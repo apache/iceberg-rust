@@ -276,25 +276,25 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             )?,
             avro_compression_codec: {
-                let codec_name = parse_property(
-                    props,
-                    TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC,
-                    TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
-                )?;
-
-                // Sentinel value 255 means level was not specified
-                let level_raw = parse_property(
-                    props,
-                    TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL,
-                    255u8,
-                )?;
-                let level = if level_raw == 255 {
-                    None
-                } else {
-                    Some(level_raw)
-                };
-
-                avro_util::parse_avro_codec(Some(&codec_name), level)
+                let codec_str = props
+                    .get(TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC)
+                    .map(|s| s.as_str())
+                    .unwrap_or(TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT);
+                let level = props
+                    .get(TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL)
+                    .map(|s| {
+                        s.parse::<u8>().map_err(|e| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Invalid value for {}: {e}",
+                                    TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL
+                                ),
+                            )
+                        })
+                    })
+                    .transpose()?;
+                avro_util::parse_avro_codec(Some(codec_str), level)?
             },
             metadata_compression_codec: parse_metadata_file_compression(props)?,
             write_datafusion_fanout_enabled: parse_property(
@@ -340,10 +340,10 @@ mod tests {
             table_properties.write_target_file_size_bytes,
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
         );
-        // Test compression defaults - should be gzip with no level specified
+        // Test compression defaults - gzip with Avro default level (9)
         assert_eq!(
             table_properties.avro_compression_codec,
-            CompressionCodec::gzip_default()
+            CompressionCodec::Gzip(9)
         );
         // Test compression defaults (none means CompressionCodec::None)
         assert_eq!(

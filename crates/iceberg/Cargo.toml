@@ -91,6 +91,7 @@ mockall = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
+rstest = { workspace = true }
 tempfile = { workspace = true }
 minijinja = { workspace = true }
 
