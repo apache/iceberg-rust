@@ -19,8 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::ops::RangeFrom;
 
-use futures::TryStreamExt;
-use futures::stream::FuturesUnordered;
+use futures::{StreamExt, TryStreamExt};
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -179,23 +178,23 @@ impl<'a> SnapshotProducer<'a> {
                 .load_manifest_list(self.table.file_io(), &self.table.metadata_ref())
                 .await?;
 
-            let mut manifest_tasks: FuturesUnordered<_> = manifest_list
-                .consume_entries()
-                .into_iter()
+            let entries: Vec<_> = manifest_list.consume_entries().into_iter().collect();
+            futures::stream::iter(entries)
                 .map(|entry| {
                     let file_io = self.table.file_io().clone();
                     spawn(async move { entry.load_manifest(&file_io).await })
                 })
-                .collect();
-
-            while let Some(manifest) = manifest_tasks.try_next().await? {
-                for entry in manifest.entries() {
-                    let file_path = entry.file_path();
-                    if new_files.contains(file_path) && entry.is_alive() {
-                        referenced_files.push(file_path.to_string());
+                .buffer_unordered(32)
+                .try_for_each(|manifest| {
+                    for entry in manifest.entries() {
+                        let file_path = entry.file_path();
+                        if new_files.contains(file_path) && entry.is_alive() {
+                            referenced_files.push(file_path.to_string());
+                        }
                     }
-                }
-            }
+                    std::future::ready(Ok(()))
+                })
+                .await?;
         }
 
         if !referenced_files.is_empty() {
