@@ -17,6 +17,9 @@
 
 use std::num::NonZeroUsize;
 
+/// Utilities for working with snapshots.
+pub mod snapshot;
+
 // Use a default value of 1 as the safest option.
 // See https://doc.rust-lang.org/std/thread/fn.available_parallelism.html#limitations
 // for more details.

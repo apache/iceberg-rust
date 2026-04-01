@@ -172,6 +172,7 @@ jobs:
         run: make docker-up
 
       - name: Run tests
+        shell: bash
         env:
           # Disable debug info to speed up compilation and reduce artifact size
           RUSTFLAGS: "-C debuginfo=0"
