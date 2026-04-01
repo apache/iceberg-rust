@@ -40,15 +40,15 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ParquetRecordBatchStreamBuilder, ProjectionMask};
-use parquet::basic::Type as PhysicalType;
 use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
 };
-use parquet::schema::types::{ColumnPath, SchemaDescriptor, Type as ParquetType};
+use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 use typed_builder::TypedBuilder;
 
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
+use crate::arrow::schema::{ArrowSchemaVisitor, DEFAULT_MAP_FIELD_NAME, visit_schema};
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
 use crate::delete_vector::DeleteVector;
 use crate::error::Result;
@@ -390,11 +390,9 @@ impl ArrowReader {
 
         // Coerce INT96 timestamp columns to the resolution specified by the Iceberg schema.
         // This must happen before building the stream reader to avoid i64 overflow in arrow-rs.
-        let arrow_metadata = if let Some(coerced_schema) = coerce_int96_timestamps(
-            arrow_metadata.metadata().file_metadata().schema_descr(),
-            arrow_metadata.schema(),
-            &task.schema,
-        ) {
+        let arrow_metadata = if let Some(coerced_schema) =
+            coerce_int96_timestamps(arrow_metadata.schema(), &task.schema)
+        {
             let options = ArrowReaderOptions::new().with_schema(Arc::clone(&coerced_schema));
             ArrowReaderMetadata::try_new(Arc::clone(arrow_metadata.metadata()), options).map_err(
                 |e| {
@@ -1270,152 +1268,51 @@ fn add_fallback_field_ids_to_arrow_schema(arrow_schema: &ArrowSchemaRef) -> Arc<
 /// - Iceberg spec primitive types: <https://iceberg.apache.org/spec/#primitive-types>
 /// - arrow-rs schema hint support: <https://github.com/apache/arrow-rs/pull/7285>
 fn coerce_int96_timestamps(
-    parquet_schema: &SchemaDescriptor,
     arrow_schema: &ArrowSchemaRef,
     iceberg_schema: &Schema,
 ) -> Option<Arc<ArrowSchema>> {
-    let int96_paths: Vec<ColumnPath> = parquet_schema
-        .columns()
-        .iter()
-        .filter(|col| col.physical_type() == PhysicalType::INT96)
-        .map(|col| col.path().clone())
-        .collect();
-
-    if int96_paths.is_empty() {
-        return None;
-    }
-
-    let mut fields: Vec<FieldRef> = arrow_schema.fields().iter().cloned().collect();
-    let mut any_changed = false;
-
-    for path in &int96_paths {
-        let parts = path.parts();
-        if let Some(idx) = fields.iter().position(|f| f.name() == &parts[0]) {
-            let (new_field, changed) = coerce_field_at_path(&fields[idx], parts, 0, iceberg_schema);
-            if changed {
-                fields[idx] = new_field;
-                any_changed = true;
-            }
-        }
-    }
-
-    if any_changed {
-        Some(Arc::new(ArrowSchema::new_with_metadata(
-            fields,
-            arrow_schema.metadata().clone(),
-        )))
+    let mut visitor = Int96CoercionVisitor::new(iceberg_schema);
+    let coerced = visit_schema(arrow_schema, &mut visitor).ok()?;
+    if visitor.changed {
+        Some(Arc::new(coerced))
     } else {
         None
     }
 }
 
-/// Navigate an Arrow field tree using a Parquet column path and coerce the leaf
-/// INT96 `Timestamp(Nanosecond)` to the resolution specified by the Iceberg schema.
-///
-/// Parquet column paths include intermediate group names for nested types (e.g. the
-/// repeated group in LIST encoding). This function accounts for those extra levels
-/// when descending through List, LargeList, and Map Arrow types.
-fn coerce_field_at_path(
-    field: &FieldRef,
-    parquet_path: &[String],
-    depth: usize,
-    iceberg_schema: &Schema,
-) -> (FieldRef, bool) {
-    if depth == parquet_path.len() - 1 {
-        return coerce_timestamp_field(field, iceberg_schema);
-    }
-
-    match field.data_type() {
-        DataType::Struct(fields) => {
-            let child_name = &parquet_path[depth + 1];
-            let mut new_fields: Vec<FieldRef> = fields.iter().cloned().collect();
-            let mut changed = false;
-
-            if let Some(idx) = new_fields.iter().position(|f| f.name() == child_name) {
-                let (new_child, child_changed) =
-                    coerce_field_at_path(&new_fields[idx], parquet_path, depth + 1, iceberg_schema);
-                if child_changed {
-                    new_fields[idx] = new_child;
-                    changed = true;
-                }
-            }
-
-            if changed {
-                let new_field = Arc::new(
-                    Field::new(
-                        field.name(),
-                        DataType::Struct(Fields::from(new_fields)),
-                        field.is_nullable(),
-                    )
-                    .with_metadata(field.metadata().clone()),
-                );
-                (new_field, true)
-            } else {
-                (Arc::clone(field), false)
-            }
-        }
-        DataType::List(element_field) | DataType::LargeList(element_field) => {
-            // Parquet 3-level LIST encoding inserts a repeated group between the list
-            // and its element, e.g. `my_list.list.element` where `list` is the
-            // intermediate group. The group name varies across writers — the spec says
-            // "list" but legacy data uses "element", "array", `<parent>_tuple`, etc.
-            // We skip it (depth + 1) since we navigate by Parquet ColumnPath parts
-            // which contain the actual name from the file. See the Parquet LogicalTypes
-            // spec for the backward-compatibility rules:
-            // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
-            if depth + 2 < parquet_path.len() {
-                let (new_element, changed) =
-                    coerce_field_at_path(element_field, parquet_path, depth + 2, iceberg_schema);
-                if changed {
-                    let new_type = match field.data_type() {
-                        DataType::List(_) => DataType::List(new_element),
-                        DataType::LargeList(_) => DataType::LargeList(new_element),
-                        _ => unreachable!(),
-                    };
-                    let new_field = Arc::new(
-                        Field::new(field.name(), new_type, field.is_nullable())
-                            .with_metadata(field.metadata().clone()),
-                    );
-                    return (new_field, true);
-                }
-            }
-            (Arc::clone(field), false)
-        }
-        DataType::Map(entries_field, sorted) => {
-            // The entries field is a struct containing key/value fields. The Parquet
-            // path segment at depth + 1 is the entries group name (e.g. "key_value"),
-            // which corresponds to the Arrow entries struct field.
-            if depth + 1 < parquet_path.len() {
-                let (new_entries, changed) =
-                    coerce_field_at_path(entries_field, parquet_path, depth + 1, iceberg_schema);
-                if changed {
-                    let new_field = Arc::new(
-                        Field::new(
-                            field.name(),
-                            DataType::Map(new_entries, *sorted),
-                            field.is_nullable(),
-                        )
-                        .with_metadata(field.metadata().clone()),
-                    );
-                    return (new_field, true);
-                }
-            }
-            (Arc::clone(field), false)
-        }
-        _ => (Arc::clone(field), false),
-    }
+/// Visitor that coerces `Timestamp(Nanosecond)` Arrow fields to the resolution
+/// indicated by the Iceberg schema. Follows the same pattern as `MetadataStripVisitor`.
+struct Int96CoercionVisitor<'a> {
+    iceberg_schema: &'a Schema,
+    field_stack: Vec<Field>,
+    changed: bool,
 }
 
-/// Coerce a single `Timestamp(Nanosecond)` field to the resolution indicated by the
-/// Iceberg schema. Falls back to microsecond when field IDs are unavailable, matching
-/// Iceberg Java behavior.
-fn coerce_timestamp_field(field: &FieldRef, iceberg_schema: &Schema) -> (FieldRef, bool) {
-    if let DataType::Timestamp(TimeUnit::Nanosecond, tz) = field.data_type() {
-        let target_unit = field
+impl<'a> Int96CoercionVisitor<'a> {
+    fn new(iceberg_schema: &'a Schema) -> Self {
+        Self {
+            iceberg_schema,
+            field_stack: Vec::new(),
+            changed: false,
+        }
+    }
+
+    /// Determine the target TimeUnit for a Timestamp(Nanosecond) field based on the
+    /// Iceberg schema. Falls back to microsecond when field IDs are unavailable,
+    /// matching Iceberg Java behavior.
+    fn target_unit(&self, field: &Field) -> Option<TimeUnit> {
+        if !matches!(
+            field.data_type(),
+            DataType::Timestamp(TimeUnit::Nanosecond, _)
+        ) {
+            return None;
+        }
+
+        let target = field
             .metadata()
             .get(PARQUET_FIELD_ID_META_KEY)
             .and_then(|id_str| id_str.parse::<i32>().ok())
-            .and_then(|field_id| iceberg_schema.field_by_id(field_id))
+            .and_then(|field_id| self.iceberg_schema.field_by_id(field_id))
             .and_then(|f| match &*f.field_type {
                 Type::Primitive(PrimitiveType::Timestamp | PrimitiveType::Timestamptz) => {
                     Some(TimeUnit::Microsecond)
@@ -1428,21 +1325,130 @@ fn coerce_timestamp_field(field: &FieldRef, iceberg_schema: &Schema) -> (FieldRe
             // Iceberg Java reads INT96 as microseconds by default
             .unwrap_or(TimeUnit::Microsecond);
 
-        if target_unit == TimeUnit::Nanosecond {
-            return (Arc::clone(field), false);
+        if target == TimeUnit::Nanosecond {
+            None
+        } else {
+            Some(target)
         }
+    }
+}
 
-        let new_field = Arc::new(
-            Field::new(
-                field.name(),
-                DataType::Timestamp(target_unit, tz.clone()),
-                field.is_nullable(),
-            )
-            .with_metadata(field.metadata().clone()),
+impl ArrowSchemaVisitor for Int96CoercionVisitor<'_> {
+    type T = Field;
+    type U = ArrowSchema;
+
+    fn before_field(&mut self, field: &Field) -> Result<()> {
+        self.field_stack.push(field.as_ref().clone());
+        Ok(())
+    }
+
+    fn before_list_element(&mut self, field: &Field) -> Result<()> {
+        self.field_stack.push(field.as_ref().clone());
+        Ok(())
+    }
+
+    fn before_map_key(&mut self, field: &Field) -> Result<()> {
+        self.field_stack.push(field.as_ref().clone());
+        Ok(())
+    }
+
+    fn before_map_value(&mut self, field: &Field) -> Result<()> {
+        self.field_stack.push(field.as_ref().clone());
+        Ok(())
+    }
+
+    fn schema(&mut self, schema: &ArrowSchema, values: Vec<Self::T>) -> Result<Self::U> {
+        Ok(ArrowSchema::new_with_metadata(
+            values,
+            schema.metadata().clone(),
+        ))
+    }
+
+    fn r#struct(&mut self, _fields: &Fields, results: Vec<Self::T>) -> Result<Self::T> {
+        let field_info = self
+            .field_stack
+            .pop()
+            .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Field stack underflow in struct"))?;
+        Ok(Field::new(
+            field_info.name(),
+            DataType::Struct(Fields::from(results)),
+            field_info.is_nullable(),
+        )
+        .with_metadata(field_info.metadata().clone()))
+    }
+
+    fn list(&mut self, list: &DataType, value: Self::T) -> Result<Self::T> {
+        let field_info = self
+            .field_stack
+            .pop()
+            .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Field stack underflow in list"))?;
+        let list_type = match list {
+            DataType::List(_) => DataType::List(Arc::new(value)),
+            DataType::LargeList(_) => DataType::LargeList(Arc::new(value)),
+            DataType::FixedSizeList(_, size) => DataType::FixedSizeList(Arc::new(value), *size),
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Expected list type, got {list}"),
+                ));
+            }
+        };
+        Ok(
+            Field::new(field_info.name(), list_type, field_info.is_nullable())
+                .with_metadata(field_info.metadata().clone()),
+        )
+    }
+
+    fn map(&mut self, map: &DataType, key_value: Self::T, value: Self::T) -> Result<Self::T> {
+        let field_info = self
+            .field_stack
+            .pop()
+            .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Field stack underflow in map"))?;
+        let sorted = match map {
+            DataType::Map(_, sorted) => *sorted,
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Expected map type, got {map}"),
+                ));
+            }
+        };
+        let struct_field = Field::new(
+            DEFAULT_MAP_FIELD_NAME,
+            DataType::Struct(Fields::from(vec![key_value, value])),
+            false,
         );
-        (new_field, true)
-    } else {
-        (Arc::clone(field), false)
+        Ok(Field::new(
+            field_info.name(),
+            DataType::Map(Arc::new(struct_field), sorted),
+            field_info.is_nullable(),
+        )
+        .with_metadata(field_info.metadata().clone()))
+    }
+
+    fn primitive(&mut self, p: &DataType) -> Result<Self::T> {
+        let field_info = self.field_stack.pop().ok_or_else(|| {
+            Error::new(ErrorKind::Unexpected, "Field stack underflow in primitive")
+        })?;
+
+        if let Some(target_unit) = self.target_unit(&field_info) {
+            let tz = match field_info.data_type() {
+                DataType::Timestamp(_, tz) => tz.clone(),
+                _ => None,
+            };
+            self.changed = true;
+            Ok(Field::new(
+                field_info.name(),
+                DataType::Timestamp(target_unit, tz),
+                field_info.is_nullable(),
+            )
+            .with_metadata(field_info.metadata().clone()))
+        } else {
+            Ok(
+                Field::new(field_info.name(), p.clone(), field_info.is_nullable())
+                    .with_metadata(field_info.metadata().clone()),
+            )
+        }
     }
 }
 
