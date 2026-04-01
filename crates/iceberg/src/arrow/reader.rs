@@ -1117,17 +1117,26 @@ fn build_field_id_map(parquet_schema: &SchemaDescriptor) -> Result<Option<HashMa
 /// top-level Arrow fields. Using leaf positions instead would produce wrong indices
 /// when nested types (struct/list/map) expand into multiple leaf columns.
 ///
-/// Matches iceberg-java's ParquetSchemaUtil.addFallbackIds().
+/// Mirrors iceberg-java's ParquetSchemaUtil.addFallbackIds() which iterates
+/// fileSchema.getFields() assigning ordinal IDs to top-level fields.
 fn build_fallback_field_id_map(parquet_schema: &SchemaDescriptor) -> HashMap<i32, usize> {
     let mut column_map = HashMap::new();
+    let mut leaf_idx = 0;
 
-    for leaf_idx in 0..parquet_schema.num_columns() {
-        let root_idx = parquet_schema.get_column_root_idx(leaf_idx);
-        // Only map primitive root columns; leaves inside groups (struct/list/map)
-        // don't get fallback IDs since predicates only target root-level primitives.
-        if !parquet_schema.get_column_root(leaf_idx).is_group() {
-            let field_id = (root_idx + 1) as i32;
+    for (top_pos, field) in parquet_schema.root_schema().get_fields().iter().enumerate() {
+        let field_id = (top_pos + 1) as i32;
+
+        if field.is_primitive() {
             column_map.insert(field_id, leaf_idx);
+            leaf_idx += 1;
+        } else {
+            // Advance past all leaves in this group. Count them by checking
+            // how many subsequent leaves share this root index.
+            while leaf_idx < parquet_schema.num_columns()
+                && parquet_schema.get_column_root_idx(leaf_idx) == top_pos
+            {
+                leaf_idx += 1;
+            }
         }
     }
 
