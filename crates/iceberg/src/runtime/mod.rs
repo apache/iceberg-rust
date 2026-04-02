@@ -17,12 +17,15 @@
 
 // This module contains the async runtime abstraction for iceberg.
 
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tokio::task;
 
+/// Wrapper around tokio's JoinHandle that panics on task failure.
 pub struct JoinHandle<T>(task::JoinHandle<T>);
 
 impl<T> Unpin for JoinHandle<T> {}
@@ -39,37 +42,147 @@ impl<T: Send + 'static> Future for JoinHandle<T> {
     }
 }
 
-#[allow(dead_code)]
-pub fn spawn<F>(f: F) -> JoinHandle<F::Output>
-where
-    F: std::future::Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    JoinHandle(task::spawn(f))
+/// Stable runtime wrapper for spawning async tasks and blocking operations.
+///
+/// Wraps `Arc<tokio::runtime::Runtime>` internally. Cloning is cheap (Arc clone).
+/// This is the public API boundary — internals can evolve without breaking consumers.
+#[derive(Clone)]
+pub struct Runtime {
+    /// We keep an optional owned runtime to prevent it from being dropped.
+    /// When created via `Runtime::new()`, this holds the runtime alive.
+    /// When created via `Default` inside an existing tokio context, this is None
+    /// and we only use the handle.
+    _owned: Option<Arc<tokio::runtime::Runtime>>,
+    handle: tokio::runtime::Handle,
 }
 
-#[allow(dead_code)]
-pub fn spawn_blocking<F, T>(f: F) -> JoinHandle<T>
-where
-    F: FnOnce() -> T + Send + 'static,
-    T: Send + 'static,
-{
-    JoinHandle(task::spawn_blocking(f))
+impl fmt::Debug for Runtime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Runtime").finish()
+    }
+}
+
+impl Runtime {
+    /// Create a new Runtime wrapping the given tokio Runtime.
+    pub fn new(runtime: Arc<tokio::runtime::Runtime>) -> Self {
+        let handle = runtime.handle().clone();
+        Self {
+            _owned: Some(runtime),
+            handle,
+        }
+    }
+
+    /// Spawn an async task on the wrapped runtime.
+    pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        JoinHandle(self.handle.spawn(future))
+    }
+
+    /// Spawn a blocking task on the wrapped runtime.
+    pub fn spawn_blocking<F, T>(&self, f: F) -> JoinHandle<T>
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        JoinHandle(self.handle.spawn_blocking(f))
+    }
+}
+
+impl Default for Runtime {
+    fn default() -> Self {
+        // Try to use the current tokio runtime handle if we're already inside one.
+        // This avoids creating a new runtime that would panic when dropped in an
+        // async context.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            return Self {
+                _owned: None,
+                handle,
+            };
+        }
+
+        let rt = Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to build default tokio runtime"),
+        );
+        let handle = rt.handle().clone();
+        Self {
+            _owned: Some(rt),
+            handle,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_tokio_spawn() {
-        let handle = spawn(async { 1 + 1 });
-        assert_eq!(handle.await, 2);
+    fn test_runtime() -> Runtime {
+        let tokio_rt = Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to build tokio runtime"),
+        );
+        Runtime::new(tokio_rt)
     }
 
-    #[tokio::test]
-    async fn test_tokio_spawn_blocking() {
-        let handle = spawn_blocking(|| 1 + 1);
-        assert_eq!(handle.await, 2);
+    #[test]
+    fn test_runtime_default_creates_working_runtime() {
+        let rt = Runtime::default();
+        let handle = rt.spawn(async { 1 + 1 });
+        let result = rt._owned.as_ref().unwrap().block_on(handle);
+        assert_eq!(result, 2);
+    }
+
+    #[test]
+    fn test_runtime_spawn() {
+        let rt = test_runtime();
+        let handle = rt.spawn(async { 1 + 1 });
+        let result = rt._owned.as_ref().unwrap().block_on(handle);
+        assert_eq!(result, 2);
+    }
+
+    #[test]
+    fn test_runtime_spawn_blocking() {
+        let rt = test_runtime();
+        let handle = rt.spawn_blocking(|| 1 + 1);
+        let result = rt._owned.as_ref().unwrap().block_on(handle);
+        assert_eq!(result, 2);
+    }
+
+    #[test]
+    fn test_runtime_new_with_custom_runtime() {
+        let tokio_rt = Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to build tokio runtime"),
+        );
+        let rt = Runtime::new(tokio_rt);
+        let handle = rt.spawn(async { 42 });
+        let result = rt._owned.as_ref().unwrap().block_on(handle);
+        assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn test_runtime_clone_shares_arc() {
+        let rt = test_runtime();
+        let rt2 = rt.clone();
+        assert!(Arc::ptr_eq(
+            rt._owned.as_ref().unwrap(),
+            rt2._owned.as_ref().unwrap()
+        ));
+    }
+
+    #[test]
+    fn test_runtime_debug() {
+        let rt = test_runtime();
+        let debug_str = format!("{:?}", rt);
+        assert!(debug_str.contains("Runtime"));
     }
 }

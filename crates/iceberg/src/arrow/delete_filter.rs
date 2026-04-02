@@ -24,6 +24,7 @@ use tokio::sync::oneshot::Receiver;
 use crate::delete_vector::DeleteVector;
 use crate::expr::Predicate::AlwaysTrue;
 use crate::expr::{Bind, BoundPredicate, Predicate};
+use crate::runtime::Runtime;
 use crate::scan::{FileScanTask, FileScanTaskDeleteFile};
 use crate::spec::DataContentType;
 use crate::{Error, ErrorKind, Result};
@@ -56,6 +57,7 @@ struct DeleteFileFilterState {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DeleteFilter {
     state: Arc<RwLock<DeleteFileFilterState>>,
+    runtime: Runtime,
 }
 
 /// Action to take when trying to start loading a positional delete file
@@ -71,6 +73,14 @@ pub(crate) enum PosDelLoadAction {
 }
 
 impl DeleteFilter {
+    /// Create a new DeleteFilter with the given runtime.
+    pub(crate) fn new(runtime: Runtime) -> Self {
+        Self {
+            state: Arc::new(RwLock::new(DeleteFileFilterState::default())),
+            runtime,
+        }
+    }
+
     /// Retrieve a delete vector for the data file associated with a given file scan task
     pub(crate) fn get_delete_vector(
         &self,
@@ -245,7 +255,7 @@ impl DeleteFilter {
 
         let state = self.state.clone();
         let delete_file_path = delete_file_path.to_string();
-        crate::runtime::spawn(async move {
+        self.runtime.spawn(async move {
             let eq_del = eq_del.await.unwrap();
             {
                 let mut state = state.write().unwrap();
@@ -292,7 +302,7 @@ pub(crate) mod tests {
         let table_location = tmp_dir.path();
         let file_io = FileIO::new_with_fs();
 
-        let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10);
+        let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::default());
 
         let file_scan_tasks = setup(table_location);
 

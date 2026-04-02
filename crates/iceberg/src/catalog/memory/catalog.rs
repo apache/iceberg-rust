@@ -29,6 +29,7 @@ use super::namespace_state::NamespaceState;
 use crate::io::{FileIO, FileIOBuilder, MemoryStorageFactory, StorageFactory};
 use crate::spec::{TableMetadata, TableMetadataBuilder};
 use crate::table::Table;
+use crate::runtime::Runtime;
 use crate::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
     TableCommit, TableCreation, TableIdent,
@@ -45,6 +46,7 @@ const LOCATION: &str = "location";
 pub struct MemoryCatalogBuilder {
     config: MemoryCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    runtime: Runtime,
 }
 
 impl Default for MemoryCatalogBuilder {
@@ -56,6 +58,7 @@ impl Default for MemoryCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
+            runtime: Runtime::default(),
         }
     }
 }
@@ -65,6 +68,11 @@ impl CatalogBuilder for MemoryCatalogBuilder {
 
     fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
         self.storage_factory = Some(storage_factory);
+        self
+    }
+
+    fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = runtime;
         self
     }
 
@@ -100,7 +108,7 @@ impl CatalogBuilder for MemoryCatalogBuilder {
                     "Catalog warehouse is required",
                 ))
             } else {
-                MemoryCatalog::new(self.config, self.storage_factory)
+                MemoryCatalog::new(self.config, self.storage_factory, self.runtime)
             }
         };
 
@@ -121,6 +129,7 @@ pub struct MemoryCatalog {
     root_namespace_state: Mutex<NamespaceState>,
     file_io: FileIO,
     warehouse_location: String,
+    runtime: Runtime,
 }
 
 impl MemoryCatalog {
@@ -128,6 +137,7 @@ impl MemoryCatalog {
     fn new(
         config: MemoryCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
+        runtime: Runtime,
     ) -> Result<Self> {
         // Use provided factory or default to MemoryStorageFactory
         let factory = storage_factory.unwrap_or_else(|| Arc::new(MemoryStorageFactory));
@@ -136,6 +146,7 @@ impl MemoryCatalog {
             root_namespace_state: Mutex::new(NamespaceState::default()),
             file_io: FileIOBuilder::new(factory).with_props(config.props).build(),
             warehouse_location: config.warehouse,
+            runtime,
         })
     }
 
@@ -153,6 +164,7 @@ impl MemoryCatalog {
             .metadata(metadata)
             .metadata_location(metadata_location.to_string())
             .file_io(self.file_io.clone())
+            .runtime(self.runtime.clone())
             .build()
     }
 }
@@ -307,6 +319,7 @@ impl Catalog for MemoryCatalog {
             .metadata_location(metadata_location.to_string())
             .metadata(metadata)
             .identifier(table_ident)
+            .runtime(self.runtime.clone())
             .build()
     }
 
@@ -378,6 +391,7 @@ impl Catalog for MemoryCatalog {
             .metadata_location(metadata_location)
             .metadata(metadata)
             .identifier(table_ident.clone())
+            .runtime(self.runtime.clone())
             .build()
     }
 

@@ -37,7 +37,7 @@ use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluato
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::metadata_columns::{get_metadata_field_id, is_metadata_column_name};
-use crate::runtime::spawn;
+use crate::runtime::Runtime;
 use crate::spec::{DataContentType, SnapshotRef};
 use crate::table::Table;
 use crate::utils::available_parallelism;
@@ -210,6 +210,7 @@ impl<'a> TableScanBuilder<'a> {
                         concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
                         row_group_filtering_enabled: self.row_group_filtering_enabled,
                         row_selection_enabled: self.row_selection_enabled,
+                        runtime: self.table.runtime().clone(),
                     });
                 };
                 current_snapshot_id.clone()
@@ -303,6 +304,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            runtime: self.table.runtime().clone(),
         })
     }
 }
@@ -331,6 +333,8 @@ pub struct TableScan {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+
+    runtime: Runtime,
 }
 
 impl TableScan {
@@ -352,7 +356,7 @@ impl TableScan {
         // used to stream the results back to the caller
         let (file_scan_task_tx, file_scan_task_rx) = channel(concurrency_limit_manifest_entries);
 
-        let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new();
+        let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new(self.runtime.clone());
 
         let manifest_list = plan_context.get_manifest_list().await?;
 
@@ -368,8 +372,10 @@ impl TableScan {
 
         let mut channel_for_manifest_error = file_scan_task_tx.clone();
 
+        let rt = self.runtime.clone();
+
         // Concurrently load all [`Manifest`]s and stream their [`ManifestEntry`]s
-        spawn(async move {
+        rt.spawn(async move {
             let result = futures::stream::iter(manifest_file_contexts)
                 .try_for_each_concurrent(concurrency_limit_manifest_files, |ctx| async move {
                     ctx.fetch_manifest_and_stream_manifest_entries().await
@@ -384,17 +390,23 @@ impl TableScan {
         let mut channel_for_data_manifest_entry_error = file_scan_task_tx.clone();
         let mut channel_for_delete_manifest_entry_error = file_scan_task_tx.clone();
 
+        let rt = self.runtime.clone();
+        let rt_inner = self.runtime.clone();
+
         // Process the delete file [`ManifestEntry`] stream in parallel
-        spawn(async move {
+        rt.spawn(async move {
             let result = manifest_entry_delete_ctx_rx
                 .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
                 .try_for_each_concurrent(
                     concurrency_limit_manifest_entries,
-                    |(manifest_entry_context, tx)| async move {
-                        spawn(async move {
-                            Self::process_delete_manifest_entry(manifest_entry_context, tx).await
-                        })
-                        .await
+                    |(manifest_entry_context, tx)| {
+                        let rt_inner = rt_inner.clone();
+                        async move {
+                            rt_inner.spawn(async move {
+                                Self::process_delete_manifest_entry(manifest_entry_context, tx).await
+                            })
+                            .await
+                        }
                     },
                 )
                 .await;
@@ -407,17 +419,23 @@ impl TableScan {
         })
         .await;
 
+        let rt = self.runtime.clone();
+        let rt_inner = self.runtime.clone();
+
         // Process the data file [`ManifestEntry`] stream in parallel
-        spawn(async move {
+        rt.spawn(async move {
             let result = manifest_entry_data_ctx_rx
                 .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone())))
                 .try_for_each_concurrent(
                     concurrency_limit_manifest_entries,
-                    |(manifest_entry_context, tx)| async move {
-                        spawn(async move {
-                            Self::process_data_manifest_entry(manifest_entry_context, tx).await
-                        })
-                        .await
+                    |(manifest_entry_context, tx)| {
+                        let rt_inner = rt_inner.clone();
+                        async move {
+                            rt_inner.spawn(async move {
+                                Self::process_data_manifest_entry(manifest_entry_context, tx).await
+                            })
+                            .await
+                        }
                     },
                 )
                 .await;
@@ -432,7 +450,7 @@ impl TableScan {
 
     /// Returns an [`ArrowRecordBatchStream`].
     pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
-        let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone())
+        let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
             .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
             .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
             .with_row_selection_enabled(self.row_selection_enabled);
@@ -1327,14 +1345,14 @@ pub mod tests {
             .unwrap();
         assert_eq!(plan_task.len(), 2);
 
-        let reader = ArrowReaderBuilder::new(fixture.table.file_io().clone()).build();
+        let reader = ArrowReaderBuilder::new(fixture.table.file_io().clone(), fixture.table.runtime().clone()).build();
         let batch_stream = reader
             .clone()
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
             .unwrap();
         let batch_1: Vec<_> = batch_stream.try_collect().await.unwrap();
 
-        let reader = ArrowReaderBuilder::new(fixture.table.file_io().clone()).build();
+        let reader = ArrowReaderBuilder::new(fixture.table.file_io().clone(), fixture.table.runtime().clone()).build();
         let batch_stream = reader
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
             .unwrap();

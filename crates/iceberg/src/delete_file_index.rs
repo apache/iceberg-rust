@@ -23,7 +23,7 @@ use futures::StreamExt;
 use futures::channel::mpsc::{Sender, channel};
 use tokio::sync::Notify;
 
-use crate::runtime::spawn;
+use crate::runtime::Runtime;
 use crate::scan::{DeleteFileContext, FileScanTaskDeleteFile};
 use crate::spec::{DataContentType, DataFile, Struct};
 
@@ -53,7 +53,7 @@ struct PopulatedDeleteFileIndex {
 
 impl DeleteFileIndex {
     /// create a new `DeleteFileIndex` along with the sender that populates it with delete files
-    pub(crate) fn new() -> (DeleteFileIndex, Sender<DeleteFileContext>) {
+    pub(crate) fn new(runtime: Runtime) -> (DeleteFileIndex, Sender<DeleteFileContext>) {
         // TODO: what should the channel limit be?
         let (tx, rx) = channel(10);
         let notify = Arc::new(Notify::new());
@@ -62,7 +62,7 @@ impl DeleteFileIndex {
         )));
         let delete_file_stream = rx.boxed();
 
-        spawn({
+        runtime.spawn({
             let state = state.clone();
             async move {
                 let delete_files: Vec<DeleteFileContext> =
