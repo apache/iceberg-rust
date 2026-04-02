@@ -23,9 +23,9 @@ use crate::arrow::ArrowReaderBuilder;
 use crate::inspect::MetadataTable;
 use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
+use crate::runtime::Runtime;
 use crate::scan::TableScanBuilder;
 use crate::spec::{SchemaRef, TableMetadata, TableMetadataRef};
-use crate::runtime::Runtime;
 use crate::{Error, ErrorKind, Result, TableIdent};
 
 /// Builder to create table scan.
