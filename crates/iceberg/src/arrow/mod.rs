@@ -27,6 +27,7 @@ pub(crate) mod caching_delete_file_loader;
 pub mod delete_file_loader;
 pub(crate) mod delete_filter;
 
+mod int96;
 mod reader;
 /// RecordBatch projection utilities
 pub mod record_batch_projector;
