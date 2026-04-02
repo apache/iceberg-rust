@@ -27,4 +27,7 @@ pub(crate) mod write;
 pub(crate) const DATA_FILES_COL_NAME: &str = "data_files";
 
 pub use project::project_with_partition;
+pub use repartition::repartition;
 pub use scan::IcebergTableScan;
+pub use sort::sort_by_partition;
+pub use write::IcebergWriteExec;

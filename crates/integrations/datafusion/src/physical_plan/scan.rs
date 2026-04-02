@@ -57,7 +57,7 @@ pub struct IcebergTableScan {
 
 impl IcebergTableScan {
     /// Creates a new [`IcebergTableScan`] object.
-    pub(crate) fn new(
+    pub fn new(
         table: Table,
         snapshot_id: Option<i64>,
         schema: ArrowSchemaRef,

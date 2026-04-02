@@ -86,7 +86,7 @@ use iceberg::spec::{TableMetadata, TableMetadataRef, Transform};
 ///     NonZeroUsize::new(4).unwrap(),
 /// )?;
 /// ```
-pub(crate) fn repartition(
+pub fn repartition(
     input: Arc<dyn ExecutionPlan>,
     table_metadata: TableMetadataRef,
     target_partitions: NonZeroUsize,
