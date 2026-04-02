@@ -403,10 +403,12 @@ impl TableScan {
                     |(manifest_entry_context, tx)| {
                         let rt_inner = rt_inner.clone();
                         async move {
-                            rt_inner.spawn(async move {
-                                Self::process_delete_manifest_entry(manifest_entry_context, tx).await
-                            })
-                            .await
+                            rt_inner
+                                .spawn(async move {
+                                    Self::process_delete_manifest_entry(manifest_entry_context, tx)
+                                        .await
+                                })
+                                .await
                         }
                     },
                 )
@@ -432,10 +434,12 @@ impl TableScan {
                     |(manifest_entry_context, tx)| {
                         let rt_inner = rt_inner.clone();
                         async move {
-                            rt_inner.spawn(async move {
-                                Self::process_data_manifest_entry(manifest_entry_context, tx).await
-                            })
-                            .await
+                            rt_inner
+                                .spawn(async move {
+                                    Self::process_data_manifest_entry(manifest_entry_context, tx)
+                                        .await
+                                })
+                                .await
                         }
                     },
                 )
@@ -451,10 +455,11 @@ impl TableScan {
 
     /// Returns an [`ArrowRecordBatchStream`].
     pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
-        let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
-            .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
-            .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
-            .with_row_selection_enabled(self.row_selection_enabled);
+        let mut arrow_reader_builder =
+            ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
+                .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
+                .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
+                .with_row_selection_enabled(self.row_selection_enabled);
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
@@ -1382,7 +1387,11 @@ pub mod tests {
             .unwrap();
         assert_eq!(plan_task.len(), 2);
 
-        let reader = ArrowReaderBuilder::new(fixture.table.file_io().clone(), fixture.table.runtime().clone()).build();
+        let reader = ArrowReaderBuilder::new(
+            fixture.table.file_io().clone(),
+            fixture.table.runtime().clone(),
+        )
+        .build();
         let batch_stream = reader
             .clone()
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
@@ -1390,7 +1399,11 @@ pub mod tests {
             .stream();
         let batch_1: Vec<_> = batch_stream.try_collect().await.unwrap();
 
-        let reader = ArrowReaderBuilder::new(fixture.table.file_io().clone(), fixture.table.runtime().clone()).build();
+        let reader = ArrowReaderBuilder::new(
+            fixture.table.file_io().clone(),
+            fixture.table.runtime().clone(),
+        )
+        .build();
         let batch_stream = reader
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
             .unwrap()

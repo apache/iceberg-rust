@@ -31,6 +31,7 @@ use crate::delete_vector::DeleteVector;
 use crate::expr::Predicate::AlwaysTrue;
 use crate::expr::{Predicate, Reference};
 use crate::io::FileIO;
+use crate::runtime::Runtime;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
 use crate::spec::{
     DataContentType, Datum, ListType, MapType, NestedField, NestedFieldRef, PartnerAccessor,
@@ -38,8 +39,6 @@ use crate::spec::{
     visit_schema_with_partner,
 };
 use crate::{Error, ErrorKind, Result};
-
-use crate::runtime::Runtime;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CachingDeleteFileLoader {
@@ -80,7 +79,11 @@ enum ParsedDeleteFileContext {
 
 #[allow(unused_variables)]
 impl CachingDeleteFileLoader {
-    pub(crate) fn new(file_io: FileIO, concurrency_limit_data_files: usize, runtime: Runtime) -> Self {
+    pub(crate) fn new(
+        file_io: FileIO,
+        concurrency_limit_data_files: usize,
+        runtime: Runtime,
+    ) -> Self {
         let scan_metrics = ScanMetrics::new();
         CachingDeleteFileLoader {
             basic_delete_file_loader: BasicDeleteFileLoader::new(file_io, scan_metrics),
@@ -741,7 +744,8 @@ mod tests {
         let table_location = tmp_dir.path();
         let file_io = FileIO::new_with_fs();
 
-        let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::default());
+        let delete_file_loader =
+            CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::default());
 
         let file_scan_tasks = setup(table_location);
 
@@ -962,7 +966,8 @@ mod tests {
         };
 
         // Load the deletes - should handle both types without error
-        let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::default());
+        let delete_file_loader =
+            CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::default());
         let delete_filter = delete_file_loader
             .load_deletes(&file_scan_task.deletes, file_scan_task.schema_ref())
             .await
@@ -1034,7 +1039,8 @@ mod tests {
         let table_location = tmp_dir.path();
         let file_io = FileIO::new_with_fs();
 
-        let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::default());
+        let delete_file_loader =
+            CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::default());
 
         let file_scan_tasks = setup(table_location);
 
