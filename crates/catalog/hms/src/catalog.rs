@@ -31,7 +31,7 @@ use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
-    TableCommit, TableCreation, TableIdent,
+    Runtime, TableCommit, TableCreation, TableIdent,
 };
 use volo_thrift::MaybeException;
 
@@ -56,6 +56,7 @@ pub const HMS_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 pub struct HmsCatalogBuilder {
     config: HmsCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    runtime: Runtime,
 }
 
 impl Default for HmsCatalogBuilder {
@@ -69,6 +70,7 @@ impl Default for HmsCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
+            runtime: Runtime::default(),
         }
     }
 }
@@ -78,6 +80,11 @@ impl CatalogBuilder for HmsCatalogBuilder {
 
     fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
         self.storage_factory = Some(storage_factory);
+        self
+    }
+
+    fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = runtime;
         self
     }
 
@@ -133,7 +140,7 @@ impl CatalogBuilder for HmsCatalogBuilder {
                     "Catalog warehouse is required",
                 ))
             } else {
-                HmsCatalog::new(self.config, self.storage_factory)
+                HmsCatalog::new(self.config, self.storage_factory, self.runtime)
             }
         };
 
@@ -169,6 +176,7 @@ pub struct HmsCatalog {
     config: HmsCatalogConfig,
     client: HmsClient,
     file_io: FileIO,
+    runtime: Runtime,
 }
 
 impl Debug for HmsCatalog {
@@ -184,6 +192,7 @@ impl HmsCatalog {
     fn new(
         config: HmsCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
+        runtime: Runtime,
     ) -> Result<Self> {
         let address = config
             .address
@@ -223,6 +232,7 @@ impl HmsCatalog {
             config,
             client: HmsClient(client),
             file_io,
+            runtime,
         })
     }
     /// Get the catalogs `FileIO`
@@ -529,6 +539,7 @@ impl Catalog for HmsCatalog {
             .metadata_location(metadata_location_str)
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
+            .runtime(self.runtime.clone())
             .build()
     }
 
@@ -567,6 +578,7 @@ impl Catalog for HmsCatalog {
                 NamespaceIdent::new(db_name),
                 table.name.clone(),
             ))
+            .runtime(self.runtime.clone())
             .build()
     }
 

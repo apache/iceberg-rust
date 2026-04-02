@@ -26,7 +26,7 @@ use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
-    TableCommit, TableCreation, TableIdent,
+    Runtime, TableCommit, TableCreation, TableIdent,
 };
 use sqlx::any::{AnyPoolOptions, AnyQueryResult, AnyRow, install_default_drivers};
 use sqlx::{Any, AnyPool, Row, Transaction};
@@ -67,6 +67,7 @@ static TEST_BEFORE_ACQUIRE: bool = true; // Default the health-check of each con
 pub struct SqlCatalogBuilder {
     config: SqlCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    runtime: Runtime,
 }
 
 impl Default for SqlCatalogBuilder {
@@ -80,6 +81,7 @@ impl Default for SqlCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
+            runtime: Runtime::default(),
         }
     }
 }
@@ -143,6 +145,11 @@ impl CatalogBuilder for SqlCatalogBuilder {
         self
     }
 
+    fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
     fn load(
         mut self,
         name: impl Into<String>,
@@ -190,7 +197,7 @@ impl CatalogBuilder for SqlCatalogBuilder {
                 ))
             } else {
                 self.config.name = name;
-                SqlCatalog::new(self.config, self.storage_factory).await
+                SqlCatalog::new(self.config, self.storage_factory, self.runtime).await
             }
         }
     }
@@ -221,6 +228,7 @@ pub struct SqlCatalog {
     warehouse_location: String,
     fileio: FileIO,
     sql_bind_style: SqlBindStyle,
+    runtime: Runtime,
 }
 
 #[derive(Debug, PartialEq, strum::EnumString, strum::Display)]
@@ -237,6 +245,7 @@ impl SqlCatalog {
     async fn new(
         config: SqlCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
+        runtime: Runtime,
     ) -> Result<Self> {
         let factory = storage_factory.ok_or_else(|| {
             Error::new(
@@ -303,6 +312,7 @@ impl SqlCatalog {
             warehouse_location: config.warehouse_location,
             fileio,
             sql_bind_style: config.sql_bind_style,
+            runtime,
         })
     }
 
@@ -810,6 +820,7 @@ impl Catalog for SqlCatalog {
             .identifier(identifier.clone())
             .metadata_location(tbl_metadata_location)
             .metadata(metadata)
+            .runtime(self.runtime.clone())
             .build()?)
     }
 
@@ -880,6 +891,7 @@ impl Catalog for SqlCatalog {
             .metadata_location(tbl_metadata_location_str)
             .identifier(tbl_ident)
             .metadata(tbl_metadata)
+            .runtime(self.runtime.clone())
             .build()?)
     }
 
@@ -951,6 +963,7 @@ impl Catalog for SqlCatalog {
             .metadata_location(metadata_location)
             .metadata(metadata)
             .file_io(self.fileio.clone())
+            .runtime(self.runtime.clone())
             .build()?)
     }
 
