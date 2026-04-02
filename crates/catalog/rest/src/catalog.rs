@@ -40,6 +40,7 @@ use typed_builder::TypedBuilder;
 use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
+use crate::signing::HttpRequestSigner;
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
     CreateTableRequest, ListNamespaceResponse, ListTablesResponse, LoadTableResult,
@@ -52,6 +53,12 @@ pub const REST_CATALOG_PROP_URI: &str = "uri";
 pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 /// Disable header redaction in error logs (defaults to false for security)
 pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-redaction";
+/// Enable AWS SigV4 signing for REST catalog requests
+pub const REST_CATALOG_PROP_SIGV4_ENABLED: &str = "rest.sigv4-enabled";
+/// The AWS service name to use for SigV4 signing (e.g. "s3", "execute-api")
+pub const REST_CATALOG_PROP_SIGNING_NAME: &str = "rest.signing-name";
+/// The AWS region to use for SigV4 signing (e.g. "us-east-1")
+pub const REST_CATALOG_PROP_SIGNING_REGION: &str = "rest.signing-region";
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -212,6 +219,11 @@ impl RestCatalogConfig {
         self.client.clone()
     }
 
+    /// Build a request signer from the config, or `None` if signing is not enabled.
+    pub(crate) fn signer(&self) -> Result<Option<Arc<dyn HttpRequestSigner>>> {
+        self.try_into()
+    }
+
     /// Get the token from the config.
     ///
     /// The client can use this token to send requests.
@@ -329,6 +341,28 @@ impl RestCatalogConfig {
 
         self.props = props;
         self
+    }
+
+    /// Check if SigV4 signing is enabled.
+    pub(crate) fn sigv4_enabled(&self) -> bool {
+        self.props
+            .get(REST_CATALOG_PROP_SIGV4_ENABLED)
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
+    /// Get the signing region from the config.
+    pub(crate) fn signing_region(&self) -> Option<&str> {
+        self.props
+            .get(REST_CATALOG_PROP_SIGNING_REGION)
+            .map(|s| s.as_str())
+    }
+
+    /// Get the signing name from the config.
+    pub(crate) fn signing_name(&self) -> Option<&str> {
+        self.props
+            .get(REST_CATALOG_PROP_SIGNING_NAME)
+            .map(|s| s.as_str())
     }
 }
 
@@ -2906,5 +2940,30 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
             assert_eq!(err.message(), "Catalog uri is required");
         }
+    }
+
+    #[test]
+    fn test_sigv4_config_disabled_by_default() {
+        let config = RestCatalogConfig::builder()
+            .uri("https://example.com".to_string())
+            .build();
+        assert!(!config.sigv4_enabled());
+        assert_eq!(config.signing_name(), None);
+        assert_eq!(config.signing_region(), None);
+    }
+
+    #[test]
+    fn test_sigv4_config_enabled() {
+        let config = RestCatalogConfig::builder()
+            .uri("https://example.com".to_string())
+            .props(HashMap::from([
+                ("rest.sigv4-enabled".to_string(), "true".to_string()),
+                ("rest.signing-name".to_string(), "execute-api".to_string()),
+                ("rest.signing-region".to_string(), "us-east-1".to_string()),
+            ]))
+            .build();
+        assert!(config.sigv4_enabled());
+        assert_eq!(config.signing_name(), Some("execute-api"));
+        assert_eq!(config.signing_region(), Some("us-east-1"));
     }
 }
