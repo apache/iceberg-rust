@@ -1976,14 +1976,9 @@ mod tests {
     use std::ops::Range;
     use std::sync::Arc;
 
-    use arrow_array::builder::StringBuilder;
     use arrow_array::cast::AsArray;
-    use arrow_array::{
-        Array, ArrayRef, Int32Array, LargeStringArray, ListArray, RecordBatch, StringArray,
-        StructArray,
-    };
-    use arrow_buffer::OffsetBuffer;
-    use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
+    use arrow_array::{ArrayRef, LargeStringArray, RecordBatch, StringArray};
+    use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
     use futures::TryStreamExt;
     use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
     use parquet::arrow::{ArrowWriter, ProjectionMask};
@@ -4692,14 +4687,147 @@ message schema {
         assert_eq!(result[2], expected_2);
     }
 
-    /// Helper: write a Parquet file without field IDs containing a nested type column
-    /// followed by an `id` column, then read it with a predicate on `id`.
-    /// This exercises the fallback field ID mapping path that Comet uses.
-    async fn read_migrated_file_with_nested_type_and_predicate(
-        iceberg_schema: SchemaRef,
-        arrow_schema: Arc<ArrowSchema>,
-        batch: RecordBatch,
-    ) {
+    /// Regression for <https://github.com/apache/iceberg-rust/issues/2306>:
+    /// predicate on a column after nested types in a migrated file (no field IDs).
+    /// Schema has struct, list, and map columns before the predicate target (`id`),
+    /// exercising the fallback field ID mapping across all nested type variants.
+    #[tokio::test]
+    async fn test_predicate_on_migrated_file_with_nested_types() {
+        use serde::{Deserialize, Serialize};
+        use serde_arrow::schema::{SchemaLike, TracingOptions};
+
+        #[derive(Serialize, Deserialize)]
+        struct Person {
+            name: String,
+            age: i32,
+        }
+
+        #[derive(Serialize, Deserialize)]
+        struct Row {
+            person: Person,
+            people: Vec<Person>,
+            props: std::collections::BTreeMap<String, String>,
+            id: i32,
+        }
+
+        let rows = vec![
+            Row {
+                person: Person {
+                    name: "Alice".into(),
+                    age: 30,
+                },
+                people: vec![Person {
+                    name: "Alice".into(),
+                    age: 30,
+                }],
+                props: [("k1".into(), "v1".into())].into(),
+                id: 1,
+            },
+            Row {
+                person: Person {
+                    name: "Bob".into(),
+                    age: 25,
+                },
+                people: vec![Person {
+                    name: "Bob".into(),
+                    age: 25,
+                }],
+                props: [("k2".into(), "v2".into())].into(),
+                id: 2,
+            },
+            Row {
+                person: Person {
+                    name: "Carol".into(),
+                    age: 40,
+                },
+                people: vec![Person {
+                    name: "Carol".into(),
+                    age: 40,
+                }],
+                props: [("k3".into(), "v3".into())].into(),
+                id: 3,
+            },
+        ];
+
+        let tracing_options = TracingOptions::default()
+            .map_as_struct(false)
+            .strings_as_large_utf8(false)
+            .sequence_as_large_list(false);
+        let fields = Vec::<arrow_schema::FieldRef>::from_type::<Row>(tracing_options).unwrap();
+        let arrow_schema = Arc::new(ArrowSchema::new(fields.clone()));
+        let batch = serde_arrow::to_record_batch(&fields, &rows).unwrap();
+
+        // Fallback field IDs: person=1, people=2, props=3, id=4
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(
+                        1,
+                        "person",
+                        Type::Struct(crate::spec::StructType::new(vec![
+                            NestedField::required(
+                                5,
+                                "name",
+                                Type::Primitive(PrimitiveType::String),
+                            )
+                            .into(),
+                            NestedField::required(6, "age", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                    NestedField::required(
+                        2,
+                        "people",
+                        Type::List(crate::spec::ListType {
+                            element_field: NestedField::required(
+                                7,
+                                "element",
+                                Type::Struct(crate::spec::StructType::new(vec![
+                                    NestedField::required(
+                                        8,
+                                        "name",
+                                        Type::Primitive(PrimitiveType::String),
+                                    )
+                                    .into(),
+                                    NestedField::required(
+                                        9,
+                                        "age",
+                                        Type::Primitive(PrimitiveType::Int),
+                                    )
+                                    .into(),
+                                ])),
+                            )
+                            .into(),
+                        }),
+                    )
+                    .into(),
+                    NestedField::required(
+                        3,
+                        "props",
+                        Type::Map(crate::spec::MapType {
+                            key_field: NestedField::required(
+                                10,
+                                "key",
+                                Type::Primitive(PrimitiveType::String),
+                            )
+                            .into(),
+                            value_field: NestedField::required(
+                                11,
+                                "value",
+                                Type::Primitive(PrimitiveType::String),
+                            )
+                            .into(),
+                        }),
+                    )
+                    .into(),
+                    NestedField::required(4, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
         let file_path = format!("{table_location}/1.parquet");
@@ -4712,7 +4840,6 @@ message schema {
         writer.write(&batch).expect("Writing batch");
         writer.close().unwrap();
 
-        // Fallback field IDs: nested_col=1, id=2
         let predicate = Reference::new("id").greater_than(Datum::int(1));
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs())
@@ -4729,7 +4856,7 @@ message schema {
                 data_file_path: file_path,
                 data_file_format: DataFileFormat::Parquet,
                 schema: iceberg_schema.clone(),
-                project_field_ids: vec![2],
+                project_field_ids: vec![4],
                 predicate: Some(predicate.bind(iceberg_schema, true).unwrap()),
                 deletes: vec![],
                 partition: None,
@@ -4758,201 +4885,5 @@ message schema {
             })
             .collect();
         assert_eq!(ids, vec![2, 3]);
-    }
-
-    /// Regression for <https://github.com/apache/iceberg-rust/issues/2306>:
-    /// predicate on a column after a struct in a migrated file (no field IDs).
-    #[tokio::test]
-    async fn test_predicate_on_migrated_file_with_struct() {
-        let schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
-                    NestedField::required(
-                        1,
-                        "person",
-                        Type::Struct(crate::spec::StructType::new(vec![
-                            NestedField::required(
-                                3,
-                                "name",
-                                Type::Primitive(PrimitiveType::String),
-                            )
-                            .into(),
-                            NestedField::required(4, "age", Type::Primitive(PrimitiveType::Int))
-                                .into(),
-                        ])),
-                    )
-                    .into(),
-                    NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new(
-                "person",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("age", DataType::Int32, false),
-                ])),
-                false,
-            ),
-            Field::new("id", DataType::Int32, false),
-        ]));
-
-        let person_data = Arc::new(StructArray::from(vec![
-            (
-                Arc::new(Field::new("name", DataType::Utf8, false)),
-                Arc::new(StringArray::from(vec!["Alice", "Bob", "Carol"])) as ArrayRef,
-            ),
-            (
-                Arc::new(Field::new("age", DataType::Int32, false)),
-                Arc::new(Int32Array::from(vec![30, 25, 40])) as ArrayRef,
-            ),
-        ])) as ArrayRef;
-        let id_data = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
-
-        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![person_data, id_data]).unwrap();
-
-        read_migrated_file_with_nested_type_and_predicate(schema, arrow_schema, batch).await;
-    }
-
-    /// Regression for <https://github.com/apache/iceberg-rust/issues/2306>:
-    /// predicate on a column after a list in a migrated file (no field IDs).
-    /// Uses list-of-struct (2+ leaves) because a list of primitives has only 1 leaf,
-    /// which coincidentally produces the same mapping as a top-level primitive.
-    #[tokio::test]
-    async fn test_predicate_on_migrated_file_with_list() {
-        let schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
-                    NestedField::required(
-                        1,
-                        "people",
-                        Type::List(crate::spec::ListType {
-                            element_field: NestedField::required(
-                                3,
-                                "element",
-                                Type::Struct(crate::spec::StructType::new(vec![
-                                    NestedField::required(
-                                        4,
-                                        "name",
-                                        Type::Primitive(PrimitiveType::String),
-                                    )
-                                    .into(),
-                                    NestedField::required(
-                                        5,
-                                        "age",
-                                        Type::Primitive(PrimitiveType::Int),
-                                    )
-                                    .into(),
-                                ])),
-                            )
-                            .into(),
-                        }),
-                    )
-                    .into(),
-                    NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-
-        let name_field = Arc::new(Field::new("name", DataType::Utf8, false));
-        let age_field = Arc::new(Field::new("age", DataType::Int32, false));
-        let struct_fields = Fields::from(vec![name_field.clone(), age_field.clone()]);
-        let element_field = Field::new("element", DataType::Struct(struct_fields), false);
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new_list("people", element_field, false),
-            Field::new("id", DataType::Int32, false),
-        ]));
-
-        // 3 rows, each with a single-element list of struct
-        let names = Arc::new(StringArray::from(vec!["Alice", "Bob", "Carol"])) as ArrayRef;
-        let ages = Arc::new(Int32Array::from(vec![30, 25, 40])) as ArrayRef;
-        let structs = StructArray::from(vec![(name_field, names), (age_field, ages)]);
-        // One list element per row
-        let offsets = OffsetBuffer::from_lengths([1, 1, 1]);
-        let people_data = Arc::new(ListArray::new(
-            Arc::new(Field::new("element", structs.data_type().clone(), false)),
-            offsets,
-            Arc::new(structs),
-            None,
-        )) as ArrayRef;
-        let id_data = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
-
-        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![people_data, id_data]).unwrap();
-
-        read_migrated_file_with_nested_type_and_predicate(schema, arrow_schema, batch).await;
-    }
-
-    /// Regression for <https://github.com/apache/iceberg-rust/issues/2306>:
-    /// predicate on a column after a map in a migrated file (no field IDs).
-    #[tokio::test]
-    async fn test_predicate_on_migrated_file_with_map() {
-        let schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
-                    NestedField::required(
-                        1,
-                        "props",
-                        Type::Map(crate::spec::MapType {
-                            key_field: NestedField::required(
-                                3,
-                                "key",
-                                Type::Primitive(PrimitiveType::String),
-                            )
-                            .into(),
-                            value_field: NestedField::required(
-                                4,
-                                "value",
-                                Type::Primitive(PrimitiveType::String),
-                            )
-                            .into(),
-                        }),
-                    )
-                    .into(),
-                    NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new_map(
-                "props",
-                "entries",
-                Field::new("key", DataType::Utf8, false),
-                Field::new("value", DataType::Utf8, false),
-                false,
-                false,
-            ),
-            Field::new("id", DataType::Int32, false),
-        ]));
-
-        let key_field = Arc::new(Field::new("key", DataType::Utf8, false));
-        let value_field = Arc::new(Field::new("value", DataType::Utf8, false));
-        let mut map_builder =
-            arrow_array::builder::MapBuilder::new(None, StringBuilder::new(), StringBuilder::new())
-                .with_keys_field(key_field)
-                .with_values_field(value_field);
-        map_builder.keys().append_value("k1");
-        map_builder.values().append_value("v1");
-        map_builder.append(true).unwrap();
-        map_builder.keys().append_value("k2");
-        map_builder.values().append_value("v2");
-        map_builder.append(true).unwrap();
-        map_builder.keys().append_value("k3");
-        map_builder.values().append_value("v3");
-        map_builder.append(true).unwrap();
-        let props_data = Arc::new(map_builder.finish()) as ArrayRef;
-        let id_data = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
-
-        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![props_data, id_data]).unwrap();
-
-        read_migrated_file_with_nested_type_and_predicate(schema, arrow_schema, batch).await;
     }
 }
