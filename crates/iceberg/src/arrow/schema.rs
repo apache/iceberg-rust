@@ -1165,6 +1165,33 @@ impl ArrowSchemaVisitor for MetadataStripVisitor {
         Ok(())
     }
 
+    fn before_list_element(&mut self, field: &Field) -> Result<()> {
+        self.field_stack.push(Field::new(
+            field.name(),
+            DataType::Null,
+            field.is_nullable(),
+        ));
+        Ok(())
+    }
+
+    fn before_map_key(&mut self, field: &Field) -> Result<()> {
+        self.field_stack.push(Field::new(
+            field.name(),
+            DataType::Null,
+            field.is_nullable(),
+        ));
+        Ok(())
+    }
+
+    fn before_map_value(&mut self, field: &Field) -> Result<()> {
+        self.field_stack.push(Field::new(
+            field.name(),
+            DataType::Null,
+            field.is_nullable(),
+        ));
+        Ok(())
+    }
+
     fn schema(&mut self, _schema: &ArrowSchema, values: Vec<Self::T>) -> Result<Self::U> {
         Ok(ArrowSchema::new(values))
     }
@@ -2306,5 +2333,281 @@ mod tests {
 
         pretty_assertions::assert_eq!(schema, expected);
         assert_eq!(schema.highest_field_id(), 17);
+    }
+
+    #[test]
+    fn test_strip_metadata_list_of_primitives() {
+        let schema = ArrowSchema::new(vec![simple_field(
+            "tags",
+            DataType::List(Arc::new(simple_field("element", DataType::Int32, false, "2"))),
+            true,
+            "1",
+        )]);
+
+        let stripped = strip_metadata_from_schema(&schema).unwrap();
+
+        let expected = ArrowSchema::new(vec![Field::new(
+            "tags",
+            DataType::List(Arc::new(Field::new("element", DataType::Int32, false))),
+            true,
+        )]);
+
+        assert_eq!(stripped, expected);
+    }
+
+    #[test]
+    fn test_strip_metadata_map_string_to_string() {
+        let map_entries = simple_field(
+            DEFAULT_MAP_FIELD_NAME,
+            DataType::Struct(Fields::from(vec![
+                simple_field("key", DataType::Utf8, false, "2"),
+                simple_field("value", DataType::Utf8, true, "3"),
+            ])),
+            false,
+            "99",
+        );
+
+        let schema = ArrowSchema::new(vec![simple_field(
+            "my_map",
+            DataType::Map(Arc::new(map_entries), false),
+            true,
+            "1",
+        )]);
+
+        let stripped = strip_metadata_from_schema(&schema).unwrap();
+
+        let expected_entries = Field::new(
+            DEFAULT_MAP_FIELD_NAME,
+            DataType::Struct(Fields::from(vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Utf8, true),
+            ])),
+            false,
+        );
+        let expected = ArrowSchema::new(vec![Field::new(
+            "my_map",
+            DataType::Map(Arc::new(expected_entries), false),
+            true,
+        )]);
+
+        assert_eq!(stripped, expected);
+    }
+
+    #[test]
+    fn test_strip_metadata_list_of_structs() {
+        let schema = ArrowSchema::new(vec![simple_field(
+            "orders",
+            DataType::List(Arc::new(simple_field(
+                "element",
+                DataType::Struct(Fields::from(vec![
+                    simple_field("id", DataType::Utf8, false, "3"),
+                    simple_field("kind", DataType::Utf8, true, "4"),
+                ])),
+                true,
+                "2",
+            ))),
+            true,
+            "1",
+        )]);
+
+        let stripped = strip_metadata_from_schema(&schema).unwrap();
+
+        let expected = ArrowSchema::new(vec![Field::new(
+            "orders",
+            DataType::List(Arc::new(Field::new(
+                "element",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("id", DataType::Utf8, false),
+                    Field::new("kind", DataType::Utf8, true),
+                ])),
+                true,
+            ))),
+            true,
+        )]);
+
+        assert_eq!(stripped, expected);
+    }
+
+    #[test]
+    fn test_strip_metadata_nested_map_in_struct() {
+        let map_entries = simple_field(
+            DEFAULT_MAP_FIELD_NAME,
+            DataType::Struct(Fields::from(vec![
+                simple_field("key", DataType::Utf8, false, "4"),
+                simple_field("value", DataType::Utf8, true, "5"),
+            ])),
+            false,
+            "99",
+        );
+
+        let schema = ArrowSchema::new(vec![simple_field(
+            "record",
+            DataType::Struct(Fields::from(vec![
+                simple_field("id", DataType::Int64, false, "2"),
+                simple_field("attrs", DataType::Map(Arc::new(map_entries), false), true, "3"),
+            ])),
+            false,
+            "1",
+        )]);
+
+        let stripped = strip_metadata_from_schema(&schema).unwrap();
+
+        let expected_entries = Field::new(
+            DEFAULT_MAP_FIELD_NAME,
+            DataType::Struct(Fields::from(vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Utf8, true),
+            ])),
+            false,
+        );
+        let expected = ArrowSchema::new(vec![Field::new(
+            "record",
+            DataType::Struct(Fields::from(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("attrs", DataType::Map(Arc::new(expected_entries), false), true),
+            ])),
+            false,
+        )]);
+
+        assert_eq!(stripped, expected);
+    }
+
+    #[test]
+    fn test_strip_metadata_wide_realistic_schema() {
+        // Representative of real Hamelin schemas: scalars, list, map,
+        // list-of-struct, struct-with-nested-map.
+        let schema = ArrowSchema::new(vec![
+            simple_field("id", DataType::Int64, false, "1"),
+            simple_field("name", DataType::Utf8, true, "2"),
+            // List of primitives
+            simple_field(
+                "tags",
+                DataType::List(Arc::new(simple_field("element", DataType::Utf8, true, "4"))),
+                true,
+                "3",
+            ),
+            // Map<Utf8, Int64>
+            simple_field(
+                "counts",
+                DataType::Map(
+                    Arc::new(simple_field(
+                        DEFAULT_MAP_FIELD_NAME,
+                        DataType::Struct(Fields::from(vec![
+                            simple_field("key", DataType::Utf8, false, "6"),
+                            simple_field("value", DataType::Int64, true, "7"),
+                        ])),
+                        false,
+                        "99",
+                    )),
+                    false,
+                ),
+                true,
+                "5",
+            ),
+            // Struct with nested map
+            simple_field(
+                "context",
+                DataType::Struct(Fields::from(vec![
+                    simple_field("session_id", DataType::Utf8, true, "9"),
+                    simple_field(
+                        "debug_data",
+                        DataType::Map(
+                            Arc::new(simple_field(
+                                DEFAULT_MAP_FIELD_NAME,
+                                DataType::Struct(Fields::from(vec![
+                                    simple_field("key", DataType::Utf8, false, "11"),
+                                    simple_field("value", DataType::Utf8, true, "12"),
+                                ])),
+                                false,
+                                "99",
+                            )),
+                            false,
+                        ),
+                        true,
+                        "10",
+                    ),
+                ])),
+                true,
+                "8",
+            ),
+            // List of structs
+            simple_field(
+                "targets",
+                DataType::List(Arc::new(simple_field(
+                    "element",
+                    DataType::Struct(Fields::from(vec![
+                        simple_field("target_id", DataType::Utf8, false, "14"),
+                        simple_field("target_type", DataType::Utf8, true, "15"),
+                    ])),
+                    true,
+                    "13",
+                ))),
+                true,
+                "16",
+            ),
+        ]);
+
+        let stripped = strip_metadata_from_schema(&schema).unwrap();
+
+        let expected = ArrowSchema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, true),
+            Field::new(
+                "tags",
+                DataType::List(Arc::new(Field::new("element", DataType::Utf8, true))),
+                true,
+            ),
+            Field::new(
+                "counts",
+                DataType::Map(
+                    Arc::new(Field::new(
+                        DEFAULT_MAP_FIELD_NAME,
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("key", DataType::Utf8, false),
+                            Field::new("value", DataType::Int64, true),
+                        ])),
+                        false,
+                    )),
+                    false,
+                ),
+                true,
+            ),
+            Field::new(
+                "context",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("session_id", DataType::Utf8, true),
+                    Field::new(
+                        "debug_data",
+                        DataType::Map(
+                            Arc::new(Field::new(
+                                DEFAULT_MAP_FIELD_NAME,
+                                DataType::Struct(Fields::from(vec![
+                                    Field::new("key", DataType::Utf8, false),
+                                    Field::new("value", DataType::Utf8, true),
+                                ])),
+                                false,
+                            )),
+                            false,
+                        ),
+                        true,
+                    ),
+                ])),
+                true,
+            ),
+            Field::new(
+                "targets",
+                DataType::List(Arc::new(Field::new(
+                    "element",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("target_id", DataType::Utf8, false),
+                        Field::new("target_type", DataType::Utf8, true),
+                    ])),
+                    true,
+                ))),
+                true,
+            ),
+        ]);
+
+        assert_eq!(stripped, expected);
     }
 }
