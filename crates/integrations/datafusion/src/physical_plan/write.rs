@@ -60,7 +60,7 @@ use crate::to_datafusion_error;
 /// The output of this execution plan is a record batch containing a single column with serialized
 /// data file information that can be used for committing the write operation to the table.
 #[derive(Debug)]
-pub(crate) struct IcebergWriteExec {
+pub struct IcebergWriteExec {
     table: Table,
     input: Arc<dyn ExecutionPlan>,
     result_schema: ArrowSchemaRef,
