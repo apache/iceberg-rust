@@ -32,7 +32,7 @@ use crate::table::Table;
 use crate::transaction::ActionCommit;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
-const META_ROOT_PATH: &str = "metadata";
+pub(crate) const META_ROOT_PATH: &str = "metadata";
 
 /// A trait that defines how different table operations produce new snapshots.
 ///
@@ -155,6 +155,10 @@ impl<'a> SnapshotProducer<'a> {
     pub(crate) fn with_data_sequence_number(mut self, seq_num: i64) -> Self {
         self.data_sequence_number = Some(seq_num);
         self
+    }
+
+    pub(crate) fn snapshot_id(&self) -> i64 {
+        self.snapshot_id
     }
 
     pub(crate) fn validate_added_data_files(&self) -> Result<()> {
