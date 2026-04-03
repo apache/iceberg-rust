@@ -19,13 +19,18 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures::future::try_join_all;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::spec::{DataFile, ManifestEntry, ManifestFile, ManifestStatus, Operation};
+use crate::spec::{
+    DataFile, DataFileFormat, FormatVersion, ManifestContentType, ManifestEntry, ManifestFile,
+    ManifestStatus, ManifestWriterBuilder, Operation,
+};
 use crate::table::Table;
 use crate::transaction::snapshot::{
-    DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
+    DefaultManifestProcess, META_ROOT_PATH, SnapshotProduceOperation, SnapshotProducer,
 };
 use crate::transaction::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind};
@@ -63,10 +68,9 @@ impl ReplaceDataFilesAction {
 
     /// Add files to delete (old files being replaced).
     ///
-    /// Every manifest that contains a file being deleted must contain **only** files being deleted
-    /// (no surviving files). If a manifest mixes files-to-delete with files-to-keep, this action
-    /// returns [`ErrorKind::DataInvalid`]. This is a Phase 1 interim constraint; Phase 2 will
-    /// rewrite mixed manifests transparently using `ManifestWriter::add_existing_entry`.
+    /// When a manifest contains both files being deleted and files not being deleted, this action
+    /// writes a new "residual" manifest containing only the surviving entries, preserving their
+    /// original sequence numbers.
     ///
     /// **Path uniqueness constraint**: Paths in `files_to_delete` cannot appear in the `add_files`
     /// list. The duplicate-file check (`validate_duplicate_files`) compares against all alive
@@ -154,9 +158,10 @@ impl TransactionAction for ReplaceDataFilesAction {
         // `files_to_add` and `files_to_delete` must be cloned here. For large
         // compaction jobs with many DataFiles this is non-trivial overhead.
         // Tracked as a known Phase 1 limitation; revisit if memory becomes an issue.
+        let commit_uuid = self.commit_uuid.unwrap_or_else(Uuid::now_v7);
         let mut snapshot_producer = SnapshotProducer::new(
             table,
-            self.commit_uuid.unwrap_or_else(Uuid::now_v7),
+            commit_uuid,
             self.key_metadata.clone(),
             self.snapshot_properties.clone(),
             self.files_to_add.clone(),
@@ -177,6 +182,8 @@ impl TransactionAction for ReplaceDataFilesAction {
                 .map(|f| f.file_path.clone())
                 .collect(),
             validate_from_snapshot_id: self.validate_from_snapshot_id,
+            commit_uuid,
+            key_metadata: self.key_metadata.clone(),
         };
 
         snapshot_producer
@@ -188,6 +195,8 @@ impl TransactionAction for ReplaceDataFilesAction {
 struct ReplaceOperation {
     files_to_delete: HashSet<String>,
     validate_from_snapshot_id: Option<i64>,
+    commit_uuid: Uuid,
+    key_metadata: Option<Vec<u8>>,
 }
 
 impl SnapshotProduceOperation for ReplaceOperation {
@@ -203,19 +212,38 @@ impl SnapshotProduceOperation for ReplaceOperation {
             return Ok(vec![]);
         }
 
-        let snapshot = if let Some(snap_id) = self.validate_from_snapshot_id {
-            snapshot_produce
-                .table
-                .metadata()
-                .snapshot_by_id(snap_id)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Snapshot not found for validate_from_snapshot: {snap_id}"),
-                    )
-                })?
+        let (snapshot, fell_back) = if let Some(snap_id) = self.validate_from_snapshot_id {
+            match snapshot_produce.table.metadata().snapshot_by_id(snap_id) {
+                Some(s) => (s, false),
+                None => {
+                    // Planning snapshot was expired by the catalog between plan time and
+                    // commit time (common during long compaction runs). Fall back to the
+                    // current snapshot: the validation goal is to confirm that the files
+                    // to delete are still alive, which the current snapshot satisfies.
+                    //
+                    // Note: we cannot distinguish between an expired snapshot (expected in
+                    // long compaction runs) and a truly invalid snapshot ID (programmer
+                    // error). Both fall back to the current snapshot.
+                    warn!(
+                        "validate_from_snapshot {} not found (likely expired by catalog); \
+                         falling back to current snapshot for file-existence validation",
+                        snap_id
+                    );
+                    let s = snapshot_produce
+                        .table
+                        .metadata()
+                        .current_snapshot()
+                        .ok_or_else(|| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                "Cannot delete files from a table with no snapshots",
+                            )
+                        })?;
+                    (s, true)
+                }
+            }
         } else {
-            snapshot_produce
+            let s = snapshot_produce
                 .table
                 .metadata()
                 .current_snapshot()
@@ -224,7 +252,8 @@ impl SnapshotProduceOperation for ReplaceOperation {
                         ErrorKind::DataInvalid,
                         "Cannot delete files from a table with no snapshots",
                     )
-                })?
+                })?;
+            (s, false)
         };
 
         let manifest_list = snapshot
@@ -234,12 +263,20 @@ impl SnapshotProduceOperation for ReplaceOperation {
             )
             .await?;
 
+        // Uses validate_from_snapshot_id when set (historical planning snapshot), or
+        // current_snapshot otherwise. See existing_manifest() for the two-snapshot design
+        // rationale and what happens to residual manifests on commit failure.
+        let manifests = try_join_all(
+            manifest_list
+                .entries()
+                .iter()
+                .map(|e| e.load_manifest(snapshot_produce.table.file_io())),
+        )
+        .await?;
+
         let mut deleted_entries = Vec::new();
         let mut found_paths = HashSet::new();
-        for entry in manifest_list.entries() {
-            let manifest = entry
-                .load_manifest(snapshot_produce.table.file_io())
-                .await?;
+        for manifest in &manifests {
             for entry in manifest.entries() {
                 if entry.is_alive() && self.files_to_delete.contains(entry.file_path()) {
                     found_paths.insert(entry.file_path().to_string());
@@ -259,9 +296,10 @@ impl SnapshotProduceOperation for ReplaceOperation {
             .collect();
         if !missing.is_empty() {
             // Use a precise label so users debugging errors know which snapshot was checked.
-            let snapshot_label = match self.validate_from_snapshot_id {
-                Some(id) => format!("snapshot {id}"),
-                None => "current snapshot".to_string(),
+            let snapshot_label = match (self.validate_from_snapshot_id, fell_back) {
+                (Some(id), false) => format!("snapshot {id}"),
+                (Some(_), true) => "current snapshot (planning snapshot expired)".to_string(),
+                (None, _) => "current snapshot".to_string(),
             };
             return Err(Error::new(
                 ErrorKind::DataInvalid,
@@ -279,6 +317,13 @@ impl SnapshotProduceOperation for ReplaceOperation {
         &self,
         snapshot_produce: &SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestFile>> {
+        // Always reads from current_snapshot — the carry-forward must reflect current table state,
+        // not the historical planning snapshot used by delete_entries(). This asymmetry is
+        // intentional: existing_manifest() rewrites survivors; delete_entries() validates deletions.
+        //
+        // If the commit subsequently fails RefSnapshotIdMatch (e.g., a concurrent writer changed
+        // the snapshot), any residual manifests written here become orphan files. The standard
+        // Iceberg orphan-file GC handles cleanup; there is no correctness issue.
         let Some(snapshot) = snapshot_produce.table.metadata().current_snapshot() else {
             return Ok(vec![]);
         };
@@ -290,39 +335,88 @@ impl SnapshotProduceOperation for ReplaceOperation {
             )
             .await?;
 
-        let mut result = Vec::new();
-        for entry in manifest_list.entries() {
-            let manifest = entry
-                .load_manifest(snapshot_produce.table.file_io())
-                .await?;
+        // Load all manifests in parallel — independent object-storage reads.
+        let manifests = try_join_all(
+            manifest_list
+                .entries()
+                .iter()
+                .map(|e| e.load_manifest(snapshot_produce.table.file_io())),
+        )
+        .await?;
 
+        let file_io = snapshot_produce.table.file_io();
+        let schema = snapshot_produce.table.metadata().current_schema().clone();
+        let spec = snapshot_produce
+            .table
+            .metadata()
+            .default_partition_spec()
+            .as_ref()
+            .clone();
+        let fmt = snapshot_produce.table.metadata().format_version();
+        let location = snapshot_produce.table.metadata().location().to_string();
+        let snap_id = snapshot_produce.snapshot_id();
+
+        let mut result = Vec::new();
+        let mut residual_idx = 0usize;
+
+        for (ml_entry, manifest) in manifest_list.entries().iter().zip(manifests.iter()) {
             let has_deletions = manifest
                 .entries()
                 .iter()
                 .any(|e| e.is_alive() && self.files_to_delete.contains(e.file_path()));
 
             if !has_deletions {
-                result.push(entry.clone());
+                result.push(ml_entry.clone());
                 continue;
             }
 
-            let has_survivors = manifest
+            let survivors: Vec<_> = manifest
                 .entries()
                 .iter()
-                .any(|e| e.is_alive() && !self.files_to_delete.contains(e.file_path()));
+                .filter(|e| e.is_alive() && !self.files_to_delete.contains(e.file_path()))
+                .collect();
 
-            if has_survivors {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Manifest '{}' contains files being deleted alongside files not being \
-                         deleted; use delete_data_files with complete manifest sets",
-                        entry.manifest_path
-                    ),
-                ));
+            if survivors.is_empty() {
+                // All alive entries are being deleted; exclude the manifest entirely.
+                // delete_entries() will mark them as Deleted in the new snapshot.
+                continue;
             }
-            // All alive entries in this manifest are being deleted; exclude it.
-            // delete_entries() will mark them as Deleted in the new snapshot.
+
+            // Partial manifest: write a residual containing only survivors.
+            let path = format!(
+                "{}/{}/{}-residual-m{}.{}",
+                location,
+                META_ROOT_PATH,
+                self.commit_uuid,
+                residual_idx,
+                DataFileFormat::Avro,
+            );
+            residual_idx += 1;
+
+            let output_file = file_io.new_output(path)?;
+            let builder = ManifestWriterBuilder::new(
+                output_file,
+                Some(snap_id),
+                self.key_metadata.clone(),
+                schema.clone(),
+                spec.clone(),
+            );
+            let mut writer = match (fmt, ml_entry.content) {
+                (FormatVersion::V1, _) => builder.build_v1(),
+                (FormatVersion::V2, ManifestContentType::Data) => builder.build_v2_data(),
+                (FormatVersion::V2, ManifestContentType::Deletes) => builder.build_v2_deletes(),
+                (FormatVersion::V3, ManifestContentType::Data) => builder.build_v3_data(),
+                (FormatVersion::V3, ManifestContentType::Deletes) => builder.build_v3_deletes(),
+            };
+            for me in survivors {
+                writer.add_existing_file(
+                    me.data_file.clone(),
+                    me.snapshot_id.unwrap_or(0),
+                    me.sequence_number.unwrap_or(0),
+                    me.file_sequence_number,
+                )?;
+            }
+            result.push(writer.write_manifest_file().await?);
         }
 
         Ok(result)
@@ -352,6 +446,46 @@ mod tests {
             .partition(Struct::from_iter([Some(Literal::long(300))]))
             .build()
             .unwrap()
+    }
+
+    async fn append_files(table: crate::table::Table, files: Vec<DataFile>) -> crate::table::Table {
+        let tx = Transaction::new(&table);
+        let append = tx.fast_append().add_data_files(files);
+        let updates = Arc::new(append)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        apply_updates_to_table(&table, &updates)
+    }
+
+    fn unwrap_add_snapshot(updates: &[TableUpdate]) -> &crate::spec::Snapshot {
+        if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            snapshot
+        } else {
+            panic!("expected AddSnapshot update at index 0")
+        }
+    }
+
+    async fn collect_alive_files(
+        snapshot: &crate::spec::Snapshot,
+        table: &crate::table::Table,
+    ) -> Vec<String> {
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let mut alive_files: Vec<String> = Vec::new();
+        for mf in manifest_list.entries() {
+            let manifest = mf.load_manifest(table.file_io()).await.unwrap();
+            for me in manifest.entries() {
+                if me.is_alive() {
+                    alive_files.push(me.file_path().to_string());
+                }
+            }
+        }
+        alive_files.sort();
+        alive_files
     }
 
     #[tokio::test]
@@ -588,7 +722,7 @@ mod tests {
         // NOTE: this test covers "partial table replace" in the sense that one manifest survives
         // (file3's manifest is untouched) while another is fully deleted (file1+file2 share a
         // manifest and both are deleted). It does NOT test the mixed-manifest case — that is
-        // covered by test_replace_mixed_manifest_errors below.
+        // covered by test_replace_partial_manifest_rewritten below.
         let table = make_v2_minimal_table();
 
         let file1 = make_data_file(&table, "data/file1.parquet", 10);
@@ -806,8 +940,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_validate_from_snapshot_unknown_id_errors() {
-        // validate_from_snapshot with a non-existent snapshot ID should return an error.
+    async fn test_replace_validate_from_snapshot_expired_falls_back_to_current() {
+        // validate_from_snapshot with a non-existent (expired) snapshot ID falls back
+        // to the current snapshot. The commit should succeed because the files to delete
+        // are still alive in the current snapshot.
         let table = make_v2_minimal_table();
 
         let file1 = make_data_file(&table, "data/file1.parquet", 10);
@@ -824,16 +960,67 @@ mod tests {
         let tx = Transaction::new(&table1);
         let replace = tx
             .replace_data_files()
-            .validate_from_snapshot(999_999_999) // does not exist
+            .validate_from_snapshot(999_999_999) // does not exist — simulates an expired snapshot
             .delete_files(vec![file1])
             .add_files(vec![compacted]);
 
-        let Err(err) = Arc::new(replace).commit(&table1).await else {
-            panic!("expected error for unknown snapshot id");
-        };
+        // Should succeed: expired planning snapshot falls back to current snapshot,
+        // and file1 is alive there.
         assert!(
-            err.to_string().contains("Snapshot not found"),
-            "Expected snapshot-not-found error, got: {err}"
+            Arc::new(replace).commit(&table1).await.is_ok(),
+            "expected commit to succeed when validate_from_snapshot is expired"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_validate_from_snapshot_expired_file_concurrently_deleted() {
+        // Scenario: validate_from_snapshot refers to an expired snapshot (simulated by a
+        // non-existent ID so the fallback fires), AND the file to delete was concurrently
+        // removed before the commit. Expected: commit fails with DataInvalid; error message
+        // references "current snapshot (planning snapshot expired)", not the expired ID.
+        let table = make_v2_minimal_table();
+
+        // Step 1: Append file1 → table1.
+        let file1 = make_data_file(&table, "data/file1.parquet", 10);
+        let table1 = append_files(table.clone(), vec![file1.clone()]).await;
+
+        // Step 2: Simulate concurrent delete — replace file1 so it is no longer alive.
+        let replacement = make_data_file(&table, "data/replacement.parquet", 10);
+        let tx = Transaction::new(&table1);
+        let replace_concurrent = tx
+            .replace_data_files()
+            .delete_files(vec![file1.clone()])
+            .add_files(vec![replacement]);
+        let updates2 = Arc::new(replace_concurrent)
+            .commit(&table1)
+            .await
+            .unwrap()
+            .take_updates();
+        let table2 = apply_updates_to_table(&table1, &updates2);
+
+        // Step 3: Attempt another replace of file1 using an expired planning snapshot ID.
+        // Fallback fires (999_999_999 not found → current snapshot used for validation).
+        // file1 is not alive in table2's current snapshot → validation must reject.
+        let compacted = make_data_file(&table, "data/compacted.parquet", 10);
+        let tx = Transaction::new(&table2);
+        let replace_stale = tx
+            .replace_data_files()
+            .validate_from_snapshot(999_999_999) // non-existent → triggers expired fallback
+            .delete_files(vec![file1])
+            .add_files(vec![compacted]);
+
+        let Err(err) = Arc::new(replace_stale).commit(&table2).await else {
+            panic!("commit should fail: file1 is no longer alive in current snapshot");
+        };
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("current snapshot"),
+            "error should reference 'current snapshot', not the expired ID; got: {msg}"
+        );
+        assert!(
+            !msg.contains("999999999"),
+            "error should not reference the expired snapshot ID; got: {msg}"
         );
     }
 
@@ -842,9 +1029,9 @@ mod tests {
     // --- Mixed manifest detection ---
 
     #[tokio::test]
-    async fn test_replace_mixed_manifest_errors() {
+    async fn test_replace_partial_manifest_rewritten() {
         // file_a and file_b share one manifest; file_c is in its own manifest.
-        // Deleting only file_a (not file_b) must return DataInvalid — mixed manifest.
+        // Deleting only file_a must produce a residual manifest with file_b surviving.
         let table = make_v2_minimal_table();
 
         let file_a = make_data_file(&table, "data/a.parquet", 10);
@@ -852,41 +1039,70 @@ mod tests {
         let file_c = make_data_file(&table, "data/c.parquet", 30);
 
         // Append A and B together — they share one manifest.
-        let tx = Transaction::new(&table);
-        let append_ab = tx
-            .fast_append()
-            .add_data_files(vec![file_a.clone(), file_b.clone()]);
-        let updates_ab = Arc::new(append_ab)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
-        let table_after_ab = apply_updates_to_table(&table, &updates_ab);
+        let table_after_ab =
+            append_files(table.clone(), vec![file_a.clone(), file_b.clone()]).await;
 
         // Append C separately — its own manifest.
-        let tx = Transaction::new(&table_after_ab);
-        let append_c = tx.fast_append().add_data_files(vec![file_c]);
-        let updates_c = Arc::new(append_c)
-            .commit(&table_after_ab)
-            .await
-            .unwrap()
-            .take_updates();
-        let table_with_files = apply_updates_to_table(&table_after_ab, &updates_c);
+        let table_with_files = append_files(table_after_ab.clone(), vec![file_c]).await;
 
-        // Compact: delete only A. B is in the same manifest — must error.
+        // Delete only A. B survives in a residual manifest; C is untouched.
         let compacted = make_data_file(&table, "data/compacted.parquet", 10);
         let tx = Transaction::new(&table_with_files);
         let replace = tx
             .replace_data_files()
             .delete_files(vec![file_a])
             .add_files(vec![compacted]);
-        let Err(err) = Arc::new(replace).commit(&table_with_files).await else {
-            panic!("expected DataInvalid error for mixed manifest");
-        };
+        let mut commit = Arc::new(replace)
+            .commit(&table_with_files)
+            .await
+            .expect("partial manifest should succeed, not error");
+        let updates = commit.take_updates();
+
+        let new_snapshot = unwrap_add_snapshot(&updates);
+
+        // Collect alive files and verify B and compacted are present, A is gone.
+        let alive_files = collect_alive_files(new_snapshot, &table_with_files).await;
+
+        // Also extract Existing entries to check sequence numbers are preserved.
+        let manifest_list = new_snapshot
+            .load_manifest_list(table_with_files.file_io(), table_with_files.metadata())
+            .await
+            .unwrap();
+        let mut existing_entries: Vec<(String, Option<i64>)> = Vec::new();
+        for mf in manifest_list.entries() {
+            let manifest = mf.load_manifest(table_with_files.file_io()).await.unwrap();
+            for me in manifest.entries() {
+                if me.is_alive() && me.status() == ManifestStatus::Existing {
+                    existing_entries.push((me.file_path().to_string(), me.sequence_number()));
+                }
+            }
+        }
+
         assert!(
-            err.to_string()
-                .contains("contains files being deleted alongside files not being deleted"),
-            "Expected mixed-manifest error, got: {err}"
+            alive_files.contains(&"data/b.parquet".to_string()),
+            "file_b must survive in residual manifest; alive: {alive_files:?}"
+        );
+        assert!(
+            alive_files.contains(&"data/c.parquet".to_string()),
+            "file_c must survive in untouched manifest; alive: {alive_files:?}"
+        );
+        assert!(
+            alive_files.contains(&"data/compacted.parquet".to_string()),
+            "compacted file must be present; alive: {alive_files:?}"
+        );
+        assert!(
+            !alive_files.contains(&"data/a.parquet".to_string()),
+            "file_a must be deleted; alive: {alive_files:?}"
+        );
+
+        // Survivor (b) must be Existing with a non-None sequence number.
+        let b_entry = existing_entries
+            .iter()
+            .find(|(p, _)| p == "data/b.parquet")
+            .expect("file_b must have an Existing entry");
+        assert!(
+            b_entry.1.is_some(),
+            "surviving file_b must have sequence_number set"
         );
     }
 
@@ -999,6 +1215,130 @@ mod tests {
         assert!(
             !alive_files.contains(&"data/a.parquet".to_string()),
             "file_a should be gone"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_multiple_partial_manifests() {
+        // Two manifests, each with two files; delete one file from each.
+        // Both must produce residual manifests — each survivor appears in the snapshot.
+        let table = make_v2_minimal_table();
+
+        let file_a = make_data_file(&table, "data/a.parquet", 10);
+        let file_b = make_data_file(&table, "data/b.parquet", 20);
+        let file_c = make_data_file(&table, "data/c.parquet", 30);
+        let file_d = make_data_file(&table, "data/d.parquet", 40);
+
+        // A+B share manifest 1.
+        let table_after_ab =
+            append_files(table.clone(), vec![file_a.clone(), file_b.clone()]).await;
+
+        // C+D share manifest 2.
+        let table_with_files =
+            append_files(table_after_ab.clone(), vec![file_c.clone(), file_d.clone()]).await;
+
+        // Delete A and C — one from each manifest; B and D survive.
+        let compacted = make_data_file(&table, "data/compacted.parquet", 50);
+        let tx = Transaction::new(&table_with_files);
+        let replace = tx
+            .replace_data_files()
+            .delete_files(vec![file_a, file_c])
+            .add_files(vec![compacted]);
+        let mut commit = Arc::new(replace)
+            .commit(&table_with_files)
+            .await
+            .expect("multiple partial manifests should succeed");
+        let updates = commit.take_updates();
+
+        let new_snapshot = unwrap_add_snapshot(&updates);
+        let alive_files = collect_alive_files(new_snapshot, &table_with_files).await;
+
+        assert!(
+            alive_files.contains(&"data/b.parquet".to_string()),
+            "file_b must survive; alive: {alive_files:?}"
+        );
+        assert!(
+            alive_files.contains(&"data/d.parquet".to_string()),
+            "file_d must survive; alive: {alive_files:?}"
+        );
+        assert!(
+            alive_files.contains(&"data/compacted.parquet".to_string()),
+            "compacted file must be present; alive: {alive_files:?}"
+        );
+        assert!(
+            !alive_files.contains(&"data/a.parquet".to_string()),
+            "file_a must be gone; alive: {alive_files:?}"
+        );
+        assert!(
+            !alive_files.contains(&"data/c.parquet".to_string()),
+            "file_c must be gone; alive: {alive_files:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_complete_and_partial_mix() {
+        // Three manifests: manifest 1 fully consumed, manifest 2 partially consumed (residual),
+        // manifest 3 untouched. Verify each is handled correctly.
+        let table = make_v2_minimal_table();
+
+        let file_a = make_data_file(&table, "data/a.parquet", 10);
+        let file_b = make_data_file(&table, "data/b.parquet", 20);
+        let file_c = make_data_file(&table, "data/c.parquet", 30);
+        let file_d = make_data_file(&table, "data/d.parquet", 40);
+        let file_e = make_data_file(&table, "data/e.parquet", 50);
+
+        // A+B → manifest 1 (will be fully consumed).
+        let table1 = append_files(table.clone(), vec![file_a.clone(), file_b.clone()]).await;
+
+        // C+D → manifest 2 (will be partially consumed; D survives).
+        let table2 = append_files(table1.clone(), vec![file_c.clone(), file_d.clone()]).await;
+
+        // E → manifest 3 (untouched).
+        let table_with_files = append_files(table2.clone(), vec![file_e]).await;
+
+        // Delete A, B (fully consumes manifest 1), and C (partially consumes manifest 2).
+        let compacted = make_data_file(&table, "data/compacted.parquet", 60);
+        let tx = Transaction::new(&table_with_files);
+        let replace = tx
+            .replace_data_files()
+            .delete_files(vec![file_a, file_b, file_c])
+            .add_files(vec![compacted]);
+        let mut commit = Arc::new(replace)
+            .commit(&table_with_files)
+            .await
+            .expect("complete+partial mix should succeed");
+        let updates = commit.take_updates();
+
+        let new_snapshot = unwrap_add_snapshot(&updates);
+        let alive_files = collect_alive_files(new_snapshot, &table_with_files).await;
+
+        // D survives from the residual of manifest 2.
+        assert!(
+            alive_files.contains(&"data/d.parquet".to_string()),
+            "file_d must survive in residual; alive: {alive_files:?}"
+        );
+        // E survives from the untouched manifest 3.
+        assert!(
+            alive_files.contains(&"data/e.parquet".to_string()),
+            "file_e must survive from untouched manifest; alive: {alive_files:?}"
+        );
+        // Compacted file is present.
+        assert!(
+            alive_files.contains(&"data/compacted.parquet".to_string()),
+            "compacted file must be present; alive: {alive_files:?}"
+        );
+        // A, B, C are all deleted.
+        assert!(
+            !alive_files.contains(&"data/a.parquet".to_string()),
+            "file_a must be gone; alive: {alive_files:?}"
+        );
+        assert!(
+            !alive_files.contains(&"data/b.parquet".to_string()),
+            "file_b must be gone; alive: {alive_files:?}"
+        );
+        assert!(
+            !alive_files.contains(&"data/c.parquet".to_string()),
+            "file_c must be gone; alive: {alive_files:?}"
         );
     }
 
