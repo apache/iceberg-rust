@@ -35,7 +35,7 @@ dirs = { workspace = true }
 fs-err = { workspace = true }
 home = { workspace = true }
 iceberg = { workspace = true }
-iceberg-catalog-rest = { workspace = true }
+iceberg-catalog-loader = { workspace = true }
 iceberg-datafusion = { workspace = true }
 mimalloc = { workspace = true }
 stacker = { workspace = true }
