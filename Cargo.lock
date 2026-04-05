@@ -3468,14 +3468,19 @@ name = "iceberg-catalog-s3tables"
 version = "0.9.0"
 dependencies = [
  "anyhow",
+ "arrow-array",
+ "arrow-schema",
  "async-trait",
  "aws-config",
  "aws-sdk-s3tables",
+ "futures",
  "iceberg",
  "iceberg-storage-opendal",
  "iceberg_test_utils",
  "itertools 0.13.0",
+ "parquet",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
