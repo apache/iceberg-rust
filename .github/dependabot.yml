@@ -23,6 +23,8 @@ updates:
     schedule:
       interval: "weekly"
       day: "sunday"
+    cooldown:
+      default-days: 7
 
   # Maintain dependencies for iceberg
   - package-ecosystem: "cargo"
@@ -42,3 +44,5 @@ updates:
         patterns:
           - "arrow*"
           - "parquet"
+    cooldown:
+      default-days: 7

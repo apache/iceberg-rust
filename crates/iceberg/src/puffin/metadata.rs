@@ -388,7 +388,7 @@ mod tests {
     use bytes::Bytes;
     use tempfile::TempDir;
 
-    use crate::io::{FileIOBuilder, InputFile};
+    use crate::io::{FileIO, InputFile};
     use crate::puffin::metadata::{BlobMetadata, CompressionCodec, FileMetadata};
     use crate::puffin::test_utils::{
         empty_footer_payload, empty_footer_payload_bytes, empty_footer_payload_bytes_length_bytes,
@@ -400,7 +400,7 @@ mod tests {
     const INVALID_MAGIC_VALUE: [u8; 4] = [80, 70, 65, 0];
 
     async fn input_file_with_bytes(temp_dir: &TempDir, slice: &[u8]) -> InputFile {
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         let path_buf = temp_dir.path().join("abc.puffin");
         let temp_path = path_buf.to_str().unwrap();
@@ -985,6 +985,9 @@ mod tests {
         assert!(result.is_ok());
         let metadata = result.unwrap();
         assert_eq!(metadata.blobs.len(), 1);
-        assert_eq!(metadata.blobs[0].compression_codec, CompressionCodec::Gzip);
+        assert_eq!(
+            metadata.blobs[0].compression_codec,
+            CompressionCodec::gzip_default()
+        );
     }
 }

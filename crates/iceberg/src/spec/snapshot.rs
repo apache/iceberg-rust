@@ -33,16 +33,15 @@ use crate::{Error, ErrorKind};
 
 /// The ref name of the main branch of the table.
 pub const MAIN_BRANCH: &str = "main";
-/// Placeholder for snapshot ID. The field with this value must be replaced with the actual snapshot ID before it is committed.
-pub const UNASSIGNED_SNAPSHOT_ID: i64 = -1;
 
 /// Reference to [`Snapshot`].
 pub type SnapshotRef = Arc<Snapshot>;
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "lowercase")]
 /// The operation field is used by some operations, like snapshot expiration, to skip processing certain snapshots.
 pub enum Operation {
     /// Only data files were added and no files were removed.
+    #[default]
     Append,
     /// Data and delete files were added and removed without changing table data;
     /// i.e., compaction, changing the data file format, or relocating data files.
@@ -73,12 +72,6 @@ pub struct Summary {
     /// Other summary data.
     #[serde(flatten)]
     pub additional_properties: HashMap<String, String>,
-}
-
-impl Default for Operation {
-    fn default() -> Operation {
-        Self::Append
-    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

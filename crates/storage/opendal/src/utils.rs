@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use opendal::Operator;
-use opendal::services::FsConfig;
+pub(crate) fn is_truthy(value: &str) -> bool {
+    ["true", "t", "1", "on"].contains(&value.to_lowercase().as_str())
+}
 
-use crate::Result;
-
-/// Build new opendal operator from give path.
-pub(crate) fn fs_config_build() -> Result<Operator> {
-    let mut cfg = FsConfig::default();
-    cfg.root = Some("/".to_string());
-
-    Ok(Operator::from_config(cfg)?.finish())
+/// Convert an opendal error into an iceberg error.
+pub(crate) fn from_opendal_error(e: opendal::Error) -> iceberg::Error {
+    iceberg::Error::new(
+        iceberg::ErrorKind::Unexpected,
+        "Failure in doing io operation",
+    )
+    .with_source(e)
 }

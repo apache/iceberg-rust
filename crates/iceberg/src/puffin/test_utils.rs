@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use super::blob::Blob;
 use crate::compression::CompressionCodec;
-use crate::io::{FileIOBuilder, InputFile};
+use crate::io::{FileIO, InputFile};
 use crate::puffin::metadata::{BlobMetadata, CREATED_BY_PROPERTY, FileMetadata};
 
 const JAVA_TESTDATA: &str = "testdata/puffin/java-generated";
@@ -28,9 +28,7 @@ const METRIC_UNCOMPRESSED: &str = "sample-metric-data-uncompressed.bin";
 const METRIC_ZSTD_COMPRESSED: &str = "sample-metric-data-compressed-zstd.bin";
 
 fn input_file_for_test_data(path: &str) -> InputFile {
-    FileIOBuilder::new_fs_io()
-        .build()
-        .unwrap()
+    FileIO::new_with_fs()
         .new_input(env!("CARGO_MANIFEST_DIR").to_owned() + "/" + path)
         .unwrap()
 }
@@ -79,7 +77,7 @@ pub(crate) fn zstd_compressed_metric_blob_0_metadata() -> BlobMetadata {
         sequence_number: METRIC_BLOB_0_SEQUENCE_NUMBER,
         offset: 4,
         length: 22,
-        compression_codec: CompressionCodec::Zstd,
+        compression_codec: CompressionCodec::zstd_default(),
         properties: HashMap::new(),
     }
 }
@@ -136,7 +134,7 @@ pub(crate) fn zstd_compressed_metric_blob_1_metadata() -> BlobMetadata {
         sequence_number: METRIC_BLOB_1_SEQUENCE_NUMBER,
         offset: 26,
         length: 77,
-        compression_codec: CompressionCodec::Zstd,
+        compression_codec: CompressionCodec::zstd_default(),
         properties: HashMap::new(),
     }
 }

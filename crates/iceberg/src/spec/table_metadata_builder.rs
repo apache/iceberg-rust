@@ -570,7 +570,7 @@ impl TableMetadataBuilder {
 
     /// Remove a reference
     ///
-    /// If `ref_name='main'` the current snapshot id is set to -1.
+    /// If `ref_name='main'` the current snapshot id is set to `None`.
     pub fn remove_ref(mut self, ref_name: &str) -> Self {
         if ref_name == MAIN_BRANCH {
             self.metadata.current_snapshot_id = None;
@@ -1466,7 +1466,7 @@ mod tests {
 
     use super::*;
     use crate::TableIdent;
-    use crate::io::FileIOBuilder;
+    use crate::io::FileIO;
     use crate::spec::{
         BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
         SnapshotRetention, SortDirection, SortField, StructType, Summary, TableProperties,
@@ -2711,7 +2711,7 @@ mod tests {
             .metadata(resp)
             .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
-            .file_io(FileIOBuilder::new("memory").build().unwrap())
+            .file_io(FileIO::new_with_memory())
             .build()
             .unwrap();
 
@@ -2742,7 +2742,7 @@ mod tests {
             .metadata(resp)
             .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
-            .file_io(FileIOBuilder::new("memory").build().unwrap())
+            .file_io(FileIO::new_with_memory())
             .build()
             .unwrap();
 

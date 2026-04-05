@@ -19,6 +19,7 @@
 
 pub mod memory;
 mod metadata_location;
+pub(crate) mod utils;
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
@@ -38,6 +39,7 @@ use serde_derive::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
+use crate::io::StorageFactory;
 use crate::spec::{
     EncryptedKey, FormatVersion, PartitionStatisticsFile, Schema, SchemaId, Snapshot,
     SnapshotReference, SortOrder, StatisticsFile, TableMetadata, TableMetadataBuilder,
@@ -97,6 +99,14 @@ pub trait Catalog: Debug + Sync + Send {
     /// Drop a table from the catalog, or returns error if it doesn't exist.
     async fn drop_table(&self, table: &TableIdent) -> Result<()>;
 
+    /// Drop a table from the catalog and delete the underlying table data.
+    ///
+    /// Implementations should load the table metadata, drop the table
+    /// from the catalog, then delete all associated data and metadata files.
+    /// The [`drop_table_data`](utils::drop_table_data) utility function can
+    /// be used for the file cleanup step.
+    async fn purge_table(&self, table: &TableIdent) -> Result<()>;
+
     /// Check if a table exists in the catalog.
     async fn table_exists(&self, table: &TableIdent) -> Result<bool>;
 
@@ -114,6 +124,34 @@ pub trait Catalog: Debug + Sync + Send {
 pub trait CatalogBuilder: Default + Debug + Send + Sync {
     /// The catalog type that this builder creates.
     type C: Catalog;
+
+    /// Set a custom StorageFactory to use for storage operations.
+    ///
+    /// When a StorageFactory is provided, the catalog will use it to build FileIO
+    /// instances for all storage operations instead of using the default factory.
+    ///
+    /// # Arguments
+    ///
+    /// * `storage_factory` - The StorageFactory to use for creating storage instances
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use iceberg::CatalogBuilder;
+    /// use iceberg::io::StorageFactory;
+    /// use iceberg_storage_opendal::OpenDalStorageFactory;
+    /// use std::sync::Arc;
+    ///
+    /// let catalog = MyCatalogBuilder::default()
+    ///     .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
+    ///         configured_scheme: "s3a".to_string(),
+    ///         customized_credential_load: None,
+    ///     }))
+    ///     .load("my_catalog", props)
+    ///     .await?;
+    /// ```
+    fn with_storage_factory(self, storage_factory: Arc<dyn StorageFactory>) -> Self;
+
     /// Create a new catalog instance.
     fn load(
         self,
@@ -353,13 +391,16 @@ impl TableCommit {
             metadata_builder = update.apply(metadata_builder)?;
         }
 
-        // Bump the version of metadata
+        // Build the new metadata
+        let new_metadata = metadata_builder.build()?.metadata;
+
         let new_metadata_location = MetadataLocation::from_str(current_metadata_location)?
             .with_next_version()
+            .with_new_metadata(&new_metadata)
             .to_string();
 
         Ok(table
-            .with_metadata(Arc::new(metadata_builder.build()?.metadata))
+            .with_metadata(Arc::new(new_metadata))
             .with_metadata_location(new_metadata_location))
     }
 }
@@ -1026,7 +1067,7 @@ mod tests {
     use uuid::uuid;
 
     use super::ViewUpdate;
-    use crate::io::FileIOBuilder;
+    use crate::io::FileIO;
     use crate::spec::{
         BlobMetadata, EncryptedKey, FormatVersion, MAIN_BRANCH, NestedField, NullOrder, Operation,
         PartitionStatisticsFile, PrimitiveType, Schema, Snapshot, SnapshotReference,
@@ -2352,7 +2393,7 @@ mod tests {
                 .metadata(resp)
                 .metadata_location("s3://bucket/test/location/metadata/00000-8a62c37d-4573-4021-952a-c0baef7d21d0.metadata.json".to_string())
                 .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
-                .file_io(FileIOBuilder::new("memory").build().unwrap())
+                .file_io(FileIO::new_with_memory())
                 .build()
                 .unwrap()
         };
