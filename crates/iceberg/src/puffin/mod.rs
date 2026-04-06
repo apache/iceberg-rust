@@ -66,9 +66,10 @@ mod tests {
         assert!(validate_puffin_compression(CompressionCodec::None).is_ok());
         assert!(validate_puffin_compression(CompressionCodec::Lz4).is_ok());
         assert!(validate_puffin_compression(CompressionCodec::zstd_default()).is_ok());
-        assert!(validate_puffin_compression(CompressionCodec::Zstd(5)).is_ok());
+        assert!(validate_puffin_compression(CompressionCodec::Zstd(3)).is_ok());
 
         // Unsupported codecs
         assert!(validate_puffin_compression(CompressionCodec::gzip_default()).is_err());
+        assert!(validate_puffin_compression(CompressionCodec::Snappy).is_err());
     }
 }

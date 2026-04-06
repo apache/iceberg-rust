@@ -21,6 +21,7 @@ use std::str::FromStr;
 
 use crate::compression::CompressionCodec;
 use crate::error::{Error, ErrorKind, Result};
+use crate::spec::avro_util;
 
 // Helper function to parse a property from a HashMap
 // If the property is not found, use the default value
@@ -114,6 +115,8 @@ pub struct TableProperties {
     pub write_format_default: String,
     /// The target file size for files.
     pub write_target_file_size_bytes: usize,
+    /// Compression codec for Avro files (manifests, manifest lists)
+    pub avro_compression_codec: CompressionCodec,
     /// Compression codec for metadata files (JSON)
     pub metadata_compression_codec: CompressionCodec,
     /// Whether to use `FanoutWriter` for partitioned tables.
@@ -210,6 +213,14 @@ impl TableProperties {
     /// Default target file size
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
 
+    /// Compression codec for Avro files (manifests, manifest lists)
+    pub const PROPERTY_AVRO_COMPRESSION_CODEC: &str = "write.avro.compression-codec";
+    /// Default Avro compression codec - gzip
+    pub const PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT: &str = "gzip";
+
+    /// Compression level for Avro files
+    pub const PROPERTY_AVRO_COMPRESSION_LEVEL: &str = "write.avro.compression-level";
+
     /// Compression codec for metadata files (JSON)
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
     /// Default metadata compression codec - uncompressed
@@ -264,6 +275,27 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             )?,
+            avro_compression_codec: {
+                let codec_str = props
+                    .get(TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC)
+                    .map(|s| s.as_str())
+                    .unwrap_or(TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT);
+                let level = props
+                    .get(TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL)
+                    .map(|s| {
+                        s.parse::<u8>().map_err(|e| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Invalid value for {}: {e}",
+                                    TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL
+                                ),
+                            )
+                        })
+                    })
+                    .transpose()?;
+                avro_util::parse_avro_codec(Some(codec_str), level)?
+            },
             metadata_compression_codec: parse_metadata_file_compression(props)?,
             write_datafusion_fanout_enabled: parse_property(
                 props,
@@ -308,14 +340,44 @@ mod tests {
             table_properties.write_target_file_size_bytes,
             TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT
         );
+        // Test compression defaults - gzip with Avro default level (9)
+        assert_eq!(
+            table_properties.avro_compression_codec,
+            CompressionCodec::Gzip(9)
+        );
         // Test compression defaults (none means CompressionCodec::None)
         assert_eq!(
             table_properties.metadata_compression_codec,
             CompressionCodec::None
         );
+        // Test datafusion fanout writer default
+        assert_eq!(
+            table_properties.write_datafusion_fanout_enabled,
+            TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT
+        );
         assert_eq!(
             table_properties.gc_enabled,
             TableProperties::PROPERTY_GC_ENABLED_DEFAULT
+        );
+    }
+
+    #[test]
+    fn test_table_properties_avro_compression() {
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC.to_string(),
+                "zstd".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL.to_string(),
+                "3".to_string(),
+            ),
+        ]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        // Check that it parsed to a Zstd codec with level 3
+        assert_eq!(
+            table_properties.avro_compression_codec,
+            CompressionCodec::Zstd(3)
         );
     }
 

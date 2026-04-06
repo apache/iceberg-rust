@@ -21,6 +21,7 @@ use std::ops::RangeFrom;
 
 use uuid::Uuid;
 
+use crate::compression::CompressionCodec;
 use crate::error::Result;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
@@ -223,6 +224,18 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_id
     }
 
+    fn avro_compression_codec(&self) -> Result<CompressionCodec> {
+        TableProperties::try_from(self.table.metadata().properties())
+            .map(|p| p.avro_compression_codec)
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Failed to parse table properties for compression settings",
+                )
+                .with_source(e)
+            })
+    }
+
     fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
         let new_manifest_path = format!(
             "{}/{}/{}-m{}.{}",
@@ -243,7 +256,9 @@ impl<'a> SnapshotProducer<'a> {
                 .default_partition_spec()
                 .as_ref()
                 .clone(),
+            self.avro_compression_codec()?,
         );
+
         match self.table.metadata().format_version() {
             FormatVersion::V1 => Ok(builder.build_v1()),
             FormatVersion::V2 => match content {
@@ -424,6 +439,8 @@ impl<'a> SnapshotProducer<'a> {
         let manifest_list_path = self.generate_manifest_list_file_path(0);
         let next_seq_num = self.table.metadata().next_sequence_number();
         let first_row_id = self.table.metadata().next_row_id();
+
+        let compression = self.avro_compression_codec()?;
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
                 self.table
@@ -431,6 +448,7 @@ impl<'a> SnapshotProducer<'a> {
                     .new_output(manifest_list_path.clone())?,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
+                compression,
             ),
             FormatVersion::V2 => ManifestListWriter::v2(
                 self.table
@@ -439,6 +457,7 @@ impl<'a> SnapshotProducer<'a> {
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
+                compression,
             ),
             FormatVersion::V3 => ManifestListWriter::v3(
                 self.table
@@ -448,6 +467,7 @@ impl<'a> SnapshotProducer<'a> {
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
                 Some(first_row_id),
+                compression,
             ),
         };
 

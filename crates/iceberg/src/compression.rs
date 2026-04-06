@@ -173,7 +173,7 @@ impl CompressionCodec {
     ///
     /// # Errors
     ///
-    /// Returns an error for Lz4 and Zstd as they are not fully supported.
+    /// Returns an error for Lz4, Zstd, and Snappy as they are not fully supported.
     pub fn suffix(&self) -> Result<&'static str> {
         match self {
             CompressionCodec::None => Ok(""),
