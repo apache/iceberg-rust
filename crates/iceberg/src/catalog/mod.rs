@@ -19,6 +19,7 @@
 
 pub mod memory;
 mod metadata_location;
+pub(crate) mod utils;
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
@@ -97,6 +98,14 @@ pub trait Catalog: Debug + Sync + Send {
 
     /// Drop a table from the catalog, or returns error if it doesn't exist.
     async fn drop_table(&self, table: &TableIdent) -> Result<()>;
+
+    /// Drop a table from the catalog and delete the underlying table data.
+    ///
+    /// Implementations should load the table metadata, drop the table
+    /// from the catalog, then delete all associated data and metadata files.
+    /// The [`drop_table_data`](utils::drop_table_data) utility function can
+    /// be used for the file cleanup step.
+    async fn purge_table(&self, table: &TableIdent) -> Result<()>;
 
     /// Check if a table exists in the catalog.
     async fn table_exists(&self, table: &TableIdent) -> Result<bool>;
@@ -382,13 +391,16 @@ impl TableCommit {
             metadata_builder = update.apply(metadata_builder)?;
         }
 
-        // Bump the version of metadata
+        // Build the new metadata
+        let new_metadata = metadata_builder.build()?.metadata;
+
         let new_metadata_location = MetadataLocation::from_str(current_metadata_location)?
             .with_next_version()
+            .with_new_metadata(&new_metadata)
             .to_string();
 
         Ok(table
-            .with_metadata(Arc::new(metadata_builder.build()?.metadata))
+            .with_metadata(Arc::new(new_metadata))
             .with_metadata_location(new_metadata_location))
     }
 }

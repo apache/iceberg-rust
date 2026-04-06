@@ -363,6 +363,35 @@ impl RestCatalog {
         }
     }
 
+    /// Sends a DELETE request for the given table, optionally requesting purge.
+    async fn delete_table(&self, table: &TableIdent, purge: bool) -> Result<()> {
+        let context = self.context().await?;
+
+        let mut request_builder = context
+            .client
+            .request(Method::DELETE, context.config.table_endpoint(table));
+
+        if purge {
+            request_builder = request_builder.query(&[("purgeRequested", "true")]);
+        }
+
+        let request = request_builder.build()?;
+        let http_response = context.client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::TableNotFound,
+                "Tried to drop a table that does not exist",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                context.client.disable_header_redaction(),
+            )
+            .await),
+        }
+    }
+
     /// Gets the [`RestContext`] from the catalog.
     async fn context(&self) -> Result<&RestContext> {
         self.ctx
@@ -504,7 +533,7 @@ impl Catalog for RestCatalog {
                 }
                 StatusCode::NOT_FOUND => {
                     return Err(Error::new(
-                        ErrorKind::Unexpected,
+                        ErrorKind::NamespaceNotFound,
                         "The parent parameter of the namespace provided does not exist",
                     ));
                 }
@@ -546,7 +575,7 @@ impl Catalog for RestCatalog {
                 Ok(Namespace::from(response))
             }
             StatusCode::CONFLICT => Err(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::NamespaceAlreadyExists,
                 "Tried to create a namespace that already exists",
             )),
             _ => Err(deserialize_unexpected_catalog_error(
@@ -574,7 +603,7 @@ impl Catalog for RestCatalog {
                 Ok(Namespace::from(response))
             }
             StatusCode::NOT_FOUND => Err(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::NamespaceNotFound,
                 "Tried to get a namespace that does not exist",
             )),
             _ => Err(deserialize_unexpected_catalog_error(
@@ -630,7 +659,7 @@ impl Catalog for RestCatalog {
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
             StatusCode::NOT_FOUND => Err(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::NamespaceNotFound,
                 "Tried to drop a namespace that does not exist",
             )),
             _ => Err(deserialize_unexpected_catalog_error(
@@ -670,7 +699,7 @@ impl Catalog for RestCatalog {
                 }
                 StatusCode::NOT_FOUND => {
                     return Err(Error::new(
-                        ErrorKind::Unexpected,
+                        ErrorKind::NamespaceNotFound,
                         "Tried to list tables of a namespace that does not exist",
                     ));
                 }
@@ -724,13 +753,13 @@ impl Catalog for RestCatalog {
             }
             StatusCode::NOT_FOUND => {
                 return Err(Error::new(
-                    ErrorKind::Unexpected,
+                    ErrorKind::NamespaceNotFound,
                     "Tried to create a table under a namespace that does not exist",
                 ));
             }
             StatusCode::CONFLICT => {
                 return Err(Error::new(
-                    ErrorKind::Unexpected,
+                    ErrorKind::TableAlreadyExists,
                     "The table already exists",
                 ));
             }
@@ -791,7 +820,7 @@ impl Catalog for RestCatalog {
             }
             StatusCode::NOT_FOUND => {
                 return Err(Error::new(
-                    ErrorKind::Unexpected,
+                    ErrorKind::TableNotFound,
                     "Tried to load a table that does not exist",
                 ));
             }
@@ -828,27 +857,13 @@ impl Catalog for RestCatalog {
 
     /// Drop a table from the catalog.
     async fn drop_table(&self, table: &TableIdent) -> Result<()> {
-        let context = self.context().await?;
+        self.delete_table(table, false).await
+    }
 
-        let request = context
-            .client
-            .request(Method::DELETE, context.config.table_endpoint(table))
-            .build()?;
-
-        let http_response = context.client.query_catalog(request).await?;
-
-        match http_response.status() {
-            StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
-            StatusCode::NOT_FOUND => Err(Error::new(
-                ErrorKind::Unexpected,
-                "Tried to drop a table that does not exist",
-            )),
-            _ => Err(deserialize_unexpected_catalog_error(
-                http_response,
-                context.client.disable_header_redaction(),
-            )
-            .await),
-        }
+    /// Drop a table from the catalog and purge its data by sending
+    /// `purgeRequested=true` to the REST server.
+    async fn purge_table(&self, table: &TableIdent) -> Result<()> {
+        self.delete_table(table, true).await
     }
 
     /// Check if a table exists in the catalog.
@@ -891,11 +906,11 @@ impl Catalog for RestCatalog {
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
             StatusCode::NOT_FOUND => Err(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::TableNotFound,
                 "Tried to rename a table that does not exist (is the namespace correct?)",
             )),
             StatusCode::CONFLICT => Err(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::TableAlreadyExists,
                 "Tried to rename a table to a name that already exists",
             )),
             _ => Err(deserialize_unexpected_catalog_error(

@@ -32,9 +32,13 @@ use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
 use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2};
 use crate::spec::{
     DataContentType, DataFile, FieldSummary, ManifestEntry, ManifestFile, ManifestMetadata,
-    ManifestStatus, PrimitiveLiteral, SchemaRef, StructType, UNASSIGNED_SNAPSHOT_ID,
+    ManifestStatus, PrimitiveLiteral, SchemaRef, StructType,
 };
 use crate::{Error, ErrorKind};
+
+/// Placeholder for snapshot ID. The field with this value must be replaced
+/// with the actual snapshot ID before it is committed.
+const UNASSIGNED_SNAPSHOT_ID: i64 = -1;
 
 /// The builder used to create a [`ManifestWriter`].
 pub struct ManifestWriterBuilder {

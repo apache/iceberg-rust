@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -307,6 +308,13 @@ impl Catalog for S3TablesCatalog {
         namespace: &NamespaceIdent,
         _properties: HashMap<String, String>,
     ) -> Result<Namespace> {
+        if self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceAlreadyExists,
+                format!("Namespace {namespace:?} already exists"),
+            ));
+        }
+
         let req = self
             .s3tables_client
             .create_namespace()
@@ -329,6 +337,13 @@ impl Catalog for S3TablesCatalog {
     /// - If there is an error querying the database, returned by
     /// `from_aws_sdk_error`.
     async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
+        if !self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {namespace:?} does not exist"),
+            ));
+        }
+
         let req = self
             .s3tables_client
             .get_namespace()
@@ -396,6 +411,13 @@ impl Catalog for S3TablesCatalog {
     /// - Errors from the underlying database deletion process, converted using
     /// `from_aws_sdk_error`.
     async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
+        if !self.namespace_exists(namespace).await? {
+            return Err(Error::new(
+                ErrorKind::NamespaceNotFound,
+                format!("Namespace {namespace:?} does not exist"),
+            ));
+        }
+
         let req = self
             .s3tables_client
             .delete_namespace()
@@ -501,17 +523,17 @@ impl Catalog for S3TablesCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
-        let metadata_location =
-            MetadataLocation::new_with_table_location(table_location).to_string();
+        let metadata_location = MetadataLocation::new_with_metadata(table_location, &metadata);
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
         // update metadata location
+        let metadata_location_str = metadata_location.to_string();
         self.s3tables_client
             .update_table_metadata_location()
             .table_bucket_arn(self.config.table_bucket_arn.clone())
             .namespace(namespace.to_url_string())
             .name(table_ident.name())
-            .metadata_location(metadata_location.clone())
+            .metadata_location(metadata_location_str.clone())
             .version_token(create_resp.version_token())
             .send()
             .await
@@ -519,7 +541,7 @@ impl Catalog for S3TablesCatalog {
 
         let table = Table::builder()
             .identifier(table_ident)
-            .metadata_location(metadata_location)
+            .metadata_location(metadata_location_str)
             .metadata(metadata)
             .file_io(self.file_io.clone())
             .build()?;
@@ -540,15 +562,18 @@ impl Catalog for S3TablesCatalog {
         Ok(self.load_table_with_version_token(table_ident).await?.0)
     }
 
-    /// Drops an existing table from the s3tables catalog.
+    /// Not supported for S3Tables. Use `purge_table` instead.
     ///
-    /// Validates the table identifier and then deletes the corresponding
-    /// table from the s3tables catalog.
-    ///
-    /// This function can return an error in the following situations:
-    /// - Errors from the underlying database deletion process, converted using
-    /// `from_aws_sdk_error`.
-    async fn drop_table(&self, table: &TableIdent) -> Result<()> {
+    /// S3 Tables doesn't support soft delete, so dropping a table will permanently remove it from the catalog.
+    async fn drop_table(&self, _table: &TableIdent) -> Result<()> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "drop_table is not supported for S3Tables; use purge_table instead",
+        ))
+    }
+
+    /// Purge a table from the S3 Tables catalog.
+    async fn purge_table(&self, table: &TableIdent) -> Result<()> {
         let req = self
             .s3tables_client
             .delete_table()
@@ -630,11 +655,12 @@ impl Catalog for S3TablesCatalog {
             self.load_table_with_version_token(&table_ident).await?;
 
         let staged_table = commit.apply(current_table)?;
-        let staged_metadata_location = staged_table.metadata_location_result()?;
+        let staged_metadata_location_str = staged_table.metadata_location_result()?;
+        let staged_metadata_location = MetadataLocation::from_str(staged_metadata_location_str)?;
 
         staged_table
             .metadata()
-            .write_to(staged_table.file_io(), staged_metadata_location)
+            .write_to(staged_table.file_io(), &staged_metadata_location)
             .await?;
 
         let builder = self
@@ -644,7 +670,7 @@ impl Catalog for S3TablesCatalog {
             .namespace(table_namespace.to_url_string())
             .name(table_ident.name())
             .version_token(version_token)
-            .metadata_location(staged_metadata_location);
+            .metadata_location(staged_metadata_location_str);
 
         let _ = builder.send().await.map_err(|e| {
             let error = e.into_service_error();
