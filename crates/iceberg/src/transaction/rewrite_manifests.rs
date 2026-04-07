@@ -28,6 +28,7 @@ use crate::spec::{
 };
 use crate::table::Table;
 use crate::transaction::{ActionCommit, TransactionAction};
+use crate::utils::{DEFAULT_LOAD_CONCURRENCY_LIMIT, load_manifests};
 use crate::{Error, ErrorKind};
 
 const KEPT_MANIFESTS_COUNT: &str = "manifests-kept";
@@ -390,40 +391,48 @@ impl TransactionAction for RewriteManifestsAction {
                 .filter(|m| !deleted_paths.contains(m.manifest_path.as_str()))
                 .collect();
 
-            for manifest_file in &remaining_manifests {
-                // Never rewrite delete manifests
+            // Separate manifests into kept (delete-type or filtered by predicate) and
+            // to-be-rewritten, so we can load the latter concurrently.
+            let mut manifests_to_rewrite: Vec<ManifestFile> = Vec::new();
+            for manifest_file in remaining_manifests {
                 if manifest_file.content == ManifestContentType::Deletes {
-                    kept_manifests.push(manifest_file.clone());
+                    kept_manifests.push(manifest_file);
                     continue;
                 }
-
-                // Check predicate
                 if let Some(ref predicate) = self.manifest_predicate
-                    && !predicate(manifest_file)
+                    && !predicate(&manifest_file)
                 {
-                    kept_manifests.push(manifest_file.clone());
+                    kept_manifests.push(manifest_file);
                     continue;
                 }
-
-                // Rewrite this manifest
                 rewritten_manifests.push(manifest_file.clone());
+                manifests_to_rewrite.push(manifest_file);
+            }
 
-                let manifest = manifest_file.load_manifest(table.file_io()).await?;
+            // Load all manifests to rewrite concurrently.
+            let loaded_manifests = load_manifests(
+                table.file_io(),
+                manifests_to_rewrite,
+                DEFAULT_LOAD_CONCURRENCY_LIMIT,
+            )
+            .await?;
 
+            // Route entries to writers (sequential — writers are stateful).
+            for (manifest_file, manifest) in &loaded_manifests {
+                let spec_id = &manifest_file.partition_spec_id;
                 for entry in manifest.entries() {
                     if !entry.is_alive() {
                         continue;
                     }
 
                     let key = cluster_func(entry.data_file());
-                    let spec_id = manifest_file.partition_spec_id;
-                    let writer_key = (key, spec_id);
+                    let writer_key = (key, *spec_id);
 
                     let writer = match writers.entry(writer_key) {
                         std::collections::btree_map::Entry::Occupied(e) => e.into_mut(),
                         std::collections::btree_map::Entry::Vacant(e) => {
                             let w = snapshot_producer
-                                .new_manifest_writer(ManifestContentType::Data, spec_id)?;
+                                .new_manifest_writer(ManifestContentType::Data, *spec_id)?;
                             e.insert(w)
                         }
                     };

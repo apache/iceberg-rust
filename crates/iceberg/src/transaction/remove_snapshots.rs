@@ -27,7 +27,7 @@ use crate::error::Result;
 use crate::spec::{MAIN_BRANCH, SnapshotReference, SnapshotRetention, TableMetadataRef};
 use crate::table::Table;
 use crate::transaction::{ActionCommit, TransactionAction};
-use crate::utils::ancestors_of;
+use crate::utils::{DEFAULT_LOAD_CONCURRENCY_LIMIT, ancestors_of, load_manifest_lists};
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 /// Default value for max snapshot age in milliseconds.
@@ -315,24 +315,33 @@ impl TransactionAction for RemoveSnapshotAction {
 
         if self.clear_expired_meta_data {
             let mut reachable_specs = HashSet::new();
-            reachable_specs.insert(table_meta.current_schema_id());
+            reachable_specs.insert(table_meta.default_partition_spec_id());
             let mut reachable_schemas = HashSet::new();
             reachable_schemas.insert(table_meta.current_schema_id());
 
-            // TODO: parallelize loading manifest list and get reachable specs and schemas to reduce latency
-            for snapshot in table_meta.snapshots() {
-                if ids_to_retain.contains(&snapshot.snapshot_id()) {
-                    let manifest_list = snapshot
-                        .load_manifest_list(table.file_io(), &table_meta)
-                        .await?;
+            let retained_snapshots: Vec<_> = table_meta
+                .snapshots()
+                .filter(|s| ids_to_retain.contains(&s.snapshot_id()))
+                .cloned()
+                .collect();
 
-                    for manifest in manifest_list.entries() {
-                        reachable_specs.insert(manifest.partition_spec_id);
-                    }
+            for snapshot in &retained_snapshots {
+                if let Some(schema_id) = snapshot.schema_id() {
+                    reachable_schemas.insert(schema_id);
+                }
+            }
 
-                    if let Some(schema_id) = snapshot.schema_id() {
-                        reachable_schemas.insert(schema_id);
-                    }
+            let loaded_lists = load_manifest_lists(
+                table.file_io(),
+                &table_meta,
+                retained_snapshots,
+                DEFAULT_LOAD_CONCURRENCY_LIMIT,
+            )
+            .await?;
+
+            for (_, manifest_list) in loaded_lists {
+                for manifest in manifest_list.entries() {
+                    reachable_specs.insert(manifest.partition_spec_id);
                 }
             }
 

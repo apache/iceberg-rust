@@ -36,6 +36,7 @@ use crate::spec::{
 use crate::table::Table;
 use crate::transaction::{ActionCommit, ManifestFilterManager, ManifestWriterContext};
 use crate::utils::bin::ListPacker;
+use crate::utils::load_manifests;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
@@ -888,14 +889,21 @@ partition_struct: {:?}, partition_type: {:?}",
 
         let mut duplicate_files = Vec::new();
 
-        // Single pass through all manifests
+        // Load all manifests concurrently, then scan entries
         if let Some(current_snapshot) = branch_snapshot_ref {
             let manifest_list = current_snapshot
                 .load_manifest_list(table.file_io(), table.metadata_ref().as_ref())
                 .await?;
 
-            for manifest_list_entry in manifest_list.entries() {
-                let manifest = manifest_list_entry.load_manifest(table.file_io()).await?;
+            let manifest_files: Vec<_> = manifest_list.entries().to_vec();
+            let loaded_manifests = load_manifests(
+                table.file_io(),
+                manifest_files,
+                crate::utils::DEFAULT_LOAD_CONCURRENCY_LIMIT,
+            )
+            .await?;
+
+            'outer: for (_, manifest) in &loaded_manifests {
                 for entry in manifest.entries() {
                     if !entry.is_alive() {
                         continue;
@@ -916,7 +924,7 @@ partition_struct: {:?}, partition_type: {:?}",
 
                     // Early exit optimization: if both checks are done, stop scanning
                     if duplicate_files.len() == files_to_add.len() && files_to_delete.is_empty() {
-                        break;
+                        break 'outer;
                     }
                 }
             }
@@ -1029,9 +1037,15 @@ impl MergeManifestManager {
         manifest_bin: Vec<ManifestFile>,
         mut writer: ManifestWriter,
     ) -> Result<ManifestFile> {
-        for manifest_file in manifest_bin {
-            let manifest_file = manifest_file.load_manifest(&file_io).await?;
-            for manifest_entry in manifest_file.entries() {
+        let loaded = load_manifests(
+            &file_io,
+            manifest_bin,
+            crate::utils::DEFAULT_LOAD_CONCURRENCY_LIMIT,
+        )
+        .await?;
+
+        for (_, manifest) in loaded {
+            for manifest_entry in manifest.entries() {
                 if manifest_entry.status() == ManifestStatus::Deleted
                     && manifest_entry
                         .snapshot_id()
