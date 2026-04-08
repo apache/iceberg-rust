@@ -23,7 +23,7 @@ use crate::io::{FileIO, OutputFile};
 use crate::spec::{DataFileBuilder, PartitionKey, TableProperties};
 use crate::writer::CurrentFileStatus;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
-use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
+use crate::writer::file_writer::{FileWriter, FileWriterBuilder, RowGroupFlushable};
 use crate::{Error, ErrorKind, Result};
 
 /// Builder for [`RollingFileWriter`].
@@ -252,6 +252,28 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> CurrentFi
 
     fn current_written_size(&self) -> usize {
         self.inner.as_ref().unwrap().current_written_size()
+    }
+}
+
+impl<B, L, F> RowGroupFlushable for RollingFileWriter<B, L, F>
+where
+    B: FileWriterBuilder,
+    B::R: RowGroupFlushable,
+    L: LocationGenerator,
+    F: FileNameGenerator,
+{
+    fn in_progress_row_group_bytes(&self) -> usize {
+        self.inner
+            .as_ref()
+            .map(|w| w.in_progress_row_group_bytes())
+            .unwrap_or(0)
+    }
+
+    async fn flush_row_group(&mut self) -> Result<()> {
+        if let Some(inner) = self.inner.as_mut() {
+            inner.flush_row_group().await?;
+        }
+        Ok(())
     }
 }
 

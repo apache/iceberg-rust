@@ -20,7 +20,7 @@
 use arrow_array::RecordBatch;
 
 use crate::spec::{DataContentType, DataFile, PartitionKey};
-use crate::writer::file_writer::FileWriterBuilder;
+use crate::writer::file_writer::{FileWriterBuilder, RowGroupFlushable};
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
 use crate::writer::file_writer::rolling_writer::{RollingFileWriter, RollingFileWriterBuilder};
 use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
@@ -131,6 +131,28 @@ where
 
     fn current_written_size(&self) -> usize {
         self.inner.as_ref().unwrap().current_written_size()
+    }
+}
+
+impl<B, L, F> RowGroupFlushable for DataFileWriter<B, L, F>
+where
+    B: FileWriterBuilder,
+    B::R: RowGroupFlushable,
+    L: LocationGenerator,
+    F: FileNameGenerator,
+{
+    fn in_progress_row_group_bytes(&self) -> usize {
+        self.inner
+            .as_ref()
+            .map(|w| w.in_progress_row_group_bytes())
+            .unwrap_or(0)
+    }
+
+    async fn flush_row_group(&mut self) -> Result<()> {
+        if let Some(inner) = self.inner.as_mut() {
+            inner.flush_row_group().await?;
+        }
+        Ok(())
     }
 }
 
