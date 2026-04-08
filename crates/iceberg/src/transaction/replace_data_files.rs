@@ -409,6 +409,12 @@ impl SnapshotProduceOperation for ReplaceOperation {
                 (FormatVersion::V3, ManifestContentType::Deletes) => builder.build_v3_deletes(),
             };
             for me in survivors {
+                let mut me = me.as_ref().clone();
+                // Resolve any inherited fields (snapshot_id, sequence_number) from the
+                // manifest list entry before writing. load_manifest already does this,
+                // but be explicit here to guard against future refactors that change
+                // how entries are loaded.
+                me.inherit_data(ml_entry);
                 writer.add_existing_file(
                     me.data_file.clone(),
                     me.snapshot_id.unwrap_or(0),
@@ -1032,6 +1038,10 @@ mod tests {
     async fn test_replace_partial_manifest_rewritten() {
         // file_a and file_b share one manifest; file_c is in its own manifest.
         // Deleting only file_a must produce a residual manifest with file_b surviving.
+        //
+        // Also serves as regression coverage for the inherit_data call in the
+        // survivors loop: the sequence_number assertion below would fire if inherited
+        // fields were written as 0 instead of their actual values.
         let table = make_v2_minimal_table();
 
         let file_a = make_data_file(&table, "data/a.parquet", 10);

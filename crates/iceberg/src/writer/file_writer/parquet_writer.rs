@@ -31,7 +31,7 @@ use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics;
 
-use super::{FileWriter, FileWriterBuilder};
+use super::{FileWriter, FileWriterBuilder, RowGroupFlushable};
 use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
     get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum,
@@ -569,6 +569,25 @@ impl CurrentFileStatus for ParquetWriter {
             // inner writer is not initialized yet
             0
         }
+    }
+
+}
+
+impl RowGroupFlushable for ParquetWriter {
+    fn in_progress_row_group_bytes(&self) -> usize {
+        self.inner_writer
+            .as_ref()
+            .map(|w| w.in_progress_size())
+            .unwrap_or(0)
+    }
+
+    async fn flush_row_group(&mut self) -> Result<()> {
+        if let Some(writer) = self.inner_writer.as_mut() {
+            writer.flush().await.map_err(|e| {
+                Error::new(ErrorKind::Unexpected, "Failed to flush row group.").with_source(e)
+            })?;
+        }
+        Ok(())
     }
 }
 

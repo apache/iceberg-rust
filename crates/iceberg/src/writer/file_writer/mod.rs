@@ -50,3 +50,13 @@ pub trait FileWriter<O = DefaultOutput>: Send + CurrentFileStatus + 'static {
     /// Close file writer.
     fn close(self) -> impl Future<Output = Result<O>> + Send;
 }
+
+/// Row-group-level flush control for file writers that support it.
+pub trait RowGroupFlushable: Send {
+    /// Returns the estimated encoded size (before block compression) of the current
+    /// in-progress row group, or 0 if none. This value is already included in
+    /// `CurrentFileStatus::current_written_size()`.
+    fn in_progress_row_group_bytes(&self) -> usize;
+    /// Flushes the current in-progress row group.
+    fn flush_row_group(&mut self) -> impl Future<Output = Result<()>> + Send;
+}
