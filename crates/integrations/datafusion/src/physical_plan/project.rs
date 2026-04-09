@@ -100,13 +100,13 @@ pub fn project_with_partition(
 
 /// PhysicalExpr implementation for partition value calculation
 #[derive(Debug, Clone)]
-struct PartitionExpr {
+pub struct PartitionExpr {
     calculator: Arc<PartitionValueCalculator>,
     partition_spec: Arc<PartitionSpec>,
 }
 
 impl PartitionExpr {
-    fn new(calculator: PartitionValueCalculator, partition_spec: Arc<PartitionSpec>) -> Self {
+    pub fn new(calculator: PartitionValueCalculator, partition_spec: Arc<PartitionSpec>) -> Self {
         Self {
             calculator: Arc::new(calculator),
             partition_spec,
