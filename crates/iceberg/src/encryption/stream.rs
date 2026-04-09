@@ -71,7 +71,7 @@ pub const GCM_STREAM_MAGIC: [u8; 4] = *b"AGS1";
 pub const GCM_STREAM_HEADER_LENGTH: u32 = 8;
 
 /// Minimum valid AGS1 stream length (header + one empty block).
-#[allow(dead_code)]
+#[cfg(test)]
 pub const MIN_STREAM_LENGTH: u32 = GCM_STREAM_HEADER_LENGTH + NONCE_LENGTH + GCM_TAG_LENGTH;
 
 /// Constructs the per-block AAD for AGS1 stream encryption.
@@ -520,10 +520,13 @@ impl FileWrite for AesGcmFileWrite {
             self.write_header().await?;
         }
 
-        // The buffer may be empty (for an empty file) or contain a partial block;
-        // either way it is encrypted and written as the final block (matching Java behavior).
-        let final_block = std::mem::take(&mut self.buffer);
-        self.encrypt_and_write_block(&final_block).await?;
+        // Write the final block if there's remaining data, or if this is an empty file
+        // (block_index == 0). Skip writing a spurious empty block when the plaintext was
+        // exactly block-aligned (buffer empty, blocks already written).
+        if !self.buffer.is_empty() || self.block_index == 0 {
+            let final_block = std::mem::take(&mut self.buffer);
+            self.encrypt_and_write_block(&final_block).await?;
+        }
         self.closed = true;
 
         self.inner.close().await
@@ -1143,6 +1146,72 @@ mod tests {
 
         assert_eq!(reader.plaintext_length(), PLAIN_BLOCK_SIZE as u64);
         let result = reader.read(0..PLAIN_BLOCK_SIZE as u64).await.unwrap();
+        assert_eq!(&result[..], &plaintext[..]);
+    }
+
+    #[tokio::test]
+    async fn test_write_block_aligned_no_spurious_empty_block() {
+        let key = b"0123456789abcdef";
+        let aad_prefix = b"block-align-aad!";
+
+        // Write exactly one block of plaintext — close() should NOT add
+        // a trailing empty encrypted block (28 bytes: 12-byte nonce + 16-byte tag).
+        let plaintext: Vec<u8> = (0..PLAIN_BLOCK_SIZE as usize)
+            .map(|i| (i % 256) as u8)
+            .collect();
+
+        let encrypted_via_writer = write_through_ags1(&plaintext, key, aad_prefix).await;
+        let encrypted_via_reference = encrypt_ags1(&plaintext, &make_cipher(key), aad_prefix);
+
+        // Both should be the same length — no extra 28-byte empty block
+        assert_eq!(
+            encrypted_via_writer.len(),
+            encrypted_via_reference.len(),
+            "Writer output should match reference encryption length (no spurious trailing block)"
+        );
+
+        // Verify roundtrip
+        let reader = AesGcmFileRead::new(
+            memory_reader(encrypted_via_writer.clone()),
+            Arc::new(make_cipher(key)),
+            aad_prefix.as_slice().into(),
+            encrypted_via_writer.len() as u64,
+        )
+        .unwrap();
+
+        assert_eq!(reader.plaintext_length(), PLAIN_BLOCK_SIZE as u64);
+        let result = reader.read(0..PLAIN_BLOCK_SIZE as u64).await.unwrap();
+        assert_eq!(&result[..], &plaintext[..]);
+    }
+
+    #[tokio::test]
+    async fn test_write_two_blocks_aligned_no_spurious_empty_block() {
+        let key = b"0123456789abcdef";
+        let aad_prefix = b"2blk-align-aad!!";
+
+        // Exactly 2 blocks
+        let size = PLAIN_BLOCK_SIZE as usize * 2;
+        let plaintext: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
+
+        let encrypted_via_writer = write_through_ags1(&plaintext, key, aad_prefix).await;
+        let encrypted_via_reference = encrypt_ags1(&plaintext, &make_cipher(key), aad_prefix);
+
+        assert_eq!(
+            encrypted_via_writer.len(),
+            encrypted_via_reference.len(),
+            "Writer output should match reference encryption length (no spurious trailing block)"
+        );
+
+        let reader = AesGcmFileRead::new(
+            memory_reader(encrypted_via_writer.clone()),
+            Arc::new(make_cipher(key)),
+            aad_prefix.as_slice().into(),
+            encrypted_via_writer.len() as u64,
+        )
+        .unwrap();
+
+        assert_eq!(reader.plaintext_length(), size as u64);
+        let result = reader.read(0..size as u64).await.unwrap();
         assert_eq!(&result[..], &plaintext[..]);
     }
 
