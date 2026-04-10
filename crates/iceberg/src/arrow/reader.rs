@@ -1112,6 +1112,18 @@ fn build_field_id_map(parquet_schema: &SchemaDescriptor) -> Result<Option<HashMa
 
 /// Build a fallback field ID map for Parquet files without embedded field IDs.
 ///
+/// Returns the number of primitive (leaf) columns in a Parquet type, recursing into groups.
+fn leaf_count(ty: &parquet::schema::types::Type) -> usize {
+    if ty.is_primitive() {
+        1
+    } else {
+        ty.get_fields().iter().map(|f| leaf_count(f)).sum()
+    }
+}
+
+/// Builds a mapping from fallback field IDs to leaf column indices for Parquet files
+/// without embedded field IDs. Returns entries only for primitive top-level fields.
+///
 /// Must use top-level field positions (not leaf column positions) to stay consistent
 /// with `add_fallback_field_ids_to_arrow_schema`, which assigns ordinal IDs to
 /// top-level Arrow fields. Using leaf positions instead would produce wrong indices
@@ -1125,19 +1137,10 @@ fn build_fallback_field_id_map(parquet_schema: &SchemaDescriptor) -> HashMap<i32
 
     for (top_pos, field) in parquet_schema.root_schema().get_fields().iter().enumerate() {
         let field_id = (top_pos + 1) as i32;
-
         if field.is_primitive() {
             column_map.insert(field_id, leaf_idx);
-            leaf_idx += 1;
-        } else {
-            // Advance past all leaves in this group. Count them by checking
-            // how many subsequent leaves share this root index.
-            while leaf_idx < parquet_schema.num_columns()
-                && parquet_schema.get_column_root_idx(leaf_idx) == top_pos
-            {
-                leaf_idx += 1;
-            }
         }
+        leaf_idx += leaf_count(field);
     }
 
     column_map
