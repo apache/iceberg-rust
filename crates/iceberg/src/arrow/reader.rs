@@ -835,6 +835,87 @@ impl ArrowReader {
         }
     }
 
+    /// Recursive DFS over an Arrow `Fields` tree whose leaf numbering matches
+    /// `arrow_schema::Fields::filter_leaves`. For every leaf sitting inside a
+    /// variant column, stores `leaf_idx → variant_field_id` in `out`. A
+    /// "variant column" is any Arrow field whose embedded Parquet field id
+    /// resolves to `Type::Variant` in the Iceberg schema — including variants
+    /// nested inside a struct, list, or map.
+    fn collect_variant_leaves(
+        fields: &arrow_schema::Fields,
+        leaf_idx: &mut usize,
+        variant_parent: Option<i32>,
+        iceberg_schema: &Schema,
+        leaf_field_id_set: &HashSet<i32>,
+        out: &mut HashMap<usize, i32>,
+    ) {
+        for field in fields {
+            Self::collect_variant_leaves_in_field(
+                field,
+                leaf_idx,
+                variant_parent,
+                iceberg_schema,
+                leaf_field_id_set,
+                out,
+            );
+        }
+    }
+
+    fn collect_variant_leaves_in_field(
+        field: &FieldRef,
+        leaf_idx: &mut usize,
+        variant_parent: Option<i32>,
+        iceberg_schema: &Schema,
+        leaf_field_id_set: &HashSet<i32>,
+        out: &mut HashMap<usize, i32>,
+    ) {
+        // Once we are inside a variant, stay inside; otherwise check
+        // whether this Arrow field IS a variant column.
+        let effective_variant = variant_parent.or_else(|| {
+            let fid = field
+                .metadata()
+                .get(PARQUET_FIELD_ID_META_KEY)
+                .and_then(|s| i32::from_str(s).ok())?;
+            if !leaf_field_id_set.contains(&fid) {
+                return None;
+            }
+            let iceberg_field = iceberg_schema.field_by_id(fid)?;
+            matches!(iceberg_field.field_type.as_ref(), Type::Variant(_)).then_some(fid)
+        });
+
+        match field.data_type() {
+            DataType::Struct(sub) => {
+                Self::collect_variant_leaves(
+                    sub,
+                    leaf_idx,
+                    effective_variant,
+                    iceberg_schema,
+                    leaf_field_id_set,
+                    out,
+                );
+            }
+            DataType::List(inner)
+            | DataType::LargeList(inner)
+            | DataType::FixedSizeList(inner, _)
+            | DataType::Map(inner, _) => {
+                Self::collect_variant_leaves_in_field(
+                    inner,
+                    leaf_idx,
+                    effective_variant,
+                    iceberg_schema,
+                    leaf_field_id_set,
+                    out,
+                );
+            }
+            _ => {
+                if let Some(vid) = effective_variant {
+                    out.insert(*leaf_idx, vid);
+                }
+                *leaf_idx += 1;
+            }
+        }
+    }
+
     /// Standard projection using embedded field IDs from Parquet metadata.
     /// For iceberg-java compatibility with ParquetSchemaUtil.pruneColumns().
     fn get_arrow_projection_mask_with_field_ids(
@@ -852,38 +933,30 @@ impl ArrowReader {
         let leaf_field_id_set: HashSet<i32> = leaf_field_ids.iter().copied().collect();
 
         // Variant fields are an Iceberg leaf type but a Parquet GROUP.  Their
-        // sub-fields (metadata, value) carry no embedded field IDs — only the
-        // parent group has the field ID. filter_leaves therefore never finds
-        // them via the standard field-ID scan below.
+        // sub-fields (metadata, value, and any shredded children) carry no
+        // embedded field IDs — only the parent group has the field ID.
+        // `filter_leaves` therefore never finds them via the standard field-ID
+        // scan below.
         //
-        // Java's PruneColumns.variant() simply returns the group as-is with no
-        // type-compatibility check (isStruct() also short-circuits on isVariantType()).
-        // We replicate that here: pre-scan top-level Arrow struct fields whose
-        // field ID resolves to Type::Variant and record all their sub-fields so
-        // the second filter_leaves can include them directly.
-        let mut variant_sub_fields: HashMap<FieldRef, i32> = HashMap::new();
-        for top_field in fields.iter() {
-            let Some(field_id) = top_field
-                .metadata()
-                .get(PARQUET_FIELD_ID_META_KEY)
-                .and_then(|s| i32::from_str(s).ok())
-            else {
-                continue;
-            };
-            if !leaf_field_id_set.contains(&field_id) {
-                continue;
-            }
-            let Some(iceberg_field) = iceberg_schema_of_task.field_by_id(field_id) else {
-                continue;
-            };
-            if let Type::Variant(_) = iceberg_field.field_type.as_ref()
-                && let DataType::Struct(sub_fields) = top_field.data_type()
-            {
-                for sub_field in sub_fields {
-                    variant_sub_fields.insert(sub_field.clone(), field_id);
-                }
-            }
-        }
+        // Java's PruneColumns.variant() returns the variant group unchanged, so
+        // every leaf beneath it is projected as part of the variant column.  We
+        // replicate that here with a recursive DFS over the Arrow schema whose
+        // leaf-numbering matches `Fields::filter_leaves`.  For each Arrow leaf
+        // index that sits inside any variant (top-level OR nested inside a
+        // struct/list/map), we record the enclosing variant's field id.
+        let variant_leaves: HashMap<usize, i32> = {
+            let mut out = HashMap::new();
+            let mut leaf_idx: usize = 0;
+            Self::collect_variant_leaves(
+                fields,
+                &mut leaf_idx,
+                None,
+                iceberg_schema_of_task,
+                &leaf_field_id_set,
+                &mut out,
+            );
+            out
+        };
 
         // Pre-project only the fields that have been selected, possibly avoiding converting
         // some Arrow types that are not yet supported.
@@ -906,7 +979,7 @@ impl ArrowReader {
             // Variant sub-fields: parent group carries the field ID, not the leaf.
             // Skip type-promotion check — Type::Variant is not a primitive type
             // (matches Java's PruneColumns.variant() which returns the group unchanged).
-            if let Some(&variant_field_id) = variant_sub_fields.get(field) {
+            if let Some(&variant_field_id) = variant_leaves.get(&idx) {
                 column_map.entry(variant_field_id).or_default().push(idx);
                 return true;
             }
@@ -2290,6 +2363,125 @@ message schema {
         assert_eq!(
             mask_primitive_only,
             ProjectionMask::leaves(&parquet_schema, vec![0]),
+        );
+    }
+
+    /// variant nested inside a struct must also have its sub-leaves
+    /// included in the projection mask.
+    #[test]
+    fn test_arrow_projection_mask_variant_nested_in_struct() {
+        // Iceberg schema: parent struct (id=1) containing c2 String (id=2) and
+        // v Variant (id=3).
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(
+                        1,
+                        "parent",
+                        Type::Struct(crate::spec::StructType::new(vec![
+                            NestedField::required(2, "c2", Type::Primitive(PrimitiveType::String))
+                                .into(),
+                            NestedField::required(3, "v", Type::Variant(VariantType)).into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Arrow: parent struct (id=1) → [c2 (id=2), v struct(metadata,value) (id=3)].
+        // Variant sub-fields intentionally without field IDs.
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new(
+                "parent",
+                DataType::Struct(arrow_schema::Fields::from(vec![
+                    Arc::new(
+                        Field::new("c2", DataType::Utf8, false).with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "2".to_string(),
+                        )])),
+                    ),
+                    Arc::new(
+                        Field::new(
+                            "v",
+                            DataType::Struct(arrow_schema::Fields::from(vec![
+                                Arc::new(Field::new("metadata", DataType::Binary, false)),
+                                Arc::new(Field::new("value", DataType::Binary, false)),
+                            ])),
+                            false,
+                        )
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "3".to_string(),
+                        )])),
+                    ),
+                ])),
+                false,
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
+
+        // Parquet: parent.c2 = leaf 0; parent.v.metadata = leaf 1; parent.v.value = leaf 2.
+        let message_type = "
+message schema {
+  required group parent = 1 {
+    required binary c2 (STRING) = 2;
+    required group v = 3 {
+      required binary metadata;
+      required binary value;
+    }
+  }
+}
+";
+        let parquet_type = parse_message_type(message_type).expect("should parse schema");
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
+
+        // Projecting the nested variant must include both of its leaves.
+        let mask_variant = ArrowReader::get_arrow_projection_mask(
+            &[3],
+            &schema,
+            &parquet_schema,
+            &arrow_schema,
+            false,
+        )
+        .expect("projection mask for nested variant");
+        assert_eq!(
+            mask_variant,
+            ProjectionMask::leaves(&parquet_schema, vec![1, 2]),
+            "variant nested in a struct was dropped from projection"
+        );
+
+        // Projecting the sibling primitive must not include variant leaves.
+        let mask_primitive = ArrowReader::get_arrow_projection_mask(
+            &[2],
+            &schema,
+            &parquet_schema,
+            &arrow_schema,
+            false,
+        )
+        .expect("projection mask for nested primitive");
+        assert_eq!(
+            mask_primitive,
+            ProjectionMask::leaves(&parquet_schema, vec![0]),
+        );
+
+        // Projecting both must include all three leaves.
+        let mask_both = ArrowReader::get_arrow_projection_mask(
+            &[2, 3],
+            &schema,
+            &parquet_schema,
+            &arrow_schema,
+            false,
+        )
+        .expect("projection mask for nested primitive + variant");
+        assert_eq!(
+            mask_both,
+            ProjectionMask::leaves(&parquet_schema, vec![0, 1, 2]),
         );
     }
 

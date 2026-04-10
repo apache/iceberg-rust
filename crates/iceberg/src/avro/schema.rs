@@ -43,12 +43,48 @@ const LOGICAL_TYPE: &str = "logicalType";
 
 struct SchemaToAvroSchema {
     schema: String,
+    // Stack of enclosing field ids, used to derive unique record names for
+    // structural types (e.g. variant) — mirrors Java TypeToSchema.fieldIds.
+    field_ids: Vec<i32>,
 }
 
 type AvroSchemaOrField = Either<AvroSchema, AvroRecordField>;
 
 impl SchemaVisitor for SchemaToAvroSchema {
     type T = AvroSchemaOrField;
+
+    fn before_struct_field(&mut self, field: &NestedFieldRef) -> Result<()> {
+        self.field_ids.push(field.id);
+        Ok(())
+    }
+    fn after_struct_field(&mut self, _field: &NestedFieldRef) -> Result<()> {
+        self.field_ids.pop();
+        Ok(())
+    }
+    fn before_list_element(&mut self, field: &NestedFieldRef) -> Result<()> {
+        self.field_ids.push(field.id);
+        Ok(())
+    }
+    fn after_list_element(&mut self, _field: &NestedFieldRef) -> Result<()> {
+        self.field_ids.pop();
+        Ok(())
+    }
+    fn before_map_key(&mut self, field: &NestedFieldRef) -> Result<()> {
+        self.field_ids.push(field.id);
+        Ok(())
+    }
+    fn after_map_key(&mut self, _field: &NestedFieldRef) -> Result<()> {
+        self.field_ids.pop();
+        Ok(())
+    }
+    fn before_map_value(&mut self, field: &NestedFieldRef) -> Result<()> {
+        self.field_ids.push(field.id);
+        Ok(())
+    }
+    fn after_map_value(&mut self, _field: &NestedFieldRef) -> Result<()> {
+        self.field_ids.pop();
+        Ok(())
+    }
 
     fn schema(&mut self, _schema: &Schema, value: AvroSchemaOrField) -> Result<AvroSchemaOrField> {
         let mut avro_schema = value.unwrap_left();
@@ -244,7 +280,14 @@ impl SchemaVisitor for SchemaToAvroSchema {
                 custom_attributes: Default::default(),
             },
         ];
-        let mut schema = avro_record_schema(VARIANT_LOGICAL_TYPE, fields)?;
+        // Avro record names must be unique within a schema. Derive the name from the
+        // enclosing field id.
+        let record_name = match self.field_ids.last() {
+            Some(id) => format!("r{id}"),
+            // falling back to "variant" when no enclosing id is set.
+            None => VARIANT_LOGICAL_TYPE.to_string(),
+        };
+        let mut schema = avro_record_schema(&record_name, fields)?;
         if let AvroSchema::Record(record) = &mut schema {
             record.attributes.insert(
                 LOGICAL_TYPE.to_string(),
@@ -283,6 +326,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
 pub(crate) fn schema_to_avro_schema(name: impl ToString, schema: &Schema) -> Result<AvroSchema> {
     let mut converter = SchemaToAvroSchema {
         schema: name.to_string(),
+        field_ids: Vec::new(),
     };
 
     visit_schema(schema, &mut converter).map(Either::unwrap_left)
@@ -1347,5 +1391,71 @@ mod tests {
             .unwrap();
 
         check_schema_conversion(avro_schema, iceberg_schema);
+    }
+
+    /// Regression: two variant columns nested inside a struct must produce unique
+    /// Avro record names (`r{field_id}`).
+    #[test]
+    fn test_multiple_variants_in_struct_have_unique_record_names() {
+        let iceberg_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "nested",
+                    Type::Struct(StructType::new(vec![
+                        NestedField::required(2, "v1", Type::Variant(VariantType)).into(),
+                        NestedField::required(3, "v2", Type::Variant(VariantType)).into(),
+                    ])),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let avro_schema = schema_to_avro_schema("test", &iceberg_schema).unwrap();
+
+        // Collect every variant record's name from the resulting Avro schema
+        // and assert they are unique and match the enclosing field ids.
+        let json = serde_json::to_value(&avro_schema).unwrap();
+        fn walk(v: &Value, out: &mut Vec<String>) {
+            match v {
+                Value::Object(map) => {
+                    if map.get("logicalType").and_then(Value::as_str) == Some("variant")
+                        && let Some(name) = map.get("name").and_then(Value::as_str)
+                    {
+                        out.push(name.to_string());
+                    }
+                    for (_k, child) in map {
+                        walk(child, out);
+                    }
+                }
+                Value::Array(arr) => {
+                    for child in arr {
+                        walk(child, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut variant_record_names: Vec<String> = Vec::new();
+        walk(&json, &mut variant_record_names);
+
+        assert_eq!(
+            variant_record_names.len(),
+            2,
+            "expected two variant records, got {variant_record_names:?}"
+        );
+        assert!(
+            variant_record_names.contains(&"r2".to_string()),
+            "expected variant record 'r2' (field id 2), got {variant_record_names:?}"
+        );
+        assert!(
+            variant_record_names.contains(&"r3".to_string()),
+            "expected variant record 'r3' (field id 3), got {variant_record_names:?}"
+        );
+
+        // Round-trips back to the same Iceberg schema.
+        let roundtrip = avro_schema_to_schema(&avro_schema).unwrap();
+        assert_eq!(iceberg_schema, roundtrip);
     }
 }
