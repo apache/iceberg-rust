@@ -163,7 +163,7 @@ jobs:
 
       - name: Install cargo-nextest
         if: matrix.test-suite.name == 'default'
-        uses: taiki-e/install-action@0fde6d128a3d980ceac30be8c8b8739abd963b81 # v2.70.0
+        uses: taiki-e/install-action@0abfcd587b70a713fdaa7fb502c885e2112acb15 # v2.75.7
         with:
           tool: cargo-nextest
 
