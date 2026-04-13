@@ -377,7 +377,7 @@ impl TableScan {
         let rt = self.runtime.clone();
 
         // Concurrently load all [`Manifest`]s and stream their [`ManifestEntry`]s
-        rt.spawn(async move {
+        rt.io().spawn(async move {
             let result = futures::stream::iter(manifest_file_contexts)
                 .try_for_each_concurrent(concurrency_limit_manifest_files, |ctx| async move {
                     ctx.fetch_manifest_and_stream_manifest_entries().await
@@ -393,41 +393,43 @@ impl TableScan {
         {
             let rt = rt.clone();
             let rt_inner = rt.clone();
-            rt.spawn(async move {
-                let result = manifest_entry_delete_ctx_rx
-                    .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
-                    .try_for_each_concurrent(
-                        concurrency_limit_manifest_entries,
-                        |(manifest_entry_context, tx)| {
-                            let rt_inner = rt_inner.clone();
-                            async move {
-                                rt_inner
-                                    .spawn(async move {
-                                        Self::process_delete_manifest_entry(
-                                            manifest_entry_context,
-                                            tx,
-                                        )
+            rt.cpu()
+                .spawn(async move {
+                    let result = manifest_entry_delete_ctx_rx
+                        .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
+                        .try_for_each_concurrent(
+                            concurrency_limit_manifest_entries,
+                            |(manifest_entry_context, tx)| {
+                                let rt_inner = rt_inner.clone();
+                                async move {
+                                    rt_inner
+                                        .cpu()
+                                        .spawn(async move {
+                                            Self::process_delete_manifest_entry(
+                                                manifest_entry_context,
+                                                tx,
+                                            )
+                                            .await
+                                        })
                                         .await
-                                    })
-                                    .await
-                            }
-                        },
-                    )
-                    .await;
-
-                if let Err(error) = result {
-                    let _ = channel_for_delete_manifest_entry_error
-                        .send(Err(error))
+                                }
+                            },
+                        )
                         .await;
-                }
-            })
-            .await;
+
+                    if let Err(error) = result {
+                        let _ = channel_for_delete_manifest_entry_error
+                            .send(Err(error))
+                            .await;
+                    }
+                })
+                .await;
         }
 
         // Process the data file [`ManifestEntry`] stream in parallel
         {
             let rt_inner = rt.clone();
-            rt.spawn(async move {
+            rt.cpu().spawn(async move {
                 let result = manifest_entry_data_ctx_rx
                     .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone())))
                     .try_for_each_concurrent(
@@ -436,6 +438,7 @@ impl TableScan {
                             let rt_inner = rt_inner.clone();
                             async move {
                                 rt_inner
+                                    .cpu()
                                     .spawn(async move {
                                         Self::process_data_manifest_entry(
                                             manifest_entry_context,

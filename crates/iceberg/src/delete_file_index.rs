@@ -62,7 +62,7 @@ impl DeleteFileIndex {
         )));
         let delete_file_stream = rx.boxed();
 
-        runtime.spawn({
+        runtime.io().spawn({
             let state = state.clone();
             async move {
                 let delete_files: Vec<DeleteFileContext> =

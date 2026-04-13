@@ -178,7 +178,7 @@ impl CachingDeleteFileLoader {
         let del_filter = self.delete_filter.clone();
         let concurrency_limit_data_files = self.concurrency_limit_data_files;
         let basic_delete_file_loader = self.basic_delete_file_loader.clone();
-        self.runtime.spawn(async move {
+        self.runtime.io().spawn(async move {
             let result = async move {
                 let mut del_filter = del_filter;
                 let basic_delete_file_loader = basic_delete_file_loader.clone();
