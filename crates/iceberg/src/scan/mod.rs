@@ -371,6 +371,8 @@ impl TableScan {
         )?;
 
         let mut channel_for_manifest_error = file_scan_task_tx.clone();
+        let mut channel_for_data_manifest_entry_error = file_scan_task_tx.clone();
+        let mut channel_for_delete_manifest_entry_error = file_scan_task_tx.clone();
 
         let rt = self.runtime.clone();
 
@@ -387,67 +389,71 @@ impl TableScan {
             }
         });
 
-        let mut channel_for_data_manifest_entry_error = file_scan_task_tx.clone();
-        let mut channel_for_delete_manifest_entry_error = file_scan_task_tx.clone();
-
-        let rt = self.runtime.clone();
-        let rt_inner = self.runtime.clone();
-
         // Process the delete file [`ManifestEntry`] stream in parallel
-        rt.spawn(async move {
-            let result = manifest_entry_delete_ctx_rx
-                .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
-                .try_for_each_concurrent(
-                    concurrency_limit_manifest_entries,
-                    |(manifest_entry_context, tx)| {
-                        let rt_inner = rt_inner.clone();
-                        async move {
-                            rt_inner
-                                .spawn(async move {
-                                    Self::process_delete_manifest_entry(manifest_entry_context, tx)
+        {
+            let rt = rt.clone();
+            let rt_inner = rt.clone();
+            rt.spawn(async move {
+                let result = manifest_entry_delete_ctx_rx
+                    .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
+                    .try_for_each_concurrent(
+                        concurrency_limit_manifest_entries,
+                        |(manifest_entry_context, tx)| {
+                            let rt_inner = rt_inner.clone();
+                            async move {
+                                rt_inner
+                                    .spawn(async move {
+                                        Self::process_delete_manifest_entry(
+                                            manifest_entry_context,
+                                            tx,
+                                        )
                                         .await
-                                })
-                                .await
-                        }
-                    },
-                )
-                .await;
-
-            if let Err(error) = result {
-                let _ = channel_for_delete_manifest_entry_error
-                    .send(Err(error))
+                                    })
+                                    .await
+                            }
+                        },
+                    )
                     .await;
-            }
-        })
-        .await;
 
-        let rt = self.runtime.clone();
-        let rt_inner = self.runtime.clone();
+                if let Err(error) = result {
+                    let _ = channel_for_delete_manifest_entry_error
+                        .send(Err(error))
+                        .await;
+                }
+            })
+            .await;
+        }
 
         // Process the data file [`ManifestEntry`] stream in parallel
-        rt.spawn(async move {
-            let result = manifest_entry_data_ctx_rx
-                .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone())))
-                .try_for_each_concurrent(
-                    concurrency_limit_manifest_entries,
-                    |(manifest_entry_context, tx)| {
-                        let rt_inner = rt_inner.clone();
-                        async move {
-                            rt_inner
-                                .spawn(async move {
-                                    Self::process_data_manifest_entry(manifest_entry_context, tx)
+        {
+            let rt_inner = rt.clone();
+            rt.spawn(async move {
+                let result = manifest_entry_data_ctx_rx
+                    .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone())))
+                    .try_for_each_concurrent(
+                        concurrency_limit_manifest_entries,
+                        |(manifest_entry_context, tx)| {
+                            let rt_inner = rt_inner.clone();
+                            async move {
+                                rt_inner
+                                    .spawn(async move {
+                                        Self::process_data_manifest_entry(
+                                            manifest_entry_context,
+                                            tx,
+                                        )
                                         .await
-                                })
-                                .await
-                        }
-                    },
-                )
-                .await;
+                                    })
+                                    .await
+                            }
+                        },
+                    )
+                    .await;
 
-            if let Err(error) = result {
-                let _ = channel_for_data_manifest_entry_error.send(Err(error)).await;
-            }
-        });
+                if let Err(error) = result {
+                    let _ = channel_for_data_manifest_entry_error.send(Err(error)).await;
+                }
+            });
+        }
 
         Ok(file_scan_task_rx.boxed())
     }

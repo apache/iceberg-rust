@@ -54,7 +54,7 @@ struct DeleteFileFilterState {
     positional_deletes: HashMap<String, PosDelState>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(crate) struct DeleteFilter {
     state: Arc<RwLock<DeleteFileFilterState>>,
     runtime: Runtime,
@@ -514,7 +514,7 @@ pub(crate) mod tests {
             case_sensitive: true,
         };
 
-        let filter = DeleteFilter::default();
+        let filter = DeleteFilter::new(Runtime::default());
 
         // ---------- insert equality delete predicate ----------
         let pred = Reference::new("id").equal_to(Datum::long(10));

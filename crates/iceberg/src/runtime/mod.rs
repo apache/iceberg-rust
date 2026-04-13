@@ -24,6 +24,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tokio::task;
+use tracing::warn;
 
 /// Wrapper around tokio's JoinHandle that panics on task failure.
 pub struct JoinHandle<T>(task::JoinHandle<T>);
@@ -42,7 +43,7 @@ impl<T: Send + 'static> Future for JoinHandle<T> {
     }
 }
 
-/// Stable runtime wrapper for spawning async tasks and blocking operations.
+/// Runtime wrapper for spawning async tasks and blocking operations.
 ///
 /// Wraps `Arc<tokio::runtime::Runtime>` internally. Cloning is cheap (Arc clone).
 /// This is the public API boundary — internals can evolve without breaking consumers.
@@ -102,6 +103,12 @@ impl Default for Runtime {
                 handle,
             };
         }
+
+        warn!(
+            "No tokio runtime found. Creating a new multi-thread runtime for iceberg. \
+             Consider providing an explicit Runtime via CatalogBuilder::with_runtime() \
+             or TableBuilder::runtime() to avoid unexpected resource usage."
+        );
 
         let rt = Arc::new(
             tokio::runtime::Builder::new_multi_thread()

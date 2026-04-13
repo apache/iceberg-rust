@@ -158,12 +158,6 @@ pub trait CatalogBuilder: Default + Debug + Send + Sync {
     /// When a Runtime is provided, the catalog will propagate it to all tables
     /// it creates. Tasks such as scan planning, delete file processing, and
     /// transaction retries will be spawned on this runtime.
-    ///
-    /// The runtime MUST have `enable_time()` configured, as transaction retry
-    /// uses `tokio::time::sleep`. This is enabled by default in all standard
-    /// tokio runtime configurations.
-    ///
-    /// This is a required method — all catalog builders must implement it.
     fn with_runtime(self, runtime: Runtime) -> Self;
 
     /// Create a new catalog instance.
