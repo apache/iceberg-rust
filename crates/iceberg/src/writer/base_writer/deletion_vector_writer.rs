@@ -113,7 +113,7 @@ where
         let mut data_files = Vec::with_capacity(delete_vectors.len());
 
         for (data_file_path, delete_vector) in delete_vectors {
-            if delete_vector.len() == 0 {
+            if delete_vector.is_empty() {
                 continue;
             }
             let file_name = self.file_name_generator.generate_file_name();

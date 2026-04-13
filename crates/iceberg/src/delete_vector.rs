@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Delete vector types and Puffin serialization support.
+
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::ops::BitOrAssign;
@@ -35,24 +37,29 @@ pub(crate) const DELETION_VECTOR_PROPERTY_CARDINALITY: &str = "cardinality";
 /// Puffin blob property for referenced data file path.
 pub(crate) const DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE: &str = "referenced-data-file";
 
+/// A set of deleted row positions backed by a `RoaringTreemap`.
 #[derive(Debug, Default)]
 pub struct DeleteVector {
     inner: RoaringTreemap,
 }
 
 impl DeleteVector {
-    #[allow(unused)]
+    /// Creates a delete vector from an existing roaring treemap.
     pub fn new(roaring_treemap: RoaringTreemap) -> DeleteVector {
         DeleteVector {
             inner: roaring_treemap,
         }
     }
 
+    /// Returns an iterator over deleted row positions in ascending order.
     pub fn iter(&self) -> DeleteVectorIterator<'_> {
         let outer = self.inner.bitmaps();
         DeleteVectorIterator { outer, inner: None }
     }
 
+    /// Marks a single row position as deleted.
+    ///
+    /// Returns `true` when the position was not already present.
     pub fn insert(&mut self, pos: u64) -> bool {
         self.inner.insert(pos)
     }
@@ -64,7 +71,6 @@ impl DeleteVector {
     /// # Errors
     ///
     /// Returns an error if the precondition is not met.
-    #[allow(dead_code)]
     pub fn insert_positions(&mut self, positions: &[u64]) -> Result<usize> {
         if let Err(err) = self.inner.append(positions.iter().copied()) {
             return Err(Error::new(
@@ -76,13 +82,18 @@ impl DeleteVector {
         Ok(positions.len())
     }
 
-    #[allow(unused)]
+    /// Returns `true` if there are no deleted positions in this vector.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Returns the number of deleted row positions in the vector.
     pub fn len(&self) -> u64 {
         self.inner.len()
     }
 
     /// Serialize this delete vector into a Puffin deletion vector blob.
-    pub(crate) fn to_puffin_blob(&self, properties: HashMap<String, String>) -> Result<Blob> {
+    pub fn to_puffin_blob(&self, properties: HashMap<String, String>) -> Result<Blob> {
         Self::check_properties(&properties)?;
 
         let serialized_bitmap_size = self.inner.serialized_size();
@@ -126,7 +137,7 @@ impl DeleteVector {
     }
 
     /// Deserialize a delete vector from a Puffin deletion vector blob.
-    pub(crate) fn from_puffin_blob(blob: Blob) -> Result<Self> {
+    pub fn from_puffin_blob(blob: Blob) -> Result<Self> {
         if blob.blob_type() != DELETION_VECTOR_V1 {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
@@ -221,6 +232,7 @@ impl DeleteVector {
 // There is a PR open on roaring to add this (https://github.com/RoaringBitmap/roaring-rs/pull/314)
 // and if that gets merged then we can simplify `DeleteVectorIterator` here, refactoring `advance_to`
 // to just a wrapper around the underlying iterator's method.
+/// An iterator over deleted row positions.
 pub struct DeleteVectorIterator<'a> {
     // NB: `BitMapIter` was only exposed publicly in https://github.com/RoaringBitmap/roaring-rs/pull/316
     // which is not yet released. As a consequence our Cargo.toml temporarily uses a git reference for
@@ -258,6 +270,7 @@ impl Iterator for DeleteVectorIterator<'_> {
 }
 
 impl DeleteVectorIterator<'_> {
+    /// Advances the iterator to the first position greater than or equal to `pos`.
     pub fn advance_to(&mut self, pos: u64) {
         let hi = (pos >> 32) as u32;
         let lo = pos as u32;
