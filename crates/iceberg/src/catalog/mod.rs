@@ -156,8 +156,8 @@ pub trait CatalogBuilder: Default + Debug + Send + Sync {
     /// Set a custom tokio Runtime to use for spawning async tasks.
     ///
     /// When a Runtime is provided, the catalog will propagate it to all tables
-    /// it creates. Tasks such as scan planning, delete file processing, and
-    /// transaction retries will be spawned on this runtime.
+    /// it creates. Tasks such as scan planning and delete file processing
+    /// will be spawned on this runtime.
     fn with_runtime(self, runtime: Runtime) -> Self;
 
     /// Create a new catalog instance.
