@@ -27,6 +27,7 @@ permissions:
 
 jobs:
   set-version:
+    if: github.repository == 'apache/iceberg-rust' || github.event_name == 'workflow_dispatch' # Run on schedule for apache repo, or on manual dispatch from any repo
     runs-on: ubuntu-latest
     outputs:
       timestamp: ${{ steps.set-ts.outputs.TIMESTAMP }}
@@ -37,7 +38,6 @@ jobs:
 
   sdist:
     needs: set-version
-    if: github.repository == 'apache/iceberg-rust' # Only run for apache repo
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -48,21 +48,20 @@ jobs:
         with:
           timestamp: ${{ needs.set-version.outputs.TIMESTAMP }}
 
-      - uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad # v1
+      - uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad # v1.50.1
         with:
           working-directory: "bindings/python"
           command: sdist
           args: -o dist
 
       - name: Upload sdist
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: wheels-sdist
           path: bindings/python/dist
 
   wheels:
     needs: set-version
-    if: github.repository == 'apache/iceberg-rust' # Only run for apache repo
     runs-on: "${{ matrix.os }}"
     strategy:
       max-parallel: 15
@@ -99,7 +98,7 @@ jobs:
         with:
           rust-version: ${{ steps.get-msrv.outputs.msrv }}
 
-      - uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad # v1
+      - uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad # v1.50.1
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux || 'auto' }}
@@ -108,12 +107,13 @@ jobs:
           args: --release -o dist -i python3.12 # Explicitly set interpreter; manylinux containers have multiple Pythons and maturin may pick an older one
 
       - name: Upload wheels
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: wheels-${{ matrix.os }}-${{ matrix.target }}
           path: bindings/python/dist
 
   testpypi-publish:
+    if: github.repository == 'apache/iceberg-rust' # Only run for apache repo
     needs: [sdist, wheels]
     runs-on: ubuntu-latest
 

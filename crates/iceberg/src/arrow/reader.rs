@@ -59,7 +59,7 @@ use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, is_metadata_field};
 use crate::runtime::Runtime;
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::{Datum, NameMapping, NestedField, PrimitiveType, Schema, Type};
-use crate::utils::available_parallelism;
+use crate::util::available_parallelism;
 use crate::{Error, ErrorKind};
 
 /// Default gap between byte ranges below which they are coalesced into a
