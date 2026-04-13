@@ -255,7 +255,7 @@ impl DeleteFilter {
 
         let state = self.state.clone();
         let delete_file_path = delete_file_path.to_string();
-        self.runtime.spawn(async move {
+        self.runtime.cpu().spawn(async move {
             let eq_del = eq_del.await.unwrap();
             {
                 let mut state = state.write().unwrap();
