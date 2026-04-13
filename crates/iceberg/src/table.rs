@@ -243,9 +243,6 @@ impl Table {
     }
 
     /// Returns a reference to the Runtime.
-    ///
-    /// Call sites use `table.runtime().spawn(...)` through the wrapper.
-    /// Runtime is always present — no None checks needed.
     pub(crate) fn runtime(&self) -> &Runtime {
         &self.runtime
     }
