@@ -23,7 +23,7 @@
 
 ### Iceberg Spec: Encryption
 
-The [Iceberg table spec](https://iceberg.apache.org/spec/#table-metadata) defines encryption
+The [Iceberg table spec](https://iceberg.apache.org/docs/nightly/encryption/) defines encryption
 as a first-class concept. Tables may store an `encryption-keys` map in their metadata,
 snapshots may reference an `encryption-key-id`, and manifest files carry optional
 `key_metadata` bytes. Data files themselves can be encrypted either at the stream level
@@ -96,17 +96,18 @@ Master Key (in KMS)
                                       │
                                       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                     EncryptionManager (trait)                                │
+│                     EncryptionManager (concrete struct)                     │
 │                                                                             │
-│  StandardEncryptionManager:                                                 │
-│  - Envelope encryption: Master → KEK → manifest list StandardKeyMetadata   │
-│  - DEKs are plaintext, protected by encrypted parent files                 │
-│  - KEK cache (moka async, configurable TTL)                                │
-│  - Automatic KEK rotation (730 days, KEY_TIMESTAMP tracking)               │
-│  - encrypt() / decrypt() for AGS1 stream files                            │
-│  - encrypt_native() for Parquet Modular Encryption                         │
-│  - wrap/unwrap_key_metadata() for manifest list keys (KEK + KMS)           │
-│  - generate_dek() for per-file plaintext DEK generation                    │
+│  EncryptionManager:                                                         │
+│  - Envelope encryption: Master → KEK → manifest list StandardKeyMetadata    │
+│  - DEKs are plaintext, protected by encrypted parent files                  │
+│  - KEK cache (moka async, configurable TTL)                                 │
+│  - Automatic KEK rotation (730 days, KEY_TIMESTAMP tracking)                │
+│  - encrypt() / decrypt() for AGS1 stream files                              │
+│  - encrypt_native() for Parquet Modular Encryption                          │
+│  - wrap/unwrap_key_metadata() for manifest list keys (KEK + KMS)            │
+│  - generate_dek() for per-file plaintext DEK generation                     │
+│  - Constructed per-table by KmsClientFactory                                │
 └─────────────────────────────────────────────────────────────────────────────┘
               │                              │
               ▼                              ▼
@@ -114,9 +115,9 @@ Master Key (in KMS)
 │   KeyManagementClient    │   │              KEK Cache                       │
 │       (trait)            │   │                                              │
 │                          │   │  - moka::future::Cache with configurable TTL │
-│  wrap_key(key, key_id)   │   │  - Thread-safe async                        │
-│  unwrap_key(wrapped, id) │   │  - Caches plaintext KEK bytes per key ID    │
-│  initialize(props)       │   │                                              │
+│  wrap_key(key, key_id)   │   │  - Thread-safe async                         │
+│  unwrap_key(wrapped, id) │   │  - Caches plaintext KEK bytes per key ID     │
+│  generate_key(key_id)    │   │                                              │
 └──────────────────────────┘   └──────────────────────────────────────────────┘
               │
               ▼
@@ -124,9 +125,20 @@ Master Key (in KMS)
 │    KMS Implementations   │
 │                          │
 │  - InMemoryKms (testing) │
-│  - AWS KMS (future)      │
+│  - AWS KMS               │
 │  - Azure KV (future)     │
 │  - GCP KMS (future)      │
+└──────────────────────────┘
+              │
+              ▲ created by
+┌──────────────────────────┐
+│   KmsClientFactory       │
+│       (trait)            │
+│                          │
+│  create_kms_client(props)│
+│                          │
+│  - AwsKmsClientFactory   │
+│  - Custom factories      │
 └──────────────────────────┘
 ```
 
@@ -218,16 +230,17 @@ crates/iceberg/src/
 │   ├── crypto.rs                    # AES-GCM primitives (SecureKey, AesGcmEncryptor)
 │   ├── key_management.rs            # KeyManagementClient trait
 │   ├── key_metadata.rs              # StandardKeyMetadata (Avro V1, Java-compatible)
-│   ├── encryption_manager.rs        # EncryptionManager trait + StandardEncryptionManager
-│   ├── plaintext_encryption_manager.rs  # No-op pass-through for unencrypted tables
+│   ├── encryption_manager.rs        # EncryptionManager (concrete struct)
 │   ├── file_encryptor.rs            # FileEncryptor (write-side AGS1 wrapper)
 │   ├── file_decryptor.rs            # FileDecryptor (read-side AGS1 wrapper)
 │   ├── encrypted_io.rs              # EncryptedInputFile / EncryptedOutputFile wrappers
 │   ├── stream.rs                    # AesGcmFileRead / AesGcmFileWrite (AGS1 format)
 │   ├── kms/
-│   │   ├── mod.rs
-│   │   └── in_memory.rs             # InMemoryKms (testing only)
-│   └── integration_tests.rs         # End-to-end encryption round-trip tests
+│   │   ├── mod.rs                   # KmsClientFactory trait
+│   │   ├── in_memory.rs             # InMemoryKms (testing only)
+│   │   └── aws.rs                   # AwsKeyManagementClient (feature-gated: kms-aws)
+├── tests/
+│   └── encryption_integration.rs    # End-to-end encryption round-trip tests
 ├── io/
 │   └── file_io.rs                   # InputFile/OutputFile enums, FileIO encryption methods
 ├── arrow/
@@ -300,11 +313,35 @@ Pluggable interface for KMS integration. Mirrors the Java `KeyManagementClient`:
 ```rust
 #[async_trait]
 pub trait KeyManagementClient: Debug + Send + Sync {
-    async fn initialize(&mut self, properties: HashMap<String, String>) -> Result<()>;
+    /// Wrap (encrypt) a key using a wrapping key managed by the KMS.
     async fn wrap_key(&self, key: &[u8], wrapping_key_id: &str) -> Result<Vec<u8>>;
-    async fn unwrap_key(&self, wrapped_key: &[u8], wrapping_key_id: &str) -> Result<Vec<u8>>;
+
+    /// Unwrap (decrypt) a previously wrapped key. Returns SensitiveBytes
+    /// which zeroizes on drop and redacts in Debug output.
+    async fn unwrap_key(&self, wrapped_key: &[u8], wrapping_key_id: &str) -> Result<SensitiveBytes>;
+
+    /// Whether this KMS supports server-side key generation.
+    /// If true, callers can use generate_key() for atomic key generation and wrapping.
+    fn supports_key_generation(&self) -> bool { false }
+
+    /// Generate a new key and wrap it atomically on the server side.
+    /// Only supported when supports_key_generation() returns true.
+    async fn generate_key(&self, wrapping_key_id: &str) -> Result<KeyGenerationResult> {
+        Err(Error::new(ErrorKind::FeatureUnsupported, "..."))
+    }
 }
 ```
+
+The `initialize()` method from the Java interface is intentionally omitted — in Rust,
+KMS clients are constructed with their configuration already applied (via builder pattern
+or constructor arguments), making a separate initialization step unnecessary.
+
+The `SensitiveBytes` return type for `unwrap_key` ensures that plaintext key material
+is automatically zeroized on drop and redacted in debug output.
+
+`supports_key_generation()` and `generate_key()` support KMS backends like AWS KMS
+that can atomically generate and wrap keys server-side via `GenerateDataKey`, which is
+more secure than generating locally and wrapping separately.
 
 Users implement this trait to integrate with their KMS of choice (AWS KMS, Azure Key Vault,
 GCP KMS, HashiCorp Vault, etc.). An `InMemoryKms` is provided for testing.
@@ -330,51 +367,59 @@ Wire format: `[version byte 0x01][Avro binary datum]` — byte-compatible with J
 
 ### EncryptionManager
 
-The `EncryptionManager` trait abstracts encryption orchestration. `StandardEncryptionManager`
-implements envelope encryption with KMS-backed KEK management, KEK caching, and rotation:
+`EncryptionManager` is a concrete struct (not a trait) that implements envelope encryption
+with KMS-backed KEK management, KEK caching, and rotation. A trait is unnecessary here —
+for unencrypted tables, the encryption manager is simply `None` rather than using a no-op
+implementation:
 
 ```rust
-#[async_trait]
-pub trait EncryptionManager: Debug + Send + Sync {
+pub struct EncryptionManager {
+    kms_client: Arc<dyn KeyManagementClient>,
+    kek_cache: moka::future::Cache<String, SensitiveBytes>,
+    kek_lifespan_days: i64,
+    algorithm: EncryptionAlgorithm,
+    table_key_id: Option<String>,
+    encryption_keys: HashMap<String, EncryptedKey>,
+}
+
+impl EncryptionManager {
+    pub fn new(kms_client: Arc<dyn KeyManagementClient>) -> Self;
+
     /// Decrypt an AGS1 stream-encrypted file.
-    async fn decrypt(&self, encrypted: EncryptedInputFile) -> Result<InputFile>;
+    pub async fn decrypt(&self, encrypted: EncryptedInputFile) -> Result<InputFile>;
 
     /// Encrypt a file with AGS1 stream encryption.
-    async fn encrypt(&self, raw_output: OutputFile) -> Result<EncryptedOutputFile>;
+    pub async fn encrypt(&self, raw_output: OutputFile) -> Result<EncryptedOutputFile>;
 
     /// Encrypt for Parquet Modular Encryption (generates NativeKeyMaterial).
-    async fn encrypt_native(&self, raw_output: OutputFile) -> Result<EncryptedOutputFile>;
+    pub async fn encrypt_native(&self, raw_output: OutputFile) -> Result<EncryptedOutputFile>;
 
     /// Unwrap key metadata for a manifest list.
     /// 1. Look up the manifest list's EncryptedKey by key ID
     /// 2. Find the KEK via encrypted_by_id
-    /// 3. Unwrap the KEK via KMS: kms_client.unwrap_key(kek.encrypted_key_metadata, table_key_id)
+    /// 3. Unwrap the KEK via KMS
     /// 4. AES-GCM decrypt the manifest list's StandardKeyMetadata using the KEK,
     ///    with KEY_TIMESTAMP as AAD
     /// 5. Return the decrypted StandardKeyMetadata bytes (containing plaintext DEK)
-    async fn unwrap_key_metadata(
+    pub async fn unwrap_key_metadata(
         &self, encrypted_key: &EncryptedKey,
         encryption_keys: &HashMap<String, EncryptedKey>,
     ) -> Result<Vec<u8>>;
 
     /// Wrap key metadata for a manifest list with a KEK for storage in table metadata.
-    /// 1. Get or create a KEK (wrapping new KEK via KMS if needed)
-    /// 2. AES-GCM encrypt the StandardKeyMetadata using the KEK, with KEY_TIMESTAMP as AAD
-    /// 3. Return the manifest list EncryptedKey (encrypted_by_id = kek_id)
-    ///    and optionally a new KEK EncryptedKey if one was created
-    async fn wrap_key_metadata(
+    pub async fn wrap_key_metadata(
         &self, key_metadata: &[u8],
     ) -> Result<(EncryptedKey, Option<EncryptedKey>)>;
 }
 ```
 
-`StandardEncryptionManager` is typically not constructed directly by users. Instead,
-`TableBuilder::build()` constructs it automatically from a `KeyManagementClient`
+`EncryptionManager` is typically not constructed directly by users. Instead,
+`TableBuilder::build()` constructs it automatically from a `KmsClientFactory`
 extension and the table's properties (see [Catalog Integration](#catalog-integration) below).
 For manual construction in tests:
 
 ```rust
-let em = StandardEncryptionManager::new(Arc::new(kms_client))
+let em = EncryptionManager::new(Arc::new(kms_client))
     .with_table_key_id("master-key-1")   // Master key ID in KMS
     .with_encryption_keys(table_metadata.encryption_keys.clone());
 ```
@@ -388,7 +433,7 @@ Block-based stream encryption format compatible with Java's `AesGcmInputStream`/
 ```
 ┌──────────────────────────────────────────┐
 │ Header (8 bytes)                         │
-│   Magic: "AGS1" (4 bytes)               │
+│   Magic: "AGS1" (4 bytes)                │
 │   Plain block size: u32 LE (4 bytes)     │
 │     Default: 1,048,576 (1 MiB)           │
 ├──────────────────────────────────────────┤
@@ -410,56 +455,67 @@ block to its position in the stream to prevent reordering attacks.
 random-access reads. **`AesGcmFileWrite`** implements `FileWrite` for transparent AGS1
 encryption with block buffering.
 
-### InputFile and OutputFile Enums
+### EncryptedInputFile and EncryptedOutputFile Wrappers
 
-`InputFile` and `OutputFile` are enums with three variants each:
+Rather than adding encryption variants to `InputFile`/`OutputFile` (which would change the
+public API of those core types), encryption uses dedicated wrapper types. `EncryptedInputFile`
+and `EncryptedOutputFile` wrap a plain `InputFile`/`OutputFile` and add transparent
+encryption/decryption. The plain `InputFile`/`OutputFile` types remain unchanged.
 
 ```rust
-pub enum InputFile {
-    /// Standard unencrypted file.
-    Plain { storage: Arc<dyn Storage>, path: String },
-
-    /// AGS1 stream-encrypted file. Transparent decryption on read.
-    Encrypted { storage: Arc<dyn Storage>, path: String, decryptor: Arc<FileDecryptor> },
-
-    /// Parquet Modular Encryption. Raw reads; Parquet reader handles decryption.
-    NativeEncrypted { storage: Arc<dyn Storage>, path: String, key_material: NativeKeyMaterial },
+/// Wraps a plain InputFile with decryption capabilities.
+pub enum EncryptedInputFile {
+    /// AGS1 stream-encrypted file. Decrypted transparently on read.
+    Encrypted {
+        inner: InputFile,
+        decryptor: Arc<AesGcmFileDecryptor>,
+    },
+    /// Parquet Modular Encryption. The Parquet reader handles decryption.
+    NativeEncrypted {
+        inner: InputFile,
+        key_material: NativeKeyMaterial,
+    },
 }
 
-pub enum OutputFile {
-    Plain { storage: Arc<dyn Storage>, path: String },
-    Encrypted { storage: Arc<dyn Storage>, path: String, encryptor: Arc<FileEncryptor> },
-    NativeEncrypted { storage: Arc<dyn Storage>, path: String, key_material: NativeKeyMaterial },
+/// Wraps a plain OutputFile with encryption capabilities.
+pub enum EncryptedOutputFile {
+    /// AGS1 stream-encrypted output. Encrypted transparently on write.
+    Encrypted {
+        inner: OutputFile,
+        key_metadata: Box<[u8]>,
+        encryptor: Arc<AesGcmFileEncryptor>,
+    },
+    /// Parquet Modular Encryption. The Parquet writer handles encryption.
+    NativeEncrypted {
+        inner: OutputFile,
+        key_metadata: Box<[u8]>,
+        key_material: NativeKeyMaterial,
+    },
 }
 ```
+
+Both wrappers delegate standard operations (`location()`, `exists()`, `read()`, `reader()`,
+`write()`, `writer()`) to the inner file, with `Encrypted` variants transparently
+encrypting/decrypting via `AesGcmFileRead`/`AesGcmFileWrite`. `into_inner()` recovers
+the underlying plain file.
 
 `NativeKeyMaterial` carries the plaintext DEK and AAD prefix for Parquet's
 `FileEncryptionProperties` / `FileDecryptionProperties`.
 
-Common operations (`location()`, `exists()`, `read()`, `reader()`, `write()`, `writer()`)
-delegate to the appropriate variant, with `Encrypted` variants transparently encrypting/decrypting
-via `AesGcmFileRead`/`AesGcmFileWrite`.
-
-#### Adaptation for Storage Trait RFC
-
-Once RFC 0002 merges, `InputFile` will hold `Arc<dyn Storage>` instead of `Operator`. This is
-already the case in this implementation — the enum structure is stable. Only the underlying
-`Storage` trait implementation may change.
+This wrapper approach means `ManifestReader` and `ManifestListWriter` accept the encrypted
+wrapper types (or `Box<dyn FileWrite>`) where encryption is needed, rather than requiring
+changes to the `InputFile`/`OutputFile` enums themselves.
 
 ### FileIO Integration
 
-The `EncryptionManager` is stored as a type-safe `FileIOBuilder` extension. This integrates
-naturally with catalogs that support extensions (e.g. `RestCatalog.with_file_io_extension()`):
+The `EncryptionManager` is attached to `FileIO` via a convenience method. The encryption
+manager is typically created automatically by `TableBuilder::build()` using the catalog's
+`KmsClientFactory`, but can also be attached directly for testing:
 
 ```rust
-// Via FileIOBuilder extension (works with RestCatalog and any extension-aware catalog)
-let file_io = FileIOBuilder::new("s3")
-    .with_prop("s3.region", "us-east-1")
-    .with_extension(encryption_manager)
-    .build()?;
-
-// Or via convenience method on FileIO
-let file_io = file_io.with_encryption_manager(encryption_manager);
+// Typically automatic via catalog + KmsClientFactory (see Catalog Integration).
+// For manual/test setup:
+let file_io = file_io.with_encryption_manager(Arc::new(encryption_manager));
 ```
 
 FileIO provides encryption-aware factory methods:
@@ -474,33 +530,21 @@ FileIO provides encryption-aware factory methods:
 
 #### After Storage Trait RFC
 
-RFC 0002 removes `Extensions` from `FileIOBuilder`. The `EncryptionManager` will instead be
-provided through the `StorageFactory` or configured at the catalog level:
+RFC 0002 removes `Extensions` from `FileIOBuilder`. The `KmsClientFactory` will be
+provided at the catalog level (Option A), which is consistent with the wrapper approach
+for `EncryptedInputFile`/`EncryptedOutputFile` — encryption operates at the `FileIO` level
+rather than wrapping storage:
 
 ```rust
-// Option A: EncryptionManager on the catalog
 let catalog = GlueCatalogBuilder::default()
     .with_storage_factory(Arc::new(OpenDalStorageFactory::S3))
-    .with_encryption_manager(encryption_manager)
+    .with_kms_client_factory(Arc::new(AwsKmsClientFactory))
     .load("my_catalog", props)
     .await?;
-
-// Option B: Wrapping StorageFactory
-pub struct EncryptingStorageFactory {
-    inner: Arc<dyn StorageFactory>,
-    encryption_manager: Arc<EncryptionManager>,
-}
-
-impl StorageFactory for EncryptingStorageFactory {
-    fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
-        let storage = self.inner.build(config)?;
-        Ok(Arc::new(EncryptingStorage::new(storage, self.encryption_manager.clone())))
-    }
-}
 ```
 
-The exact integration point will be finalized when RFC 0002 merges. The encryption
-module's internal design (crypto, key management, stream format) is unaffected.
+The encryption module's internal design (crypto, key management, stream format) is unaffected
+by the storage trait changes.
 
 ### Parquet Modular Encryption
 
@@ -540,21 +584,63 @@ to produce a per-table encrypting FileIO.
 #### How Rust Does It
 
 Rust does not have Java's reflection-based class loading, so `encryption.kms-impl` (a class name
-string) is not useful. Instead, the user provides a concrete `Arc<dyn KeyManagementClient>`
-as a `FileIOBuilder` extension on the catalog. The `table_key_id` and `encryption_keys` are
-then inferred automatically from table metadata.
+string) is not useful. Instead, the user provides a `KmsClientFactory` to the catalog builder.
+The factory creates per-table `KeyManagementClient` instances from table properties, and the
+`table_key_id` and `encryption_keys` are inferred automatically from table metadata.
 
-**Step 1: User provides the KMS client to the catalog.**
+##### KmsClientFactory Trait
 
-For catalogs that support `FileIOBuilder` extensions (e.g. `RestCatalog`):
+A `KmsClientFactory` abstracts the construction of KMS clients. This allows the catalog to
+create a correctly configured KMS client for each table based on that table's properties,
+without the user needing to know the details of per-table KMS configuration:
 
 ```rust
-let kms_client: Arc<dyn KeyManagementClient> = Arc::new(my_aws_kms);
+#[async_trait]
+pub trait KmsClientFactory: Send + Sync + Debug {
+    /// Create a KeyManagementClient from table properties.
+    ///
+    /// Called by TableBuilder::build() for each encrypted table. The factory
+    /// receives the table's properties (which may include KMS endpoint, region,
+    /// credentials, etc.) and returns a configured client.
+    async fn create_kms_client(
+        &self,
+        properties: &HashMap<String, String>,
+    ) -> Result<Arc<dyn KeyManagementClient>>;
+}
+```
 
+Example implementations:
+
+```rust
+/// Factory for AWS KMS clients. Reads endpoint and region from table properties.
+#[derive(Debug)]
+pub struct AwsKmsClientFactory;
+
+#[async_trait]
+impl KmsClientFactory for AwsKmsClientFactory {
+    async fn create_kms_client(
+        &self,
+        properties: &HashMap<String, String>,
+    ) -> Result<Arc<dyn KeyManagementClient>> {
+        let region = properties.get("kms.region").cloned();
+        let endpoint = properties.get("kms.endpoint").cloned();
+        let client = AwsKeyManagementClient::builder()
+            .with_region(region)
+            .with_endpoint(endpoint)
+            .build()
+            .await?;
+        Ok(Arc::new(client))
+    }
+}
+```
+
+**Step 1: User provides the KMS client factory to the catalog builder.**
+
+```rust
 let catalog = RestCatalogBuilder::default()
+    .with_kms_client_factory(Arc::new(AwsKmsClientFactory))
     .load("rest", props)
-    .await?
-    .with_file_io_extension(kms_client);
+    .await?;
 ```
 
 **Step 2: `TableBuilder::build()` auto-configures encryption per table.**
@@ -563,48 +649,28 @@ When building a `Table`, `TableBuilder::maybe_configure_encryption()` runs autom
 This is the Rust equivalent of Java's `RESTTableOperations.io()` which calls
 `EncryptingFileIO.combine(io, encryption())`. It checks:
 
-1. Does the `FileIO` have a `KeyManagementClient` extension? If not, return as-is.
+1. Does the catalog have a `KmsClientFactory`? If not, return as-is.
 2. Does the table metadata have an `encryption.key-id` property? If not, return as-is (unencrypted table).
-3. If both are present, construct a `StandardEncryptionManager` with:
-   - `table_key_id` from the `encryption.key-id` table property
-   - `encryption_keys` from `TableMetadata.encryption_keys` (the KEK map)
-   - The `KeyManagementClient` from the extension
+3. If both are present:
+   a. Call `kms_client_factory.create_kms_client(table_properties)` to get a per-table KMS client
+   b. Construct an `EncryptionManager` with:
+      - `table_key_id` from the `encryption.key-id` table property
+      - `encryption_keys` from `TableMetadata.encryption_keys` (the KEK map)
+      - The `KeyManagementClient` from the factory
 4. Attach the `EncryptionManager` to the table's `FileIO`.
 
 This runs on every `Table::builder().build()` call, so each table gets a correctly configured
 per-table `EncryptionManager` even when a single catalog manages tables with different key IDs.
 
 ```rust
-// User code — just provide the KMS client, everything else is automatic:
+// User code — just provide the factory, everything else is automatic:
 let table = catalog.load_table(&ident).await?;
-// table.file_io() now has a StandardEncryptionManager configured with
+// table.file_io() now has an EncryptionManager configured with
 // the correct table_key_id and encryption_keys from this table's metadata.
 ```
 
 `Table::with_file_io()` replaces the table's `FileIO` and rebuilds its `ObjectCache` (which
 stores its own `FileIO` for manifest/manifest list loading).
-
-#### Open Decision: KMS Client Injection Mechanism
-
-The current approach requires the user to manually construct and provide the KMS client.
-In production, the REST catalog server may return `encryption.kms-impl` or `encryption.kms-type`
-in its config response. A few options for resolving this automatically in Rust:
-
-1. **Current approach (explicit)**: User constructs `Arc<dyn KeyManagementClient>` and adds
-   it as a `FileIOBuilder` extension. Simple, no magic, works today.
-
-2. **Type registry**: A `HashMap<String, Box<dyn Fn(props) -> Arc<dyn KeyManagementClient>>>`
-   mapping `kms-type` strings (e.g. `"aws"`, `"gcp"`) to factory functions. The catalog reads
-   `encryption.kms-type` from properties and looks up the factory. Requires a registration step
-   but is closer to Java's `kms-type` intent.
-
-3. **Catalog-specific logic**: Each catalog implementation (REST, Glue, etc.) knows how to
-   create its KMS client based on the properties it receives. For example, `RestCatalog` could
-   detect `encryption.kms-impl = AwsKeyManagementClient` in the config response and
-   automatically create an `AwsKms` instance with the right endpoint and credentials.
-
-The right choice depends on how the upstream Iceberg spec evolves `encryption.kms-type`. For
-now, option 1 (explicit) is implemented and sufficient for production use.
 
 ### DataFusion Integration
 
@@ -640,9 +706,5 @@ Cross-language compatibility is a hard requirement:
 
 ## Future Work
 
-- **Production KMS implementations**: AWS KMS, Azure Key Vault, GCP KMS
-- **Column-level encryption policies**: Encrypt specific columns with different keys
-- **Key rotation support**: Re-encrypt DEKs with new KEKs without re-encrypting data
+- **Additional KMS implementations**: Azure Key Vault, GCP KMS (AWS KMS is implemented)
 - **AES-256-GCM support**: Depends on `parquet-rs` support
-- **Storage Trait adaptation**: Replace `Extensions`-based `EncryptionManager` injection
-  with the pattern from RFC 0002 (catalog-level or `EncryptingStorageFactory` wrapper)
