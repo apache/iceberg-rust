@@ -49,7 +49,7 @@ use iceberg_catalog_sql::{
 };
 use iceberg_storage_opendal::OpenDalStorageFactory;
 use iceberg_test_utils::{
-    get_glue_endpoint, get_hms_endpoint, get_minio_endpoint, get_rest_catalog_endpoint, set_up,
+    get_glue_endpoint, get_hms_endpoint, get_rest_catalog_endpoint, get_s3_endpoint, set_up,
 };
 use sqlx::migrate::MigrateDatabase;
 use tempfile::TempDir;
@@ -216,7 +216,7 @@ async fn rest_catalog() -> RestCatalog {
 
 async fn glue_catalog() -> GlueCatalog {
     let glue_endpoint = get_glue_endpoint();
-    let minio_endpoint = get_minio_endpoint();
+    let s3_endpoint = get_s3_endpoint();
 
     let props = HashMap::from([
         (AWS_ACCESS_KEY_ID.to_string(), "my_access_id".to_string()),
@@ -225,7 +225,7 @@ async fn glue_catalog() -> GlueCatalog {
             "my_secret_key".to_string(),
         ),
         (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
-        (S3_ENDPOINT.to_string(), minio_endpoint),
+        (S3_ENDPOINT.to_string(), s3_endpoint),
         (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
         (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
         (S3_REGION.to_string(), "us-east-1".to_string()),
@@ -265,7 +265,7 @@ async fn glue_catalog() -> GlueCatalog {
 
 async fn hms_catalog() -> HmsCatalog {
     let hms_endpoint = get_hms_endpoint();
-    let minio_endpoint = get_minio_endpoint();
+    let s3_endpoint = get_s3_endpoint();
 
     let props = HashMap::from([
         (HMS_CATALOG_PROP_URI.to_string(), hms_endpoint),
@@ -277,7 +277,7 @@ async fn hms_catalog() -> HmsCatalog {
             HMS_CATALOG_PROP_WAREHOUSE.to_string(),
             "s3a://warehouse/hive".to_string(),
         ),
-        (S3_ENDPOINT.to_string(), minio_endpoint),
+        (S3_ENDPOINT.to_string(), s3_endpoint),
         (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
         (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
         (S3_REGION.to_string(), "us-east-1".to_string()),

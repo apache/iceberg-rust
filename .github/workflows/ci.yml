@@ -176,6 +176,7 @@ jobs:
         env:
           # Disable debug info to speed up compilation and reduce artifact size
           RUSTFLAGS: "-C debuginfo=0"
+          ICEBERG_TEST_S3TABLES_ENDPOINT: "http://localhost:9000"
         run: |
           if [ "${{ matrix.test-suite.name }}" = "default" ]; then
             cargo nextest run ${{ matrix.test-suite.args }}

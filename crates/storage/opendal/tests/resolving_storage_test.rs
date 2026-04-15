@@ -33,16 +33,16 @@ mod tests {
         S3_SECRET_ACCESS_KEY,
     };
     use iceberg_storage_opendal::OpenDalResolvingStorageFactory;
-    use iceberg_test_utils::{get_minio_endpoint, normalize_test_name_with_parts, set_up};
+    use iceberg_test_utils::{get_s3_endpoint, normalize_test_name_with_parts, set_up};
 
     fn get_resolving_file_io() -> iceberg::io::FileIO {
         set_up();
 
-        let minio_endpoint = get_minio_endpoint();
+        let s3_endpoint = get_s3_endpoint();
 
         FileIOBuilder::new(Arc::new(OpenDalResolvingStorageFactory::new()))
             .with_props(vec![
-                (S3_ENDPOINT, minio_endpoint),
+                (S3_ENDPOINT, s3_endpoint),
                 (S3_ACCESS_KEY_ID, "admin".to_string()),
                 (S3_SECRET_ACCESS_KEY, "password".to_string()),
                 (S3_REGION, "us-east-1".to_string()),
@@ -262,10 +262,10 @@ mod tests {
         use reqsign::{AwsCredential, AwsCredentialLoad};
         use reqwest::Client;
 
-        struct MinioCredentialLoader;
+        struct S3TestCredentialLoader;
 
         #[async_trait]
-        impl AwsCredentialLoad for MinioCredentialLoader {
+        impl AwsCredentialLoad for S3TestCredentialLoader {
             async fn load_credential(
                 &self,
                 _client: Client,
@@ -280,15 +280,15 @@ mod tests {
         }
 
         set_up();
-        let minio_endpoint = get_minio_endpoint();
+        let s3_endpoint = get_s3_endpoint();
 
         let factory = OpenDalResolvingStorageFactory::new().with_s3_credential_loader(
-            CustomAwsCredentialLoader::new(Arc::new(MinioCredentialLoader)),
+            CustomAwsCredentialLoader::new(Arc::new(S3TestCredentialLoader)),
         );
 
         let file_io = FileIOBuilder::new(Arc::new(factory))
             .with_props(vec![
-                (S3_ENDPOINT, minio_endpoint),
+                (S3_ENDPOINT, s3_endpoint),
                 (S3_REGION, "us-east-1".to_string()),
                 (S3_PATH_STYLE_ACCESS, "true".to_string()),
             ])
