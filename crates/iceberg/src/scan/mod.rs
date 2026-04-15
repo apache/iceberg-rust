@@ -30,8 +30,8 @@ use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Sender, channel};
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
-pub use incremental::IncrementalAppendScanBuilder;
 pub(crate) use incremental::AppendSnapshotSet;
+pub use incremental::IncrementalAppendScanBuilder;
 pub use task::*;
 
 use crate::arrow::ArrowReaderBuilder;
