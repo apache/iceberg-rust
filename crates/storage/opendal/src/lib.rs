@@ -236,7 +236,14 @@ impl StorageFactory for OpenDalStorageFactory {
                 config: gcs_config_parse(config.props().clone())?.into(),
                 client_config,
             })),
-            #[cfg(feature = "opendal-oss")]
+            // OSS is S3-API-compatible; route through S3 so `s3.*` props
+            // work for OSS-backed tables (mirrors pyiceberg/Java S3FileIO).
+            #[cfg(all(feature = "opendal-oss", feature = "opendal-s3"))]
+            OpenDalStorageFactory::Oss => Ok(Arc::new(OpenDalStorage::S3 {
+                config: s3_config_parse(config.props().clone())?.into(),
+                customized_credential_load: None,
+            })),
+            #[cfg(all(feature = "opendal-oss", not(feature = "opendal-s3")))]
             OpenDalStorageFactory::Oss => Ok(Arc::new(OpenDalStorage::Oss {
                 config: oss_config_parse(config.props().clone())?.into(),
                 client_config,
