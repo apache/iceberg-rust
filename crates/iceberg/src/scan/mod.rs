@@ -42,6 +42,7 @@ use crate::runtime::spawn;
 use crate::spec::{DataContentType, Operation, SnapshotRef, TableMetadataRef};
 use crate::table::Table;
 use crate::util::available_parallelism;
+use crate::util::snapshot::ancestors_between;
 use crate::{Error, ErrorKind, Result};
 
 /// A stream of arrow [`RecordBatch`]es.
@@ -75,46 +76,85 @@ impl SnapshotRange {
         to_snapshot_id: i64,
         from_inclusive: bool,
     ) -> Result<Self> {
-        let mut snapshot_ids = HashSet::new();
-        let mut current_id = Some(to_snapshot_id);
-
-        // Walk backwards from to_snapshot to from_snapshot
-        while let Some(id) = current_id {
-            let snapshot = table_metadata.snapshot_by_id(id).ok_or_else(|| {
-                Error::new(ErrorKind::DataInvalid, format!("Snapshot {id} not found"))
+        // Verify from_snapshot exists and determine the exclusive stop point.
+        let from_snapshot = table_metadata
+            .snapshot_by_id(from_snapshot_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Snapshot {from_snapshot_id} not found"),
+                )
             })?;
 
-            // Validate operation is APPEND
+        // ancestors_between returns (oldest_exclusive, latest_inclusive].
+        // For inclusive mode, stop at from's parent so from itself is included.
+        let oldest_exclusive = if from_inclusive {
+            from_snapshot.parent_snapshot_id()
+        } else {
+            Some(from_snapshot_id)
+        };
+
+        let snapshots: Vec<_> =
+            ancestors_between(table_metadata, to_snapshot_id, oldest_exclusive).collect();
+
+        // ancestors_between silently returns the full chain to root if
+        // oldest_exclusive isn't in the ancestry chain. Detect this:
+        // if we got snapshots but from_snapshot_id wasn't encountered as
+        // the stop point, the chain doesn't connect.
+        if from_snapshot_id == to_snapshot_id {
+            // Edge case: from == to. In exclusive mode, range is empty.
+            // In inclusive mode, we should have exactly one snapshot.
+            if !from_inclusive {
+                return Ok(Self {
+                    snapshot_ids: HashSet::new(),
+                });
+            }
+        } else if snapshots.is_empty() {
+            // to_snapshot_id doesn't exist
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "from_snapshot {from_snapshot_id} is not an ancestor of to_snapshot {to_snapshot_id}",
+                ),
+            ));
+        } else {
+            // Verify the oldest snapshot in our walk is actually connected
+            // to from_snapshot_id. The last snapshot's parent (for exclusive)
+            // or the last snapshot itself (for inclusive) should be from_snapshot_id.
+            let oldest_collected = snapshots.last().unwrap();
+            let connects = if from_inclusive {
+                oldest_collected.snapshot_id() == from_snapshot_id
+            } else {
+                oldest_collected.parent_snapshot_id() == Some(from_snapshot_id)
+            };
+            if !connects {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "from_snapshot {from_snapshot_id} is not an ancestor of to_snapshot {to_snapshot_id}",
+                    ),
+                ));
+            }
+        }
+
+        // Validate all snapshots have APPEND operations and collect IDs.
+        let mut snapshot_ids = HashSet::with_capacity(snapshots.len());
+        for snapshot in &snapshots {
             if snapshot.summary().operation != Operation::Append {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
                     format!(
                         "Incremental scan only supports APPEND operations, \
                          snapshot {} has operation: {:?}",
-                        id,
+                        snapshot.snapshot_id(),
                         snapshot.summary().operation
                     ),
                 ));
             }
-
-            if id == from_snapshot_id {
-                if from_inclusive {
-                    snapshot_ids.insert(id);
-                }
-                return Ok(Self { snapshot_ids });
-            }
-
-            snapshot_ids.insert(id);
-            current_id = snapshot.parent_snapshot_id();
+            snapshot_ids.insert(snapshot.snapshot_id());
         }
 
-        // If we get here, from_snapshot was not found in the ancestry chain
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "from_snapshot {from_snapshot_id} is not an ancestor of to_snapshot {to_snapshot_id}",
-            ),
-        ))
+        Ok(Self { snapshot_ids })
     }
 
     /// Check if a snapshot_id is within this range
@@ -2494,7 +2534,10 @@ pub mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("not an ancestor"));
+        assert!(
+            err.to_string().contains("not found"),
+            "Expected 'not found' error, got: {err}"
+        );
     }
 
     #[test]
@@ -2655,5 +2698,81 @@ pub mod tests {
         );
         assert!(range.contains(3055729675574597004), "S2 should be in range");
         assert!(range.contains(3056729675574597004), "S3 should be in range");
+    }
+
+    #[tokio::test]
+    async fn test_incremental_scan_returns_only_added_files_in_range() {
+        // Fixture has S1 (append) -> S2 (append, current)
+        // Manifest contains:
+        //   1.parquet: status=Added, snapshot=S2
+        //   2.parquet: status=Deleted, snapshot=S1
+        //   3.parquet: status=Existing, snapshot=S1
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let current_snapshot = fixture.table.metadata().current_snapshot().unwrap();
+        let parent_snapshot_id = current_snapshot.parent_snapshot_id().unwrap();
+
+        // Incremental scan from S1 (exclusive) to S2 should return only 1.parquet
+        let table_scan = fixture
+            .table
+            .incremental_append_scan(parent_snapshot_id)
+            .to_snapshot(current_snapshot.snapshot_id())
+            .build()
+            .unwrap();
+
+        let tasks: Vec<_> = table_scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            tasks.len(),
+            1,
+            "Incremental scan should return exactly 1 file"
+        );
+        assert_eq!(
+            tasks[0].data_file_path,
+            format!("{}/1.parquet", &fixture.table_location),
+            "Should only return the file added in S2"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_incremental_scan_exclusive_same_snapshot_returns_empty() {
+        // Fixture has S1 (append) -> S2 (append, current)
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let current_snapshot_id = fixture
+            .table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .snapshot_id();
+
+        // Incremental scan from S2 to S2 (exclusive) should return nothing
+        let table_scan = fixture
+            .table
+            .incremental_append_scan(current_snapshot_id)
+            .to_snapshot(current_snapshot_id)
+            .build()
+            .unwrap();
+
+        let tasks: Vec<_> = table_scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert!(
+            tasks.is_empty(),
+            "Exclusive scan from=to should return no files"
+        );
     }
 }
