@@ -927,7 +927,7 @@ mod tests {
         let schema = create_test_schema();
 
         // Create test files
-        let files_to_keep = vec![
+        let files_to_keep = [
             create_test_data_file("/test/keep1.parquet", 0),
             create_test_data_file("/test/keep2.parquet", 0),
         ];

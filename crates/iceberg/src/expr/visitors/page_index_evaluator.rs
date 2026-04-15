@@ -791,7 +791,7 @@ mod tests {
     use parquet::arrow::arrow_reader::{
         ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelector,
     };
-    use parquet::file::metadata::ParquetMetaData;
+    use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData};
     use parquet::file::properties::WriterProperties;
     use rand::{Rng, thread_rng};
     use tempfile::NamedTempFile;
@@ -895,7 +895,7 @@ mod tests {
         writer.close().unwrap();
 
         let file = temp_file.reopen().unwrap();
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
         let metadata = reader.metadata().clone();
 
@@ -936,7 +936,7 @@ mod tests {
         writer.close().unwrap();
 
         let file = temp_file.reopen().unwrap();
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
         let metadata = reader.metadata();
 
