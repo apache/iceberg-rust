@@ -69,7 +69,7 @@ const PATH_V1: &str = "v1";
 pub struct RestCatalogBuilder {
     config: RestCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
-    signer: Option<Arc<dyn crate::signing::HttpRequestSigner>>,
+    signer: Option<Arc<dyn HttpRequestSigner>>,
 }
 
 impl Default for RestCatalogBuilder {
@@ -93,7 +93,7 @@ impl RestCatalogBuilder {
     ///
     /// This overrides the signer that would otherwise be built from
     /// config properties (e.g. `rest.sigv4-enabled`).
-    pub fn with_signer(mut self, signer: Arc<dyn crate::signing::HttpRequestSigner>) -> Self {
+    pub fn with_signer(mut self, signer: Arc<dyn HttpRequestSigner>) -> Self {
         self.signer = Some(signer);
         self
     }
@@ -399,7 +399,7 @@ pub struct RestCatalog {
     /// Storage factory for creating FileIO instances.
     storage_factory: Option<Arc<dyn StorageFactory>>,
     /// Optional custom request signer.
-    signer: Option<Arc<dyn crate::signing::HttpRequestSigner>>,
+    signer: Option<Arc<dyn HttpRequestSigner>>,
 }
 
 impl RestCatalog {
@@ -407,7 +407,7 @@ impl RestCatalog {
     fn new(
         config: RestCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
-        signer: Option<Arc<dyn crate::signing::HttpRequestSigner>>,
+        signer: Option<Arc<dyn HttpRequestSigner>>,
     ) -> Self {
         Self {
             user_config: config,
