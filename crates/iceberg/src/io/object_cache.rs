@@ -135,7 +135,9 @@ impl ObjectCache {
         let key = CachedObjectKey::ManifestList((
             snapshot.manifest_list().to_string(),
             table_metadata.format_version,
-            snapshot.schema_id().unwrap(),
+            snapshot
+                .schema_id()
+                .unwrap_or_else(|| table_metadata.current_schema_id()),
         ));
         let cache_entry = self
             .cache
@@ -405,5 +407,107 @@ mod tests {
                 .unwrap(),
             "1.parquet"
         );
+    }
+
+    /// Regression test: ObjectCache::get_manifest_list must not panic when
+    /// the snapshot has no schema_id (Iceberg v1 format tables).
+    #[tokio::test]
+    async fn test_get_manifest_list_v1_snapshot_without_schema_id() {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().join("table1");
+        let manifest_list_location = table_location.join("metadata/manifests_list_1.avro");
+        let table_metadata_location = table_location.join("metadata/v1.json");
+
+        let file_io = FileIO::new_with_fs();
+
+        let template_json_str = fs::read_to_string(format!(
+            "{}/testdata/example_table_metadata_v1.json",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let metadata_json = render_template(&template_json_str, context! {
+            table_location => &table_location,
+            manifest_list_location => &manifest_list_location,
+            table_metadata_location => &table_metadata_location,
+        });
+        let table_metadata: TableMetadata = serde_json::from_str(&metadata_json).unwrap();
+
+        let table = Table::builder()
+            .metadata(table_metadata)
+            .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
+            .file_io(file_io.clone())
+            .metadata_location(table_metadata_location.as_os_str().to_str().unwrap())
+            .build()
+            .unwrap();
+
+        let current_snapshot = table.metadata().current_snapshot().unwrap();
+
+        // Verify the snapshot has no schema_id (the condition that caused the panic)
+        assert!(current_snapshot.schema_id().is_none());
+
+        let current_schema = current_snapshot.schema(table.metadata()).unwrap();
+        let current_partition_spec = table.metadata().default_partition_spec();
+
+        // Write a manifest file
+        let manifest_output = table
+            .file_io()
+            .new_output(format!(
+                "{}/metadata/manifest_{}.avro",
+                table_location.to_str().unwrap(),
+                Uuid::new_v4()
+            ))
+            .unwrap();
+
+        let mut writer = ManifestWriterBuilder::new(
+            manifest_output,
+            Some(current_snapshot.snapshot_id()),
+            None,
+            current_schema.clone(),
+            current_partition_spec.as_ref().clone(),
+        )
+        .build_v1();
+        writer
+            .add_entry(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .data_file(
+                        DataFileBuilder::default()
+                            .partition_spec_id(0)
+                            .content(DataContentType::Data)
+                            .file_path(format!("{}/1.parquet", table_location.to_str().unwrap()))
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::long(100))]))
+                            .build()
+                            .unwrap(),
+                    )
+                    .build(),
+            )
+            .unwrap();
+        let data_file_manifest = writer.write_manifest_file().await.unwrap();
+
+        // Write manifest list
+        let mut manifest_list_write = ManifestListWriter::v1(
+            table
+                .file_io()
+                .new_output(current_snapshot.manifest_list())
+                .unwrap(),
+            current_snapshot.snapshot_id(),
+            current_snapshot.parent_snapshot_id(),
+        );
+        manifest_list_write
+            .add_manifests(vec![data_file_manifest].into_iter())
+            .unwrap();
+        manifest_list_write.close().await.unwrap();
+
+        // This used to panic with: called `Option::unwrap()` on a `None` value
+        let object_cache = ObjectCache::new(table.file_io().clone());
+        let result = object_cache
+            .get_manifest_list(current_snapshot, &table.metadata_ref())
+            .await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().entries().len(), 1);
     }
 }
