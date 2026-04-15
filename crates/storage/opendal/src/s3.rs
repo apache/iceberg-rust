@@ -37,6 +37,12 @@ use crate::utils::{from_opendal_error, is_truthy};
 /// Parse iceberg props to s3 config.
 pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config> {
     let mut cfg = S3Config::default();
+    // Match Iceberg `S3FileIOProperties.PATH_STYLE_ACCESS_DEFAULT = false`:
+    // virtual-host-style addressing is the spec default. opendal's own
+    // default is path-style, which disagrees with the Java SDK and breaks
+    // S3-compatible stores that only accept virtual-hosted-style URLs.
+    // Any explicit `s3.path-style-access` property below overrides this.
+    cfg.enable_virtual_host_style = true;
     if let Some(endpoint) = m.remove(S3_ENDPOINT) {
         cfg.endpoint = Some(endpoint);
     };
@@ -175,5 +181,30 @@ impl CustomAwsCredentialLoader {
 impl AwsCredentialLoad for CustomAwsCredentialLoader {
     async fn load_credential(&self, client: Client) -> anyhow::Result<Option<AwsCredential>> {
         self.0.load_credential(client).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use iceberg::io::S3_PATH_STYLE_ACCESS;
+
+    use super::s3_config_parse;
+
+    fn parse_with(prop: Option<&str>) -> bool {
+        let mut props = HashMap::new();
+        if let Some(v) = prop {
+            props.insert(S3_PATH_STYLE_ACCESS.to_string(), v.to_string());
+        }
+        s3_config_parse(props).unwrap().enable_virtual_host_style
+    }
+
+    #[test]
+    fn s3_config_parse_path_style_access() {
+        // Match Iceberg S3FileIOProperties.PATH_STYLE_ACCESS_DEFAULT = false.
+        assert!(parse_with(None));
+        assert!(parse_with(Some("false")));
+        assert!(!parse_with(Some("true")));
     }
 }
