@@ -24,8 +24,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use iceberg::io::{
-    FileIOBuilder, LocalFsStorageFactory, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION,
-    S3_SECRET_ACCESS_KEY,
+    FileIOBuilder, LocalFsStorageFactory, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_PATH_STYLE_ACCESS,
+    S3_REGION, S3_SECRET_ACCESS_KEY,
 };
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
@@ -229,6 +229,7 @@ async fn glue_catalog() -> GlueCatalog {
         (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
         (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
         (S3_REGION.to_string(), "us-east-1".to_string()),
+        (S3_PATH_STYLE_ACCESS.to_string(), "true".to_string()),
     ]);
 
     let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
@@ -280,6 +281,7 @@ async fn hms_catalog() -> HmsCatalog {
         (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
         (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
         (S3_REGION.to_string(), "us-east-1".to_string()),
+        (S3_PATH_STYLE_ACCESS.to_string(), "true".to_string()),
     ]);
 
     let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
