@@ -53,7 +53,8 @@
 
 mod catalog;
 mod client;
-mod signing;
+/// HTTP request signing for the REST catalog.
+pub mod signing;
 mod types;
 
 pub use catalog::*;

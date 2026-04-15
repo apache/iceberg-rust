@@ -23,7 +23,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use iceberg::{Error, ErrorKind, Result};
 use reqsign_aws_v4::{Credential, DefaultCredentialProvider, RequestSigner};
-use reqsign_core::{Context, HttpSend, Signer};
+use reqsign_core::{Context, HttpSend, OsEnv, ProvideCredential, Signer};
 use reqsign_file_read_tokio::TokioFileRead;
 use reqwest::{Client, Request};
 
@@ -31,22 +31,31 @@ use crate::RestCatalogConfig;
 
 /// A trait for signing HTTP requests.
 #[async_trait]
-pub(crate) trait HttpRequestSigner: Send + Sync + Debug {
+pub trait HttpRequestSigner: Send + Sync + Debug {
     /// Sign the request by modifying its headers (and potentially other parts).
     async fn sign(&self, parts: &mut http::request::Parts) -> Result<()>;
 
     /// Sign a full [`reqwest::Request`] by converting it to [`http::request::Parts`] and back.
     async fn sign_request(&self, mut request: Request) -> Result<Request> {
-        // We have to use a builder to convert a reqwest::Request to http::request::Parts.
         let (mut parts, _) = http::Request::builder()
             .method(request.method().clone())
             .uri(request.url().as_str())
             .body(())
             .expect("request parts derived from a valid request")
             .into_parts();
-        parts.headers = request.headers().clone();
+        // Compute the SHA256 hash of the request body for the content hash header.
+        // Some AWS services (e.g. Glue) reject UNSIGNED-PAYLOAD.
+        let body_bytes = request.body().and_then(|b| b.as_bytes()).unwrap_or(&[]);
+        parts.headers.insert(
+            http::HeaderName::from_static("x-amz-content-sha256"),
+            http::HeaderValue::from_str(&reqsign_core::hash::hex_sha256(body_bytes))
+                .expect("hex string is valid header value"),
+        );
         self.sign(&mut parts).await?;
-        *request.headers_mut() = parts.headers;
+        // Merge signing headers into the original request, preserving
+        // application headers (content-type, user-agent, etc.) that
+        // should not participate in signing.
+        request.headers_mut().extend(parts.headers);
         Ok(request)
     }
 }
@@ -89,20 +98,32 @@ impl TryFrom<&RestCatalogConfig> for Option<Arc<dyn HttpRequestSigner>> {
 
 /// The HttpRequestSigner implementation for AWS SigV4
 #[derive(Debug)]
-pub(crate) struct SigV4Signer {
+pub struct SigV4Signer {
     /// The inner reqwest signer with an AWS credential loader.
     inner: Signer<Credential>,
 }
 
 impl SigV4Signer {
-    pub(crate) fn new(client: Client, service: &str, region: &str) -> Self {
+    /// Create a new SigV4 signer using the default AWS credential chain
+    /// (env vars, profiles, IMDS, etc.).
+    pub fn new(client: Client, service: &str, region: &str) -> Self {
+        Self::with_credential_provider(client, service, region, DefaultCredentialProvider::new())
+    }
+
+    /// Create a new SigV4 signer with a custom credential provider.
+    pub fn with_credential_provider(
+        client: Client,
+        service: &str,
+        region: &str,
+        credential_provider: impl ProvideCredential<Credential = Credential>,
+    ) -> Self {
         let ctx = Context::new()
             .with_file_read(TokioFileRead)
-            .with_http_send(ReqwestHttpSend(client));
-        let loader = DefaultCredentialProvider::new();
+            .with_http_send(ReqwestHttpSend(client))
+            .with_env(OsEnv);
         let signer = RequestSigner::new(service, region);
         Self {
-            inner: Signer::new(ctx, loader, signer),
+            inner: Signer::new(ctx, credential_provider, signer),
         }
     }
 }

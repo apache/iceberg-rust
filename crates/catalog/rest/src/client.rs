@@ -62,7 +62,10 @@ impl Debug for HttpClient {
 
 impl HttpClient {
     /// Create a new http client.
-    pub fn new(cfg: &RestCatalogConfig) -> Result<Self> {
+    pub fn new(
+        cfg: &RestCatalogConfig,
+        signer_override: Option<Arc<dyn HttpRequestSigner>>,
+    ) -> Result<Self> {
         let extra_headers = cfg.extra_headers()?;
         Ok(HttpClient {
             client: cfg.client().unwrap_or_default(),
@@ -72,7 +75,7 @@ impl HttpClient {
             extra_headers,
             extra_oauth_params: cfg.extra_oauth_params(),
             disable_header_redaction: cfg.disable_header_redaction(),
-            signer: cfg.signer()?,
+            signer: signer_override.or(cfg.signer()?),
         })
     }
 
@@ -101,7 +104,7 @@ impl HttpClient {
                 self.extra_oauth_params
             },
             disable_header_redaction: cfg.disable_header_redaction(),
-            signer: cfg.signer()?.or(self.signer),
+            signer: self.signer.or(cfg.signer()?),
         })
     }
 
