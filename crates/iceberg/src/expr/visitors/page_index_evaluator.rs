@@ -793,7 +793,7 @@ mod tests {
     };
     use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData};
     use parquet::file::properties::WriterProperties;
-    use rand::{Rng, thread_rng};
+    use rand::Rng;
     use tempfile::NamedTempFile;
 
     use super::PageIndexEvaluator;
@@ -1284,13 +1284,13 @@ mod tests {
 
     #[test]
     fn eval_in_length_of_set_above_limit_all_rows() -> Result<()> {
-        let mut rng = thread_rng();
+        let mut rng = rand::rng();
         let (metadata, _temp_file) = create_test_parquet_file()?;
         let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
-            .is_in(std::iter::repeat_with(|| Datum::float(rng.gen_range(0.0..10.0))).take(1000))
+            .is_in(std::iter::repeat_with(|| Datum::float(rng.random_range(0.0..10.0))).take(1000))
             .bind(iceberg_schema_ref.clone(), false)?;
 
         let result = PageIndexEvaluator::eval(
