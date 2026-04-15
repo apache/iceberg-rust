@@ -26,7 +26,8 @@ mod tests {
     use async_trait::async_trait;
     use futures::StreamExt;
     use iceberg::io::{
-        FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
+        FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION,
+        S3_SECRET_ACCESS_KEY,
     };
     use iceberg_storage_opendal::{CustomAwsCredentialLoader, OpenDalStorageFactory};
     use iceberg_test_utils::{get_minio_endpoint, normalize_test_name_with_parts, set_up};
@@ -47,6 +48,7 @@ mod tests {
             (S3_ACCESS_KEY_ID, "admin".to_string()),
             (S3_SECRET_ACCESS_KEY, "password".to_string()),
             (S3_REGION, "us-east-1".to_string()),
+            (S3_PATH_STYLE_ACCESS, "true".to_string()),
         ])
         .build()
     }
@@ -139,6 +141,7 @@ mod tests {
             (S3_ENDPOINT, "http://localhost:9000".to_string()),
             ("bucket", "test-bucket".to_string()),
             (S3_REGION, "us-east-1".to_string()),
+            (S3_PATH_STYLE_ACCESS, "true".to_string()),
         ]);
     }
 
@@ -160,6 +163,7 @@ mod tests {
         .with_props(vec![
             (S3_ENDPOINT, minio_endpoint),
             (S3_REGION, "us-east-1".to_string()),
+            (S3_PATH_STYLE_ACCESS, "true".to_string()),
         ])
         .build();
 
@@ -188,6 +192,7 @@ mod tests {
         .with_props(vec![
             (S3_ENDPOINT, minio_endpoint),
             (S3_REGION, "us-east-1".to_string()),
+            (S3_PATH_STYLE_ACCESS, "true".to_string()),
         ])
         .build();
 
