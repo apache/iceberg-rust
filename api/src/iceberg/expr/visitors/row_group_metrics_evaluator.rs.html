@@ -528,7 +528,7 @@
 <a href=#528 id=528 data-nosnippet>528</a>    <span class="kw">use </span>parquet::schema::types::{
 <a href=#529 id=529 data-nosnippet>529</a>        ColumnDescriptor, ColumnPath, SchemaDescriptor, Type <span class="kw">as </span>parquetSchemaType,
 <a href=#530 id=530 data-nosnippet>530</a>    };
-<a href=#531 id=531 data-nosnippet>531</a>    <span class="kw">use </span>rand::{Rng, thread_rng};
+<a href=#531 id=531 data-nosnippet>531</a>    <span class="kw">use </span>rand::Rng;
 <a href=#532 id=532 data-nosnippet>532</a>
 <a href=#533 id=533 data-nosnippet>533</a>    <span class="kw">use </span><span class="kw">super</span>::RowGroupMetricsEvaluator;
 <a href=#534 id=534 data-nosnippet>534</a>    <span class="kw">use </span><span class="kw">crate</span>::Result;
@@ -1617,7 +1617,7 @@
 <a href=#1617 id=1617 data-nosnippet>1617</a>
 <a href=#1618 id=1618 data-nosnippet>1618</a>    <span class="attr">#[test]
 <a href=#1619 id=1619 data-nosnippet>1619</a>    </span><span class="kw">fn </span>eval_true_for_too_many_literals_filter_is_in() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#1620 id=1620 data-nosnippet>1620</a>        <span class="kw">let </span><span class="kw-2">mut </span>rng = thread_rng();
+<a href=#1620 id=1620 data-nosnippet>1620</a>        <span class="kw">let </span><span class="kw-2">mut </span>rng = rand::rng();
 <a href=#1621 id=1621 data-nosnippet>1621</a>
 <a href=#1622 id=1622 data-nosnippet>1622</a>        <span class="kw">let </span>row_group_metadata = create_row_group_metadata(
 <a href=#1623 id=1623 data-nosnippet>1623</a>            <span class="number">1</span>,
@@ -1636,7 +1636,7 @@
 <a href=#1636 id=1636 data-nosnippet>1636</a>        <span class="kw">let </span>(iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()<span class="question-mark">?</span>;
 <a href=#1637 id=1637 data-nosnippet>1637</a>
 <a href=#1638 id=1638 data-nosnippet>1638</a>        <span class="kw">let </span>filter = Reference::new(<span class="string">"col_float"</span>)
-<a href=#1639 id=1639 data-nosnippet>1639</a>            .is_in(std::iter::repeat_with(|| Datum::float(rng.gen_range(<span class="number">0.0</span>..<span class="number">10.0</span>))).take(<span class="number">1000</span>))
+<a href=#1639 id=1639 data-nosnippet>1639</a>            .is_in(std::iter::repeat_with(|| Datum::float(rng.random_range(<span class="number">0.0</span>..<span class="number">10.0</span>))).take(<span class="number">1000</span>))
 <a href=#1640 id=1640 data-nosnippet>1640</a>            .bind(iceberg_schema_ref.clone(), <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 <a href=#1641 id=1641 data-nosnippet>1641</a>
 <a href=#1642 id=1642 data-nosnippet>1642</a>        <span class="kw">let </span>result = RowGroupMetricsEvaluator::eval(

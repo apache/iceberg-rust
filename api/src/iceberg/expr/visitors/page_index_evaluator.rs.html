@@ -793,7 +793,7 @@
 <a href=#793 id=793 data-nosnippet>793</a>    };
 <a href=#794 id=794 data-nosnippet>794</a>    <span class="kw">use </span>parquet::file::metadata::{PageIndexPolicy, ParquetMetaData};
 <a href=#795 id=795 data-nosnippet>795</a>    <span class="kw">use </span>parquet::file::properties::WriterProperties;
-<a href=#796 id=796 data-nosnippet>796</a>    <span class="kw">use </span>rand::{Rng, thread_rng};
+<a href=#796 id=796 data-nosnippet>796</a>    <span class="kw">use </span>rand::Rng;
 <a href=#797 id=797 data-nosnippet>797</a>    <span class="kw">use </span>tempfile::NamedTempFile;
 <a href=#798 id=798 data-nosnippet>798</a>
 <a href=#799 id=799 data-nosnippet>799</a>    <span class="kw">use </span><span class="kw">super</span>::PageIndexEvaluator;
@@ -1284,13 +1284,13 @@
 <a href=#1284 id=1284 data-nosnippet>1284</a>
 <a href=#1285 id=1285 data-nosnippet>1285</a>    <span class="attr">#[test]
 <a href=#1286 id=1286 data-nosnippet>1286</a>    </span><span class="kw">fn </span>eval_in_length_of_set_above_limit_all_rows() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#1287 id=1287 data-nosnippet>1287</a>        <span class="kw">let </span><span class="kw-2">mut </span>rng = thread_rng();
+<a href=#1287 id=1287 data-nosnippet>1287</a>        <span class="kw">let </span><span class="kw-2">mut </span>rng = rand::rng();
 <a href=#1288 id=1288 data-nosnippet>1288</a>        <span class="kw">let </span>(metadata, _temp_file) = create_test_parquet_file()<span class="question-mark">?</span>;
 <a href=#1289 id=1289 data-nosnippet>1289</a>        <span class="kw">let </span>(column_index, offset_index, row_group_metadata) = get_test_metadata(<span class="kw-2">&amp;</span>metadata);
 <a href=#1290 id=1290 data-nosnippet>1290</a>        <span class="kw">let </span>(iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()<span class="question-mark">?</span>;
 <a href=#1291 id=1291 data-nosnippet>1291</a>
 <a href=#1292 id=1292 data-nosnippet>1292</a>        <span class="kw">let </span>filter = Reference::new(<span class="string">"col_float"</span>)
-<a href=#1293 id=1293 data-nosnippet>1293</a>            .is_in(std::iter::repeat_with(|| Datum::float(rng.gen_range(<span class="number">0.0</span>..<span class="number">10.0</span>))).take(<span class="number">1000</span>))
+<a href=#1293 id=1293 data-nosnippet>1293</a>            .is_in(std::iter::repeat_with(|| Datum::float(rng.random_range(<span class="number">0.0</span>..<span class="number">10.0</span>))).take(<span class="number">1000</span>))
 <a href=#1294 id=1294 data-nosnippet>1294</a>            .bind(iceberg_schema_ref.clone(), <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 <a href=#1295 id=1295 data-nosnippet>1295</a>
 <a href=#1296 id=1296 data-nosnippet>1296</a>        <span class="kw">let </span>result = PageIndexEvaluator::eval(
