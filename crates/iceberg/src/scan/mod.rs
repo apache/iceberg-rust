@@ -2430,77 +2430,147 @@ pub mod tests {
 
     #[test]
     fn test_appends_after_convenience_method() {
+        // Fixture has S1 (append) -> S2 (append, current)
         let table = TableTestFixture::new().table;
 
-        // appends_after should work and set from_snapshot_exclusive
         let result = table.scan().appends_after(3051729675574597004).build();
+        assert!(result.is_ok(), "appends_after should succeed when all snapshots are appends");
 
-        // Should succeed as long as 3051729675574597004 is an ancestor of current snapshot
-        // This depends on the test fixture's snapshot structure
-        // The test fixture has snapshots with these IDs in the hierarchy
-        assert!(result.is_ok() || result.is_err()); // Just verify it doesn't panic
+        let scan = result.unwrap();
+        assert!(
+            scan.plan_context.is_some(),
+            "Incremental scan should have a plan context"
+        );
     }
 
     #[test]
     fn test_appends_between_convenience_method() {
+        // Fixture has S1 (append) -> S2 (append, current)
         let table = TableTestFixture::new().table;
 
-        // Get snapshot IDs from the fixture
         let current_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
-        let parent_snapshot_id = table
+        let parent_id = table
             .metadata()
             .current_snapshot()
             .unwrap()
-            .parent_snapshot_id();
+            .parent_snapshot_id()
+            .expect("Current snapshot should have a parent");
 
-        if let Some(parent_id) = parent_snapshot_id {
-            // appends_between should set both from_snapshot_exclusive and to_snapshot
-            let result = table
-                .scan()
-                .appends_between(parent_id, current_snapshot_id)
-                .build();
+        let result = table
+            .scan()
+            .appends_between(parent_id, current_snapshot_id)
+            .build();
 
-            // This may succeed or fail based on operation type validation
-            // Just verify it doesn't panic
-            assert!(result.is_ok() || result.is_err());
-        }
+        assert!(
+            result.is_ok(),
+            "appends_between should succeed for two append snapshots"
+        );
     }
 
     #[test]
     fn test_incremental_scan_from_snapshot_inclusive() {
+        // Fixture has S1 (append) -> S2 (append, current)
         let table = TableTestFixture::new().table;
-
-        // Test the from_snapshot_inclusive method
         let current_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
 
-        // Using from_snapshot_inclusive with same snapshot as to_snapshot
         let result = table
             .scan()
             .from_snapshot_inclusive(current_snapshot_id)
             .to_snapshot(current_snapshot_id)
             .build();
 
-        // This should succeed and include the snapshot
-        assert!(result.is_ok() || result.is_err()); // May fail if operation is not APPEND
+        assert!(
+            result.is_ok(),
+            "Inclusive scan of a single append snapshot should succeed"
+        );
+
+        // The snapshot range should contain exactly one snapshot
+        let scan = result.unwrap();
+        let plan_context = scan.plan_context.as_ref().unwrap();
+        let range = plan_context.snapshot_range.as_ref().unwrap();
+        assert!(
+            range.contains(current_snapshot_id),
+            "Inclusive range should contain the from_snapshot"
+        );
     }
 
     #[test]
     fn test_incremental_scan_from_snapshot_exclusive() {
+        // Fixture has S1 (append) -> S2 (append, current)
         let table = TableTestFixture::new().table;
-
-        // Test the from_snapshot_exclusive method
         let current_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
 
-        // Using from_snapshot_exclusive with same snapshot should return empty
-        // (since the from snapshot is excluded)
         let result = table
             .scan()
             .from_snapshot_exclusive(current_snapshot_id)
             .to_snapshot(current_snapshot_id)
             .build();
 
-        // This should succeed with an empty snapshot range
-        // which will result in no files being scanned
-        assert!(result.is_ok());
+        assert!(
+            result.is_ok(),
+            "Exclusive scan from=to should succeed with empty range"
+        );
+
+        // The snapshot range should be empty (from is excluded, and from == to)
+        let scan = result.unwrap();
+        let plan_context = scan.plan_context.as_ref().unwrap();
+        let range = plan_context.snapshot_range.as_ref().unwrap();
+        assert!(
+            !range.contains(current_snapshot_id),
+            "Exclusive range should not contain the from_snapshot"
+        );
+    }
+
+    #[test]
+    fn test_incremental_scan_rejects_non_append_operations() {
+        // Deep history fixture: S1 (append) -> S2 (append) -> S3 (append)
+        //   -> S4 (overwrite) -> S5 (append, current)
+        let table = TableTestFixture::new_with_deep_history().table;
+
+        // Scanning from S1 to S5 crosses S4 (overwrite), should fail
+        let result = table
+            .scan()
+            .from_snapshot_exclusive(3051729675574597004)
+            .to_snapshot(3059729675574597004)
+            .build();
+
+        assert!(result.is_err(), "Should reject range containing overwrite snapshot");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("only supports APPEND"),
+            "Error should mention APPEND requirement, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_incremental_scan_succeeds_for_append_only_range() {
+        // Deep history fixture: S1 (append) -> S2 (append) -> S3 (append)
+        //   -> S4 (overwrite) -> S5 (append, current)
+        let table = TableTestFixture::new_with_deep_history().table;
+
+        // Scanning from S1 to S3 (all appends) should succeed
+        let result = table
+            .scan()
+            .from_snapshot_exclusive(3051729675574597004)
+            .to_snapshot(3056729675574597004)
+            .build();
+
+        assert!(
+            result.is_ok(),
+            "Range of only append snapshots should succeed"
+        );
+
+        let scan = result.unwrap();
+        let range = scan
+            .plan_context
+            .as_ref()
+            .unwrap()
+            .snapshot_range
+            .as_ref()
+            .unwrap();
+        // Should contain S2 and S3 but not S1 (exclusive)
+        assert!(!range.contains(3051729675574597004), "from_snapshot should be excluded");
+        assert!(range.contains(3055729675574597004), "S2 should be in range");
+        assert!(range.contains(3056729675574597004), "S3 should be in range");
     }
 }

@@ -242,6 +242,14 @@ impl PlanContext {
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
         for manifest_file in manifest_files {
+            // For incremental scans, skip delete manifests entirely —
+            // we only care about newly added data files.
+            if self.snapshot_range.is_some()
+                && manifest_file.content == ManifestContentType::Deletes
+            {
+                continue;
+            }
+
             let tx = if manifest_file.content == ManifestContentType::Deletes {
                 delete_file_tx.clone()
             } else {
