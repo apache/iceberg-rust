@@ -356,7 +356,7 @@ mod tests {
             format!("{scheme}://myfs@myaccount.dfs.core.windows.net/path/to/file.parquet")
         };
 
-        // All four Azure schemes collapse onto one cached instance.
+        // All Azure schemes collapse onto one cached instance.
         let abfss = storage.resolve(&path_for("abfss")).unwrap();
         let abfs = storage.resolve(&path_for("abfs")).unwrap();
 
