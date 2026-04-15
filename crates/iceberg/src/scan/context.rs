@@ -24,14 +24,22 @@ use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::object_cache::ObjectCache;
 use crate::scan::{
-    AppendSnapshotSet, BoundPredicates, ExpressionEvaluatorCache, FileScanTask,
-    ManifestEvaluatorCache, PartitionFilterCache,
+    BoundPredicates, ExpressionEvaluatorCache, FileScanTask, ManifestEvaluatorCache,
+    PartitionFilterCache,
 };
 use crate::spec::{
-    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, ManifestStatus, SchemaRef,
-    SnapshotRef, TableMetadataRef,
+    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, SchemaRef, SnapshotRef,
+    TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
+
+/// Filter applied to each [`ManifestFile`] before fetching it.
+/// Returns `true` to include the manifest, `false` to skip it.
+pub(crate) type ManifestFileFilter = Arc<dyn Fn(&ManifestFile) -> bool + Send + Sync>;
+
+/// Filter applied to each manifest entry after loading a manifest.
+/// Returns `true` to include the entry, `false` to skip it.
+pub(crate) type ManifestEntryFilter = Arc<dyn Fn(&ManifestEntryRef) -> bool + Send + Sync>;
 
 /// Wraps a [`ManifestFile`] alongside the objects that are needed
 /// to process it in a thread-safe manner
@@ -47,7 +55,7 @@ pub(crate) struct ManifestFileContext {
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
     delete_file_index: DeleteFileIndex,
     case_sensitive: bool,
-    snapshot_range: Option<Arc<AppendSnapshotSet>>,
+    entry_filter: Option<ManifestEntryFilter>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -78,32 +86,15 @@ impl ManifestFileContext {
             expression_evaluator_cache,
             delete_file_index,
             case_sensitive,
-            snapshot_range,
+            entry_filter,
         } = self;
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
 
         for manifest_entry in manifest.entries() {
-            // For incremental scans, filter entries to only include those:
-            // 1. With status ADDED (not EXISTING or DELETED)
-            // 2. With a snapshot_id that falls within the range
-            if let Some(ref range) = snapshot_range {
-                // Only include entries with status ADDED
-                if manifest_entry.status() != ManifestStatus::Added {
+            if let Some(ref filter) = entry_filter {
+                if !filter(manifest_entry) {
                     continue;
-                }
-
-                // Only include entries from snapshots in the range
-                match manifest_entry.snapshot_id() {
-                    Some(entry_snapshot_id) => {
-                        if !range.contains(entry_snapshot_id) {
-                            continue;
-                        }
-                    }
-                    None => {
-                        // Skip entries without a snapshot_id in incremental mode
-                        continue;
-                    }
                 }
             }
 
@@ -171,7 +162,6 @@ impl ManifestEntryContext {
 
 /// PlanContext wraps a [`SnapshotRef`] alongside all the other
 /// objects that are required to perform a scan file plan.
-#[derive(Debug)]
 pub(crate) struct PlanContext {
     pub snapshot: SnapshotRef,
 
@@ -186,7 +176,25 @@ pub(crate) struct PlanContext {
     pub partition_filter_cache: Arc<PartitionFilterCache>,
     pub manifest_evaluator_cache: Arc<ManifestEvaluatorCache>,
     pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
-    pub snapshot_range: Option<Arc<AppendSnapshotSet>>,
+    pub manifest_file_filter: Option<ManifestFileFilter>,
+    pub manifest_entry_filter: Option<ManifestEntryFilter>,
+}
+
+impl std::fmt::Debug for PlanContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlanContext")
+            .field("snapshot", &self.snapshot)
+            .field("case_sensitive", &self.case_sensitive)
+            .field(
+                "manifest_file_filter",
+                &self.manifest_file_filter.as_ref().map(|_| "..."),
+            )
+            .field(
+                "manifest_entry_filter",
+                &self.manifest_entry_filter.as_ref().map(|_| "..."),
+            )
+            .finish_non_exhaustive()
+    }
 }
 
 impl PlanContext {
@@ -240,17 +248,8 @@ impl PlanContext {
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
         for manifest_file in manifest_files {
-            // For incremental scans, skip manifests that can't contain relevant entries:
-            // 1. Delete manifests — we only care about newly added data files.
-            // 2. Data manifests whose added_snapshot_id is outside the scan range —
-            //    they can't contain entries added in the snapshots we care about.
-            //    (We still keep the entry-level filter because a manifest can contain
-            //    entries from multiple snapshots via manifest reuse.)
-            if let Some(ref range) = self.snapshot_range {
-                if manifest_file.content == ManifestContentType::Deletes {
-                    continue;
-                }
-                if !range.contains(manifest_file.added_snapshot_id) {
+            if let Some(ref filter) = self.manifest_file_filter {
+                if !filter(manifest_file) {
                     continue;
                 }
             }
@@ -324,7 +323,7 @@ impl PlanContext {
             expression_evaluator_cache: self.expression_evaluator_cache.clone(),
             delete_file_index,
             case_sensitive: self.case_sensitive,
-            snapshot_range: self.snapshot_range.clone(),
+            entry_filter: self.manifest_entry_filter.clone(),
         }
     }
 }

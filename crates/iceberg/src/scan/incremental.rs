@@ -18,10 +18,12 @@
 //! Incremental append scan for reading only newly added data between snapshots.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::expr::Predicate;
+use crate::scan::context::{ManifestEntryFilter, ManifestFileFilter};
 use crate::scan::{ScanConfig, TableScan, build_table_scan};
-use crate::spec::{Operation, TableMetadataRef};
+use crate::spec::{ManifestContentType, ManifestStatus, Operation, TableMetadataRef};
 use crate::table::Table;
 use crate::util::available_parallelism;
 use crate::util::snapshot::ancestors_between;
@@ -136,9 +138,29 @@ impl AppendSnapshotSet {
         Ok(Self { snapshot_ids })
     }
 
-    /// Check if a snapshot_id is within this range
+    /// Check if a snapshot_id is within this set
     pub(crate) fn contains(&self, snapshot_id: i64) -> bool {
         self.snapshot_ids.contains(&snapshot_id)
+    }
+
+    /// Create a manifest file filter that skips delete manifests and data
+    /// manifests whose `added_snapshot_id` is outside this set.
+    pub(crate) fn manifest_file_filter(self: &Arc<Self>) -> ManifestFileFilter {
+        let set = self.clone();
+        Arc::new(move |manifest_file| {
+            manifest_file.content != ManifestContentType::Deletes
+                && set.contains(manifest_file.added_snapshot_id)
+        })
+    }
+
+    /// Create a manifest entry filter that includes only entries with
+    /// status ADDED and a snapshot_id within this set.
+    pub(crate) fn manifest_entry_filter(self: &Arc<Self>) -> ManifestEntryFilter {
+        let set = self.clone();
+        Arc::new(move |entry| {
+            entry.status() == ManifestStatus::Added
+                && entry.snapshot_id().is_some_and(|id| set.contains(id))
+        })
     }
 }
 
@@ -294,12 +316,12 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
             }
         };
 
-        let snapshot_range = AppendSnapshotSet::build(
+        let append_set = Arc::new(AppendSnapshotSet::build(
             &self.table.metadata_ref(),
             self.from_snapshot_id,
             to_snapshot.snapshot_id(),
             self.from_inclusive,
-        )?;
+        )?);
 
         build_table_scan(
             ScanConfig {
@@ -315,7 +337,8 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
                 row_selection_enabled: self.row_selection_enabled,
             },
             to_snapshot,
-            Some(snapshot_range),
+            Some(append_set.manifest_file_filter()),
+            Some(append_set.manifest_entry_filter()),
         )
     }
 }
@@ -324,6 +347,7 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
 mod tests {
     use futures::TryStreamExt;
 
+    use super::AppendSnapshotSet;
     use crate::scan::tests::TableTestFixture;
 
     #[test]
@@ -402,22 +426,27 @@ mod tests {
         let table = TableTestFixture::new().table;
         let current_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
 
+        // Verify the scan builds successfully
         let result = table
             .incremental_append_scan_inclusive(current_snapshot_id)
             .to_snapshot(current_snapshot_id)
             .build();
-
         assert!(
             result.is_ok(),
             "Inclusive scan of a single append snapshot should succeed"
         );
 
-        let scan = result.unwrap();
-        let plan_context = scan.plan_context.as_ref().unwrap();
-        let range = plan_context.snapshot_range.as_ref().unwrap();
+        // Verify AppendSnapshotSet directly
+        let set = AppendSnapshotSet::build(
+            &table.metadata_ref(),
+            current_snapshot_id,
+            current_snapshot_id,
+            true,
+        )
+        .unwrap();
         assert!(
-            range.contains(current_snapshot_id),
-            "Inclusive range should contain the from_snapshot"
+            set.contains(current_snapshot_id),
+            "Inclusive set should contain the from_snapshot"
         );
     }
 
@@ -427,22 +456,27 @@ mod tests {
         let table = TableTestFixture::new().table;
         let current_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
 
+        // Verify the scan builds successfully
         let result = table
             .incremental_append_scan(current_snapshot_id)
             .to_snapshot(current_snapshot_id)
             .build();
-
         assert!(
             result.is_ok(),
             "Exclusive scan from=to should succeed with empty range"
         );
 
-        let scan = result.unwrap();
-        let plan_context = scan.plan_context.as_ref().unwrap();
-        let range = plan_context.snapshot_range.as_ref().unwrap();
+        // Verify AppendSnapshotSet directly
+        let set = AppendSnapshotSet::build(
+            &table.metadata_ref(),
+            current_snapshot_id,
+            current_snapshot_id,
+            false,
+        )
+        .unwrap();
         assert!(
-            !range.contains(current_snapshot_id),
-            "Exclusive range should not contain the from_snapshot"
+            !set.contains(current_snapshot_id),
+            "Exclusive set should not contain the from_snapshot"
         );
     }
 
@@ -484,20 +518,20 @@ mod tests {
             "Range of only append snapshots should succeed"
         );
 
-        let scan = result.unwrap();
-        let range = scan
-            .plan_context
-            .as_ref()
-            .unwrap()
-            .snapshot_range
-            .as_ref()
-            .unwrap();
+        // Verify AppendSnapshotSet directly
+        let set = AppendSnapshotSet::build(
+            &table.metadata_ref(),
+            3051729675574597004,
+            3056729675574597004,
+            false,
+        )
+        .unwrap();
         assert!(
-            !range.contains(3051729675574597004),
+            !set.contains(3051729675574597004),
             "from_snapshot should be excluded"
         );
-        assert!(range.contains(3055729675574597004), "S2 should be in range");
-        assert!(range.contains(3056729675574597004), "S3 should be in range");
+        assert!(set.contains(3055729675574597004), "S2 should be in range");
+        assert!(set.contains(3056729675574597004), "S3 should be in range");
     }
 
     #[tokio::test]
