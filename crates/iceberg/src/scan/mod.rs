@@ -30,7 +30,6 @@ use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Sender, channel};
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
-pub(crate) use incremental::AppendSnapshotSet;
 pub use incremental::IncrementalAppendScanBuilder;
 pub use task::*;
 
@@ -70,7 +69,8 @@ pub(crate) struct ScanConfig<'a> {
 pub(crate) fn build_table_scan(
     config: ScanConfig<'_>,
     snapshot: SnapshotRef,
-    snapshot_range: Option<AppendSnapshotSet>,
+    manifest_file_filter: Option<ManifestFileFilter>,
+    manifest_entry_filter: Option<ManifestEntryFilter>,
 ) -> Result<TableScan> {
     let schema = snapshot.schema(config.table.metadata())?;
 
@@ -145,7 +145,8 @@ pub(crate) fn build_table_scan(
         partition_filter_cache: Arc::new(PartitionFilterCache::new()),
         manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
         expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
-        snapshot_range: snapshot_range.map(Arc::new),
+        manifest_file_filter,
+        manifest_entry_filter,
     };
 
     Ok(TableScan {
@@ -347,6 +348,7 @@ impl<'a> TableScanBuilder<'a> {
                 row_selection_enabled: self.row_selection_enabled,
             },
             snapshot,
+            None,
             None,
         )
     }
