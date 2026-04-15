@@ -319,3 +319,260 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use futures::TryStreamExt;
+
+    use crate::scan::tests::TableTestFixture;
+
+    #[test]
+    fn test_incremental_scan_invalid_from_snapshot() {
+        let table = TableTestFixture::new().table;
+
+        let result = table.incremental_append_scan(999999999).build();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("not found"),
+            "Expected 'not found' error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_incremental_scan_invalid_to_snapshot() {
+        let table = TableTestFixture::new().table;
+
+        let result = table
+            .incremental_append_scan(3051729675574597004)
+            .to_snapshot(999999999)
+            .build();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_incremental_scan_appends_after() {
+        // Fixture has S1 (append) -> S2 (append, current)
+        let table = TableTestFixture::new().table;
+
+        let result = table.incremental_append_scan(3051729675574597004).build();
+        assert!(
+            result.is_ok(),
+            "appends_after should succeed when all snapshots are appends"
+        );
+
+        let scan = result.unwrap();
+        assert!(
+            scan.plan_context.is_some(),
+            "Incremental scan should have a plan context"
+        );
+    }
+
+    #[test]
+    fn test_incremental_scan_appends_between() {
+        // Fixture has S1 (append) -> S2 (append, current)
+        let table = TableTestFixture::new().table;
+
+        let current_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
+        let parent_id = table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .parent_snapshot_id()
+            .expect("Current snapshot should have a parent");
+
+        let result = table
+            .incremental_append_scan(parent_id)
+            .to_snapshot(current_snapshot_id)
+            .build();
+
+        assert!(
+            result.is_ok(),
+            "appends_between should succeed for two append snapshots"
+        );
+    }
+
+    #[test]
+    fn test_incremental_scan_from_snapshot_inclusive() {
+        // Fixture has S1 (append) -> S2 (append, current)
+        let table = TableTestFixture::new().table;
+        let current_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        let result = table
+            .incremental_append_scan_inclusive(current_snapshot_id)
+            .to_snapshot(current_snapshot_id)
+            .build();
+
+        assert!(
+            result.is_ok(),
+            "Inclusive scan of a single append snapshot should succeed"
+        );
+
+        let scan = result.unwrap();
+        let plan_context = scan.plan_context.as_ref().unwrap();
+        let range = plan_context.snapshot_range.as_ref().unwrap();
+        assert!(
+            range.contains(current_snapshot_id),
+            "Inclusive range should contain the from_snapshot"
+        );
+    }
+
+    #[test]
+    fn test_incremental_scan_from_snapshot_exclusive() {
+        // Fixture has S1 (append) -> S2 (append, current)
+        let table = TableTestFixture::new().table;
+        let current_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        let result = table
+            .incremental_append_scan(current_snapshot_id)
+            .to_snapshot(current_snapshot_id)
+            .build();
+
+        assert!(
+            result.is_ok(),
+            "Exclusive scan from=to should succeed with empty range"
+        );
+
+        let scan = result.unwrap();
+        let plan_context = scan.plan_context.as_ref().unwrap();
+        let range = plan_context.snapshot_range.as_ref().unwrap();
+        assert!(
+            !range.contains(current_snapshot_id),
+            "Exclusive range should not contain the from_snapshot"
+        );
+    }
+
+    #[test]
+    fn test_incremental_scan_rejects_non_append_operations() {
+        // Deep history fixture: S1 (append) -> S2 (append) -> S3 (append)
+        //   -> S4 (overwrite) -> S5 (append, current)
+        let table = TableTestFixture::new_with_deep_history().table;
+
+        let result = table
+            .incremental_append_scan(3051729675574597004)
+            .to_snapshot(3059729675574597004)
+            .build();
+
+        assert!(
+            result.is_err(),
+            "Should reject range containing overwrite snapshot"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("only supports APPEND"),
+            "Error should mention APPEND requirement, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_incremental_scan_succeeds_for_append_only_range() {
+        // Deep history fixture: S1 (append) -> S2 (append) -> S3 (append)
+        //   -> S4 (overwrite) -> S5 (append, current)
+        let table = TableTestFixture::new_with_deep_history().table;
+
+        let result = table
+            .incremental_append_scan(3051729675574597004)
+            .to_snapshot(3056729675574597004)
+            .build();
+
+        assert!(
+            result.is_ok(),
+            "Range of only append snapshots should succeed"
+        );
+
+        let scan = result.unwrap();
+        let range = scan
+            .plan_context
+            .as_ref()
+            .unwrap()
+            .snapshot_range
+            .as_ref()
+            .unwrap();
+        assert!(
+            !range.contains(3051729675574597004),
+            "from_snapshot should be excluded"
+        );
+        assert!(range.contains(3055729675574597004), "S2 should be in range");
+        assert!(range.contains(3056729675574597004), "S3 should be in range");
+    }
+
+    #[tokio::test]
+    async fn test_incremental_scan_returns_only_added_files_in_range() {
+        // Fixture has S1 (append) -> S2 (append, current)
+        // Manifest contains:
+        //   1.parquet: status=Added, snapshot=S2
+        //   2.parquet: status=Deleted, snapshot=S1
+        //   3.parquet: status=Existing, snapshot=S1
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let current_snapshot = fixture.table.metadata().current_snapshot().unwrap();
+        let parent_snapshot_id = current_snapshot.parent_snapshot_id().unwrap();
+
+        // Incremental scan from S1 (exclusive) to S2 should return only 1.parquet
+        let table_scan = fixture
+            .table
+            .incremental_append_scan(parent_snapshot_id)
+            .to_snapshot(current_snapshot.snapshot_id())
+            .build()
+            .unwrap();
+
+        let tasks: Vec<_> = table_scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            tasks.len(),
+            1,
+            "Incremental scan should return exactly 1 file"
+        );
+        assert_eq!(
+            tasks[0].data_file_path,
+            format!("{}/1.parquet", &fixture.table_location),
+            "Should only return the file added in S2"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_incremental_scan_exclusive_same_snapshot_returns_empty() {
+        // Fixture has S1 (append) -> S2 (append, current)
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let current_snapshot_id = fixture
+            .table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .snapshot_id();
+
+        // Incremental scan from S2 to S2 (exclusive) should return nothing
+        let table_scan = fixture
+            .table
+            .incremental_append_scan(current_snapshot_id)
+            .to_snapshot(current_snapshot_id)
+            .build()
+            .unwrap();
+
+        let tasks: Vec<_> = table_scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert!(
+            tasks.is_empty(),
+            "Exclusive scan from=to should return no files"
+        );
+    }
+}
