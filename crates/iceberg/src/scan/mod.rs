@@ -31,7 +31,7 @@ use futures::channel::mpsc::{Sender, channel};
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
 pub use incremental::IncrementalAppendScanBuilder;
-pub(crate) use incremental::SnapshotRange;
+pub(crate) use incremental::AppendSnapshotSet;
 pub use task::*;
 
 use crate::arrow::ArrowReaderBuilder;
@@ -69,7 +69,7 @@ pub(crate) struct ScanConfig<'a> {
 pub(crate) fn build_table_scan(
     config: ScanConfig<'_>,
     snapshot: SnapshotRef,
-    snapshot_range: Option<SnapshotRange>,
+    snapshot_range: Option<AppendSnapshotSet>,
 ) -> Result<TableScan> {
     let schema = snapshot.schema(config.table.metadata())?;
 

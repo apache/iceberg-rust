@@ -25,7 +25,7 @@ use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::object_cache::ObjectCache;
 use crate::scan::{
     BoundPredicates, ExpressionEvaluatorCache, FileScanTask, ManifestEvaluatorCache,
-    PartitionFilterCache, SnapshotRange,
+    PartitionFilterCache, AppendSnapshotSet,
 };
 use crate::spec::{
     ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, ManifestStatus, SchemaRef,
@@ -48,7 +48,7 @@ pub(crate) struct ManifestFileContext {
     delete_file_index: DeleteFileIndex,
     case_sensitive: bool,
     /// Optional snapshot range for incremental scans
-    snapshot_range: Option<Arc<SnapshotRange>>,
+    snapshot_range: Option<Arc<AppendSnapshotSet>>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -188,7 +188,7 @@ pub(crate) struct PlanContext {
     pub manifest_evaluator_cache: Arc<ManifestEvaluatorCache>,
     pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
     /// Optional snapshot range for incremental scans
-    pub snapshot_range: Option<Arc<SnapshotRange>>,
+    pub snapshot_range: Option<Arc<AppendSnapshotSet>>,
 }
 
 impl PlanContext {
