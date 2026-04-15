@@ -399,7 +399,18 @@ impl IcebergStaticTableProvider {
     /// let df = ctx.sql("SELECT * FROM new_data").await?;
     /// ```
     pub async fn try_new_appends_after(table: Table, from_snapshot_id: i64) -> Result<Self> {
-        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
+        let current_snapshot =
+            table.metadata().current_snapshot().ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "table {} has no current snapshot",
+                        table.identifier().name()
+                    ),
+                )
+            })?;
+        let table_schema = current_snapshot.schema(table.metadata())?;
+        let schema = Arc::new(schema_to_arrow_schema(&table_schema)?);
         Ok(IcebergStaticTableProvider {
             table,
             snapshot_id: None, // Use current snapshot
