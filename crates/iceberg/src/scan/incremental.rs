@@ -32,12 +32,12 @@ use crate::{Error, ErrorKind, Result};
 /// This struct is used to track which snapshot IDs are included in an incremental
 /// scan range, allowing efficient filtering of manifest entries.
 #[derive(Debug, Clone)]
-pub(crate) struct SnapshotRange {
+pub(crate) struct AppendSnapshotSet {
     /// Snapshot IDs in the range
     snapshot_ids: HashSet<i64>,
 }
 
-impl SnapshotRange {
+impl AppendSnapshotSet {
     /// Build a snapshot range by walking the snapshot ancestry chain.
     ///
     /// Validates that `from_snapshot_id` is an ancestor of `to_snapshot_id` and
@@ -294,7 +294,7 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
             }
         };
 
-        let snapshot_range = SnapshotRange::build(
+        let snapshot_range = AppendSnapshotSet::build(
             &self.table.metadata_ref(),
             self.from_snapshot_id,
             to_snapshot.snapshot_id(),
