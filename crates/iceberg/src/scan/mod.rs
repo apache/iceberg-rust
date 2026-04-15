@@ -123,6 +123,117 @@ impl SnapshotRange {
     }
 }
 
+/// Shared configuration extracted from scan builders, used by both
+/// [`TableScanBuilder`] and [`IncrementalAppendScanBuilder`].
+struct ScanConfig<'a> {
+    table: &'a Table,
+    column_names: Option<Vec<String>>,
+    batch_size: Option<usize>,
+    case_sensitive: bool,
+    filter: Option<Predicate>,
+    concurrency_limit_data_files: usize,
+    concurrency_limit_manifest_entries: usize,
+    concurrency_limit_manifest_files: usize,
+    row_group_filtering_enabled: bool,
+    row_selection_enabled: bool,
+}
+
+/// Shared build logic: validates columns, resolves field IDs, binds predicates,
+/// and constructs [`PlanContext`] + [`TableScan`].
+fn build_table_scan(
+    config: ScanConfig<'_>,
+    snapshot: SnapshotRef,
+    snapshot_range: Option<SnapshotRange>,
+) -> Result<TableScan> {
+    let schema = snapshot.schema(config.table.metadata())?;
+
+    // Check that all column names exist in the schema (skip reserved columns).
+    if let Some(column_names) = config.column_names.as_ref() {
+        for column_name in column_names {
+            if is_metadata_column_name(column_name) {
+                continue;
+            }
+            if schema.field_by_name(column_name).is_none() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Column {column_name} not found in table. Schema: {schema}"),
+                ));
+            }
+        }
+    }
+
+    let mut field_ids = vec![];
+    let column_names = config.column_names.clone().unwrap_or_else(|| {
+        schema
+            .as_struct()
+            .fields()
+            .iter()
+            .map(|f| f.name.clone())
+            .collect()
+    });
+
+    for column_name in column_names.iter() {
+        if is_metadata_column_name(column_name) {
+            field_ids.push(get_metadata_field_id(column_name)?);
+            continue;
+        }
+
+        let field_id = schema.field_id_by_name(column_name).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Column {column_name} not found in table. Schema: {schema}"),
+            )
+        })?;
+
+        schema
+            .as_struct()
+            .field_by_id(field_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!(
+                        "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
+                    ),
+                )
+            })?;
+
+        field_ids.push(field_id);
+    }
+
+    let snapshot_bound_predicate = if let Some(ref predicates) = config.filter {
+        Some(predicates.bind(schema.clone(), true)?)
+    } else {
+        None
+    };
+
+    let plan_context = PlanContext {
+        snapshot,
+        table_metadata: config.table.metadata_ref(),
+        snapshot_schema: schema,
+        case_sensitive: config.case_sensitive,
+        predicate: config.filter.map(Arc::new),
+        snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
+        object_cache: config.table.object_cache(),
+        field_ids: Arc::new(field_ids),
+        partition_filter_cache: Arc::new(PartitionFilterCache::new()),
+        manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
+        expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
+        snapshot_range: snapshot_range.map(Arc::new),
+    };
+
+    Ok(TableScan {
+        batch_size: config.batch_size,
+        column_names: config.column_names,
+        file_io: config.table.file_io().clone(),
+        plan_context: Some(plan_context),
+        concurrency_limit_data_files: config.concurrency_limit_data_files,
+        concurrency_limit_manifest_entries: config.concurrency_limit_manifest_entries,
+        concurrency_limit_manifest_files: config.concurrency_limit_manifest_files,
+        row_group_filtering_enabled: config.row_group_filtering_enabled,
+        row_selection_enabled: config.row_selection_enabled,
+    })
+}
+
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
     table: &'a Table,
@@ -137,10 +248,6 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
-    // Incremental scan fields
-    from_snapshot_id: Option<i64>,
-    from_snapshot_inclusive: bool,
-    to_snapshot_id: Option<i64>,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -159,9 +266,6 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
-            from_snapshot_id: None,
-            from_snapshot_inclusive: false,
-            to_snapshot_id: None,
         }
     }
 
@@ -210,64 +314,9 @@ impl<'a> TableScanBuilder<'a> {
     }
 
     /// Set the snapshot to scan. When not set, it uses current snapshot.
-    ///
-    /// Note: This method is mutually exclusive with incremental scan methods
-    /// (`from_snapshot_exclusive`, `from_snapshot_inclusive`, `to_snapshot`,
-    /// `appends_after`, `appends_between`).
     pub fn snapshot_id(mut self, snapshot_id: i64) -> Self {
         self.snapshot_id = Some(snapshot_id);
         self
-    }
-
-    /// Set the starting snapshot for an incremental scan (exclusive).
-    ///
-    /// The scan will include all data files added in snapshots after this snapshot,
-    /// up to the snapshot specified by `to_snapshot()` or the current snapshot.
-    ///
-    /// This method is mutually exclusive with `snapshot_id()`.
-    pub fn from_snapshot_exclusive(mut self, snapshot_id: i64) -> Self {
-        self.from_snapshot_id = Some(snapshot_id);
-        self.from_snapshot_inclusive = false;
-        self
-    }
-
-    /// Set the starting snapshot for an incremental scan (inclusive).
-    ///
-    /// The scan will include all data files added in this snapshot and all
-    /// subsequent snapshots, up to the snapshot specified by `to_snapshot()`
-    /// or the current snapshot.
-    ///
-    /// This method is mutually exclusive with `snapshot_id()`.
-    pub fn from_snapshot_inclusive(mut self, snapshot_id: i64) -> Self {
-        self.from_snapshot_id = Some(snapshot_id);
-        self.from_snapshot_inclusive = true;
-        self
-    }
-
-    /// Set the ending snapshot for an incremental scan (inclusive).
-    ///
-    /// Must be used in combination with `from_snapshot_exclusive()` or
-    /// `from_snapshot_inclusive()`. If not set, defaults to the current snapshot.
-    pub fn to_snapshot(mut self, snapshot_id: i64) -> Self {
-        self.to_snapshot_id = Some(snapshot_id);
-        self
-    }
-
-    /// Convenience method to scan all appends after a given snapshot.
-    ///
-    /// Equivalent to calling `from_snapshot_exclusive(snapshot_id)` without
-    /// setting `to_snapshot()`, which defaults to the current snapshot.
-    pub fn appends_after(self, from_snapshot_id: i64) -> Self {
-        self.from_snapshot_exclusive(from_snapshot_id)
-    }
-
-    /// Convenience method to scan all appends between two snapshots.
-    ///
-    /// Equivalent to calling `from_snapshot_exclusive(from_snapshot_id)`
-    /// followed by `to_snapshot(to_snapshot_id)`.
-    pub fn appends_between(self, from_snapshot_id: i64, to_snapshot_id: i64) -> Self {
-        self.from_snapshot_exclusive(from_snapshot_id)
-            .to_snapshot(to_snapshot_id)
     }
 
     /// Sets the concurrency limit for both manifest files and manifest
@@ -325,177 +374,230 @@ impl<'a> TableScanBuilder<'a> {
 
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
-        // Check for mutually exclusive options
-        if self.snapshot_id.is_some() && self.from_snapshot_id.is_some() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Cannot use both snapshot_id and incremental scan options (from_snapshot_exclusive/from_snapshot_inclusive)",
-            ));
-        }
-
-        // Determine if this is an incremental scan
-        let is_incremental = self.from_snapshot_id.is_some();
-
-        // Get the target snapshot (to_snapshot for incremental, snapshot_id for point-in-time, or current)
-        let snapshot = if is_incremental {
-            // For incremental scans, use to_snapshot_id or current snapshot
-            match self.to_snapshot_id {
-                Some(snapshot_id) => self
-                    .table
-                    .metadata()
-                    .snapshot_by_id(snapshot_id)
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("to_snapshot with id {snapshot_id} not found"),
-                        )
-                    })?
-                    .clone(),
-                None => {
-                    let Some(current_snapshot) = self.table.metadata().current_snapshot() else {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            "Cannot perform incremental scan: table has no snapshots",
-                        ));
-                    };
-                    current_snapshot.clone()
-                }
-            }
-        } else {
-            // Regular point-in-time scan
-            match self.snapshot_id {
-                Some(snapshot_id) => self
-                    .table
-                    .metadata()
-                    .snapshot_by_id(snapshot_id)
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("Snapshot with id {snapshot_id} not found"),
-                        )
-                    })?
-                    .clone(),
-                None => {
-                    let Some(current_snapshot_id) = self.table.metadata().current_snapshot() else {
-                        return Ok(TableScan {
-                            batch_size: self.batch_size,
-                            column_names: self.column_names,
-                            file_io: self.table.file_io().clone(),
-                            plan_context: None,
-                            concurrency_limit_data_files: self.concurrency_limit_data_files,
-                            concurrency_limit_manifest_entries: self
-                                .concurrency_limit_manifest_entries,
-                            concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
-                            row_group_filtering_enabled: self.row_group_filtering_enabled,
-                            row_selection_enabled: self.row_selection_enabled,
-                        });
-                    };
-                    current_snapshot_id.clone()
-                }
-            }
-        };
-
-        // Build snapshot range for incremental scans
-        let snapshot_range = if let Some(from_snapshot_id) = self.from_snapshot_id {
-            Some(SnapshotRange::build(
-                &self.table.metadata_ref(),
-                from_snapshot_id,
-                snapshot.snapshot_id(),
-                self.from_snapshot_inclusive,
-            )?)
-        } else {
-            None
-        };
-
-        let schema = snapshot.schema(self.table.metadata())?;
-
-        // Check that all column names exist in the schema (skip reserved columns).
-        if let Some(column_names) = self.column_names.as_ref() {
-            for column_name in column_names {
-                // Skip reserved columns that don't exist in the schema
-                if is_metadata_column_name(column_name) {
-                    continue;
-                }
-                if schema.field_by_name(column_name).is_none() {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Column {column_name} not found in table. Schema: {schema}"),
-                    ));
-                }
-            }
-        }
-
-        let mut field_ids = vec![];
-        let column_names = self.column_names.clone().unwrap_or_else(|| {
-            schema
-                .as_struct()
-                .fields()
-                .iter()
-                .map(|f| f.name.clone())
-                .collect()
-        });
-
-        for column_name in column_names.iter() {
-            // Handle metadata columns (like "_file")
-            if is_metadata_column_name(column_name) {
-                field_ids.push(get_metadata_field_id(column_name)?);
-                continue;
-            }
-
-            let field_id = schema.field_id_by_name(column_name).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Column {column_name} not found in table. Schema: {schema}"),
-                )
-            })?;
-
-            schema
-                .as_struct()
-                .field_by_id(field_id)
+        let snapshot = match self.snapshot_id {
+            Some(snapshot_id) => self
+                .table
+                .metadata()
+                .snapshot_by_id(snapshot_id)
                 .ok_or_else(|| {
                     Error::new(
-                        ErrorKind::FeatureUnsupported,
-                        format!(
-                        "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
-                    ),
-                )
-            })?;
-
-            field_ids.push(field_id);
-        }
-
-        let snapshot_bound_predicate = if let Some(ref predicates) = self.filter {
-            Some(predicates.bind(schema.clone(), true)?)
-        } else {
-            None
+                        ErrorKind::DataInvalid,
+                        format!("Snapshot with id {snapshot_id} not found"),
+                    )
+                })?
+                .clone(),
+            None => {
+                let Some(current_snapshot) = self.table.metadata().current_snapshot() else {
+                    return Ok(TableScan {
+                        batch_size: self.batch_size,
+                        column_names: self.column_names,
+                        file_io: self.table.file_io().clone(),
+                        plan_context: None,
+                        concurrency_limit_data_files: self.concurrency_limit_data_files,
+                        concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
+                        concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
+                        row_group_filtering_enabled: self.row_group_filtering_enabled,
+                        row_selection_enabled: self.row_selection_enabled,
+                    });
+                };
+                current_snapshot.clone()
+            }
         };
 
-        let plan_context = PlanContext {
+        build_table_scan(
+            ScanConfig {
+                table: self.table,
+                column_names: self.column_names,
+                batch_size: self.batch_size,
+                case_sensitive: self.case_sensitive,
+                filter: self.filter,
+                concurrency_limit_data_files: self.concurrency_limit_data_files,
+                concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
+                concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
+                row_group_filtering_enabled: self.row_group_filtering_enabled,
+                row_selection_enabled: self.row_selection_enabled,
+            },
             snapshot,
-            table_metadata: self.table.metadata_ref(),
-            snapshot_schema: schema,
-            case_sensitive: self.case_sensitive,
-            predicate: self.filter.map(Arc::new),
-            snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
-            object_cache: self.table.object_cache(),
-            field_ids: Arc::new(field_ids),
-            partition_filter_cache: Arc::new(PartitionFilterCache::new()),
-            manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
-            expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
-            snapshot_range: snapshot_range.map(Arc::new),
+            None,
+        )
+    }
+}
+
+/// Builder to create an incremental append scan between two snapshots.
+///
+/// An incremental append scan returns only data files that were added in
+/// snapshots between `from_snapshot_id` and the target snapshot. Only
+/// snapshots with APPEND operations are supported.
+///
+/// Use [`Table::incremental_append_scan`] or
+/// [`Table::incremental_append_scan_inclusive`] to create an instance.
+pub struct IncrementalAppendScanBuilder<'a> {
+    table: &'a Table,
+    from_snapshot_id: i64,
+    from_inclusive: bool,
+    to_snapshot_id: Option<i64>,
+    column_names: Option<Vec<String>>,
+    batch_size: Option<usize>,
+    case_sensitive: bool,
+    filter: Option<Predicate>,
+    concurrency_limit_data_files: usize,
+    concurrency_limit_manifest_entries: usize,
+    concurrency_limit_manifest_files: usize,
+    row_group_filtering_enabled: bool,
+    row_selection_enabled: bool,
+}
+
+impl<'a> IncrementalAppendScanBuilder<'a> {
+    pub(crate) fn new(table: &'a Table, from_snapshot_id: i64, from_inclusive: bool) -> Self {
+        let num_cpus = available_parallelism().get();
+
+        Self {
+            table,
+            from_snapshot_id,
+            from_inclusive,
+            to_snapshot_id: None,
+            column_names: None,
+            batch_size: None,
+            case_sensitive: true,
+            filter: None,
+            concurrency_limit_data_files: num_cpus,
+            concurrency_limit_manifest_entries: num_cpus,
+            concurrency_limit_manifest_files: num_cpus,
+            row_group_filtering_enabled: true,
+            row_selection_enabled: false,
+        }
+    }
+
+    /// Set the ending snapshot for the incremental scan (inclusive).
+    /// If not set, defaults to the current snapshot.
+    pub fn to_snapshot(mut self, snapshot_id: i64) -> Self {
+        self.to_snapshot_id = Some(snapshot_id);
+        self
+    }
+
+    /// Sets the desired size of batches in the response
+    /// to something other than the default
+    pub fn with_batch_size(mut self, batch_size: Option<usize>) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
+    /// Sets the scan's case sensitivity
+    pub fn with_case_sensitive(mut self, case_sensitive: bool) -> Self {
+        self.case_sensitive = case_sensitive;
+        self
+    }
+
+    /// Specifies a predicate to use as a filter
+    pub fn with_filter(mut self, predicate: Predicate) -> Self {
+        self.filter = Some(predicate.rewrite_not());
+        self
+    }
+
+    /// Select all columns.
+    pub fn select_all(mut self) -> Self {
+        self.column_names = None;
+        self
+    }
+
+    /// Select empty columns.
+    pub fn select_empty(mut self) -> Self {
+        self.column_names = Some(vec![]);
+        self
+    }
+
+    /// Select some columns of the table.
+    pub fn select(mut self, column_names: impl IntoIterator<Item = impl ToString>) -> Self {
+        self.column_names = Some(
+            column_names
+                .into_iter()
+                .map(|item| item.to_string())
+                .collect(),
+        );
+        self
+    }
+
+    /// Sets the concurrency limit for both manifest files and manifest
+    /// entries for this scan
+    pub fn with_concurrency_limit(mut self, limit: usize) -> Self {
+        self.concurrency_limit_manifest_files = limit;
+        self.concurrency_limit_manifest_entries = limit;
+        self.concurrency_limit_data_files = limit;
+        self
+    }
+
+    /// Sets the data file concurrency limit for this scan
+    pub fn with_data_file_concurrency_limit(mut self, limit: usize) -> Self {
+        self.concurrency_limit_data_files = limit;
+        self
+    }
+
+    /// Sets the manifest entry concurrency limit for this scan
+    pub fn with_manifest_entry_concurrency_limit(mut self, limit: usize) -> Self {
+        self.concurrency_limit_manifest_entries = limit;
+        self
+    }
+
+    /// Determines whether to enable row group filtering.
+    pub fn with_row_group_filtering_enabled(mut self, row_group_filtering_enabled: bool) -> Self {
+        self.row_group_filtering_enabled = row_group_filtering_enabled;
+        self
+    }
+
+    /// Determines whether to enable row selection.
+    pub fn with_row_selection_enabled(mut self, row_selection_enabled: bool) -> Self {
+        self.row_selection_enabled = row_selection_enabled;
+        self
+    }
+
+    /// Build the incremental append scan.
+    pub fn build(self) -> Result<TableScan> {
+        let to_snapshot = match self.to_snapshot_id {
+            Some(snapshot_id) => self
+                .table
+                .metadata()
+                .snapshot_by_id(snapshot_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("to_snapshot with id {snapshot_id} not found"),
+                    )
+                })?
+                .clone(),
+            None => {
+                let Some(current_snapshot) = self.table.metadata().current_snapshot() else {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        "Cannot perform incremental scan: table has no snapshots",
+                    ));
+                };
+                current_snapshot.clone()
+            }
         };
 
-        Ok(TableScan {
-            batch_size: self.batch_size,
-            column_names: self.column_names,
-            file_io: self.table.file_io().clone(),
-            plan_context: Some(plan_context),
-            concurrency_limit_data_files: self.concurrency_limit_data_files,
-            concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
-            concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
-            row_group_filtering_enabled: self.row_group_filtering_enabled,
-            row_selection_enabled: self.row_selection_enabled,
-        })
+        let snapshot_range = SnapshotRange::build(
+            &self.table.metadata_ref(),
+            self.from_snapshot_id,
+            to_snapshot.snapshot_id(),
+            self.from_inclusive,
+        )?;
+
+        build_table_scan(
+            ScanConfig {
+                table: self.table,
+                column_names: self.column_names,
+                batch_size: self.batch_size,
+                case_sensitive: self.case_sensitive,
+                filter: self.filter,
+                concurrency_limit_data_files: self.concurrency_limit_data_files,
+                concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
+                concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
+                row_group_filtering_enabled: self.row_group_filtering_enabled,
+                row_selection_enabled: self.row_selection_enabled,
+            },
+            to_snapshot,
+            Some(snapshot_range),
+        )
     }
 }
 
@@ -2382,30 +2484,13 @@ pub mod tests {
         assert!(result.is_ok(), "Scan timed out - deadlock detected");
     }
 
-    // Incremental scan tests
-
-    #[test]
-    fn test_incremental_scan_mutually_exclusive_with_snapshot_id() {
-        let table = TableTestFixture::new().table;
-
-        // Using both snapshot_id and from_snapshot_exclusive should fail
-        let result = table
-            .scan()
-            .snapshot_id(3051729675574597004)
-            .from_snapshot_exclusive(3055729675574597004)
-            .build();
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("Cannot use both snapshot_id"));
-    }
+    // Incremental append scan tests
 
     #[test]
     fn test_incremental_scan_invalid_from_snapshot() {
         let table = TableTestFixture::new().table;
 
-        // Using a non-existent from_snapshot_id should fail
-        let result = table.scan().from_snapshot_exclusive(999999999).build();
+        let result = table.incremental_append_scan(999999999).build();
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -2416,10 +2501,8 @@ pub mod tests {
     fn test_incremental_scan_invalid_to_snapshot() {
         let table = TableTestFixture::new().table;
 
-        // Using a non-existent to_snapshot_id should fail
         let result = table
-            .scan()
-            .from_snapshot_exclusive(3051729675574597004)
+            .incremental_append_scan(3051729675574597004)
             .to_snapshot(999999999)
             .build();
 
@@ -2429,12 +2512,15 @@ pub mod tests {
     }
 
     #[test]
-    fn test_appends_after_convenience_method() {
+    fn test_incremental_scan_appends_after() {
         // Fixture has S1 (append) -> S2 (append, current)
         let table = TableTestFixture::new().table;
 
-        let result = table.scan().appends_after(3051729675574597004).build();
-        assert!(result.is_ok(), "appends_after should succeed when all snapshots are appends");
+        let result = table.incremental_append_scan(3051729675574597004).build();
+        assert!(
+            result.is_ok(),
+            "appends_after should succeed when all snapshots are appends"
+        );
 
         let scan = result.unwrap();
         assert!(
@@ -2444,7 +2530,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_appends_between_convenience_method() {
+    fn test_incremental_scan_appends_between() {
         // Fixture has S1 (append) -> S2 (append, current)
         let table = TableTestFixture::new().table;
 
@@ -2457,8 +2543,8 @@ pub mod tests {
             .expect("Current snapshot should have a parent");
 
         let result = table
-            .scan()
-            .appends_between(parent_id, current_snapshot_id)
+            .incremental_append_scan(parent_id)
+            .to_snapshot(current_snapshot_id)
             .build();
 
         assert!(
@@ -2474,8 +2560,7 @@ pub mod tests {
         let current_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
 
         let result = table
-            .scan()
-            .from_snapshot_inclusive(current_snapshot_id)
+            .incremental_append_scan_inclusive(current_snapshot_id)
             .to_snapshot(current_snapshot_id)
             .build();
 
@@ -2484,7 +2569,6 @@ pub mod tests {
             "Inclusive scan of a single append snapshot should succeed"
         );
 
-        // The snapshot range should contain exactly one snapshot
         let scan = result.unwrap();
         let plan_context = scan.plan_context.as_ref().unwrap();
         let range = plan_context.snapshot_range.as_ref().unwrap();
@@ -2501,8 +2585,7 @@ pub mod tests {
         let current_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
 
         let result = table
-            .scan()
-            .from_snapshot_exclusive(current_snapshot_id)
+            .incremental_append_scan(current_snapshot_id)
             .to_snapshot(current_snapshot_id)
             .build();
 
@@ -2511,7 +2594,6 @@ pub mod tests {
             "Exclusive scan from=to should succeed with empty range"
         );
 
-        // The snapshot range should be empty (from is excluded, and from == to)
         let scan = result.unwrap();
         let plan_context = scan.plan_context.as_ref().unwrap();
         let range = plan_context.snapshot_range.as_ref().unwrap();
@@ -2527,14 +2609,15 @@ pub mod tests {
         //   -> S4 (overwrite) -> S5 (append, current)
         let table = TableTestFixture::new_with_deep_history().table;
 
-        // Scanning from S1 to S5 crosses S4 (overwrite), should fail
         let result = table
-            .scan()
-            .from_snapshot_exclusive(3051729675574597004)
+            .incremental_append_scan(3051729675574597004)
             .to_snapshot(3059729675574597004)
             .build();
 
-        assert!(result.is_err(), "Should reject range containing overwrite snapshot");
+        assert!(
+            result.is_err(),
+            "Should reject range containing overwrite snapshot"
+        );
         let err = result.unwrap_err();
         assert!(
             err.to_string().contains("only supports APPEND"),
@@ -2548,10 +2631,8 @@ pub mod tests {
         //   -> S4 (overwrite) -> S5 (append, current)
         let table = TableTestFixture::new_with_deep_history().table;
 
-        // Scanning from S1 to S3 (all appends) should succeed
         let result = table
-            .scan()
-            .from_snapshot_exclusive(3051729675574597004)
+            .incremental_append_scan(3051729675574597004)
             .to_snapshot(3056729675574597004)
             .build();
 
@@ -2568,8 +2649,10 @@ pub mod tests {
             .snapshot_range
             .as_ref()
             .unwrap();
-        // Should contain S2 and S3 but not S1 (exclusive)
-        assert!(!range.contains(3051729675574597004), "from_snapshot should be excluded");
+        assert!(
+            !range.contains(3051729675574597004),
+            "from_snapshot should be excluded"
+        );
         assert!(range.contains(3055729675574597004), "S2 should be in range");
         assert!(range.contains(3056729675574597004), "S3 should be in range");
     }

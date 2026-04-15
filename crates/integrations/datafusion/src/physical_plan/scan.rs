@@ -234,37 +234,47 @@ async fn get_batch_stream(
     column_names: Option<Vec<String>>,
     predicates: Option<Predicate>,
 ) -> DFResult<Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>>> {
-    let mut scan_builder = table.scan();
-
-    // Configure incremental scan if from_snapshot_id is specified
-    if let Some(from_id) = from_snapshot_id {
-        scan_builder = if from_snapshot_inclusive {
-            scan_builder.from_snapshot_inclusive(from_id)
+    let table_scan = if let Some(from_id) = from_snapshot_id {
+        // Incremental append scan
+        let mut builder = if from_snapshot_inclusive {
+            table.incremental_append_scan_inclusive(from_id)
         } else {
-            scan_builder.from_snapshot_exclusive(from_id)
+            table.incremental_append_scan(from_id)
         };
 
-        // Set to_snapshot if specified, otherwise uses current snapshot
         if let Some(to_id) = snapshot_id {
-            scan_builder = scan_builder.to_snapshot(to_id);
+            builder = builder.to_snapshot(to_id);
         }
-    } else if let Some(snapshot_id) = snapshot_id {
+
+        builder = match column_names {
+            Some(names) => builder.select(names),
+            None => builder.select_all(),
+        };
+
+        if let Some(pred) = predicates {
+            builder = builder.with_filter(pred);
+        }
+
+        builder.build().map_err(to_datafusion_error)?
+    } else {
         // Regular point-in-time scan
-        scan_builder = scan_builder.snapshot_id(snapshot_id);
-    }
+        let mut scan_builder = table.scan();
 
-    // Apply column selection
-    scan_builder = match column_names {
-        Some(column_names) => scan_builder.select(column_names),
-        None => scan_builder.select_all(),
+        if let Some(snapshot_id) = snapshot_id {
+            scan_builder = scan_builder.snapshot_id(snapshot_id);
+        }
+
+        scan_builder = match column_names {
+            Some(column_names) => scan_builder.select(column_names),
+            None => scan_builder.select_all(),
+        };
+
+        if let Some(pred) = predicates {
+            scan_builder = scan_builder.with_filter(pred);
+        }
+
+        scan_builder.build().map_err(to_datafusion_error)?
     };
-
-    // Apply predicates
-    if let Some(pred) = predicates {
-        scan_builder = scan_builder.with_filter(pred);
-    }
-
-    let table_scan = scan_builder.build().map_err(to_datafusion_error)?;
 
     let stream = table_scan
         .to_arrow()
