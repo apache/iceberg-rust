@@ -47,7 +47,7 @@ pub(crate) struct ManifestFileContext {
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
     delete_file_index: DeleteFileIndex,
     case_sensitive: bool,
-    /// Optional snapshot range for incremental scans
+
     snapshot_range: Option<Arc<AppendSnapshotSet>>,
 }
 
@@ -187,7 +187,7 @@ pub(crate) struct PlanContext {
     pub partition_filter_cache: Arc<PartitionFilterCache>,
     pub manifest_evaluator_cache: Arc<ManifestEvaluatorCache>,
     pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
-    /// Optional snapshot range for incremental scans
+
     pub snapshot_range: Option<Arc<AppendSnapshotSet>>,
 }
 

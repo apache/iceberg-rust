@@ -236,26 +236,26 @@ async fn get_batch_stream(
 ) -> DFResult<Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>>> {
     let table_scan = if let Some(from_id) = from_snapshot_id {
         // Incremental append scan
-        let mut builder = if from_snapshot_inclusive {
+        let mut scan_builder = if from_snapshot_inclusive {
             table.incremental_append_scan_inclusive(from_id)
         } else {
             table.incremental_append_scan(from_id)
         };
 
         if let Some(to_id) = snapshot_id {
-            builder = builder.to_snapshot(to_id);
+            scan_builder = scan_builder.to_snapshot(to_id);
         }
 
-        builder = match column_names {
-            Some(names) => builder.select(names),
-            None => builder.select_all(),
+        scan_builder = match column_names {
+            Some(names) => scan_builder.select(names),
+            None => scan_builder.select_all(),
         };
 
         if let Some(pred) = predicates {
-            builder = builder.with_filter(pred);
+            scan_builder = scan_builder.with_filter(pred);
         }
 
-        builder.build().map_err(to_datafusion_error)?
+        scan_builder.build().map_err(to_datafusion_error)?
     } else {
         // Regular point-in-time scan
         let mut scan_builder = table.scan();
