@@ -26,30 +26,22 @@ pub use blob::{APACHE_DATASKETCHES_THETA_V1, Blob, DELETION_VECTOR_V1};
 
 pub use crate::compression::CompressionCodec;
 
-/// Compression codecs supported by the Puffin spec.
-const SUPPORTED_PUFFIN_CODECS: &[CompressionCodec] = &[
-    CompressionCodec::None,
-    CompressionCodec::Lz4,
-    CompressionCodec::Zstd,
-];
-
 /// Validates that the compression codec is supported for Puffin files.
 /// Returns an error if the codec is not supported.
 fn validate_puffin_compression(codec: CompressionCodec) -> Result<()> {
-    if !SUPPORTED_PUFFIN_CODECS.contains(&codec) {
-        let supported_names: Vec<String> = SUPPORTED_PUFFIN_CODECS
-            .iter()
-            .map(|c| format!("{c:?}"))
-            .collect();
-        return Err(Error::new(
+    match codec {
+        CompressionCodec::None | CompressionCodec::Lz4 | CompressionCodec::Zstd(_) => Ok(()),
+        other => Err(Error::new(
             ErrorKind::DataInvalid,
             format!(
-                "Compression codec {codec:?} is not supported for Puffin files. Only {} are supported.",
-                supported_names.join(", ")
+                "Compression codec {} is not supported for Puffin files. Only {}, {}, and {} are supported.",
+                other.name(),
+                CompressionCodec::None.name(),
+                CompressionCodec::Lz4.name(),
+                CompressionCodec::zstd_default().name()
             ),
-        ));
+        )),
     }
-    Ok(())
 }
 
 mod metadata;
@@ -70,12 +62,13 @@ mod tests {
 
     #[test]
     fn test_puffin_codec_validation() {
-        // All codecs in SUPPORTED_PUFFIN_CODECS should be valid
-        for codec in SUPPORTED_PUFFIN_CODECS {
-            assert!(validate_puffin_compression(*codec).is_ok());
-        }
+        // Supported codecs
+        assert!(validate_puffin_compression(CompressionCodec::None).is_ok());
+        assert!(validate_puffin_compression(CompressionCodec::Lz4).is_ok());
+        assert!(validate_puffin_compression(CompressionCodec::zstd_default()).is_ok());
+        assert!(validate_puffin_compression(CompressionCodec::Zstd(5)).is_ok());
 
-        // Gzip should not be supported for Puffin files
-        assert!(validate_puffin_compression(CompressionCodec::Gzip).is_err());
+        // Unsupported codecs
+        assert!(validate_puffin_compression(CompressionCodec::gzip_default()).is_err());
     }
 }
