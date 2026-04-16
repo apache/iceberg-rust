@@ -36,14 +36,29 @@ use iceberg::table::Table;
 use super::expr_to_predicate::convert_filters_to_predicate;
 use crate::to_datafusion_error;
 
+/// Describes which snapshot(s) to scan.
+#[derive(Debug, Clone)]
+pub(crate) enum ScanRange {
+    /// Scan the current (latest) snapshot.
+    Latest,
+    /// Scan a specific point-in-time snapshot.
+    PointInTime(i64),
+    /// Incremental append scan between two snapshots.
+    Incremental {
+        from: i64,
+        to: Option<i64>,
+        from_inclusive: bool,
+    },
+}
+
 /// Manages the scanning process of an Iceberg [`Table`], encapsulating the
 /// necessary details and computed properties required for execution planning.
 #[derive(Debug)]
 pub struct IcebergTableScan {
     /// A table in the catalog.
     table: Table,
-    /// Snapshot of the table to scan.
-    snapshot_id: Option<i64>,
+    /// Which snapshot(s) to scan.
+    scan_range: ScanRange,
     /// Stores certain, often expensive to compute,
     /// plan properties used in query optimization.
     plan_properties: Arc<PlanProperties>,
@@ -59,7 +74,7 @@ impl IcebergTableScan {
     /// Creates a new [`IcebergTableScan`] object.
     pub(crate) fn new(
         table: Table,
-        snapshot_id: Option<i64>,
+        scan_range: ScanRange,
         schema: ArrowSchemaRef,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
@@ -75,7 +90,7 @@ impl IcebergTableScan {
 
         Self {
             table,
-            snapshot_id,
+            scan_range,
             plan_properties,
             projection,
             predicates,
@@ -87,8 +102,9 @@ impl IcebergTableScan {
         &self.table
     }
 
-    pub fn snapshot_id(&self) -> Option<i64> {
-        self.snapshot_id
+    #[cfg(test)]
+    pub(crate) fn scan_range(&self) -> &ScanRange {
+        &self.scan_range
     }
 
     pub fn projection(&self) -> Option<&[String]> {
@@ -148,7 +164,7 @@ impl ExecutionPlan for IcebergTableScan {
     ) -> DFResult<SendableRecordBatchStream> {
         let fut = get_batch_stream(
             self.table.clone(),
-            self.snapshot_id,
+            self.scan_range.clone(),
             self.projection.clone(),
             self.predicates.clone(),
         );
@@ -205,25 +221,47 @@ impl DisplayAs for IcebergTableScan {
 ///
 /// This function initializes a [`TableScan`], builds it,
 /// and then converts it into a stream of Arrow [`RecordBatch`]es.
+///
+/// Supports both regular point-in-time scans and incremental scans.
 async fn get_batch_stream(
     table: Table,
-    snapshot_id: Option<i64>,
+    scan_range: ScanRange,
     column_names: Option<Vec<String>>,
     predicates: Option<Predicate>,
 ) -> DFResult<Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>>> {
-    let scan_builder = match snapshot_id {
-        Some(snapshot_id) => table.scan().snapshot_id(snapshot_id),
-        None => table.scan(),
-    };
-
-    let mut scan_builder = match column_names {
-        Some(column_names) => scan_builder.select(column_names),
-        None => scan_builder.select_all(),
-    };
-    if let Some(pred) = predicates {
-        scan_builder = scan_builder.with_filter(pred);
+    // Apply column selection, predicates, and build a TableScan.
+    macro_rules! configure_and_build {
+        ($builder:expr) => {{
+            let mut b = $builder;
+            b = match column_names {
+                Some(names) => b.select(names),
+                None => b.select_all(),
+            };
+            if let Some(pred) = predicates {
+                b = b.with_filter(pred);
+            }
+            b.build().map_err(to_datafusion_error)?
+        }};
     }
-    let table_scan = scan_builder.build().map_err(to_datafusion_error)?;
+
+    let table_scan = match scan_range {
+        ScanRange::Incremental {
+            from,
+            to,
+            from_inclusive,
+        } => {
+            let scan_builder = if from_inclusive {
+                table.incremental_append_scan_inclusive(from, to)
+            } else {
+                table.incremental_append_scan(from, to)
+            };
+            configure_and_build!(scan_builder)
+        }
+        ScanRange::Latest => configure_and_build!(table.scan()),
+        ScanRange::PointInTime(snapshot_id) => {
+            configure_and_build!(table.scan().snapshot_id(snapshot_id))
+        }
+    };
 
     let stream = table_scan
         .to_arrow()

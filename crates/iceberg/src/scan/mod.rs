@@ -21,6 +21,7 @@ mod cache;
 use cache::*;
 mod context;
 use context::*;
+mod incremental;
 mod task;
 
 use std::sync::Arc;
@@ -29,6 +30,7 @@ use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Sender, channel};
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
+pub use incremental::IncrementalAppendScanBuilder;
 pub use task::*;
 
 use crate::arrow::ArrowReaderBuilder;
@@ -45,6 +47,119 @@ use crate::{Error, ErrorKind, Result};
 
 /// A stream of arrow [`RecordBatch`]es.
 pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
+
+/// Shared configuration extracted from scan builders, used by both
+/// [`TableScanBuilder`] and [`IncrementalAppendScanBuilder`].
+pub(crate) struct ScanConfig<'a> {
+    table: &'a Table,
+    column_names: Option<Vec<String>>,
+    batch_size: Option<usize>,
+    case_sensitive: bool,
+    filter: Option<Predicate>,
+    concurrency_limit_data_files: usize,
+    concurrency_limit_manifest_entries: usize,
+    concurrency_limit_manifest_files: usize,
+    row_group_filtering_enabled: bool,
+    row_selection_enabled: bool,
+}
+
+/// Shared build logic: validates columns, resolves field IDs, binds predicates,
+/// and constructs [`PlanContext`] + [`TableScan`].
+pub(crate) fn build_table_scan(
+    config: ScanConfig<'_>,
+    snapshot: SnapshotRef,
+    manifest_file_filter: Option<ManifestFileFilter>,
+    manifest_entry_filter: Option<ManifestEntryFilter>,
+) -> Result<TableScan> {
+    let schema = snapshot.schema(config.table.metadata())?;
+
+    // Check that all column names exist in the schema (skip reserved columns).
+    if let Some(column_names) = config.column_names.as_ref() {
+        for column_name in column_names {
+            if is_metadata_column_name(column_name) {
+                continue;
+            }
+            if schema.field_by_name(column_name).is_none() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Column {column_name} not found in table. Schema: {schema}"),
+                ));
+            }
+        }
+    }
+
+    let mut field_ids = vec![];
+    let column_names = config.column_names.clone().unwrap_or_else(|| {
+        schema
+            .as_struct()
+            .fields()
+            .iter()
+            .map(|f| f.name.clone())
+            .collect()
+    });
+
+    for column_name in column_names.iter() {
+        if is_metadata_column_name(column_name) {
+            field_ids.push(get_metadata_field_id(column_name)?);
+            continue;
+        }
+
+        let field_id = schema.field_id_by_name(column_name).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Column {column_name} not found in table. Schema: {schema}"),
+            )
+        })?;
+
+        schema
+            .as_struct()
+            .field_by_id(field_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!(
+                        "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
+                    ),
+                )
+            })?;
+
+        field_ids.push(field_id);
+    }
+
+    let snapshot_bound_predicate = if let Some(ref predicates) = config.filter {
+        Some(predicates.bind(schema.clone(), true)?)
+    } else {
+        None
+    };
+
+    let plan_context = PlanContext {
+        snapshot,
+        table_metadata: config.table.metadata_ref(),
+        snapshot_schema: schema,
+        case_sensitive: config.case_sensitive,
+        predicate: config.filter.map(Arc::new),
+        snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
+        object_cache: config.table.object_cache(),
+        field_ids: Arc::new(field_ids),
+        partition_filter_cache: Arc::new(PartitionFilterCache::new()),
+        manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
+        expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
+        manifest_file_filter,
+        manifest_entry_filter,
+    };
+
+    Ok(TableScan {
+        batch_size: config.batch_size,
+        column_names: config.column_names,
+        file_io: config.table.file_io().clone(),
+        plan_context: Some(plan_context),
+        concurrency_limit_data_files: config.concurrency_limit_data_files,
+        concurrency_limit_manifest_entries: config.concurrency_limit_manifest_entries,
+        concurrency_limit_manifest_files: config.concurrency_limit_manifest_files,
+        row_group_filtering_enabled: config.row_group_filtering_enabled,
+        row_selection_enabled: config.row_selection_enabled,
+    })
+}
 
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
@@ -199,7 +314,7 @@ impl<'a> TableScanBuilder<'a> {
                 })?
                 .clone(),
             None => {
-                let Some(current_snapshot_id) = self.table.metadata().current_snapshot() else {
+                let Some(current_snapshot) = self.table.metadata().current_snapshot() else {
                     return Ok(TableScan {
                         batch_size: self.batch_size,
                         column_names: self.column_names,
@@ -212,98 +327,27 @@ impl<'a> TableScanBuilder<'a> {
                         row_selection_enabled: self.row_selection_enabled,
                     });
                 };
-                current_snapshot_id.clone()
+                current_snapshot.clone()
             }
         };
 
-        let schema = snapshot.schema(self.table.metadata())?;
-
-        // Check that all column names exist in the schema (skip reserved columns).
-        if let Some(column_names) = self.column_names.as_ref() {
-            for column_name in column_names {
-                // Skip reserved columns that don't exist in the schema
-                if is_metadata_column_name(column_name) {
-                    continue;
-                }
-                if schema.field_by_name(column_name).is_none() {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Column {column_name} not found in table. Schema: {schema}"),
-                    ));
-                }
-            }
-        }
-
-        let mut field_ids = vec![];
-        let column_names = self.column_names.clone().unwrap_or_else(|| {
-            schema
-                .as_struct()
-                .fields()
-                .iter()
-                .map(|f| f.name.clone())
-                .collect()
-        });
-
-        for column_name in column_names.iter() {
-            // Handle metadata columns (like "_file")
-            if is_metadata_column_name(column_name) {
-                field_ids.push(get_metadata_field_id(column_name)?);
-                continue;
-            }
-
-            let field_id = schema.field_id_by_name(column_name).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Column {column_name} not found in table. Schema: {schema}"),
-                )
-            })?;
-
-            schema
-                .as_struct()
-                .field_by_id(field_id)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::FeatureUnsupported,
-                        format!(
-                        "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
-                    ),
-                )
-            })?;
-
-            field_ids.push(field_id);
-        }
-
-        let snapshot_bound_predicate = if let Some(ref predicates) = self.filter {
-            Some(predicates.bind(schema.clone(), true)?)
-        } else {
-            None
-        };
-
-        let plan_context = PlanContext {
+        build_table_scan(
+            ScanConfig {
+                table: self.table,
+                column_names: self.column_names,
+                batch_size: self.batch_size,
+                case_sensitive: self.case_sensitive,
+                filter: self.filter,
+                concurrency_limit_data_files: self.concurrency_limit_data_files,
+                concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
+                concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
+                row_group_filtering_enabled: self.row_group_filtering_enabled,
+                row_selection_enabled: self.row_selection_enabled,
+            },
             snapshot,
-            table_metadata: self.table.metadata_ref(),
-            snapshot_schema: schema,
-            case_sensitive: self.case_sensitive,
-            predicate: self.filter.map(Arc::new),
-            snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
-            object_cache: self.table.object_cache(),
-            field_ids: Arc::new(field_ids),
-            partition_filter_cache: Arc::new(PartitionFilterCache::new()),
-            manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
-            expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
-        };
-
-        Ok(TableScan {
-            batch_size: self.batch_size,
-            column_names: self.column_names,
-            file_io: self.table.file_io().clone(),
-            plan_context: Some(plan_context),
-            concurrency_limit_data_files: self.concurrency_limit_data_files,
-            concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
-            concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
-            row_group_filtering_enabled: self.row_group_filtering_enabled,
-            row_selection_enabled: self.row_selection_enabled,
-        })
+            None,
+            None,
+        )
     }
 }
 
