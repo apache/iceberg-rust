@@ -833,11 +833,21 @@ impl Catalog for RestCatalog {
             }
         };
 
-        let config = response
+        let mut config = response
             .config
             .into_iter()
             .chain(self.user_config.props.clone())
-            .collect();
+            .collect::<HashMap<String, String>>();
+
+        if let Some(storage_credentials) = response.storage_credentials {
+            for storage_credential in storage_credentials {
+                if let Some(metadata_location) = &response.metadata_location
+                    && metadata_location.starts_with(&storage_credential.prefix)
+                {
+                    config.extend(storage_credential.config.clone());
+                }
+            }
+        }
 
         let file_io = self
             .load_file_io(response.metadata_location.as_deref(), Some(config))
