@@ -146,7 +146,10 @@ impl TransactionAction for RowDeltaAction {
             self.added_data_files.clone(),
         );
 
-        // Validate added files (same validation as FastAppend)
+        // Validate newly added data files (partition value type-checks, etc.).
+        // removed_data_files are not validated: they are existing table files that
+        // were already validated when originally committed, so re-validating them
+        // here would be redundant. This matches Java's MergingSnapshotProducer behavior.
         snapshot_producer.validate_added_data_files()?;
 
         // Create RowDeltaOperation with removed files
@@ -175,19 +178,21 @@ struct RowDeltaOperation {
 impl SnapshotProduceOperation for RowDeltaOperation {
     /// Determine operation type based on what's being added/removed.
     ///
-    /// Logic matches Java implementation in BaseRowDelta:
-    /// - Only adds data files (no deletes, no removes) → Append
-    /// - Only adds delete files → Delete
-    /// - Mixed or removes data files → Overwrite
+    /// Logic based on Java `BaseRowDelta.operation()`:
+    /// - Only adds data files (no deletes or removes) → `Append`
+    /// - Removes data files or has delete files, AND also adds data files → `Overwrite`
+    /// - Only removes/deletes with no new data added → `Delete` (future: MoR path)
+    ///
+    /// Note: `Operation::Delete` is not yet returned because `add_delete_files` is
+    /// not fully implemented. Once Merge-on-Read support is wired up, the operation
+    /// will be `Delete` when only delete files are added with no new data rows.
     fn operation(&self) -> Operation {
         let has_added_deletes = !self.added_delete_files.is_empty();
         let has_removed_data = !self.removed_data_files.is_empty();
 
         if has_removed_data || has_added_deletes {
-            // If we're removing data files or adding delete files, it's an Overwrite
             Operation::Overwrite
         } else {
-            // Pure append of new data files
             Operation::Append
         }
     }
@@ -463,15 +468,8 @@ mod tests {
             .validate_from_snapshot(99999)
             .add_data_files(vec![data_file.clone()]);
 
-        let result = Arc::new(action).commit(&table).await;
-        assert!(result.is_err());
-
-        // Verify the error message mentions snapshot validation
-        if let Err(e) = result {
-            assert!(
-                e.to_string().contains("stale snapshot") || e.to_string().contains("Cannot commit")
-            );
-        }
+        let err = Arc::new(action).commit(&table).await.unwrap_err();
+        assert_eq!(err.kind(), crate::ErrorKind::DataInvalid);
     }
 
     #[tokio::test]
