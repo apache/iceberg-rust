@@ -468,8 +468,11 @@ mod tests {
             .validate_from_snapshot(99999)
             .add_data_files(vec![data_file.clone()]);
 
-        let err = Arc::new(action).commit(&table).await.unwrap_err();
-        assert_eq!(err.kind(), crate::ErrorKind::DataInvalid);
+        let result = Arc::new(action).commit(&table).await;
+        match result {
+            Ok(_) => panic!("expected DataInvalid error for stale snapshot"),
+            Err(e) => assert_eq!(e.kind(), crate::ErrorKind::DataInvalid),
+        }
     }
 
     #[tokio::test]
