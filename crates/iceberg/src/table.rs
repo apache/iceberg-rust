@@ -227,23 +227,25 @@ impl Table {
     /// Creates an incremental append scan starting from the given snapshot (exclusive).
     ///
     /// Returns only data files added in APPEND snapshots after `from_snapshot_id`,
-    /// up to the current snapshot (or a snapshot set via [`IncrementalAppendScanBuilder::to_snapshot`]).
+    /// up to `to_snapshot_id` or the current snapshot if `None`.
     pub fn incremental_append_scan(
         &self,
         from_snapshot_id: i64,
+        to_snapshot_id: Option<i64>,
     ) -> IncrementalAppendScanBuilder<'_> {
-        IncrementalAppendScanBuilder::new(self, from_snapshot_id, false)
+        IncrementalAppendScanBuilder::new(self, from_snapshot_id, to_snapshot_id, false)
     }
 
     /// Creates an incremental append scan starting from the given snapshot (inclusive).
     ///
     /// Returns only data files added in APPEND snapshots from `from_snapshot_id` (inclusive),
-    /// up to the current snapshot (or a snapshot set via [`IncrementalAppendScanBuilder::to_snapshot`]).
+    /// up to `to_snapshot_id` or the current snapshot if `None`.
     pub fn incremental_append_scan_inclusive(
         &self,
         from_snapshot_id: i64,
+        to_snapshot_id: Option<i64>,
     ) -> IncrementalAppendScanBuilder<'_> {
-        IncrementalAppendScanBuilder::new(self, from_snapshot_id, true)
+        IncrementalAppendScanBuilder::new(self, from_snapshot_id, to_snapshot_id, true)
     }
 
     /// Creates a metadata table which provides table-like APIs for inspecting metadata.
@@ -338,16 +340,20 @@ impl StaticTable {
     pub fn incremental_append_scan(
         &self,
         from_snapshot_id: i64,
+        to_snapshot_id: Option<i64>,
     ) -> IncrementalAppendScanBuilder<'_> {
-        self.0.incremental_append_scan(from_snapshot_id)
+        self.0
+            .incremental_append_scan(from_snapshot_id, to_snapshot_id)
     }
 
     /// Creates an incremental append scan starting from the given snapshot (inclusive).
     pub fn incremental_append_scan_inclusive(
         &self,
         from_snapshot_id: i64,
+        to_snapshot_id: Option<i64>,
     ) -> IncrementalAppendScanBuilder<'_> {
-        self.0.incremental_append_scan_inclusive(from_snapshot_id)
+        self.0
+            .incremental_append_scan_inclusive(from_snapshot_id, to_snapshot_id)
     }
 
     /// Get TableMetadataRef for the static table

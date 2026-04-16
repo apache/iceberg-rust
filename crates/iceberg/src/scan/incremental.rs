@@ -183,14 +183,19 @@ pub struct IncrementalAppendScanBuilder<'a> {
 }
 
 impl<'a> IncrementalAppendScanBuilder<'a> {
-    pub(crate) fn new(table: &'a Table, from_snapshot_id: i64, from_inclusive: bool) -> Self {
+    pub(crate) fn new(
+        table: &'a Table,
+        from_snapshot_id: i64,
+        to_snapshot_id: Option<i64>,
+        from_inclusive: bool,
+    ) -> Self {
         let num_cpus = available_parallelism().get();
 
         Self {
             table,
             from_snapshot_id,
             from_inclusive,
-            to_snapshot_id: None,
+            to_snapshot_id,
             column_names: None,
             batch_size: None,
             case_sensitive: true,
@@ -201,13 +206,6 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
         }
-    }
-
-    /// Set the ending snapshot for the incremental scan (inclusive).
-    /// If not set, defaults to the current snapshot.
-    pub fn to_snapshot(mut self, snapshot_id: i64) -> Self {
-        self.to_snapshot_id = Some(snapshot_id);
-        self
     }
 
     /// Sets the desired size of batches in the response
@@ -348,7 +346,7 @@ mod tests {
     fn test_incremental_scan_invalid_from_snapshot() {
         let table = TableTestFixture::new().table;
 
-        let result = table.incremental_append_scan(999999999).build();
+        let result = table.incremental_append_scan(999999999, None).build();
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -363,8 +361,7 @@ mod tests {
         let table = TableTestFixture::new().table;
 
         let result = table
-            .incremental_append_scan(3051729675574597004)
-            .to_snapshot(999999999)
+            .incremental_append_scan(3051729675574597004, Some(999999999))
             .build();
 
         assert!(result.is_err());
@@ -377,7 +374,9 @@ mod tests {
         // Fixture has S1 (append) -> S2 (append, current)
         let table = TableTestFixture::new().table;
 
-        let result = table.incremental_append_scan(3051729675574597004).build();
+        let result = table
+            .incremental_append_scan(3051729675574597004, None)
+            .build();
         assert!(
             result.is_ok(),
             "appends_after should succeed when all snapshots are appends"
@@ -404,8 +403,7 @@ mod tests {
             .expect("Current snapshot should have a parent");
 
         let result = table
-            .incremental_append_scan(parent_id)
-            .to_snapshot(current_snapshot_id)
+            .incremental_append_scan(parent_id, Some(current_snapshot_id))
             .build();
 
         assert!(
@@ -422,8 +420,7 @@ mod tests {
 
         // Verify the scan builds successfully
         let result = table
-            .incremental_append_scan_inclusive(current_snapshot_id)
-            .to_snapshot(current_snapshot_id)
+            .incremental_append_scan_inclusive(current_snapshot_id, Some(current_snapshot_id))
             .build();
         assert!(
             result.is_ok(),
@@ -452,8 +449,7 @@ mod tests {
 
         // Verify the scan builds successfully
         let result = table
-            .incremental_append_scan(current_snapshot_id)
-            .to_snapshot(current_snapshot_id)
+            .incremental_append_scan(current_snapshot_id, Some(current_snapshot_id))
             .build();
         assert!(
             result.is_ok(),
@@ -483,8 +479,7 @@ mod tests {
         // Scanning from S1 to S5 crosses S4 (overwrite) — should succeed
         // but only include APPEND snapshots (S2, S3, S5), skipping S4
         let result = table
-            .incremental_append_scan(3051729675574597004)
-            .to_snapshot(3059729675574597004)
+            .incremental_append_scan(3051729675574597004, Some(3059729675574597004))
             .build();
 
         assert!(
@@ -559,8 +554,7 @@ mod tests {
         // Incremental scan from S1 (exclusive) to S2 should return only 1.parquet
         let table_scan = fixture
             .table
-            .incremental_append_scan(parent_snapshot_id)
-            .to_snapshot(current_snapshot.snapshot_id())
+            .incremental_append_scan(parent_snapshot_id, Some(current_snapshot.snapshot_id()))
             .build()
             .unwrap();
 
@@ -600,8 +594,7 @@ mod tests {
         // Incremental scan from S2 to S2 (exclusive) should return nothing
         let table_scan = fixture
             .table
-            .incremental_append_scan(current_snapshot_id)
-            .to_snapshot(current_snapshot_id)
+            .incremental_append_scan(current_snapshot_id, Some(current_snapshot_id))
             .build()
             .unwrap();
 

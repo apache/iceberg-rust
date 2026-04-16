@@ -53,7 +53,7 @@ use crate::error::to_datafusion_error;
 use crate::physical_plan::commit::IcebergCommitExec;
 use crate::physical_plan::project::project_with_partition;
 use crate::physical_plan::repartition::repartition;
-use crate::physical_plan::scan::IcebergTableScan;
+use crate::physical_plan::scan::{IcebergTableScan, ScanRange};
 use crate::physical_plan::sort::sort_by_partition;
 use crate::physical_plan::write::IcebergWriteExec;
 
@@ -139,9 +139,7 @@ impl TableProvider for IcebergTableProvider {
         // Create scan with fresh metadata (always use current snapshot)
         Ok(Arc::new(IcebergTableScan::new(
             table,
-            None, // Always use current snapshot for catalog-backed provider
-            None, // No incremental scan for catalog-backed provider
-            false,
+            ScanRange::Latest,
             self.schema.clone(),
             projection,
             filters,
@@ -249,14 +247,10 @@ impl TableProvider for IcebergTableProvider {
 pub struct IcebergStaticTableProvider {
     /// The static table instance (never refreshed)
     table: Table,
-    /// Optional snapshot ID for this static view (to_snapshot for incremental scans)
-    snapshot_id: Option<i64>,
     /// A reference-counted arrow `Schema`
     schema: ArrowSchemaRef,
-    /// Optional starting snapshot ID for incremental scans
-    from_snapshot_id: Option<i64>,
-    /// Whether the from_snapshot is inclusive (default: false/exclusive)
-    from_snapshot_inclusive: bool,
+    /// Which snapshot(s) to scan
+    scan_range: ScanRange,
 }
 
 impl IcebergStaticTableProvider {
@@ -267,10 +261,8 @@ impl IcebergStaticTableProvider {
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
         Ok(IcebergStaticTableProvider {
             table,
-            snapshot_id: None,
             schema,
-            from_snapshot_id: None,
-            from_snapshot_inclusive: false,
+            scan_range: ScanRange::Latest,
         })
     }
 
@@ -295,10 +287,8 @@ impl IcebergStaticTableProvider {
         let schema = Arc::new(schema_to_arrow_schema(&table_schema)?);
         Ok(IcebergStaticTableProvider {
             table,
-            snapshot_id: Some(snapshot_id),
             schema,
-            from_snapshot_id: None,
-            from_snapshot_inclusive: false,
+            scan_range: ScanRange::PointInTime(snapshot_id),
         })
     }
 
@@ -339,10 +329,12 @@ impl IcebergStaticTableProvider {
         let schema = Arc::new(schema_to_arrow_schema(&table_schema)?);
         Ok(IcebergStaticTableProvider {
             table,
-            snapshot_id: Some(to_snapshot_id),
             schema,
-            from_snapshot_id: Some(from_snapshot_id),
-            from_snapshot_inclusive: false,
+            scan_range: ScanRange::Incremental {
+                from: from_snapshot_id,
+                to: Some(to_snapshot_id),
+                from_inclusive: false,
+            },
         })
     }
 
@@ -376,10 +368,12 @@ impl IcebergStaticTableProvider {
         let schema = Arc::new(schema_to_arrow_schema(&table_schema)?);
         Ok(IcebergStaticTableProvider {
             table,
-            snapshot_id: Some(to_snapshot_id),
             schema,
-            from_snapshot_id: Some(from_snapshot_id),
-            from_snapshot_inclusive: true,
+            scan_range: ScanRange::Incremental {
+                from: from_snapshot_id,
+                to: Some(to_snapshot_id),
+                from_inclusive: true,
+            },
         })
     }
 
@@ -412,10 +406,12 @@ impl IcebergStaticTableProvider {
         let schema = Arc::new(schema_to_arrow_schema(&table_schema)?);
         Ok(IcebergStaticTableProvider {
             table,
-            snapshot_id: None, // Use current snapshot
             schema,
-            from_snapshot_id: Some(from_snapshot_id),
-            from_snapshot_inclusive: false,
+            scan_range: ScanRange::Incremental {
+                from: from_snapshot_id,
+                to: None,
+                from_inclusive: false,
+            },
         })
     }
 }
@@ -444,9 +440,7 @@ impl TableProvider for IcebergStaticTableProvider {
         // Use cached table (no refresh)
         Ok(Arc::new(IcebergTableScan::new(
             self.table.clone(),
-            self.snapshot_id,
-            self.from_snapshot_id,
-            self.from_snapshot_inclusive,
+            self.scan_range.clone(),
             self.schema.clone(),
             projection,
             filters,
@@ -1022,9 +1016,14 @@ mod tests {
             .downcast_ref::<IcebergTableScan>()
             .expect("Expected IcebergTableScan");
 
-        assert_eq!(iceberg_scan.from_snapshot_id(), Some(from_id));
-        assert!(!iceberg_scan.from_snapshot_inclusive());
-        assert_eq!(iceberg_scan.snapshot_id(), Some(to_id));
+        assert!(matches!(
+            iceberg_scan.scan_range(),
+            ScanRange::Incremental {
+                from,
+                to: Some(to),
+                from_inclusive: false
+            } if *from == from_id && *to == to_id
+        ));
     }
 
     #[tokio::test]
@@ -1055,8 +1054,14 @@ mod tests {
             .downcast_ref::<IcebergTableScan>()
             .expect("Expected IcebergTableScan");
 
-        assert_eq!(iceberg_scan.from_snapshot_id(), Some(from_id));
-        assert!(iceberg_scan.from_snapshot_inclusive());
+        assert!(matches!(
+            iceberg_scan.scan_range(),
+            ScanRange::Incremental {
+                from,
+                to: Some(to),
+                from_inclusive: true
+            } if *from == from_id && *to == to_id
+        ));
     }
 
     #[tokio::test]
@@ -1082,9 +1087,14 @@ mod tests {
             .downcast_ref::<IcebergTableScan>()
             .expect("Expected IcebergTableScan");
 
-        assert_eq!(iceberg_scan.from_snapshot_id(), Some(from_id));
-        assert!(!iceberg_scan.from_snapshot_inclusive());
-        assert_eq!(iceberg_scan.snapshot_id(), None);
+        assert!(matches!(
+            iceberg_scan.scan_range(),
+            ScanRange::Incremental {
+                from,
+                to: None,
+                from_inclusive: false
+            } if *from == from_id
+        ));
     }
 
     #[tokio::test]
