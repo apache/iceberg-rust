@@ -92,10 +92,10 @@ impl ManifestFileContext {
         let manifest = object_cache.get_manifest(&manifest_file).await?;
 
         for manifest_entry in manifest.entries() {
-            if let Some(ref filter) = entry_filter {
-                if !filter(manifest_entry) {
-                    continue;
-                }
+            if let Some(ref filter) = entry_filter
+                && !filter(manifest_entry)
+            {
+                continue;
             }
 
             let manifest_entry_context = ManifestEntryContext {
@@ -248,10 +248,10 @@ impl PlanContext {
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
         for manifest_file in manifest_files {
-            if let Some(ref filter) = self.manifest_file_filter {
-                if !filter(manifest_file) {
-                    continue;
-                }
+            if let Some(ref filter) = self.manifest_file_filter
+                && !filter(manifest_file)
+            {
+                continue;
             }
 
             let tx = if manifest_file.content == ManifestContentType::Deletes {
