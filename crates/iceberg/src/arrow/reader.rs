@@ -57,6 +57,7 @@ use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, is_metadata_field};
+use crate::runtime::Runtime;
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::{Datum, NameMapping, NestedField, PrimitiveType, Schema, Type};
 use crate::util::available_parallelism;
@@ -142,11 +143,12 @@ pub struct ArrowReaderBuilder {
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
     parquet_read_options: ParquetReadOptions,
+    runtime: Runtime,
 }
 
 impl ArrowReaderBuilder {
     /// Create a new ArrowReaderBuilder
-    pub fn new(file_io: FileIO) -> Self {
+    pub fn new(file_io: FileIO, runtime: Runtime) -> Self {
         let num_cpus = available_parallelism().get();
 
         ArrowReaderBuilder {
@@ -156,6 +158,7 @@ impl ArrowReaderBuilder {
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
             parquet_read_options: ParquetReadOptions::builder().build(),
+            runtime,
         }
     }
 
@@ -218,6 +221,7 @@ impl ArrowReaderBuilder {
             delete_file_loader: CachingDeleteFileLoader::new(
                 self.file_io.clone(),
                 self.concurrency_limit_data_files,
+                self.runtime,
             ),
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
@@ -2022,6 +2026,7 @@ mod tests {
     use crate::expr::visitors::bound_predicate_visitor::visit;
     use crate::expr::{Bind, Predicate, Reference};
     use crate::io::FileIO;
+    use crate::runtime::Runtime;
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
     use crate::spec::{
         DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
@@ -2207,7 +2212,7 @@ message schema {
 
         let (file_io, schema, table_location, _temp_dir) =
             setup_kleene_logic(data_for_col_a, DataType::Utf8);
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
 
         let result_data = test_perform_read(predicate, schema, table_location, reader).await;
 
@@ -2229,7 +2234,7 @@ message schema {
 
         let (file_io, schema, table_location, _temp_dir) =
             setup_kleene_logic(data_for_col_a, DataType::Utf8);
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
 
         let result_data = test_perform_read(predicate, schema, table_location, reader).await;
 
@@ -2293,7 +2298,7 @@ message schema {
 
         let (file_io, schema, table_location, _temp_dir) =
             setup_kleene_logic(data_for_col_a, DataType::LargeUtf8);
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
 
         for (predicate, expected) in predicates {
             println!("testing predicate {predicate}");
@@ -2638,7 +2643,7 @@ message schema {
         );
 
         let file_io = FileIO::new_with_fs();
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
 
         // Task 1: read only the first row group
         let task1 = FileScanTask {
@@ -2786,7 +2791,7 @@ message schema {
         writer.close().unwrap();
 
         // Read the old Parquet file using the NEW schema (with column 'b')
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
                 file_size_in_bytes: std::fs::metadata(format!("{table_location}/old_file.parquet"))
@@ -2956,7 +2961,7 @@ message schema {
 
         // Step 3: Read the data file with the delete applied
         let file_io = FileIO::new_with_fs();
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
 
         let task = FileScanTask {
             file_size_in_bytes: std::fs::metadata(&data_file_path).unwrap().len(),
@@ -3175,7 +3180,7 @@ message schema {
         );
 
         let file_io = FileIO::new_with_fs();
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
 
         // Create FileScanTask that reads ONLY row group 1 via byte range filtering
         let task = FileScanTask {
@@ -3388,7 +3393,7 @@ message schema {
         let rg1_length = row_group_1.compressed_size() as u64;
 
         let file_io = FileIO::new_with_fs();
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
 
         // Create FileScanTask that reads ONLY row group 1 via byte range filtering
         let task = FileScanTask {
@@ -3499,7 +3504,7 @@ message schema {
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
 
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
@@ -3600,7 +3605,7 @@ message schema {
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
 
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
@@ -3690,7 +3695,7 @@ message schema {
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
 
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
@@ -3794,7 +3799,7 @@ message schema {
         }
         writer.close().unwrap();
 
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
@@ -3927,7 +3932,7 @@ message schema {
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
 
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
@@ -4027,7 +4032,7 @@ message schema {
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
 
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
@@ -4137,7 +4142,7 @@ message schema {
         let predicate = Reference::new("id").less_than(Datum::int(5));
 
         // Enable both row_group_filtering and row_selection - triggered the panic
-        let reader = ArrowReaderBuilder::new(file_io)
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::default())
             .with_row_group_filtering_enabled(true)
             .with_row_selection_enabled(true)
             .build();
@@ -4231,7 +4236,7 @@ message schema {
         }
 
         // Read with concurrency=1 (fast-path)
-        let reader = ArrowReaderBuilder::new(file_io)
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::default())
             .with_data_file_concurrency_limit(1)
             .build();
 
@@ -4453,7 +4458,7 @@ message schema {
         writer.close().unwrap();
 
         // Read the Parquet file with partition spec and data
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
                 file_size_in_bytes: std::fs::metadata(format!("{table_location}/data.parquet"))

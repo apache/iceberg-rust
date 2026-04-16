@@ -32,7 +32,7 @@ use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
-    TableCommit, TableCreation, TableIdent,
+    Runtime, TableCommit, TableCreation, TableIdent,
 };
 use iceberg_storage_opendal::OpenDalStorageFactory;
 
@@ -71,6 +71,7 @@ struct S3TablesCatalogConfig {
 pub struct S3TablesCatalogBuilder {
     config: S3TablesCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    runtime: Runtime,
 }
 
 /// Default builder for [`S3TablesCatalog`].
@@ -85,6 +86,7 @@ impl Default for S3TablesCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
+            runtime: Runtime::default(),
         }
     }
 }
@@ -132,6 +134,11 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
         self
     }
 
+    fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
     fn load(
         mut self,
         name: impl Into<String>,
@@ -172,7 +179,7 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
                     "Table bucket ARN is required",
                 ))
             } else {
-                S3TablesCatalog::new(self.config, self.storage_factory).await
+                S3TablesCatalog::new(self.config, self.storage_factory, self.runtime).await
             }
         }
     }
@@ -184,6 +191,7 @@ pub struct S3TablesCatalog {
     config: S3TablesCatalogConfig,
     s3tables_client: aws_sdk_s3tables::Client,
     file_io: FileIO,
+    runtime: Runtime,
 }
 
 impl S3TablesCatalog {
@@ -191,6 +199,7 @@ impl S3TablesCatalog {
     async fn new(
         config: S3TablesCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
+        runtime: Runtime,
     ) -> Result<Self> {
         let s3tables_client = if let Some(client) = config.client.clone() {
             client
@@ -214,6 +223,7 @@ impl S3TablesCatalog {
             config,
             s3tables_client,
             file_io,
+            runtime,
         })
     }
 
@@ -246,6 +256,7 @@ impl S3TablesCatalog {
             .metadata(metadata)
             .metadata_location(metadata_location)
             .file_io(self.file_io.clone())
+            .runtime(self.runtime.clone())
             .build()?;
         Ok((table, resp.version_token))
     }
@@ -544,6 +555,7 @@ impl Catalog for S3TablesCatalog {
             .metadata_location(metadata_location_str)
             .metadata(metadata)
             .file_io(self.file_io.clone())
+            .runtime(self.runtime.clone())
             .build()?;
         Ok(table)
     }
@@ -727,7 +739,9 @@ mod tests {
             props: HashMap::new(),
         };
 
-        Ok(Some(S3TablesCatalog::new(config, None).await?))
+        Ok(Some(
+            S3TablesCatalog::new(config, None, Runtime::default()).await?,
+        ))
     }
 
     #[tokio::test]

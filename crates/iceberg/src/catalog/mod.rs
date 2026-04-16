@@ -40,6 +40,7 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 use crate::io::StorageFactory;
+use crate::runtime::Runtime;
 use crate::spec::{
     EncryptedKey, FormatVersion, PartitionStatisticsFile, Schema, SchemaId, Snapshot,
     SnapshotReference, SortOrder, StatisticsFile, TableMetadata, TableMetadataBuilder,
@@ -151,6 +152,13 @@ pub trait CatalogBuilder: Default + Debug + Send + Sync {
     ///     .await?;
     /// ```
     fn with_storage_factory(self, storage_factory: Arc<dyn StorageFactory>) -> Self;
+
+    /// Set a custom tokio Runtime to use for spawning async tasks.
+    ///
+    /// When a Runtime is provided, the catalog will propagate it to all tables
+    /// it creates. Tasks such as scan planning and delete file processing
+    /// will be spawned on this runtime.
+    fn with_runtime(self, runtime: Runtime) -> Self;
 
     /// Create a new catalog instance.
     fn load(

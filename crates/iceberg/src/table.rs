@@ -23,6 +23,7 @@ use crate::arrow::ArrowReaderBuilder;
 use crate::inspect::MetadataTable;
 use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
+use crate::runtime::Runtime;
 use crate::scan::TableScanBuilder;
 use crate::spec::{SchemaRef, TableMetadata, TableMetadataRef};
 use crate::{Error, ErrorKind, Result, TableIdent};
@@ -36,6 +37,7 @@ pub struct TableBuilder {
     readonly: bool,
     disable_cache: bool,
     cache_size_bytes: Option<u64>,
+    runtime: Runtime,
 }
 
 impl TableBuilder {
@@ -48,6 +50,7 @@ impl TableBuilder {
             readonly: false,
             disable_cache: false,
             cache_size_bytes: None,
+            runtime: Runtime::default(),
         }
     }
 
@@ -95,6 +98,12 @@ impl TableBuilder {
         self
     }
 
+    /// Set the Runtime for this table to use when spawning tasks.
+    pub fn runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
     /// build the Table
     pub fn build(self) -> Result<Table> {
         let Self {
@@ -105,6 +114,7 @@ impl TableBuilder {
             readonly,
             disable_cache,
             cache_size_bytes,
+            runtime,
         } = self;
 
         let Some(file_io) = file_io else {
@@ -146,6 +156,7 @@ impl TableBuilder {
             identifier,
             readonly,
             object_cache,
+            runtime,
         })
     }
 }
@@ -159,6 +170,7 @@ pub struct Table {
     identifier: TableIdent,
     readonly: bool,
     object_cache: Arc<ObjectCache>,
+    runtime: Runtime,
 }
 
 impl Table {
@@ -230,6 +242,11 @@ impl Table {
         MetadataTable::new(self)
     }
 
+    /// Returns a reference to the Runtime.
+    pub(crate) fn runtime(&self) -> &Runtime {
+        &self.runtime
+    }
+
     /// Returns the flag indicating whether the `Table` is readonly or not
     pub fn readonly(&self) -> bool {
         self.readonly
@@ -242,7 +259,7 @@ impl Table {
 
     /// Create a reader for the table.
     pub fn reader_builder(&self) -> ArrowReaderBuilder {
-        ArrowReaderBuilder::new(self.file_io.clone())
+        ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
     }
 }
 
@@ -326,7 +343,7 @@ impl StaticTable {
 
     /// Create a reader for the table.
     pub fn reader_builder(&self) -> ArrowReaderBuilder {
-        ArrowReaderBuilder::new(self.0.file_io.clone())
+        ArrowReaderBuilder::new(self.0.file_io.clone(), self.0.runtime.clone())
     }
 }
 
