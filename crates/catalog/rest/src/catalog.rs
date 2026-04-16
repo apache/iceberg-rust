@@ -143,7 +143,11 @@ impl CatalogBuilder for RestCatalogBuilder {
                     "Catalog uri is required",
                 ))
             } else {
-                Ok(RestCatalog::new(self.config, self.storage_factory, self.signer))
+                Ok(RestCatalog::new(
+                    self.config,
+                    self.storage_factory,
+                    self.signer,
+                ))
             }
         };
 
