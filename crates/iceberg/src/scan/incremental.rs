@@ -118,21 +118,15 @@ impl AppendSnapshotSet {
             }
         }
 
-        // Validate all snapshots have APPEND operations and collect IDs.
+        // Collect only APPEND snapshot IDs, silently skipping non-APPEND
+        // snapshots (e.g. replace/compaction, overwrite, delete). This matches
+        // the Java BaseIncrementalAppendScan behavior — only append operations
+        // contribute new data files to an incremental append scan.
         let mut snapshot_ids = HashSet::with_capacity(snapshots.len());
         for snapshot in &snapshots {
-            if snapshot.summary().operation != Operation::Append {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    format!(
-                        "Incremental scan only supports APPEND operations, \
-                         snapshot {} has operation: {:?}",
-                        snapshot.snapshot_id(),
-                        snapshot.summary().operation
-                    ),
-                ));
+            if snapshot.summary().operation == Operation::Append {
+                snapshot_ids.insert(snapshot.snapshot_id());
             }
-            snapshot_ids.insert(snapshot.snapshot_id());
         }
 
         Ok(Self { snapshot_ids })
@@ -481,44 +475,59 @@ mod tests {
     }
 
     #[test]
-    fn test_incremental_scan_rejects_non_append_operations() {
+    fn test_incremental_scan_skips_non_append_operations() {
         // Deep history fixture: S1 (append) -> S2 (append) -> S3 (append)
         //   -> S4 (overwrite) -> S5 (append, current)
         let table = TableTestFixture::new_with_deep_history().table;
 
+        // Scanning from S1 to S5 crosses S4 (overwrite) — should succeed
+        // but only include APPEND snapshots (S2, S3, S5), skipping S4
         let result = table
             .incremental_append_scan(3051729675574597004)
             .to_snapshot(3059729675574597004)
             .build();
 
         assert!(
-            result.is_err(),
-            "Should reject range containing overwrite snapshot"
+            result.is_ok(),
+            "Should succeed, skipping non-APPEND snapshots"
         );
-        let err = result.unwrap_err();
+
+        let set = AppendSnapshotSet::build(
+            &table.metadata_ref(),
+            3051729675574597004,
+            3059729675574597004,
+            false,
+        )
+        .unwrap();
         assert!(
-            err.to_string().contains("only supports APPEND"),
-            "Error should mention APPEND requirement, got: {err}"
+            !set.contains(3051729675574597004),
+            "S1 (from) should be excluded"
+        );
+        assert!(
+            set.contains(3055729675574597004),
+            "S2 (append) should be in set"
+        );
+        assert!(
+            set.contains(3056729675574597004),
+            "S3 (append) should be in set"
+        );
+        assert!(
+            !set.contains(3057729675574597004),
+            "S4 (overwrite) should be skipped"
+        );
+        assert!(
+            set.contains(3059729675574597004),
+            "S5 (append) should be in set"
         );
     }
 
     #[test]
-    fn test_incremental_scan_succeeds_for_append_only_range() {
+    fn test_incremental_scan_append_only_range() {
         // Deep history fixture: S1 (append) -> S2 (append) -> S3 (append)
         //   -> S4 (overwrite) -> S5 (append, current)
         let table = TableTestFixture::new_with_deep_history().table;
 
-        let result = table
-            .incremental_append_scan(3051729675574597004)
-            .to_snapshot(3056729675574597004)
-            .build();
-
-        assert!(
-            result.is_ok(),
-            "Range of only append snapshots should succeed"
-        );
-
-        // Verify AppendSnapshotSet directly
+        // Scanning from S1 to S3 (all appends)
         let set = AppendSnapshotSet::build(
             &table.metadata_ref(),
             3051729675574597004,
