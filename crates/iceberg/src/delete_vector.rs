@@ -45,6 +45,26 @@ impl DeleteVector {
         self.inner.insert(pos)
     }
 
+    /// Inserts all positions in the range [start, end) into the delete vector.
+    /// If start == end, this method does nothing and returns 0.
+    ///
+    /// # Panics
+    ///
+    /// Panics if start > end (a reversed range indicates a bug in the caller).
+    ///
+    /// Returns the number of newly inserted positions.
+    #[allow(unused)]
+    pub fn insert_range(&mut self, start: u64, end: u64) -> u64 {
+        assert!(
+            start <= end,
+            "insert_range requires start <= end, got [{start}, {end})"
+        );
+        if start == end {
+            return 0;
+        }
+        self.inner.insert_range(start..end)
+    }
+
     /// Marks the given `positions` as deleted and returns the number of elements appended.
     ///
     /// The input slice must be strictly ordered in ascending order, and every value must be greater than all existing values already in the set.
@@ -62,6 +82,12 @@ impl DeleteVector {
             .with_source(err));
         }
         Ok(positions.len())
+    }
+
+    /// Returns true if the given position is present in the delete vector.
+    #[allow(unused)]
+    pub fn contains(&self, pos: u64) -> bool {
+        self.inner.contains(pos)
     }
 
     #[allow(unused)]
@@ -197,5 +223,82 @@ mod tests {
         let positions = vec![1, 3, 5, 5];
         let res = dv.insert_positions(&positions);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_insert_range_single_key() {
+        let mut dv = DeleteVector::default();
+        assert_eq!(dv.insert_range(10, 20), 10);
+        assert_eq!(dv.len(), 10);
+        for pos in 10..20 {
+            assert!(dv.iter().any(|p| p == pos), "missing {pos}");
+        }
+        assert!(!dv.iter().any(|p| p == 9));
+        assert!(!dv.iter().any(|p| p == 20));
+    }
+
+    #[test]
+    fn test_insert_range_single_position() {
+        let mut dv = DeleteVector::default();
+        assert_eq!(dv.insert_range(42, 43), 1);
+        assert_eq!(dv.len(), 1);
+        assert!(dv.iter().any(|p| p == 42));
+        assert!(!dv.iter().any(|p| p == 41));
+        assert!(!dv.iter().any(|p| p == 43));
+    }
+
+    #[test]
+    fn test_insert_range_across_keys() {
+        let mut dv = DeleteVector::default();
+        let start = (1u64 << 32) - 5;
+        let end = (1u64 << 32) + 5;
+        assert_eq!(dv.insert_range(start, end), 10);
+        assert_eq!(dv.len(), 10);
+        for pos in start..end {
+            assert!(dv.iter().any(|p| p == pos), "missing {pos}");
+        }
+        assert!(!dv.iter().any(|p| p == start - 1));
+        assert!(!dv.iter().any(|p| p == end));
+    }
+
+    #[test]
+    fn test_insert_range_spanning_three_keys() {
+        let mut dv = DeleteVector::default();
+        let start = 0xFFFFFFF0u64;
+        let end = (2u64 << 32) | 0x10;
+        let inserted = dv.insert_range(start, end);
+        assert_eq!(inserted, end - start);
+        assert_eq!(dv.len(), end - start);
+        assert!(dv.contains(start));
+        assert!(dv.contains(end - 1));
+        assert!(dv.contains(1u64 << 32));
+        assert!(dv.contains((1u64 << 32) | 0xFFFFFFF0));
+        assert!(!dv.contains(start - 1));
+        assert!(!dv.contains(end));
+    }
+
+    #[test]
+    fn test_insert_range_empty_when_start_equals_end() {
+        let mut dv = DeleteVector::default();
+        assert_eq!(dv.insert_range(100, 100), 0);
+        assert_eq!(dv.len(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "insert_range requires start <= end")]
+    fn test_insert_range_reversed_panics() {
+        let mut dv = DeleteVector::default();
+        dv.insert_range(100, 50);
+    }
+
+    #[test]
+    fn test_insert_range_large_contiguous() {
+        let mut dv = DeleteVector::default();
+        assert_eq!(dv.insert_range(500, 200_500), 200_000);
+        assert_eq!(dv.len(), 200_000);
+        assert!(dv.iter().any(|p| p == 500));
+        assert!(dv.iter().any(|p| p == 200_499));
+        assert!(!dv.iter().any(|p| p == 499));
+        assert!(!dv.iter().any(|p| p == 200_500));
     }
 }
