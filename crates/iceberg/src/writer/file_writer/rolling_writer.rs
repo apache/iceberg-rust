@@ -102,6 +102,12 @@ where
         }
     }
 
+    /// Add a key-value metadata entry to the file footer.
+    pub fn with_footer_metadata(mut self, key: String, value: String) -> Self {
+        self.inner_builder = self.inner_builder.with_footer_metadata(key, value);
+        self
+    }
+
     /// Build a new [`RollingFileWriter`].
     pub fn build(&self) -> RollingFileWriter<B, L, F> {
         RollingFileWriter {

@@ -41,6 +41,8 @@ pub trait FileWriterBuilder<O = DefaultOutput>: Clone + Send + Sync + 'static {
     type R: FileWriter<O>;
     /// Build file writer.
     fn build(&self, output_file: OutputFile) -> impl Future<Output = Result<Self::R>> + Send;
+    /// Add a key-value metadata entry to the file footer.
+    fn with_footer_metadata(self, key: String, value: String) -> Self;
 }
 
 /// File writer focus on writing record batch to different physical file format.(Such as parquet. orc)

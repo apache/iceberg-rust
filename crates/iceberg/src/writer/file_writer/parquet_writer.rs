@@ -27,7 +27,7 @@ use itertools::Itertools;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
-use parquet::file::metadata::ParquetMetaData;
+use parquet::file::metadata::{KeyValue, ParquetMetaData};
 use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics;
 
@@ -87,6 +87,18 @@ impl FileWriterBuilder for ParquetWriterBuilder {
             output_file,
             nan_value_count_visitor: NanValueCountVisitor::new_with_match_mode(self.match_mode),
         })
+    }
+
+    fn with_footer_metadata(mut self, key: String, value: String) -> Self {
+        let mut kv_metadata = self.props.key_value_metadata().cloned().unwrap_or_default();
+        kv_metadata.push(KeyValue::new(key, value));
+
+        self.props = self
+            .props
+            .into_builder()
+            .set_key_value_metadata(Some(kv_metadata))
+            .build();
+        self
     }
 }
 
