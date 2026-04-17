@@ -18,7 +18,6 @@
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::vec;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
@@ -30,7 +29,10 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, Partitioning, PlanProperties};
 use datafusion::prelude::Expr;
 use futures::{Stream, TryStreamExt};
+use iceberg::arrow::ArrowReaderBuilder;
 use iceberg::expr::Predicate;
+use iceberg::io::FileIO;
+use iceberg::scan::CombinedScanTask;
 use iceberg::table::Table;
 
 use super::expr_to_predicate::convert_filters_to_predicate;
@@ -53,10 +55,18 @@ pub struct IcebergTableScan {
     predicates: Option<Predicate>,
     /// Optional limit on the number of rows to return
     limit: Option<usize>,
+    /// Pre-planned combined scan tasks, one per DataFusion partition.
+    /// When `None`, falls back to single-partition planning via `plan_files()`.
+    combined_tasks: Option<Arc<Vec<CombinedScanTask>>>,
+    /// FileIO for reading data files.
+    file_io: FileIO,
 }
 
 impl IcebergTableScan {
-    /// Creates a new [`IcebergTableScan`] object.
+    /// Creates a new [`IcebergTableScan`] without eagerly planning tasks.
+    ///
+    /// This produces a single-partition scan. Call [`plan`] after construction
+    /// to enable multi-partition execution via `plan_tasks()`.
     pub(crate) fn new(
         table: Table,
         snapshot_id: Option<i64>,
@@ -69,9 +79,10 @@ impl IcebergTableScan {
             None => schema.clone(),
             Some(projection) => Arc::new(schema.project(projection).unwrap()),
         };
-        let plan_properties = Self::compute_properties(output_schema.clone());
+        let plan_properties = Self::compute_properties(output_schema, 1);
         let projection = get_column_names(schema.clone(), projection);
         let predicates = convert_filters_to_predicate(filters);
+        let file_io = table.file_io().clone();
 
         Self {
             table,
@@ -80,7 +91,45 @@ impl IcebergTableScan {
             projection,
             predicates,
             limit,
+            combined_tasks: None,
+            file_io,
         }
+    }
+
+    /// Eagerly plans scan tasks via `plan_tasks()`, enabling multi-partition
+    /// parallel execution in DataFusion.
+    ///
+    /// If planning fails (e.g. manifests are unreachable), returns `self`
+    /// unchanged in single-partition mode. Errors will surface at `execute()` time.
+    pub(crate) async fn plan(mut self) -> Self {
+        let combined_tasks = self.try_plan_tasks().await;
+        if let Ok(tasks) = combined_tasks {
+            let num_partitions = tasks.len().max(1);
+            self.plan_properties = Self::compute_properties(self.schema(), num_partitions);
+            self.combined_tasks = Some(Arc::new(tasks));
+        }
+        self
+    }
+
+    async fn try_plan_tasks(&self) -> Result<Vec<CombinedScanTask>, iceberg::Error> {
+        let scan_builder = match self.snapshot_id {
+            Some(snapshot_id) => self.table.scan().snapshot_id(snapshot_id),
+            None => self.table.scan(),
+        };
+        let mut scan_builder = match &self.projection {
+            Some(column_names) => scan_builder.select(column_names.clone()),
+            None => scan_builder.select_all(),
+        };
+        if let Some(ref pred) = self.predicates {
+            scan_builder = scan_builder.with_filter(pred.clone());
+        }
+        let table_scan = scan_builder.build()?;
+        let combined_tasks: Vec<CombinedScanTask> = table_scan
+            .plan_tasks()
+            .await?
+            .try_collect()
+            .await?;
+        Ok(combined_tasks)
     }
 
     pub fn table(&self) -> &Table {
@@ -103,14 +152,10 @@ impl IcebergTableScan {
         self.limit
     }
 
-    /// Computes [`PlanProperties`] used in query optimization.
-    fn compute_properties(schema: ArrowSchemaRef) -> Arc<PlanProperties> {
-        // TODO:
-        // This is more or less a placeholder, to be replaced
-        // once we support output-partitioning
+    fn compute_properties(schema: ArrowSchemaRef, num_partitions: usize) -> Arc<PlanProperties> {
         Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(1),
+            Partitioning::UnknownPartitioning(num_partitions),
             EmissionType::Incremental,
             Boundedness::Bounded,
         ))
@@ -143,9 +188,41 @@ impl ExecutionPlan for IcebergTableScan {
 
     fn execute(
         &self,
-        _partition: usize,
+        partition: usize,
         _context: Arc<TaskContext>,
     ) -> DFResult<SendableRecordBatchStream> {
+        let schema = self.schema();
+
+        // If we have pre-planned tasks, use them for partition-aware execution
+        if let Some(ref combined_tasks) = self.combined_tasks {
+            let Some(combined_task) = combined_tasks.get(partition) else {
+                return Ok(Box::pin(RecordBatchStreamAdapter::new(
+                    schema,
+                    futures::stream::empty(),
+                )));
+            };
+
+            let tasks = combined_task.tasks().to_vec();
+            let file_io = self.file_io.clone();
+
+            let fut = async move {
+                let task_stream = Box::pin(futures::stream::iter(tasks.into_iter().map(Ok)));
+                let reader = ArrowReaderBuilder::new(file_io).build();
+                let stream = reader
+                    .read(task_stream)
+                    .map_err(to_datafusion_error)?
+                    .map_err(to_datafusion_error);
+                Ok::<_, datafusion::error::DataFusionError>(stream)
+            };
+
+            let stream = futures::stream::once(fut).try_flatten();
+            return Ok(Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                apply_limit(stream, self.limit),
+            )));
+        }
+
+        // Fallback: single-partition mode using plan_files() + to_arrow()
         let fut = get_batch_stream(
             self.table.clone(),
             self.snapshot_id,
@@ -154,30 +231,34 @@ impl ExecutionPlan for IcebergTableScan {
         );
         let stream = futures::stream::once(fut).try_flatten();
 
-        // Apply limit if specified
-        let limited_stream: Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>> =
-            if let Some(limit) = self.limit {
-                let mut remaining = limit;
-                Box::pin(stream.try_filter_map(move |batch| {
-                    futures::future::ready(if remaining == 0 {
-                        Ok(None)
-                    } else if batch.num_rows() <= remaining {
-                        remaining -= batch.num_rows();
-                        Ok(Some(batch))
-                    } else {
-                        let limited_batch = batch.slice(0, remaining);
-                        remaining = 0;
-                        Ok(Some(limited_batch))
-                    })
-                }))
-            } else {
-                Box::pin(stream)
-            };
-
         Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.schema(),
-            limited_stream,
+            schema,
+            apply_limit(stream, self.limit),
         )))
+    }
+}
+
+/// Apply an optional row limit to a stream of record batches.
+fn apply_limit(
+    stream: impl Stream<Item = DFResult<RecordBatch>> + Send + 'static,
+    limit: Option<usize>,
+) -> Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>> {
+    if let Some(limit) = limit {
+        let mut remaining = limit;
+        Box::pin(stream.try_filter_map(move |batch| {
+            futures::future::ready(if remaining == 0 {
+                Ok(None)
+            } else if batch.num_rows() <= remaining {
+                remaining -= batch.num_rows();
+                Ok(Some(batch))
+            } else {
+                let limited_batch = batch.slice(0, remaining);
+                remaining = 0;
+                Ok(Some(limited_batch))
+            })
+        }))
+    } else {
+        Box::pin(stream)
     }
 }
 
@@ -195,7 +276,7 @@ impl DisplayAs for IcebergTableScan {
                 .map_or(String::new(), |v| v.join(",")),
             self.predicates
                 .clone()
-                .map_or(String::from(""), |p| format!("{p}"))
+                .map_or(String::from(""), |p| format!("{p}")),
         )
     }
 }
