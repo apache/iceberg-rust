@@ -139,6 +139,10 @@ impl SchemaVisitor for HiveSchemaBuilder {
 
         Ok(hive_type)
     }
+
+    fn variant(&mut self, _v: &iceberg::spec::VariantType) -> Result<Self::T> {
+        Ok("variant".to_string())
+    }
 }
 
 #[cfg(test)]
