@@ -233,7 +233,6 @@ async fn glue_catalog() -> GlueCatalog {
     ]);
 
     let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
-        configured_scheme: "s3a".to_string(),
         customized_credential_load: None,
     }))
     .with_props(props.clone())
@@ -285,7 +284,6 @@ async fn hms_catalog() -> HmsCatalog {
     ]);
 
     let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
-        configured_scheme: "s3a".to_string(),
         customized_credential_load: None,
     }))
     .with_props(props.clone())
@@ -302,7 +300,6 @@ async fn hms_catalog() -> HmsCatalog {
 
     HmsCatalogBuilder::default()
         .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
-            configured_scheme: "s3a".to_string(),
             customized_credential_load: None,
         }))
         .load("hms", props)
