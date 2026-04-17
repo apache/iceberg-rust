@@ -110,6 +110,14 @@ pub struct FileScanTask {
 
     /// Whether this scan task should treat column names as case-sensitive when binding predicates.
     pub case_sensitive: bool,
+
+    /// Row group byte offsets from the DataFile, used for offset-aware splitting
+    /// of Parquet files during scan planning.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_not_implemented")]
+    #[serde(deserialize_with = "deserialize_not_implemented")]
+    pub split_offsets: Option<Vec<i64>>,
 }
 
 impl FileScanTask {
@@ -174,4 +182,43 @@ pub struct FileScanTaskDeleteFile {
 
     /// equality ids for equality deletes (null for anything other than equality-deletes)
     pub equality_ids: Option<Vec<i32>>,
+}
+
+/// A stream of [`CombinedScanTask`]s.
+pub type CombinedScanTaskStream = BoxStream<'static, Result<CombinedScanTask>>;
+
+/// A group of [`FileScanTask`]s to be processed together by a single reader.
+///
+/// Created by [`TableScan::plan_tasks()`] which splits large files and bin-packs
+/// the results into balanced groups for parallel execution.
+#[derive(Debug, Clone)]
+pub struct CombinedScanTask {
+    tasks: Vec<FileScanTask>,
+}
+
+impl CombinedScanTask {
+    /// Creates a new `CombinedScanTask` from a list of `FileScanTask`s.
+    pub fn new(tasks: Vec<FileScanTask>) -> Self {
+        Self { tasks }
+    }
+
+    /// Returns the constituent `FileScanTask`s.
+    pub fn tasks(&self) -> &[FileScanTask] {
+        &self.tasks
+    }
+
+    /// Consumes self and returns the constituent `FileScanTask`s.
+    pub fn into_tasks(self) -> Vec<FileScanTask> {
+        self.tasks
+    }
+
+    /// Returns the total estimated size of all tasks in bytes.
+    pub fn estimated_bytes(&self) -> u64 {
+        self.tasks.iter().map(|t| t.length).sum()
+    }
+
+    /// Returns the number of files in this combined task.
+    pub fn files_count(&self) -> usize {
+        self.tasks.len()
+    }
 }
