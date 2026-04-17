@@ -17,15 +17,20 @@
 
 //! Iceberg table providers for DataFusion.
 //!
-//! This module provides two table provider implementations:
+//! This module provides three table provider implementations:
 //!
 //! - [`IcebergTableProvider`]: Catalog-backed provider with automatic metadata refresh.
 //!   Use for write operations and when you need to see the latest table state.
 //!
 //! - [`IcebergStaticTableProvider`]: Static provider for read-only access to a specific
 //!   table snapshot. Use for consistent analytical queries or time-travel scenarios.
+//!
+//! - [`IcebergPartitionedTableProvider`]: Catalog-backed provider that assigns one
+//!   DataFusion partition per data file, enabling parallel file-level scanning.
+//!   Read-only; use [`IcebergTableProvider`] for write operations.
 
 pub mod metadata_table;
+pub mod partitioned;
 pub mod table_provider_factory;
 
 use std::any::Any;
