@@ -29,5 +29,5 @@ mod stream;
 pub use crypto::{AesGcmCipher, AesKeySize, SecureKey, SensitiveBytes};
 pub use file_decryptor::AesGcmFileDecryptor;
 pub use file_encryptor::AesGcmFileEncryptor;
-pub use kms::{KeyGenerationResult, KeyManagementClient};
+pub use kms::{GeneratedKey, KeyManagementClient};
 pub use stream::{AesGcmFileRead, AesGcmFileWrite};

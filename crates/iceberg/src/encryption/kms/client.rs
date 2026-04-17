@@ -30,7 +30,7 @@ use crate::{Error, ErrorKind, Result};
 ///
 /// Returned by [`KeyManagementClient::generate_key`] when the KMS supports
 /// atomic key generation and wrapping.
-pub struct KeyGenerationResult {
+pub struct GeneratedKey {
     /// The plaintext key bytes. Zeroized on drop, redacted in Debug.
     pub key: SensitiveBytes,
     /// The wrapped (encrypted) key bytes.
@@ -60,7 +60,7 @@ pub trait KeyManagementClient: Send + Sync + std::fmt::Debug {
     ///
     /// This is only supported when [`supports_key_generation`](Self::supports_key_generation)
     /// returns `true`. The default implementation returns `FeatureUnsupported`.
-    async fn generate_key(&self, _wrapping_key_id: &str) -> Result<KeyGenerationResult> {
+    async fn generate_key(&self, _wrapping_key_id: &str) -> Result<GeneratedKey> {
         Err(Error::new(
             ErrorKind::FeatureUnsupported,
             "This KMS client does not support server-side key generation",
@@ -86,7 +86,7 @@ impl KeyManagementClient for Arc<dyn KeyManagementClient> {
         self.as_ref().supports_key_generation()
     }
 
-    async fn generate_key(&self, wrapping_key_id: &str) -> Result<KeyGenerationResult> {
+    async fn generate_key(&self, wrapping_key_id: &str) -> Result<GeneratedKey> {
         self.as_ref().generate_key(wrapping_key_id).await
     }
 }

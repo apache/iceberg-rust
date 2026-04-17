@@ -23,5 +23,5 @@
 mod client;
 mod in_memory;
 
-pub use client::{KeyGenerationResult, KeyManagementClient};
+pub use client::{GeneratedKey, KeyManagementClient};
 pub use in_memory::InMemoryKeyManagementClient;
