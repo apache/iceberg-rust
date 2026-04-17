@@ -93,6 +93,10 @@ tempfile = { workspace = true }
 minijinja = { workspace = true }
 serde_arrow = { version = "0.14", features = ["arrow-58"] }
 
+[[example]]
+name = "compaction_benchmark"
+path = "examples/compaction_benchmark.rs"
+
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version
 ignored = ["tap"]
