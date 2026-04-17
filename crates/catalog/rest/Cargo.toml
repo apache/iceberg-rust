@@ -30,10 +30,14 @@ repository = { workspace = true }
 
 [dependencies]
 async-trait = { workspace = true }
+bytes = { workspace = true }
 chrono = { workspace = true }
 http = { workspace = true }
 iceberg = { workspace = true }
 itertools = { workspace = true }
+reqsign-aws-v4 = { workspace = true }
+reqsign-core = { workspace = true }
+reqsign-file-read-tokio = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }

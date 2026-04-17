@@ -40,6 +40,7 @@ use typed_builder::TypedBuilder;
 use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
+use crate::signing::HttpRequestSigner;
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
     CreateTableRequest, ListNamespaceResponse, ListTablesResponse, LoadTableResult,
@@ -52,6 +53,12 @@ pub const REST_CATALOG_PROP_URI: &str = "uri";
 pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 /// Disable header redaction in error logs (defaults to false for security)
 pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-redaction";
+/// Enable AWS SigV4 signing for REST catalog requests
+pub const REST_CATALOG_PROP_SIGV4_ENABLED: &str = "rest.sigv4-enabled";
+/// The AWS service name to use for SigV4 signing (e.g. "s3", "execute-api")
+pub const REST_CATALOG_PROP_SIGNING_NAME: &str = "rest.signing-name";
+/// The AWS region to use for SigV4 signing (e.g. "us-east-1")
+pub const REST_CATALOG_PROP_SIGNING_REGION: &str = "rest.signing-region";
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -62,6 +69,7 @@ const PATH_V1: &str = "v1";
 pub struct RestCatalogBuilder {
     config: RestCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    signer: Option<Arc<dyn HttpRequestSigner>>,
 }
 
 impl Default for RestCatalogBuilder {
@@ -75,7 +83,19 @@ impl Default for RestCatalogBuilder {
                 client: None,
             },
             storage_factory: None,
+            signer: None,
         }
+    }
+}
+
+impl RestCatalogBuilder {
+    /// Set a custom request signer for the REST catalog.
+    ///
+    /// This overrides the signer that would otherwise be built from
+    /// config properties (e.g. `rest.sigv4-enabled`).
+    pub fn with_signer(mut self, signer: Arc<dyn HttpRequestSigner>) -> Self {
+        self.signer = Some(signer);
+        self
     }
 }
 
@@ -123,7 +143,11 @@ impl CatalogBuilder for RestCatalogBuilder {
                     "Catalog uri is required",
                 ))
             } else {
-                Ok(RestCatalog::new(self.config, self.storage_factory))
+                Ok(RestCatalog::new(
+                    self.config,
+                    self.storage_factory,
+                    self.signer,
+                ))
             }
         };
 
@@ -210,6 +234,11 @@ impl RestCatalogConfig {
     /// Get the client from the config.
     pub(crate) fn client(&self) -> Option<Client> {
         self.client.clone()
+    }
+
+    /// Build a request signer from the config, or `None` if signing is not enabled.
+    pub(crate) fn signer(&self) -> Result<Option<Arc<dyn HttpRequestSigner>>> {
+        self.try_into()
     }
 
     /// Get the token from the config.
@@ -330,6 +359,28 @@ impl RestCatalogConfig {
         self.props = props;
         self
     }
+
+    /// Check if SigV4 signing is enabled.
+    pub(crate) fn sigv4_enabled(&self) -> bool {
+        self.props
+            .get(REST_CATALOG_PROP_SIGV4_ENABLED)
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
+    /// Get the signing region from the config.
+    pub(crate) fn signing_region(&self) -> Option<&str> {
+        self.props
+            .get(REST_CATALOG_PROP_SIGNING_REGION)
+            .map(|s| s.as_str())
+    }
+
+    /// Get the signing name from the config.
+    pub(crate) fn signing_name(&self) -> Option<&str> {
+        self.props
+            .get(REST_CATALOG_PROP_SIGNING_NAME)
+            .map(|s| s.as_str())
+    }
 }
 
 #[derive(Debug)]
@@ -351,15 +402,22 @@ pub struct RestCatalog {
     ctx: OnceCell<RestContext>,
     /// Storage factory for creating FileIO instances.
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    /// Optional custom request signer.
+    signer: Option<Arc<dyn HttpRequestSigner>>,
 }
 
 impl RestCatalog {
     /// Creates a `RestCatalog` from a [`RestCatalogConfig`].
-    fn new(config: RestCatalogConfig, storage_factory: Option<Arc<dyn StorageFactory>>) -> Self {
+    fn new(
+        config: RestCatalogConfig,
+        storage_factory: Option<Arc<dyn StorageFactory>>,
+        signer: Option<Arc<dyn HttpRequestSigner>>,
+    ) -> Self {
         Self {
             user_config: config,
             ctx: OnceCell::new(),
             storage_factory,
+            signer,
         }
     }
 
@@ -396,7 +454,7 @@ impl RestCatalog {
     async fn context(&self) -> Result<&RestContext> {
         self.ctx
             .get_or_try_init(|| async {
-                let client = HttpClient::new(&self.user_config)?;
+                let client = HttpClient::new(&self.user_config, self.signer.clone())?;
                 let catalog_config = RestCatalog::load_config(&client, &self.user_config).await?;
                 let config = self.user_config.clone().merge_with_config(catalog_config);
                 let client = client.update_with(&config)?;
@@ -1099,6 +1157,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         assert_eq!(
@@ -1173,6 +1232,7 @@ mod tests {
                 .props(props)
                 .build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let token = catalog.context().await.unwrap().client.token().await;
@@ -1220,6 +1280,7 @@ mod tests {
                 .props(props)
                 .build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let token = catalog.context().await.unwrap().client.token().await;
@@ -1244,6 +1305,7 @@ mod tests {
                 .props(props)
                 .build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let token = catalog.context().await.unwrap().client.token().await;
@@ -1275,6 +1337,7 @@ mod tests {
                 .props(props)
                 .build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let token = catalog.context().await.unwrap().client.token().await;
@@ -1306,6 +1369,7 @@ mod tests {
                 .props(props)
                 .build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let token = catalog.context().await.unwrap().client.token().await;
@@ -1337,6 +1401,7 @@ mod tests {
                 .props(props)
                 .build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let token = catalog.context().await.unwrap().client.token().await;
@@ -1450,6 +1515,7 @@ mod tests {
                 .props(props)
                 .build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let token = catalog.context().await.unwrap().client.token().await;
@@ -1497,6 +1563,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let _namespaces = catalog.list_namespaces(None).await.unwrap();
@@ -1527,6 +1594,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let namespaces = catalog.list_namespaces(None).await.unwrap();
@@ -1578,6 +1646,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let namespaces = catalog.list_namespaces(None).await.unwrap();
@@ -1677,6 +1746,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let namespaces = catalog.list_namespaces(None).await.unwrap();
@@ -1730,6 +1800,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let namespaces = catalog
@@ -1773,6 +1844,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let namespaces = catalog
@@ -1806,6 +1878,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         assert!(
@@ -1834,6 +1907,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         catalog
@@ -1874,6 +1948,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let tables = catalog
@@ -1942,6 +2017,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let tables = catalog
@@ -2073,6 +2149,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let tables = catalog
@@ -2117,6 +2194,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         catalog
@@ -2146,6 +2224,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         assert!(
@@ -2177,6 +2256,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         catalog
@@ -2211,6 +2291,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let table = catalog
@@ -2328,6 +2409,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let table = catalog
@@ -2364,6 +2446,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let table_creation = TableCreation::builder()
@@ -2513,6 +2596,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let table_creation = TableCreation::builder()
@@ -2582,6 +2666,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let table1 = {
@@ -2725,6 +2810,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let table1 = {
@@ -2789,6 +2875,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
         let table_ident =
             TableIdent::new(NamespaceIdent::new("ns1".to_string()), "test1".to_string());
@@ -2840,6 +2927,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            None,
         );
 
         let table_ident =
@@ -2906,5 +2994,30 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
             assert_eq!(err.message(), "Catalog uri is required");
         }
+    }
+
+    #[test]
+    fn test_sigv4_config_disabled_by_default() {
+        let config = RestCatalogConfig::builder()
+            .uri("https://example.com".to_string())
+            .build();
+        assert!(!config.sigv4_enabled());
+        assert_eq!(config.signing_name(), None);
+        assert_eq!(config.signing_region(), None);
+    }
+
+    #[test]
+    fn test_sigv4_config_enabled() {
+        let config = RestCatalogConfig::builder()
+            .uri("https://example.com".to_string())
+            .props(HashMap::from([
+                ("rest.sigv4-enabled".to_string(), "true".to_string()),
+                ("rest.signing-name".to_string(), "execute-api".to_string()),
+                ("rest.signing-region".to_string(), "us-east-1".to_string()),
+            ]))
+            .build();
+        assert!(config.sigv4_enabled());
+        assert_eq!(config.signing_name(), Some("execute-api"));
+        assert_eq!(config.signing_region(), Some("us-east-1"));
     }
 }
