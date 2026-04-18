@@ -43,7 +43,7 @@ use crate::{Error, ErrorKind, Result};
 /// containing `SensitiveBytes` can safely derive or implement `Debug`
 /// without risk of leaking key material.
 #[derive(Clone, PartialEq, Eq)]
-struct SensitiveBytes(Zeroizing<Box<[u8]>>);
+pub struct SensitiveBytes(Zeroizing<Box<[u8]>>);
 
 impl SensitiveBytes {
     /// Wraps the given bytes as sensitive material.
@@ -57,13 +57,11 @@ impl SensitiveBytes {
     }
 
     /// Returns the number of bytes.
-    #[allow(dead_code)] // Encryption work is ongoing so currently unused
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
     /// Returns `true` if the byte slice is empty.
-    #[allow(dead_code)] // Encryption work is ongoing so currently unused
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
