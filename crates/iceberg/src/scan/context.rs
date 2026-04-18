@@ -140,6 +140,11 @@ impl ManifestEntryContext {
             // TODO: Extract name_mapping from table metadata property "schema.name-mapping.default"
             name_mapping: None,
             case_sensitive: self.case_sensitive,
+            split_offsets: self
+                .manifest_entry
+                .data_file()
+                .split_offsets()
+                .map(|s| s.to_vec()),
         })
     }
 }

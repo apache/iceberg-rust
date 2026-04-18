@@ -17,10 +17,12 @@
 
 //! Table scan api.
 
+mod bin_packing;
 mod cache;
 use cache::*;
 mod context;
 use context::*;
+mod split;
 mod task;
 
 use std::sync::Arc;
@@ -38,7 +40,9 @@ use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::metadata_columns::{get_metadata_field_id, is_metadata_column_name};
 use crate::runtime::spawn;
-use crate::spec::{DataContentType, SnapshotRef};
+use crate::scan::bin_packing::bin_pack;
+use crate::scan::split::{merge_adjacent_tasks, split_scan_task};
+use crate::spec::{DataContentType, SnapshotRef, TableProperties};
 use crate::table::Table;
 use crate::util::available_parallelism;
 use crate::{Error, ErrorKind, Result};
@@ -60,6 +64,9 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    target_split_size: Option<u64>,
+    split_lookback: Option<usize>,
+    split_open_file_cost: Option<u64>,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -78,6 +85,9 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            target_split_size: None,
+            split_lookback: None,
+            split_open_file_cost: None,
         }
     }
 
@@ -184,8 +194,49 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
+    /// Sets the target split size in bytes for `plan_tasks()`.
+    /// Overrides the table property `read.split.target-size`.
+    pub fn with_target_split_size(mut self, size: u64) -> Self {
+        self.target_split_size = Some(size);
+        self
+    }
+
+    /// Sets the bin-packing lookback for `plan_tasks()`.
+    /// Overrides the table property `read.split.planning-lookback`.
+    pub fn with_split_lookback(mut self, lookback: usize) -> Self {
+        self.split_lookback = Some(lookback);
+        self
+    }
+
+    /// Sets the open file cost in bytes for `plan_tasks()`.
+    /// Overrides the table property `read.split.open-file-cost`.
+    pub fn with_split_open_file_cost(mut self, cost: u64) -> Self {
+        self.split_open_file_cost = Some(cost);
+        self
+    }
+
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
+        let props = self.table.metadata().properties();
+        let target_split_size = self.target_split_size.unwrap_or_else(|| {
+            props
+                .get(TableProperties::PROPERTY_SPLIT_SIZE)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(TableProperties::PROPERTY_SPLIT_SIZE_DEFAULT)
+        });
+        let split_lookback = self.split_lookback.unwrap_or_else(|| {
+            props
+                .get(TableProperties::PROPERTY_SPLIT_LOOKBACK)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(TableProperties::PROPERTY_SPLIT_LOOKBACK_DEFAULT)
+        });
+        let split_open_file_cost = self.split_open_file_cost.unwrap_or_else(|| {
+            props
+                .get(TableProperties::PROPERTY_SPLIT_OPEN_FILE_COST)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(TableProperties::PROPERTY_SPLIT_OPEN_FILE_COST_DEFAULT)
+        });
+
         let snapshot = match self.snapshot_id {
             Some(snapshot_id) => self
                 .table
@@ -210,6 +261,9 @@ impl<'a> TableScanBuilder<'a> {
                         concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
                         row_group_filtering_enabled: self.row_group_filtering_enabled,
                         row_selection_enabled: self.row_selection_enabled,
+                        target_split_size,
+                        split_lookback,
+                        split_open_file_cost,
                     });
                 };
                 current_snapshot_id.clone()
@@ -303,6 +357,9 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            target_split_size,
+            split_lookback,
+            split_open_file_cost,
         })
     }
 }
@@ -331,9 +388,53 @@ pub struct TableScan {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+
+    target_split_size: u64,
+    split_lookback: usize,
+    split_open_file_cost: u64,
 }
 
 impl TableScan {
+    /// Returns a stream of [`CombinedScanTask`]s.
+    ///
+    /// This builds on [`plan_files()`](Self::plan_files) by additionally:
+    /// 1. Splitting large files into smaller tasks based on `target_split_size`
+    /// 2. Bin-packing small tasks into balanced groups for parallel execution
+    ///
+    /// Use this method when you need evenly-sized work units, e.g. for
+    /// distributing scan work across multiple threads or nodes.
+    pub async fn plan_tasks(&self) -> Result<CombinedScanTaskStream> {
+        let file_tasks: Vec<FileScanTask> =
+            self.plan_files().await?.try_collect().await?;
+
+        let split_tasks: Vec<FileScanTask> = file_tasks
+            .into_iter()
+            .flat_map(|task| split_scan_task(task, self.target_split_size))
+            .collect();
+
+        let open_file_cost = self.split_open_file_cost;
+        let weight_fn = |task: &FileScanTask| -> u64 {
+            let content_size =
+                task.length + task.deletes.iter().map(|d| d.file_size_in_bytes).sum::<u64>();
+            let open_cost = (1 + task.deletes.len() as u64) * open_file_cost;
+            content_size.max(open_cost)
+        };
+
+        let bins = bin_pack(
+            split_tasks,
+            self.target_split_size,
+            self.split_lookback,
+            weight_fn,
+        );
+
+        let combined: Vec<CombinedScanTask> = bins
+            .into_iter()
+            .map(|group| CombinedScanTask::new(merge_adjacent_tasks(group)))
+            .collect();
+
+        Ok(Box::pin(futures::stream::iter(combined.into_iter().map(Ok))))
+    }
+
     /// Returns a stream of [`FileScanTask`]s.
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
         let Some(plan_context) = self.plan_context.as_ref() else {
@@ -1820,6 +1921,7 @@ pub mod tests {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+            split_offsets: None,
         };
         test_fn(task);
 
@@ -1839,6 +1941,7 @@ pub mod tests {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+            split_offsets: None,
         };
         test_fn(task);
     }

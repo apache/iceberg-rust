@@ -226,6 +226,22 @@ impl TableProperties {
     pub const PROPERTY_GC_ENABLED: &str = "gc.enabled";
     /// Default value for gc.enabled
     pub const PROPERTY_GC_ENABLED_DEFAULT: bool = true;
+
+    /// Target size in bytes for split scan tasks during scan planning.
+    pub const PROPERTY_SPLIT_SIZE: &str = "read.split.target-size";
+    /// Default target split size: 128 MB
+    pub const PROPERTY_SPLIT_SIZE_DEFAULT: u64 = 128 * 1024 * 1024;
+
+    /// Number of bins to consider when bin-packing scan tasks.
+    pub const PROPERTY_SPLIT_LOOKBACK: &str = "read.split.planning-lookback";
+    /// Default split lookback: 10
+    pub const PROPERTY_SPLIT_LOOKBACK_DEFAULT: usize = 10;
+
+    /// Minimum cost in bytes assigned to opening a file, used as a weight floor
+    /// in the bin-packing algorithm to avoid creating tasks with many tiny files.
+    pub const PROPERTY_SPLIT_OPEN_FILE_COST: &str = "read.split.open-file-cost";
+    /// Default open file cost: 4 MB
+    pub const PROPERTY_SPLIT_OPEN_FILE_COST_DEFAULT: u64 = 4 * 1024 * 1024;
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {

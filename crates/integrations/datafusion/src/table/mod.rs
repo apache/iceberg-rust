@@ -137,14 +137,17 @@ impl TableProvider for IcebergTableProvider {
             .map_err(to_datafusion_error)?;
 
         // Create scan with fresh metadata (always use current snapshot)
-        Ok(Arc::new(IcebergTableScan::new(
+        let scan = IcebergTableScan::new(
             table,
             None, // Always use current snapshot for catalog-backed provider
             self.schema.clone(),
             projection,
             filters,
             limit,
-        )))
+        )
+        .plan()
+        .await;
+        Ok(Arc::new(scan))
     }
 
     fn supports_filters_pushdown(
@@ -315,14 +318,17 @@ impl TableProvider for IcebergStaticTableProvider {
         limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         // Use cached table (no refresh)
-        Ok(Arc::new(IcebergTableScan::new(
+        let scan = IcebergTableScan::new(
             self.table.clone(),
             self.snapshot_id,
             self.schema.clone(),
             projection,
             filters,
             limit,
-        )))
+        )
+        .plan()
+        .await;
+        Ok(Arc::new(scan))
     }
 
     fn supports_filters_pushdown(
