@@ -18,13 +18,15 @@
 //! This module contains memory catalog implementation.
 
 use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::lock::{Mutex, MutexGuard};
 use itertools::Itertools;
 
 use super::namespace_state::NamespaceState;
-use crate::io::FileIO;
+use crate::io::{FileIO, FileIOBuilder, MemoryStorageFactory, StorageFactory};
 use crate::spec::{TableMetadata, TableMetadataBuilder};
 use crate::table::Table;
 use crate::{
@@ -40,54 +42,65 @@ const LOCATION: &str = "location";
 
 /// Builder for [`MemoryCatalog`].
 #[derive(Debug)]
-pub struct MemoryCatalogBuilder(MemoryCatalogConfig);
+pub struct MemoryCatalogBuilder {
+    config: MemoryCatalogConfig,
+    storage_factory: Option<Arc<dyn StorageFactory>>,
+}
 
 impl Default for MemoryCatalogBuilder {
     fn default() -> Self {
-        Self(MemoryCatalogConfig {
-            name: None,
-            warehouse: "".to_string(),
-            props: HashMap::new(),
-        })
+        Self {
+            config: MemoryCatalogConfig {
+                name: None,
+                warehouse: "".to_string(),
+                props: HashMap::new(),
+            },
+            storage_factory: None,
+        }
     }
 }
 
 impl CatalogBuilder for MemoryCatalogBuilder {
     type C = MemoryCatalog;
 
+    fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
+        self.storage_factory = Some(storage_factory);
+        self
+    }
+
     fn load(
         mut self,
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.0.name = Some(name.into());
+        self.config.name = Some(name.into());
 
         if props.contains_key(MEMORY_CATALOG_WAREHOUSE) {
-            self.0.warehouse = props
+            self.config.warehouse = props
                 .get(MEMORY_CATALOG_WAREHOUSE)
                 .cloned()
                 .unwrap_or_default()
         }
 
         // Collect other remaining properties
-        self.0.props = props
+        self.config.props = props
             .into_iter()
             .filter(|(k, _)| k != MEMORY_CATALOG_WAREHOUSE)
             .collect();
 
         let result = {
-            if self.0.name.is_none() {
+            if self.config.name.is_none() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name is required",
                 ))
-            } else if self.0.warehouse.is_empty() {
+            } else if self.config.warehouse.is_empty() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog warehouse is required",
                 ))
             } else {
-                MemoryCatalog::new(self.0)
+                MemoryCatalog::new(self.config, self.storage_factory)
             }
         };
 
@@ -112,12 +125,16 @@ pub struct MemoryCatalog {
 
 impl MemoryCatalog {
     /// Creates a memory catalog.
-    fn new(config: MemoryCatalogConfig) -> Result<Self> {
+    fn new(
+        config: MemoryCatalogConfig,
+        storage_factory: Option<Arc<dyn StorageFactory>>,
+    ) -> Result<Self> {
+        // Use provided factory or default to MemoryStorageFactory
+        let factory = storage_factory.unwrap_or_else(|| Arc::new(MemoryStorageFactory));
+
         Ok(Self {
             root_namespace_state: Mutex::new(NamespaceState::default()),
-            file_io: FileIO::from_path(&config.warehouse)?
-                .with_props(config.props)
-                .build()?,
+            file_io: FileIOBuilder::new(factory).with_props(config.props).build(),
             warehouse_location: config.warehouse,
         })
     }
@@ -279,15 +296,15 @@ impl Catalog for MemoryCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(table_creation)?
             .build()?
             .metadata;
-        let metadata_location = MetadataLocation::new_with_table_location(location).to_string();
+        let metadata_location = MetadataLocation::new_with_metadata(location, &metadata);
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
-        root_namespace_state.insert_new_table(&table_ident, metadata_location.clone())?;
+        root_namespace_state.insert_new_table(&table_ident, metadata_location.to_string())?;
 
         Table::builder()
             .file_io(self.file_io.clone())
-            .metadata_location(metadata_location)
+            .metadata_location(metadata_location.to_string())
             .metadata(metadata)
             .identifier(table_ident)
             .build()
@@ -305,8 +322,19 @@ impl Catalog for MemoryCatalog {
     async fn drop_table(&self, table_ident: &TableIdent) -> Result<()> {
         let mut root_namespace_state = self.root_namespace_state.lock().await;
 
-        let metadata_location = root_namespace_state.remove_existing_table(table_ident)?;
-        self.file_io.delete(&metadata_location).await
+        root_namespace_state.remove_existing_table(table_ident)?;
+        Ok(())
+    }
+
+    async fn purge_table(&self, table_ident: &TableIdent) -> Result<()> {
+        let table_info = self.load_table(table_ident).await?;
+        self.drop_table(table_ident).await?;
+        crate::catalog::utils::drop_table_data(
+            table_info.file_io(),
+            table_info.metadata(),
+            table_info.metadata_location(),
+        )
+        .await
     }
 
     /// Check if a table exists in the catalog.
@@ -365,12 +393,11 @@ impl Catalog for MemoryCatalog {
         let staged_table = commit.apply(current_table)?;
 
         // Write table metadata to the new location
+        let metadata_location =
+            MetadataLocation::from_str(staged_table.metadata_location_result()?)?;
         staged_table
             .metadata()
-            .write_to(
-                staged_table.file_io(),
-                staged_table.metadata_location_result()?,
-            )
+            .write_to(staged_table.file_io(), &metadata_location)
             .await?;
 
         // Flip the pointer to reference the new metadata file.
@@ -391,7 +418,7 @@ pub(crate) mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::io::FileIOBuilder;
+    use crate::io::FileIO;
     use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     use crate::transaction::{ApplyTransactionAction, Transaction};
 
@@ -1893,7 +1920,7 @@ pub(crate) mod tests {
     }
 
     fn build_table(ident: TableIdent) -> Table {
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         let temp_dir = TempDir::new().unwrap();
         let location = temp_dir.path().to_str().unwrap().to_string();

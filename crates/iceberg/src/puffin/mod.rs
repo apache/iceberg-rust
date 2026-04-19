@@ -19,11 +19,30 @@
 
 #![deny(missing_docs)]
 
+use crate::{Error, ErrorKind, Result};
+
 mod blob;
 pub use blob::{APACHE_DATASKETCHES_THETA_V1, Blob, DELETION_VECTOR_V1};
 
-mod compression;
-pub use compression::CompressionCodec;
+pub use crate::compression::CompressionCodec;
+
+/// Validates that the compression codec is supported for Puffin files.
+/// Returns an error if the codec is not supported.
+fn validate_puffin_compression(codec: CompressionCodec) -> Result<()> {
+    match codec {
+        CompressionCodec::None | CompressionCodec::Lz4 | CompressionCodec::Zstd(_) => Ok(()),
+        other => Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Compression codec {} is not supported for Puffin files. Only {}, {}, and {} are supported.",
+                other.name(),
+                CompressionCodec::None.name(),
+                CompressionCodec::Lz4.name(),
+                CompressionCodec::zstd_default().name()
+            ),
+        )),
+    }
+}
 
 mod metadata;
 pub use metadata::{BlobMetadata, CREATED_BY_PROPERTY, FileMetadata};
@@ -36,3 +55,20 @@ pub use writer::PuffinWriter;
 
 #[cfg(test)]
 mod test_utils;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_puffin_codec_validation() {
+        // Supported codecs
+        assert!(validate_puffin_compression(CompressionCodec::None).is_ok());
+        assert!(validate_puffin_compression(CompressionCodec::Lz4).is_ok());
+        assert!(validate_puffin_compression(CompressionCodec::zstd_default()).is_ok());
+        assert!(validate_puffin_compression(CompressionCodec::Zstd(5)).is_ok());
+
+        // Unsupported codecs
+        assert!(validate_puffin_compression(CompressionCodec::gzip_default()).is_err());
+    }
+}

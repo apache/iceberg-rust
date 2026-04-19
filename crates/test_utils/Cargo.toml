@@ -26,7 +26,7 @@ license = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-tracing = { workspace = true }
+iceberg = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [features]

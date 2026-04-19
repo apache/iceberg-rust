@@ -36,7 +36,7 @@ use datafusion::physical_plan::{
 };
 use futures::StreamExt;
 use iceberg::arrow::FieldMatchMode;
-use iceberg::spec::{DataFileFormat, TableProperties, serialize_data_file_to_json};
+use iceberg::spec::{DataFileFormat, serialize_data_file_to_json};
 use iceberg::table::Table;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
@@ -64,7 +64,7 @@ pub(crate) struct IcebergWriteExec {
     table: Table,
     input: Arc<dyn ExecutionPlan>,
     result_schema: ArrowSchemaRef,
-    plan_properties: PlanProperties,
+    plan_properties: Arc<PlanProperties>,
 }
 
 impl IcebergWriteExec {
@@ -82,13 +82,13 @@ impl IcebergWriteExec {
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: ArrowSchemaRef,
-    ) -> PlanProperties {
-        PlanProperties::new(
+    ) -> Arc<PlanProperties> {
+        Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(input.output_partitioning().partition_count()),
             EmissionType::Final,
             Boundedness::Bounded,
-        )
+        ))
     }
 
     // Create a record batch with serialized data files
@@ -153,7 +153,7 @@ impl ExecutionPlan for IcebergWriteExec {
         vec![true; self.children().len()]
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.plan_properties
     }
 
@@ -208,15 +208,16 @@ impl ExecutionPlan for IcebergWriteExec {
         let partition_type = self.table.metadata().default_partition_type().clone();
         let format_version = self.table.metadata().format_version();
 
+        // Get typed table properties
+        let table_props = self
+            .table
+            .metadata()
+            .table_properties()
+            .map_err(to_datafusion_error)?;
+
         // Check data file format
-        let file_format = DataFileFormat::from_str(
-            self.table
-                .metadata()
-                .properties()
-                .get(TableProperties::PROPERTY_DEFAULT_FILE_FORMAT)
-                .unwrap_or(&TableProperties::PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT.to_string()),
-        )
-        .map_err(to_datafusion_error)?;
+        let file_format = DataFileFormat::from_str(&table_props.write_format_default)
+            .map_err(to_datafusion_error)?;
         if file_format != DataFileFormat::Parquet {
             return Err(to_datafusion_error(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -230,24 +231,7 @@ impl ExecutionPlan for IcebergWriteExec {
             self.table.metadata().current_schema().clone(),
             FieldMatchMode::Name,
         );
-        let target_file_size = match self
-            .table
-            .metadata()
-            .properties()
-            .get(TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES)
-        {
-            Some(value_str) => value_str
-                .parse::<usize>()
-                .map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Invalid value for write.target-file-size-bytes",
-                    )
-                    .with_source(e)
-                })
-                .map_err(to_datafusion_error)?,
-            None => TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
-        };
+        let target_file_size = table_props.write_target_file_size_bytes;
 
         let file_io = self.table.file_io().clone();
         // todo location_gen and file_name_gen should be configurable
@@ -266,28 +250,7 @@ impl ExecutionPlan for IcebergWriteExec {
         let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
 
         // Create TaskWriter
-        let fanout_enabled = self
-            .table
-            .metadata()
-            .properties()
-            .get(TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED)
-            .map(|value| {
-                value
-                    .parse::<bool>()
-                    .map_err(|e| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Invalid value for {}, expected 'true' or 'false'",
-                                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED
-                            ),
-                        )
-                        .with_source(e)
-                    })
-                    .map_err(to_datafusion_error)
-            })
-            .transpose()?
-            .unwrap_or(TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT);
+        let fanout_enabled = table_props.write_datafusion_fanout_enabled;
         let schema = self.table.metadata().current_schema().clone();
         let partition_spec = self.table.metadata().default_partition_spec().clone();
         let task_writer = TaskWriter::try_new(
@@ -373,17 +336,17 @@ mod tests {
     struct MockExecutionPlan {
         schema: ArrowSchemaRef,
         batches: Vec<RecordBatch>,
-        properties: PlanProperties,
+        properties: Arc<PlanProperties>,
     }
 
     impl MockExecutionPlan {
         fn new(schema: ArrowSchemaRef, batches: Vec<RecordBatch>) -> Self {
-            let properties = PlanProperties::new(
+            let properties = Arc::new(PlanProperties::new(
                 EquivalenceProperties::new(schema.clone()),
                 Partitioning::UnknownPartitioning(1),
                 EmissionType::Final,
                 Boundedness::Bounded,
-            );
+            ));
 
             Self {
                 schema,
@@ -420,7 +383,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             &self.properties
         }
 

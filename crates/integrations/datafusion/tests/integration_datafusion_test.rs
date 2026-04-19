@@ -26,6 +26,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use datafusion::execution::context::SessionContext;
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use expect_test::expect;
+use iceberg::io::LocalFsStorageFactory;
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
 use iceberg::spec::{
     NestedField, PrimitiveType, Schema, StructType, Transform, Type, UnboundPartitionSpec,
@@ -44,6 +45,7 @@ fn temp_path() -> String {
 
 async fn get_iceberg_catalog() -> MemoryCatalog {
     MemoryCatalogBuilder::default()
+        .with_storage_factory(Arc::new(LocalFsStorageFactory))
         .load(
             "memory",
             HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), temp_path())]),
@@ -533,9 +535,9 @@ fn get_nested_struct_type() -> StructType {
             10,
             "address",
             Type::Struct(StructType::new(vec![
-                NestedField::required(11, "street", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(12, "city", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(13, "zip", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(11, "street", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(12, "city", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(13, "zip", Type::Primitive(PrimitiveType::Int)).into(),
             ])),
         )
         .into(),
@@ -660,7 +662,7 @@ async fn test_insert_into_nested() -> Result<()> {
         expect![[r#"
             Field { "id": Int32, metadata: {"PARQUET:field_id": "1"} },
             Field { "name": Utf8, metadata: {"PARQUET:field_id": "2"} },
-            Field { "profile": nullable Struct("address": Struct("street": non-null Utf8, metadata: {"PARQUET:field_id": "6"}, "city": non-null Utf8, metadata: {"PARQUET:field_id": "7"}, "zip": non-null Int32, metadata: {"PARQUET:field_id": "8"}), metadata: {"PARQUET:field_id": "4"}, "contact": Struct("email": Utf8, metadata: {"PARQUET:field_id": "9"}, "phone": Utf8, metadata: {"PARQUET:field_id": "10"}), metadata: {"PARQUET:field_id": "5"}), metadata: {"PARQUET:field_id": "3"} }"#]],
+            Field { "profile": nullable Struct("address": Struct("street": Utf8, metadata: {"PARQUET:field_id": "6"}, "city": Utf8, metadata: {"PARQUET:field_id": "7"}, "zip": Int32, metadata: {"PARQUET:field_id": "8"}), metadata: {"PARQUET:field_id": "4"}, "contact": Struct("email": Utf8, metadata: {"PARQUET:field_id": "9"}, "phone": Utf8, metadata: {"PARQUET:field_id": "10"}), metadata: {"PARQUET:field_id": "5"}), metadata: {"PARQUET:field_id": "3"} }"#]],
         expect![[r#"
             id: PrimitiveArray<Int32>
             [
@@ -679,7 +681,7 @@ async fn test_insert_into_nested() -> Result<()> {
               valid,
             ]
             [
-            -- child 0: "address" (Struct([Field { name: "street", data_type: Utf8, metadata: {"PARQUET:field_id": "6"} }, Field { name: "city", data_type: Utf8, metadata: {"PARQUET:field_id": "7"} }, Field { name: "zip", data_type: Int32, metadata: {"PARQUET:field_id": "8"} }]))
+            -- child 0: "address" (Struct([Field { name: "street", data_type: Utf8, nullable: true, metadata: {"PARQUET:field_id": "6"} }, Field { name: "city", data_type: Utf8, nullable: true, metadata: {"PARQUET:field_id": "7"} }, Field { name: "zip", data_type: Int32, nullable: true, metadata: {"PARQUET:field_id": "8"} }]))
             StructArray
             -- validity:
             [

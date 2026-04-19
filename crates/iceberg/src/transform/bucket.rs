@@ -78,12 +78,26 @@ impl Bucket {
     /// ref: https://iceberg.apache.org/spec/#appendix-b-32-bit-hash-requirements
     #[inline]
     fn hash_decimal(v: i128) -> i32 {
-        let bytes = v.to_be_bytes();
-        if let Some(start) = bytes.iter().position(|&x| x != 0) {
-            Self::hash_bytes(&bytes[start..])
-        } else {
-            Self::hash_bytes(&[0])
+        if v == 0 {
+            return Self::hash_bytes(&[0]);
         }
+
+        let bytes = v.to_be_bytes();
+        let start = if v > 0 {
+            // Positive: skip 0x00 unless next byte would appear negative
+            bytes
+                .windows(2)
+                .position(|w| w[0] != 0x00 || w[1] & 0x80 != 0)
+                .unwrap_or(15)
+        } else {
+            // Negative: skip 0xFF only if next byte stays negative
+            bytes
+                .windows(2)
+                .position(|w| w[0] != 0xFF || w[1] & 0x80 == 0)
+                .unwrap_or(15)
+        };
+
+        Self::hash_bytes(&bytes[start..])
     }
 
     /// def bucket_N(x) = (murmur3_x86_32_hash(x) & Integer.MAX_VALUE) % N
@@ -280,6 +294,7 @@ mod test {
         TimestampNs, Timestamptz, TimestamptzNs, Uuid,
     };
     use crate::spec::Type::{Primitive, Struct};
+    use crate::spec::decimal_utils::decimal_new;
     use crate::spec::{Datum, NestedField, PrimitiveType, StructType, Transform, Type};
     use crate::transform::TransformFunction;
     use crate::transform::test::{TestProjectionFixture, TestTransformFixture};
@@ -791,6 +806,27 @@ mod test {
     }
 
     #[test]
+    fn test_hash_decimal_with_negative_value() {
+        // Test cases from GitHub issue #1981
+        assert_eq!(Bucket::hash_decimal(1), -463810133);
+        assert_eq!(Bucket::hash_decimal(-1), -43192051);
+
+        // Additional test cases for edge case values
+        assert_eq!(Bucket::hash_decimal(0), Bucket::hash_decimal(0));
+        assert_eq!(Bucket::hash_decimal(127), Bucket::hash_decimal(127));
+        assert_eq!(Bucket::hash_decimal(-128), Bucket::hash_decimal(-128));
+
+        // Test minimum representation is used
+        // -1 should hash as [0xFF] not [0xFF, 0xFF, ..., 0xFF]
+        // 128 should hash as [0x00, 0x80] not [0x00, 0x00, ..., 0x80]
+        assert_eq!(Bucket::hash_decimal(128), Bucket::hash_bytes(&[0x00, 0x80]));
+        assert_eq!(
+            Bucket::hash_decimal(-129),
+            Bucket::hash_bytes(&[0xFF, 0x7F])
+        );
+    }
+
+    #[test]
     fn test_int_literal() {
         let bucket = Bucket::new(10);
         assert_eq!(
@@ -813,7 +849,7 @@ mod test {
         let bucket = Bucket::new(10);
         assert_eq!(
             bucket
-                .transform_literal(&Datum::decimal(1420).unwrap())
+                .transform_literal(&Datum::decimal(decimal_new(1420, 0)).unwrap())
                 .unwrap()
                 .unwrap(),
             Datum::int(9)

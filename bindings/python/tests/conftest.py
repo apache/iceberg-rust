@@ -25,6 +25,7 @@ from typing import (
 
 import pytest
 from pydantic_core import to_json
+from pyiceberg.utils.config import Config
 
 from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
@@ -34,6 +35,20 @@ from pyiceberg.types import (
     NestedField,
     TimestampType,
 )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def isolate_pyiceberg_config() -> Generator[None, None, None]:
+    monkeypatch = pytest.MonkeyPatch()
+    with TemporaryDirectory() as empty_home_dir:
+        monkeypatch.setenv("HOME", empty_home_dir)
+        monkeypatch.setenv("PYICEBERG_HOME", empty_home_dir)
+
+        import pyiceberg.catalog as catalog
+
+        monkeypatch.setattr(catalog, "_ENV_CONFIG", Config())
+        yield
+    monkeypatch.undo()
 
 
 @pytest.fixture(scope="session")

@@ -46,11 +46,13 @@ pub struct IcebergTableScan {
     snapshot_id: Option<i64>,
     /// Stores certain, often expensive to compute,
     /// plan properties used in query optimization.
-    plan_properties: PlanProperties,
+    plan_properties: Arc<PlanProperties>,
     /// Projection column names, None means all columns
     projection: Option<Vec<String>>,
     /// Filters to apply to the table scan
     predicates: Option<Predicate>,
+    /// Optional limit on the number of rows to return
+    limit: Option<usize>,
 }
 
 impl IcebergTableScan {
@@ -61,6 +63,7 @@ impl IcebergTableScan {
         schema: ArrowSchemaRef,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
+        limit: Option<usize>,
     ) -> Self {
         let output_schema = match projection {
             None => schema.clone(),
@@ -76,6 +79,7 @@ impl IcebergTableScan {
             plan_properties,
             projection,
             predicates,
+            limit,
         }
     }
 
@@ -95,17 +99,21 @@ impl IcebergTableScan {
         self.predicates.as_ref()
     }
 
+    pub fn limit(&self) -> Option<usize> {
+        self.limit
+    }
+
     /// Computes [`PlanProperties`] used in query optimization.
-    fn compute_properties(schema: ArrowSchemaRef) -> PlanProperties {
+    fn compute_properties(schema: ArrowSchemaRef) -> Arc<PlanProperties> {
         // TODO:
         // This is more or less a placeholder, to be replaced
         // once we support output-partitioning
-        PlanProperties::new(
+        Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Incremental,
             Boundedness::Bounded,
-        )
+        ))
     }
 }
 
@@ -118,7 +126,7 @@ impl ExecutionPlan for IcebergTableScan {
         self
     }
 
-    fn children(&self) -> Vec<&Arc<(dyn ExecutionPlan + 'static)>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan + 'static>> {
         vec![]
     }
 
@@ -129,7 +137,7 @@ impl ExecutionPlan for IcebergTableScan {
         Ok(self)
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.plan_properties
     }
 
@@ -146,9 +154,29 @@ impl ExecutionPlan for IcebergTableScan {
         );
         let stream = futures::stream::once(fut).try_flatten();
 
+        // Apply limit if specified
+        let limited_stream: Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>> =
+            if let Some(limit) = self.limit {
+                let mut remaining = limit;
+                Box::pin(stream.try_filter_map(move |batch| {
+                    futures::future::ready(if remaining == 0 {
+                        Ok(None)
+                    } else if batch.num_rows() <= remaining {
+                        remaining -= batch.num_rows();
+                        Ok(Some(batch))
+                    } else {
+                        let limited_batch = batch.slice(0, remaining);
+                        remaining = 0;
+                        Ok(Some(limited_batch))
+                    })
+                }))
+            } else {
+                Box::pin(stream)
+            };
+
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
-            stream,
+            limited_stream,
         )))
     }
 }
