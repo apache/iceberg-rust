@@ -48,7 +48,7 @@ jobs:
         with:
           timestamp: ${{ needs.set-version.outputs.TIMESTAMP }}
 
-      - uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad # v1.50.1
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           working-directory: "bindings/python"
           command: sdist
@@ -98,7 +98,7 @@ jobs:
         with:
           rust-version: ${{ steps.get-msrv.outputs.msrv }}
 
-      - uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad # v1.50.1
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux || 'auto' }}
