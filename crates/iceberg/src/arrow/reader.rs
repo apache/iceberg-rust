@@ -254,7 +254,7 @@ struct FileScanTaskReader {
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
     parquet_read_options: ParquetReadOptions,
-    bytes_read: Arc<AtomicU64>,
+    scan_metrics: ScanMetrics,
 }
 
 impl ArrowReader {
@@ -272,7 +272,7 @@ impl ArrowReader {
         tasks: FileScanTaskStream,
     ) -> Result<(ArrowRecordBatchStream, ScanMetrics)> {
         let concurrency_limit_data_files = self.concurrency_limit_data_files;
-        let (scan_metrics, bytes_read) = ScanMetrics::new();
+        let scan_metrics = ScanMetrics::new();
 
         let task_reader = FileScanTaskReader {
             batch_size: self.batch_size,
@@ -281,7 +281,7 @@ impl ArrowReader {
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
             parquet_read_options: self.parquet_read_options,
-            bytes_read,
+            scan_metrics: scan_metrics.clone(),
         };
 
         // Fast-path for single concurrency to avoid overhead of try_flatten_unordered
@@ -323,13 +323,14 @@ impl FileScanTaskReader {
             .delete_file_loader
             .load_deletes(&task.deletes, Arc::clone(&task.schema));
 
-        // Open the Parquet file once, loading its metadata
-        let (parquet_file_reader, arrow_metadata) = ArrowReader::open_parquet_file(
+        // Open the Parquet file once, loading its metadata.
+        // Uses the counting variant so metadata + data page I/O is tracked.
+        let (parquet_file_reader, arrow_metadata) = ArrowReader::open_parquet_file_counted(
             &task.data_file_path,
             &self.file_io,
             task.file_size_in_bytes,
             parquet_read_options,
-            Some(&self.bytes_read),
+            self.scan_metrics.bytes_read_counter(),
         )
         .await?;
 
@@ -608,24 +609,40 @@ impl FileScanTaskReader {
 }
 
 impl ArrowReader {
-    /// Opens a Parquet file and loads its metadata, returning both the reader and metadata.
-    /// The reader can be reused to build a `ParquetRecordBatchStreamBuilder` without
-    /// reopening the file.
+    /// Opens a Parquet file and loads its metadata.
     pub(crate) async fn open_parquet_file(
         data_file_path: &str,
         file_io: &FileIO,
         file_size_in_bytes: u64,
         parquet_read_options: ParquetReadOptions,
-        bytes_read: Option<&Arc<AtomicU64>>,
     ) -> Result<(ArrowFileReader, ArrowReaderMetadata)> {
         let parquet_file = file_io.new_input(data_file_path)?;
-        let parquet_reader: Box<dyn FileRead> = match bytes_read {
-            Some(counter) => Box::new(CountingFileRead::new(
-                parquet_file.reader().await?,
-                Arc::clone(counter),
-            )),
-            None => parquet_file.reader().await?,
-        };
+        let parquet_reader = parquet_file.reader().await?;
+        Self::build_parquet_reader(parquet_reader, file_size_in_bytes, parquet_read_options).await
+    }
+
+    /// Opens a Parquet file wrapped with [`CountingFileRead`] so that all I/O
+    /// (metadata + data pages) is accumulated into `bytes_read`.
+    async fn open_parquet_file_counted(
+        data_file_path: &str,
+        file_io: &FileIO,
+        file_size_in_bytes: u64,
+        parquet_read_options: ParquetReadOptions,
+        bytes_read: &Arc<AtomicU64>,
+    ) -> Result<(ArrowFileReader, ArrowReaderMetadata)> {
+        let parquet_file = file_io.new_input(data_file_path)?;
+        let parquet_reader: Box<dyn FileRead> = Box::new(CountingFileRead::new(
+            parquet_file.reader().await?,
+            Arc::clone(bytes_read),
+        ));
+        Self::build_parquet_reader(parquet_reader, file_size_in_bytes, parquet_read_options).await
+    }
+
+    async fn build_parquet_reader(
+        parquet_reader: Box<dyn FileRead>,
+        file_size_in_bytes: u64,
+        parquet_read_options: ParquetReadOptions,
+    ) -> Result<(ArrowFileReader, ArrowReaderMetadata)> {
         let mut reader = ArrowFileReader::new(
             FileMetadata {
                 size: file_size_in_bytes,

@@ -58,12 +58,14 @@ pub struct ScanMetrics {
 }
 
 impl ScanMetrics {
-    pub(crate) fn new() -> (Self, Arc<AtomicU64>) {
-        let bytes_read = Arc::new(AtomicU64::new(0));
-        let metrics = Self {
-            bytes_read: Arc::clone(&bytes_read),
-        };
-        (metrics, bytes_read)
+    pub(crate) fn new() -> Self {
+        Self {
+            bytes_read: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    pub(crate) fn bytes_read_counter(&self) -> &Arc<AtomicU64> {
+        &self.bytes_read
     }
 
     /// Total bytes read from storage for data files during this scan.

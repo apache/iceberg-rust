@@ -69,7 +69,6 @@ impl BasicDeleteFileLoader {
             &self.file_io,
             file_size_in_bytes,
             parquet_read_options,
-            None,
         )
         .await?;
 
