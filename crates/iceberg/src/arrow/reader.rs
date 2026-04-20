@@ -259,9 +259,18 @@ struct FileScanTaskReader {
 
 impl ArrowReader {
     /// Take a stream of FileScanTasks and reads all the files.
-    /// Returns a stream of Arrow RecordBatches containing the data from the files,
-    /// along with [`ScanMetrics`] tracking I/O during the scan.
-    pub fn read(self, tasks: FileScanTaskStream) -> Result<(ArrowRecordBatchStream, ScanMetrics)> {
+    /// Returns a stream of Arrow RecordBatches containing the data from the files.
+    pub fn read(self, tasks: FileScanTaskStream) -> Result<ArrowRecordBatchStream> {
+        let (stream, _metrics) = self.read_with_metrics(tasks)?;
+        Ok(stream)
+    }
+
+    /// Same as [`read`](Self::read), but also returns [`ScanMetrics`] tracking
+    /// I/O during the scan.
+    pub fn read_with_metrics(
+        self,
+        tasks: FileScanTaskStream,
+    ) -> Result<(ArrowRecordBatchStream, ScanMetrics)> {
         let concurrency_limit_data_files = self.concurrency_limit_data_files;
         let (scan_metrics, bytes_read) = ScanMetrics::new();
 
@@ -2269,7 +2278,7 @@ message schema {
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-        let (stream, scan_metrics) = reader.read(tasks).unwrap();
+        let (stream, scan_metrics) = reader.read_with_metrics(tasks).unwrap();
 
         // Metrics should be zero before consuming the stream
         assert_eq!(scan_metrics.bytes_read(), 0);
@@ -2388,7 +2397,6 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
-            .0
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -2730,7 +2738,6 @@ message schema {
             .clone()
             .read(tasks1)
             .unwrap()
-            .0
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -2747,7 +2754,6 @@ message schema {
         let result2 = reader
             .read(tasks2)
             .unwrap()
-            .0
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -2863,7 +2869,6 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
-            .0
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -3037,7 +3042,6 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
-            .0
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -3258,7 +3262,6 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
-            .0
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -3472,7 +3475,6 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
-            .0
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -3581,7 +3583,6 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
-            .0
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -3683,7 +3684,6 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
-            .0
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -3774,7 +3774,6 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
-            .0
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -3879,7 +3878,6 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
-            .0
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -4013,7 +4011,6 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
-            .0
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -4114,7 +4111,6 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
-            .0
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -4229,7 +4225,6 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
-            .0
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -4360,7 +4355,6 @@ message schema {
         let result = reader
             .read(tasks_stream)
             .unwrap()
-            .0
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -4542,7 +4536,6 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
-            .0
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -4959,7 +4952,6 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
-            .0
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -5024,7 +5016,7 @@ message schema {
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-        reader.read(tasks).unwrap().0.try_collect().await.unwrap()
+        reader.read(tasks).unwrap().try_collect().await.unwrap()
     }
 
     // ArrowWriter cannot write INT96, so we use SerializedFileWriter directly.
