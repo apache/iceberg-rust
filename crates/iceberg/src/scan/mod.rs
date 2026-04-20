@@ -32,6 +32,7 @@ use futures::{SinkExt, StreamExt, TryStreamExt};
 pub use task::*;
 
 use crate::arrow::ArrowReaderBuilder;
+pub use crate::arrow::ScanMetrics;
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
@@ -441,7 +442,10 @@ impl TableScan {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
         }
 
-        arrow_reader_builder.build().read(self.plan_files().await?)
+        let (stream, _scan_metrics) = arrow_reader_builder
+            .build()
+            .read(self.plan_files().await?)?;
+        Ok(stream)
     }
 
     /// Returns a reference to the column names of the table scan.
@@ -1361,14 +1365,14 @@ pub mod tests {
         assert_eq!(plan_task.len(), 2);
 
         let reader = ArrowReaderBuilder::new(fixture.table.file_io().clone()).build();
-        let batch_stream = reader
+        let (batch_stream, _) = reader
             .clone()
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
             .unwrap();
         let batch_1: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         let reader = ArrowReaderBuilder::new(fixture.table.file_io().clone()).build();
-        let batch_stream = reader
+        let (batch_stream, _) = reader
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
             .unwrap();
         let batch_2: Vec<_> = batch_stream.try_collect().await.unwrap();
