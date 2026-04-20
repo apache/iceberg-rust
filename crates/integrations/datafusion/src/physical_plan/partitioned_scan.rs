@@ -87,8 +87,15 @@ impl ExecutionPlan for IcebergPartitionedScan {
 
     fn with_new_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        if !children.is_empty() {
+            return Err(datafusion::error::DataFusionError::Internal(format!(
+                "{} is a leaf node and expects no children, but {} were provided",
+                self.name(),
+                children.len()
+            )));
+        }
         Ok(self)
     }
 
