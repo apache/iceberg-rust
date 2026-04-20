@@ -17,7 +17,7 @@
 
 //! Iceberg table providers for DataFusion.
 //!
-//! This module provides three table provider implementations:
+//! This module provides various table provider implementations:
 //!
 //! - [`IcebergTableProvider`]: Catalog-backed provider with automatic metadata refresh.
 //!   Use for write operations and when you need to see the latest table state.
