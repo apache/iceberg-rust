@@ -609,7 +609,9 @@ impl FileScanTaskReader {
 }
 
 impl ArrowReader {
-    /// Opens a Parquet file and loads its metadata.
+    /// Opens a Parquet file and loads its metadata, returning both the reader and metadata.
+    /// The reader can be reused to build a `ParquetRecordBatchStreamBuilder` without
+    /// reopening the file.
     pub(crate) async fn open_parquet_file(
         data_file_path: &str,
         file_io: &FileIO,
