@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, RecordBatch, StructArray};
 use arrow_select::filter::filter_record_batch;
+use hashbrown::HashMap;
 
 use super::arrow_struct_to_literal;
 use super::partition_value_calculator::PartitionValueCalculator;
@@ -115,9 +115,8 @@ impl RecordBatchPartitionSplitter {
         Self::try_new(iceberg_schema, partition_spec, None)
     }
 
-    /// Split the record batch into multiple record batches based on the partition spec.
-    pub fn split(&self, batch: &RecordBatch) -> Result<Vec<(PartitionKey, RecordBatch)>> {
-        let partition_structs = if let Some(calculator) = &self.calculator {
+    fn compute_partition_structs(&self, batch: &RecordBatch) -> Result<Vec<crate::spec::Struct>> {
+        if let Some(calculator) = &self.calculator {
             // Compute partition values from source columns using calculator
             let partition_array = calculator.calculate(batch)?;
             let struct_array = arrow_struct_to_literal(&partition_array, &self.partition_type)?;
@@ -134,7 +133,7 @@ impl RecordBatchPartitionSplitter {
                         ))
                     }
                 })
-                .collect::<Result<Vec<_>>>()?
+                .collect::<Result<Vec<_>>>()
         } else {
             // Extract partition values from pre-computed partition column
             let partition_column = batch
@@ -173,17 +172,25 @@ impl RecordBatchPartitionSplitter {
                         ))
                     }
                 })
-                .collect::<Result<Vec<_>>>()?
-        };
+                .collect::<Result<Vec<_>>>()
+        }
+    }
+
+    /// Split the record batch into multiple record batches based on the partition spec.
+    ///
+    /// Returns tuples of `(partition_key, partition_batch, row_ids)` where `row_ids[i]` is the
+    /// index in the original input batch of row `i` in `partition_batch`.
+    pub fn split(
+        &self,
+        batch: &RecordBatch,
+    ) -> Result<Vec<(PartitionKey, RecordBatch, Vec<usize>)>> {
+        let partition_structs = self.compute_partition_structs(batch)?;
 
         // Group the batch by row value.
-        let mut group_ids = HashMap::new();
-        partition_structs
-            .iter()
-            .enumerate()
-            .for_each(|(row_id, row)| {
-                group_ids.entry(row.clone()).or_insert(vec![]).push(row_id);
-            });
+        let mut group_ids: HashMap<crate::spec::Struct, Vec<usize>> = HashMap::new();
+        for (row_id, row) in partition_structs.iter().enumerate() {
+            group_ids.entry_ref(row).or_default().push(row_id);
+        }
 
         // Partition the batch with same partition partition_values
         let mut partition_batches = Vec::with_capacity(group_ids.len());
@@ -191,9 +198,9 @@ impl RecordBatchPartitionSplitter {
             // generate the bool filter array from column_ids
             let filter_array: BooleanArray = {
                 let mut filter = vec![false; batch.num_rows()];
-                row_ids.into_iter().for_each(|row_id| {
+                for &row_id in &row_ids {
                     filter[row_id] = true;
-                });
+                }
                 filter.into()
             };
 
@@ -205,7 +212,11 @@ impl RecordBatchPartitionSplitter {
             );
 
             // filter the RecordBatch
-            partition_batches.push((partition_key, filter_record_batch(batch, &filter_array)?));
+            partition_batches.push((
+                partition_key,
+                filter_record_batch(batch, &filter_array)?,
+                row_ids,
+            ));
         }
 
         Ok(partition_batches)
@@ -214,6 +225,7 @@ impl RecordBatchPartitionSplitter {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use arrow_array::{Int32Array, RecordBatch, StringArray};
@@ -279,7 +291,7 @@ mod tests {
         let mut partitioned_batches = partition_splitter
             .split(&batch)
             .expect("Failed to split RecordBatch");
-        partitioned_batches.sort_by_key(|(partition_key, _)| {
+        partitioned_batches.sort_by_key(|(partition_key, _, _)| {
             if let PrimitiveLiteral::Int(i) = partition_key.data().fields()[0]
                 .as_ref()
                 .unwrap()
@@ -328,7 +340,7 @@ mod tests {
 
         let partition_values = partitioned_batches
             .iter()
-            .map(|(partition_key, _)| partition_key.data().clone())
+            .map(|(partition_key, _, _)| partition_key.data().clone())
             .collect::<Vec<_>>();
         // check partition value is struct(1), struct(2), struct(3)
         assert_eq!(partition_values, vec![
@@ -423,7 +435,7 @@ mod tests {
             .split(&batch)
             .expect("Failed to split RecordBatch");
 
-        partitioned_batches.sort_by_key(|(partition_key, _)| {
+        partitioned_batches.sort_by_key(|(partition_key, _, _)| {
             if let PrimitiveLiteral::Int(i) = partition_key.data().fields()[0]
                 .as_ref()
                 .unwrap()
@@ -457,24 +469,27 @@ mod tests {
         };
 
         // Verify partition 1: id=1, names=["a", "c", "g"]
-        let (key, batch) = &partitioned_batches[0];
+        let (key, batch, row_ids) = &partitioned_batches[0];
         assert_eq!(key.data(), &Struct::from_iter(vec![Some(Literal::int(1))]));
         let (ids, names) = extract_values(batch);
         assert_eq!(ids, vec![1, 1, 1]);
         assert_eq!(names, vec!["a", "c", "g"]);
+        assert_eq!(row_ids, &vec![0, 2, 6]);
 
         // Verify partition 2: id=2, names=["b", "e"]
-        let (key, batch) = &partitioned_batches[1];
+        let (key, batch, row_ids) = &partitioned_batches[1];
         assert_eq!(key.data(), &Struct::from_iter(vec![Some(Literal::int(2))]));
         let (ids, names) = extract_values(batch);
         assert_eq!(ids, vec![2, 2]);
         assert_eq!(names, vec!["b", "e"]);
+        assert_eq!(row_ids, &vec![1, 4]);
 
         // Verify partition 3: id=3, names=["d", "f"]
-        let (key, batch) = &partitioned_batches[2];
+        let (key, batch, row_ids) = &partitioned_batches[2];
         assert_eq!(key.data(), &Struct::from_iter(vec![Some(Literal::int(3))]));
         let (ids, names) = extract_values(batch);
         assert_eq!(ids, vec![3, 3]);
         assert_eq!(names, vec!["d", "f"]);
+        assert_eq!(row_ids, &vec![3, 5]);
     }
 }

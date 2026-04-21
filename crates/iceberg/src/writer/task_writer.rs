@@ -62,7 +62,7 @@ use crate::writer::partitioning::PartitioningWriter;
 use crate::writer::partitioning::clustered_writer::ClusteredWriter;
 use crate::writer::partitioning::fanout_writer::FanoutWriter;
 use crate::writer::partitioning::unpartitioned_writer::UnpartitionedWriter;
-use crate::writer::{IcebergWriter, IcebergWriterBuilder};
+use crate::writer::{IcebergWriter, IcebergWriterBuilder, PositionDeleteInput};
 
 /// High-level writer that handles partitioning and routing of `RecordBatch` data to Iceberg tables.
 pub struct TaskWriter<B: IcebergWriterBuilder> {
@@ -152,30 +152,91 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
         match writer {
             SupportedWriter::Unpartitioned(writer) => writer.write(batch).await,
             SupportedWriter::Fanout(writer) => {
-                if self.partition_splitter.is_none() {
-                    self.partition_splitter = Some(
-                        RecordBatchPartitionSplitter::try_new_with_precomputed_values(
-                            self.schema.clone(),
-                            self.partition_spec.clone(),
-                        )?,
-                    );
-                }
+                Self::ensure_partition_splitter(
+                    &mut self.partition_splitter,
+                    &self.schema,
+                    &self.partition_spec,
+                )?;
 
                 Self::write_partitioned_batches(writer, &self.partition_splitter, &batch).await
             }
             SupportedWriter::Clustered(writer) => {
-                if self.partition_splitter.is_none() {
-                    self.partition_splitter = Some(
-                        RecordBatchPartitionSplitter::try_new_with_precomputed_values(
-                            self.schema.clone(),
-                            self.partition_spec.clone(),
-                        )?,
-                    );
-                }
+                Self::ensure_partition_splitter(
+                    &mut self.partition_splitter,
+                    &self.schema,
+                    &self.partition_spec,
+                )?;
 
                 Self::write_partitioned_batches(writer, &self.partition_splitter, &batch).await
             }
         }
+    }
+
+    /// Write a `RecordBatch` to the `TaskWriter` and return the `(file_path, pos)` for each
+    /// input row.
+    ///
+    /// The returned [`PositionArray`] has the same length as `batch.num_rows()`, with entry `i`
+    /// describing where row `i` of the input was written. For partitioned tables, the input
+    /// is first split by partition; the positions for each partition are then gathered back
+    /// into the original input row order.
+    pub async fn write_with_position(
+        &mut self,
+        batch: RecordBatch,
+    ) -> Result<Vec<PositionDeleteInput>> {
+        let writer = self.writer.as_mut().ok_or_else(|| {
+            crate::Error::new(
+                crate::ErrorKind::Unexpected,
+                "TaskWriter has been closed and cannot be used",
+            )
+        })?;
+
+        match writer {
+            SupportedWriter::Unpartitioned(writer) => writer.write_with_position(batch).await,
+            SupportedWriter::Fanout(writer) => {
+                Self::ensure_partition_splitter(
+                    &mut self.partition_splitter,
+                    &self.schema,
+                    &self.partition_spec,
+                )?;
+
+                Self::write_partitioned_batches_with_position(
+                    writer,
+                    &self.partition_splitter,
+                    &batch,
+                )
+                .await
+            }
+            SupportedWriter::Clustered(writer) => {
+                Self::ensure_partition_splitter(
+                    &mut self.partition_splitter,
+                    &self.schema,
+                    &self.partition_spec,
+                )?;
+
+                Self::write_partitioned_batches_with_position(
+                    writer,
+                    &self.partition_splitter,
+                    &batch,
+                )
+                .await
+            }
+        }
+    }
+
+    fn ensure_partition_splitter(
+        splitter: &mut Option<RecordBatchPartitionSplitter>,
+        schema: &SchemaRef,
+        partition_spec: &PartitionSpecRef,
+    ) -> Result<()> {
+        if splitter.is_none() {
+            *splitter = Some(
+                RecordBatchPartitionSplitter::try_new_with_precomputed_values(
+                    schema.clone(),
+                    partition_spec.clone(),
+                )?,
+            );
+        }
+        Ok(())
     }
 
     /// Close the `TaskWriter` and return all written data files.
@@ -204,11 +265,57 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
             .expect("partition splitter must be initialised before use");
         let partitioned_batches = splitter.split(batch)?;
 
-        for (partition_key, partition_batch) in partitioned_batches {
+        for (partition_key, partition_batch, _) in partitioned_batches {
             writer.write(partition_key, partition_batch).await?;
         }
 
         Ok(())
+    }
+
+    async fn write_partitioned_batches_with_position<W: PartitioningWriter>(
+        writer: &mut W,
+        partition_splitter: &Option<RecordBatchPartitionSplitter>,
+        batch: &RecordBatch,
+    ) -> Result<Vec<PositionDeleteInput>> {
+        let splitter = partition_splitter
+            .as_ref()
+            .expect("partition splitter must be initialised before use");
+        let partitioned_batches = splitter.split(batch)?;
+
+        let num_rows = batch.num_rows();
+
+        // Fast path: the batch fell into a single partition, so the inner writer's output positions
+        // are already in the correct order and can be returned directly without additional shuffling
+        if partitioned_batches.len() == 1 {
+            let [(partition_key, partition_batch, _)] = partitioned_batches.try_into().unwrap();
+            let positions = writer
+                .write_with_position(partition_key, partition_batch)
+                .await?;
+            return Ok(positions);
+        }
+
+        let mut builder: Vec<Option<PositionDeleteInput>> = vec![None; num_rows];
+        for (partition_key, partition_batch, row_ids) in partitioned_batches {
+            let positions_for_partition = writer
+                .write_with_position(partition_key, partition_batch)
+                .await?;
+            for (row_id, position) in row_ids.into_iter().zip(positions_for_partition) {
+                builder[row_id] = Some(position);
+            }
+        }
+        let positions = builder
+            .into_iter()
+            .enumerate()
+            .map(|(i, pos)| {
+                pos.ok_or_else(|| {
+                    crate::Error::new(
+                        crate::ErrorKind::Unexpected,
+                        format!("missing position for input row {i}"),
+                    )
+                })
+            })
+            .collect::<Result<Vec<PositionDeleteInput>>>()?;
+        Ok(positions)
     }
 }
 
@@ -216,6 +323,13 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
 impl<B: IcebergWriterBuilder> IcebergWriter for TaskWriter<B> {
     async fn write(&mut self, input: RecordBatch) -> Result<()> {
         self.write(input).await
+    }
+
+    async fn write_with_position(
+        &mut self,
+        input: RecordBatch,
+    ) -> Result<Vec<PositionDeleteInput>> {
+        self.write_with_position(input).await
     }
 
     async fn close(&mut self) -> Result<Vec<DataFile>> {
@@ -481,6 +595,100 @@ mod tests {
         let partition_counts = verify_partition_files(&data_files, 4);
         assert_eq!(partition_counts.get("US"), Some(&2));
         assert_eq!(partition_counts.get("EU"), Some(&2));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_task_writer_write_with_position_unpartitioned() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let schema = create_test_schema()?;
+        let arrow_schema = create_arrow_schema();
+
+        let partition_spec = Arc::new(PartitionSpec::builder(schema.clone()).build()?);
+
+        let writer_builder = create_writer_builder(&temp_dir, schema.clone())?;
+        let mut task_writer = TaskWriter::new(writer_builder, false, schema, partition_spec);
+
+        let batch = RecordBatch::try_new(arrow_schema, vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["US", "EU", "US"])) as ArrayRef,
+        ])?;
+
+        let positions = task_writer.write_with_position(batch).await?;
+        let data_files = task_writer.close().await?;
+
+        assert_eq!(positions.len(), 3);
+        assert!(!data_files.is_empty());
+
+        let file_path = data_files[0].file_path();
+        for (i, pos) in positions.iter().enumerate() {
+            assert_eq!(&*pos.path, file_path);
+            assert_eq!(pos.pos, i as i64);
+        }
+
+        let files: Vec<&str> = data_files.iter().map(|f| f.file_path()).collect();
+        assert!(files.contains(&file_path));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_task_writer_write_with_position_partitioned_fanout() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let schema = create_test_schema()?;
+        let arrow_schema = create_arrow_schema_with_partition();
+
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .with_spec_id(1)
+                .add_partition_field("region", "region", crate::spec::Transform::Identity)?
+                .build()?,
+        );
+
+        let writer_builder = create_writer_builder(&temp_dir, schema.clone())?;
+        let mut task_writer = TaskWriter::new(writer_builder, true, schema, partition_spec);
+
+        let partition_field = Field::new("region", DataType::Utf8, false).with_metadata(
+            HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1000".to_string())]),
+        );
+        let partition_values = StringArray::from(vec!["US", "EU", "US", "EU"]);
+        let partition_struct = StructArray::from(vec![(
+            Arc::new(partition_field),
+            Arc::new(partition_values) as ArrayRef,
+        )]);
+
+        let batch = RecordBatch::try_new(arrow_schema, vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie", "Dave"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["US", "EU", "US", "EU"])) as ArrayRef,
+            Arc::new(partition_struct) as ArrayRef,
+        ])?;
+
+        let positions = task_writer.write_with_position(batch).await?;
+        let data_files = task_writer.close().await?;
+
+        assert_eq!(positions.len(), 4, "one position per input row");
+
+        // Rows 0 and 2 go to US, rows 1 and 3 go to EU. Within each partition,
+        // positions must be contiguous starting at 0.
+        let path_us = &*positions[0].path;
+        let path_eu = &*positions[1].path;
+
+        assert_ne!(path_us, path_eu, "US and EU should land in different files");
+        assert_eq!(&*positions[2].path, path_us);
+        assert_eq!(&*positions[3].path, path_eu);
+
+        assert_eq!(positions[0].pos, 0);
+        assert_eq!(positions[1].pos, 0);
+        assert_eq!(positions[2].pos, 1);
+        assert_eq!(positions[3].pos, 1);
+
+        let file_paths: std::collections::HashSet<&str> =
+            data_files.iter().map(|f| f.file_path()).collect();
+        assert!(file_paths.contains(path_us));
+        assert!(file_paths.contains(path_eu));
 
         Ok(())
     }

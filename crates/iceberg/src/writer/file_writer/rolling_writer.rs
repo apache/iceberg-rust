@@ -16,6 +16,7 @@
 // under the License.
 
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use futures::future::{self, BoxFuture};
@@ -23,9 +24,9 @@ use futures::future::{self, BoxFuture};
 use crate::io::{FileIO, OutputFile};
 use crate::runtime::{JoinHandle, spawn};
 use crate::spec::{DataFileBuilder, PartitionKey, TableProperties};
-use crate::writer::CurrentFileStatus;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
 use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
+use crate::writer::{CurrentFileStatus, PositionDeleteInput};
 use crate::{Error, ErrorKind, Result};
 
 type CloseFuture = BoxFuture<'static, Result<Vec<DataFileBuilder>>>;
@@ -209,27 +210,11 @@ where
         Ok(())
     }
 
-    /// Writes a record batch to the current file, rolling over to a new file if necessary.
-    ///
-    /// # Parameters
-    ///
-    /// * `partition_key` - Optional partition key for the data
-    /// * `input` - The record batch to write
-    ///
-    /// # Returns
-    ///
-    /// A `Result` indicating success or failure
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the writer is not initialized or if writing fails
-    pub async fn write(
+    async fn ensure_partition_writer(
         &mut self,
         partition_key: &Option<PartitionKey>,
-        input: &RecordBatch,
-    ) -> Result<()> {
+    ) -> Result<&mut B::R> {
         if self.inner.is_none() {
-            // initialize inner writer
             self.inner = Some(
                 self.inner_builder
                     .build(self.new_output_file(partition_key)?)
@@ -260,15 +245,77 @@ where
             }
         }
 
-        // write the input
-        if let Some(writer) = self.inner.as_mut() {
-            Ok(writer.write(input).await?)
-        } else {
-            Err(Error::new(
+        let writer = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Writer is not initialized!"))?;
+        Ok(writer)
+    }
+
+    /// Writes a record batch to the current file, rolling over to a new file if necessary.
+    ///
+    /// # Parameters
+    ///
+    /// * `partition_key` - Optional partition key for the data
+    /// * `input` - The record batch to write
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or failure
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the writer is not initialized or if writing fails
+    pub async fn write(
+        &mut self,
+        partition_key: &Option<PartitionKey>,
+        input: &RecordBatch,
+    ) -> Result<()> {
+        let writer = self.ensure_partition_writer(partition_key).await?;
+        writer.write(input).await
+    }
+
+    /// Writes a record batch and returns the `(file_path, pos)` position for each record.
+    ///
+    /// # Parameters
+    ///
+    /// * `partition_key` - Optional partition key for the data
+    /// * `input` - The record batch to write
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a vector of `PositionDeleteInput` with the file path and position for each record
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for the following cases:
+    /// - If the writer is not initialized
+    /// - If writing fails
+    /// - If the position exceeds `i64::MAX`, which would cause overflow in position deletes
+    pub async fn write_with_position(
+        &mut self,
+        partition_key: &Option<PartitionKey>,
+        input: &RecordBatch,
+    ) -> Result<Vec<PositionDeleteInput>> {
+        let writer = self.ensure_partition_writer(partition_key).await?;
+
+        let num_rows = input.num_rows();
+        let file_path: Arc<str> = Arc::from(writer.current_file_path());
+        let start_pos = writer.current_row_num();
+        if start_pos.saturating_add(num_rows) > i64::MAX as usize {
+            return Err(Error::new(
                 ErrorKind::Unexpected,
-                "Writer is not initialized!",
-            ))
+                "position overflow: file has more than 2^63 - 1 rows",
+            ));
         }
+
+        writer.write(input).await?;
+
+        // Generate position delete inputs for the entire batch
+        let positions = (0..num_rows)
+            .map(|i| PositionDeleteInput::new(file_path.clone(), (start_pos + i) as i64))
+            .collect();
+        Ok(positions)
     }
 
     /// Closes the writer and returns all data file builders.

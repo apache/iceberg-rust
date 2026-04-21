@@ -24,7 +24,9 @@ use async_trait::async_trait;
 
 use crate::spec::{PartitionKey, Struct};
 use crate::writer::partitioning::PartitioningWriter;
-use crate::writer::{DefaultInput, DefaultOutput, IcebergWriter, IcebergWriterBuilder};
+use crate::writer::{
+    DefaultInput, DefaultOutput, IcebergWriter, IcebergWriterBuilder, PositionDeleteInput,
+};
 use crate::{Error, ErrorKind, Result};
 
 /// A writer that writes data to a single partition at a time.
@@ -40,6 +42,7 @@ use crate::{Error, ErrorKind, Result};
 pub struct ClusteredWriter<B, I = DefaultInput, O = DefaultOutput>
 where
     B: IcebergWriterBuilder<I, O>,
+    I: Send + 'static,
     O: IntoIterator + FromIterator<<O as IntoIterator>::Item>,
     <O as IntoIterator>::Item: Clone,
 {
@@ -70,6 +73,40 @@ where
         }
     }
 
+    /// Switch to a writer for the given `partition_key`, reusing the current one if the
+    /// partition matches, creating a new one otherwise. Rejects out-of-order writes to
+    /// partitions that have already been closed.
+    async fn ensure_partition_writer(&mut self, partition_key: &PartitionKey) -> Result<()> {
+        let partition_value = partition_key.data();
+
+        if self.closed_partitions.contains(partition_value) {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                format!(
+                    "The input is not sorted! Cannot write to partition that was previously closed: {partition_key:?}"
+                ),
+            ));
+        }
+
+        let need_new_writer = match &self.current_partition {
+            Some(current) => current != partition_value,
+            None => true,
+        };
+
+        if need_new_writer {
+            self.close_current_writer().await?;
+
+            self.current_writer = Some(
+                self.inner_builder
+                    .build(Some(partition_key.clone()))
+                    .await?,
+            );
+            self.current_partition = Some(partition_value.clone());
+        }
+
+        Ok(())
+    }
+
     /// Closes the current writer if it exists, flushes the written data to output, and record closed partition.
     async fn close_current_writer(&mut self) -> Result<()> {
         if let Some(mut writer) = self.current_writer.take() {
@@ -94,41 +131,26 @@ where
     <O as IntoIterator>::Item: Send + Clone,
 {
     async fn write(&mut self, partition_key: PartitionKey, input: I) -> Result<()> {
-        let partition_value = partition_key.data();
+        self.ensure_partition_writer(&partition_key).await?;
 
-        // Check if this partition has been closed already
-        if self.closed_partitions.contains(partition_value) {
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                format!(
-                    "The input is not sorted! Cannot write to partition that was previously closed: {partition_key:?}"
-                ),
-            ));
-        }
-
-        // Check if we need to switch to a new partition
-        let need_new_writer = match &self.current_partition {
-            Some(current) => current != partition_value,
-            None => true,
-        };
-
-        if need_new_writer {
-            self.close_current_writer().await?;
-
-            // Create a new writer for the new partition
-            self.current_writer = Some(
-                self.inner_builder
-                    .build(Some(partition_key.clone()))
-                    .await?,
-            );
-            self.current_partition = Some(partition_value.clone());
-        }
-
-        // do write
         self.current_writer
             .as_mut()
             .expect("Writer should be initialized")
             .write(input)
+            .await
+    }
+
+    async fn write_with_position(
+        &mut self,
+        partition_key: PartitionKey,
+        input: I,
+    ) -> Result<Vec<PositionDeleteInput>> {
+        self.ensure_partition_writer(&partition_key).await?;
+
+        self.current_writer
+            .as_mut()
+            .expect("Writer should be initialized")
+            .write_with_position(input)
             .await
     }
 

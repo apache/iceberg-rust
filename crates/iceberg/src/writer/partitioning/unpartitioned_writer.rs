@@ -20,7 +20,9 @@
 use std::marker::PhantomData;
 
 use crate::Result;
-use crate::writer::{DefaultInput, DefaultOutput, IcebergWriter, IcebergWriterBuilder};
+use crate::writer::{
+    DefaultInput, DefaultOutput, IcebergWriter, IcebergWriterBuilder, PositionDeleteInput,
+};
 
 /// A simple wrapper around `IcebergWriterBuilder` for unpartitioned tables.
 ///
@@ -35,6 +37,7 @@ use crate::writer::{DefaultInput, DefaultOutput, IcebergWriter, IcebergWriterBui
 pub struct UnpartitionedWriter<B, I = DefaultInput, O = DefaultOutput>
 where
     B: IcebergWriterBuilder<I, O>,
+    I: Send + 'static,
     O: IntoIterator + FromIterator<<O as IntoIterator>::Item>,
     <O as IntoIterator>::Item: Clone,
 {
@@ -83,6 +86,21 @@ where
             .as_mut()
             .expect("Writer should be initialized")
             .write(input)
+            .await
+    }
+
+    /// Write data to the writer and return position information for each record.
+    ///
+    /// See [`IcebergWriter::write_with_position`] for details.
+    pub async fn write_with_position(&mut self, input: I) -> Result<Vec<PositionDeleteInput>> {
+        if self.writer.is_none() {
+            self.writer = Some(self.inner_builder.build(None).await?);
+        }
+
+        self.writer
+            .as_mut()
+            .expect("Writer should be initialized")
+            .write_with_position(input)
             .await
     }
 

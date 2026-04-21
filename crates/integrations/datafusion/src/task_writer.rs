@@ -221,7 +221,7 @@ impl<B: IcebergWriterBuilder> TaskWriter<B> {
         let partitioned_batches = splitter.split(batch)?;
 
         // Write each partition
-        for (partition_key, partition_batch) in partitioned_batches {
+        for (partition_key, partition_batch, _) in partitioned_batches {
             writer.write(partition_key, partition_batch).await?;
         }
 

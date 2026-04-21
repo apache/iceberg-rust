@@ -93,6 +93,7 @@ typetag = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 zstd = { workspace = true }
+hashbrown = "0.17.0"
 
 [dev-dependencies]
 expect-test = { workspace = true }

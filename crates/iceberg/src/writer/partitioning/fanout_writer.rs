@@ -24,7 +24,9 @@ use async_trait::async_trait;
 
 use crate::spec::{PartitionKey, Struct};
 use crate::writer::partitioning::PartitioningWriter;
-use crate::writer::{DefaultInput, DefaultOutput, IcebergWriter, IcebergWriterBuilder};
+use crate::writer::{
+    DefaultInput, DefaultOutput, IcebergWriter, IcebergWriterBuilder, PositionDeleteInput,
+};
 use crate::{Error, ErrorKind, Result};
 
 /// A writer that can write data to multiple partitions simultaneously.
@@ -42,6 +44,7 @@ use crate::{Error, ErrorKind, Result};
 pub struct FanoutWriter<B, I = DefaultInput, O = DefaultOutput>
 where
     B: IcebergWriterBuilder<I, O>,
+    I: Send + 'static,
     O: IntoIterator + FromIterator<<O as IntoIterator>::Item>,
     <O as IntoIterator>::Item: Clone,
 {
@@ -101,6 +104,15 @@ where
     async fn write(&mut self, partition_key: PartitionKey, input: I) -> Result<()> {
         let writer = self.get_or_create_writer(&partition_key).await?;
         writer.write(input).await
+    }
+
+    async fn write_with_position(
+        &mut self,
+        partition_key: PartitionKey,
+        input: I,
+    ) -> Result<Vec<PositionDeleteInput>> {
+        let writer = self.get_or_create_writer(&partition_key).await?;
+        writer.write_with_position(input).await
     }
 
     async fn close(mut self) -> Result<O> {

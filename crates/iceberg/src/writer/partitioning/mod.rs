@@ -27,14 +27,16 @@ pub mod unpartitioned_writer;
 
 use crate::Result;
 use crate::spec::PartitionKey;
-use crate::writer::{DefaultInput, DefaultOutput};
+use crate::writer::{DefaultInput, DefaultOutput, PositionDeleteInput};
 
 /// A writer that can write data to partitioned tables.
 ///
 /// This trait provides methods for writing data with partition keys and
 /// closing the writer to retrieve the output.
 #[async_trait::async_trait]
-pub trait PartitioningWriter<I = DefaultInput, O = DefaultOutput>: Send + 'static {
+pub trait PartitioningWriter<I = DefaultInput, O = DefaultOutput>: Send + 'static
+where I: Send + 'static
+{
     /// Write data with a partition key.
     ///
     /// # Parameters
@@ -46,6 +48,13 @@ pub trait PartitioningWriter<I = DefaultInput, O = DefaultOutput>: Send + 'stati
     ///
     /// `Ok(())` on success, or an error if the write operation fails.
     async fn write(&mut self, partition_key: PartitionKey, input: I) -> Result<()>;
+
+    /// Write data with a partition key and return position information for each record.
+    async fn write_with_position(
+        &mut self,
+        partition_key: PartitionKey,
+        input: I,
+    ) -> Result<Vec<PositionDeleteInput>>;
 
     /// Close the writer and return the output.
     ///

@@ -23,7 +23,7 @@ use crate::spec::{DataContentType, DataFile, PartitionKey};
 use crate::writer::file_writer::FileWriterBuilder;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
 use crate::writer::file_writer::rolling_writer::{RollingFileWriter, RollingFileWriterBuilder};
-use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
+use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder, PositionDeleteInput};
 use crate::{Error, ErrorKind, Result};
 
 /// Builder for `DataFileWriter`.
@@ -90,6 +90,22 @@ where
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
         if let Some(writer) = self.inner.as_mut() {
             writer.write(&self.partition_key, &batch).await
+        } else {
+            Err(Error::new(
+                ErrorKind::Unexpected,
+                "Writer is not initialized!",
+            ))
+        }
+    }
+
+    async fn write_with_position(
+        &mut self,
+        batch: RecordBatch,
+    ) -> Result<Vec<PositionDeleteInput>> {
+        if let Some(writer) = self.inner.as_mut() {
+            writer
+                .write_with_position(&self.partition_key, &batch)
+                .await
         } else {
             Err(Error::new(
                 ErrorKind::Unexpected,
