@@ -193,6 +193,15 @@ pub(crate) struct RecordBatchTransformerBuilder {
     snapshot_schema: Arc<IcebergSchema>,
     projected_iceberg_field_ids: Vec<i32>,
     constant_fields: HashMap<i32, Datum>,
+    /// Optional table-level Arrow schema override. When set, the transformer uses it
+    /// instead of `schema_to_arrow_schema(snapshot_schema)` to derive the target types
+    /// of each projected column. The override must carry `PARQUET:field_id` metadata on
+    /// each top-level field so that the transformer can match columns by field ID.
+    ///
+    /// Used to produce Arrow layouts that diverge from the default mapping (e.g.
+    /// `Utf8View` instead of `Utf8`) without a physical cast, as long as the types
+    /// share the same Parquet physical encoding.
+    arrow_schema_override: Option<ArrowSchemaRef>,
 }
 
 impl RecordBatchTransformerBuilder {
@@ -204,7 +213,14 @@ impl RecordBatchTransformerBuilder {
             snapshot_schema,
             projected_iceberg_field_ids: projected_iceberg_field_ids.to_vec(),
             constant_fields: HashMap::new(),
+            arrow_schema_override: None,
         }
+    }
+
+    /// Override the table-level Arrow schema used when deriving the transformer's target types.
+    pub(crate) fn with_arrow_schema(mut self, arrow_schema: ArrowSchemaRef) -> Self {
+        self.arrow_schema_override = Some(arrow_schema);
+        self
     }
 
     /// Add a constant value for a specific field ID.
@@ -245,6 +261,7 @@ impl RecordBatchTransformerBuilder {
             snapshot_schema: self.snapshot_schema,
             projected_iceberg_field_ids: self.projected_iceberg_field_ids,
             constant_fields: self.constant_fields,
+            arrow_schema_override: self.arrow_schema_override,
             batch_transform: None,
         }
     }
@@ -289,6 +306,9 @@ pub(crate) struct RecordBatchTransformer {
     // Datum holds both the Iceberg type and the value
     constant_fields: HashMap<i32, Datum>,
 
+    /// Table-level Arrow schema override (see builder docs).
+    arrow_schema_override: Option<ArrowSchemaRef>,
+
     // BatchTransform gets lazily constructed based on the schema of
     // the first RecordBatch we receive from the file
     batch_transform: Option<BatchTransform>,
@@ -330,6 +350,7 @@ impl RecordBatchTransformer {
                     self.snapshot_schema.as_ref(),
                     &self.projected_iceberg_field_ids,
                     &self.constant_fields,
+                    self.arrow_schema_override.as_ref(),
                 )?);
 
                 self.process_record_batch(record_batch)?
@@ -349,8 +370,15 @@ impl RecordBatchTransformer {
         snapshot_schema: &IcebergSchema,
         projected_iceberg_field_ids: &[i32],
         constant_fields: &HashMap<i32, Datum>,
+        arrow_schema_override: Option<&ArrowSchemaRef>,
     ) -> Result<BatchTransform> {
-        let mapped_unprojected_arrow_schema = Arc::new(schema_to_arrow_schema(snapshot_schema)?);
+        // Prefer the caller-supplied table Arrow schema when present. This lets the caller
+        // pin types that share the same Parquet physical encoding as the default mapping
+        // (e.g. Utf8View / BinaryView) so no physical cast is performed downstream.
+        let mapped_unprojected_arrow_schema = match arrow_schema_override {
+            Some(schema) => Arc::clone(schema),
+            None => Arc::new(schema_to_arrow_schema(snapshot_schema)?),
+        };
         let field_id_to_mapped_schema_map =
             Self::build_field_id_to_arrow_schema_map(&mapped_unprojected_arrow_schema)?;
 

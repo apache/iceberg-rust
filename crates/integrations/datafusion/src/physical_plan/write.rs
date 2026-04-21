@@ -225,12 +225,16 @@ impl ExecutionPlan for IcebergWriteExec {
             )));
         }
 
-        // Create data file writer builder
+        // Pass the caller's Arrow schema as an override so the underlying
+        // `AsyncArrowWriter` accepts the incoming batches' Arrow layout directly
+        // (e.g. Utf8View/BinaryView) without a physical cast — only safe because
+        // both sides share the same Parquet physical encoding.
         let parquet_file_writer_builder = ParquetWriterBuilder::new_with_match_mode(
             WriterProperties::default(),
             self.table.metadata().current_schema().clone(),
             FieldMatchMode::Name,
-        );
+        )
+        .with_arrow_schema(self.schema());
         let target_file_size = table_props.write_target_file_size_bytes;
 
         let file_io = self.table.file_io().clone();

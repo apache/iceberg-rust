@@ -27,7 +27,7 @@ use arrow_array::{Array, ArrayRef, BooleanArray, Datum as ArrowDatum, RecordBatc
 use arrow_cast::cast::cast;
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow_schema::{
-    ArrowError, DataType, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+    ArrowError, DataType, Field, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
 use arrow_string::like::starts_with;
 use bytes::Bytes;
@@ -38,7 +38,10 @@ use parquet::arrow::arrow_reader::{
     ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions, RowFilter, RowSelection, RowSelector,
 };
 use parquet::arrow::async_reader::AsyncFileReader;
-use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ParquetRecordBatchStreamBuilder, ProjectionMask};
+use parquet::arrow::{
+    ArrowSchemaConverter, PARQUET_FIELD_ID_META_KEY, ParquetRecordBatchStreamBuilder,
+    ProjectionMask,
+};
 use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
 };
@@ -47,6 +50,7 @@ use typed_builder::TypedBuilder;
 
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
+use crate::arrow::schema::get_field_id_from_metadata;
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
 use crate::delete_vector::DeleteVector;
 use crate::error::Result;
@@ -141,6 +145,12 @@ pub struct ArrowReaderBuilder {
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
     parquet_read_options: ParquetReadOptions,
+    /// Optional caller-supplied table-level Arrow schema. When set, the reader uses
+    /// it in place of `schema_to_arrow_schema(snapshot)` when deriving target types
+    /// for the underlying Parquet decoder and the record-batch transformer. Used to
+    /// pin Arrow layouts (e.g. `Utf8View`, `BinaryView`) that share the same Parquet
+    /// physical encoding as the default mapping but avoid an `i32`-offset downcast.
+    arrow_schema_override: Option<ArrowSchemaRef>,
 }
 
 impl ArrowReaderBuilder {
@@ -155,7 +165,20 @@ impl ArrowReaderBuilder {
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
             parquet_read_options: ParquetReadOptions::builder().build(),
+            arrow_schema_override: None,
         }
+    }
+
+    /// Override the table-level Arrow schema used by the reader.
+    ///
+    /// The override must carry `PARQUET:field_id` metadata on each top-level field
+    /// so that projection and schema-evolution matching still work by field ID. The
+    /// override may only diverge from the default mapping in ways that share the
+    /// same Parquet physical encoding (e.g. `Utf8View` vs `Utf8`, `BinaryView` vs
+    /// `LargeBinary` — all BYTE_ARRAY).
+    pub fn with_arrow_schema(mut self, arrow_schema: ArrowSchemaRef) -> Self {
+        self.arrow_schema_override = Some(arrow_schema);
+        self
     }
 
     /// Sets the max number of in flight data files that are being fetched
@@ -222,6 +245,7 @@ impl ArrowReaderBuilder {
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
             parquet_read_options: self.parquet_read_options,
+            arrow_schema_override: self.arrow_schema_override,
         }
     }
 }
@@ -239,6 +263,9 @@ pub struct ArrowReader {
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
     parquet_read_options: ParquetReadOptions,
+
+    /// See [`ArrowReaderBuilder::with_arrow_schema`].
+    arrow_schema_override: Option<ArrowSchemaRef>,
 }
 
 impl ArrowReader {
@@ -251,6 +278,7 @@ impl ArrowReader {
         let row_group_filtering_enabled = self.row_group_filtering_enabled;
         let row_selection_enabled = self.row_selection_enabled;
         let parquet_read_options = self.parquet_read_options;
+        let arrow_schema_override = self.arrow_schema_override.clone();
 
         // Fast-path for single concurrency to avoid overhead of try_flatten_unordered
         let stream: ArrowRecordBatchStream = if concurrency_limit_data_files == 1 {
@@ -258,6 +286,7 @@ impl ArrowReader {
                 tasks
                     .and_then(move |task| {
                         let file_io = file_io.clone();
+                        let arrow_schema_override = arrow_schema_override.clone();
 
                         Self::process_file_scan_task(
                             task,
@@ -267,6 +296,7 @@ impl ArrowReader {
                             row_group_filtering_enabled,
                             row_selection_enabled,
                             parquet_read_options,
+                            arrow_schema_override,
                         )
                     })
                     .map_err(|err| {
@@ -280,6 +310,7 @@ impl ArrowReader {
                 tasks
                     .map_ok(move |task| {
                         let file_io = file_io.clone();
+                        let arrow_schema_override = arrow_schema_override.clone();
 
                         Self::process_file_scan_task(
                             task,
@@ -289,6 +320,7 @@ impl ArrowReader {
                             row_group_filtering_enabled,
                             row_selection_enabled,
                             parquet_read_options,
+                            arrow_schema_override,
                         )
                     })
                     .map_err(|err| {
@@ -311,6 +343,7 @@ impl ArrowReader {
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
         parquet_read_options: ParquetReadOptions,
+        arrow_schema_override: Option<ArrowSchemaRef>,
     ) -> Result<ArrowRecordBatchStream> {
         let should_load_page_index =
             (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
@@ -371,12 +404,33 @@ impl ArrowReader {
                 add_fallback_field_ids_to_arrow_schema(arrow_metadata.schema())
             };
 
+            // If the caller supplied an Arrow schema override, apply it to the
+            // assigned-ID schema so the Parquet decoder produces the caller's types.
+            let arrow_schema =
+                apply_arrow_schema_override(&arrow_schema, arrow_schema_override.as_deref());
             let options = ArrowReaderOptions::new().with_schema(arrow_schema);
             ArrowReaderMetadata::try_new(Arc::clone(arrow_metadata.metadata()), options).map_err(
                 |e| {
                     Error::new(
                         ErrorKind::Unexpected,
                         "Failed to create ArrowReaderMetadata with field ID schema",
+                    )
+                    .with_source(e)
+                },
+            )?
+        } else if let Some(override_schema) = arrow_schema_override.as_deref() {
+            // Branch 1+override: file has embedded field IDs and caller supplied an Arrow
+            // schema override. Remap the file's arrow schema field-by-field to the
+            // caller's types so the Parquet decoder produces them directly (zero-copy
+            // for types that share the same physical encoding, e.g. Utf8View ↔ Utf8).
+            let remapped =
+                apply_arrow_schema_override(arrow_metadata.schema(), Some(override_schema));
+            let options = ArrowReaderOptions::new().with_schema(remapped);
+            ArrowReaderMetadata::try_new(Arc::clone(arrow_metadata.metadata()), options).map_err(
+                |e| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "Failed to create ArrowReaderMetadata with overridden schema",
                     )
                     .with_source(e)
                 },
@@ -418,6 +472,11 @@ impl ArrowReader {
         // column re-ordering, partition constants, and virtual field addition (like _file)
         let mut record_batch_transformer_builder =
             RecordBatchTransformerBuilder::new(task.schema_ref(), task.project_field_ids());
+
+        if let Some(override_schema) = arrow_schema_override.as_ref() {
+            record_batch_transformer_builder =
+                record_batch_transformer_builder.with_arrow_schema(override_schema.clone());
+        }
 
         // Add the _file metadata column if it's in the projected fields
         if task.project_field_ids().contains(&RESERVED_FIELD_ID_FILE) {
@@ -1232,6 +1291,110 @@ fn add_fallback_field_ids_to_arrow_schema(arrow_schema: &ArrowSchemaRef) -> Arc<
     ))
 }
 
+/// Remap the data types of `file_schema`'s top-level fields to match `override_schema`
+/// by `PARQUET:field_id`. A field is only coerced to the override's type when the two
+/// share the file field's Parquet physical layout at every leaf (e.g. `Utf8` → `Utf8View`,
+/// both BYTE_ARRAY) — reinterpretation with no decode-time work. Incompatible overrides
+/// (e.g. `Int32` → `Int64`, from Iceberg type promotion) are dropped and the
+/// `RecordBatchTransformer` casts via `arrow::cast()` downstream. Fields without a matching
+/// ID in the override are preserved as-is. When `override_schema` is `None`, returns
+/// `file_schema` unchanged.
+fn apply_arrow_schema_override(
+    file_schema: &ArrowSchemaRef,
+    override_schema: Option<&ArrowSchema>,
+) -> Arc<ArrowSchema> {
+    let Some(override_schema) = override_schema else {
+        return Arc::clone(file_schema);
+    };
+
+    // Field-IDs are Iceberg's stable identity for a column across schema evolution; names
+    // and positions can diverge between file and override, so matching by ID is the only
+    // safe way to pair them.
+    let mut override_fields: HashMap<i32, &FieldRef> = HashMap::new();
+    for field in override_schema.fields() {
+        if let Ok(id) = get_field_id_from_metadata(field) {
+            override_fields.insert(id, field);
+        }
+    }
+
+    // Empty ID map (e.g. override schema authored without field-IDs) means we have no way
+    // to pair fields; skip rather than silently dropping all overrides by position.
+    if override_fields.is_empty() {
+        return Arc::clone(file_schema);
+    }
+
+    // Walk the file schema, not the override: the result must align to the file's shape
+    // so `ArrowReaderOptions::with_schema` accepts it.
+    let mut changed = false;
+    let remapped: Vec<FieldRef> = file_schema
+        .fields()
+        .iter()
+        .map(|file_field| {
+            let override_field = get_field_id_from_metadata(file_field)
+                .ok()
+                .and_then(|id| override_fields.get(&id).copied());
+
+            // No override for this field (column not in override, or file field missing
+            // an ID — common for files materialized via name-mapping): keep file's type.
+            let Some(override_field) = override_field else {
+                return file_field.clone();
+            };
+            // Fast path: identical types need no work and no physical-compat probe.
+            if override_field.data_type() == file_field.data_type() {
+                return file_field.clone();
+            }
+            // The caller's override type doesn't share Parquet physical encoding with the
+            // file (e.g. Iceberg int→long promotion: Int64 hint vs INT32 storage). We
+            // can't ask the decoder to do the cross-physical-type cast — leave the file's
+            // type in place and rely on `RecordBatchTransformer` to `arrow::cast()` the
+            // decoded batch up to the caller's expected type downstream.
+            if !physically_compatible(file_field, override_field) {
+                return file_field.clone();
+            }
+            // Physically compatible (e.g. Utf8→Utf8View, both BYTE_ARRAY): the decoder
+            // can produce the override type zero-copy. Preserve the file field's name,
+            // nullability, and metadata (including its field-ID) so downstream paths
+            // still identify it correctly.
+            changed = true;
+            Arc::new(
+                Field::new(
+                    file_field.name(),
+                    override_field.data_type().clone(),
+                    file_field.is_nullable(),
+                )
+                .with_metadata(file_field.metadata().clone()),
+            )
+        })
+        .collect();
+
+    if changed {
+        Arc::new(ArrowSchema::new_with_metadata(
+            remapped,
+            file_schema.metadata().clone(),
+        ))
+    } else {
+        Arc::clone(file_schema)
+    }
+}
+
+/// Returns true when both Arrow fields convert to the same Parquet physical layout at
+/// every leaf — i.e. the caller can freely coerce one to the other at decode time
+/// without changing how bytes are read. Delegates the Arrow → Parquet physical-type
+/// mapping to `ArrowSchemaConverter`. Returns false on any conversion failure.
+fn physically_compatible(a: &FieldRef, b: &FieldRef) -> bool {
+    fn convert(field: &FieldRef) -> Option<SchemaDescriptor> {
+        let schema = ArrowSchema::new(vec![field.clone()]);
+        ArrowSchemaConverter::new().convert(&schema).ok()
+    }
+    let (Some(da), Some(db)) = (convert(a), convert(b)) else {
+        return false;
+    };
+    if da.num_columns() != db.num_columns() {
+        return false;
+    }
+    (0..da.num_columns()).all(|i| da.column(i).physical_type() == db.column(i).physical_type())
+}
+
 /// A visitor to collect field ids from bound predicates.
 struct CollectFieldIdVisitor {
     field_ids: HashSet<i32>,
@@ -1959,7 +2122,7 @@ mod tests {
 
     use arrow_array::cast::AsArray;
     use arrow_array::{ArrayRef, LargeStringArray, RecordBatch, StringArray};
-    use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
+    use arrow_schema::{DataType, Field, FieldRef, Schema as ArrowSchema, TimeUnit};
     use futures::TryStreamExt;
     use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
     use parquet::arrow::{ArrowWriter, ProjectionMask};
@@ -4702,5 +4865,285 @@ message schema {
         assert_eq!(result[0], expected_0);
         assert_eq!(result[1], expected_1);
         assert_eq!(result[2], expected_2);
+    }
+
+    fn field_with_id(name: &str, dt: DataType, nullable: bool, id: i32) -> FieldRef {
+        Arc::new(Field::new(name, dt, nullable).with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            id.to_string(),
+        )])))
+    }
+
+    fn make_scan_task(
+        path: String,
+        schema: SchemaRef,
+        project_field_ids: Vec<i32>,
+    ) -> FileScanTask {
+        FileScanTask {
+            file_size_in_bytes: std::fs::metadata(&path).unwrap().len(),
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path: path,
+            data_file_format: DataFileFormat::Parquet,
+            schema,
+            project_field_ids,
+            predicate: None,
+            deletes: vec![],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            column_sizes: None,
+            split_offsets: None,
+            case_sensitive: false,
+        }
+    }
+
+    #[test]
+    fn test_physically_compatible() {
+        let int32 = field_with_id("a", DataType::Int32, false, 1);
+        let int64 = field_with_id("a", DataType::Int64, false, 1);
+        let utf8 = field_with_id("s", DataType::Utf8, false, 2);
+        let utf8_view = field_with_id("s", DataType::Utf8View, false, 2);
+        let large_utf8 = field_with_id("s", DataType::LargeUtf8, false, 2);
+        let binary = field_with_id("b", DataType::Binary, false, 3);
+        let binary_view = field_with_id("b", DataType::BinaryView, false, 3);
+        let float32 = field_with_id("f", DataType::Float32, false, 4);
+        let float64 = field_with_id("f", DataType::Float64, false, 4);
+
+        assert!(!super::physically_compatible(&int32, &int64));
+        assert!(!super::physically_compatible(&float32, &float64));
+
+        assert!(super::physically_compatible(&utf8, &utf8_view));
+        assert!(super::physically_compatible(&utf8, &large_utf8));
+        assert!(super::physically_compatible(&binary, &binary_view));
+
+        assert!(super::physically_compatible(&int32, &int32));
+
+        let list_i32 = Arc::new(Field::new(
+            "l",
+            DataType::List(field_with_id("element", DataType::Int32, true, 11)),
+            true,
+        )) as FieldRef;
+        let list_i64 = Arc::new(Field::new(
+            "l",
+            DataType::List(field_with_id("element", DataType::Int64, true, 11)),
+            true,
+        )) as FieldRef;
+        assert!(!super::physically_compatible(&list_i32, &list_i64));
+
+        let struct_i32 = Arc::new(Field::new(
+            "s",
+            DataType::Struct(arrow_schema::Fields::from(vec![field_with_id(
+                "x",
+                DataType::Int32,
+                false,
+                21,
+            )])),
+            false,
+        )) as FieldRef;
+        let struct_i64 = Arc::new(Field::new(
+            "s",
+            DataType::Struct(arrow_schema::Fields::from(vec![field_with_id(
+                "x",
+                DataType::Int64,
+                false,
+                21,
+            )])),
+            false,
+        )) as FieldRef;
+        assert!(!super::physically_compatible(&struct_i32, &struct_i64));
+    }
+
+    #[test]
+    fn test_apply_arrow_schema_override_drops_incompatible() {
+        let file = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "a",
+            DataType::Int32,
+            false,
+            1,
+        )]));
+        let override_schema =
+            ArrowSchema::new(vec![field_with_id("a", DataType::Int64, false, 1)]);
+
+        let result = super::apply_arrow_schema_override(&file, Some(&override_schema));
+        assert_eq!(result.field(0).data_type(), &DataType::Int32);
+    }
+
+    #[test]
+    fn test_apply_arrow_schema_override_applies_compatible() {
+        let file = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "s",
+            DataType::Utf8,
+            false,
+            1,
+        )]));
+        let override_schema =
+            ArrowSchema::new(vec![field_with_id("s", DataType::Utf8View, false, 1)]);
+
+        let result = super::apply_arrow_schema_override(&file, Some(&override_schema));
+        assert_eq!(result.field(0).data_type(), &DataType::Utf8View);
+    }
+
+    #[test]
+    fn test_apply_arrow_schema_override_mixed() {
+        let file = Arc::new(ArrowSchema::new(vec![
+            field_with_id("a", DataType::Int32, false, 1),
+            field_with_id("s", DataType::Utf8, false, 2),
+        ]));
+        let override_schema = ArrowSchema::new(vec![
+            field_with_id("a", DataType::Int64, false, 1),
+            field_with_id("s", DataType::Utf8View, false, 2),
+        ]);
+
+        let result = super::apply_arrow_schema_override(&file, Some(&override_schema));
+        assert_eq!(result.field(0).data_type(), &DataType::Int32);
+        assert_eq!(result.field(1).data_type(), &DataType::Utf8View);
+    }
+
+    /// Regression test for the type-promotion path: when DataFusion (or any caller) passes
+    /// the post-promotion current Arrow schema as the reader's `arrow_schema_override`, and
+    /// the file was written before the promotion, the reader must not ask the Parquet decoder
+    /// to produce the promoted type directly. The override is physically incompatible with
+    /// the file's INT32 storage; the `RecordBatchTransformer` casts Int32 → Int64 downstream.
+    #[tokio::test]
+    async fn test_read_with_incompatible_override_falls_back_and_casts() {
+        use arrow_array::Int32Array;
+
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(2)
+                .with_fields(vec![
+                    NestedField::required(1, "a", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let file_arrow_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "a",
+            DataType::Int32,
+            false,
+            1,
+        )]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let data_path = format!("{}/a.parquet", tmp_dir.path().to_str().unwrap());
+        let data = Arc::new(Int32Array::from(vec![1i32, 2, 3])) as ArrayRef;
+        let batch = RecordBatch::try_new(file_arrow_schema.clone(), vec![data]).unwrap();
+        let file = File::create(&data_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, file_arrow_schema.clone(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let override_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "a",
+            DataType::Int64,
+            false,
+            1,
+        )]));
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs())
+            .with_arrow_schema(override_schema)
+            .build();
+        let task = make_scan_task(data_path, table_schema.clone(), vec![1]);
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = reader
+            .read(tasks)
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(batches.len(), 1);
+        let out = &batches[0];
+        assert_eq!(out.num_columns(), 1);
+        assert_eq!(out.schema().field(0).data_type(), &DataType::Int64);
+        let col = out
+            .column(0)
+            .as_primitive::<arrow_array::types::Int64Type>();
+        assert_eq!(col.values(), &[1i64, 2, 3]);
+    }
+
+    /// Same regression but nested: a promoted field inside a struct must still be cast by
+    /// the transformer, not rejected by the Parquet decoder.
+    #[tokio::test]
+    async fn test_read_with_incompatible_override_in_struct() {
+        use arrow_array::{Int32Array, StructArray};
+
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(2)
+                .with_fields(vec![
+                    NestedField::required(
+                        1,
+                        "s",
+                        Type::Struct(crate::spec::StructType::new(vec![
+                            NestedField::required(2, "x", Type::Primitive(PrimitiveType::Long))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let struct_field = |child_type: DataType| -> FieldRef {
+            Arc::new(
+                Field::new(
+                    "s",
+                    DataType::Struct(arrow_schema::Fields::from(vec![field_with_id(
+                        "x", child_type, false, 2,
+                    )])),
+                    false,
+                )
+                .with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "1".to_string(),
+                )])),
+            )
+        };
+        let file_arrow_schema = Arc::new(ArrowSchema::new(vec![struct_field(DataType::Int32)]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let data_path = format!("{}/s.parquet", tmp_dir.path().to_str().unwrap());
+        let inner = Arc::new(Int32Array::from(vec![10i32, 20, 30])) as ArrayRef;
+        let struct_array = Arc::new(StructArray::from(vec![(
+            field_with_id("x", DataType::Int32, false, 2),
+            inner,
+        )])) as ArrayRef;
+        let batch = RecordBatch::try_new(file_arrow_schema.clone(), vec![struct_array]).unwrap();
+        let file = File::create(&data_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, file_arrow_schema.clone(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let override_schema = Arc::new(ArrowSchema::new(vec![struct_field(DataType::Int64)]));
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs())
+            .with_arrow_schema(override_schema)
+            .build();
+        let task = make_scan_task(data_path, table_schema.clone(), vec![1]);
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = reader
+            .read(tasks)
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(batches.len(), 1);
+        let out = &batches[0];
+        let struct_col = out
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::StructArray>()
+            .unwrap();
+        assert_eq!(struct_col.column(0).data_type(), &DataType::Int64);
+        let inner = struct_col
+            .column(0)
+            .as_primitive::<arrow_array::types::Int64Type>();
+        assert_eq!(inner.values(), &[10i64, 20, 30]);
     }
 }

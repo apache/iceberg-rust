@@ -60,6 +60,9 @@ pub struct TableScanBuilder<'a> {
     row_selection_enabled: bool,
     from_snapshot_id: Option<i64>,
     to_snapshot_id: Option<i64>,
+    /// Optional caller-supplied table Arrow schema, forwarded to the reader.
+    /// See [`ArrowReaderBuilder::with_arrow_schema`].
+    arrow_schema_override: Option<arrow_schema::SchemaRef>,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -80,7 +83,15 @@ impl<'a> TableScanBuilder<'a> {
             row_selection_enabled: false,
             from_snapshot_id: None,
             to_snapshot_id: None,
+            arrow_schema_override: None,
         }
+    }
+
+    /// Override the Arrow schema used by the reader. See
+    /// [`crate::arrow::ArrowReaderBuilder::with_arrow_schema`].
+    pub fn with_arrow_schema(mut self, arrow_schema: arrow_schema::SchemaRef) -> Self {
+        self.arrow_schema_override = Some(arrow_schema);
+        self
     }
 
     /// Sets the desired size of batches in the response
@@ -275,6 +286,7 @@ impl<'a> TableScanBuilder<'a> {
                         concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
                         row_group_filtering_enabled: self.row_group_filtering_enabled,
                         row_selection_enabled: self.row_selection_enabled,
+                        arrow_schema_override: self.arrow_schema_override.clone(),
                     });
                 };
                 current_snapshot_id.clone()
@@ -370,6 +382,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            arrow_schema_override: self.arrow_schema_override,
         })
     }
 }
@@ -398,6 +411,9 @@ pub struct TableScan {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+
+    /// See [`TableScanBuilder::with_arrow_schema`].
+    arrow_schema_override: Option<arrow_schema::SchemaRef>,
 }
 
 impl TableScan {
@@ -469,6 +485,10 @@ impl TableScan {
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
+        }
+
+        if let Some(arrow_schema) = &self.arrow_schema_override {
+            arrow_reader_builder = arrow_reader_builder.with_arrow_schema(arrow_schema.clone());
         }
 
         arrow_reader_builder.build().read(self.plan_files().await?)

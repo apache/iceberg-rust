@@ -44,6 +44,11 @@ pub struct IcebergTableScan {
     table: Table,
     /// Snapshot of the table to scan.
     snapshot_id: Option<i64>,
+    /// Caller-supplied table Arrow schema — forwarded to the underlying
+    /// [`TableScanBuilder::with_arrow_schema`] so the reader produces Arrow
+    /// types that match the caller's declaration (e.g. `Utf8View`) rather
+    /// than the default Iceberg→Arrow mapping.
+    table_arrow_schema: ArrowSchemaRef,
     /// Stores certain, often expensive to compute,
     /// plan properties used in query optimization.
     plan_properties: PlanProperties,
@@ -70,12 +75,14 @@ impl IcebergTableScan {
             Some(projection) => Arc::new(schema.project(projection).unwrap()),
         };
         let plan_properties = Self::compute_properties(output_schema.clone());
-        let projection = get_column_names(schema.clone(), projection);
+        let table_arrow_schema = schema.clone();
+        let projection = get_column_names(schema, projection);
         let predicates = convert_filters_to_predicate(filters);
 
         Self {
             table,
             snapshot_id,
+            table_arrow_schema,
             plan_properties,
             projection,
             predicates,
@@ -151,6 +158,7 @@ impl ExecutionPlan for IcebergTableScan {
             self.snapshot_id,
             self.projection.clone(),
             self.predicates.clone(),
+            Some(self.table_arrow_schema.clone()),
         );
         let stream = futures::stream::once(fut).try_flatten();
 
@@ -210,6 +218,7 @@ async fn get_batch_stream(
     snapshot_id: Option<i64>,
     column_names: Option<Vec<String>>,
     predicates: Option<Predicate>,
+    arrow_schema_override: Option<ArrowSchemaRef>,
 ) -> DFResult<Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>>> {
     let scan_builder = match snapshot_id {
         Some(snapshot_id) => table.scan().snapshot_id(snapshot_id),
@@ -222,6 +231,9 @@ async fn get_batch_stream(
     };
     if let Some(pred) = predicates {
         scan_builder = scan_builder.with_filter(pred);
+    }
+    if let Some(arrow_schema) = arrow_schema_override {
+        scan_builder = scan_builder.with_arrow_schema(arrow_schema);
     }
     let table_scan = scan_builder.build().map_err(to_datafusion_error)?;
 

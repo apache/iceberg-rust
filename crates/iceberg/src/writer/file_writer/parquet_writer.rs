@@ -52,6 +52,14 @@ pub struct ParquetWriterBuilder {
     props: WriterProperties,
     schema: SchemaRef,
     match_mode: FieldMatchMode,
+    /// Optional override for the Arrow schema the writer uses when initializing the
+    /// underlying `AsyncArrowWriter`. When `None`, derived from `schema`.
+    ///
+    /// Useful when the caller wants the writer to accept batches whose Arrow types
+    /// differ from the default `schema_to_arrow_schema` mapping — e.g. `Utf8View`
+    /// instead of `Utf8` — without a physical cast. The types must still share the
+    /// same Parquet physical encoding (e.g. both map to `BYTE_ARRAY`).
+    arrow_schema_override: Option<ArrowSchemaRef>,
 }
 
 impl ParquetWriterBuilder {
@@ -71,7 +79,19 @@ impl ParquetWriterBuilder {
             props,
             schema,
             match_mode,
+            arrow_schema_override: None,
         }
+    }
+
+    /// Override the Arrow schema used by the underlying `AsyncArrowWriter`.
+    ///
+    /// The override must be encoding-compatible with the Iceberg schema — same
+    /// field IDs, same Parquet physical types. The only permitted divergence is
+    /// Arrow-level layout variants like `Utf8View` vs `Utf8` or `BinaryView` vs
+    /// `Binary`, which share their Parquet physical encoding (`BYTE_ARRAY`).
+    pub fn with_arrow_schema(mut self, arrow_schema: ArrowSchemaRef) -> Self {
+        self.arrow_schema_override = Some(arrow_schema);
+        self
     }
 }
 
@@ -79,8 +99,13 @@ impl FileWriterBuilder for ParquetWriterBuilder {
     type R = ParquetWriter;
 
     async fn build(&self, output_file: OutputFile) -> Result<Self::R> {
+        let arrow_schema: ArrowSchemaRef = match &self.arrow_schema_override {
+            Some(override_schema) => override_schema.clone(),
+            None => Arc::new(self.schema.as_ref().try_into()?),
+        };
         Ok(ParquetWriter {
             schema: self.schema.clone(),
+            arrow_schema,
             inner_writer: None,
             writer_properties: self.props.clone(),
             current_row_num: 0,
@@ -211,6 +236,7 @@ impl SchemaVisitor for IndexByParquetPathName {
 /// `ParquetWriter`` is used to write arrow data into parquet file on storage.
 pub struct ParquetWriter {
     schema: SchemaRef,
+    arrow_schema: ArrowSchemaRef,
     output_file: OutputFile,
     inner_writer: Option<AsyncArrowWriter<AsyncFileWriter>>,
     writer_properties: WriterProperties,
@@ -489,12 +515,11 @@ impl FileWriter for ParquetWriter {
         let writer = if let Some(writer) = &mut self.inner_writer {
             writer
         } else {
-            let arrow_schema: ArrowSchemaRef = Arc::new(self.schema.as_ref().try_into()?);
             let inner_writer = self.output_file.writer().await?;
             let async_writer = AsyncFileWriter::new(inner_writer);
             let writer = AsyncArrowWriter::try_new(
                 async_writer,
-                arrow_schema.clone(),
+                self.arrow_schema.clone(),
                 Some(self.writer_properties.clone()),
             )
             .map_err(|err| {
