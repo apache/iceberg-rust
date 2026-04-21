@@ -271,7 +271,6 @@ async fn run_partition_aligned_delete(
                 }
             }
         }
-
     }
 
     if to_delete.is_empty() {
