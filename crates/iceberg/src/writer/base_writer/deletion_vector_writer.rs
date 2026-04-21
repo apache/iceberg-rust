@@ -17,7 +17,9 @@
 
 //! Deletion vector writer for Iceberg V3.
 
-use std::collections::HashMap;
+use std::collections::HashMap as StdHashMap;
+
+use hashbrown::HashMap;
 
 use crate::delete_vector::{
     DELETION_VECTOR_PROPERTY_CARDINALITY, DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE,
@@ -94,10 +96,7 @@ where
                     "deletion vector position must be non-negative".to_string(),
                 )
             })?;
-            let entry = self
-                .delete_vectors
-                .entry(delete.path.as_ref().to_string())
-                .or_default();
+            let entry = self.delete_vectors.entry_ref(&*delete.path).or_default();
             entry.insert(pos);
         }
         Ok(())
@@ -121,10 +120,10 @@ where
                 .location_generator
                 .generate_location(partition_key, &file_name);
             let output_file = self.file_io.new_output(&location)?;
-            let mut writer = PuffinWriter::new(&output_file, HashMap::new(), false).await?;
+            let mut writer = PuffinWriter::new(&output_file, StdHashMap::new(), false).await?;
 
             let cardinality = delete_vector.len();
-            let properties = HashMap::from([
+            let properties = StdHashMap::from([
                 (
                     DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(),
                     cardinality.to_string(),

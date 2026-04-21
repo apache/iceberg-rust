@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::{Arc, RwLock};
 
 use futures::StreamExt;
 use futures::channel::mpsc::{Sender, channel};
+use hashbrown::HashMap;
 use tokio::sync::Notify;
 
 use crate::runtime::spawn;
@@ -173,7 +173,7 @@ impl PopulatedDeleteFileIndex {
             };
 
             destination_map
-                .entry(partition.clone())
+                .entry_ref(partition)
                 .and_modify(|entry: &mut Vec<DeleteFileContextAndTask>| {
                     entry.push((arc_ctx.clone(), file_scan_task.clone()));
                 })
@@ -265,6 +265,8 @@ impl PopulatedDeleteFileIndex {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use futures::SinkExt;
     use uuid::Uuid;
 

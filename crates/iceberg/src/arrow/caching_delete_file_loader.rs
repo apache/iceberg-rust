@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ops::Not;
 use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, Int64Array, StringArray, StructArray};
 use futures::{StreamExt, TryStreamExt};
+use hashbrown::HashMap;
 use tokio::sync::oneshot::{Receiver, channel};
 
 use super::delete_filter::{DeleteFilter, PosDelLoadAction};
@@ -385,10 +386,7 @@ impl CachingDeleteFileLoader {
                     ));
                 };
 
-                result
-                    .entry(file_path.to_string())
-                    .or_default()
-                    .insert(pos as u64);
+                result.entry_ref(file_path).or_default().insert(pos as u64);
             }
         }
 

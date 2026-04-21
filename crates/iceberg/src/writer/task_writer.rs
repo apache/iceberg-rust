@@ -505,7 +505,7 @@ mod tests {
                 _ => panic!("expected string partition value"),
             };
 
-            *partition_counts.entry(region.clone()).or_insert(0) += data_file.record_count();
+            *partition_counts.entry(region).or_insert(0) += data_file.record_count();
 
             assert!(
                 data_file.file_path().contains("region="),
