@@ -19,47 +19,99 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
-use datafusion::error::Result as DFResult;
+use datafusion::error::{DataFusionError, Result as DFResult};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, Partitioning, PlanProperties};
+use datafusion::prelude::Expr;
 use futures::TryStreamExt;
-use iceberg::arrow::ArrowReaderBuilder;
-use iceberg::io::FileIO;
+use iceberg::expr::Predicate;
 use iceberg::scan::FileScanTask;
+use iceberg::table::Table;
 
+use super::expr_to_predicate::convert_filters_to_predicate;
+use super::scan::get_column_names;
 use crate::to_datafusion_error;
 
 /// A DataFusion [`ExecutionPlan`] that reads one [`FileScanTask`] per partition.
 ///
-/// Display information (projection, predicate) is derived at runtime from the output schema and
-/// the tasks rather than stored as dedicated struct fields.
-#[derive(Debug, Clone)]
+/// Arrow reader configuration (row-group filtering, row selection, concurrency
+/// limit, batch size) matches [`IcebergTableScan`][super::scan::IcebergTableScan]:
+/// it is sourced from the underlying [`TableScan`][iceberg::scan::TableScan]
+/// rebuilt in [`execute`](ExecutionPlan::execute) and applied via
+/// [`TableScan::to_arrow_with_tasks`][iceberg::scan::TableScan::to_arrow_with_tasks].
+///
+/// Note: the `TableScan` is rebuilt on every `execute(partition)` call rather
+/// than cached as an `Arc<TableScan>` on the struct. Caching would avoid
+/// redundant schema resolution and predicate binding per partition, but
+/// `TableScan` carries a `PlanContext` with `Arc`-shared evaluator caches
+/// which is awkward to serialize if this plan ever needs to be shipped across
+/// workers. The per-build cost is bounded (no I/O), so the rebuild is kept
+/// for now; revisit once the cross-worker story is clearer.
+#[derive(Debug)]
 pub struct IcebergPartitionedScan {
-    tasks: Vec<FileScanTask>,
-    file_io: FileIO,
+    /// A table in the catalog.
+    table: Table,
+    /// Snapshot of the table to scan.
+    snapshot_id: Option<i64>,
+    /// Stores certain, often expensive to compute,
+    /// plan properties used in query optimization.
     plan_properties: Arc<PlanProperties>,
+    /// Projection column names, None means all columns.
+    projection: Option<Vec<String>>,
+    /// Filters to apply to the table scan.
+    predicates: Option<Predicate>,
+    /// Pre-planned file scan tasks, one per DataFusion partition.
+    tasks: Vec<FileScanTask>,
 }
 
 impl IcebergPartitionedScan {
-    pub fn new(tasks: Vec<FileScanTask>, file_io: FileIO, schema: ArrowSchemaRef) -> Self {
-        let n_partitions = tasks.len();
-        let plan_properties = Self::compute_properties(schema, n_partitions);
+    pub(crate) fn new(
+        table: Table,
+        snapshot_id: Option<i64>,
+        schema: ArrowSchemaRef,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        tasks: Vec<FileScanTask>,
+    ) -> Self {
+        let output_schema = match projection {
+            None => schema.clone(),
+            Some(projection) => Arc::new(schema.project(projection).unwrap()),
+        };
+        let plan_properties = Self::compute_properties(output_schema, tasks.len());
+        let projection = get_column_names(schema, projection);
+        let predicates = convert_filters_to_predicate(filters);
+
         Self {
-            tasks,
-            file_io,
+            table,
+            snapshot_id,
             plan_properties,
+            projection,
+            predicates,
+            tasks,
         }
+    }
+
+    pub fn table(&self) -> &Table {
+        &self.table
+    }
+
+    pub fn snapshot_id(&self) -> Option<i64> {
+        self.snapshot_id
+    }
+
+    pub fn projection(&self) -> Option<&[String]> {
+        self.projection.as_deref()
+    }
+
+    pub fn predicates(&self) -> Option<&Predicate> {
+        self.predicates.as_ref()
     }
 
     pub fn tasks(&self) -> &[FileScanTask] {
         &self.tasks
-    }
-
-    pub fn file_io(&self) -> &FileIO {
-        &self.file_io
     }
 
     fn compute_properties(schema: ArrowSchemaRef, n_partitions: usize) -> Arc<PlanProperties> {
@@ -90,7 +142,7 @@ impl ExecutionPlan for IcebergPartitionedScan {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         if !children.is_empty() {
-            return Err(datafusion::error::DataFusionError::Internal(format!(
+            return Err(DataFusionError::Internal(format!(
                 "{} is a leaf node and expects no children, but {} were provided",
                 self.name(),
                 children.len()
@@ -109,24 +161,40 @@ impl ExecutionPlan for IcebergPartitionedScan {
         _context: Arc<TaskContext>,
     ) -> DFResult<SendableRecordBatchStream> {
         let task = self.tasks.get(partition).cloned().ok_or_else(|| {
-            datafusion::error::DataFusionError::Internal(format!(
-                "{}: partition index {partition} is out of bounds \
-                 (total tasks: {})",
+            DataFusionError::Internal(format!(
+                "{}: partition index {partition} is out of bounds (total tasks: {})",
                 self.name(),
                 self.tasks.len()
             ))
         })?;
 
-        let file_io = self.file_io.clone();
+        let table = self.table.clone();
+        let snapshot_id = self.snapshot_id;
+        let column_names = self.projection.clone();
+        let predicates = self.predicates.clone();
 
         let fut = async move {
-            let task_stream = futures::stream::once(futures::future::ready(Ok(task)));
-            let record_batch_stream = ArrowReaderBuilder::new(file_io)
-                .build()
-                .read(Box::pin(task_stream))
+            // Rebuild a TableScan mirroring IcebergTableScan::get_batch_stream so we
+            // inherit the same defaults (row-group filtering, batch size, concurrency, ...).
+            let scan_builder = match snapshot_id {
+                Some(id) => table.scan().snapshot_id(id),
+                None => table.scan(),
+            };
+            let mut scan_builder = match column_names {
+                Some(names) => scan_builder.select(names),
+                None => scan_builder.select_all(),
+            };
+            if let Some(pred) = predicates {
+                scan_builder = scan_builder.with_filter(pred);
+            }
+            let table_scan = scan_builder.build().map_err(to_datafusion_error)?;
+
+            let task_stream = Box::pin(futures::stream::once(futures::future::ready(Ok(task))));
+            let record_batch_stream = table_scan
+                .to_arrow_with_tasks(task_stream)
                 .map_err(to_datafusion_error)?
                 .map_err(to_datafusion_error);
-            Ok::<_, datafusion::error::DataFusionError>(record_batch_stream)
+            Ok::<_, DataFusionError>(record_batch_stream)
         };
 
         let stream = futures::stream::once(fut).try_flatten();
@@ -145,18 +213,12 @@ impl DisplayAs for IcebergPartitionedScan {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         let projection = self
-            .schema()
-            .fields()
-            .iter()
-            .map(|f| f.name().as_str())
-            .collect::<Vec<_>>()
-            .join(",");
-        // All tasks share the same predicate (they come from a single scan plan build),
-        // so reading it from the first task is sufficient.
+            .projection
+            .clone()
+            .map_or(String::new(), |v| v.join(","));
         let predicate = self
-            .tasks
-            .first()
-            .and_then(|t| t.predicate())
+            .predicates
+            .clone()
             .map_or(String::new(), |p| format!("{p}"));
         let file_count = self.tasks.len();
         write!(
@@ -164,7 +226,7 @@ impl DisplayAs for IcebergPartitionedScan {
             "{} projection:[{projection}] predicate:[{predicate}] file_count:[{file_count}]",
             self.name()
         )?;
-        if self.tasks.len() <= 5 {
+        if file_count <= 5 {
             let files = self
                 .tasks
                 .iter()

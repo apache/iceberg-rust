@@ -21,7 +21,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::catalog::Session;
-use datafusion::common::DataFusionError;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result as DFResult;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
@@ -101,8 +100,8 @@ impl TableProvider for IcebergPartitionedTableProvider {
             .await
             .map_err(to_datafusion_error)?;
 
-        // Projection indices are resolved against self.schema (captured at try_new time),
-        // same as IcebergTableProvider / IcebergTableScan.
+        // Build a TableScan mirroring the inputs we'll hand to IcebergPartitionedScan,
+        // so plan_files() uses the same projection/filters the scan will replay in execute().
         let col_names = projection.map(|indices| {
             indices
                 .iter()
@@ -131,17 +130,13 @@ impl TableProvider for IcebergPartitionedTableProvider {
             .await
             .map_err(to_datafusion_error)?;
 
-        let output_schema = match projection {
-            None => self.schema.clone(),
-            Some(indices) => Arc::new(self.schema.project(indices).map_err(|e| {
-                DataFusionError::Internal(format!("schema projection failed: {e}"))
-            })?),
-        };
-
         Ok(Arc::new(IcebergPartitionedScan::new(
+            table,
+            None, // Always use current snapshot for catalog-backed provider
+            self.schema.clone(),
+            projection,
+            filters,
             tasks,
-            table.file_io().clone(),
-            output_schema,
         )))
     }
 

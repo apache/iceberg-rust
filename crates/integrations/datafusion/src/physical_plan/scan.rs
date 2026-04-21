@@ -237,7 +237,7 @@ async fn get_batch_stream(
     Ok(Box::pin(stream))
 }
 
-fn get_column_names(
+pub(super) fn get_column_names(
     schema: ArrowSchemaRef,
     projection: Option<&Vec<usize>>,
 ) -> Option<Vec<String>> {
