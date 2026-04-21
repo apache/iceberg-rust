@@ -21,10 +21,12 @@ mod term;
 use serde::{Deserialize, Serialize};
 pub use term::*;
 pub(crate) mod accessor;
+mod partition_filter;
 mod predicate;
 pub(crate) mod visitors;
 use std::fmt::{Display, Formatter};
 
+pub use partition_filter::{PartitionCoverage, PartitionCoverageFilter};
 pub use predicate::*;
 
 use crate::spec::SchemaRef;

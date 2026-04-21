@@ -49,6 +49,62 @@ pub fn convert_filters_to_predicate(filters: &[Expr]) -> Option<Predicate> {
         .reduce(Predicate::and)
 }
 
+/// Strict variant of [`convert_filters_to_predicate`]: returns an error if any
+/// filter (or any sub-expression inside it) cannot be represented as an Iceberg
+/// predicate.
+///
+/// The permissive variant is safe for scan pushdown (unconverted clauses stay in
+/// the DataFusion filter). For row-level DML it is not: silently dropping a
+/// clause from the predicate would delete/update rows the user didn't ask to
+/// touch.
+pub fn convert_filters_to_predicate_strict(
+    filters: &[Expr],
+) -> std::result::Result<Option<Predicate>, String> {
+    let mut combined: Option<Predicate> = None;
+    for expr in filters {
+        let predicate = convert_filter_to_predicate_strict(expr)?;
+        combined = Some(match combined {
+            Some(existing) => existing.and(predicate),
+            None => predicate,
+        });
+    }
+    Ok(combined)
+}
+
+fn convert_filter_to_predicate_strict(expr: &Expr) -> std::result::Result<Predicate, String> {
+    // Logical connectives are walked recursively so that silent drops in
+    // `to_iceberg_and_predicate` / `to_iceberg_or_predicate` can't hide a
+    // non-convertible sub-expression.
+    if let Expr::BinaryExpr(b) = expr {
+        match b.op {
+            Operator::And => {
+                return Ok(convert_filter_to_predicate_strict(&b.left)?
+                    .and(convert_filter_to_predicate_strict(&b.right)?));
+            }
+            Operator::Or => {
+                return Ok(convert_filter_to_predicate_strict(&b.left)?
+                    .or(convert_filter_to_predicate_strict(&b.right)?));
+            }
+            _ => {}
+        }
+    }
+    if let Expr::Not(inner) = expr {
+        return Ok(!convert_filter_to_predicate_strict(inner)?);
+    }
+
+    match to_iceberg_predicate(expr) {
+        TransformedResult::Predicate(p) => Ok(p),
+        TransformedResult::Column(column) => Ok(Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::Eq,
+            column,
+            Datum::bool(true),
+        ))),
+        TransformedResult::Literal(_) | TransformedResult::NotTransformed => Err(format!(
+            "Expression `{expr}` cannot be represented as an Iceberg predicate"
+        )),
+    }
+}
+
 fn convert_filter_to_predicate(expr: &Expr) -> Option<Predicate> {
     match to_iceberg_predicate(expr) {
         TransformedResult::Predicate(predicate) => Some(predicate),

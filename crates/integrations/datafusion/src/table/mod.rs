@@ -51,6 +51,7 @@ use metadata_table::IcebergMetadataTableProvider;
 
 use crate::error::to_datafusion_error;
 use crate::physical_plan::commit::IcebergCommitExec;
+use crate::physical_plan::delete::IcebergDeleteExec;
 use crate::physical_plan::project::project_with_partition;
 use crate::physical_plan::repartition::repartition;
 use crate::physical_plan::scan::IcebergTableScan;
@@ -233,6 +234,18 @@ impl TableProvider for IcebergTableProvider {
             self.schema.clone(),
         )))
     }
+
+    async fn delete_from(
+        &self,
+        _state: &dyn Session,
+        filters: Vec<Expr>,
+    ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(IcebergDeleteExec::new(
+            self.catalog.clone(),
+            self.table_ident.clone(),
+            filters,
+        )))
+    }
 }
 
 /// Static table provider for read-only snapshot access.
@@ -342,6 +355,19 @@ impl TableProvider for IcebergStaticTableProvider {
         Err(to_datafusion_error(Error::new(
             ErrorKind::FeatureUnsupported,
             "Write operations are not supported on IcebergStaticTableProvider. \
+             Use IcebergTableProvider with a catalog for write support."
+                .to_string(),
+        )))
+    }
+
+    async fn delete_from(
+        &self,
+        _state: &dyn Session,
+        _filters: Vec<Expr>,
+    ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        Err(to_datafusion_error(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "DELETE is not supported on IcebergStaticTableProvider. \
              Use IcebergTableProvider with a catalog for write support."
                 .to_string(),
         )))
@@ -864,5 +890,167 @@ mod tests {
             None,
             "Limit should be None when not specified"
         );
+    }
+
+    // --- partition-aligned delete_from tests --------------------------------
+
+    async fn count_rows(ctx: &SessionContext, table: &str) -> u64 {
+        use datafusion::arrow::array::Int64Array;
+        let df = ctx
+            .sql(&format!("SELECT count(*) FROM {table}"))
+            .await
+            .unwrap();
+        let batches = df.collect().await.unwrap();
+        let arr = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        arr.value(0) as u64
+    }
+
+    async fn collected_delete_count(df: datafusion::dataframe::DataFrame) -> u64 {
+        use datafusion::arrow::array::UInt64Array;
+        let batches = df.collect().await.unwrap();
+        let arr = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        arr.value(0)
+    }
+
+    async fn register_partitioned_table(ctx: &SessionContext) -> (Arc<dyn Catalog>, TempDir) {
+        let (catalog, namespace, table_name, temp_dir) =
+            get_partitioned_test_catalog_and_table(Some(true)).await;
+        let provider = IcebergTableProvider::try_new(catalog.clone(), namespace, table_name)
+            .await
+            .unwrap();
+        ctx.register_table("t", Arc::new(provider)).unwrap();
+        (catalog, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn test_delete_partition_aligned_drops_whole_partition() {
+        let ctx = SessionContext::new();
+        let (_catalog, _temp_dir) = register_partitioned_table(&ctx).await;
+
+        // 6 rows across 3 partitions: a (2), b (2), c (2).
+        ctx.sql(
+            "INSERT INTO t VALUES \
+             (1, 'a'), (2, 'a'), (3, 'b'), (4, 'b'), (5, 'c'), (6, 'c')",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+        assert_eq!(count_rows(&ctx, "t").await, 6);
+
+        let df = ctx.sql("DELETE FROM t WHERE category = 'b'").await.unwrap();
+        let deleted = collected_delete_count(df).await;
+        assert_eq!(deleted, 2, "should report 2 rows deleted");
+
+        assert_eq!(count_rows(&ctx, "t").await, 4);
+
+        // Surviving partitions' data is untouched.
+        let df = ctx
+            .sql("SELECT id FROM t WHERE category = 'a' ORDER BY id")
+            .await
+            .unwrap();
+        let batches = df.collect().await.unwrap();
+        assert_eq!(batches[0].num_rows(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_delete_straddling_predicate_hard_errors() {
+        let ctx = SessionContext::new();
+        let (_catalog, _temp_dir) = register_partitioned_table(&ctx).await;
+
+        ctx.sql("INSERT INTO t VALUES (1, 'a'), (2, 'a'), (3, 'b')")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        // `id` is not a partition column — the predicate does not align.
+        let df = ctx.sql("DELETE FROM t WHERE id = 1").await.unwrap();
+        let err = df.collect().await.expect_err(
+            "DELETE on non-partition column must error (predicate straddles data files)",
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("partition") && msg.contains("align"),
+            "expected alignment error, got: {msg}"
+        );
+
+        // State is unchanged — the error must happen before any commit.
+        assert_eq!(count_rows(&ctx, "t").await, 3);
+    }
+
+    #[tokio::test]
+    async fn test_delete_unpartitioned_full_truncate() {
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+        let provider = IcebergTableProvider::try_new(catalog.clone(), namespace, table_name)
+            .await
+            .unwrap();
+        let ctx = SessionContext::new();
+        ctx.register_table("t", Arc::new(provider)).unwrap();
+
+        ctx.sql("INSERT INTO t VALUES (1, 'x'), (2, 'y'), (3, 'z')")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(count_rows(&ctx, "t").await, 3);
+
+        // Unfiltered DELETE on an unpartitioned table is always partition-aligned:
+        // every file is wholly covered by AlwaysTrue.
+        let df = ctx.sql("DELETE FROM t").await.unwrap();
+        let deleted = collected_delete_count(df).await;
+        assert_eq!(deleted, 3);
+        assert_eq!(count_rows(&ctx, "t").await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_delete_unpartitioned_with_predicate_errors() {
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+        let provider = IcebergTableProvider::try_new(catalog.clone(), namespace, table_name)
+            .await
+            .unwrap();
+        let ctx = SessionContext::new();
+        ctx.register_table("t", Arc::new(provider)).unwrap();
+
+        ctx.sql("INSERT INTO t VALUES (1, 'x')")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        // Any predicate on an unpartitioned table is a straddle by construction.
+        let df = ctx.sql("DELETE FROM t WHERE id = 1").await.unwrap();
+        let err = df.collect().await.expect_err("must error");
+        assert!(
+            err.to_string().contains("partition"),
+            "expected alignment error, got: {err}"
+        );
+        assert_eq!(count_rows(&ctx, "t").await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_delete_empty_table_returns_zero() {
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+        let provider = IcebergTableProvider::try_new(catalog.clone(), namespace, table_name)
+            .await
+            .unwrap();
+        let ctx = SessionContext::new();
+        ctx.register_table("t", Arc::new(provider)).unwrap();
+
+        let df = ctx.sql("DELETE FROM t").await.unwrap();
+        let deleted = collected_delete_count(df).await;
+        assert_eq!(deleted, 0);
     }
 }
