@@ -89,7 +89,7 @@ rand = { workspace = true }
 regex = { workspace = true }
 tempfile = { workspace = true }
 minijinja = { workspace = true }
-serde_arrow = { version = "0.14", features = ["arrow-58"] }
+serde_arrow = { version = "0.14", features = ["arrow-57"] }
 
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version
