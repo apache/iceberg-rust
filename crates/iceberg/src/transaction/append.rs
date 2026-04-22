@@ -613,4 +613,136 @@ mod tests {
                 if r#ref == branch_name)
         ));
     }
+
+    /// Regression test: when a table already has a snapshot on `main` with
+    /// cumulative totals set in its summary, the totals on the newly produced
+    /// snapshot must be rolled forward (`previous_total + added`), not recomputed
+    /// from zero.
+    ///
+    /// Before the fix, `SnapshotProducer::summary` looked up the previous
+    /// snapshot via `snapshot_by_id(self.snapshot_id)` — i.e. the new snapshot
+    /// that is not yet in `table_metadata` — so the lookup returned `None` and
+    /// `update_totals` fell back to `previous_total = 0`. That caused the new
+    /// snapshot to report only the files/records from the current commit,
+    /// losing everything already in the table. This test fails on the buggy
+    /// code path (`total-records = 10`, `total-data-files = 1`) and passes
+    /// with the fix (`total-records = 110`, `total-data-files = 6`).
+    #[tokio::test]
+    async fn test_fast_append_rolls_previous_totals_forward() {
+        use std::sync::Arc;
+
+        use crate::spec::{
+            ManifestListWriter, Operation, Snapshot, SnapshotReference, SnapshotRetention, Summary,
+        };
+
+        // Spec-stable summary keys — kept inline because the equivalent
+        // constants in `spec::snapshot_summary` are private.
+        const TOTAL_DATA_FILES_KEY: &str = "total-data-files";
+        const TOTAL_RECORDS_KEY: &str = "total-records";
+
+        // Build a V2 table whose current snapshot on `main` already reports
+        // 5 data files / 100 records. The summary totals are what the rollup
+        // must carry forward.
+        let base = make_v2_minimal_table();
+
+        const PARENT_SNAPSHOT_ID: i64 = 42;
+        const PARENT_TOTAL_DATA_FILES: u64 = 5;
+        const PARENT_TOTAL_RECORDS: u64 = 100;
+        const PARENT_MANIFEST_LIST: &str = "memory:///snap-parent-manifest-list.avro";
+
+        // FastAppend reads the parent snapshot's manifest list during commit
+        // (to carry forward existing manifests), so we must stage a real file
+        // at the path we reference on the parent snapshot. An empty V2
+        // manifest list is sufficient — the commit just needs it to deserialize.
+        let parent_manifest_list_writer = ManifestListWriter::v2(
+            base.file_io().new_output(PARENT_MANIFEST_LIST).unwrap(),
+            PARENT_SNAPSHOT_ID,
+            None,
+            1,
+        );
+        parent_manifest_list_writer.close().await.unwrap();
+
+        let parent_summary = Summary {
+            operation: Operation::Append,
+            additional_properties: HashMap::from([
+                (
+                    TOTAL_DATA_FILES_KEY.to_string(),
+                    PARENT_TOTAL_DATA_FILES.to_string(),
+                ),
+                (
+                    TOTAL_RECORDS_KEY.to_string(),
+                    PARENT_TOTAL_RECORDS.to_string(),
+                ),
+            ]),
+        };
+
+        let parent_snapshot = Snapshot::builder()
+            .with_snapshot_id(PARENT_SNAPSHOT_ID)
+            .with_timestamp_ms(base.metadata().last_updated_ms() + 1)
+            .with_sequence_number(1)
+            .with_schema_id(0)
+            .with_manifest_list(PARENT_MANIFEST_LIST)
+            .with_summary(parent_summary)
+            .build();
+
+        let metadata_with_parent = base
+            .metadata()
+            .clone()
+            .into_builder(Some("s3://bucket/test/location/metadata/v1.json".into()))
+            .add_snapshot(parent_snapshot)
+            .unwrap()
+            .set_ref(MAIN_BRANCH, SnapshotReference {
+                snapshot_id: PARENT_SNAPSHOT_ID,
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            })
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        let table = base.with_metadata(Arc::new(metadata_with_parent));
+
+        // Append 1 new data file with 10 records.
+        const ADDED_RECORDS: u64 = 10;
+        let data_file = DataFileBuilder::default()
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .content(DataContentType::Data)
+            .file_path("test/new.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(ADDED_RECORDS)
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![data_file]);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_snapshot = match &updates[0] {
+            TableUpdate::AddSnapshot { snapshot } => snapshot,
+            _ => unreachable!("first update must be AddSnapshot"),
+        };
+
+        let props = &new_snapshot.summary().additional_properties;
+        let total_records: u64 = props.get(TOTAL_RECORDS_KEY).unwrap().parse().unwrap();
+        let total_data_files: u64 = props.get(TOTAL_DATA_FILES_KEY).unwrap().parse().unwrap();
+
+        // The key assertion: totals are rolled forward from the parent, not
+        // reset. On the buggy path these would be 10 and 1.
+        assert_eq!(
+            total_records,
+            PARENT_TOTAL_RECORDS + ADDED_RECORDS,
+            "total-records must roll forward (previous={PARENT_TOTAL_RECORDS} + added={ADDED_RECORDS})",
+        );
+        assert_eq!(
+            total_data_files,
+            PARENT_TOTAL_DATA_FILES + 1,
+            "total-data-files must roll forward (previous={PARENT_TOTAL_DATA_FILES} + added=1)",
+        );
+    }
 }

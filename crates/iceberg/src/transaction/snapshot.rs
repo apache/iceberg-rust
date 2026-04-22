@@ -651,10 +651,14 @@ partition_struct: {:?}, partition_type: {:?}",
             );
         }
 
-        let previous_snapshot = table_metadata
-            .snapshot_by_id(self.snapshot_id)
-            .and_then(|snapshot| snapshot.parent_snapshot_id())
-            .and_then(|parent_id| table_metadata.snapshot_by_id(parent_id));
+        // The previous snapshot for summary rollup is the current tip of the
+        // target branch — which is exactly what `commit()` below uses as the
+        // parent for the new snapshot. The earlier implementation looked up
+        // `self.snapshot_id` (the *new* snapshot that is not yet in
+        // `table_metadata`), causing the lookup to return `None` and the
+        // `total-*` fields to be recomputed from scratch (`previous_total = 0`)
+        // instead of rolled forward.
+        let previous_snapshot = table_metadata.snapshot_for_ref(&self.target_branch);
 
         let mut additional_properties = summary_collector.build();
         additional_properties.extend(self.snapshot_properties.clone());
