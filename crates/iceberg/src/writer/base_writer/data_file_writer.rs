@@ -30,6 +30,7 @@ use crate::{Error, ErrorKind, Result};
 #[derive(Debug)]
 pub struct DataFileWriterBuilder<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> {
     inner: RollingFileWriterBuilder<B, L, F>,
+    sort_order_id: Option<i32>,
 }
 
 impl<B, L, F> DataFileWriterBuilder<B, L, F>
@@ -40,7 +41,22 @@ where
 {
     /// Create a new `DataFileWriterBuilder` using a `RollingFileWriterBuilder`.
     pub fn new(inner: RollingFileWriterBuilder<B, L, F>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            sort_order_id: None,
+        }
+    }
+
+    /// Stamp the `sort_order_id` (Iceberg spec field 140) on every `DataFile` this
+    /// writer produces. Use when the records being written are sorted according to
+    /// a named sort order in the table metadata (typically
+    /// `table.metadata().default_sort_order_id()`).
+    ///
+    /// When unset, produced `DataFile`s leave `sort_order_id = None`, which readers
+    /// must treat as unsorted per the Iceberg spec.
+    pub fn with_sort_order_id(mut self, sort_order_id: i32) -> Self {
+        self.sort_order_id = Some(sort_order_id);
+        self
     }
 }
 
@@ -57,6 +73,7 @@ where
         Ok(DataFileWriter {
             inner: Some(self.inner.build()),
             partition_key,
+            sort_order_id: self.sort_order_id,
         })
     }
 }
@@ -66,6 +83,7 @@ where
 pub struct DataFileWriter<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> {
     inner: Option<RollingFileWriter<B, L, F>>,
     partition_key: Option<PartitionKey>,
+    sort_order_id: Option<i32>,
 }
 
 #[async_trait::async_trait]
@@ -97,6 +115,9 @@ where
                     if let Some(pk) = self.partition_key.as_ref() {
                         res.partition(pk.data().clone());
                         res.partition_spec_id(pk.spec().spec_id());
+                    }
+                    if let Some(sort_order_id) = self.sort_order_id {
+                        res.sort_order_id(sort_order_id);
                     }
                     res.build().map_err(|e| {
                         Error::new(
@@ -344,6 +365,78 @@ mod test {
             .map(|col| col.name())
             .collect();
         assert_eq!(field_names, vec!["id", "name"]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_data_file_writer_stamps_sort_order_id() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen = DefaultFileNameGenerator::new(
+            "test_sort_order".to_string(),
+            None,
+            DataFileFormat::Parquet,
+        );
+
+        let schema = Schema::builder()
+            .with_schema_id(7)
+            .with_fields(vec![
+                NestedField::required(7, "ts", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()?;
+
+        let pw = ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema));
+        let rolling = RollingFileWriterBuilder::new_with_default_file_size(
+            pw,
+            file_io,
+            location_gen,
+            file_name_gen,
+        );
+
+        // Default: unset → None
+        let unset = DataFileWriterBuilder::new(rolling.clone()).build(None).await?;
+        // Stamped: Some(42)
+        let stamped = DataFileWriterBuilder::new(rolling)
+            .with_sort_order_id(42)
+            .build(None)
+            .await?;
+
+        let arrow_schema = arrow_schema::Schema::new(vec![Field::new(
+            "ts",
+            DataType::Int64,
+            false,
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            7.to_string(),
+        )]))]);
+        let batch = RecordBatch::try_new(Arc::new(arrow_schema), vec![Arc::new(
+            arrow_array::Int64Array::from(vec![1_i64, 2, 3]),
+        )])?;
+
+        let mut unset = unset;
+        unset.write(batch.clone()).await?;
+        let unset_files = unset.close().await?;
+        assert_eq!(unset_files.len(), 1);
+        assert_eq!(
+            unset_files[0].sort_order_id(),
+            None,
+            "unset builder must produce DataFile with sort_order_id = None",
+        );
+
+        let mut stamped = stamped;
+        stamped.write(batch).await?;
+        let stamped_files = stamped.close().await?;
+        assert_eq!(stamped_files.len(), 1);
+        assert_eq!(
+            stamped_files[0].sort_order_id(),
+            Some(42),
+            "with_sort_order_id(42) must stamp Some(42) on the DataFile",
+        );
 
         Ok(())
     }
