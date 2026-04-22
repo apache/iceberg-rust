@@ -25,22 +25,24 @@ use bytes::Bytes;
 
 use crate::error::Result;
 use crate::io::FileRead;
+use crate::scan::ArrowRecordBatchStream;
 
 /// Wraps a [`FileRead`] to count bytes read via a shared atomic counter.
-pub(crate) struct CountingFileRead {
-    inner: Box<dyn FileRead>,
+pub(crate) struct CountingFileRead<F: FileRead> {
+    inner: F,
     bytes_read: Arc<AtomicU64>,
 }
 
-impl CountingFileRead {
-    pub(crate) fn new(inner: Box<dyn FileRead>, bytes_read: Arc<AtomicU64>) -> Self {
+impl<F: FileRead> CountingFileRead<F> {
+    pub(crate) fn new(inner: F, bytes_read: Arc<AtomicU64>) -> Self {
         Self { inner, bytes_read }
     }
 }
 
 #[async_trait::async_trait]
-impl FileRead for CountingFileRead {
+impl<F: FileRead> FileRead for CountingFileRead<F> {
     async fn read(&self, range: Range<u64>) -> Result<Bytes> {
+        debug_assert!(range.end >= range.start);
         self.bytes_read
             .fetch_add(range.end - range.start, Ordering::Relaxed);
         self.inner.read(range).await
@@ -48,10 +50,6 @@ impl FileRead for CountingFileRead {
 }
 
 /// Metrics collected during an Iceberg scan.
-///
-/// Returned alongside the record batch stream from [`ArrowReader::read`](super::ArrowReader::read).
-/// Additional counters (e.g. positional deletes applied, row groups pruned)
-/// can be added here without changing the `read()` return type.
 #[derive(Clone, Debug)]
 pub struct ScanMetrics {
     bytes_read: Arc<AtomicU64>,
@@ -71,5 +69,33 @@ impl ScanMetrics {
     /// Total bytes read from storage for data files during this scan.
     pub fn bytes_read(&self) -> u64 {
         self.bytes_read.load(Ordering::Relaxed)
+    }
+}
+
+/// Result of [`ArrowReader::read`](super::ArrowReader::read), containing the
+/// record batch stream and metrics collected during the scan.
+pub struct ScanResult {
+    stream: ArrowRecordBatchStream,
+    metrics: ScanMetrics,
+}
+
+impl ScanResult {
+    pub(crate) fn new(stream: ArrowRecordBatchStream, metrics: ScanMetrics) -> Self {
+        Self { stream, metrics }
+    }
+
+    /// Consumes the result, returning only the record batch stream.
+    pub fn stream(self) -> ArrowRecordBatchStream {
+        self.stream
+    }
+
+    /// Returns a reference to the scan metrics.
+    pub fn metrics(&self) -> &ScanMetrics {
+        &self.metrics
+    }
+
+    /// Consumes the result into its parts.
+    pub fn into_parts(self) -> (ArrowRecordBatchStream, ScanMetrics) {
+        (self.stream, self.metrics)
     }
 }

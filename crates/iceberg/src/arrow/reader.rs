@@ -49,7 +49,7 @@ use typed_builder::TypedBuilder;
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
 use crate::arrow::int96::coerce_int96_timestamps;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
-use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics};
+use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics, ScanResult};
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
 use crate::delete_vector::DeleteVector;
 use crate::error::Result;
@@ -244,33 +244,10 @@ pub struct ArrowReader {
     parquet_read_options: ParquetReadOptions,
 }
 
-/// Per-scan state for processing [`FileScanTask`]s. Created once per
-/// [`ArrowReader::read`] call and cloned per task.
-#[derive(Clone)]
-struct FileScanTaskReader {
-    batch_size: Option<usize>,
-    file_io: FileIO,
-    delete_file_loader: CachingDeleteFileLoader,
-    row_group_filtering_enabled: bool,
-    row_selection_enabled: bool,
-    parquet_read_options: ParquetReadOptions,
-    scan_metrics: ScanMetrics,
-}
-
 impl ArrowReader {
     /// Take a stream of FileScanTasks and reads all the files.
-    /// Returns a stream of Arrow RecordBatches containing the data from the files.
-    pub fn read(self, tasks: FileScanTaskStream) -> Result<ArrowRecordBatchStream> {
-        let (stream, _metrics) = self.read_with_metrics(tasks)?;
-        Ok(stream)
-    }
-
-    /// Same as [`read`](Self::read), but also returns [`ScanMetrics`] tracking
-    /// I/O during the scan.
-    pub fn read_with_metrics(
-        self,
-        tasks: FileScanTaskStream,
-    ) -> Result<(ArrowRecordBatchStream, ScanMetrics)> {
+    /// Returns a [`ScanResult`] containing the record batch stream and scan metrics.
+    pub fn read(self, tasks: FileScanTaskStream) -> Result<ScanResult> {
         let concurrency_limit_data_files = self.concurrency_limit_data_files;
         let scan_metrics = ScanMetrics::new();
 
@@ -308,8 +285,21 @@ impl ArrowReader {
             )
         };
 
-        Ok((stream, scan_metrics))
+        Ok(ScanResult::new(stream, scan_metrics))
     }
+}
+
+/// Per-scan state for processing [`FileScanTask`]s. Created once per
+/// [`ArrowReader::read`] call and cloned per task.
+#[derive(Clone)]
+struct FileScanTaskReader {
+    batch_size: Option<usize>,
+    file_io: FileIO,
+    delete_file_loader: CachingDeleteFileLoader,
+    row_group_filtering_enabled: bool,
+    row_selection_enabled: bool,
+    parquet_read_options: ParquetReadOptions,
+    scan_metrics: ScanMetrics,
 }
 
 impl FileScanTaskReader {
@@ -323,8 +313,6 @@ impl FileScanTaskReader {
             .delete_file_loader
             .load_deletes(&task.deletes, Arc::clone(&task.schema));
 
-        // Open the Parquet file once, loading its metadata.
-        // Uses the counting variant so metadata + data page I/O is tracked.
         let (parquet_file_reader, arrow_metadata) = ArrowReader::open_parquet_file_counted(
             &task.data_file_path,
             &self.file_io,
@@ -633,11 +621,14 @@ impl ArrowReader {
         bytes_read: &Arc<AtomicU64>,
     ) -> Result<(ArrowFileReader, ArrowReaderMetadata)> {
         let parquet_file = file_io.new_input(data_file_path)?;
-        let parquet_reader: Box<dyn FileRead> = Box::new(CountingFileRead::new(
-            parquet_file.reader().await?,
-            Arc::clone(bytes_read),
-        ));
-        Self::build_parquet_reader(parquet_reader, file_size_in_bytes, parquet_read_options).await
+        let counting_reader =
+            CountingFileRead::new(parquet_file.reader().await?, Arc::clone(bytes_read));
+        Self::build_parquet_reader(
+            Box::new(counting_reader),
+            file_size_in_bytes,
+            parquet_read_options,
+        )
+        .await
     }
 
     async fn build_parquet_reader(
@@ -2297,7 +2288,8 @@ message schema {
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-        let (stream, scan_metrics) = reader.read_with_metrics(tasks).unwrap();
+        let scan_result = reader.read(tasks).unwrap();
+        let (stream, scan_metrics) = scan_result.into_parts();
 
         // Metrics should be zero before consuming the stream
         assert_eq!(scan_metrics.bytes_read(), 0);
@@ -2416,6 +2408,7 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
+            .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -2757,6 +2750,7 @@ message schema {
             .clone()
             .read(tasks1)
             .unwrap()
+            .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -2773,6 +2767,7 @@ message schema {
         let result2 = reader
             .read(tasks2)
             .unwrap()
+            .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -2888,6 +2883,7 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
+            .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -3061,6 +3057,7 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
+            .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -3281,6 +3278,7 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
+            .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -3494,6 +3492,7 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
+            .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -3602,6 +3601,7 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
+            .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -3703,6 +3703,7 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
+            .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -3793,6 +3794,7 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
+            .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -3897,6 +3899,7 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
+            .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -4030,6 +4033,7 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
+            .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -4130,6 +4134,7 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
+            .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -4244,6 +4249,7 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
+            .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -4374,6 +4380,7 @@ message schema {
         let result = reader
             .read(tasks_stream)
             .unwrap()
+            .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -4555,6 +4562,7 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
+            .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -4971,6 +4979,7 @@ message schema {
         let result = reader
             .read(tasks)
             .unwrap()
+            .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
             .unwrap();
@@ -5035,7 +5044,13 @@ message schema {
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-        reader.read(tasks).unwrap().try_collect().await.unwrap()
+        reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap()
     }
 
     // ArrowWriter cannot write INT96, so we use SerializedFileWriter directly.
