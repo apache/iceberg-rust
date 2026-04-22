@@ -309,11 +309,13 @@ impl FileScanTaskReader {
         let mut parquet_read_options = self.parquet_read_options;
         parquet_read_options.preload_page_index = should_load_page_index;
 
-        let delete_filter_rx = self
-            .delete_file_loader
-            .load_deletes(&task.deletes, Arc::clone(&task.schema));
+        let delete_filter_rx = self.delete_file_loader.load_deletes(
+            &task.deletes,
+            Arc::clone(&task.schema),
+            self.scan_metrics.bytes_read_counter(),
+        );
 
-        let (parquet_file_reader, arrow_metadata) = ArrowReader::open_parquet_file_counted(
+        let (parquet_file_reader, arrow_metadata) = ArrowReader::open_parquet_file(
             &task.data_file_path,
             &self.file_io,
             task.file_size_in_bytes,
@@ -597,23 +599,9 @@ impl FileScanTaskReader {
 }
 
 impl ArrowReader {
-    /// Opens a Parquet file and loads its metadata, returning both the reader and metadata.
-    /// The reader can be reused to build a `ParquetRecordBatchStreamBuilder` without
-    /// reopening the file.
+    /// Opens a Parquet file and loads its metadata, wrapping the reader with
+    /// [`CountingFileRead`] so all I/O is accumulated into `bytes_read`.
     pub(crate) async fn open_parquet_file(
-        data_file_path: &str,
-        file_io: &FileIO,
-        file_size_in_bytes: u64,
-        parquet_read_options: ParquetReadOptions,
-    ) -> Result<(ArrowFileReader, ArrowReaderMetadata)> {
-        let parquet_file = file_io.new_input(data_file_path)?;
-        let parquet_reader = parquet_file.reader().await?;
-        Self::build_parquet_reader(parquet_reader, file_size_in_bytes, parquet_read_options).await
-    }
-
-    /// Opens a Parquet file wrapped with [`CountingFileRead`] so that all I/O
-    /// (metadata + data pages) is accumulated into `bytes_read`.
-    async fn open_parquet_file_counted(
         data_file_path: &str,
         file_io: &FileIO,
         file_size_in_bytes: u64,
@@ -2301,6 +2289,98 @@ message schema {
             scan_metrics.bytes_read() > 0,
             "Expected bytes_read > 0, got {}",
             scan_metrics.bytes_read()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_scan_metrics_includes_delete_file_bytes() {
+        let data_for_col_a = vec![
+            Some("foo".to_string()),
+            Some("bar".to_string()),
+            Some("baz".to_string()),
+        ];
+
+        let (file_io, schema, table_location, _temp_dir) =
+            setup_kleene_logic(data_for_col_a, DataType::Utf8);
+
+        let data_file_path = format!("{table_location}/1.parquet");
+        let data_file_size = std::fs::metadata(&data_file_path).unwrap().len();
+
+        // Write a positional delete file targeting row 0
+        let pos_del_schema = crate::arrow::delete_filter::tests::create_pos_del_schema();
+        let file_path_col = Arc::new(StringArray::from_iter_values(vec![data_file_path.clone()]));
+        let pos_col = Arc::new(arrow_array::Int64Array::from_iter_values(vec![0i64]));
+        let pos_del_batch =
+            RecordBatch::try_new(pos_del_schema, vec![file_path_col, pos_col]).unwrap();
+
+        let pos_del_path = format!("{table_location}/pos-del.parquet");
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let file = File::create(&pos_del_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, pos_del_batch.schema(), Some(props)).unwrap();
+        writer.write(&pos_del_batch).unwrap();
+        writer.close().unwrap();
+        let pos_del_size = std::fs::metadata(&pos_del_path).unwrap().len();
+
+        // Read without deletes to get a baseline
+        let reader = ArrowReaderBuilder::new(file_io.clone()).build();
+        let task_no_deletes = FileScanTask {
+            file_size_in_bytes: data_file_size,
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path: data_file_path.clone(),
+            data_file_format: DataFileFormat::Parquet,
+            schema: schema.clone(),
+            project_field_ids: vec![1],
+            predicate: None,
+            deletes: vec![],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: false,
+        };
+        let tasks =
+            Box::pin(futures::stream::iter(vec![Ok(task_no_deletes)])) as FileScanTaskStream;
+        let (stream, baseline_metrics) = reader.read(tasks).unwrap().into_parts();
+        let _: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+        let baseline_bytes = baseline_metrics.bytes_read();
+
+        // Read with deletes
+        let reader = ArrowReaderBuilder::new(file_io.clone()).build();
+        let task_with_deletes = FileScanTask {
+            file_size_in_bytes: data_file_size,
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path: data_file_path.clone(),
+            data_file_format: DataFileFormat::Parquet,
+            schema,
+            project_field_ids: vec![1],
+            predicate: None,
+            deletes: vec![FileScanTaskDeleteFile {
+                file_path: pos_del_path,
+                file_size_in_bytes: pos_del_size,
+                file_type: DataContentType::PositionDeletes,
+                partition_spec_id: 0,
+                equality_ids: None,
+            }],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: false,
+        };
+        let tasks =
+            Box::pin(futures::stream::iter(vec![Ok(task_with_deletes)])) as FileScanTaskStream;
+        let (stream, delete_metrics) = reader.read(tasks).unwrap().into_parts();
+        let _: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+
+        assert!(
+            delete_metrics.bytes_read() > baseline_bytes,
+            "Expected bytes_read with deletes ({}) > baseline without deletes ({})",
+            delete_metrics.bytes_read(),
+            baseline_bytes
         );
     }
 

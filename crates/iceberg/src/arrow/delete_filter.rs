@@ -267,6 +267,7 @@ pub(crate) mod tests {
     use std::fs::File;
     use std::path::Path;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
 
     use arrow_array::{Int64Array, RecordBatch, StringArray};
     use arrow_schema::Schema as ArrowSchema;
@@ -293,11 +294,16 @@ pub(crate) mod tests {
         let file_io = FileIO::new_with_fs();
 
         let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10);
+        let bytes_read = Arc::new(AtomicU64::new(0));
 
         let file_scan_tasks = setup(table_location);
 
         let delete_filter = delete_file_loader
-            .load_deletes(&file_scan_tasks[0].deletes, file_scan_tasks[0].schema_ref())
+            .load_deletes(
+                &file_scan_tasks[0].deletes,
+                file_scan_tasks[0].schema_ref(),
+                &bytes_read,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -308,7 +314,11 @@ pub(crate) mod tests {
         assert_eq!(result.lock().unwrap().len(), 12); // pos dels from pos del file 1 and 2
 
         let delete_filter = delete_file_loader
-            .load_deletes(&file_scan_tasks[1].deletes, file_scan_tasks[1].schema_ref())
+            .load_deletes(
+                &file_scan_tasks[1].deletes,
+                file_scan_tasks[1].schema_ref(),
+                &bytes_read,
+            )
             .await
             .unwrap()
             .unwrap();

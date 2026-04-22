@@ -16,6 +16,7 @@
 // under the License.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use futures::{StreamExt, TryStreamExt};
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
@@ -39,6 +40,7 @@ pub trait DeleteFileLoader {
         &self,
         task: &FileScanTaskDeleteFile,
         schema: SchemaRef,
+        bytes_read: &Arc<AtomicU64>,
     ) -> Result<ArrowRecordBatchStream>;
 }
 
@@ -57,6 +59,7 @@ impl BasicDeleteFileLoader {
         &self,
         data_file_path: &str,
         file_size_in_bytes: u64,
+        bytes_read: &Arc<AtomicU64>,
     ) -> Result<ArrowRecordBatchStream> {
         /*
            Essentially a super-cut-down ArrowReader. We can't use ArrowReader directly
@@ -69,6 +72,7 @@ impl BasicDeleteFileLoader {
             &self.file_io,
             file_size_in_bytes,
             parquet_read_options,
+            bytes_read,
         )
         .await?;
 
@@ -108,9 +112,10 @@ impl DeleteFileLoader for BasicDeleteFileLoader {
         &self,
         task: &FileScanTaskDeleteFile,
         schema: SchemaRef,
+        bytes_read: &Arc<AtomicU64>,
     ) -> Result<ArrowRecordBatchStream> {
         let raw_batch_stream = self
-            .parquet_to_batch_stream(&task.file_path, task.file_size_in_bytes)
+            .parquet_to_batch_stream(&task.file_path, task.file_size_in_bytes, bytes_read)
             .await?;
 
         // For equality deletes, only evolve the equality_ids columns.
@@ -138,6 +143,7 @@ mod tests {
         let file_io = FileIO::new_with_fs();
 
         let delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
+        let bytes_read = Arc::new(AtomicU64::new(0));
 
         let file_scan_tasks = setup(table_location);
 
@@ -145,6 +151,7 @@ mod tests {
             .read_delete_file(
                 &file_scan_tasks[0].deletes[0],
                 file_scan_tasks[0].schema_ref(),
+                &bytes_read,
             )
             .await
             .unwrap();
