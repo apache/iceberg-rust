@@ -24,6 +24,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.9.1] - 2026-04-22
+
+### All Changes
+
+* ci: fix zizmor workflow (#2334) by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2334
+* chore: update comment tag to match the exact version to fix zizmor (#2333) by @CTTY in https://github.com/apache/iceberg-rust/pull/2333
+* Fix RUSTSEC-2026-0097 (#2331) by @blackmwk in https://github.com/apache/iceberg-rust/pull/2331
+* Fix zizmor workflow (#2324) by @blackmwk in https://github.com/apache/iceberg-rust/pull/2324
+* fix(s3tables): use 's3' as the default scheme (#2313) by @rchowell in https://github.com/apache/iceberg-rust/pull/2313
+* fix: build_fallback_field_id_map produces incorrect column indices for schemas with nested types (#2307) by @mbutrovich in https://github.com/apache/iceberg-rust/pull/2307
+* ci: ensure use bash shell for env (#2305) by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2305
+* fix: incorrect Parquet INT96 timestamp values from ArrowReader (#2301) by @mbutrovich in https://github.com/apache/iceberg-rust/pull/2301
+* ci: fix zizmor security findings (#2290) by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2290
+* fix: explicitly set Python interpreter in maturin build to prevent using wrong version (#2277) by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2277
+* chore(deps): Bump rustls-webpki from 0.103.7 to 0.103.10 in bindings/python (#2278) by @blackmwk in https://github.com/apache/iceberg-rust/pull/2278
+* chore(deps): fix audit check and disable inherited aws sdk default features (#2274) by @maybe-vibe in https://github.com/apache/iceberg-rust/pull/2274
+* chore: Change publish parallism back to 1 (#2254) by @CTTY in https://github.com/apache/iceberg-rust/pull/2254
+
 ## [v0.9.0] - 2026-03-10
 
 ### Breaking Changes
