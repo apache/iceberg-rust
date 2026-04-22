@@ -54,6 +54,7 @@ brotli@8.0.2					X				X
 brotli-decompressor@5.0.0					X				X					
 bumpalo@3.20.2		X							X					
 bytemuck@1.25.0		X							X				X	
+bytemuck_derive@1.10.2		X							X				X	
 byteorder@1.5.0									X			X		
 bytes@1.11.1									X					
 bzip2@0.6.1		X							X					
@@ -191,10 +192,10 @@ hyper@1.8.1									X
 hyper-util@0.1.20									X					
 iana-time-zone@0.1.65		X							X					
 iana-time-zone-haiku@0.1.2		X							X					
-iceberg@0.9.0		X												
-iceberg-datafusion@0.9.0		X												
-iceberg-sqllogictest@0.9.0		X												
-iceberg_test_utils@0.9.0		X												
+iceberg@0.9.1		X												
+iceberg-datafusion@0.9.1		X												
+iceberg-sqllogictest@0.9.1		X												
+iceberg_test_utils@0.9.1		X												
 icu_collections@2.1.1											X			
 icu_locale_core@2.1.1											X			
 icu_normalizer@2.1.1											X			
@@ -235,7 +236,7 @@ linux-raw-sys@0.12.1		X	X						X
 litemap@0.8.1											X			
 lock_api@0.4.14		X							X					
 log@0.4.29		X							X					
-lz4_flex@0.12.0									X					
+lz4_flex@0.12.1									X					
 md-5@0.10.6		X							X					
 memchr@2.8.0									X			X		
 miniz_oxide@0.8.9		X							X				X	
@@ -285,7 +286,7 @@ quad-rand@0.2.3									X
 quote@1.0.44		X							X					
 r-efi@5.3.0		X						X	X					
 rand@0.8.5		X							X					
-rand@0.9.2		X							X					
+rand@0.9.4		X							X					
 rand_chacha@0.3.1		X							X					
 rand_chacha@0.9.0		X							X					
 rand_core@0.6.4		X							X					
@@ -335,6 +336,7 @@ siphasher@1.0.2		X							X
 slab@0.4.12									X					
 smallvec@1.15.1		X							X					
 snap@1.1.1					X									
+socket2@0.5.10		X							X					
 socket2@0.6.2		X							X					
 sqllogictest@0.28.4		X							X					
 sqlparser@0.59.0		X												
@@ -415,6 +417,7 @@ windows-interface@0.59.3		X							X
 windows-link@0.2.1		X							X					
 windows-result@0.4.1		X							X					
 windows-strings@0.5.1		X							X					
+windows-sys@0.52.0		X							X					
 windows-sys@0.59.0		X							X					
 windows-sys@0.60.2		X							X					
 windows-sys@0.61.2		X							X					

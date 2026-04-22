@@ -180,9 +180,9 @@ hyper-rustls@0.27.7		X							X		X
 hyper-util@0.1.17											X						
 iana-time-zone@0.1.64		X									X						
 iana-time-zone-haiku@0.1.2		X									X						
-iceberg@0.9.0		X															
-iceberg-datafusion@0.9.0		X															
-iceberg-storage-opendal@0.9.0		X															
+iceberg@0.9.1		X															
+iceberg-datafusion@0.9.1		X															
+iceberg-storage-opendal@0.9.1		X															
 icu_collections@2.1.0														X			
 icu_locale_core@2.1.0														X			
 icu_normalizer@2.1.0														X			
@@ -274,7 +274,7 @@ quick-xml@0.38.3											X
 quote@1.0.41		X									X						
 r-efi@5.3.0		X								X	X						
 rand@0.8.5		X									X						
-rand@0.9.2		X									X						
+rand@0.9.4		X									X						
 rand_chacha@0.3.1		X									X						
 rand_chacha@0.9.0		X									X						
 rand_core@0.6.4		X									X						
@@ -295,7 +295,7 @@ rustc_version@0.4.1		X									X
 rustix@1.1.2		X	X								X						
 rustls@0.23.34		X							X		X						
 rustls-pki-types@1.13.0		X									X						
-rustls-webpki@0.103.7									X								
+rustls-webpki@0.103.10									X								
 rustversion@1.0.22		X									X						
 ryu@1.0.20		X				X											
 same-file@1.0.6											X				X		

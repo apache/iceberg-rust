@@ -37,6 +37,7 @@ brotli@8.0.2					X						X
 brotli-decompressor@5.0.0					X						X			
 bumpalo@3.20.2		X									X			
 bytemuck@1.25.0		X									X			X
+bytemuck_derive@1.10.2		X									X			X
 byteorder@1.5.0											X		X	
 bytes@1.11.1											X			
 cc@1.2.56		X									X			
@@ -112,9 +113,9 @@ hyper-rustls@0.27.7		X							X		X
 hyper-util@0.1.20											X			
 iana-time-zone@0.1.65		X									X			
 iana-time-zone-haiku@0.1.2		X									X			
-iceberg@0.9.0		X												
-iceberg-storage-opendal@0.9.0		X												
-iceberg_test_utils@0.9.0		X												
+iceberg@0.9.1		X												
+iceberg-storage-opendal@0.9.1		X												
+iceberg_test_utils@0.9.1		X												
 icu_collections@2.1.1												X		
 icu_locale_core@2.1.1												X		
 icu_normalizer@2.1.1												X		
@@ -148,7 +149,7 @@ libm@0.2.16											X
 litemap@0.8.1												X		
 lock_api@0.4.14		X									X			
 log@0.4.29		X									X			
-lz4_flex@0.12.0											X			
+lz4_flex@0.12.1											X			
 md-5@0.10.6		X									X			
 memchr@2.8.0											X		X	
 miniz_oxide@0.8.9		X									X			X
@@ -184,7 +185,7 @@ quick-xml@0.38.4											X
 quote@1.0.44		X									X			
 r-efi@5.3.0		X								X	X			
 rand@0.8.5		X									X			
-rand@0.9.2		X									X			
+rand@0.9.4		X									X			
 rand_chacha@0.3.1		X									X			
 rand_chacha@0.9.0		X									X			
 rand_core@0.6.4		X									X			
@@ -201,7 +202,7 @@ roaring@0.11.3		X									X
 rustc_version@0.4.1		X									X			
 rustls@0.23.37		X							X		X			
 rustls-pki-types@1.14.0		X									X			
-rustls-webpki@0.103.9									X					
+rustls-webpki@0.103.12									X					
 rustversion@1.0.22		X									X			
 ryu@1.0.23		X				X								
 scopeguard@1.2.0		X									X			
@@ -226,6 +227,7 @@ simdutf8@0.1.5		X									X
 slab@0.4.12											X			
 smallvec@1.15.1		X									X			
 snap@1.1.1					X									
+socket2@0.5.10		X									X			
 socket2@0.6.2		X									X			
 stable_deref_trait@1.2.1		X									X			
 strsim@0.11.1											X			
