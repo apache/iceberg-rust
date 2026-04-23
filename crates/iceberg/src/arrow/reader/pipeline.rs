@@ -23,9 +23,8 @@
 use std::sync::Arc;
 
 use futures::{StreamExt, TryStreamExt};
-use parquet::arrow::ParquetRecordBatchStreamBuilder;
-use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ParquetRecordBatchStreamBuilder};
 
 use super::{
     ArrowFileReader, ArrowReader, ParquetReadOptions, add_fallback_field_ids_to_arrow_schema,
@@ -444,15 +443,12 @@ mod tests {
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
     use parquet::file::properties::WriterProperties;
-    
     use tempfile::TempDir;
 
     use crate::arrow::ArrowReaderBuilder;
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskStream};
-    use crate::spec::{
-        DataFileFormat, NestedField, PrimitiveType, Schema, SchemaRef, Type,
-    };
+    use crate::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
     // INT96 encoding: [nanos_low_u32, nanos_high_u32, julian_day_u32]
     // Julian day 2_440_588 = Unix epoch (1970-01-01)
@@ -1176,4 +1172,3 @@ mod tests {
         );
     }
 }
-

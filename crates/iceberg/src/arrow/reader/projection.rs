@@ -30,8 +30,8 @@ use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 use super::{ArrowReader, CollectFieldIdVisitor};
 use crate::arrow::arrow_schema_to_schema;
 use crate::error::Result;
-use crate::expr::visitors::bound_predicate_visitor::visit;
 use crate::expr::BoundPredicate;
+use crate::expr::visitors::bound_predicate_visitor::visit;
 use crate::spec::{NameMapping, NestedField, PrimitiveType, Schema, Type};
 use crate::{Error, ErrorKind};
 
@@ -291,7 +291,9 @@ fn leaf_count(ty: &parquet::schema::types::Type) -> usize {
 ///
 /// Mirrors iceberg-java's ParquetSchemaUtil.addFallbackIds() which iterates
 /// fileSchema.getFields() assigning ordinal IDs to top-level fields.
-pub(super) fn build_fallback_field_id_map(parquet_schema: &SchemaDescriptor) -> HashMap<i32, usize> {
+pub(super) fn build_fallback_field_id_map(
+    parquet_schema: &SchemaDescriptor,
+) -> HashMap<i32, usize> {
     let mut column_map = HashMap::new();
     let mut leaf_idx = 0;
 
@@ -422,7 +424,7 @@ mod tests {
     use arrow_array::{ArrayRef, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
     use futures::TryStreamExt;
-    use parquet::arrow::{ArrowWriter, ProjectionMask};
+    use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY, ProjectionMask};
     use parquet::basic::Compression;
     use parquet::file::properties::WriterProperties;
     use parquet::schema::parser::parse_message_type;
@@ -430,14 +432,11 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::ErrorKind;
-    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use crate::arrow::{ArrowReader, ArrowReaderBuilder};
     use crate::expr::{Bind, Reference};
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskStream};
-    use crate::spec::{
-        DataFileFormat, Datum, NestedField, PrimitiveType, Schema, Type,
-    };
+    use crate::spec::{DataFileFormat, Datum, NestedField, PrimitiveType, Schema, Type};
 
     #[test]
     fn test_arrow_projection_mask() {

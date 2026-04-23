@@ -208,9 +208,7 @@ mod tests {
     use crate::expr::{Bind, Predicate, Reference};
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskStream};
-    use crate::spec::{
-        DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
-    };
+    use crate::spec::{DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
     async fn test_perform_read(
         predicate: Predicate,
@@ -616,4 +614,3 @@ mod tests {
         }
     }
 }
-

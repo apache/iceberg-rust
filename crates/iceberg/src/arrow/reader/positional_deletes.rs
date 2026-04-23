@@ -162,7 +162,6 @@ mod tests {
     use parquet::basic::Compression;
     use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
     use parquet::file::properties::WriterProperties;
-    
     use parquet::schema::types::{SchemaDescPtr, SchemaDescriptor};
     use roaring::RoaringTreemap;
     use tempfile::TempDir;
@@ -171,9 +170,7 @@ mod tests {
     use crate::delete_vector::DeleteVector;
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
-    use crate::spec::{
-        DataContentType, DataFileFormat, NestedField, PrimitiveType, Schema, Type,
-    };
+    use crate::spec::{DataContentType, DataFileFormat, NestedField, PrimitiveType, Schema, Type};
 
     fn build_test_row_group_meta(
         schema_descr: SchemaDescPtr,
@@ -932,4 +929,3 @@ mod tests {
         );
     }
 }
-
