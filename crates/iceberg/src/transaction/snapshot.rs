@@ -127,6 +127,12 @@ pub(crate) struct SnapshotProducer<'a> {
     // for filtering out files that are removed by action
     pub removed_data_file_paths: HashSet<String>,
     pub removed_delete_file_paths: HashSet<String>,
+    // Full DataFile objects for removed files. Retained so the snapshot summary
+    // can roll up `deleted-records`, `removed-files-size`, etc. from the file
+    // metadata. Only paths are needed for manifest filtering, but the summary
+    // collector needs the full records to produce accurate `total-*` fields
+    // on the new snapshot.
+    pub removed_data_files: Vec<DataFile>,
     pub removed_delete_files: Vec<DataFile>,
 
     // A counter used to generate unique manifest file names.
@@ -155,8 +161,8 @@ impl<'a> SnapshotProducer<'a> {
         removed_delete_files: Vec<DataFile>,
     ) -> Self {
         let removed_data_file_paths = removed_data_files
-            .into_iter()
-            .map(|df| df.file_path)
+            .iter()
+            .map(|df| df.file_path.clone())
             .collect();
         let removed_delete_file_paths = removed_delete_files
             .iter()
@@ -179,6 +185,7 @@ impl<'a> SnapshotProducer<'a> {
             added_delete_files,
             removed_data_file_paths,
             removed_delete_file_paths,
+            removed_data_files,
             removed_delete_files,
             new_data_file_sequence_number: None,
             target_branch: MAIN_BRANCH.to_string(),
@@ -651,6 +658,42 @@ partition_struct: {:?}, partition_type: {:?}",
             );
         }
 
+        // Also account for files removed by this action (e.g. Replace / Delete).
+        // Without this, `deleted-records` / `removed-files-size` /
+        // `deleted-data-files` stay at zero on the new summary, so
+        // `update_totals` computes
+        //   total = previous_total + added
+        // instead of
+        //   total = previous_total + added - removed
+        // — REPLACE commits look like pure appends to consumers that read
+        // snapshot summaries.
+        //
+        // Skipped for `Overwrite`: `update_snapshot_summaries` routes those
+        // through `truncate_table_summary`, which derives removed-* fields
+        // directly from the parent's total-* values (full-table truncate
+        // semantics). Pre-populating removed-* here would either be silently
+        // clobbered by truncate (when the parent totals are non-zero) or leak
+        // through and double-count against already-zeroed parent totals (when
+        // the parent was itself produced by a truncating overwrite), which
+        // causes `update_totals` to underflow on `previous_total - removed`.
+        let operation = snapshot_produce_operation.operation();
+        if operation != Operation::Overwrite {
+            for data_file in &self.removed_data_files {
+                summary_collector.remove_file(
+                    data_file,
+                    table_metadata.current_schema().clone(),
+                    table_metadata.default_partition_spec().clone(),
+                );
+            }
+            for delete_file in &self.removed_delete_files {
+                summary_collector.remove_file(
+                    delete_file,
+                    table_metadata.current_schema().clone(),
+                    table_metadata.default_partition_spec().clone(),
+                );
+            }
+        }
+
         // The previous snapshot for summary rollup is the current tip of the
         // target branch — which is exactly what `commit()` below uses as the
         // parent for the new snapshot. The earlier implementation looked up
@@ -664,14 +707,14 @@ partition_struct: {:?}, partition_type: {:?}",
         additional_properties.extend(self.snapshot_properties.clone());
 
         let summary = Summary {
-            operation: snapshot_produce_operation.operation(),
+            operation: operation.clone(),
             additional_properties,
         };
 
         update_snapshot_summaries(
             summary,
             previous_snapshot.map(|s| s.summary()),
-            snapshot_produce_operation.operation() == Operation::Overwrite,
+            operation == Operation::Overwrite,
         )
     }
 
@@ -1167,4 +1210,267 @@ pub(crate) fn new_manifest_path(
     format: DataFileFormat,
 ) -> String {
     format!("{metadata_location}/{meta_root_path}/{commit_uuid}-m{manifest_counter}.{format}")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use uuid::Uuid;
+
+    use super::SnapshotProducer;
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, Operation,
+        Snapshot, SnapshotReference, SnapshotRetention, Struct, Summary,
+    };
+    use crate::transaction::rewrite_files::RewriteFilesOperation;
+    use crate::transaction::tests::make_v2_minimal_table;
+
+    const TOTAL_DATA_FILES_KEY: &str = "total-data-files";
+    const TOTAL_RECORDS_KEY: &str = "total-records";
+    const DELETED_DATA_FILES_KEY: &str = "deleted-data-files";
+    const DELETED_RECORDS_KEY: &str = "deleted-records";
+
+    /// Regression test: on a `Replace` (rewrite) commit, the snapshot summary
+    /// must report the files and records removed by this action. Without this,
+    /// `update_totals` computes
+    ///   total = previous_total + added
+    /// instead of
+    ///   total = previous_total + added - removed
+    /// i.e. a compaction that rewrites N files into M (same row count) looks
+    /// like a pure append of M files and inflates `total-data-files` and
+    /// `total-records` on every subsequent commit.
+    ///
+    /// The bug is in `SnapshotProducer::summary`, which only iterates
+    /// `added_data_files`. This test exercises `summary()` directly against a
+    /// producer configured with one added and one removed data file (each 10
+    /// records), against a parent snapshot that already reports 5 data files
+    /// and 100 records on `main`.
+    ///
+    /// Before the fix this asserts fails with `total-records = 110` /
+    /// `total-data-files = 6`. With the fix both roll up correctly to 100 / 5,
+    /// and the summary also records `deleted-records = 10` /
+    /// `deleted-data-files = 1`, which consumers (dashboards, cost reporting,
+    /// change-data tracking) rely on.
+    #[tokio::test]
+    async fn test_rewrite_summary_accounts_for_removed_files() {
+        const PARENT_SNAPSHOT_ID: i64 = 42;
+        const PARENT_TOTAL_DATA_FILES: u64 = 5;
+        const PARENT_TOTAL_RECORDS: u64 = 100;
+        const RECORDS_PER_FILE: u64 = 10;
+
+        // Build a V2 table whose `main` already reports cumulative totals.
+        // We don't need the parent manifest list to be loadable here because
+        // `summary()` only reads the parent's summary from metadata; the
+        // manifest-list walk happens in `commit()`, not `summary()`.
+        let base = make_v2_minimal_table();
+        let parent_summary = Summary {
+            operation: Operation::Append,
+            additional_properties: HashMap::from([
+                (
+                    TOTAL_DATA_FILES_KEY.to_string(),
+                    PARENT_TOTAL_DATA_FILES.to_string(),
+                ),
+                (
+                    TOTAL_RECORDS_KEY.to_string(),
+                    PARENT_TOTAL_RECORDS.to_string(),
+                ),
+            ]),
+        };
+        let parent_snapshot = Snapshot::builder()
+            .with_snapshot_id(PARENT_SNAPSHOT_ID)
+            .with_timestamp_ms(base.metadata().last_updated_ms() + 1)
+            .with_sequence_number(1)
+            .with_schema_id(0)
+            .with_manifest_list("memory:///unused-by-summary.avro")
+            .with_summary(parent_summary)
+            .build();
+
+        let metadata_with_parent = base
+            .metadata()
+            .clone()
+            .into_builder(Some("s3://bucket/test/location/metadata/v1.json".into()))
+            .add_snapshot(parent_snapshot)
+            .unwrap()
+            .set_ref(MAIN_BRANCH, SnapshotReference {
+                snapshot_id: PARENT_SNAPSHOT_ID,
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            })
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        let table = base.with_metadata(Arc::new(metadata_with_parent));
+
+        // One file added, one file removed — same row count, so logical table
+        // contents don't change. This is the shape compaction produces.
+        let make_file = |path: &str| {
+            DataFileBuilder::default()
+                .partition_spec_id(table.metadata().default_partition_spec_id())
+                .content(DataContentType::Data)
+                .file_path(path.to_string())
+                .file_format(DataFileFormat::Parquet)
+                .file_size_in_bytes(100)
+                .record_count(RECORDS_PER_FILE)
+                .partition(Struct::from_iter([Some(Literal::long(300))]))
+                .build()
+                .unwrap()
+        };
+        let added = make_file("test/new.parquet");
+        let removed = make_file("test/old.parquet");
+
+        let producer = SnapshotProducer::new(
+            &table,
+            Uuid::now_v7(),
+            None,
+            None,
+            HashMap::new(),
+            vec![added],
+            vec![],
+            vec![removed],
+            vec![],
+        );
+
+        let summary = producer.summary(&RewriteFilesOperation).unwrap();
+        assert_eq!(summary.operation, Operation::Replace);
+        let props = &summary.additional_properties;
+
+        // Removed file accounting — absent before the fix.
+        assert_eq!(
+            props.get(DELETED_RECORDS_KEY).map(String::as_str),
+            Some(RECORDS_PER_FILE.to_string().as_str()),
+            "deleted-records must reflect the removed file's record count",
+        );
+        assert_eq!(
+            props.get(DELETED_DATA_FILES_KEY).map(String::as_str),
+            Some("1"),
+            "deleted-data-files must reflect the removed file count",
+        );
+
+        // Totals roll forward from the parent, with both added and removed
+        // subtracted — so a zero-delta rewrite is a no-op on totals.
+        let total_records: u64 = props.get(TOTAL_RECORDS_KEY).unwrap().parse().unwrap();
+        let total_data_files: u64 = props.get(TOTAL_DATA_FILES_KEY).unwrap().parse().unwrap();
+        assert_eq!(
+            total_records, PARENT_TOTAL_RECORDS,
+            "total-records must stay at {PARENT_TOTAL_RECORDS} (added={RECORDS_PER_FILE} − removed={RECORDS_PER_FILE})",
+        );
+        assert_eq!(
+            total_data_files, PARENT_TOTAL_DATA_FILES,
+            "total-data-files must stay at {PARENT_TOTAL_DATA_FILES} (added=1 − removed=1)",
+        );
+    }
+
+    /// Regression test: on an `Overwrite` commit whose parent is itself a
+    /// truncating overwrite (so the parent's `total-*` rolled down to 0),
+    /// `summary()` must not feed removed_data_files through the summary
+    /// collector. `update_snapshot_summaries` routes Overwrite through
+    /// `truncate_table_summary`, which derives removed-* fields from the
+    /// parent's total-* values. When the parent totals are zero the truncate
+    /// step leaves the summary unchanged, so any removed-* that `summary()`
+    /// pre-populated leaks into `update_totals` and computes
+    ///   new_total = previous_total(0) + added(0) - removed(>0)
+    /// which underflows on u64 and panics with "attempt to subtract with
+    /// overflow".
+    ///
+    /// This mirrors the shape that the existing
+    /// overwrite_files_test::test_partition_spec_id_in_manifest integration
+    /// test exercises: N fast appends followed by N single-file
+    /// overwrite-deletes in separate commits. Before this fix the second
+    /// overwrite-delete panics; with the fix `summary()` skips the
+    /// remove_file calls for Overwrite and `truncate_table_summary` drives
+    /// the accounting as it always has.
+    #[tokio::test]
+    async fn test_overwrite_summary_does_not_underflow_after_prior_truncate() {
+        use crate::transaction::overwrite_files::OverwriteFilesOperation;
+
+        // Build a parent whose `total-*` are all zero — i.e. the prior
+        // commit was a full-table overwrite that already drained the totals.
+        // This is the precondition for the underflow on the next overwrite
+        // that still reports per-file removed-* values.
+        const PARENT_SNAPSHOT_ID: i64 = 42;
+        const RECORDS_PER_FILE: u64 = 4;
+
+        let base = make_v2_minimal_table();
+        let parent_summary = Summary {
+            operation: Operation::Overwrite,
+            additional_properties: HashMap::from([
+                (TOTAL_DATA_FILES_KEY.to_string(), "0".to_string()),
+                (TOTAL_RECORDS_KEY.to_string(), "0".to_string()),
+                ("total-files-size".to_string(), "0".to_string()),
+            ]),
+        };
+        let parent_snapshot = Snapshot::builder()
+            .with_snapshot_id(PARENT_SNAPSHOT_ID)
+            .with_timestamp_ms(base.metadata().last_updated_ms() + 1)
+            .with_sequence_number(1)
+            .with_schema_id(0)
+            .with_manifest_list("memory:///unused-by-summary.avro")
+            .with_summary(parent_summary)
+            .build();
+
+        let metadata_with_parent = base
+            .metadata()
+            .clone()
+            .into_builder(Some("s3://bucket/test/location/metadata/v1.json".into()))
+            .add_snapshot(parent_snapshot)
+            .unwrap()
+            .set_ref(MAIN_BRANCH, SnapshotReference {
+                snapshot_id: PARENT_SNAPSHOT_ID,
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            })
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        let table = base.with_metadata(Arc::new(metadata_with_parent));
+
+        // Overwrite action that removes one data file and adds nothing —
+        // exactly what the overwrite_files integration test does per commit.
+        let removed = DataFileBuilder::default()
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .content(DataContentType::Data)
+            .file_path("test/old.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(RECORDS_PER_FILE)
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+
+        let producer = SnapshotProducer::new(
+            &table,
+            Uuid::now_v7(),
+            None,
+            None,
+            HashMap::new(),
+            vec![],
+            vec![],
+            vec![removed],
+            vec![],
+        );
+
+        // The key assertion is that this does not panic with
+        // "attempt to subtract with overflow". The returned summary is
+        // allowed to report zeros across the board — that matches what the
+        // JVM Iceberg reference produces for a no-op overwrite on an empty
+        // (post-truncate) table.
+        let summary = producer.summary(&OverwriteFilesOperation).unwrap();
+        assert_eq!(summary.operation, Operation::Overwrite);
+        let props = &summary.additional_properties;
+        assert_eq!(props.get(TOTAL_RECORDS_KEY).map(String::as_str), Some("0"));
+        assert_eq!(
+            props.get(TOTAL_DATA_FILES_KEY).map(String::as_str),
+            Some("0")
+        );
+    }
 }
