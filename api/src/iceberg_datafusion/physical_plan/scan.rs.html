@@ -196,51 +196,55 @@
 <a href=#196 id=196 data-nosnippet>196</a>            <span class="self">self</span>.predicates
 <a href=#197 id=197 data-nosnippet>197</a>                .clone()
 <a href=#198 id=198 data-nosnippet>198</a>                .map_or(String::from(<span class="string">""</span>), |p| <span class="macro">format!</span>(<span class="string">"{p}"</span>))
-<a href=#199 id=199 data-nosnippet>199</a>        )
-<a href=#200 id=200 data-nosnippet>200</a>    }
-<a href=#201 id=201 data-nosnippet>201</a>}
-<a href=#202 id=202 data-nosnippet>202</a>
-<a href=#203 id=203 data-nosnippet>203</a><span class="doccomment">/// Asynchronously retrieves a stream of [`RecordBatch`] instances
-<a href=#204 id=204 data-nosnippet>204</a>/// from a given table.
-<a href=#205 id=205 data-nosnippet>205</a>///
-<a href=#206 id=206 data-nosnippet>206</a>/// This function initializes a [`TableScan`], builds it,
-<a href=#207 id=207 data-nosnippet>207</a>/// and then converts it into a stream of Arrow [`RecordBatch`]es.
-<a href=#208 id=208 data-nosnippet>208</a></span><span class="kw">async fn </span>get_batch_stream(
-<a href=#209 id=209 data-nosnippet>209</a>    table: Table,
-<a href=#210 id=210 data-nosnippet>210</a>    snapshot_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
-<a href=#211 id=211 data-nosnippet>211</a>    column_names: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
-<a href=#212 id=212 data-nosnippet>212</a>    predicates: <span class="prelude-ty">Option</span>&lt;Predicate&gt;,
-<a href=#213 id=213 data-nosnippet>213</a>) -&gt; DFResult&lt;Pin&lt;Box&lt;<span class="kw">dyn </span>Stream&lt;Item = DFResult&lt;RecordBatch&gt;&gt; + Send&gt;&gt;&gt; {
-<a href=#214 id=214 data-nosnippet>214</a>    <span class="kw">let </span>scan_builder = <span class="kw">match </span>snapshot_id {
-<a href=#215 id=215 data-nosnippet>215</a>        <span class="prelude-val">Some</span>(snapshot_id) =&gt; table.scan().snapshot_id(snapshot_id),
-<a href=#216 id=216 data-nosnippet>216</a>        <span class="prelude-val">None </span>=&gt; table.scan(),
-<a href=#217 id=217 data-nosnippet>217</a>    };
-<a href=#218 id=218 data-nosnippet>218</a>
-<a href=#219 id=219 data-nosnippet>219</a>    <span class="kw">let </span><span class="kw-2">mut </span>scan_builder = <span class="kw">match </span>column_names {
-<a href=#220 id=220 data-nosnippet>220</a>        <span class="prelude-val">Some</span>(column_names) =&gt; scan_builder.select(column_names),
-<a href=#221 id=221 data-nosnippet>221</a>        <span class="prelude-val">None </span>=&gt; scan_builder.select_all(),
-<a href=#222 id=222 data-nosnippet>222</a>    };
-<a href=#223 id=223 data-nosnippet>223</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(pred) = predicates {
-<a href=#224 id=224 data-nosnippet>224</a>        scan_builder = scan_builder.with_filter(pred);
-<a href=#225 id=225 data-nosnippet>225</a>    }
-<a href=#226 id=226 data-nosnippet>226</a>    <span class="kw">let </span>table_scan = scan_builder.build().map_err(to_datafusion_error)<span class="question-mark">?</span>;
-<a href=#227 id=227 data-nosnippet>227</a>
-<a href=#228 id=228 data-nosnippet>228</a>    <span class="kw">let </span>stream = table_scan
-<a href=#229 id=229 data-nosnippet>229</a>        .to_arrow()
-<a href=#230 id=230 data-nosnippet>230</a>        .<span class="kw">await
-<a href=#231 id=231 data-nosnippet>231</a>        </span>.map_err(to_datafusion_error)<span class="question-mark">?
-<a href=#232 id=232 data-nosnippet>232</a>        </span>.map_err(to_datafusion_error);
-<a href=#233 id=233 data-nosnippet>233</a>    <span class="prelude-val">Ok</span>(Box::pin(stream))
-<a href=#234 id=234 data-nosnippet>234</a>}
-<a href=#235 id=235 data-nosnippet>235</a>
-<a href=#236 id=236 data-nosnippet>236</a><span class="kw">fn </span>get_column_names(
-<a href=#237 id=237 data-nosnippet>237</a>    schema: ArrowSchemaRef,
-<a href=#238 id=238 data-nosnippet>238</a>    projection: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Vec&lt;usize&gt;&gt;,
-<a href=#239 id=239 data-nosnippet>239</a>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt; {
-<a href=#240 id=240 data-nosnippet>240</a>    projection.map(|v| {
-<a href=#241 id=241 data-nosnippet>241</a>        v.iter()
-<a href=#242 id=242 data-nosnippet>242</a>            .map(|p| schema.field(<span class="kw-2">*</span>p).name().clone())
-<a href=#243 id=243 data-nosnippet>243</a>            .collect::&lt;Vec&lt;String&gt;&gt;()
-<a href=#244 id=244 data-nosnippet>244</a>    })
-<a href=#245 id=245 data-nosnippet>245</a>}
+<a href=#199 id=199 data-nosnippet>199</a>        )<span class="question-mark">?</span>;
+<a href=#200 id=200 data-nosnippet>200</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(limit) = <span class="self">self</span>.limit {
+<a href=#201 id=201 data-nosnippet>201</a>            <span class="macro">write!</span>(f, <span class="string">" limit:[{limit}]"</span>)<span class="question-mark">?</span>;
+<a href=#202 id=202 data-nosnippet>202</a>        }
+<a href=#203 id=203 data-nosnippet>203</a>        <span class="prelude-val">Ok</span>(())
+<a href=#204 id=204 data-nosnippet>204</a>    }
+<a href=#205 id=205 data-nosnippet>205</a>}
+<a href=#206 id=206 data-nosnippet>206</a>
+<a href=#207 id=207 data-nosnippet>207</a><span class="doccomment">/// Asynchronously retrieves a stream of [`RecordBatch`] instances
+<a href=#208 id=208 data-nosnippet>208</a>/// from a given table.
+<a href=#209 id=209 data-nosnippet>209</a>///
+<a href=#210 id=210 data-nosnippet>210</a>/// This function initializes a [`TableScan`], builds it,
+<a href=#211 id=211 data-nosnippet>211</a>/// and then converts it into a stream of Arrow [`RecordBatch`]es.
+<a href=#212 id=212 data-nosnippet>212</a></span><span class="kw">async fn </span>get_batch_stream(
+<a href=#213 id=213 data-nosnippet>213</a>    table: Table,
+<a href=#214 id=214 data-nosnippet>214</a>    snapshot_id: <span class="prelude-ty">Option</span>&lt;i64&gt;,
+<a href=#215 id=215 data-nosnippet>215</a>    column_names: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
+<a href=#216 id=216 data-nosnippet>216</a>    predicates: <span class="prelude-ty">Option</span>&lt;Predicate&gt;,
+<a href=#217 id=217 data-nosnippet>217</a>) -&gt; DFResult&lt;Pin&lt;Box&lt;<span class="kw">dyn </span>Stream&lt;Item = DFResult&lt;RecordBatch&gt;&gt; + Send&gt;&gt;&gt; {
+<a href=#218 id=218 data-nosnippet>218</a>    <span class="kw">let </span>scan_builder = <span class="kw">match </span>snapshot_id {
+<a href=#219 id=219 data-nosnippet>219</a>        <span class="prelude-val">Some</span>(snapshot_id) =&gt; table.scan().snapshot_id(snapshot_id),
+<a href=#220 id=220 data-nosnippet>220</a>        <span class="prelude-val">None </span>=&gt; table.scan(),
+<a href=#221 id=221 data-nosnippet>221</a>    };
+<a href=#222 id=222 data-nosnippet>222</a>
+<a href=#223 id=223 data-nosnippet>223</a>    <span class="kw">let </span><span class="kw-2">mut </span>scan_builder = <span class="kw">match </span>column_names {
+<a href=#224 id=224 data-nosnippet>224</a>        <span class="prelude-val">Some</span>(column_names) =&gt; scan_builder.select(column_names),
+<a href=#225 id=225 data-nosnippet>225</a>        <span class="prelude-val">None </span>=&gt; scan_builder.select_all(),
+<a href=#226 id=226 data-nosnippet>226</a>    };
+<a href=#227 id=227 data-nosnippet>227</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(pred) = predicates {
+<a href=#228 id=228 data-nosnippet>228</a>        scan_builder = scan_builder.with_filter(pred);
+<a href=#229 id=229 data-nosnippet>229</a>    }
+<a href=#230 id=230 data-nosnippet>230</a>    <span class="kw">let </span>table_scan = scan_builder.build().map_err(to_datafusion_error)<span class="question-mark">?</span>;
+<a href=#231 id=231 data-nosnippet>231</a>
+<a href=#232 id=232 data-nosnippet>232</a>    <span class="kw">let </span>stream = table_scan
+<a href=#233 id=233 data-nosnippet>233</a>        .to_arrow()
+<a href=#234 id=234 data-nosnippet>234</a>        .<span class="kw">await
+<a href=#235 id=235 data-nosnippet>235</a>        </span>.map_err(to_datafusion_error)<span class="question-mark">?
+<a href=#236 id=236 data-nosnippet>236</a>        </span>.map_err(to_datafusion_error);
+<a href=#237 id=237 data-nosnippet>237</a>    <span class="prelude-val">Ok</span>(Box::pin(stream))
+<a href=#238 id=238 data-nosnippet>238</a>}
+<a href=#239 id=239 data-nosnippet>239</a>
+<a href=#240 id=240 data-nosnippet>240</a><span class="kw">fn </span>get_column_names(
+<a href=#241 id=241 data-nosnippet>241</a>    schema: ArrowSchemaRef,
+<a href=#242 id=242 data-nosnippet>242</a>    projection: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Vec&lt;usize&gt;&gt;,
+<a href=#243 id=243 data-nosnippet>243</a>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt; {
+<a href=#244 id=244 data-nosnippet>244</a>    projection.map(|v| {
+<a href=#245 id=245 data-nosnippet>245</a>        v.iter()
+<a href=#246 id=246 data-nosnippet>246</a>            .map(|p| schema.field(<span class="kw-2">*</span>p).name().clone())
+<a href=#247 id=247 data-nosnippet>247</a>            .collect::&lt;Vec&lt;String&gt;&gt;()
+<a href=#248 id=248 data-nosnippet>248</a>    })
+<a href=#249 id=249 data-nosnippet>249</a>}
 </code></pre></div></section></main></body></html>
