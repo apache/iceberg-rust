@@ -295,7 +295,7 @@ rustc_version@0.4.1		X									X
 rustix@1.1.2		X	X								X						
 rustls@0.23.34		X							X		X						
 rustls-pki-types@1.13.0		X									X						
-rustls-webpki@0.103.10									X								
+rustls-webpki@0.103.13									X								
 rustversion@1.0.22		X									X						
 ryu@1.0.20		X				X											
 same-file@1.0.6											X				X		

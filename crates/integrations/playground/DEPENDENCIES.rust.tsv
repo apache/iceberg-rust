@@ -332,7 +332,7 @@ rustls@0.23.37		X						X		X
 rustls-native-certs@0.8.3		X						X		X						
 rustls-pemfile@2.2.0		X						X		X						
 rustls-pki-types@1.14.0		X								X						
-rustls-webpki@0.103.12								X								
+rustls-webpki@0.103.13								X								
 rustversion@1.0.22		X								X						
 rustyline@17.0.2										X						
 ryu@1.0.23		X				X										
