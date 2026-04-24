@@ -126,9 +126,9 @@ pub(crate) struct SnapshotProducer<'a> {
     #[builder(default)]
     added_delete_files: Vec<DataFile>,
     #[builder(default)]
-    pub deleted_data_files: Vec<DataFile>,
+    removed_data_files: Vec<DataFile>,
     #[builder(default)]
-    pub deleted_delete_files: Vec<DataFile>,
+    removed_delete_files: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
@@ -299,12 +299,12 @@ impl<'a> SnapshotProducer<'a> {
         &mut self,
         content_type: ManifestContentType,
     ) -> Result<ManifestFile> {
-        let added_data_files = match content_type {
+        let added_files = match content_type {
             ManifestContentType::Data => std::mem::take(&mut self.added_data_files),
             ManifestContentType::Deletes => std::mem::take(&mut self.added_delete_files),
         };
 
-        if added_data_files.is_empty() {
+        if added_files.is_empty() {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
                 "No added data files found when write an added manifest file",
@@ -313,7 +313,7 @@ impl<'a> SnapshotProducer<'a> {
 
         let snapshot_id = self.snapshot_id;
         let format_version = self.table.metadata().format_version();
-        let manifest_entries = added_data_files.into_iter().map(|data_file| {
+        let manifest_entries = added_files.into_iter().map(|data_file| {
             let builder = ManifestEntry::builder()
                 .status(crate::spec::ManifestStatus::Added)
                 .data_file(data_file);
@@ -362,7 +362,7 @@ impl<'a> SnapshotProducer<'a> {
                             .get_or_insert(
                                 self.new_manifest_writer(ManifestContentType::Data, spec_id)?,
                             )
-                            .add_entry(entry)?,
+                            .add_delete_entry(entry)?,
                         DataContentType::PositionDeletes | DataContentType::EqualityDeletes => {
                             delete_manifest_writer
                                 .get_or_insert(
@@ -400,8 +400,8 @@ impl<'a> SnapshotProducer<'a> {
         // For details, please refer to https://github.com/apache/iceberg-rust/issues/1548
         if self.added_data_files.is_empty()
             && self.added_delete_files.is_empty()
-            && self.deleted_data_files.is_empty()
-            && self.deleted_delete_files.is_empty()
+            && self.removed_data_files.is_empty()
+            && self.removed_delete_files.is_empty()
             && self.snapshot_properties.is_empty()
         {
             return Err(Error::new(
