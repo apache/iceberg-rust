@@ -35,7 +35,14 @@ use super::expr_to_predicate::convert_filters_to_predicate;
 use super::scan::get_column_names;
 use crate::to_datafusion_error;
 
-/// A DataFusion [`ExecutionPlan`] that reads one [`FileScanTask`] per partition.
+/// A DataFusion [`ExecutionPlan`] that reads a bucket of [`FileScanTask`]s per partition.
+///
+/// Each DataFusion partition `i` streams every [`FileScanTask`] in `buckets[i]`,
+/// concatenated into a single Arrow record-batch stream. The caller decides how
+/// tasks are assigned to buckets and supplies the resulting [`Partitioning`]
+/// (typically [`Partitioning::Hash`] when files are bucketed by identity-partition
+/// values matching DataFusion's repartition hash, otherwise
+/// [`Partitioning::UnknownPartitioning`]).
 ///
 /// Arrow reader configuration (row-group filtering, row selection, concurrency
 /// limit, batch size) matches [`IcebergTableScan`][super::scan::IcebergTableScan]:
@@ -63,8 +70,9 @@ pub struct IcebergPartitionedScan {
     projection: Option<Vec<String>>,
     /// Filters to apply to the table scan.
     predicates: Option<Predicate>,
-    /// Pre-planned file scan tasks, one per DataFusion partition.
-    tasks: Vec<FileScanTask>,
+    /// Pre-planned file scan tasks grouped by output DataFusion partition.
+    /// `buckets[i]` holds every task that `execute(i)` will read.
+    buckets: Vec<Vec<FileScanTask>>,
 }
 
 impl IcebergPartitionedScan {
@@ -74,13 +82,19 @@ impl IcebergPartitionedScan {
         schema: ArrowSchemaRef,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
-        tasks: Vec<FileScanTask>,
+        buckets: Vec<Vec<FileScanTask>>,
+        partitioning: Partitioning,
     ) -> Self {
         let output_schema = match projection {
             None => schema.clone(),
             Some(projection) => Arc::new(schema.project(projection).unwrap()),
         };
-        let plan_properties = Self::compute_properties(output_schema, tasks.len());
+        let plan_properties = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(output_schema),
+            partitioning,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        ));
         let projection = get_column_names(schema, projection);
         let predicates = convert_filters_to_predicate(filters);
 
@@ -90,7 +104,7 @@ impl IcebergPartitionedScan {
             plan_properties,
             projection,
             predicates,
-            tasks,
+            buckets,
         }
     }
 
@@ -110,17 +124,12 @@ impl IcebergPartitionedScan {
         self.predicates.as_ref()
     }
 
-    pub fn tasks(&self) -> &[FileScanTask] {
-        &self.tasks
+    pub fn buckets(&self) -> &[Vec<FileScanTask>] {
+        &self.buckets
     }
 
-    fn compute_properties(schema: ArrowSchemaRef, n_partitions: usize) -> Arc<PlanProperties> {
-        Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(n_partitions),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        ))
+    fn total_file_count(&self) -> usize {
+        self.buckets.iter().map(|b| b.len()).sum()
     }
 }
 
@@ -160,11 +169,11 @@ impl ExecutionPlan for IcebergPartitionedScan {
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> DFResult<SendableRecordBatchStream> {
-        let task = self.tasks.get(partition).cloned().ok_or_else(|| {
+        let bucket = self.buckets.get(partition).cloned().ok_or_else(|| {
             DataFusionError::Internal(format!(
-                "{}: partition index {partition} is out of bounds (total tasks: {})",
+                "{}: partition index {partition} is out of bounds (total buckets: {})",
                 self.name(),
-                self.tasks.len()
+                self.buckets.len()
             ))
         })?;
 
@@ -189,7 +198,9 @@ impl ExecutionPlan for IcebergPartitionedScan {
             }
             let table_scan = scan_builder.build().map_err(to_datafusion_error)?;
 
-            let task_stream = Box::pin(futures::stream::once(futures::future::ready(Ok(task))));
+            let task_stream = Box::pin(futures::stream::iter(
+                bucket.into_iter().map(Ok::<_, iceberg::Error>),
+            ));
             let record_batch_stream = table_scan
                 .to_arrow_with_tasks(task_stream)
                 .map_err(to_datafusion_error)?
@@ -220,17 +231,19 @@ impl DisplayAs for IcebergPartitionedScan {
             .predicates
             .clone()
             .map_or(String::new(), |p| format!("{p}"));
-        let file_count = self.tasks.len();
+        let file_count = self.total_file_count();
+        let bucket_count = self.buckets.len();
         write!(
             f,
-            "{} projection:[{projection}] predicate:[{predicate}] file_count:[{file_count}]",
+            "{} projection:[{projection}] predicate:[{predicate}] \
+             buckets:[{bucket_count}] file_count:[{file_count}]",
             self.name()
         )?;
         if file_count <= 5 {
             let files = self
-                .tasks
+                .buckets
                 .iter()
-                .map(|t| t.data_file_path())
+                .flat_map(|b| b.iter().map(|t| t.data_file_path()))
                 .collect::<Vec<_>>()
                 .join(", ");
             write!(f, " files:[{files}]")?;
