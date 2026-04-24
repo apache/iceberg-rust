@@ -683,7 +683,11 @@ mod tests {
             .unwrap();
 
         // Expect one data manifest + one delete manifest for the single partition group.
-        assert_eq!(manifests.len(), 2, "expected one data and one delete manifest");
+        assert_eq!(
+            manifests.len(),
+            2,
+            "expected one data and one delete manifest"
+        );
 
         let mut data_manifests = 0;
         let mut delete_manifests = 0;
