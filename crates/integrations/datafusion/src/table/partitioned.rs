@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -28,7 +29,7 @@ use datafusion::catalog::Session;
 use datafusion::common::hash_utils::create_hashes;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result as DFResult;
-use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
+use datafusion::logical_expr::{Expr, Operator, TableProviderFilterPushDown};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::repartition::REPARTITION_RANDOM_STATE;
@@ -41,7 +42,9 @@ use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 
 use crate::error::to_datafusion_error;
-use crate::physical_plan::expr_to_predicate::convert_filters_to_predicate;
+use crate::physical_plan::expr_to_predicate::{
+    convert_filter_to_predicate, convert_filters_to_predicate,
+};
 use crate::physical_plan::partitioned_scan::IcebergPartitionedScan;
 
 /// Catalog-backed table provider that scans each data file in a separate DataFusion partition.
@@ -59,6 +62,17 @@ pub struct IcebergPartitionedTableProvider {
     catalog: Arc<dyn Catalog>,
     table_ident: TableIdent,
     schema: ArrowSchemaRef,
+    /// Source-column names that are identity-partitioned in the table's
+    /// default spec, captured at construction. Used by
+    /// `supports_filters_pushdown` to mark filters as `Exact` when they
+    /// only reference identity-partition columns. Empty when the table
+    /// has spec evolution (>1 historical specs) or no identity transforms,
+    /// which forces every filter to `Inexact`.
+    ///
+    /// This is a snapshot: if the table's default spec changes between
+    /// `try_new` and a later scan, the cached set may be stale. Spec
+    /// evolution is rare in practice and the next `try_new` will refresh.
+    identity_partition_cols: HashSet<String>,
 }
 
 impl IcebergPartitionedTableProvider {
@@ -72,10 +86,12 @@ impl IcebergPartitionedTableProvider {
         // A second load_table is issued at scan time to guarantee the freshest snapshot.
         let table = catalog.load_table(&table_ident).await?;
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
+        let identity_partition_cols = identity_partition_col_names(&table);
         Ok(Self {
             catalog,
             table_ident,
             schema,
+            identity_partition_cols,
         })
     }
 }
@@ -193,7 +209,24 @@ impl TableProvider for IcebergPartitionedTableProvider {
         &self,
         filters: &[&Expr],
     ) -> DFResult<Vec<TableProviderFilterPushDown>> {
-        Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
+        Ok(filters
+            .iter()
+            .map(|f| {
+                // `Exact` is only safe when (1) the filter touches nothing but
+                // identity-partition columns and operators preserved by the
+                // identity transform, and (2) the iceberg conversion can
+                // actually represent the filter, so manifest pruning will
+                // remove every row that fails it. Either miss falls back to
+                // `Inexact` and DataFusion adds a FilterExec on top.
+                if convert_filter_to_predicate(f).is_some()
+                    && is_exact_on_identity(f, &self.identity_partition_cols)
+                {
+                    TableProviderFilterPushDown::Exact
+                } else {
+                    TableProviderFilterPushDown::Inexact
+                }
+            })
+            .collect())
     }
 
     async fn insert_into(
@@ -342,6 +375,76 @@ fn fallback_hash(task: &FileScanTask) -> u64 {
     hasher.finish()
 }
 
+/// Source-column names of every identity-transform field in the table's
+/// default partition spec. Returns the empty set when the table has spec
+/// evolution (>1 historical specs) — older files may carry partition tuples
+/// whose identity status differs from the current spec, so the safe choice
+/// is to refuse all `Exact` pushdowns until each task carries its own spec.
+fn identity_partition_col_names(table: &Table) -> HashSet<String> {
+    let metadata = table.metadata();
+    if metadata.partition_specs_iter().len() > 1 {
+        return HashSet::new();
+    }
+    let spec = metadata.default_partition_spec();
+    let table_schema = metadata.current_schema();
+    let mut names = HashSet::new();
+    for pf in spec.fields() {
+        if pf.transform != Transform::Identity {
+            continue;
+        }
+        if let Some(field) = table_schema.field_by_id(pf.source_id) {
+            names.insert(field.name.clone());
+        }
+    }
+    names
+}
+
+/// Returns `true` when every leaf of `expr` is a comparison or null check
+/// against an identity-partition column. Such filters are fully resolvable
+/// by manifest-level partition pruning, so DataFusion does not need to
+/// re-apply them post-scan.
+///
+/// Safe operators: `=`, `!=`, `<`, `<=`, `>`, `>=`, `IS NULL`, `IS NOT NULL`,
+/// `IN (..)`, `NOT IN (..)`, plus `AND` / `OR` / `NOT` of any of those. Every
+/// other shape returns `false` (caller falls back to `Inexact`).
+fn is_exact_on_identity(expr: &Expr, cols: &HashSet<String>) -> bool {
+    if cols.is_empty() {
+        return false;
+    }
+    match expr {
+        Expr::BinaryExpr(b) => match b.op {
+            Operator::And | Operator::Or => {
+                is_exact_on_identity(&b.left, cols) && is_exact_on_identity(&b.right, cols)
+            }
+            Operator::Eq
+            | Operator::NotEq
+            | Operator::Lt
+            | Operator::LtEq
+            | Operator::Gt
+            | Operator::GtEq => is_simple_compare_on_identity(&b.left, &b.right, cols),
+            _ => false,
+        },
+        Expr::Not(inner) => is_exact_on_identity(inner, cols),
+        Expr::IsNull(inner) | Expr::IsNotNull(inner) => is_identity_col(inner, cols),
+        Expr::InList(l) => {
+            is_identity_col(&l.expr, cols) && l.list.iter().all(|e| matches!(e, Expr::Literal(..)))
+        }
+        _ => false,
+    }
+}
+
+fn is_simple_compare_on_identity(l: &Expr, r: &Expr, cols: &HashSet<String>) -> bool {
+    let l_col = is_identity_col(l, cols);
+    let r_col = is_identity_col(r, cols);
+    let l_lit = matches!(l, Expr::Literal(..));
+    let r_lit = matches!(r, Expr::Literal(..));
+    (l_col && r_lit) || (r_col && l_lit)
+}
+
+fn is_identity_col(e: &Expr, cols: &HashSet<String>) -> bool {
+    matches!(e, Expr::Column(c) if cols.contains(&c.name))
+}
+
 /// Materialize a single-element Arrow array of `dt` holding the value of
 /// `lit`. The Arrow type must match what DataFusion will see for this column
 /// at scan time, otherwise `create_hashes` would dispatch on a different type
@@ -370,16 +473,70 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use datafusion::logical_expr::{col, lit};
     use datafusion::prelude::{SessionConfig, SessionContext};
     use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
     use iceberg::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, NestedField, PrimitiveType, Schema, Type,
+        DataContentType, DataFileBuilder, DataFileFormat, NestedField, PrimitiveType, Schema,
+        Transform, Type, UnboundPartitionSpec,
     };
     use iceberg::transaction::{ApplyTransactionAction, Transaction};
     use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
     use tempfile::TempDir;
 
     use super::*;
+
+    async fn make_catalog_and_partitioned_table(
+        partition_spec: Option<UnboundPartitionSpec>,
+    ) -> (Arc<dyn Catalog>, NamespaceIdent, String, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let warehouse = temp_dir.path().to_str().unwrap().to_string();
+
+        let catalog = Arc::new(
+            MemoryCatalogBuilder::default()
+                .load(
+                    "memory",
+                    HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse.clone())]),
+                )
+                .await
+                .unwrap(),
+        );
+
+        let namespace = NamespaceIdent::new("ns".to_string());
+        catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await
+            .unwrap();
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let creation = match partition_spec {
+            Some(spec) => TableCreation::builder()
+                .name("t".to_string())
+                .location(format!("{warehouse}/t"))
+                .schema(schema)
+                .partition_spec(spec)
+                .properties(HashMap::new())
+                .build(),
+            None => TableCreation::builder()
+                .name("t".to_string())
+                .location(format!("{warehouse}/t"))
+                .schema(schema)
+                .properties(HashMap::new())
+                .build(),
+        };
+
+        catalog.create_table(&namespace, creation).await.unwrap();
+
+        (catalog, namespace, "t".to_string(), temp_dir)
+    }
 
     async fn make_catalog_and_table() -> (Arc<dyn Catalog>, NamespaceIdent, String, TempDir) {
         let temp_dir = TempDir::new().unwrap();
@@ -544,6 +701,90 @@ mod tests {
             .unwrap();
 
         assert_eq!(scan.buckets().len(), 2);
+    }
+
+    /// Filters that only touch identity-partition columns with literal RHS
+    /// can be marked `Exact` because Iceberg's manifest-level pruning already
+    /// removes every file whose partition value fails the predicate.
+    #[tokio::test]
+    async fn test_pushdown_exact_on_identity_column() {
+        let spec = UnboundPartitionSpec::builder()
+            .add_partition_field(1, "id_part", Transform::Identity)
+            .unwrap()
+            .build();
+        let (catalog, namespace, table_name, _temp_dir) =
+            make_catalog_and_partitioned_table(Some(spec)).await;
+        let provider = IcebergPartitionedTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+
+        let f_eq = col("id").eq(lit(5_i32));
+        let f_neq = col("id").not_eq(lit(5_i32));
+        let f_isnull = col("id").is_null();
+        let f_and = col("id").eq(lit(5_i32)).and(col("id").lt(lit(10_i32)));
+
+        let supports = provider
+            .supports_filters_pushdown(&[&f_eq, &f_neq, &f_isnull, &f_and])
+            .unwrap();
+        for (i, s) in supports.iter().enumerate() {
+            assert!(
+                matches!(s, TableProviderFilterPushDown::Exact),
+                "filter index {i} should be Exact, got {s:?}"
+            );
+        }
+    }
+
+    /// Filters touching non-partition columns or columns with non-identity
+    /// transforms must remain `Inexact`: the partition value is either
+    /// missing or lossy (bucket/truncate/etc.), so DataFusion still needs to
+    /// re-apply the filter against actual row values.
+    #[tokio::test]
+    async fn test_pushdown_inexact_on_non_identity_column() {
+        let spec = UnboundPartitionSpec::builder()
+            .add_partition_field(1, "id_part", Transform::Identity)
+            .unwrap()
+            .build();
+        let (catalog, namespace, table_name, _temp_dir) =
+            make_catalog_and_partitioned_table(Some(spec)).await;
+        let provider = IcebergPartitionedTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+
+        // `name` is not partitioned — manifest pruning cannot eliminate files
+        // by it, so the filter must re-execute post-scan.
+        let f_name = col("name").eq(lit("alice"));
+        // Mixed AND: even though `id` is identity-partitioned, the `name` arm
+        // is not exact, so the whole expression is Inexact.
+        let f_mixed = col("id").eq(lit(5_i32)).and(col("name").eq(lit("alice")));
+
+        let supports = provider
+            .supports_filters_pushdown(&[&f_name, &f_mixed])
+            .unwrap();
+        for (i, s) in supports.iter().enumerate() {
+            assert!(
+                matches!(s, TableProviderFilterPushDown::Inexact),
+                "filter index {i} should be Inexact, got {s:?}"
+            );
+        }
+    }
+
+    /// Unpartitioned tables must mark every filter `Inexact` regardless of
+    /// shape: there is no partition pruning that could make the scan
+    /// authoritative.
+    #[tokio::test]
+    async fn test_pushdown_unpartitioned_table_all_inexact() {
+        let (catalog, namespace, table_name, _temp_dir) = make_catalog_and_table().await;
+        let provider = IcebergPartitionedTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+
+        let f_id = col("id").eq(lit(5_i32));
+        let f_name = col("name").eq(lit("alice"));
+        let supports = provider
+            .supports_filters_pushdown(&[&f_id, &f_name])
+            .unwrap();
+        assert!(matches!(supports[0], TableProviderFilterPushDown::Inexact));
+        assert!(matches!(supports[1], TableProviderFilterPushDown::Inexact));
     }
 
     /// target_partitions = 1 collapses every task into a single bucket, giving
