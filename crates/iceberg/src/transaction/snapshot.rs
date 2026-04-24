@@ -590,3 +590,178 @@ impl<'a> SnapshotProducer<'a> {
         Ok(ActionCommit::new(updates, requirements))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestContentType,
+        ManifestEntry, ManifestStatus, Struct,
+    };
+    use crate::transaction::tests::make_v2_minimal_table;
+
+    fn make_entry(
+        path: &str,
+        content: DataContentType,
+        spec_id: i32,
+        partition: Struct,
+        seq: i64,
+    ) -> ManifestEntry {
+        let data_file = DataFileBuilder::default()
+            .content(content)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(spec_id)
+            .partition(partition)
+            .build()
+            .unwrap();
+
+        ManifestEntry::builder()
+            .status(ManifestStatus::Existing)
+            .snapshot_id(1)
+            .sequence_number(seq)
+            .file_sequence_number(seq)
+            .data_file(data_file)
+            .build()
+    }
+
+    fn make_producer(table: &Table) -> SnapshotProducer<'_> {
+        SnapshotProducer::builder()
+            .with_table(table)
+            .with_commit_uuid(Uuid::now_v7())
+            .build()
+    }
+
+    #[tokio::test]
+    async fn test_write_deleted_manifest_empty_returns_empty() {
+        let table = make_v2_minimal_table();
+        let mut producer = make_producer(&table);
+
+        let result = producer.write_deleted_manifest(vec![]).await.unwrap();
+
+        assert!(
+            result.is_empty(),
+            "empty input should produce no manifest files"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_deleted_manifest_splits_data_and_deletes() {
+        let table = make_v2_minimal_table();
+        let mut producer = make_producer(&table);
+
+        let spec_id = table.metadata().default_partition_spec_id();
+        let partition = Struct::from_iter([Some(Literal::long(1))]);
+
+        let data_entry = make_entry(
+            "test/data-0.parquet",
+            DataContentType::Data,
+            spec_id,
+            partition.clone(),
+            5,
+        );
+        let pos_delete_entry = make_entry(
+            "test/pos-delete-0.parquet",
+            DataContentType::PositionDeletes,
+            spec_id,
+            partition.clone(),
+            6,
+        );
+        let eq_delete_entry = make_entry(
+            "test/eq-delete-0.parquet",
+            DataContentType::EqualityDeletes,
+            spec_id,
+            partition,
+            7,
+        );
+
+        let manifests = producer
+            .write_deleted_manifest(vec![data_entry, pos_delete_entry, eq_delete_entry])
+            .await
+            .unwrap();
+
+        // Expect one data manifest + one delete manifest for the single partition group.
+        assert_eq!(manifests.len(), 2, "expected one data and one delete manifest");
+
+        let mut data_manifests = 0;
+        let mut delete_manifests = 0;
+        for mf in &manifests {
+            let manifest = mf.load_manifest(table.file_io()).await.unwrap();
+            // Every entry in a deleted manifest must have Deleted status.
+            for entry in manifest.entries() {
+                assert_eq!(
+                    entry.status(),
+                    ManifestStatus::Deleted,
+                    "entry in deleted manifest must have Deleted status",
+                );
+            }
+            match mf.content {
+                ManifestContentType::Data => {
+                    data_manifests += 1;
+                    assert_eq!(manifest.entries().len(), 1);
+                    assert_eq!(
+                        manifest.entries()[0].data_file().content_type(),
+                        DataContentType::Data,
+                    );
+                }
+                ManifestContentType::Deletes => {
+                    delete_manifests += 1;
+                    assert_eq!(manifest.entries().len(), 2);
+                    for entry in manifest.entries() {
+                        assert!(matches!(
+                            entry.data_file().content_type(),
+                            DataContentType::PositionDeletes | DataContentType::EqualityDeletes
+                        ));
+                    }
+                }
+            }
+        }
+        assert_eq!(data_manifests, 1);
+        assert_eq!(delete_manifests, 1);
+    }
+
+    #[tokio::test]
+    async fn test_write_added_manifest_for_delete_files() {
+        let table = make_v2_minimal_table();
+        let spec_id = table.metadata().default_partition_spec_id();
+        let partition = Struct::from_iter([Some(Literal::long(2))]);
+
+        let delete_file = DataFileBuilder::default()
+            .content(DataContentType::PositionDeletes)
+            .file_path("test/pos-delete-added.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(spec_id)
+            .partition(partition)
+            .build()
+            .unwrap();
+
+        let mut producer = SnapshotProducer::builder()
+            .with_table(&table)
+            .with_commit_uuid(Uuid::now_v7())
+            .with_added_delete_files(vec![delete_file])
+            .build();
+
+        let manifest_file = producer
+            .write_added_manifest(ManifestContentType::Deletes)
+            .await
+            .unwrap();
+
+        assert_eq!(manifest_file.content, ManifestContentType::Deletes);
+
+        let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
+        assert_eq!(manifest.entries().len(), 1);
+        let entry = &manifest.entries()[0];
+        assert_eq!(entry.status(), ManifestStatus::Added);
+        assert_eq!(
+            entry.data_file().content_type(),
+            DataContentType::PositionDeletes,
+        );
+
+        // Producer should have drained its added_delete_files.
+        assert!(producer.added_delete_files.is_empty());
+    }
+}
