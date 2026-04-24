@@ -25,6 +25,7 @@
 mod utils;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -35,7 +36,7 @@ use iceberg::io::{
 };
 use iceberg::{Error, ErrorKind, Result};
 use opendal::Operator;
-use opendal::layers::RetryLayer;
+use opendal::layers::{RetryLayer, TimeoutLayer};
 use serde::{Deserialize, Serialize};
 use utils::from_opendal_error;
 
@@ -343,9 +344,28 @@ impl OpenDalStorage {
             }
         };
 
-        // Transient errors are common for object stores; however there's no
-        // harm in retrying temporary failures for other storage backends as well.
-        let operator = operator.layer(RetryLayer::new());
+        // TimeoutLayer first, RetryLayer second. opendal's `.layer()` chain is
+        // last-applied = outermost, so this composes as RetryLayer(TimeoutLayer(op)):
+        // each retry attempt enters a fresh TimeoutLayer scope with its own 60s
+        // deadline, and a timeout-induced future-drop is contained inside one
+        // retry iteration rather than corrupting RetryLayer's outer state.
+        // See opendal 0.55's TimeoutLayer panics section:
+        //   https://docs.rs/opendal/0.55.0/opendal/layers/struct.TimeoutLayer.html
+        //
+        // 60s / 60s overrides opendal's defaults (60s whole-op / 10s per-IO). The
+        // 10s per-IO default is too aggressive for S3 `UploadPart` flushing ~128
+        // MiB row groups or `CompleteMultipartUpload` against a multipart with 50+
+        // parts cross-region. 60s matches our experience-tuned "definitely
+        // wedged" threshold and escapes the infinite-hang failure class.
+        let operator = operator
+            .layer(
+                TimeoutLayer::new()
+                    .with_timeout(Duration::from_secs(60))
+                    .with_io_timeout(Duration::from_secs(60)),
+            )
+            // Transient errors are common for object stores; however there's no
+            // harm in retrying temporary failures for other storage backends as well.
+            .layer(RetryLayer::new());
         Ok((operator, relative_path))
     }
 }
