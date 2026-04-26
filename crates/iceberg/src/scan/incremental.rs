@@ -63,14 +63,15 @@ impl AppendSnapshotSet {
         // (the parent pointer on its child still references it), so we only
         // need the ID — matching Java's BaseIncrementalScan semantics.
         let oldest_exclusive = if from_inclusive {
-            let from_snapshot = table_metadata
-                .snapshot_by_id(from_snapshot_id)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Snapshot {from_snapshot_id} not found"),
-                    )
-                })?;
+            let from_snapshot =
+                table_metadata
+                    .snapshot_by_id(from_snapshot_id)
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("Snapshot {from_snapshot_id} not found"),
+                        )
+                    })?;
             from_snapshot.parent_snapshot_id()
         } else {
             Some(from_snapshot_id)
@@ -399,9 +400,7 @@ mod tests {
             Some(s1_id)
         );
 
-        let result = table
-            .incremental_append_scan(s1_id, Some(s2_id))
-            .build();
+        let result = table.incremental_append_scan(s1_id, Some(s2_id)).build();
 
         assert!(
             result.is_ok(),

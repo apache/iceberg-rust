@@ -773,16 +773,11 @@ pub mod tests {
             let table_location = tmp_dir.path().join("table1");
             let table_metadata1_location = table_location.join("metadata/v1.json");
 
-            let manifest_list_s1 =
-                table_location.join("metadata/snap-3051729675574597004.avro");
-            let manifest_list_s2 =
-                table_location.join("metadata/snap-3055729675574597004.avro");
-            let manifest_list_s3 =
-                table_location.join("metadata/snap-3056729675574597004.avro");
-            let manifest_list_s4 =
-                table_location.join("metadata/snap-3057729675574597004.avro");
-            let manifest_list_s5 =
-                table_location.join("metadata/snap-3059729675574597004.avro");
+            let manifest_list_s1 = table_location.join("metadata/snap-3051729675574597004.avro");
+            let manifest_list_s2 = table_location.join("metadata/snap-3055729675574597004.avro");
+            let manifest_list_s3 = table_location.join("metadata/snap-3056729675574597004.avro");
+            let manifest_list_s4 = table_location.join("metadata/snap-3057729675574597004.avro");
+            let manifest_list_s5 = table_location.join("metadata/snap-3059729675574597004.avro");
 
             let file_io = FileIO::new_with_fs();
 
@@ -1033,10 +1028,7 @@ pub mod tests {
                                 DataFileBuilder::default()
                                     .partition_spec_id(0)
                                     .content(DataContentType::Data)
-                                    .file_path(format!(
-                                        "{}/{}",
-                                        &self.table_location, file_name
-                                    ))
+                                    .file_path(format!("{}/{}", &self.table_location, file_name))
                                     .file_format(DataFileFormat::Parquet)
                                     .file_size_in_bytes(parquet_file_size)
                                     .record_count(1)
@@ -1105,8 +1097,7 @@ pub mod tests {
             let col2 = Arc::new(Int64Array::from_iter_values(vec![2; 10])) as ArrayRef;
             let col3 = Arc::new(Int64Array::from_iter_values(vec![3; 10])) as ArrayRef;
 
-            let batch =
-                RecordBatch::try_new(schema.clone(), vec![col1, col2, col3]).unwrap();
+            let batch = RecordBatch::try_new(schema.clone(), vec![col1, col2, col3]).unwrap();
 
             let props = WriterProperties::builder()
                 .set_compression(Compression::SNAPPY)
@@ -1114,8 +1105,7 @@ pub mod tests {
 
             for i in 1..=5 {
                 let file =
-                    File::create(format!("{}/s{}.parquet", &self.table_location, i))
-                        .unwrap();
+                    File::create(format!("{}/s{}.parquet", &self.table_location, i)).unwrap();
                 let mut writer =
                     ArrowWriter::try_new(file, batch.schema(), Some(props.clone())).unwrap();
                 writer.write(&batch).expect("Writing batch");
