@@ -1,7 +1,7 @@
 {
   "format-version": 2,
   "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
-  "location": "s3://bucket/test/location",
+  "location": "{{ table_location }}",
   "last-sequence-number": 34,
   "last-updated-ms": 1602638573590,
   "last-column-id": 3,
@@ -53,7 +53,7 @@
       "timestamp-ms": 1515100955770,
       "sequence-number": 0,
       "summary": {"operation": "append"},
-      "manifest-list": "s3://bucket/metadata/snap-3051729675574597004.avro"
+      "manifest-list": "{{ manifest_list_s1_location }}"
     },
     {
       "snapshot-id": 3055729675574597004,
@@ -61,7 +61,7 @@
       "timestamp-ms": 1555100955770,
       "sequence-number": 1,
       "summary": {"operation": "append"},
-      "manifest-list": "s3://bucket/metadata/snap-3055729675574597004.avro",
+      "manifest-list": "{{ manifest_list_s2_location }}",
       "schema-id": 1
     },
     {
@@ -70,7 +70,7 @@
       "timestamp-ms": 1575100955770,
       "sequence-number": 2,
       "summary": {"operation": "append"},
-      "manifest-list": "s3://bucket/metadata/snap-3056729675574597004.avro",
+      "manifest-list": "{{ manifest_list_s3_location }}",
       "schema-id": 1
     },
     {
@@ -79,7 +79,7 @@
       "timestamp-ms": 1595100955770,
       "sequence-number": 3,
       "summary": {"operation": "overwrite"},
-      "manifest-list": "s3://bucket/metadata/snap-3057729675574597004.avro",
+      "manifest-list": "{{ manifest_list_s4_location }}",
       "schema-id": 1
     },
     {
@@ -88,7 +88,7 @@
       "timestamp-ms": 1602638573590,
       "sequence-number": 4,
       "summary": {"operation": "append"},
-      "manifest-list": "s3://bucket/metadata/snap-3059729675574597004.avro",
+      "manifest-list": "{{ manifest_list_s5_location }}",
       "schema-id": 1
     }
   ],

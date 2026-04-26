@@ -611,4 +611,140 @@ mod tests {
             "Exclusive scan from=to should return no files"
         );
     }
+
+    #[tokio::test]
+    async fn test_incremental_scan_deep_history_skips_overwrite_files() {
+        // Deep history fixture:
+        //   S1 (append) -> S2 (append) -> S3 (append) -> S4 (overwrite) -> S5 (append, current)
+        // Each snapshot adds one file: s1.parquet .. s5.parquet
+        //
+        // Incremental scan from S1 (exclusive) to S5 should return only files
+        // from APPEND snapshots: s2.parquet, s3.parquet, s5.parquet
+        // s4.parquet (added in overwrite S4) must be skipped.
+        let mut fixture = TableTestFixture::new_with_deep_history();
+        fixture.setup_manifest_files_deep_history().await;
+
+        let s1_id = 3051729675574597004_i64;
+        let s5_id = 3059729675574597004_i64;
+
+        let table_scan = fixture
+            .table
+            .incremental_append_scan(s1_id, Some(s5_id))
+            .build()
+            .unwrap();
+
+        let mut tasks: Vec<_> = table_scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        // Sort by path for deterministic assertions
+        tasks.sort_by(|a, b| a.data_file_path.cmp(&b.data_file_path));
+
+        assert_eq!(
+            tasks.len(),
+            3,
+            "Should return 3 files (s2, s3, s5), skipping s4 (overwrite)"
+        );
+
+        let file_names: Vec<&str> = tasks
+            .iter()
+            .map(|t| {
+                t.data_file_path
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&t.data_file_path)
+            })
+            .collect();
+
+        assert_eq!(
+            file_names,
+            vec!["s2.parquet", "s3.parquet", "s5.parquet"],
+            "Only files from APPEND snapshots should be returned"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_incremental_scan_deep_history_partial_range() {
+        // Scan from S2 (exclusive) to S3 — both appends, should return only s3.parquet
+        let mut fixture = TableTestFixture::new_with_deep_history();
+        fixture.setup_manifest_files_deep_history().await;
+
+        let s2_id = 3055729675574597004_i64;
+        let s3_id = 3056729675574597004_i64;
+
+        let table_scan = fixture
+            .table
+            .incremental_append_scan(s2_id, Some(s3_id))
+            .build()
+            .unwrap();
+
+        let tasks: Vec<_> = table_scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(tasks.len(), 1, "Should return exactly 1 file");
+        assert!(
+            tasks[0].data_file_path.ends_with("s3.parquet"),
+            "Should return s3.parquet, got: {}",
+            tasks[0].data_file_path
+        );
+    }
+
+    #[tokio::test]
+    async fn test_incremental_scan_deep_history_inclusive_with_overwrite() {
+        // Inclusive scan from S3 to S5:
+        //   S3 (append) -> S4 (overwrite) -> S5 (append)
+        // Should return s3.parquet and s5.parquet, skipping s4.parquet
+        let mut fixture = TableTestFixture::new_with_deep_history();
+        fixture.setup_manifest_files_deep_history().await;
+
+        let s3_id = 3056729675574597004_i64;
+        let s5_id = 3059729675574597004_i64;
+
+        let table_scan = fixture
+            .table
+            .incremental_append_scan_inclusive(s3_id, Some(s5_id))
+            .build()
+            .unwrap();
+
+        let mut tasks: Vec<_> = table_scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        tasks.sort_by(|a, b| a.data_file_path.cmp(&b.data_file_path));
+
+        assert_eq!(
+            tasks.len(),
+            2,
+            "Should return 2 files (s3, s5), skipping s4 (overwrite)"
+        );
+
+        let file_names: Vec<&str> = tasks
+            .iter()
+            .map(|t| {
+                t.data_file_path
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&t.data_file_path)
+            })
+            .collect();
+
+        assert_eq!(
+            file_names,
+            vec!["s3.parquet", "s5.parquet"],
+            "Only files from APPEND snapshots should be returned"
+        );
+    }
 }
