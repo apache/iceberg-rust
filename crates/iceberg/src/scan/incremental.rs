@@ -57,19 +57,20 @@ impl AppendSnapshotSet {
         to_snapshot_id: i64,
         from_inclusive: bool,
     ) -> Result<Self> {
-        // Verify from_snapshot exists and determine the exclusive stop point.
-        let from_snapshot = table_metadata
-            .snapshot_by_id(from_snapshot_id)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Snapshot {from_snapshot_id} not found"),
-                )
-            })?;
-
-        // ancestors_between returns (oldest_exclusive, latest_inclusive].
-        // For inclusive mode, stop at from's parent so from itself is included.
+        // Determine the exclusive stop point for the ancestry walk.
+        // For inclusive mode the from-snapshot must exist so we can look up
+        // its parent. For exclusive mode the snapshot may have been expired
+        // (the parent pointer on its child still references it), so we only
+        // need the ID — matching Java's BaseIncrementalScan semantics.
         let oldest_exclusive = if from_inclusive {
+            let from_snapshot = table_metadata
+                .snapshot_by_id(from_snapshot_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Snapshot {from_snapshot_id} not found"),
+                    )
+                })?;
             from_snapshot.parent_snapshot_id()
         } else {
             Some(from_snapshot_id)
@@ -343,16 +344,68 @@ mod tests {
     use crate::scan::tests::TableTestFixture;
 
     #[test]
-    fn test_incremental_scan_invalid_from_snapshot() {
+    fn test_incremental_scan_invalid_from_snapshot_exclusive() {
         let table = TableTestFixture::new().table;
 
+        // Exclusive mode doesn't require from-snapshot to exist, but it must
+        // be an ancestor of the to-snapshot. 999999999 is not in the ancestry
+        // chain so this should fail.
         let result = table.incremental_append_scan(999999999, None).build();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("not an ancestor"),
+            "Expected ancestry error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_incremental_scan_invalid_from_snapshot_inclusive() {
+        let table = TableTestFixture::new().table;
+
+        // Inclusive mode requires from-snapshot to exist (we need its parent ID).
+        let result = table
+            .incremental_append_scan_inclusive(999999999, None)
+            .build();
 
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
             err.to_string().contains("not found"),
             "Expected 'not found' error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_incremental_scan_exclusive_from_expired_snapshot() {
+        // Fixture has S1 (append) -> S2 (append, current).
+        // Simulate S1 being expired: use S1's ID as from-snapshot in exclusive
+        // mode even though it wouldn't exist in metadata after expiration.
+        // Since exclusive mode only needs the ID (not the snapshot object),
+        // this should succeed — the child (S2) still has parent_snapshot_id = S1.
+        let table = TableTestFixture::new().table;
+
+        let s1_id = 3051729675574597004_i64;
+        let s2_id = 3055729675574597004_i64;
+
+        // Verify S2's parent is S1 (simulating the expired-parent scenario)
+        assert_eq!(
+            table
+                .metadata()
+                .snapshot_by_id(s2_id)
+                .unwrap()
+                .parent_snapshot_id(),
+            Some(s1_id)
+        );
+
+        let result = table
+            .incremental_append_scan(s1_id, Some(s2_id))
+            .build();
+
+        assert!(
+            result.is_ok(),
+            "Exclusive scan from an (effectively expired) parent should succeed"
         );
     }
 
