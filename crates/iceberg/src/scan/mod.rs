@@ -360,7 +360,7 @@ pub struct TableScan {
     /// A [PlanContext], if this table has at least one snapshot, otherwise None.
     ///
     /// If this is None, then the scan contains no rows.
-    pub(crate) plan_context: Option<PlanContext>,
+    plan_context: Option<PlanContext>,
     batch_size: Option<usize>,
     file_io: FileIO,
     column_names: Option<Vec<String>>,
