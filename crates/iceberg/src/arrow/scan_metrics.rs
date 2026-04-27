@@ -95,7 +95,7 @@ impl ScanResult {
     }
 
     /// Consumes the result into its parts.
-    pub fn into_parts(self) -> (ArrowRecordBatchStream, ScanMetrics) {
+    pub(crate) fn into_parts(self) -> (ArrowRecordBatchStream, ScanMetrics) {
         (self.stream, self.metrics)
     }
 }
