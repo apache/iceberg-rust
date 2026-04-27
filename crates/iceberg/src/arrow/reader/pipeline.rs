@@ -52,7 +52,9 @@ impl ArrowReader {
         let task_reader = FileScanTaskReader {
             batch_size: self.batch_size,
             file_io: self.file_io,
-            delete_file_loader: self.delete_file_loader,
+            delete_file_loader: self
+                .delete_file_loader
+                .with_scan_metrics(scan_metrics.clone()),
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
             parquet_read_options: self.parquet_read_options,
@@ -107,11 +109,9 @@ impl FileScanTaskReader {
         let mut parquet_read_options = self.parquet_read_options;
         parquet_read_options.preload_page_index = should_load_page_index;
 
-        let delete_filter_rx = self.delete_file_loader.load_deletes(
-            &task.deletes,
-            Arc::clone(&task.schema),
-            self.scan_metrics.bytes_read_counter(),
-        );
+        let delete_filter_rx = self
+            .delete_file_loader
+            .load_deletes(&task.deletes, Arc::clone(&task.schema));
 
         // Open the Parquet file once, loading its metadata
         let (parquet_file_reader, arrow_metadata) = ArrowReader::open_parquet_file(
@@ -508,7 +508,13 @@ mod tests {
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-        reader.read(tasks).unwrap().stream().try_collect().await.unwrap()
+        reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap()
     }
 
     // ArrowWriter cannot write INT96, so we use SerializedFileWriter directly.

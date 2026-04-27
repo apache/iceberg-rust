@@ -18,7 +18,6 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Not;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 
 use arrow_array::{Array, ArrayRef, Int64Array, StringArray, StructArray};
 use futures::{StreamExt, TryStreamExt};
@@ -26,6 +25,7 @@ use tokio::sync::oneshot::{Receiver, channel};
 
 use super::delete_filter::{DeleteFilter, PosDelLoadAction};
 use crate::arrow::delete_file_loader::BasicDeleteFileLoader;
+use crate::arrow::scan_metrics::ScanMetrics;
 use crate::arrow::{arrow_primitive_to_literal, arrow_schema_to_schema};
 use crate::delete_vector::DeleteVector;
 use crate::expr::Predicate::AlwaysTrue;
@@ -78,11 +78,20 @@ enum ParsedDeleteFileContext {
 #[allow(unused_variables)]
 impl CachingDeleteFileLoader {
     pub(crate) fn new(file_io: FileIO, concurrency_limit_data_files: usize) -> Self {
+        let scan_metrics = ScanMetrics::new();
         CachingDeleteFileLoader {
-            basic_delete_file_loader: BasicDeleteFileLoader::new(file_io),
+            basic_delete_file_loader: BasicDeleteFileLoader::new(file_io, scan_metrics),
             concurrency_limit_data_files,
             delete_filter: DeleteFilter::default(),
         }
+    }
+
+    pub(crate) fn with_scan_metrics(mut self, scan_metrics: ScanMetrics) -> Self {
+        self.basic_delete_file_loader = BasicDeleteFileLoader::new(
+            self.basic_delete_file_loader.file_io().clone(),
+            scan_metrics,
+        );
+        self
     }
 
     /// Initiates loading of all deletes for all the specified tasks
@@ -153,7 +162,6 @@ impl CachingDeleteFileLoader {
         &self,
         delete_file_entries: &[FileScanTaskDeleteFile],
         schema: SchemaRef,
-        bytes_read: &Arc<AtomicU64>,
     ) -> Receiver<Result<DeleteFilter>> {
         let (tx, rx) = channel();
 
@@ -173,7 +181,6 @@ impl CachingDeleteFileLoader {
         let del_filter = self.delete_filter.clone();
         let concurrency_limit_data_files = self.concurrency_limit_data_files;
         let basic_delete_file_loader = self.basic_delete_file_loader.clone();
-        let bytes_read = Arc::clone(bytes_read);
         crate::runtime::spawn(async move {
             let result = async move {
                 let mut del_filter = del_filter;
@@ -182,14 +189,12 @@ impl CachingDeleteFileLoader {
                 let mut results_stream = task_stream
                     .map(move |(task, file_io, del_filter, schema)| {
                         let basic_delete_file_loader = basic_delete_file_loader.clone();
-                        let bytes_read = Arc::clone(&bytes_read);
                         async move {
                             Self::load_file_for_task(
                                 &task,
                                 basic_delete_file_loader.clone(),
                                 del_filter,
                                 schema,
-                                &bytes_read,
                             )
                             .await
                         }
@@ -225,7 +230,6 @@ impl CachingDeleteFileLoader {
         basic_delete_file_loader: BasicDeleteFileLoader,
         del_filter: DeleteFilter,
         schema: SchemaRef,
-        bytes_read: &Arc<AtomicU64>,
     ) -> Result<DeleteFileContext> {
         match task.file_type {
             DataContentType::PositionDeletes => {
@@ -241,11 +245,7 @@ impl CachingDeleteFileLoader {
                     PosDelLoadAction::Load => Ok(DeleteFileContext::PosDels {
                         file_path: task.file_path.clone(),
                         stream: basic_delete_file_loader
-                            .parquet_to_batch_stream(
-                                &task.file_path,
-                                task.file_size_in_bytes,
-                                bytes_read,
-                            )
+                            .parquet_to_batch_stream(&task.file_path, task.file_size_in_bytes)
                             .await?,
                     }),
                 }
@@ -264,11 +264,7 @@ impl CachingDeleteFileLoader {
                 let equality_ids_vec = task.equality_ids.clone().unwrap();
                 let evolved_stream = BasicDeleteFileLoader::evolve_schema(
                     basic_delete_file_loader
-                        .parquet_to_batch_stream(
-                            &task.file_path,
-                            task.file_size_in_bytes,
-                            bytes_read,
-                        )
+                        .parquet_to_batch_stream(&task.file_path, task.file_size_in_bytes)
                         .await?,
                     schema,
                     &equality_ids_vec,
@@ -626,13 +622,12 @@ mod tests {
 
         let eq_delete_file_path = setup_write_equality_delete_file_1(table_location);
 
-        let basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
-        let bytes_read = Arc::new(AtomicU64::new(0));
+        let basic_delete_file_loader =
+            BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new());
         let record_batch_stream = basic_delete_file_loader
             .parquet_to_batch_stream(
                 &eq_delete_file_path,
                 std::fs::metadata(&eq_delete_file_path).unwrap().len(),
-                &bytes_read,
             )
             .await
             .expect("could not get batch stream");
@@ -743,16 +738,11 @@ mod tests {
         let file_io = FileIO::new_with_fs();
 
         let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10);
-        let bytes_read = Arc::new(AtomicU64::new(0));
 
         let file_scan_tasks = setup(table_location);
 
         let delete_filter = delete_file_loader
-            .load_deletes(
-                &file_scan_tasks[0].deletes,
-                file_scan_tasks[0].schema_ref(),
-                &bytes_read,
-            )
+            .load_deletes(&file_scan_tasks[0].deletes, file_scan_tasks[0].schema_ref())
             .await
             .unwrap()
             .unwrap();
@@ -829,14 +819,13 @@ mod tests {
         };
 
         let file_io = FileIO::new_with_fs();
-        let basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
-        let bytes_read = Arc::new(AtomicU64::new(0));
+        let basic_delete_file_loader =
+            BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new());
 
         let batch_stream = basic_delete_file_loader
             .parquet_to_batch_stream(
                 &delete_file_path,
                 std::fs::metadata(&delete_file_path).unwrap().len(),
-                &bytes_read,
             )
             .await
             .unwrap();
@@ -970,13 +959,8 @@ mod tests {
 
         // Load the deletes - should handle both types without error
         let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10);
-        let bytes_read = Arc::new(AtomicU64::new(0));
         let delete_filter = delete_file_loader
-            .load_deletes(
-                &file_scan_task.deletes,
-                file_scan_task.schema_ref(),
-                &bytes_read,
-            )
+            .load_deletes(&file_scan_task.deletes, file_scan_task.schema_ref())
             .await
             .unwrap()
             .unwrap();
@@ -1022,10 +1006,10 @@ mod tests {
         writer.write(&record_batch).unwrap();
         writer.close().unwrap();
 
-        let basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
-        let bytes_read = Arc::new(AtomicU64::new(0));
+        let basic_delete_file_loader =
+            BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new());
         let record_batch_stream = basic_delete_file_loader
-            .parquet_to_batch_stream(&path, std::fs::metadata(&path).unwrap().len(), &bytes_read)
+            .parquet_to_batch_stream(&path, std::fs::metadata(&path).unwrap().len())
             .await
             .expect("could not get batch stream");
 
@@ -1047,28 +1031,19 @@ mod tests {
         let file_io = FileIO::new_with_fs();
 
         let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10);
-        let bytes_read = Arc::new(AtomicU64::new(0));
 
         let file_scan_tasks = setup(table_location);
 
         // Load deletes for the first time
         let delete_filter_1 = delete_file_loader
-            .load_deletes(
-                &file_scan_tasks[0].deletes,
-                file_scan_tasks[0].schema_ref(),
-                &bytes_read,
-            )
+            .load_deletes(&file_scan_tasks[0].deletes, file_scan_tasks[0].schema_ref())
             .await
             .unwrap()
             .unwrap();
 
         // Load deletes for the second time (same task/files)
         let delete_filter_2 = delete_file_loader
-            .load_deletes(
-                &file_scan_tasks[0].deletes,
-                file_scan_tasks[0].schema_ref(),
-                &bytes_read,
-            )
+            .load_deletes(&file_scan_tasks[0].deletes, file_scan_tasks[0].schema_ref())
             .await
             .unwrap()
             .unwrap();
