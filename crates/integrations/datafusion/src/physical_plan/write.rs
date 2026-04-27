@@ -227,7 +227,9 @@ impl ExecutionPlan for IcebergWriteExec {
 
         // Create data file writer builder
         let parquet_file_writer_builder = ParquetWriterBuilder::new_with_match_mode(
-            WriterProperties::default(),
+            WriterProperties::builder()
+                .set_compression(table_props.write_parquet_compression())
+                .build(),
             self.table.metadata().current_schema().clone(),
             FieldMatchMode::Name,
         );
@@ -324,10 +326,13 @@ mod tests {
     use futures::{StreamExt, stream};
     use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
     use iceberg::spec::{
-        DataFileFormat, NestedField, PrimitiveType, Schema, Type, deserialize_data_file_from_json,
+        DataFile, DataFileFormat, NestedField, PrimitiveType, Schema, TableProperties, Type,
+        deserialize_data_file_from_json,
     };
     use iceberg::{Catalog, CatalogBuilder, MemoryCatalog, NamespaceIdent, Result, TableCreation};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+    use parquet::basic::{Compression, ZstdLevel};
+    use parquet::file::metadata::ParquetMetaDataReader;
     use tempfile::TempDir;
 
     use super::*;
@@ -446,12 +451,82 @@ mod tests {
         name: impl ToString,
         schema: Schema,
     ) -> TableCreation {
+        get_table_creation_with_properties(location, name, schema, HashMap::new())
+    }
+
+    fn get_table_creation_with_properties(
+        location: impl ToString,
+        name: impl ToString,
+        schema: Schema,
+        properties: HashMap<String, String>,
+    ) -> TableCreation {
         TableCreation::builder()
             .location(location.to_string())
             .name(name.to_string())
-            .properties(HashMap::new())
+            .properties(properties)
             .schema(schema)
             .build()
+    }
+
+    async fn write_test_data_file(table: iceberg::table::Table) -> Result<DataFile> {
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("name", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+
+        let id_array = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let name_array = Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])) as ArrayRef;
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![id_array, name_array])
+            .map_err(|e| Error::new(ErrorKind::Unexpected, e.to_string()))?;
+
+        let input_plan = Arc::new(MockExecutionPlan::new(arrow_schema.clone(), vec![batch]));
+        let write_exec = IcebergWriteExec::new(table.clone(), input_plan, arrow_schema);
+        let task_ctx = Arc::new(TaskContext::default());
+        let mut stream = write_exec
+            .execute(0, task_ctx)
+            .map_err(|e| Error::new(ErrorKind::Unexpected, e.to_string()))?;
+
+        let batch = stream
+            .next()
+            .await
+            .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Expected one result batch"))?
+            .map_err(|e| Error::new(ErrorKind::Unexpected, e.to_string()))?;
+
+        let data_file_json = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("Expected StringArray")
+            .value(0);
+
+        deserialize_data_file_from_json(
+            data_file_json,
+            table.metadata().default_partition_spec_id(),
+            table.metadata().default_partition_type(),
+            table.metadata().current_schema(),
+        )
+    }
+
+    async fn data_file_parquet_compression(
+        table: &iceberg::table::Table,
+        data_file: &DataFile,
+    ) -> Result<Compression> {
+        let bytes = table
+            .file_io()
+            .new_input(data_file.file_path())?
+            .read()
+            .await?;
+        let metadata = ParquetMetaDataReader::new()
+            .parse_and_finish(&bytes)
+            .map_err(|e| Error::new(ErrorKind::Unexpected, e.to_string()))?;
+
+        Ok(metadata.row_group(0).column(0).compression())
     }
 
     #[tokio::test]
@@ -608,6 +683,89 @@ mod tests {
         let file_io = table.file_io();
         assert!(file_io.exists(file_path).await?, "Data file should exist");
 
+        Ok(())
+    }
+
+    /// Java ref: iceberg-1.10.1/spark/v4.0/spark/src/test/java/org/apache/iceberg/spark/source/TestCompressionSettings.java:169
+    ///
+    /// Java setup: creates a table, sets `write.parquet.compression-codec`, writes rows, and
+    /// inspects the produced Parquet file footer.
+    /// Java asserts: the written data file uses the requested compression codec.
+    ///
+    /// What this tests: DataFusion writes honor the Iceberg table property
+    /// `write.parquet.compression-codec` when building Parquet writer properties.
+    ///
+    /// Faithfulness: FAITHFUL for data files. Java also covers delete files and Spark write/session
+    /// options, which are not part of this Rust DataFusion write path.
+    ///
+    /// Exercises: `IcebergWriteExec::execute` -> `ParquetWriterBuilder` -> Parquet file metadata.
+    #[tokio::test]
+    async fn test_iceberg_write_exec_uses_table_parquet_compression_property() -> Result<()> {
+        let iceberg_catalog = get_iceberg_catalog().await;
+        let namespace = NamespaceIdent::new("test_namespace".to_string());
+        iceberg_catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await?;
+
+        let schema = get_test_schema()?;
+        let creation = get_table_creation_with_properties(
+            temp_path(),
+            "test_table",
+            schema,
+            HashMap::from([(
+                TableProperties::PROPERTY_WRITE_PARQUET_COMPRESSION_CODEC.to_string(),
+                "snappy".to_string(),
+            )]),
+        );
+        let table = iceberg_catalog.create_table(&namespace, creation).await?;
+
+        let data_file = write_test_data_file(table.clone()).await?;
+        let compression = data_file_parquet_compression(&table, &data_file).await?;
+
+        assert_eq!(compression, Compression::SNAPPY);
+        Ok(())
+    }
+
+    /// Java ref: iceberg-1.10.1/core/src/main/java/org/apache/iceberg/TableMetadata.java:90
+    /// Java ref: iceberg-1.10.1/spark/v4.0/spark/src/main/java/org/apache/iceberg/spark/SparkWriteConf.java:563
+    ///
+    /// Java setup: new Java tables persist `write.parquet.compression-codec=zstd`; Spark write
+    /// config falls back to the table/default value when no write override is present.
+    /// Java asserts: compression defaults are resolved before writing.
+    ///
+    /// What this tests: Rust's requested tolerant behavior: absent or unrecognized
+    /// `write.parquet.compression-codec` values fall back to ZSTD for actual Parquet writes.
+    ///
+    /// Faithfulness: Rust-specific. Java rejects invalid codec values later in Parquet config,
+    /// while this branch intentionally treats unrecognized values as ZSTD.
+    ///
+    /// Exercises: `TableProperties::write_parquet_compression` through the production
+    /// DataFusion write path and Parquet file metadata.
+    #[tokio::test]
+    async fn test_iceberg_write_exec_falls_back_to_zstd_for_invalid_parquet_compression_property()
+    -> Result<()> {
+        let iceberg_catalog = get_iceberg_catalog().await;
+        let namespace = NamespaceIdent::new("test_namespace".to_string());
+        iceberg_catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await?;
+
+        let schema = get_test_schema()?;
+        let creation = get_table_creation_with_properties(
+            temp_path(),
+            "test_table",
+            schema,
+            HashMap::from([(
+                TableProperties::PROPERTY_WRITE_PARQUET_COMPRESSION_CODEC.to_string(),
+                "not-a-codec".to_string(),
+            )]),
+        );
+        let table = iceberg_catalog.create_table(&namespace, creation).await?;
+
+        let data_file = write_test_data_file(table.clone()).await?;
+        let compression = data_file_parquet_compression(&table, &data_file).await?;
+
+        assert_eq!(compression, Compression::ZSTD(ZstdLevel::default()));
         Ok(())
     }
 }
