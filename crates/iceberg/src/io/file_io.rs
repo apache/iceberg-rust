@@ -256,7 +256,7 @@ pub trait FileRead: Send + Sync + Unpin + 'static {
 }
 
 #[async_trait::async_trait]
-impl FileRead for Box<dyn FileRead> {
+impl<T: AsRef<dyn FileRead>> FileRead for T {
     async fn read(&self, range: Range<u64>) -> crate::Result<Bytes> {
         self.as_ref().read(range).await
     }
