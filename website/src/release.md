@@ -179,6 +179,8 @@ Then, upload the artifacts:
 
 > The `${release_version}` here should be like `0.2.0-rc1`
 
+Example of uploaded artifacts can be found at: https://dist.apache.org/repos/dist/dev/iceberg/apache-iceberg-rust-0.9.1-rc3/
+
 ```shell
 # create a directory named by version
 mkdir /tmp/iceberg-dist-dev/apache-iceberg-rust-${release_version}/
