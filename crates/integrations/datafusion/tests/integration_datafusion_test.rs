@@ -131,7 +131,7 @@ async fn test_provider_plan_stream_schema() -> Result<()> {
 
     let task_ctx = Arc::new(df.task_ctx());
     let plan = df.create_physical_plan().await.unwrap();
-    let stream = plan.execute(1, task_ctx).unwrap();
+    let stream = plan.execute(0, task_ctx).unwrap();
 
     // Ensure both the plan and the stream conform to the same schema
     assert_eq!(plan.schema(), stream.schema());
