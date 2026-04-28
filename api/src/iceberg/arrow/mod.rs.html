@@ -32,14 +32,16 @@
 <a href=#32 id=32 data-nosnippet>32</a><span class="doccomment">/// RecordBatch projection utilities
 <a href=#33 id=33 data-nosnippet>33</a></span><span class="kw">pub mod </span>record_batch_projector;
 <a href=#34 id=34 data-nosnippet>34</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>record_batch_transformer;
-<a href=#35 id=35 data-nosnippet>35</a><span class="kw">mod </span>value;
-<a href=#36 id=36 data-nosnippet>36</a>
-<a href=#37 id=37 data-nosnippet>37</a><span class="kw">pub use </span>reader::<span class="kw-2">*</span>;
-<a href=#38 id=38 data-nosnippet>38</a><span class="kw">pub use </span>value::<span class="kw-2">*</span>;
-<a href=#39 id=39 data-nosnippet>39</a><span class="doccomment">/// Partition value calculator for computing partition values
-<a href=#40 id=40 data-nosnippet>40</a></span><span class="kw">pub mod </span>partition_value_calculator;
-<a href=#41 id=41 data-nosnippet>41</a><span class="kw">pub use </span>partition_value_calculator::<span class="kw-2">*</span>;
-<a href=#42 id=42 data-nosnippet>42</a><span class="doccomment">/// Record batch partition splitter for partitioned tables
-<a href=#43 id=43 data-nosnippet>43</a></span><span class="kw">pub mod </span>record_batch_partition_splitter;
-<a href=#44 id=44 data-nosnippet>44</a><span class="kw">pub use </span>record_batch_partition_splitter::<span class="kw-2">*</span>;
+<a href=#35 id=35 data-nosnippet>35</a><span class="kw">mod </span>scan_metrics;
+<a href=#36 id=36 data-nosnippet>36</a><span class="kw">mod </span>value;
+<a href=#37 id=37 data-nosnippet>37</a>
+<a href=#38 id=38 data-nosnippet>38</a><span class="kw">pub use </span>reader::<span class="kw-2">*</span>;
+<a href=#39 id=39 data-nosnippet>39</a><span class="kw">pub use </span>scan_metrics::{ScanMetrics, ScanResult};
+<a href=#40 id=40 data-nosnippet>40</a><span class="kw">pub use </span>value::<span class="kw-2">*</span>;
+<a href=#41 id=41 data-nosnippet>41</a><span class="doccomment">/// Partition value calculator for computing partition values
+<a href=#42 id=42 data-nosnippet>42</a></span><span class="kw">pub mod </span>partition_value_calculator;
+<a href=#43 id=43 data-nosnippet>43</a><span class="kw">pub use </span>partition_value_calculator::<span class="kw-2">*</span>;
+<a href=#44 id=44 data-nosnippet>44</a><span class="doccomment">/// Record batch partition splitter for partitioned tables
+<a href=#45 id=45 data-nosnippet>45</a></span><span class="kw">pub mod </span>record_batch_partition_splitter;
+<a href=#46 id=46 data-nosnippet>46</a><span class="kw">pub use </span>record_batch_partition_splitter::<span class="kw-2">*</span>;
 </code></pre></div></section></main></body></html>
