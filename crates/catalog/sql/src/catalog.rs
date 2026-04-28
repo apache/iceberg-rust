@@ -310,6 +310,24 @@ impl SqlCatalog {
         .await
         .map_err(from_sqlx_error)?;
 
+        // Check if the catalog table has the iceberg_type column, if not, it's a V0 schema.
+        let needs_migration = sqlx::query(&format!(
+            "SELECT {CATALOG_FIELD_RECORD_TYPE} FROM {CATALOG_TABLE_NAME} LIMIT 0"
+        ))
+        .fetch_all(&pool)
+        .await
+        .is_err();
+
+        // Add the iceberg_type column if it's missing, thereby updating the schema to V1.
+        if needs_migration {
+            sqlx::query(&format!(
+                "ALTER TABLE {CATALOG_TABLE_NAME} ADD COLUMN {CATALOG_FIELD_RECORD_TYPE} VARCHAR(5)"
+            ))
+            .execute(&pool)
+            .await
+            .map_err(from_sqlx_error)?;
+        }
+
         Ok(SqlCatalog {
             name: config.name.to_owned(),
             connection: pool,
@@ -1037,6 +1055,7 @@ mod tests {
     use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
     use itertools::Itertools;
     use regex::Regex;
+    use sqlx::any::install_default_drivers;
     use sqlx::migrate::MigrateDatabase;
     use tempfile::TempDir;
 
@@ -2045,5 +2064,64 @@ mod tests {
                 .to_string(),
             format!("NamespaceNotFound => No such namespace: {non_existent_dst_namespace_ident:?}"),
         );
+    }
+
+    #[tokio::test]
+    async fn test_v0_schema_migration() {
+        install_default_drivers();
+
+        // Simulate a V0 database with no "iceberg_type" column.
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("catalog.db");
+        let uri = format!("sqlite:{}", db_path.to_str().unwrap());
+        sqlx::Sqlite::create_database(&uri).await.unwrap();
+
+        let pool = sqlx::AnyPool::connect(&uri).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE iceberg_tables (
+                catalog_name VARCHAR(255) NOT NULL,
+                table_namespace VARCHAR(255) NOT NULL,
+                table_name VARCHAR(255) NOT NULL,
+                metadata_location VARCHAR(1000),
+                previous_metadata_location VARCHAR(1000),
+                PRIMARY KEY (catalog_name, table_namespace, table_name)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO iceberg_tables
+             (catalog_name, table_namespace, table_name, metadata_location)
+             VALUES ('iceberg', 'ns', 'tbl', '/tmp/fake-location')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        // Opening the catalog should migrate the V0 schema to V1 without error.
+        let props = HashMap::from_iter([
+            (SQL_CATALOG_PROP_URI.to_string(), uri),
+            (
+                SQL_CATALOG_PROP_WAREHOUSE.to_string(),
+                temp_dir.path().to_str().unwrap().to_string(),
+            ),
+            (
+                SQL_CATALOG_PROP_BIND_STYLE.to_string(),
+                SqlBindStyle::QMark.to_string(),
+            ),
+        ]);
+        let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load("iceberg", props)
+            .await
+            .expect("should open V0 catalog and migrate schema");
+
+        // The V0 row (no "iceberg_type" column) should be treated as a TABLE.
+        let ns = NamespaceIdent::from_strs(["ns"]).unwrap();
+        let tables = catalog.list_tables(&ns).await.unwrap();
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].name(), "tbl");
     }
 }

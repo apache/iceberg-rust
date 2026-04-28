@@ -29,7 +29,7 @@
 //!     SqlBindStyle, SqlCatalogBuilder,
 //! };
 //!
-//! #[tokio::main]
+//! #[tokio::main(flavor = "current_thread")]
 //! async fn main() {
 //!     let catalog = SqlCatalogBuilder::default()
 //!         .load(
