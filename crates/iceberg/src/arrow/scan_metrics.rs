@@ -66,7 +66,7 @@ impl ScanMetrics {
         &self.bytes_read
     }
 
-    /// Total bytes read from storage for data files during this scan.
+    /// Total bytes read from storage during this scan, including data files and delete files.
     pub fn bytes_read(&self) -> u64 {
         self.bytes_read.load(Ordering::Relaxed)
     }
