@@ -37,7 +37,7 @@ use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use futures::TryStreamExt;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::scan::FileScanTask;
-use iceberg::spec::{Literal, PartitionSpec, PrimitiveLiteral, Transform};
+use iceberg::spec::{Literal, PrimitiveLiteral, Transform};
 use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 
@@ -62,21 +62,16 @@ pub struct IcebergPartitionedTableProvider {
     catalog: Arc<dyn Catalog>,
     table_ident: TableIdent,
     schema: ArrowSchemaRef,
-    /// Source-column names that are identity-partitioned in *every* historical
-    /// partition spec of the table, captured at construction. Used by
-    /// `supports_filters_pushdown` to mark filters as `Exact` when they only
-    /// reference these columns: Iceberg evaluates partition predicates against
-    /// each manifest's own spec, so a column that is identity-partitioned in
-    /// every spec is fully prunable across the full table regardless of which
-    /// spec a given file was written under.
+    /// Source-column names that are identity-partitioned in the table's
+    /// default spec, captured at construction. Used by
+    /// `supports_filters_pushdown` to mark filters as `Exact` when they
+    /// only reference identity-partition columns. Empty when the table
+    /// has spec evolution (>1 historical specs) or no identity transforms,
+    /// which forces every filter to `Inexact`.
     ///
-    /// Columns that appear in some specs with non-identity transforms
-    /// (`bucket`, `truncate`, `year`/`month`/etc.), or that are missing from
-    /// any spec entirely, are dropped from the set — those files cannot be
-    /// pruned exactly, so DataFusion must keep its FilterExec.
-    ///
-    /// This is a snapshot: if the table's specs change between `try_new` and
-    /// a later scan, the cached set may be stale. The next `try_new` refreshes.
+    /// This is a snapshot: if the table's default spec changes between
+    /// `try_new` and a later scan, the cached set may be stale. Spec
+    /// evolution is rare in practice and the next `try_new` will refresh.
     identity_partition_cols: HashSet<String>,
 }
 
@@ -380,44 +375,28 @@ fn fallback_hash(task: &FileScanTask) -> u64 {
     hasher.finish()
 }
 
-/// Intersection of identity-partitioned source-column names across every
-/// historical partition spec. A column is included only if every spec
-/// includes that column with `Transform::Identity`; any spec where the column
-/// is absent or has a non-identity transform drops it from the result.
-///
-/// Why intersection: Iceberg evaluates partition predicates against each
-/// manifest's own spec. A file written under spec A can only be exactly
-/// pruned by columns identity-partitioned in spec A. To guarantee Exact
-/// pushdown for *every* file in the table, the column must be identity in
-/// *every* spec. Otherwise some surviving files would still need DataFusion's
-/// FilterExec to enforce the predicate.
+/// Source-column names of every identity-transform field in the table's
+/// default partition spec. Returns the empty set when the table has spec
+/// evolution (>1 historical specs) — older files may carry partition tuples
+/// whose identity status differs from the current spec, so the safe choice
+/// is to refuse all `Exact` pushdowns until each task carries its own spec.
 fn identity_partition_col_names(table: &Table) -> HashSet<String> {
     let metadata = table.metadata();
-    let table_schema = metadata.current_schema();
-    let identity_set = |spec: &PartitionSpec| -> HashSet<String> {
-        spec.fields()
-            .iter()
-            .filter(|pf| pf.transform == Transform::Identity)
-            .filter_map(|pf| {
-                table_schema
-                    .field_by_id(pf.source_id)
-                    .map(|f| f.name.clone())
-            })
-            .collect()
-    };
-
-    let mut iter = metadata.partition_specs_iter();
-    let Some(first) = iter.next() else {
+    if metadata.partition_specs_iter().len() > 1 {
         return HashSet::new();
-    };
-    let mut acc = identity_set(first);
-    for spec in iter {
-        if acc.is_empty() {
-            break;
-        }
-        acc = acc.intersection(&identity_set(spec)).cloned().collect();
     }
-    acc
+    let spec = metadata.default_partition_spec();
+    let table_schema = metadata.current_schema();
+    let mut names = HashSet::new();
+    for pf in spec.fields() {
+        if pf.transform != Transform::Identity {
+            continue;
+        }
+        if let Some(field) = table_schema.field_by_id(pf.source_id) {
+            names.insert(field.name.clone());
+        }
+    }
+    names
 }
 
 /// Returns `true` when every leaf of `expr` is a comparison or null check
@@ -496,14 +475,11 @@ mod tests {
 
     use datafusion::logical_expr::{col, lit};
     use datafusion::prelude::{SessionConfig, SessionContext};
-    use iceberg::io::FileIO;
     use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
     use iceberg::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, NestedField,
-        PrimitiveType, Schema, SortOrder, TableMetadataBuilder, Transform, Type,
-        UnboundPartitionSpec,
+        DataContentType, DataFileBuilder, DataFileFormat, NestedField, PrimitiveType, Schema,
+        Transform, Type, UnboundPartitionSpec,
     };
-    use iceberg::table::Table;
     use iceberg::transaction::{ApplyTransactionAction, Transaction};
     use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
     use tempfile::TempDir;
@@ -650,126 +626,6 @@ mod tests {
 
     fn ctx_with_target_partitions(n: usize) -> SessionContext {
         SessionContext::new_with_config(SessionConfig::new().with_target_partitions(n))
-    }
-
-    /// Build a `Table` carrying `specs.len()` historical partition specs. The
-    /// first spec is the table's initial spec; each subsequent spec is added
-    /// via `into_builder().add_partition_spec(...)`. No catalog round-trip,
-    /// no real I/O — `FileIO::new_with_memory()` is sufficient because the
-    /// helper under test only reads metadata.
-    fn build_table_with_specs(specs: Vec<UnboundPartitionSpec>) -> Table {
-        assert!(!specs.is_empty(), "need at least one spec");
-        let schema = Schema::builder()
-            .with_schema_id(0)
-            .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-            ])
-            .build()
-            .unwrap();
-
-        let mut iter = specs.into_iter();
-        let first = iter.next().unwrap();
-        let mut metadata = TableMetadataBuilder::new(
-            schema,
-            first,
-            SortOrder::unsorted_order(),
-            "memory:///t".to_string(),
-            FormatVersion::V2,
-            HashMap::new(),
-        )
-        .unwrap()
-        .build()
-        .unwrap()
-        .metadata;
-
-        for spec in iter {
-            metadata = metadata
-                .into_builder(None)
-                .add_partition_spec(spec)
-                .unwrap()
-                .build()
-                .unwrap()
-                .metadata;
-        }
-
-        Table::builder()
-            .file_io(FileIO::new_with_memory())
-            .metadata(Arc::new(metadata))
-            .identifier(TableIdent::new(
-                NamespaceIdent::new("ns".to_string()),
-                "t".to_string(),
-            ))
-            .build()
-            .unwrap()
-    }
-
-    /// Multi-spec table where every historical spec keeps `id` as identity:
-    /// the column survives the intersection and remains Exact-pushdown safe.
-    /// `name` is never identity-partitioned, so it is excluded.
-    #[test]
-    fn test_identity_cols_preserved_across_compatible_specs() {
-        let spec_v0 = UnboundPartitionSpec::builder()
-            .add_partition_field(1, "id_part", Transform::Identity)
-            .unwrap()
-            .build();
-        // Evolved spec: still identity on `id`, plus a non-identity transform
-        // on `name`. The latter must not pollute the result.
-        let spec_v1 = UnboundPartitionSpec::builder()
-            .add_partition_field(1, "id_part", Transform::Identity)
-            .unwrap()
-            .add_partition_field(2, "name_bucket", Transform::Bucket(8))
-            .unwrap()
-            .build();
-        let table = build_table_with_specs(vec![spec_v0, spec_v1]);
-
-        let cols = identity_partition_col_names(&table);
-        assert_eq!(cols, HashSet::from(["id".to_string()]));
-    }
-
-    /// Multi-spec table where the evolved spec replaces `identity(id)` with
-    /// `bucket(id)`. Files written under the evolved spec cannot be exactly
-    /// pruned on `id`, so `id` must be dropped from the Exact-safe set.
-    #[test]
-    fn test_identity_cols_dropped_when_transform_changes() {
-        let spec_v0 = UnboundPartitionSpec::builder()
-            .add_partition_field(1, "id_part", Transform::Identity)
-            .unwrap()
-            .build();
-        let spec_v1 = UnboundPartitionSpec::builder()
-            .add_partition_field(1, "id_bucket", Transform::Bucket(8))
-            .unwrap()
-            .build();
-        let table = build_table_with_specs(vec![spec_v0, spec_v1]);
-
-        let cols = identity_partition_col_names(&table);
-        assert!(
-            cols.is_empty(),
-            "expected empty set after non-identity replacement, got {cols:?}"
-        );
-    }
-
-    /// Multi-spec table where the second spec omits `id` from partitioning
-    /// entirely. Files under that spec carry no `id` partition tuple, so
-    /// pruning is a no-op for them — `id` must be dropped from the
-    /// Exact-safe set.
-    #[test]
-    fn test_identity_cols_dropped_when_column_missing_from_some_spec() {
-        let spec_v0 = UnboundPartitionSpec::builder()
-            .add_partition_field(1, "id_part", Transform::Identity)
-            .unwrap()
-            .build();
-        // Evolved spec only partitions on `name`, omitting `id`.
-        let spec_v1 = UnboundPartitionSpec::builder()
-            .add_partition_field(2, "name_part", Transform::Identity)
-            .unwrap()
-            .build();
-        let table = build_table_with_specs(vec![spec_v0, spec_v1]);
-
-        let cols = identity_partition_col_names(&table);
-        // Neither column survives the intersection: `id` missing from v1,
-        // `name` missing from v0.
-        assert!(cols.is_empty(), "got {cols:?}");
     }
 
     /// An empty table must produce a zero-partition scan so DataFusion never calls
