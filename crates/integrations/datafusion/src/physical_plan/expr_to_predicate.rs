@@ -49,7 +49,7 @@ pub fn convert_filters_to_predicate(filters: &[Expr]) -> Option<Predicate> {
         .reduce(Predicate::and)
 }
 
-pub(crate) fn convert_filter_to_predicate(expr: &Expr) -> Option<Predicate> {
+fn convert_filter_to_predicate(expr: &Expr) -> Option<Predicate> {
     match to_iceberg_predicate(expr) {
         TransformedResult::Predicate(predicate) => Some(predicate),
         TransformedResult::Column(column) => {
