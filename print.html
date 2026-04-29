@@ -949,6 +949,7 @@ dist
 ├── apache-iceberg-rust-0.2.0.tar.gz.asc
 └── apache-iceberg-rust-0.2.0.tar.gz.sha512
 </code></pre>
+<p>It is recommended to verify the artifacts yourself before uploading them to the SVN dist repo, see <a href="release.html#how-to-verify-a-release">How to verify a release</a></p>
 <h3 id="upload-artifacts-to-the-svn-dist-repo"><a class="header" href="#upload-artifacts-to-the-svn-dist-repo">Upload artifacts to the SVN dist repo</a></h3>
 <p>SVN is required for this step.</p>
 <p>The svn repository of the dev branch is: <a href="https://dist.apache.org/repos/dist/dev/iceberg/">https://dist.apache.org/repos/dist/dev/iceberg/</a></p>
@@ -958,8 +959,9 @@ svn co https://dist.apache.org/repos/dist/dev/iceberg/ /tmp/iceberg-dist-dev
 </code></pre>
 <p>Then, upload the artifacts:</p>
 <blockquote>
-<p>The <code>${release_version}</code> here should be like <code>0.2.0-rc.1</code></p>
+<p>The <code>${release_version}</code> here should be like <code>0.2.0-rc1</code></p>
 </blockquote>
+<p>Example of uploaded artifacts can be found at: https://dist.apache.org/repos/dist/dev/iceberg/apache-iceberg-rust-0.9.1-rc3/</p>
 <pre><code class="language-shell"># create a directory named by version
 mkdir /tmp/iceberg-dist-dev/apache-iceberg-rust-${release_version}/
 
@@ -971,8 +973,8 @@ cd /tmp/iceberg-dist-dev/
 
 # check svn status
 svn status
-
-# add to svn
+</code></pre>
+<pre><code class="language-shell"># add to svn
 svn add apache-iceberg-rust-${release_version}
 
 # commit to SVN remote server
@@ -990,11 +992,11 @@ And remember to delete the wrong artifacts from the SVN dist repo.</p>
 <pre><code>[VOTE] Release Apache Iceberg Rust ${iceberg_version} ${rc_version}
 </code></pre>
 <p>Content:</p>
-<pre><code>Hello, Apache Iceberg Rust Community,
+<pre><code>Hello Apache Iceberg Rust Community,
 
-This is a call for a vote to release Apache Iceberg rust version ${iceberg_version}.
+This is a call for a vote to release Apache Iceberg Rust version ${iceberg_version}.
 
-The tag to be voted on is v${release_version}.
+The tag to be voted on is: v${release_version}.
 
 The release candidate:
 
@@ -1008,30 +1010,30 @@ Git tag for the release:
 
 https://github.com/apache/iceberg-rust/releases/tag/v${release_version}
 
-Please download, verify, and test.
+Please download, verify, and test the release candidate.
 
-The VOTE will be open for at least 72 hours and until the necessary
-number of votes are reached.
+This vote will be open for at least 72 hours and will remain open until the required number of votes is reached.
 
-[ ] +1 approve
-[ ] +0 no opinion
-[ ] -1 disapprove with the reason
+Please vote accordingly:
+[ ] +1 Approve
+[ ] +0 No opinion
+[ ] -1 Disapprove (please provide a reason)
 
-To learn more about Apache Iceberg, please see https://rust.iceberg.apache.org/
+To learn more about Apache Iceberg, please visit:
+https://rust.iceberg.apache.org/
 
 Checklist for reference:
-
-[ ] Download links are valid.
-[ ] Checksums and signatures.
-[ ] LICENSE/NOTICE files exist
-[ ] No unexpected binary files
+[ ] Download links are valid
+[ ] Checksums and signatures are correct
+[ ] LICENSE and NOTICE files are present
+[ ] No unexpected binary files are included
 [ ] All source files have ASF headers
-[ ] Can compile from source
+[ ] The project builds successfully from source
 
-More details please refer to https://rust.iceberg.apache.org/release.html#how-to-verify-a-release.
+For more details, please refer to:
+https://rust.iceberg.apache.org/release.html#how-to-verify-a-release
 
-Thanks
-
+Thanks,
 ${name}
 </code></pre>
 <p>Example: <a href="https://lists.apache.org/thread/c211gqq2yl15jbxqk4rcnq1bdqltjm5l">https://lists.apache.org/thread/c211gqq2yl15jbxqk4rcnq1bdqltjm5l</a></p>
@@ -1040,7 +1042,7 @@ ${name}
 <pre><code>[RESULT][VOTE] Release Apache Iceberg Rust ${iceberg_version} ${rc_version}
 </code></pre>
 <p>Content:</p>
-<pre><code>Hello, Apache Iceberg Rust Community,
+<pre><code>Hello Apache Iceberg Rust Community,
 
 The vote to release Apache Iceberg Rust ${release_version} has passed.
 
@@ -1058,8 +1060,7 @@ Non-Binding votes:
 
 Vote thread: ${vote_thread_url}
 
-Thanks
-
+Thanks,
 ${name}
 </code></pre>
 <p>Example: <a href="https://lists.apache.org/thread/xk5myl10mztcfotn59oo59s4ckvojds6">https://lists.apache.org/thread/xk5myl10mztcfotn59oo59s4ckvojds6</a></p>

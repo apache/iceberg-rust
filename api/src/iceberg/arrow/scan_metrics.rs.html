@@ -66,7 +66,7 @@
 <a href=#66 id=66 data-nosnippet>66</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.bytes_read
 <a href=#67 id=67 data-nosnippet>67</a>    }
 <a href=#68 id=68 data-nosnippet>68</a>
-<a href=#69 id=69 data-nosnippet>69</a>    <span class="doccomment">/// Total bytes read from storage for data files during this scan.
+<a href=#69 id=69 data-nosnippet>69</a>    <span class="doccomment">/// Total bytes read from storage during this scan, including data files and delete files.
 <a href=#70 id=70 data-nosnippet>70</a>    </span><span class="kw">pub fn </span>bytes_read(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
 <a href=#71 id=71 data-nosnippet>71</a>        <span class="self">self</span>.bytes_read.load(Ordering::Relaxed)
 <a href=#72 id=72 data-nosnippet>72</a>    }
