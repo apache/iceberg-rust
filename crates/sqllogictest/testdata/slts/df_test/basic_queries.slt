@@ -53,7 +53,7 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=3
 02)--CooperativeExec
-03)----IcebergTableScan projection:[id,name,score,category] predicate:[] limit:[3]
+03)----IcebergTableScan projection:[id,name,score,category] predicate:[] buckets:[1] file_count:[1] limit:[3]
 
 # Test SELECT * with ORDER BY and LIMIT
 query ITRT
