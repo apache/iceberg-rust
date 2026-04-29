@@ -178,9 +178,7 @@ fn literal_to_array(lit: &Literal, dt: &DataType) -> Option<ArrayRef> {
         (PrimitiveLiteral::Int(v), DataType::Date32) => Arc::new(Date32Array::from(vec![*v])),
         (PrimitiveLiteral::Long(v), DataType::Int64) => Arc::new(Int64Array::from(vec![*v])),
         (PrimitiveLiteral::Float(v), DataType::Float32) => Arc::new(Float32Array::from(vec![v.0])),
-        (PrimitiveLiteral::Double(v), DataType::Float64) => {
-            Arc::new(Float64Array::from(vec![v.0]))
-        }
+        (PrimitiveLiteral::Double(v), DataType::Float64) => Arc::new(Float64Array::from(vec![v.0])),
         (PrimitiveLiteral::String(v), DataType::Utf8) => {
             Arc::new(StringArray::from(vec![v.as_str()]))
         }

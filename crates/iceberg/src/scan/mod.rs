@@ -462,29 +462,21 @@ impl TableScan {
 
     /// Returns an [`ArrowRecordBatchStream`].
     pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
-        self.to_arrow_with_tasks(self.plan_files().await?)
+        self.to_arrow_from_tasks(self.plan_files().await?)
     }
 
-    /// Consumes an externally-planned [`FileScanTask`] stream and returns an
-    /// [`ArrowRecordBatchStream`] using this scan's [`ArrowReaderBuilder`]
-    /// configuration (row-group filtering, row selection, data-file
-    /// concurrency limit, batch size).
-    ///
-    /// Equivalent to [`TableScan::to_arrow`] — which delegates to this method
-    /// after awaiting [`TableScan::plan_files`] — but lets the caller supply
-    /// a pre-computed task stream. This decouples planning from reading, so
-    /// external executors (e.g. a DataFusion partitioned scan) can plan once,
-    /// distribute tasks across workers, and replay them here without
-    /// re-running `plan_files()`.
+    /// Like [`TableScan::to_arrow`], but accepts a caller-supplied
+    /// [`FileScanTask`] stream instead of running [`TableScan::plan_files`]
+    /// internally.
     ///
     /// # Correctness
     ///
-    /// The tasks passed in must have been produced by a [`TableScan`] whose
-    /// projection and filter match `self`: filters are already baked into
-    /// each [`FileScanTask::predicate`] at planning time and are not
-    /// re-applied here. Using tasks from a scan with a different projection
-    /// or filter yields undefined behavior.
-    pub fn to_arrow_with_tasks(&self, tasks: FileScanTaskStream) -> Result<ArrowRecordBatchStream> {
+    /// Tasks must come from a [`TableScan`] with the same projection and
+    /// filter as `self`: predicates are baked into each task at planning
+    /// time and are not re-applied here. Reader-side configuration
+    /// (concurrency, batch size, row-group filtering, row selection) is
+    /// taken from `self` and may differ from the planning scan.
+    pub fn to_arrow_from_tasks(&self, tasks: FileScanTaskStream) -> Result<ArrowRecordBatchStream> {
         let mut arrow_reader_builder =
             ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
                 .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
