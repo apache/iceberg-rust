@@ -53,6 +53,7 @@
 mod action;
 mod manifest_filter;
 mod manifest_merge;
+mod merging_state;
 
 pub use action::*;
 mod append;
