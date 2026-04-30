@@ -24,7 +24,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tokio::task;
-use tracing::warn;
+
+use crate::{Error, ErrorKind, Result};
 
 /// Wrapper around tokio's JoinHandle that panics on task failure.
 pub struct JoinHandle<T>(task::JoinHandle<T>);
@@ -70,7 +71,7 @@ impl RuntimeHandle {
     }
 
     /// Create a handle that borrows an existing tokio runtime via its handle.
-    fn from_handle(handle: tokio::runtime::Handle) -> Self {
+    fn from_tokio_handle(handle: tokio::runtime::Handle) -> Self {
         Self {
             _owned: None,
             handle,
@@ -136,6 +137,30 @@ impl Runtime {
         }
     }
 
+    /// Create a Runtime that borrows the tokio runtime the caller is currently
+    /// running in.
+    ///
+    /// Returns an error if this is not called from within a tokio runtime
+    /// context. This is the preferred path for callers who already manage a
+    /// tokio runtime (e.g. `#[tokio::main]`, datafusion, axum): iceberg will
+    /// reuse that runtime rather than spawning its own.
+    pub fn try_from_current() -> Result<Self> {
+        let handle = tokio::runtime::Handle::try_current().map_err(|e| {
+            Error::new(
+                ErrorKind::Unexpected,
+                "no tokio runtime in context; call Runtime::try_from_current() \
+                 from within a tokio runtime, or construct a Runtime explicitly \
+                 via Runtime::new / Runtime::new_with_split",
+            )
+            .with_source(e)
+        })?;
+        let rh = RuntimeHandle::from_tokio_handle(handle);
+        Ok(Self {
+            io: rh.clone(),
+            cpu: rh,
+        })
+    }
+
     /// Handle for IO-bound work (network fetches, file reads).
     pub fn io(&self) -> &RuntimeHandle {
         &self.io
@@ -148,28 +173,13 @@ impl Runtime {
 }
 
 impl Default for Runtime {
+    /// Borrows the current tokio runtime via [`Handle::try_current`].
     fn default() -> Self {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let rh = RuntimeHandle::from_handle(handle);
-            return Self {
-                io: rh.clone(),
-                cpu: rh,
-            };
-        }
-
-        warn!(
-            "No tokio runtime found. Creating a new multi-thread runtime for iceberg. \
-             Consider providing an explicit Runtime via CatalogBuilder::with_runtime() \
-             or TableBuilder::runtime() to avoid unexpected resource usage."
-        );
-
-        let rt = Arc::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to build default tokio runtime"),
-        );
-        Self::new(rt)
+        Self::try_from_current().expect(
+            "Runtime::default() called outside a tokio runtime context. \
+             Call it from within #[tokio::main] / #[tokio::test], or construct \
+             a Runtime explicitly via Runtime::new / Runtime::new_with_split.",
+        )
     }
 }
 
@@ -189,14 +199,6 @@ mod tests {
 
     fn block_on<F: Future>(rt: &Runtime, f: F) -> F::Output {
         rt.io._owned.as_ref().unwrap().block_on(f)
-    }
-
-    #[test]
-    fn test_runtime_default_creates_working_runtime() {
-        let rt = Runtime::default();
-        let handle = rt.io().spawn(async { 1 + 1 });
-        let result = block_on(&rt, handle);
-        assert_eq!(result, 2);
     }
 
     #[test]
@@ -283,5 +285,21 @@ mod tests {
         let rt = test_runtime();
         let debug_str = format!("{:?}", rt);
         assert!(debug_str.contains("Runtime"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_try_from_current_in_runtime() {
+        let rt = Runtime::try_from_current().expect("should find current runtime");
+        let result = rt.io().spawn(async { 7 }).await;
+        assert_eq!(result, 7);
+        // Borrowed: no owned Arc.
+        assert!(rt.io._owned.is_none());
+        assert!(rt.cpu._owned.is_none());
+    }
+
+    #[test]
+    fn test_try_from_current_outside_runtime() {
+        let err = Runtime::try_from_current().expect_err("must fail outside runtime");
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
     }
 }
