@@ -52,6 +52,7 @@
 /// that allows users to apply a transaction action to a `Transaction`.
 mod action;
 mod manifest_filter;
+mod manifest_merge;
 
 pub use action::*;
 mod append;
