@@ -23,10 +23,10 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
-    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
-    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
-    TableProperties, update_snapshot_summaries,
+    DataContentType, DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType,
+    ManifestEntry, ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder,
+    Operation, Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct,
+    StructType, Summary, TableProperties, update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -180,6 +180,116 @@ impl<'a> SnapshotProducer<'a> {
                 data_file.partition(),
                 self.table.metadata().default_partition_type(),
             )?;
+        }
+
+        Ok(())
+    }
+
+    /// Verify that no new delete files have been added since `starting_snapshot_id` that
+    /// reference a path being replaced by this commit. If `starting_snapshot_id` is `None`
+    /// the walk covers every ancestor of the current snapshot.
+    ///
+    /// Equality deletes are ignored when the producer has an explicit
+    /// `data_sequence_number`: rewritten files inherit their original sequence number, so
+    /// equality deletes added at higher sequence numbers continue to apply correctly and
+    /// don't conflict with the rewrite. Same trade-off as Java's
+    /// `MergingSnapshotProducer::validateNoNewDeletesForDataFiles` (`ignoreEqualityDeletes`).
+    ///
+    /// Java analog: `org.apache.iceberg.MergingSnapshotProducer::validateNoNewDeletesForDataFiles`.
+    #[allow(dead_code)] // Wired up in the rewrite_files.rs commit; tests exercise it now.
+    pub(crate) async fn validate_no_new_deletes_for_data_files(
+        &self,
+        starting_snapshot_id: Option<i64>,
+        replaced_data_files: &HashSet<String>,
+    ) -> Result<()> {
+        let metadata = self.table.metadata();
+        // Format-V1 tables have no delete files; nothing to check.
+        if metadata.format_version() == FormatVersion::V1 {
+            return Ok(());
+        }
+        let Some(parent) = metadata.current_snapshot() else {
+            return Ok(());
+        };
+        if replaced_data_files.is_empty() {
+            return Ok(());
+        }
+
+        let ignore_equality_deletes = self.data_sequence_number.is_some();
+
+        let starting_seq_num: i64 = starting_snapshot_id
+            .and_then(|id| metadata.snapshot_by_id(id))
+            .map(|s| s.sequence_number())
+            .unwrap_or(0);
+
+        let metadata_ref = self.table.metadata_ref();
+        let mut current = Some(parent.clone());
+        while let Some(snap) = current {
+            if Some(snap.snapshot_id()) == starting_snapshot_id {
+                break;
+            }
+
+            let manifest_list = snap
+                .load_manifest_list(self.table.file_io(), &metadata_ref)
+                .await?;
+
+            for ml_entry in manifest_list.entries() {
+                if ml_entry.content != ManifestContentType::Deletes {
+                    continue;
+                }
+                // Only manifests that this snapshot itself added; older delete manifests
+                // were already in scope at `starting_snapshot_id` and don't represent a
+                // conflict.
+                if ml_entry.added_snapshot_id != snap.snapshot_id() {
+                    continue;
+                }
+
+                let manifest = ml_entry.load_manifest(self.table.file_io()).await?;
+                for entry in manifest.entries() {
+                    if !entry.is_alive() {
+                        continue;
+                    }
+                    let f = &entry.data_file;
+                    match f.content_type() {
+                        DataContentType::PositionDeletes => {
+                            if let Some(ref_path) = f.referenced_data_file()
+                                && replaced_data_files.contains(&ref_path)
+                            {
+                                return Err(Error::new(
+                                    ErrorKind::DataInvalid,
+                                    format!(
+                                        "Cannot commit, found new position delete \
+                                         for replaced data file: {ref_path}"
+                                    ),
+                                ));
+                            }
+                        }
+                        DataContentType::EqualityDeletes => {
+                            if !ignore_equality_deletes
+                                && entry.sequence_number().unwrap_or(0) > starting_seq_num
+                            {
+                                return Err(Error::new(
+                                    ErrorKind::DataInvalid,
+                                    format!(
+                                        "Cannot commit, found new equality delete file \
+                                         {} added at sequence {} since starting sequence \
+                                         {starting_seq_num}",
+                                        f.file_path,
+                                        entry.sequence_number().unwrap_or(0)
+                                    ),
+                                ));
+                            }
+                        }
+                        DataContentType::Data => {
+                            // Data entries don't appear in Deletes manifests; ignore.
+                        }
+                    }
+                }
+            }
+
+            current = snap
+                .parent_snapshot_id()
+                .and_then(|pid| metadata.snapshot_by_id(pid))
+                .cloned();
         }
 
         Ok(())
@@ -570,5 +680,145 @@ impl<'a> SnapshotProducer<'a> {
         ];
 
         Ok(ActionCommit::new(updates, requirements))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestStatus, Struct,
+    };
+    use crate::transaction::tests::{apply_updates_to_table, make_v1_table, make_v2_minimal_table};
+    use crate::transaction::{Transaction, TransactionAction};
+
+    fn data_file(table: &Table, path: &str) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap()
+    }
+
+    /// V1 tables don't have delete files, so the validator must short-circuit.
+    #[tokio::test]
+    async fn validate_no_new_deletes_short_circuits_for_v1() {
+        let table = make_v1_table();
+        let producer = SnapshotProducer::new(
+            &table,
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/x.parquet")],
+        );
+        let mut replaced = HashSet::new();
+        replaced.insert("data/replaced.parquet".to_string());
+
+        producer
+            .validate_no_new_deletes_for_data_files(None, &replaced)
+            .await
+            .expect("V1 must short-circuit");
+    }
+
+    /// Tables with no current snapshot have no ancestors to walk.
+    #[tokio::test]
+    async fn validate_no_new_deletes_short_circuits_for_empty_table() {
+        let table = make_v2_minimal_table();
+        let producer = SnapshotProducer::new(
+            &table,
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/x.parquet")],
+        );
+        let mut replaced = HashSet::new();
+        replaced.insert("data/replaced.parquet".to_string());
+
+        producer
+            .validate_no_new_deletes_for_data_files(None, &replaced)
+            .await
+            .expect("empty-snapshot table must short-circuit");
+    }
+
+    /// An empty replaced set means the action is purely additive — nothing to validate.
+    #[tokio::test]
+    async fn validate_no_new_deletes_short_circuits_for_empty_replaced_set() {
+        let table = make_v2_minimal_table();
+        let f = data_file(&table, "data/x.parquet");
+        let tx = Transaction::new(&table);
+        let append = tx.fast_append().add_data_files(vec![f.clone()]);
+        let updates = Arc::new(append)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+
+        let producer = SnapshotProducer::new(
+            &table,
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/y.parquet")],
+        );
+        let replaced = HashSet::new();
+
+        producer
+            .validate_no_new_deletes_for_data_files(None, &replaced)
+            .await
+            .expect("empty replaced set must short-circuit");
+    }
+
+    /// Walking ancestors that contain only data manifests (no delete manifests) succeeds.
+    /// Acts as the happy-path baseline for the compaction case where the upstream table has
+    /// never had delete files written.
+    #[tokio::test]
+    async fn validate_no_new_deletes_passes_when_no_delete_manifests() {
+        let table = make_v2_minimal_table();
+        let f1 = data_file(&table, "data/f1.parquet");
+        let f2 = data_file(&table, "data/f2.parquet");
+        let tx = Transaction::new(&table);
+        let append = tx.fast_append().add_data_files(vec![f1.clone(), f2.clone()]);
+        let updates = Arc::new(append)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+
+        let producer = SnapshotProducer::new(
+            &table,
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/compacted.parquet")],
+        )
+        .with_removed_data_files(vec![f1.clone()]);
+
+        let mut replaced = HashSet::new();
+        replaced.insert(f1.file_path.clone());
+
+        producer
+            .validate_no_new_deletes_for_data_files(None, &replaced)
+            .await
+            .expect("table without delete manifests must pass");
+
+        // Also the unused-status guard: an unrelated path also passes.
+        let mut other = HashSet::new();
+        other.insert("data/never-existed.parquet".to_string());
+        producer
+            .validate_no_new_deletes_for_data_files(None, &other)
+            .await
+            .expect("path not present in any ancestor still passes");
+
+        // Sanity: silence unused warning while we're here.
+        let _ = ManifestStatus::Added;
     }
 }
