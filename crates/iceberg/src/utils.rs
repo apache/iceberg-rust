@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub(crate) mod bin_packing;
-
 use std::num::NonZeroUsize;
 
 // Use a default value of 1 as the safest option.

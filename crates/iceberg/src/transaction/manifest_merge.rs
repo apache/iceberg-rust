@@ -47,7 +47,7 @@ use crate::spec::{
     ManifestWriterBuilder,
 };
 use crate::transaction::snapshot::{META_ROOT_PATH, SnapshotProducer};
-use crate::utils::bin_packing::ListPacker;
+use crate::prptl_utils::bin_packing::ListPacker;
 
 /// Maximum number of merge tasks running concurrently. Caps both the storage
 /// client's outstanding write requests and the per-task working-set memory
