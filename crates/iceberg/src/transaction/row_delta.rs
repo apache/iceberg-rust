@@ -15,53 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::spec::{DataFile, ManifestEntry, ManifestFile, ManifestStatus, Operation};
+use crate::spec::{DataFile, ManifestContentType, ManifestEntry, ManifestFile, Operation};
 use crate::table::Table;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
 };
 use crate::transaction::{ActionCommit, TransactionAction};
 
-/// RowDeltaAction handles both data file additions and deletions in a single snapshot.
-/// This is the core transaction type for MERGE, UPDATE, DELETE operations.
+/// Transaction action for Copy-on-Write row-level modifications (UPDATE, DELETE, MERGE INTO).
 ///
 /// Corresponds to `org.apache.iceberg.RowDelta` in the Java implementation.
-///
-/// # Copy-on-Write (COW) Strategy
-///
-/// For row-level modifications:
-/// 1. Read target data files that contain rows to be modified
-/// 2. Apply modifications (UPDATE/DELETE logic)
-/// 3. Write modified rows to new data files via `add_data_files()`
-/// 4. Mark original files as deleted via `remove_data_files()`
-///
-/// For inserts (NOT MATCHED in MERGE):
-/// 1. Write new rows to data files
-/// 2. Add files via `add_data_files()`
-///
-/// # Future: Merge-on-Read Strategy
-///
-/// The `add_delete_files()` method is reserved for future Merge-on-Read support, which uses
-/// delete files instead of rewriting data files.
 pub struct RowDeltaAction {
-    /// New data files to add (for inserts or rewritten files in COW mode)
     added_data_files: Vec<DataFile>,
-    /// Data files to mark as deleted (for COW mode when rewriting files)
     removed_data_files: Vec<DataFile>,
-    /// Delete files to add (reserved for future Merge-on-Read mode support)
+    /// Reserved for future Merge-on-Read support; calling `add_delete_files` currently errors.
     added_delete_files: Vec<DataFile>,
-    /// Optional commit UUID for manifest file naming
     commit_uuid: Option<Uuid>,
-    /// Additional properties to add to snapshot summary
     snapshot_properties: HashMap<String, String>,
-    /// Optional starting snapshot ID for conflict detection
     starting_snapshot_id: Option<i64>,
 }
 
@@ -77,44 +54,42 @@ impl RowDeltaAction {
         }
     }
 
-    /// Add new data files to the snapshot. Used for:
-    /// - New rows from INSERT operations
-    /// - Rewritten data files in COW mode (after applying UPDATE/DELETE)
+    /// Add new data files (INSERT rows or Copy-on-Write rewritten files).
     pub fn add_data_files(mut self, data_files: impl IntoIterator<Item = DataFile>) -> Self {
         self.added_data_files.extend(data_files);
         self
     }
 
-    /// Mark data files as deleted in the snapshot.
-    /// Used in COW mode to mark original files as deleted when they've been rewritten with modifications.
-    /// Corresponds to `removeRows(DataFile)` in Java implementation.
+    /// Mark existing data files as deleted (Copy-on-Write mode).
+    ///
+    /// Corresponds to `removeRows(DataFile)` in the Java implementation.
     pub fn remove_data_files(mut self, data_files: impl IntoIterator<Item = DataFile>) -> Self {
         self.removed_data_files.extend(data_files);
         self
     }
 
-    /// Add delete files to the snapshot (reserved for future Merge-on-Read mode).
-    /// #Note: This is not yet implemented and is reserved for future Merge-on-Read optimization
-    /// where delete files are used instead of rewriting data files.
+    /// Reserved for future Merge-on-Read support — currently returns an error on commit.
+    ///
+    /// Once MoR is implemented, this will write position/equality delete files instead of
+    /// rewriting data files.
     pub fn add_delete_files(mut self, delete_files: impl IntoIterator<Item = DataFile>) -> Self {
         self.added_delete_files.extend(delete_files);
         self
     }
 
-    /// Set commit UUID for the snapshot.
+    /// Set the commit UUID used for manifest file naming.
     pub fn set_commit_uuid(mut self, commit_uuid: Uuid) -> Self {
         self.commit_uuid = Some(commit_uuid);
         self
     }
 
-    /// Set snapshot summary properties.
+    /// Attach custom key/value metadata to the snapshot summary.
     pub fn set_snapshot_properties(mut self, snapshot_properties: HashMap<String, String>) -> Self {
         self.snapshot_properties = snapshot_properties;
         self
     }
 
-    /// Validate that the operation is applied on top of a specific snapshot.
-    /// This can be used for conflict detection in concurrent modification scenarios.
+    /// Reject the commit if the table has advanced past `snapshot_id` (optimistic concurrency).
     pub fn validate_from_snapshot(mut self, snapshot_id: i64) -> Self {
         self.starting_snapshot_id = Some(snapshot_id);
         self
@@ -124,7 +99,14 @@ impl RowDeltaAction {
 #[async_trait]
 impl TransactionAction for RowDeltaAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
-        // Validate starting snapshot if specified
+        if !self.added_delete_files.is_empty() {
+            return Err(crate::Error::new(
+                crate::ErrorKind::FeatureUnsupported,
+                "add_delete_files is not yet implemented; Merge-on-Read support is pending. \
+                 Use remove_data_files for Copy-on-Write deletes instead.",
+            ));
+        }
+
         if let Some(expected_snapshot_id) = self.starting_snapshot_id
             && table.metadata().current_snapshot_id() != Some(expected_snapshot_id)
         {
@@ -141,21 +123,17 @@ impl TransactionAction for RowDeltaAction {
         let snapshot_producer = SnapshotProducer::new(
             table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
-            None, // key_metadata - not used for row delta
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
         );
 
         // Validate newly added data files (partition value type-checks, etc.).
-        // removed_data_files are not validated: they are existing table files that
-        // were already validated when originally committed, so re-validating them
-        // here would be redundant. This matches Java's MergingSnapshotProducer behavior.
+        // removed_data_files are not re-validated: they are existing table files that were
+        // already validated when originally committed. This matches Java's MergingSnapshotProducer.
         snapshot_producer.validate_added_data_files()?;
 
-        // Create RowDeltaOperation with removed files
         let operation = RowDeltaOperation {
             removed_data_files: self.removed_data_files.clone(),
-            added_delete_files: self.added_delete_files.clone(),
         };
 
         snapshot_producer
@@ -164,309 +142,198 @@ impl TransactionAction for RowDeltaAction {
     }
 }
 
-/// Implements the snapshot production logic for RowDelta operations.
-///
-/// This determines:
-/// - Which operation type is recorded (Append/Delete/Overwrite)
-/// - Which manifest entries should be marked as deleted
-/// - Which existing manifests should be carried forward
 struct RowDeltaOperation {
     removed_data_files: Vec<DataFile>,
-    added_delete_files: Vec<DataFile>,
 }
 
 impl SnapshotProduceOperation for RowDeltaOperation {
-    /// Determine operation type based on what's being added/removed.
+    /// Operation type based on Java `BaseRowDelta.operation()`:
+    /// - No removes → `Append`
+    /// - Any removes → `Overwrite`
     ///
-    /// Logic based on Java `BaseRowDelta.operation()`:
-    /// - Only adds data files (no deletes or removes) → `Append`
-    /// - Removes data files or has delete files, AND also adds data files → `Overwrite`
-    /// - Only removes/deletes with no new data added → `Delete` (future: MoR path)
-    ///
-    /// Note: `Operation::Delete` is not yet returned because `add_delete_files` is
-    /// not fully implemented. Once Merge-on-Read support is wired up, the operation
-    /// will be `Delete` when only delete files are added with no new data rows.
+    /// `Operation::Delete` (MoR-only delete files, no data file changes) is deferred until
+    /// Merge-on-Read is wired up.
     fn operation(&self) -> Operation {
-        let has_added_deletes = !self.added_delete_files.is_empty();
-        let has_removed_data = !self.removed_data_files.is_empty();
-
-        if has_removed_data || has_added_deletes {
-            Operation::Overwrite
-        } else {
+        if self.removed_data_files.is_empty() {
             Operation::Append
+        } else {
+            Operation::Overwrite
         }
     }
 
-    /// Returns manifest entries for files that should be marked as deleted.
-    /// This creates DELETED entries for removed data files in COW mode.
+    /// Delete entries are handled inside `existing_manifest` by rewriting the manifest.
     async fn delete_entries(
         &self,
-        snapshot_produce: &SnapshotProducer<'_>,
+        _snapshot_produce: &SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestEntry>> {
-        let snapshot_id = snapshot_produce.table.metadata().current_snapshot_id();
-
-        // Create DELETED manifest entries for removed data files
-        let deleted_entries: Vec<ManifestEntry> = self
-            .removed_data_files
-            .iter()
-            .map(|data_file| {
-                if let Some(snapshot_id) = snapshot_id {
-                    ManifestEntry::builder()
-                        .status(ManifestStatus::Deleted)
-                        .snapshot_id(snapshot_id)
-                        // TODO: Get actual sequence numbers from original manifest entries
-                        // For now, use 0 as a placeholder - this should be the sequence
-                        // number from when the file was originally added
-                        .sequence_number(0)
-                        .file_sequence_number(0)
-                        .data_file(data_file.clone())
-                        .build()
-                } else {
-                    ManifestEntry::builder()
-                        .status(ManifestStatus::Deleted)
-                        .sequence_number(0)
-                        .file_sequence_number(0)
-                        .data_file(data_file.clone())
-                        .build()
-                }
-            })
-            .collect();
-
-        Ok(deleted_entries)
+        Ok(vec![])
     }
 
-    /// Returns existing manifest files that should be included in the new snapshot.
+    /// Returns manifest files for the new snapshot.
     ///
-    /// For RowDelta in Copy-on-Write mode:
-    /// - We're rewriting entire data files (not just modifying rows)
-    /// - Files being deleted are completely replaced by new files
-    /// - We should NOT carry forward manifests that contain any of the deleted files
+    /// For each manifest in the previous snapshot:
+    /// - If it contains any file being removed: rewrite it with DELETED entries for removed files
+    ///   and EXISTING entries for survivors, preserving original sequence numbers.
+    /// - Otherwise: carry it forward unchanged.
     ///
-    /// Note: For future precision COW or Merge-on-Read modes, this logic may need refinement.
+    /// This matches Java's `ManifestFilterManager.filterManifestWithDeletedFiles` logic.
     async fn existing_manifest(
         &self,
-        snapshot_produce: &SnapshotProducer<'_>,
+        snapshot_produce: &mut SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestFile>> {
         let Some(snapshot) = snapshot_produce.table.metadata().current_snapshot() else {
             return Ok(vec![]);
         };
 
-        let manifest_list = snapshot
-            .load_manifest_list(
-                snapshot_produce.table.file_io(),
-                &snapshot_produce.table.metadata_ref(),
-            )
+        let manifest_list = snapshot_produce
+            .table
+            .manifest_list_reader(snapshot)
+            .load()
             .await?;
 
-        // In COW mode, we rewrite entire files, so we need to exclude manifests
-        // that contain any files we're deleting. Create a set of deleted file paths for fast lookup.
-        let deleted_file_paths: std::collections::HashSet<String> = self
+        let deleted_paths: HashSet<&str> = self
             .removed_data_files
             .iter()
-            .map(|f| f.file_path().to_string())
+            .map(|f| f.file_path())
             .collect();
 
-        // Filter out manifests that contain deleted files
-        let mut filtered_manifests = Vec::new();
-        for manifest_file in manifest_list.entries().iter() {
-            if manifest_file.has_added_files() || manifest_file.has_existing_files() {
-                // Load the manifest to check if it contains any deleted files
-                let manifest = manifest_file
-                    .load_manifest(snapshot_produce.table.file_io())
-                    .await?;
+        let mut result = Vec::new();
+        for manifest_file in manifest_list.entries() {
+            if !manifest_file.has_added_files() && !manifest_file.has_existing_files() {
+                continue;
+            }
 
-                // Check if any entries in this manifest are files we're deleting
-                let contains_deleted_file = manifest
-                    .entries()
-                    .iter()
-                    .any(|entry| deleted_file_paths.contains(entry.data_file().file_path()));
+            let manifest = manifest_file
+                .load_manifest(snapshot_produce.table.file_io())
+                .await?;
 
-                if !contains_deleted_file {
-                    // This manifest doesn't contain any files we're deleting, keep it
-                    filtered_manifests.push(manifest_file.clone());
+            let needs_rewrite = manifest
+                .entries()
+                .iter()
+                .any(|e| e.is_alive() && deleted_paths.contains(e.data_file().file_path()));
+
+            if !needs_rewrite {
+                result.push(manifest_file.clone());
+                continue;
+            }
+
+            // Rewrite: deleted files → DELETED (new snapshot_id, original seq nums preserved),
+            // surviving files → EXISTING (all original fields preserved).
+            let mut writer = snapshot_produce.new_manifest_writer(ManifestContentType::Data)?;
+            for entry in manifest.entries() {
+                if deleted_paths.contains(entry.data_file().file_path()) {
+                    writer.add_delete_entry((**entry).clone())?;
+                } else {
+                    writer.add_existing_entry((**entry).clone())?;
                 }
             }
+            result.push(writer.write_manifest_file().await?);
         }
 
-        Ok(filtered_manifests)
+        Ok(result)
+    }
+
+    fn removed_data_files(&self) -> &[DataFile] {
+        &self.removed_data_files
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
-    use crate::TableUpdate;
-    use crate::spec::{DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct};
+    use crate::spec::{
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
+        ManifestStatus, SnapshotRef, Struct, TableMetadataBuilder,
+    };
+    use crate::table::Table;
     use crate::transaction::tests::make_v2_minimal_table;
     use crate::transaction::{Transaction, TransactionAction};
+    use crate::{TableIdent, TableUpdate};
+
+    fn make_data_file(table: &Table, path: &str, size: u64) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(size)
+            .record_count(10)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(100))]))
+            .build()
+            .unwrap()
+    }
+
+    /// Build a table that has `snapshot` as its current snapshot, backed by the same FileIO.
+    async fn table_with_snapshot(base: &Table, snapshot: crate::spec::Snapshot) -> Table {
+        let updated_metadata =
+            TableMetadataBuilder::new_from_metadata(base.metadata_ref().as_ref().clone(), None)
+                .set_branch_snapshot(snapshot, MAIN_BRANCH)
+                .unwrap()
+                .build()
+                .unwrap()
+                .metadata;
+
+        Table::builder()
+            .metadata(updated_metadata)
+            .metadata_location("s3://bucket/test/location/metadata/v2.json".to_string())
+            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .file_io(base.file_io().clone())
+            .runtime(crate::test_utils::test_runtime())
+            .build()
+            .unwrap()
+    }
 
     #[tokio::test]
     async fn test_row_delta_add_only() {
-        // Test adding data files only (pure append)
         let table = make_v2_minimal_table();
-        let tx = Transaction::new(&table);
+        let data_file = make_data_file(&table, "test/1.parquet", 100);
+        let action = Transaction::new(&table)
+            .row_delta()
+            .add_data_files(vec![data_file]);
 
-        let data_file = DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path("test/1.parquet".to_string())
-            .file_format(DataFileFormat::Parquet)
-            .file_size_in_bytes(100)
-            .record_count(10)
-            .partition_spec_id(table.metadata().default_partition_spec_id())
-            .partition(Struct::from_iter([Some(Literal::long(100))]))
-            .build()
-            .unwrap();
+        let mut commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = commit.take_updates();
 
-        let action = tx.row_delta().add_data_files(vec![data_file.clone()]);
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
-        let updates = action_commit.take_updates();
-
-        // Verify snapshot was created
-        assert!(matches!(&updates[0], TableUpdate::AddSnapshot { .. }));
-
-        // Verify the snapshot summary shows Append operation
         if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
             assert_eq!(snapshot.summary().operation, crate::spec::Operation::Append);
-        }
-    }
-
-    #[tokio::test]
-    async fn test_row_delta_remove_only() {
-        // Test removing data files (COW delete) - should succeed
-        let table = make_v2_minimal_table();
-        let tx = Transaction::new(&table);
-
-        let data_file = DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path("test/old.parquet".to_string())
-            .file_format(DataFileFormat::Parquet)
-            .file_size_in_bytes(100)
-            .record_count(10)
-            .partition_spec_id(table.metadata().default_partition_spec_id())
-            .partition(Struct::from_iter([Some(Literal::long(100))]))
-            .build()
-            .unwrap();
-
-        let action = tx.row_delta().remove_data_files(vec![data_file]);
-
-        // This should succeed - delete-only operations are valid
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
-        let updates = action_commit.take_updates();
-
-        // Verify snapshot was created with Overwrite operation
-        if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            assert_eq!(
-                snapshot.summary().operation,
-                crate::spec::Operation::Overwrite
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn test_row_delta_add_and_remove() {
-        // Test COW update: remove old file, add new file
-        let table = make_v2_minimal_table();
-        let tx = Transaction::new(&table);
-
-        let old_file = DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path("test/old.parquet".to_string())
-            .file_format(DataFileFormat::Parquet)
-            .file_size_in_bytes(100)
-            .record_count(10)
-            .partition_spec_id(table.metadata().default_partition_spec_id())
-            .partition(Struct::from_iter([Some(Literal::long(100))]))
-            .build()
-            .unwrap();
-
-        let new_file = DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path("test/new.parquet".to_string())
-            .file_format(DataFileFormat::Parquet)
-            .file_size_in_bytes(120)
-            .record_count(12)
-            .partition_spec_id(table.metadata().default_partition_spec_id())
-            .partition(Struct::from_iter([Some(Literal::long(100))]))
-            .build()
-            .unwrap();
-
-        let action = tx
-            .row_delta()
-            .remove_data_files(vec![old_file])
-            .add_data_files(vec![new_file]);
-
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
-        let updates = action_commit.take_updates();
-
-        // Verify snapshot was created with Overwrite operation
-        if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            assert_eq!(
-                snapshot.summary().operation,
-                crate::spec::Operation::Overwrite
-            );
+        } else {
+            panic!("expected AddSnapshot");
         }
     }
 
     #[tokio::test]
     async fn test_row_delta_with_snapshot_properties() {
         let table = make_v2_minimal_table();
-        let tx = Transaction::new(&table);
-
-        let mut snapshot_properties = HashMap::new();
-        snapshot_properties.insert("key".to_string(), "value".to_string());
-
-        let data_file = DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path("test/1.parquet".to_string())
-            .file_format(DataFileFormat::Parquet)
-            .file_size_in_bytes(100)
-            .record_count(10)
-            .partition_spec_id(table.metadata().default_partition_spec_id())
-            .partition(Struct::from_iter([Some(Literal::long(100))]))
-            .build()
-            .unwrap();
-
-        let action = tx
+        let data_file = make_data_file(&table, "test/1.parquet", 100);
+        let mut props = std::collections::HashMap::new();
+        props.insert("key".to_string(), "value".to_string());
+        let action = Transaction::new(&table)
             .row_delta()
-            .set_snapshot_properties(snapshot_properties)
+            .set_snapshot_properties(props)
             .add_data_files(vec![data_file]);
 
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
-        let updates = action_commit.take_updates();
+        let mut commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = commit.take_updates();
 
-        // Check customized properties in snapshot summary
         if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
             assert_eq!(
                 snapshot.summary().additional_properties.get("key").unwrap(),
                 "value"
             );
+        } else {
+            panic!("expected AddSnapshot");
         }
     }
 
     #[tokio::test]
     async fn test_row_delta_validate_from_snapshot() {
-        // Test the snapshot validation logic
         let table = make_v2_minimal_table();
-        let tx = Transaction::new(&table);
-
-        let data_file = DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path("test/1.parquet".to_string())
-            .file_format(DataFileFormat::Parquet)
-            .file_size_in_bytes(100)
-            .record_count(10)
-            .partition_spec_id(table.metadata().default_partition_spec_id())
-            .partition(Struct::from_iter([Some(Literal::long(100))]))
-            .build()
-            .unwrap();
-
-        // Test with invalid snapshot ID (table has no snapshot, so any ID should fail)
-        let action = tx
+        let data_file = make_data_file(&table, "test/1.parquet", 100);
+        let action = Transaction::new(&table)
             .row_delta()
             .validate_from_snapshot(99999)
-            .add_data_files(vec![data_file.clone()]);
+            .add_data_files(vec![data_file]);
 
         let result = Arc::new(action).commit(&table).await;
         match result {
@@ -478,20 +345,18 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_empty_action() {
         let table = make_v2_minimal_table();
-        let tx = Transaction::new(&table);
-        let action = tx.row_delta();
-
-        // Empty row delta should fail
-        assert!(Arc::new(action).commit(&table).await.is_err());
+        assert!(
+            Arc::new(Transaction::new(&table).row_delta())
+                .commit(&table)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
     async fn test_row_delta_incompatible_partition_value() {
         let table = make_v2_minimal_table();
-        let tx = Transaction::new(&table);
-
-        // Create file with incompatible partition value (string instead of long)
-        let data_file = DataFileBuilder::default()
+        let bad_file = DataFileBuilder::default()
             .content(DataContentType::Data)
             .file_path("test/bad.parquet".to_string())
             .file_format(DataFileFormat::Parquet)
@@ -501,10 +366,143 @@ mod tests {
             .partition(Struct::from_iter([Some(Literal::string("wrong"))]))
             .build()
             .unwrap();
-
-        let action = tx.row_delta().add_data_files(vec![data_file]);
-
-        // Should fail validation
+        let action = Transaction::new(&table)
+            .row_delta()
+            .add_data_files(vec![bad_file]);
         assert!(Arc::new(action).commit(&table).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_row_delta_add_delete_files_errors() {
+        let table = make_v2_minimal_table();
+        let file = make_data_file(&table, "test/delete.parquet", 100);
+        let action = Transaction::new(&table)
+            .row_delta()
+            .add_delete_files(vec![file]);
+        let result = Arc::new(action).commit(&table).await;
+        match result {
+            Ok(_) => panic!("expected FeatureUnsupported"),
+            Err(e) => assert_eq!(e.kind(), crate::ErrorKind::FeatureUnsupported),
+        }
+    }
+
+    /// End-to-end CoW test: append two files, then remove one via RowDelta.
+    ///
+    /// Verifies:
+    /// - The removed file appears as DELETED with correct sequence numbers.
+    /// - The surviving file appears as EXISTING with correct sequence numbers.
+    /// - The new file appears as ADDED.
+    /// - The snapshot summary counts `deleted-data-files = 1`.
+    #[tokio::test]
+    async fn test_row_delta_cow_manifest_rewrite() {
+        let base_table = make_v2_minimal_table();
+
+        // --- S1: append file-A and file-B ---
+        let file_a = make_data_file(&base_table, "test/a.parquet", 100);
+        let file_b = make_data_file(&base_table, "test/b.parquet", 200);
+
+        let action1 = Transaction::new(&base_table)
+            .fast_append()
+            .add_data_files(vec![file_a.clone(), file_b.clone()]);
+        let mut commit1 = Arc::new(action1).commit(&base_table).await.unwrap();
+        let updates1 = commit1.take_updates();
+
+        let snapshot_s1 =
+            if let TableUpdate::AddSnapshot { snapshot } = updates1.into_iter().next().unwrap() {
+                snapshot
+            } else {
+                panic!("expected AddSnapshot");
+            };
+
+        let table_s1 = table_with_snapshot(&base_table, snapshot_s1).await;
+
+        // --- S2: remove file-A (CoW), add file-C ---
+        let file_c = make_data_file(&table_s1, "test/c.parquet", 300);
+        let action2 = Transaction::new(&table_s1)
+            .row_delta()
+            .remove_data_files(vec![file_a.clone()])
+            .add_data_files(vec![file_c.clone()]);
+        let mut commit2 = Arc::new(action2).commit(&table_s1).await.unwrap();
+        let updates2 = commit2.take_updates();
+
+        let snapshot_s2 = if let TableUpdate::AddSnapshot { ref snapshot } = updates2[0] {
+            snapshot
+        } else {
+            panic!("expected AddSnapshot");
+        };
+
+        assert_eq!(
+            snapshot_s2.summary().operation,
+            crate::spec::Operation::Overwrite
+        );
+
+        // Verify snapshot summary metrics
+        let props = &snapshot_s2.summary().additional_properties;
+        assert_eq!(
+            props.get("deleted-data-files").map(String::as_str),
+            Some("1"),
+            "summary should count 1 deleted file"
+        );
+
+        // Scan all manifest entries in S2
+        let manifest_list = table_s1
+            .manifest_list_reader(&SnapshotRef::new(snapshot_s2.clone()))
+            .load()
+            .await
+            .unwrap();
+
+        let mut found_deleted_a = false;
+        let mut found_existing_b = false;
+        let mut found_added_c = false;
+
+        for manifest_file in manifest_list.entries() {
+            let manifest = manifest_file
+                .load_manifest(table_s1.file_io())
+                .await
+                .unwrap();
+            for entry in manifest.entries() {
+                match entry.data_file().file_path() {
+                    "test/a.parquet" => {
+                        assert_eq!(
+                            entry.status(),
+                            ManifestStatus::Deleted,
+                            "file-A must be DELETED"
+                        );
+                        assert!(
+                            entry.sequence_number().is_some(),
+                            "DELETED entry must have sequence number"
+                        );
+                        assert!(
+                            entry.file_sequence_number.is_some(),
+                            "DELETED entry must have file sequence number"
+                        );
+                        found_deleted_a = true;
+                    }
+                    "test/b.parquet" => {
+                        assert_eq!(
+                            entry.status(),
+                            ManifestStatus::Existing,
+                            "file-B must be EXISTING"
+                        );
+                        assert!(
+                            entry.sequence_number().is_some(),
+                            "EXISTING entry must have sequence number"
+                        );
+                        found_existing_b = true;
+                    }
+                    "test/c.parquet" => {
+                        found_added_c = true;
+                    }
+                    other => panic!("unexpected file in S2 manifests: {other}"),
+                }
+            }
+        }
+
+        assert!(found_deleted_a, "file-A should have a DELETED entry in S2");
+        assert!(
+            found_existing_b,
+            "file-B should have an EXISTING entry in S2"
+        );
+        assert!(found_added_c, "file-C should have an ADDED entry in S2");
     }
 }
