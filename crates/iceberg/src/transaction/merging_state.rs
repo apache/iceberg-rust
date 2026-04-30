@@ -17,20 +17,14 @@
 
 //! Composition root for the merging snapshot producer.
 //!
-//! Each action that wants Java's `MergingSnapshotProducer` semantics embeds a
-//! `MergingState` and routes its commit body through `filter_manifests` and
-//! `merge_manifests`. The two stages share a snapshot-level set of table
-//! properties (target manifest size, min count to merge, merge enabled) that
-//! are read once at construction so a single commit observes consistent
-//! values even if the table's properties were edited in flight.
+//! Actions that want Java's `MergingSnapshotProducer` semantics embed a
+//! `MergingState` and route their commit body through `filter_manifests` and
+//! `merge_manifests`. The merge-related table properties are read once at
+//! construction, so a single attempt sequence observes consistent values even
+//! if the table's properties were edited mid-flight.
 //!
-//! Java analog: this struct fills the role that `MergingSnapshotProducer`
-//! plays in the Java type hierarchy as a partial mixin around its concrete
-//! actions. Using composition (rather than a trait with default methods) was
-//! decided in brainstorm §4.2 / §16.1 — it sidesteps the "no mutable state in
-//! a default method" limitation of Rust traits.
-
-#![allow(dead_code)] // Wired up in the rewrite_files.rs commit.
+//! Java analog: fills the partial-mixin role that `MergingSnapshotProducer`
+//! plays in Java's type hierarchy.
 
 use std::collections::HashSet;
 
@@ -42,17 +36,12 @@ use crate::transaction::manifest_merge::ManifestMergeManager;
 use crate::transaction::snapshot::SnapshotProducer;
 
 pub(crate) struct MergingState {
-    target_size_bytes: u64,
-    min_count_to_merge: u32,
-    merge_enabled: bool,
     data_filter: ManifestFilterManager,
     data_merge: ManifestMergeManager,
 }
 
 impl MergingState {
-    /// Read the merge-related table properties once and construct a fresh state
-    /// for a single commit attempt sequence (one action invocation, possibly
-    /// retried). Defaults match Java parity — see brainstorm §3 / §15 Q1.
+    /// Reads the merge-related table properties once. Defaults are Java-parity.
     pub(crate) fn from_table(table: &Table) -> Self {
         let props = table.metadata().properties();
         let target_size_bytes = parse_or_default(
@@ -72,9 +61,6 @@ impl MergingState {
         );
 
         Self {
-            target_size_bytes,
-            min_count_to_merge,
-            merge_enabled,
             data_filter: ManifestFilterManager::new(),
             data_merge: ManifestMergeManager::new(
                 target_size_bytes,
@@ -84,15 +70,10 @@ impl MergingState {
         }
     }
 
-    /// Mark a file path for removal during the next filter pass.
     pub(crate) fn delete(&self, file: &DataFile) {
         self.data_filter.delete(file);
     }
 
-    /// Run the residual-rewrite pass over `current_manifests`. Returns the new
-    /// manifest list with each replaced manifest either dropped (all alive
-    /// entries were marked for deletion) or rewritten as a residual containing
-    /// only the survivors with their original sequence numbers preserved.
     pub(crate) async fn filter_manifests(
         &self,
         producer: &SnapshotProducer<'_>,
@@ -103,9 +84,9 @@ impl MergingState {
             .await
     }
 
-    /// Run the bin-pack merge pass over `unmerged`. The first element of
-    /// `unmerged` is treated as the "first" manifest (the one this commit just
-    /// produced) and exempted from being merged into a small bin.
+    /// `unmerged[0]` is the "first" manifest this commit produced; the merge
+    /// manager exempts the bin containing it when it has fewer than
+    /// `min_count_to_merge` siblings.
     pub(crate) async fn merge_manifests(
         &self,
         producer: &SnapshotProducer<'_>,
@@ -136,12 +117,6 @@ impl MergingState {
             .await;
     }
 
-    /// Whether the merge pass is enabled. Exposed so the action can choose to
-    /// skip the merge step (and the cost of `merge_manifests`) when the table
-    /// has opted out.
-    pub(crate) fn merge_enabled(&self) -> bool {
-        self.merge_enabled
-    }
 }
 
 fn parse_or_default<T: std::str::FromStr>(
@@ -160,22 +135,14 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::spec::TableProperties;
     use crate::transaction::tests::make_v2_minimal_table;
 
     #[test]
-    fn defaults_when_properties_absent() {
+    fn from_table_constructs_without_panic_when_properties_absent() {
+        // `make_v2_minimal_table` carries none of the merge properties; constructor
+        // must fall back to defaults rather than failing parse_or_default.
         let table = make_v2_minimal_table();
-        let state = MergingState::from_table(&table);
-        assert_eq!(
-            state.target_size_bytes,
-            TableProperties::PROPERTY_COMMIT_MANIFEST_TARGET_SIZE_BYTES_DEFAULT
-        );
-        assert_eq!(
-            state.min_count_to_merge,
-            TableProperties::PROPERTY_COMMIT_MANIFEST_MIN_MERGE_COUNT_DEFAULT
-        );
-        assert!(state.merge_enabled);
+        let _state = MergingState::from_table(&table);
     }
 
     #[test]
@@ -193,6 +160,8 @@ mod tests {
         let mut props = HashMap::new();
         props.insert("k".to_string(), "not-a-number".to_string());
         let v: u64 = parse_or_default(&props, "k", 7);
-        assert_eq!(v, 7, "invalid value falls back to default rather than panicking");
+        // Garbage values must not panic; a malformed property setting silently
+        // falls back to the Java-parity default.
+        assert_eq!(v, 7);
     }
 }

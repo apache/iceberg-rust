@@ -145,27 +145,26 @@ impl TableProperties {
     /// Default value for fanout writer enabled
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool = true;
 
-    /// Target manifest size when bin-packing siblings during a merging commit.
+    /// Target manifest size for the merge step's bin packer.
     /// Java analog: `org.apache.iceberg.TableProperties::MANIFEST_TARGET_SIZE_BYTES`.
     pub const PROPERTY_COMMIT_MANIFEST_TARGET_SIZE_BYTES: &str =
         "commit.manifest.target-size-bytes";
-    /// Default target manifest size: 8 MB.
+    /// Default for `PROPERTY_COMMIT_MANIFEST_TARGET_SIZE_BYTES`.
     pub const PROPERTY_COMMIT_MANIFEST_TARGET_SIZE_BYTES_DEFAULT: u64 = 8 * 1024 * 1024;
 
-    /// Minimum number of manifests in a single bin before the merge step rewrites them
-    /// into a combined manifest. Bins with fewer manifests pass through unchanged so a
-    /// cluster of small commits doesn't force an expensive rewrite of historical data.
+    /// Minimum bin size that triggers a merge. Bins below this threshold pass
+    /// through unchanged, so a cluster of small commits doesn't force a
+    /// historical rewrite.
     /// Java analog: `org.apache.iceberg.TableProperties::MANIFEST_MIN_MERGE_COUNT`.
     pub const PROPERTY_COMMIT_MANIFEST_MIN_MERGE_COUNT: &str = "commit.manifest.min-count-to-merge";
-    /// Default minimum count.
+    /// Default for `PROPERTY_COMMIT_MANIFEST_MIN_MERGE_COUNT`.
     pub const PROPERTY_COMMIT_MANIFEST_MIN_MERGE_COUNT_DEFAULT: u32 = 100;
 
-    /// Whether the merging snapshot producer rewrites and bin-packs siblings of the new
-    /// manifest on every commit. When `false`, only the residual filter pass runs;
+    /// Toggles the merge step. When `false`, only the residual filter runs and
     /// manifest count grows monotonically.
     /// Java analog: `org.apache.iceberg.TableProperties::MANIFEST_MERGE_ENABLED`.
     pub const PROPERTY_COMMIT_MANIFEST_MERGE_ENABLED: &str = "commit.manifest-merge.enabled";
-    /// Default: enabled (Java parity).
+    /// Default for `PROPERTY_COMMIT_MANIFEST_MERGE_ENABLED`.
     pub const PROPERTY_COMMIT_MANIFEST_MERGE_ENABLED_DEFAULT: bool = true;
 }
 

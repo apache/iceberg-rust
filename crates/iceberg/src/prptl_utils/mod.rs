@@ -1,9 +1,4 @@
-// Perpetual fork-only utility modules.
-//
-// Lives in a separate `prptl_utils/` directory rather than alongside
-// `utils.rs` so that future merges from apache/iceberg-rust upstream don't
-// have to navigate around fork-specific additions in `utils.rs`. Add new
-// fork-only helpers here unless there is a specific reason to integrate
-// them with upstream's `utils` namespace.
+// Fork-only utilities. Kept separate from upstream's `utils.rs` so merges
+// from apache/iceberg-rust don't pull in our additions there.
 
 pub(crate) mod bin_packing;

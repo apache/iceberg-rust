@@ -35,10 +35,8 @@ use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 pub(crate) const META_ROOT_PATH: &str = "metadata";
 
-/// Inject the per-commit manifest activity counters into `summary`. Walks the
-/// final manifest list, classifies each entry by whether the new commit
-/// produced it (`manifests-created`) or carried it forward (`manifests-kept`),
-/// and merges in the action's `manifests-replaced` count.
+/// Set the per-commit manifest activity counters on `summary` from the final
+/// manifest list and the action's replaced count.
 ///
 /// Java analog: `org.apache.iceberg.SnapshotProducer::commitSummary`.
 fn inject_manifest_summary_keys(
@@ -213,10 +211,6 @@ impl<'a> SnapshotProducer<'a> {
         self.key_metadata.as_deref()
     }
 
-    #[allow(dead_code)] // Consumed by manifest_merge.rs in a subsequent commit.
-    pub(crate) fn data_sequence_number(&self) -> Option<i64> {
-        self.data_sequence_number
-    }
 
     pub(crate) fn validate_added_data_files(&self) -> Result<()> {
         for data_file in &self.added_data_files {
@@ -242,25 +236,22 @@ impl<'a> SnapshotProducer<'a> {
         Ok(())
     }
 
-    /// Verify that no new delete files have been added since `starting_snapshot_id` that
-    /// reference a path being replaced by this commit. If `starting_snapshot_id` is `None`
-    /// the walk covers every ancestor of the current snapshot.
+    /// Reject the commit if any ancestor since `starting_snapshot_id` (or all
+    /// ancestors when `None`) added a delete file that targets one of the
+    /// replaced paths.
     ///
-    /// Equality deletes are ignored when the producer has an explicit
-    /// `data_sequence_number`: rewritten files inherit their original sequence number, so
-    /// equality deletes added at higher sequence numbers continue to apply correctly and
-    /// don't conflict with the rewrite. Same trade-off as Java's
-    /// `MergingSnapshotProducer::validateNoNewDeletesForDataFiles` (`ignoreEqualityDeletes`).
+    /// Equality deletes are ignored when the producer has a
+    /// `data_sequence_number` set — the rewrite preserves the original sequence
+    /// number, so equality deletes at higher sequence numbers continue to apply
+    /// correctly and don't conflict.
     ///
     /// Java analog: `org.apache.iceberg.MergingSnapshotProducer::validateNoNewDeletesForDataFiles`.
-    #[allow(dead_code)] // Wired up in the rewrite_files.rs commit; tests exercise it now.
     pub(crate) async fn validate_no_new_deletes_for_data_files(
         &self,
         starting_snapshot_id: Option<i64>,
         replaced_data_files: &HashSet<String>,
     ) -> Result<()> {
         let metadata = self.table.metadata();
-        // Format-V1 tables have no delete files; nothing to check.
         if metadata.format_version() == FormatVersion::V1 {
             return Ok(());
         }
@@ -293,9 +284,8 @@ impl<'a> SnapshotProducer<'a> {
                 if ml_entry.content != ManifestContentType::Deletes {
                     continue;
                 }
-                // Only manifests that this snapshot itself added; older delete manifests
-                // were already in scope at `starting_snapshot_id` and don't represent a
-                // conflict.
+                // Only delete manifests this snapshot itself added — older
+                // ones were already in scope at `starting_snapshot_id`.
                 if ml_entry.added_snapshot_id != snap.snapshot_id() {
                     continue;
                 }
@@ -336,9 +326,7 @@ impl<'a> SnapshotProducer<'a> {
                                 ));
                             }
                         }
-                        DataContentType::Data => {
-                            // Data entries don't appear in Deletes manifests; ignore.
-                        }
+                        DataContentType::Data => {}
                     }
                 }
             }
@@ -681,11 +669,9 @@ impl<'a> SnapshotProducer<'a> {
             ),
         };
 
-        // Build the per-file summary inputs BEFORE manifest_file empties
-        // self.added_data_files via mem::take in write_added_manifest. Manifest
-        // counts for the summary (manifests-created/kept/replaced) are injected
-        // post-hoc once we know the final manifest list and the process's
-        // replaced count.
+        // Build the file-counter summary BEFORE manifest_file empties
+        // self.added_data_files (via mem::take in write_added_manifest). The
+        // manifest counters are added post-hoc once the final list is known.
         let mut summary = self.summary(&snapshot_produce_operation).map_err(|err| {
             Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
         })?;
@@ -775,7 +761,6 @@ mod tests {
             .unwrap()
     }
 
-    /// V1 tables don't have delete files, so the validator must short-circuit.
     #[tokio::test]
     async fn validate_no_new_deletes_short_circuits_for_v1() {
         let table = make_v1_table();
@@ -795,7 +780,6 @@ mod tests {
             .expect("V1 must short-circuit");
     }
 
-    /// Tables with no current snapshot have no ancestors to walk.
     #[tokio::test]
     async fn validate_no_new_deletes_short_circuits_for_empty_table() {
         let table = make_v2_minimal_table();
@@ -815,7 +799,6 @@ mod tests {
             .expect("empty-snapshot table must short-circuit");
     }
 
-    /// An empty replaced set means the action is purely additive — nothing to validate.
     #[tokio::test]
     async fn validate_no_new_deletes_short_circuits_for_empty_replaced_set() {
         let table = make_v2_minimal_table();
@@ -844,9 +827,6 @@ mod tests {
             .expect("empty replaced set must short-circuit");
     }
 
-    /// Walking ancestors that contain only data manifests (no delete manifests) succeeds.
-    /// Acts as the happy-path baseline for the compaction case where the upstream table has
-    /// never had delete files written.
     #[tokio::test]
     async fn validate_no_new_deletes_passes_when_no_delete_manifests() {
         let table = make_v2_minimal_table();
@@ -878,7 +858,7 @@ mod tests {
             .await
             .expect("table without delete manifests must pass");
 
-        // Also the unused-status guard: an unrelated path also passes.
+        // A path that never existed also passes — no false positives.
         let mut other = HashSet::new();
         other.insert("data/never-existed.parquet".to_string());
         producer
@@ -886,7 +866,6 @@ mod tests {
             .await
             .expect("path not present in any ancestor still passes");
 
-        // Sanity: silence unused warning while we're here.
         let _ = ManifestStatus::Added;
     }
 }
