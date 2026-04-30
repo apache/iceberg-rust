@@ -313,11 +313,12 @@ impl SnapshotProduceOperation for RewriteOperation {
             )
             .await?;
 
+        let object_cache = snapshot_produce.table.object_cache();
         let manifests = try_join_all(
             manifest_list
                 .entries()
                 .iter()
-                .map(|e| e.load_manifest(snapshot_produce.table.file_io())),
+                .map(|e| object_cache.get_manifest(e)),
         )
         .await?;
 

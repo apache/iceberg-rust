@@ -93,16 +93,16 @@ impl ManifestFilterManager {
             return Ok(current_manifests);
         }
 
-        let file_io = producer.table.file_io();
+        let object_cache = producer.table.object_cache();
 
         let read_futures = current_manifests.into_iter().map(|m| {
-            let file_io = file_io.clone();
+            let object_cache = object_cache.clone();
             async move {
-                let loaded = m.load_manifest(&file_io).await?;
+                let loaded = object_cache.get_manifest(&m).await?;
                 Ok::<_, crate::Error>((m, loaded))
             }
         });
-        let mut loaded: Vec<(ManifestFile, Manifest)> = futures::stream::iter(read_futures)
+        let mut loaded: Vec<(ManifestFile, std::sync::Arc<Manifest>)> = futures::stream::iter(read_futures)
             .buffer_unordered(MANIFEST_READ_CONCURRENCY)
             .try_collect()
             .await?;

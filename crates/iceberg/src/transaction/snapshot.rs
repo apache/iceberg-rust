@@ -311,7 +311,7 @@ impl<'a> SnapshotProducer<'a> {
                     continue;
                 }
 
-                let manifest = ml_entry.load_manifest(self.table.file_io()).await?;
+                let manifest = self.table.object_cache().get_manifest(ml_entry).await?;
                 for entry in manifest.entries() {
                     if !entry.is_alive() {
                         continue;
@@ -374,9 +374,7 @@ impl<'a> SnapshotProducer<'a> {
                 .load_manifest_list(self.table.file_io(), &self.table.metadata_ref())
                 .await?;
             for manifest_list_entry in manifest_list.entries() {
-                let manifest = manifest_list_entry
-                    .load_manifest(self.table.file_io())
-                    .await?;
+                let manifest = self.table.object_cache().get_manifest(manifest_list_entry).await?;
                 for entry in manifest.entries() {
                     let file_path = entry.file_path();
                     if new_files.contains(file_path) && entry.is_alive() {

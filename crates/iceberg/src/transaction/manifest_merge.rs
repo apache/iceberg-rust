@@ -172,6 +172,7 @@ impl ManifestMergeManager {
         let snap_id = producer.snapshot_id();
         let metadata = producer.table.metadata();
         let file_io = producer.table.file_io();
+        let object_cache = producer.table.object_cache();
 
         let spec = metadata
             .partition_spec_by_id(spec_id)
@@ -215,7 +216,7 @@ impl ManifestMergeManager {
         };
 
         for source in &bin {
-            let manifest = source.load_manifest(file_io).await?;
+            let manifest = object_cache.get_manifest(source).await?;
             for entry in manifest.entries() {
                 let mut e = entry.as_ref().clone();
                 e.inherit_data(source);
