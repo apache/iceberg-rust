@@ -188,12 +188,12 @@ impl ManifestMergeManager {
         let fmt = metadata.format_version();
 
         let path = format!(
-            "{}/{}/{}-merge-{}.{}",
-            metadata.location(),
-            META_ROOT_PATH,
-            producer.commit_uuid(),
-            merge_suffix(&cache_key),
-            DataFileFormat::Avro,
+            "{location}/{root}/{uuid}-merge-{suffix}.{ext}",
+            location = metadata.location(),
+            root = META_ROOT_PATH,
+            uuid = producer.commit_uuid(),
+            suffix = merge_suffix(&cache_key),
+            ext = DataFileFormat::Avro,
         );
 
         let output_file = file_io.new_output(&path)?;
