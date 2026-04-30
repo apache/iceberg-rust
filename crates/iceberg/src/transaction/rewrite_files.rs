@@ -211,18 +211,12 @@ impl TransactionAction for RewriteFilesAction {
         let process = RewriteManifestProcess {
             state: state.clone(),
         };
-        let file_io = table.file_io().clone();
 
         match snapshot_producer.commit(rewrite_op, process).await {
             Ok(commit) => Ok(commit),
             Err(err) => {
-                // Best-effort sweep of any residuals/merges this attempt wrote
-                // but never committed. The merging state's caches survive into
-                // the next retry, so a successful subsequent attempt can still
-                // return them.
-                state
-                    .clean_uncommitted(&file_io, &HashSet::new())
-                    .await;
+                // Do not clean up on error: commit may have actually succeeded but the ACK was lost.
+                // Deleting here risks removing committed manifests, leading to silent table corruption.
                 Err(err)
             }
         }
