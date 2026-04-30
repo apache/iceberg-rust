@@ -54,15 +54,36 @@ fn inject_manifest_summary_keys(
             kept += 1;
         }
     }
-    summary
+    // Do not overwrite values that may have been explicitly set by an action
+    // like RewriteManifestsAction. Only insert counters if they are absent.
+    use std::collections::hash_map::Entry;
+    match summary
         .additional_properties
-        .insert(MANIFESTS_CREATED.to_string(), created.to_string());
-    summary
+        .entry(MANIFESTS_CREATED.to_string())
+    {
+        Entry::Vacant(v) => {
+            v.insert(created.to_string());
+        }
+        Entry::Occupied(_) => {}
+    }
+    match summary
         .additional_properties
-        .insert(MANIFESTS_KEPT.to_string(), kept.to_string());
-    summary
+        .entry(MANIFESTS_KEPT.to_string())
+    {
+        Entry::Vacant(v) => {
+            v.insert(kept.to_string());
+        }
+        Entry::Occupied(_) => {}
+    }
+    match summary
         .additional_properties
-        .insert(MANIFESTS_REPLACED.to_string(), replaced_count.to_string());
+        .entry(MANIFESTS_REPLACED.to_string())
+    {
+        Entry::Vacant(v) => {
+            v.insert(replaced_count.to_string());
+        }
+        Entry::Occupied(_) => {}
+    }
 }
 
 /// A trait that defines how different table operations produce new snapshots.
