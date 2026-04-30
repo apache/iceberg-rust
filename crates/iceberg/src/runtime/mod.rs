@@ -27,20 +27,25 @@ use tokio::task;
 
 use crate::{Error, ErrorKind, Result};
 
-/// Wrapper around tokio's JoinHandle that panics on task failure.
+/// Wrapper around tokio's `JoinHandle` that converts task failures into
+/// [`iceberg::Error`].
+///
+/// Tokio's `JoinHandle<T>` resolves to `Result<T, JoinError>`, where a
+/// `JoinError` means the task either panicked or was cancelled (typically from
+/// runtime shutdown or `abort`). Both are surfaced here as
+/// `ErrorKind::Unexpected` with the original `JoinError` preserved as the
+/// source.
 pub struct JoinHandle<T>(task::JoinHandle<T>);
 
 impl<T> Unpin for JoinHandle<T> {}
 
 impl<T: Send + 'static> Future for JoinHandle<T> {
-    type Output = T;
+    type Output = crate::Result<T>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.get_mut() {
-            JoinHandle(handle) => Pin::new(handle)
-                .poll(cx)
-                .map(|r| r.expect("tokio spawned task failed")),
-        }
+        Pin::new(&mut self.get_mut().0).poll(cx).map(|r| {
+            r.map_err(|e| Error::new(ErrorKind::Unexpected, "spawned task failed").with_source(e))
+        })
     }
 }
 
@@ -205,7 +210,7 @@ mod tests {
     fn test_runtime_spawn_io() {
         let rt = test_runtime();
         let handle = rt.io().spawn(async { 1 + 1 });
-        let result = block_on(&rt, handle);
+        let result = block_on(&rt, handle).unwrap();
         assert_eq!(result, 2);
     }
 
@@ -213,7 +218,7 @@ mod tests {
     fn test_runtime_spawn_cpu() {
         let rt = test_runtime();
         let handle = rt.cpu().spawn(async { 3 + 4 });
-        let result = block_on(&rt, handle);
+        let result = block_on(&rt, handle).unwrap();
         assert_eq!(result, 7);
     }
 
@@ -221,7 +226,7 @@ mod tests {
     fn test_runtime_spawn_blocking() {
         let rt = test_runtime();
         let handle = rt.cpu().spawn_blocking(|| 1 + 1);
-        let result = block_on(&rt, handle);
+        let result = block_on(&rt, handle).unwrap();
         assert_eq!(result, 2);
     }
 
@@ -235,7 +240,7 @@ mod tests {
         );
         let rt = Runtime::new(tokio_rt);
         let handle = rt.io().spawn(async { 42 });
-        let result = block_on(&rt, handle);
+        let result = block_on(&rt, handle).unwrap();
         assert_eq!(result, 42);
     }
 
@@ -290,7 +295,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_try_from_current_in_runtime() {
         let rt = Runtime::try_from_current().expect("should find current runtime");
-        let result = rt.io().spawn(async { 7 }).await;
+        let result = rt.io().spawn(async { 7 }).await.unwrap();
         assert_eq!(result, 7);
         // Borrowed: no owned Arc.
         assert!(rt.io._owned.is_none());

@@ -394,37 +394,35 @@ impl TableScan {
         {
             let rt = rt.clone();
             let rt_inner = rt.clone();
-            rt.cpu()
-                .spawn(async move {
-                    let result = manifest_entry_delete_ctx_rx
-                        .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
-                        .try_for_each_concurrent(
-                            concurrency_limit_manifest_entries,
-                            |(manifest_entry_context, tx)| {
-                                let rt_inner = rt_inner.clone();
-                                async move {
-                                    rt_inner
-                                        .cpu()
-                                        .spawn(async move {
-                                            Self::process_delete_manifest_entry(
-                                                manifest_entry_context,
-                                                tx,
-                                            )
-                                            .await
-                                        })
+            rt.cpu().spawn(async move {
+                let result = manifest_entry_delete_ctx_rx
+                    .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
+                    .try_for_each_concurrent(
+                        concurrency_limit_manifest_entries,
+                        |(manifest_entry_context, tx)| {
+                            let rt_inner = rt_inner.clone();
+                            async move {
+                                rt_inner
+                                    .cpu()
+                                    .spawn(async move {
+                                        Self::process_delete_manifest_entry(
+                                            manifest_entry_context,
+                                            tx,
+                                        )
                                         .await
-                                }
-                            },
-                        )
-                        .await;
+                                    })
+                                    .await?
+                            }
+                        },
+                    )
+                    .await;
 
-                    if let Err(error) = result {
-                        let _ = channel_for_delete_manifest_entry_error
-                            .send(Err(error))
-                            .await;
-                    }
-                })
-                .await;
+                if let Err(error) = result {
+                    let _ = channel_for_delete_manifest_entry_error
+                        .send(Err(error))
+                        .await;
+                }
+            });
         }
 
         // Process the data file [`ManifestEntry`] stream in parallel
@@ -447,7 +445,7 @@ impl TableScan {
                                         )
                                         .await
                                     })
-                                    .await
+                                    .await?
                             }
                         },
                     )
