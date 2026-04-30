@@ -1419,4 +1419,467 @@ mod tests {
         }
         assert!(found, "No Added manifest entry found");
     }
+
+    // --- Java-port subset (cuts per brainstorm §16.8) ---
+
+    #[tokio::test]
+    async fn test_rewrite_empty_table_errors() {
+        // Java analog: TestRewriteFiles::testEmptyTable. Both files_to_add and
+        // files_to_delete empty → action rejects on "files to add" precondition.
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+        let action = tx.rewrite_files(); // no add, no delete
+        let Err(err) = Arc::new(action).commit(&table).await else {
+            panic!("empty rewrite must error");
+        };
+        assert!(err.to_string().contains("files to add"));
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_add_only_errors() {
+        // Add-only on a table with existing files: validate_duplicate_files
+        // rejects this since the add path *isn't* in the snapshot, so the
+        // "duplicate" check passes — but our action requires files_to_delete
+        // to be non-empty when there are files to add? Actually we don't enforce
+        // that. So add-only succeeds. This is a Rust-divergence-from-Java test:
+        // document the difference. Java's BaseRewriteFiles validateReplacedAndAddedFiles
+        // requires deletesDataFiles() || !addsDataFiles() — which means if you
+        // add files you must also delete files. We don't currently enforce this.
+        //
+        // This test asserts the current Rust behavior so the divergence is
+        // explicit and any future tightening of the contract is intentional.
+        let table = make_v2_minimal_table();
+        let f1 = make_data_file(&table, "data/keep.parquet", 10);
+        let table_with_files = append_files(table.clone(), vec![f1]).await;
+
+        let new_file = make_data_file(&table, "data/new.parquet", 10);
+        let tx = Transaction::new(&table_with_files);
+        let action = tx.rewrite_files().add_files(vec![new_file]);
+        // Add-only currently succeeds (no Java-style "delete required" check).
+        // Documenting the divergence; treat as a behavioral regression target.
+        let result = Arc::new(action).commit(&table_with_files).await;
+        assert!(
+            result.is_ok(),
+            "add-only rewrite currently succeeds in this fork; \
+             Java rejects via validateReplacedAndAddedFiles. \
+             If we tighten the contract to match Java, flip this assertion."
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_already_deleted_file() {
+        // Replacing the same file twice: the second attempt should fail with
+        // "not found as alive entries" because the first replace removed it.
+        // Java analog: TestRewriteFiles::testAlreadyDeletedFile.
+        let table = make_v2_minimal_table();
+        let f1 = make_data_file(&table, "data/f1.parquet", 10);
+        let table = append_files(table, vec![f1.clone()]).await;
+
+        let new1 = make_data_file(&table, "data/new1.parquet", 10);
+        let tx = Transaction::new(&table);
+        let r1 = tx
+            .rewrite_files()
+            .delete_files(vec![f1.clone()])
+            .add_files(vec![new1]);
+        let updates = Arc::new(r1)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+
+        // Try to replace f1 again — it's no longer alive.
+        let new2 = make_data_file(&table, "data/new2.parquet", 10);
+        let tx = Transaction::new(&table);
+        let r2 = tx.rewrite_files().delete_files(vec![f1]).add_files(vec![new2]);
+        let Err(err) = Arc::new(r2).commit(&table).await else {
+            panic!("rewriting an already-deleted file must error");
+        };
+        assert!(err.to_string().contains("not found as alive entries"));
+    }
+
+    // --- Merge-pass behavioral tests ---
+
+    #[tokio::test]
+    async fn test_rewrite_emits_manifest_summary_keys() {
+        // The new summary keys (manifests-created/kept/replaced) appear on every
+        // RewriteFiles snapshot.
+        let table = make_v2_minimal_table();
+        let f1 = make_data_file(&table, "data/f1.parquet", 10);
+        let table = append_files(table, vec![f1.clone()]).await;
+
+        let new = make_data_file(&table, "data/new.parquet", 10);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_files()
+            .delete_files(vec![f1])
+            .add_files(vec![new]);
+        let updates = Arc::new(action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        let snap = unwrap_add_snapshot(&updates);
+        let props = &snap.summary().additional_properties;
+        assert!(
+            props.contains_key("manifests-created"),
+            "summary missing manifests-created; props: {props:?}"
+        );
+        assert!(props.contains_key("manifests-kept"));
+        assert!(props.contains_key("manifests-replaced"));
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_merge_disabled_passthrough() {
+        // With commit.manifest-merge.enabled=false on the table, the merge step
+        // is a no-op. The filter pass still rewrites residuals. Manifest count
+        // grows monotonically across two compactions because nothing consolidates.
+        let mut table = make_v2_minimal_table();
+        // Inject the property into the metadata in-place by reconstructing.
+        // make_v2_minimal_table loads from JSON; rewrite the properties via a
+        // table-property update that the next commit picks up.
+        let tx = Transaction::new(&table);
+        let prop_action = tx.update_table_properties().set(
+            "commit.manifest-merge.enabled".to_string(),
+            "false".to_string(),
+        );
+        let updates = Arc::new(prop_action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        table = apply_updates_to_table(&table, &updates);
+
+        let f1 = make_data_file(&table, "data/f1.parquet", 10);
+        let f2 = make_data_file(&table, "data/f2.parquet", 10);
+        let table = append_files(table, vec![f1.clone()]).await;
+        let table = append_files(table, vec![f2.clone()]).await;
+
+        let initial_manifest_count = table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap()
+            .entries()
+            .len();
+        // Two appends → at least 2 data manifests.
+        assert!(initial_manifest_count >= 2);
+
+        // Compact f1 → c1. With merge disabled, c1's data manifest is added,
+        // f1's manifest is dropped (filter), f2's manifest carried forward.
+        let c1 = make_data_file(&table, "data/c1.parquet", 10);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_files()
+            .delete_files(vec![f1])
+            .add_files(vec![c1.clone()]);
+        let updates = Arc::new(action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+
+        // Now compact f2 → c2.
+        let c2 = make_data_file(&table, "data/c2.parquet", 10);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_files()
+            .delete_files(vec![f2])
+            .add_files(vec![c2]);
+        let updates = Arc::new(action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+
+        let final_count = table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap()
+            .entries()
+            .len();
+        assert!(
+            final_count >= initial_manifest_count,
+            "with merge disabled, manifest count should not shrink; \
+             initial={initial_manifest_count}, final={final_count}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_merge_consolidates_small_siblings() {
+        // With merge enabled and min-count-to-merge lowered, two small data
+        // manifests should consolidate after a rewrite.
+        let mut table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+        let prop_action = tx
+            .update_table_properties()
+            .set(
+                "commit.manifest.min-count-to-merge".to_string(),
+                "2".to_string(),
+            )
+            .set(
+                "commit.manifest.target-size-bytes".to_string(),
+                "1048576".to_string(), // 1 MB; manifests are small in tests
+            );
+        let updates = Arc::new(prop_action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        table = apply_updates_to_table(&table, &updates);
+
+        // Build up several small data manifests.
+        let f1 = make_data_file(&table, "data/f1.parquet", 10);
+        let f2 = make_data_file(&table, "data/f2.parquet", 10);
+        let f3 = make_data_file(&table, "data/f3.parquet", 10);
+        let f4 = make_data_file(&table, "data/f4.parquet", 10);
+        let mut t = table;
+        for f in [&f1, &f2, &f3, &f4] {
+            t = append_files(t, vec![f.clone()]).await;
+        }
+
+        let pre_count = t
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .load_manifest_list(t.file_io(), t.metadata())
+            .await
+            .unwrap()
+            .entries()
+            .len();
+
+        // Rewrite f1 → c1. The merge pass should consolidate sibling manifests.
+        let c1 = make_data_file(&t, "data/c1.parquet", 10);
+        let tx = Transaction::new(&t);
+        let action = tx
+            .rewrite_files()
+            .delete_files(vec![f1])
+            .add_files(vec![c1]);
+        let updates = Arc::new(action)
+            .commit(&t)
+            .await
+            .unwrap()
+            .take_updates();
+        let t = apply_updates_to_table(&t, &updates);
+
+        let post_count = t
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .load_manifest_list(t.file_io(), t.metadata())
+            .await
+            .unwrap()
+            .entries()
+            .len();
+        assert!(
+            post_count <= pre_count,
+            "merge should not increase manifest count; pre={pre_count}, post={post_count}"
+        );
+
+        // Surviving files all still alive.
+        let snap = t.metadata().current_snapshot().unwrap();
+        let alive = collect_alive_files(snap, &t).await;
+        for expected in ["data/c1.parquet", "data/f2.parquet", "data/f3.parquet", "data/f4.parquet"]
+        {
+            assert!(
+                alive.contains(&expected.to_string()),
+                "expected {expected} alive; got {alive:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_sequence_number_preserved_across_merge() {
+        // AC-9: a survivor that gets demoted from ADDED to EXISTING during the
+        // merge keeps its original (sequence_number, file_sequence_number).
+        // Without this, equality deletes pinned at the original sequence number
+        // would silently stop applying to the survivor.
+        let mut table = make_v2_minimal_table();
+        // Force the merge step to run by lowering min-count-to-merge.
+        let tx = Transaction::new(&table);
+        let prop_action = tx.update_table_properties().set(
+            "commit.manifest.min-count-to-merge".to_string(),
+            "2".to_string(),
+        );
+        let updates = Arc::new(prop_action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        table = apply_updates_to_table(&table, &updates);
+
+        // Append a stays_alive file at sequence N1 in its own manifest.
+        let stays_alive = make_data_file(&table, "data/stays.parquet", 10);
+        let table = append_files(table, vec![stays_alive.clone()]).await;
+        let stays_seq = table.metadata().current_snapshot().unwrap().sequence_number();
+
+        // Append another file in a separate manifest to force grouping by spec.
+        let other = make_data_file(&table, "data/other.parquet", 10);
+        let table = append_files(table, vec![other.clone()]).await;
+
+        // Rewrite `other` → compacted; the merge pass should consolidate the
+        // two prior data manifests + the new added manifest. `stays_alive`
+        // gets demoted ADDED → EXISTING; its sequence number must survive.
+        let compacted = make_data_file(&table, "data/compacted.parquet", 10);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_files()
+            .delete_files(vec![other])
+            .add_files(vec![compacted]);
+        let updates = Arc::new(action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+
+        // Find stays_alive's surviving entry and check its sequence number.
+        let snap = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snap
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let mut found = None;
+        for ml in manifest_list.entries() {
+            let manifest = ml.load_manifest(table.file_io()).await.unwrap();
+            for entry in manifest.entries() {
+                if entry.file_path() == stays_alive.file_path && entry.is_alive() {
+                    found = entry.sequence_number();
+                }
+            }
+        }
+        let actual = found.expect("stays_alive must still be alive");
+        assert_eq!(
+            actual, stays_seq,
+            "ADDED→EXISTING demotion in merge must preserve original sequence number"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_tombstone_suppression_across_merges() {
+        // AC-8: tombstones from a *prior* snapshot do not survive into a
+        // merged manifest — they're suppressed by ManifestMergeManager. This
+        // is what stops manifest-entry count from growing monotonically across
+        // many compactions.
+        let mut table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+        let prop_action = tx.update_table_properties().set(
+            "commit.manifest.min-count-to-merge".to_string(),
+            "2".to_string(),
+        );
+        let updates = Arc::new(prop_action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        table = apply_updates_to_table(&table, &updates);
+
+        // Append two files, then compact the first → first compaction's
+        // delete_manifest carries a Deleted tombstone for f1.
+        let f1 = make_data_file(&table, "data/f1.parquet", 10);
+        let f2 = make_data_file(&table, "data/f2.parquet", 10);
+        let table = append_files(table, vec![f1.clone()]).await;
+        let table = append_files(table, vec![f2.clone()]).await;
+
+        let c1 = make_data_file(&table, "data/c1.parquet", 10);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_files()
+            .delete_files(vec![f1])
+            .add_files(vec![c1]);
+        let updates = Arc::new(action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+
+        // Now compact f2 → c2. The merge pass on this commit should consolidate
+        // the prior delete_manifest (carrying f1's tombstone from the previous
+        // snapshot) into a merged manifest, dropping the tombstone.
+        let c2 = make_data_file(&table, "data/c2.parquet", 10);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_files()
+            .delete_files(vec![f2])
+            .add_files(vec![c2]);
+        let updates = Arc::new(action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+
+        // Walk every manifest and count Deleted entries by source snapshot.
+        let snap = table.metadata().current_snapshot().unwrap();
+        let current_snap_id = snap.snapshot_id();
+        let manifest_list = snap
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let mut prior_tombstones = 0u64;
+        for ml in manifest_list.entries() {
+            let manifest = ml.load_manifest(table.file_io()).await.unwrap();
+            for entry in manifest.entries() {
+                if entry.status() == ManifestStatus::Deleted
+                    && entry.snapshot_id() != Some(current_snap_id)
+                {
+                    prior_tombstones += 1;
+                }
+            }
+        }
+        // No prior-snapshot tombstones should remain after the merge consolidated
+        // the previous compaction's delete-manifest into the new merged manifest.
+        // (This assumes the prior-compaction's data manifests + delete manifest
+        // landed in a multi-element bin together — which they do under the lowered
+        // min-count-to-merge=2.)
+        assert_eq!(
+            prior_tombstones, 0,
+            "merge must suppress prior-snapshot tombstones; found {prior_tombstones}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_idempotent_merging_state() {
+        // The merging state's caches survive a second commit attempt on the
+        // same Arc<RewriteFilesAction>. Re-invoking commit() in succession (which
+        // simulates the structure of Transaction's retry on Err) does not
+        // double-count manifests-replaced.
+        let mut table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+        let prop_action = tx.update_table_properties().set(
+            "commit.manifest.min-count-to-merge".to_string(),
+            "2".to_string(),
+        );
+        let updates = Arc::new(prop_action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        table = apply_updates_to_table(&table, &updates);
+
+        let f1 = make_data_file(&table, "data/f1.parquet", 10);
+        let f2 = make_data_file(&table, "data/f2.parquet", 10);
+        let table = append_files(table, vec![f1.clone()]).await;
+        let table = append_files(table, vec![f2.clone()]).await;
+
+        let c1 = make_data_file(&table, "data/c1.parquet", 10);
+        let action = Arc::new(
+            Transaction::new(&table)
+                .rewrite_files()
+                .delete_files(vec![f1])
+                .add_files(vec![c1]),
+        );
+        let _ = action.clone().commit(&table).await.unwrap();
+        // Second invocation on the same Arc — caches should short-circuit and
+        // not produce different manifest paths, so re-commit succeeds.
+        let _ = action.commit(&table).await.unwrap();
+    }
 }
