@@ -85,7 +85,7 @@ impl MergingState {
     }
 
     /// Mark a file path for removal during the next filter pass.
-    pub(crate) fn delete(&mut self, file: &DataFile) {
+    pub(crate) fn delete(&self, file: &DataFile) {
         self.data_filter.delete(file);
     }
 
@@ -94,7 +94,7 @@ impl MergingState {
     /// entries were marked for deletion) or rewritten as a residual containing
     /// only the survivors with their original sequence numbers preserved.
     pub(crate) async fn filter_manifests(
-        &mut self,
+        &self,
         producer: &SnapshotProducer<'_>,
         current_manifests: Vec<ManifestFile>,
     ) -> Result<Vec<ManifestFile>> {
@@ -124,15 +124,15 @@ impl MergingState {
     /// Best-effort cleanup of any cached residual or merged manifest paths
     /// that aren't in `committed_paths`. Errors are logged, never propagated.
     pub(crate) async fn clean_uncommitted(
-        &mut self,
-        producer: &SnapshotProducer<'_>,
+        &self,
+        file_io: &crate::io::FileIO,
         committed_paths: &HashSet<String>,
     ) {
         self.data_filter
-            .clean_uncommitted(producer, committed_paths)
+            .clean_uncommitted(file_io, committed_paths)
             .await;
         self.data_merge
-            .clean_uncommitted(producer, committed_paths)
+            .clean_uncommitted(file_io, committed_paths)
             .await;
     }
 

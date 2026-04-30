@@ -16,7 +16,7 @@
 // under the License.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use futures::future::try_join_all;
@@ -24,19 +24,36 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, ManifestContentType, ManifestEntry, ManifestFile,
-    ManifestStatus, ManifestWriterBuilder, Operation,
-};
+use crate::spec::{DataFile, ManifestEntry, ManifestFile, ManifestStatus, Operation};
 use crate::table::Table;
-use crate::transaction::snapshot::{
-    DefaultManifestProcess, META_ROOT_PATH, SnapshotProduceOperation, SnapshotProducer,
-};
+use crate::transaction::merging_state::MergingState;
+use crate::transaction::snapshot::{ManifestProcess, SnapshotProduceOperation, SnapshotProducer};
 use crate::transaction::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind};
 
-/// Action to replace data files in a table (for compaction/rewrite operations).
-pub struct ReplaceDataFilesAction {
+/// Action to rewrite data files in a table — primarily compaction.
+///
+/// On every commit, the action runs Java's `MergingSnapshotProducer` filter+merge
+/// pipeline:
+///
+///   1. **Filter pass.** Each manifest in the current snapshot's manifest list is
+///      inspected. Manifests with no replaced entries pass through unchanged;
+///      manifests whose alive entries are all replaced are dropped; manifests
+///      with both replaced and surviving entries are rewritten as residuals
+///      containing only the survivors with their original sequence numbers
+///      preserved.
+///   2. **Merge pass.** The result of the filter pass plus the new added/delete
+///      manifests are bin-packed by partition spec id and target manifest size
+///      (default 8 MB). Bins with multiple sibling manifests are consolidated
+///      into a single merged manifest, suppressing prior-snapshot tombstones in
+///      the process. The bin containing the action's "first" manifest is
+///      exempted when fewer than `commit.manifest.min-count-to-merge` (default
+///      100) siblings are present, so a cluster of small commits doesn't trigger
+///      a giant historical rewrite.
+///
+/// Java analog: `org.apache.iceberg.BaseRewriteFiles` extending
+/// `MergingSnapshotProducer`.
+pub struct RewriteFilesAction {
     commit_uuid: Option<Uuid>,
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
@@ -51,9 +68,14 @@ pub struct ReplaceDataFilesAction {
     /// correctness: compacted files that predate an equality delete must retain the original
     /// sequence number so the delete continues to apply to them.
     data_sequence_number: Option<i64>,
+    /// Lazy-initialized on the first commit attempt and shared across retries so
+    /// the filter+merge caches survive the catalog round-trip — exactly Java's
+    /// idempotency contract (brainstorm §5.5, §6.5). The state holds the three
+    /// merge table-property values read at first construction.
+    merging_state: OnceLock<Arc<MergingState>>,
 }
 
-impl ReplaceDataFilesAction {
+impl RewriteFilesAction {
     pub(crate) fn new() -> Self {
         Self {
             commit_uuid: None,
@@ -63,7 +85,14 @@ impl ReplaceDataFilesAction {
             files_to_add: vec![],
             validate_from_snapshot_id: None,
             data_sequence_number: None,
+            merging_state: OnceLock::new(),
         }
+    }
+
+    fn merging_state(&self, table: &Table) -> Arc<MergingState> {
+        self.merging_state
+            .get_or_init(|| Arc::new(MergingState::from_table(table)))
+            .clone()
     }
 
     /// Add files to delete (old files being replaced).
@@ -131,12 +160,12 @@ impl ReplaceDataFilesAction {
 }
 
 #[async_trait]
-impl TransactionAction for ReplaceDataFilesAction {
+impl TransactionAction for RewriteFilesAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
         if self.files_to_add.is_empty() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                "Replace operation requires files to add",
+                "Rewrite operation requires files to add",
             ));
         }
 
@@ -175,31 +204,89 @@ impl TransactionAction for ReplaceDataFilesAction {
         snapshot_producer.validate_added_data_files()?;
         snapshot_producer.validate_duplicate_files().await?;
 
-        let replace_op = ReplaceOperation {
-            files_to_delete: self
-                .files_to_delete
-                .iter()
-                .map(|f| f.file_path.clone())
-                .collect(),
-            validate_from_snapshot_id: self.validate_from_snapshot_id,
-            commit_uuid,
-            key_metadata: self.key_metadata.clone(),
-        };
+        // Build the replaced-paths set for both the merging-state delete bookkeeping
+        // and the validate_no_new_deletes_for_data_files check. Compute once.
+        let replaced_paths: HashSet<String> = self
+            .files_to_delete
+            .iter()
+            .map(|f| f.file_path.clone())
+            .collect();
 
-        snapshot_producer
-            .commit(replace_op, DefaultManifestProcess)
-            .await
+        if !replaced_paths.is_empty() {
+            snapshot_producer
+                .validate_no_new_deletes_for_data_files(
+                    self.validate_from_snapshot_id,
+                    &replaced_paths,
+                )
+                .await?;
+        }
+
+        let state = self.merging_state(table);
+        // Mark each replaced path on the filter manager. Idempotent: re-marking on
+        // a retry is a no-op.
+        for f in &self.files_to_delete {
+            state.delete(f);
+        }
+
+        let rewrite_op = RewriteOperation {
+            files_to_delete: replaced_paths,
+            validate_from_snapshot_id: self.validate_from_snapshot_id,
+            state: state.clone(),
+        };
+        let process = RewriteManifestProcess {
+            state: state.clone(),
+        };
+        let file_io = table.file_io().clone();
+
+        match snapshot_producer.commit(rewrite_op, process).await {
+            Ok(commit) => Ok(commit),
+            Err(err) => {
+                // Best-effort cleanup of orphan residuals + merged manifests this
+                // attempt wrote but never committed. The merging state's caches
+                // persist into the next retry, so paths returned to disk on a
+                // successful retry are not deleted here. Cleanup IO failures are
+                // logged inside clean_uncommitted; the orphan-file sweeper picks
+                // up anything missed.
+                state
+                    .clean_uncommitted(&file_io, &HashSet::new())
+                    .await;
+                Err(err)
+            }
+        }
     }
 }
 
-struct ReplaceOperation {
+struct RewriteOperation {
     files_to_delete: HashSet<String>,
     validate_from_snapshot_id: Option<i64>,
-    commit_uuid: Uuid,
-    key_metadata: Option<Vec<u8>>,
+    state: Arc<MergingState>,
 }
 
-impl SnapshotProduceOperation for ReplaceOperation {
+struct RewriteManifestProcess {
+    state: Arc<MergingState>,
+}
+
+impl ManifestProcess for RewriteManifestProcess {
+    async fn process_manifests(
+        &self,
+        snapshot_produce: &SnapshotProducer<'_>,
+        manifests: Vec<ManifestFile>,
+    ) -> Result<Vec<ManifestFile>> {
+        // The "first" manifest of this snapshot is at the front of `manifests`
+        // (existing_manifest's filtered output is followed by the added manifest
+        // and the optional delete manifest in `manifest_file()`). The merge
+        // manager re-orders inputs to put the new manifest in the head bin via
+        // pack_end internally, so the order at the boundary doesn't matter for
+        // the first-guard.
+        self.state.merge_manifests(snapshot_produce, manifests).await
+    }
+
+    fn replaced_manifests_count(&self) -> u64 {
+        self.state.replaced_manifests_count()
+    }
+}
+
+impl SnapshotProduceOperation for RewriteOperation {
     fn operation(&self) -> Operation {
         Operation::Replace
     }
@@ -317,13 +404,15 @@ impl SnapshotProduceOperation for ReplaceOperation {
         &self,
         snapshot_produce: &SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestFile>> {
-        // Always reads from current_snapshot — the carry-forward must reflect current table state,
-        // not the historical planning snapshot used by delete_entries(). This asymmetry is
-        // intentional: existing_manifest() rewrites survivors; delete_entries() validates deletions.
+        // Always reads from current_snapshot — the carry-forward must reflect current
+        // table state, not the historical planning snapshot used by delete_entries().
+        // This asymmetry is intentional: existing_manifest() rewrites survivors;
+        // delete_entries() validates deletions.
         //
-        // If the commit subsequently fails RefSnapshotIdMatch (e.g., a concurrent writer changed
-        // the snapshot), any residual manifests written here become orphan files. The standard
-        // Iceberg orphan-file GC handles cleanup; there is no correctness issue.
+        // If the commit subsequently fails RefSnapshotIdMatch (e.g., a concurrent writer
+        // changed the snapshot), any residual manifests written here become orphans.
+        // The merging state's clean_uncommitted hook (run by Transaction's retry) plus
+        // the orphan-file sweeper handle cleanup.
         let Some(snapshot) = snapshot_produce.table.metadata().current_snapshot() else {
             return Ok(vec![]);
         };
@@ -335,97 +424,16 @@ impl SnapshotProduceOperation for ReplaceOperation {
             )
             .await?;
 
-        // Load all manifests in parallel — independent object-storage reads.
-        let manifests = try_join_all(
-            manifest_list
-                .entries()
-                .iter()
-                .map(|e| e.load_manifest(snapshot_produce.table.file_io())),
-        )
-        .await?;
+        let current_manifests: Vec<ManifestFile> =
+            manifest_list.entries().iter().cloned().collect();
 
-        let file_io = snapshot_produce.table.file_io();
-        let schema = snapshot_produce.table.metadata().current_schema().clone();
-        let spec = snapshot_produce
-            .table
-            .metadata()
-            .default_partition_spec()
-            .as_ref()
-            .clone();
-        let fmt = snapshot_produce.table.metadata().format_version();
-        let location = snapshot_produce.table.metadata().location().to_string();
-        let snap_id = snapshot_produce.snapshot_id();
-
-        let mut result = Vec::new();
-        let mut residual_idx = 0usize;
-
-        for (ml_entry, manifest) in manifest_list.entries().iter().zip(manifests.iter()) {
-            let has_deletions = manifest
-                .entries()
-                .iter()
-                .any(|e| e.is_alive() && self.files_to_delete.contains(e.file_path()));
-
-            if !has_deletions {
-                result.push(ml_entry.clone());
-                continue;
-            }
-
-            let survivors: Vec<_> = manifest
-                .entries()
-                .iter()
-                .filter(|e| e.is_alive() && !self.files_to_delete.contains(e.file_path()))
-                .collect();
-
-            if survivors.is_empty() {
-                // All alive entries are being deleted; exclude the manifest entirely.
-                // delete_entries() will mark them as Deleted in the new snapshot.
-                continue;
-            }
-
-            // Partial manifest: write a residual containing only survivors.
-            let path = format!(
-                "{}/{}/{}-residual-m{}.{}",
-                location,
-                META_ROOT_PATH,
-                self.commit_uuid,
-                residual_idx,
-                DataFileFormat::Avro,
-            );
-            residual_idx += 1;
-
-            let output_file = file_io.new_output(path)?;
-            let builder = ManifestWriterBuilder::new(
-                output_file,
-                Some(snap_id),
-                self.key_metadata.clone(),
-                schema.clone(),
-                spec.clone(),
-            );
-            let mut writer = match (fmt, ml_entry.content) {
-                (FormatVersion::V1, _) => builder.build_v1(),
-                (FormatVersion::V2, ManifestContentType::Data) => builder.build_v2_data(),
-                (FormatVersion::V2, ManifestContentType::Deletes) => builder.build_v2_deletes(),
-                (FormatVersion::V3, ManifestContentType::Data) => builder.build_v3_data(),
-                (FormatVersion::V3, ManifestContentType::Deletes) => builder.build_v3_deletes(),
-            };
-            for me in survivors {
-                let mut me = me.as_ref().clone();
-                // Resolve any inherited fields (snapshot_id, sequence_number) from the
-                // manifest list entry before writing. load_manifest already does this,
-                // but be explicit here to guard against future refactors that change
-                // how entries are loaded.
-                me.inherit_data(ml_entry);
-                writer.add_existing_file(
-                    me.data_file.clone(),
-                    me.snapshot_id.unwrap_or(0),
-                    me.sequence_number.unwrap_or(0),
-                    me.file_sequence_number,
-                )?;
-            }
-            result.push(writer.write_manifest_file().await?);
-        }
-
-        Ok(result)
+        // The filter pass replaces the residual-write loop that lived inline here.
+        // It loads each manifest with bounded concurrency, drops manifests whose
+        // alive entries are all being replaced, and writes residuals for the rest.
+        // Sequence numbers on surviving entries are preserved unchanged.
+        self.state
+            .filter_manifests(snapshot_produce, current_manifests)
+            .await
     }
 }
 
@@ -495,15 +503,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_requires_files_to_add() {
+    async fn test_rewrite_requires_files_to_add() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let action = tx.replace_data_files();
+        let action = tx.rewrite_files();
         assert!(Arc::new(action).commit(&table).await.is_err());
     }
 
     #[tokio::test]
-    async fn test_replace_add_file_already_in_snapshot_errors() {
+    async fn test_rewrite_add_file_already_in_snapshot_errors() {
         // validate_duplicate_files() must reject adding a file that already exists as a live entry.
         let table = make_v2_minimal_table();
 
@@ -520,7 +528,7 @@ mod tests {
         // Try to add file1 again — it's already alive in the snapshot.
         let tx = Transaction::new(&table_with_file);
         let action = tx
-            .replace_data_files()
+            .rewrite_files()
             .delete_files(vec![file1.clone()])
             .add_files(vec![file1.clone()]); // re-adding the same path
         let Err(err) = Arc::new(action).commit(&table_with_file).await else {
@@ -533,7 +541,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_phantom_delete_errors() {
+    async fn test_rewrite_phantom_delete_errors() {
         // Phantom delete: file is not alive in the current snapshot.
         let table = make_v2_minimal_table();
 
@@ -552,7 +560,7 @@ mod tests {
         let compacted = make_data_file(&table, "data/compacted.parquet", 50);
         let tx = Transaction::new(&table_with_file);
         let action = tx
-            .replace_data_files()
+            .rewrite_files()
             .delete_files(vec![phantom])
             .add_files(vec![compacted]);
         let Err(err) = Arc::new(action).commit(&table_with_file).await else {
@@ -566,7 +574,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_duplicate_paths_in_delete_errors() {
+    async fn test_rewrite_duplicate_paths_in_delete_errors() {
         let table = make_v2_minimal_table();
 
         let file1 = make_data_file(&table, "data/file1.parquet", 50);
@@ -582,7 +590,7 @@ mod tests {
         let compacted = make_data_file(&table, "data/compacted.parquet", 50);
         let tx = Transaction::new(&table_with_file);
         let action = tx
-            .replace_data_files()
+            .rewrite_files()
             .delete_files(vec![file1.clone(), file1.clone()]) // duplicate
             .add_files(vec![compacted]);
         let Err(err) = Arc::new(action).commit(&table_with_file).await else {
@@ -596,7 +604,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_action_full_table() {
+    async fn test_rewrite_action_full_table() {
         let table = make_v2_minimal_table();
 
         // Step 1: fast-append two data files to create initial state.
@@ -622,7 +630,7 @@ mod tests {
         let compacted = make_data_file(&table, "data/compacted.parquet", 110);
         let tx = Transaction::new(&table_with_files);
         let replace_action = tx
-            .replace_data_files()
+            .rewrite_files()
             .delete_files(vec![file1.clone(), file2.clone()])
             .add_files(vec![compacted.clone()]);
         let mut replace_commit = Arc::new(replace_action)
@@ -724,11 +732,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_action_partial() {
+    async fn test_rewrite_action_partial() {
         // NOTE: this test covers "partial table replace" in the sense that one manifest survives
         // (file3's manifest is untouched) while another is fully deleted (file1+file2 share a
         // manifest and both are deleted). It does NOT test the mixed-manifest case — that is
-        // covered by test_replace_partial_manifest_rewritten below.
+        // covered by test_rewrite_partial_manifest_rewritten below.
         let table = make_v2_minimal_table();
 
         let file1 = make_data_file(&table, "data/file1.parquet", 10);
@@ -761,7 +769,7 @@ mod tests {
         let compacted = make_data_file(&table, "data/compacted.parquet", 30);
         let tx = Transaction::new(&table_with_files);
         let replace_action = tx
-            .replace_data_files()
+            .rewrite_files()
             .delete_files(vec![file1, file2])
             .add_files(vec![compacted]);
         let updates = Arc::new(replace_action)
@@ -837,7 +845,7 @@ mod tests {
     // --- 012: FastAppend must carry forward delete-only manifests ---
 
     #[tokio::test]
-    async fn test_replace_then_fast_append_preserves_delete_manifest() {
+    async fn test_rewrite_then_fast_append_preserves_delete_manifest() {
         // Verify that a FastAppend after a Replace does NOT drop the delete-only manifest.
         // Regression for the bug fixed in upstream apache/iceberg-rust PR #2149.
         let table = make_v2_minimal_table();
@@ -860,7 +868,7 @@ mod tests {
         let compacted = make_data_file(&table, "data/compacted.parquet", 30);
         let tx = Transaction::new(&table1);
         let replace = tx
-            .replace_data_files()
+            .rewrite_files()
             .delete_files(vec![file1, file2])
             .add_files(vec![compacted.clone()]);
         let updates = Arc::new(replace)
@@ -915,7 +923,7 @@ mod tests {
     // --- 013: validate_from_snapshot ---
 
     #[tokio::test]
-    async fn test_replace_validate_from_snapshot_succeeds() {
+    async fn test_rewrite_validate_from_snapshot_succeeds() {
         // validate_from_snapshot with the planning snapshot should succeed even when validated
         // against a historical snapshot that contains the files.
         let table = make_v2_minimal_table();
@@ -936,7 +944,7 @@ mod tests {
         let compacted = make_data_file(&table, "data/compacted.parquet", 10);
         let tx = Transaction::new(&table1);
         let replace = tx
-            .replace_data_files()
+            .rewrite_files()
             .validate_from_snapshot(planning_snapshot_id)
             .delete_files(vec![file1])
             .add_files(vec![compacted]);
@@ -946,7 +954,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_validate_from_snapshot_expired_falls_back_to_current() {
+    async fn test_rewrite_validate_from_snapshot_expired_falls_back_to_current() {
         // validate_from_snapshot with a non-existent (expired) snapshot ID falls back
         // to the current snapshot. The commit should succeed because the files to delete
         // are still alive in the current snapshot.
@@ -965,7 +973,7 @@ mod tests {
         let compacted = make_data_file(&table, "data/compacted.parquet", 10);
         let tx = Transaction::new(&table1);
         let replace = tx
-            .replace_data_files()
+            .rewrite_files()
             .validate_from_snapshot(999_999_999) // does not exist — simulates an expired snapshot
             .delete_files(vec![file1])
             .add_files(vec![compacted]);
@@ -979,7 +987,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_validate_from_snapshot_expired_file_concurrently_deleted() {
+    async fn test_rewrite_validate_from_snapshot_expired_file_concurrently_deleted() {
         // Scenario: validate_from_snapshot refers to an expired snapshot (simulated by a
         // non-existent ID so the fallback fires), AND the file to delete was concurrently
         // removed before the commit. Expected: commit fails with DataInvalid; error message
@@ -994,7 +1002,7 @@ mod tests {
         let replacement = make_data_file(&table, "data/replacement.parquet", 10);
         let tx = Transaction::new(&table1);
         let replace_concurrent = tx
-            .replace_data_files()
+            .rewrite_files()
             .delete_files(vec![file1.clone()])
             .add_files(vec![replacement]);
         let updates2 = Arc::new(replace_concurrent)
@@ -1010,7 +1018,7 @@ mod tests {
         let compacted = make_data_file(&table, "data/compacted.parquet", 10);
         let tx = Transaction::new(&table2);
         let replace_stale = tx
-            .replace_data_files()
+            .rewrite_files()
             .validate_from_snapshot(999_999_999) // non-existent → triggers expired fallback
             .delete_files(vec![file1])
             .add_files(vec![compacted]);
@@ -1035,7 +1043,7 @@ mod tests {
     // --- Mixed manifest detection ---
 
     #[tokio::test]
-    async fn test_replace_partial_manifest_rewritten() {
+    async fn test_rewrite_partial_manifest_rewritten() {
         // file_a and file_b share one manifest; file_c is in its own manifest.
         // Deleting only file_a must produce a residual manifest with file_b surviving.
         //
@@ -1059,7 +1067,7 @@ mod tests {
         let compacted = make_data_file(&table, "data/compacted.parquet", 10);
         let tx = Transaction::new(&table_with_files);
         let replace = tx
-            .replace_data_files()
+            .rewrite_files()
             .delete_files(vec![file_a])
             .add_files(vec![compacted]);
         let mut commit = Arc::new(replace)
@@ -1117,7 +1125,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_full_manifest_delete_no_regression() {
+    async fn test_rewrite_full_manifest_delete_no_regression() {
         // Deleting ALL files from a manifest must succeed (not a mixed manifest).
         let table = make_v2_minimal_table();
 
@@ -1140,7 +1148,7 @@ mod tests {
         let compacted = make_data_file(&table, "data/compacted.parquet", 30);
         let tx = Transaction::new(&table_with_files);
         let replace = tx
-            .replace_data_files()
+            .rewrite_files()
             .delete_files(vec![file_a, file_b])
             .add_files(vec![compacted]);
         assert!(
@@ -1150,7 +1158,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_single_file_manifests_no_false_positive() {
+    async fn test_rewrite_single_file_manifests_no_false_positive() {
         // A and B are in separate single-file manifests. Deleting A must succeed; B must survive.
         let table = make_v2_minimal_table();
 
@@ -1181,7 +1189,7 @@ mod tests {
         let compacted = make_data_file(&table, "data/compacted.parquet", 10);
         let tx = Transaction::new(&table_with_files);
         let replace = tx
-            .replace_data_files()
+            .rewrite_files()
             .delete_files(vec![file_a])
             .add_files(vec![compacted]);
         let mut commit = Arc::new(replace)
@@ -1229,7 +1237,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_multiple_partial_manifests() {
+    async fn test_rewrite_multiple_partial_manifests() {
         // Two manifests, each with two files; delete one file from each.
         // Both must produce residual manifests — each survivor appears in the snapshot.
         let table = make_v2_minimal_table();
@@ -1251,7 +1259,7 @@ mod tests {
         let compacted = make_data_file(&table, "data/compacted.parquet", 50);
         let tx = Transaction::new(&table_with_files);
         let replace = tx
-            .replace_data_files()
+            .rewrite_files()
             .delete_files(vec![file_a, file_c])
             .add_files(vec![compacted]);
         let mut commit = Arc::new(replace)
@@ -1286,7 +1294,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_complete_and_partial_mix() {
+    async fn test_rewrite_complete_and_partial_mix() {
         // Three manifests: manifest 1 fully consumed, manifest 2 partially consumed (residual),
         // manifest 3 untouched. Verify each is handled correctly.
         let table = make_v2_minimal_table();
@@ -1310,7 +1318,7 @@ mod tests {
         let compacted = make_data_file(&table, "data/compacted.parquet", 60);
         let tx = Transaction::new(&table_with_files);
         let replace = tx
-            .replace_data_files()
+            .rewrite_files()
             .delete_files(vec![file_a, file_b, file_c])
             .add_files(vec![compacted]);
         let mut commit = Arc::new(replace)
@@ -1353,7 +1361,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_data_sequence_number_is_set_on_entries() {
+    async fn test_rewrite_data_sequence_number_is_set_on_entries() {
         // data_sequence_number() must propagate to the added manifest entries.
         let table = make_v2_minimal_table();
 
@@ -1372,7 +1380,7 @@ mod tests {
 
         let tx = Transaction::new(&table1);
         let replace = tx
-            .replace_data_files()
+            .rewrite_files()
             .data_sequence_number(custom_seq)
             .delete_files(vec![file1])
             .add_files(vec![compacted]);

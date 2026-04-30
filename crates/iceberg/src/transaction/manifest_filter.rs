@@ -30,6 +30,8 @@
 #![allow(dead_code)] // Wired up in the rewrite_files.rs commit.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures::stream::{StreamExt, TryStreamExt};
 use tracing::warn;
@@ -37,7 +39,7 @@ use tracing::warn;
 use crate::Result;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, Manifest, ManifestContentType, ManifestEntry,
-    ManifestFile, ManifestStatus, ManifestWriterBuilder,
+    ManifestFile, ManifestWriterBuilder,
 };
 use crate::transaction::snapshot::{META_ROOT_PATH, SnapshotProducer};
 
@@ -49,45 +51,51 @@ const MANIFEST_READ_CONCURRENCY: usize = 32;
 pub(crate) struct ManifestFilterManager {
     /// Paths of files this commit replaces. Manifests containing any of these as
     /// alive entries will be rewritten.
-    deleted_paths: HashSet<String>,
+    deleted_paths: Mutex<HashSet<String>>,
     /// Cache of `original_manifest_path → rewritten_residual`. Persists across
     /// commit retries so identical inputs produce identical residuals
     /// (idempotent retry contract — see brainstorm §5.5, §6.5).
-    cache: HashMap<String, ManifestFile>,
+    cache: Mutex<HashMap<String, ManifestFile>>,
     /// Paths written to the cache so far this attempt; consulted by
     /// `clean_uncommitted` on commit failure to delete orphan residuals.
-    cleanup_paths: Vec<String>,
+    cleanup_paths: Mutex<Vec<String>>,
     /// Count of manifests this filter pass rewrote (residuals produced + dropped
     /// manifests). Surfaces as `manifests-replaced` in the snapshot summary.
-    replaced_count: u64,
+    replaced_count: AtomicU64,
 }
 
 impl ManifestFilterManager {
     pub(crate) fn new() -> Self {
         Self {
-            deleted_paths: HashSet::new(),
-            cache: HashMap::new(),
-            cleanup_paths: Vec::new(),
-            replaced_count: 0,
+            deleted_paths: Mutex::new(HashSet::new()),
+            cache: Mutex::new(HashMap::new()),
+            cleanup_paths: Mutex::new(Vec::new()),
+            replaced_count: AtomicU64::new(0),
         }
     }
 
     /// Mark a path for removal during the next filter pass.
-    pub(crate) fn delete(&mut self, file: &DataFile) {
-        self.deleted_paths.insert(file.file_path.clone());
+    pub(crate) fn delete(&self, file: &DataFile) {
+        self.deleted_paths
+            .lock()
+            .expect("filter deleted-paths mutex")
+            .insert(file.file_path.clone());
     }
 
     /// Number of manifests rewritten or dropped by the filter pass. Drives the
     /// `manifests-replaced` summary key.
     pub(crate) fn replaced_manifests_count(&self) -> u64 {
-        self.replaced_count
+        self.replaced_count.load(Ordering::Relaxed)
     }
 
     /// Snapshot of the residual paths written this attempt. The
     /// `MergingState::clean_uncommitted` orchestrator consults the union with the
     /// merge manager's paths to decide which Avro files to delete on `Err`.
-    pub(crate) fn cleanup_paths(&self) -> &[String] {
-        &self.cleanup_paths
+    pub(crate) fn cleanup_paths(&self) -> Vec<String> {
+        self.cleanup_paths
+            .lock()
+            .expect("filter cleanup-paths mutex")
+            .clone()
     }
 
     /// Rewrite the input manifest list so any manifest with replaced entries is
@@ -99,11 +107,17 @@ impl ManifestFilterManager {
     /// inputs returns the same `ManifestFile` instances and no new files are
     /// written to object storage.
     pub(crate) async fn filter_manifests(
-        &mut self,
+        &self,
         producer: &SnapshotProducer<'_>,
         current_manifests: Vec<ManifestFile>,
     ) -> Result<Vec<ManifestFile>> {
-        if self.deleted_paths.is_empty() || current_manifests.is_empty() {
+        // Lock-clone-release: take a snapshot of the current delete set, then
+        // drop the guard before any `.await`.
+        let deleted_paths: HashSet<String> = {
+            let g = self.deleted_paths.lock().expect("filter deleted-paths mutex");
+            g.clone()
+        };
+        if deleted_paths.is_empty() || current_manifests.is_empty() {
             return Ok(current_manifests);
         }
 
@@ -129,15 +143,19 @@ impl ManifestFilterManager {
 
         let mut result = Vec::with_capacity(loaded.len());
         for (ml_entry, manifest) in loaded.into_iter() {
-            if let Some(cached) = self.cache.get(&ml_entry.manifest_path) {
-                result.push(cached.clone());
+            // Cache check (lock-clone-release).
+            if let Some(cached) = {
+                let g = self.cache.lock().expect("filter cache mutex");
+                g.get(&ml_entry.manifest_path).cloned()
+            } {
+                result.push(cached);
                 continue;
             }
 
             let has_deletions = manifest
                 .entries()
                 .iter()
-                .any(|e| e.is_alive() && self.deleted_paths.contains(e.file_path()));
+                .any(|e| e.is_alive() && deleted_paths.contains(e.file_path()));
 
             if !has_deletions {
                 result.push(ml_entry);
@@ -147,22 +165,27 @@ impl ManifestFilterManager {
             let survivors: Vec<&ManifestEntry> = manifest
                 .entries()
                 .iter()
-                .filter(|e| e.is_alive() && !self.deleted_paths.contains(e.file_path()))
+                .filter(|e| e.is_alive() && !deleted_paths.contains(e.file_path()))
                 .map(|e| e.as_ref())
                 .collect();
 
             if survivors.is_empty() {
                 // All alive entries are being replaced; drop the manifest. The
                 // delete pass marks the entries as `Deleted` in the new snapshot.
-                self.replaced_count += 1;
+                self.replaced_count.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
 
             let residual = write_residual(producer, &ml_entry, &survivors).await?;
-            self.cleanup_paths.push(residual.manifest_path.clone());
-            self.cache
-                .insert(ml_entry.manifest_path.clone(), residual.clone());
-            self.replaced_count += 1;
+            {
+                let mut g = self.cleanup_paths.lock().expect("filter cleanup-paths mutex");
+                g.push(residual.manifest_path.clone());
+            }
+            {
+                let mut g = self.cache.lock().expect("filter cache mutex");
+                g.insert(ml_entry.manifest_path.clone(), residual.clone());
+            }
+            self.replaced_count.fetch_add(1, Ordering::Relaxed);
             result.push(residual);
         }
 
@@ -175,16 +198,19 @@ impl ManifestFilterManager {
     /// but never fail the caller — orphans get caught by the standard
     /// orphan-file sweep later.
     pub(crate) async fn clean_uncommitted(
-        &mut self,
-        producer: &SnapshotProducer<'_>,
+        &self,
+        file_io: &crate::io::FileIO,
         committed_paths: &HashSet<String>,
     ) {
-        let file_io = producer.table.file_io();
-        for path in &self.cleanup_paths {
-            if committed_paths.contains(path) {
+        let paths_snapshot = {
+            let g = self.cleanup_paths.lock().expect("filter cleanup-paths mutex");
+            g.clone()
+        };
+        for path in paths_snapshot {
+            if committed_paths.contains(&path) {
                 continue;
             }
-            if let Err(e) = file_io.delete(path).await {
+            if let Err(e) = file_io.delete(&path).await {
                 warn!(
                     path = %path,
                     error = %e,
@@ -241,15 +267,14 @@ async fn write_residual(
     for me in survivors {
         let mut me = (*me).clone();
         // Resolve any inherited fields (snapshot_id, sequence numbers) from the
-        // source manifest list entry before reading them. `load_manifest` already
-        // does this internally, but be explicit here so a future refactor that
-        // changes how manifests are loaded doesn't silently lose the inheritance.
+        // source manifest list entry. `load_manifest` already does this internally,
+        // but be explicit here so a future refactor that changes how manifests are
+        // loaded doesn't silently lose the inheritance. Whatever the source entry's
+        // status was (Added or Existing — survivors are alive entries that are not
+        // being replaced), `add_existing_file` writes it as EXISTING in the residual,
+        // matching the post-snapshot semantics of "files we already wrote and are
+        // keeping."
         me.inherit_data(source);
-        debug_assert_eq!(
-            me.status(),
-            ManifestStatus::Existing,
-            "survivor entries are demoted to Existing before being written into the residual"
-        );
         writer.add_existing_file(
             me.data_file.clone(),
             me.snapshot_id.unwrap_or(0),
@@ -295,7 +320,7 @@ mod tests {
     #[test]
     fn delete_dedupes_paths() {
         use crate::spec::{DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct};
-        let mut filter = ManifestFilterManager::new();
+        let filter = ManifestFilterManager::new();
         let f = DataFileBuilder::default()
             .content(DataContentType::Data)
             .file_path("data/x.parquet".to_string())
@@ -308,6 +333,9 @@ mod tests {
             .unwrap();
         filter.delete(&f);
         filter.delete(&f);
-        assert_eq!(filter.deleted_paths.len(), 1);
+        assert_eq!(
+            filter.deleted_paths.lock().expect("test mutex").len(),
+            1
+        );
     }
 }

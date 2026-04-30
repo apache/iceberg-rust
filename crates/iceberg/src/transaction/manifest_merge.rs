@@ -314,14 +314,13 @@ impl ManifestMergeManager {
     /// orphan-file sweep later.
     pub(crate) async fn clean_uncommitted(
         &self,
-        producer: &SnapshotProducer<'_>,
+        file_io: &crate::io::FileIO,
         committed_paths: &std::collections::HashSet<String>,
     ) {
         let entries: Vec<(Vec<String>, ManifestFile)> = {
             let guard = self.cache.lock().expect("merge cache mutex");
             guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
         };
-        let file_io = producer.table.file_io();
 
         for (key, merged) in entries {
             if committed_paths.contains(&merged.manifest_path) {

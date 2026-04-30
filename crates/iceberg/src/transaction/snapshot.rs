@@ -22,6 +22,7 @@ use std::ops::RangeFrom;
 use uuid::Uuid;
 
 use crate::error::Result;
+use crate::spec::snapshot_summary::{MANIFESTS_CREATED, MANIFESTS_KEPT, MANIFESTS_REPLACED};
 use crate::spec::{
     DataContentType, DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType,
     ManifestEntry, ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder,
@@ -33,6 +34,38 @@ use crate::transaction::ActionCommit;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 pub(crate) const META_ROOT_PATH: &str = "metadata";
+
+/// Inject the per-commit manifest activity counters into `summary`. Walks the
+/// final manifest list, classifies each entry by whether the new commit
+/// produced it (`manifests-created`) or carried it forward (`manifests-kept`),
+/// and merges in the action's `manifests-replaced` count.
+///
+/// Java analog: `org.apache.iceberg.SnapshotProducer::commitSummary`.
+fn inject_manifest_summary_keys(
+    summary: &mut Summary,
+    manifests: &[ManifestFile],
+    snapshot_id: i64,
+    replaced_count: u64,
+) {
+    let mut created = 0u64;
+    let mut kept = 0u64;
+    for m in manifests {
+        if m.added_snapshot_id == snapshot_id {
+            created += 1;
+        } else {
+            kept += 1;
+        }
+    }
+    summary
+        .additional_properties
+        .insert(MANIFESTS_CREATED.to_string(), created.to_string());
+    summary
+        .additional_properties
+        .insert(MANIFESTS_KEPT.to_string(), kept.to_string());
+    summary
+        .additional_properties
+        .insert(MANIFESTS_REPLACED.to_string(), replaced_count.to_string());
+}
 
 /// A trait that defines how different table operations produce new snapshots.
 ///
@@ -94,17 +127,28 @@ impl ManifestProcess for DefaultManifestProcess {
         &self,
         _snapshot_produce: &SnapshotProducer<'_>,
         manifests: Vec<ManifestFile>,
-    ) -> Vec<ManifestFile> {
-        manifests
+    ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send {
+        async move { Ok(manifests) }
     }
 }
 
+/// Hook that a snapshot-producing action can use to transform the manifest list
+/// after it's been assembled (carry-forward + new added + new delete) but
+/// before it's written into the snapshot's manifest list. The merging snapshot
+/// producer uses this hook to bin-pack siblings via `MergingState::merge_manifests`.
 pub(crate) trait ManifestProcess: Send + Sync {
     fn process_manifests(
         &self,
         snapshot_produce: &SnapshotProducer<'_>,
         manifests: Vec<ManifestFile>,
-    ) -> Vec<ManifestFile>;
+    ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
+
+    /// Number of manifests this process replaced as part of the transformation.
+    /// Surfaces as the snapshot summary's `manifests-replaced` key. Default 0
+    /// for processes that don't replace anything.
+    fn replaced_manifests_count(&self) -> u64 {
+        0
+    }
 }
 
 pub(crate) struct SnapshotProducer<'a> {
@@ -117,7 +161,7 @@ pub(crate) struct SnapshotProducer<'a> {
     removed_data_files: Vec<DataFile>,
     /// Explicit data sequence number for added manifest entries. When `Some`, all entries written
     /// by `write_added_manifest()` carry this sequence number instead of inheriting from the new
-    /// snapshot. Used by `ReplaceDataFilesAction::data_sequence_number()` to preserve the
+    /// snapshot. Used by `RewriteFilesAction::data_sequence_number()` to preserve the
     /// original sequence number of compacted files when equality deletes are present.
     data_sequence_number: Option<i64>,
     // A counter used to generate unique manifest file names.
@@ -522,7 +566,9 @@ impl<'a> SnapshotProducer<'a> {
             manifest_files.push(delete_manifest);
         }
 
-        let manifest_files = manifest_process.process_manifests(self, manifest_files);
+        let manifest_files = manifest_process
+            .process_manifests(self, manifest_files)
+            .await?;
         Ok(manifest_files)
     }
 
@@ -635,16 +681,25 @@ impl<'a> SnapshotProducer<'a> {
             ),
         };
 
-        // Calling self.summary() before self.manifest_file() is important because self.added_data_files
-        // will be set to an empty vec after self.manifest_file() returns, resulting in an empty summary
-        // being generated.
-        let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
+        // Build the per-file summary inputs BEFORE manifest_file empties
+        // self.added_data_files via mem::take in write_added_manifest. Manifest
+        // counts for the summary (manifests-created/kept/replaced) are injected
+        // post-hoc once we know the final manifest list and the process's
+        // replaced count.
+        let mut summary = self.summary(&snapshot_produce_operation).map_err(|err| {
             Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
         })?;
 
         let new_manifests = self
             .manifest_file(&snapshot_produce_operation, &process)
             .await?;
+
+        inject_manifest_summary_keys(
+            &mut summary,
+            &new_manifests,
+            self.snapshot_id,
+            process.replaced_manifests_count(),
+        );
 
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;
         let writer_next_row_id = manifest_list_writer.next_row_id();
