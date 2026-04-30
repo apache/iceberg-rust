@@ -203,12 +203,12 @@ async fn write_residual(
     // Stable per-source suffix so retries reproduce the same path and the cache
     // can short-circuit. `commit_uuid` keeps paths from colliding across actions.
     let path = format!(
-        "{}/{}/{}-residual-{}.{}",
-        metadata.location(),
-        META_ROOT_PATH,
-        producer.commit_uuid(),
-        residual_suffix(&source.manifest_path),
-        DataFileFormat::Avro,
+        "{location}/{root}/{uuid}-residual-{suffix}.{ext}",
+        location = metadata.location(),
+        root = META_ROOT_PATH,
+        uuid = producer.commit_uuid(),
+        suffix = residual_suffix(&source.manifest_path),
+        ext = DataFileFormat::Avro,
     );
 
     let output_file = file_io.new_output(path)?;
