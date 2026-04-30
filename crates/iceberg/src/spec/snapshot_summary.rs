@@ -48,6 +48,23 @@ const TOTAL_FILE_SIZE: &str = "total-files-size";
 const CHANGED_PARTITION_COUNT_PROP: &str = "changed-partition-count";
 const CHANGED_PARTITION_PREFIX: &str = "partitions.";
 
+/// Snapshot-summary keys describing the manifest activity of a single commit.
+/// Set per-commit (not running totals) by the merging snapshot producer; mirror the
+/// constants in Java's `org.apache.iceberg.SnapshotSummary` so cross-engine readers
+/// see the same values.
+///
+/// Wired up by `SnapshotProducer::commit` and `RewriteFilesAction` in subsequent commits.
+#[allow(dead_code)]
+pub(crate) const MANIFESTS_CREATED: &str = "manifests-created";
+#[allow(dead_code)]
+pub(crate) const MANIFESTS_REPLACED: &str = "manifests-replaced";
+#[allow(dead_code)]
+pub(crate) const MANIFESTS_KEPT: &str = "manifests-kept";
+/// Currently emitted only by the future `PackManifestsAction` (Java analog
+/// `BaseRewriteManifests`); `MergingSnapshotProducer` itself does not set it.
+#[allow(dead_code)]
+pub(crate) const ENTRIES_PROCESSED: &str = "entries-processed";
+
 /// `SnapshotSummaryCollector` collects and aggregates snapshot update metrics.
 /// It gathers metrics about added or removed data files and manifests, and tracks
 /// partition-specific updates.

@@ -144,6 +144,29 @@ impl TableProperties {
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &str = "write.datafusion.fanout.enabled";
     /// Default value for fanout writer enabled
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool = true;
+
+    /// Target manifest size when bin-packing siblings during a merging commit.
+    /// Java analog: `org.apache.iceberg.TableProperties::MANIFEST_TARGET_SIZE_BYTES`.
+    pub const PROPERTY_COMMIT_MANIFEST_TARGET_SIZE_BYTES: &str =
+        "commit.manifest.target-size-bytes";
+    /// Default target manifest size: 8 MB.
+    pub const PROPERTY_COMMIT_MANIFEST_TARGET_SIZE_BYTES_DEFAULT: u64 = 8 * 1024 * 1024;
+
+    /// Minimum number of manifests in a single bin before the merge step rewrites them
+    /// into a combined manifest. Bins with fewer manifests pass through unchanged so a
+    /// cluster of small commits doesn't force an expensive rewrite of historical data.
+    /// Java analog: `org.apache.iceberg.TableProperties::MANIFEST_MIN_MERGE_COUNT`.
+    pub const PROPERTY_COMMIT_MANIFEST_MIN_MERGE_COUNT: &str = "commit.manifest.min-count-to-merge";
+    /// Default minimum count.
+    pub const PROPERTY_COMMIT_MANIFEST_MIN_MERGE_COUNT_DEFAULT: u32 = 100;
+
+    /// Whether the merging snapshot producer rewrites and bin-packs siblings of the new
+    /// manifest on every commit. When `false`, only the residual filter pass runs;
+    /// manifest count grows monotonically.
+    /// Java analog: `org.apache.iceberg.TableProperties::MANIFEST_MERGE_ENABLED`.
+    pub const PROPERTY_COMMIT_MANIFEST_MERGE_ENABLED: &str = "commit.manifest-merge.enabled";
+    /// Default: enabled (Java parity).
+    pub const PROPERTY_COMMIT_MANIFEST_MERGE_ENABLED_DEFAULT: bool = true;
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
