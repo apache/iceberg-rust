@@ -161,6 +161,19 @@ impl<'a> SnapshotProducer<'a> {
         self.snapshot_id
     }
 
+    pub(crate) fn commit_uuid(&self) -> Uuid {
+        self.commit_uuid
+    }
+
+    pub(crate) fn key_metadata(&self) -> Option<&[u8]> {
+        self.key_metadata.as_deref()
+    }
+
+    #[allow(dead_code)] // Consumed by manifest_merge.rs in a subsequent commit.
+    pub(crate) fn data_sequence_number(&self) -> Option<i64> {
+        self.data_sequence_number
+    }
+
     pub(crate) fn validate_added_data_files(&self) -> Result<()> {
         for data_file in &self.added_data_files {
             if data_file.content_type() != crate::spec::DataContentType::Data {

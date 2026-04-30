@@ -51,6 +51,7 @@
 /// The `ApplyTransactionAction` trait provides an `apply` method
 /// that allows users to apply a transaction action to a `Transaction`.
 mod action;
+mod manifest_filter;
 
 pub use action::*;
 mod append;
