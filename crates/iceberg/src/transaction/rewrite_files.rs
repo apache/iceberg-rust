@@ -424,8 +424,7 @@ impl SnapshotProduceOperation for RewriteOperation {
             )
             .await?;
 
-        let current_manifests: Vec<ManifestFile> =
-            manifest_list.entries().iter().cloned().collect();
+        let current_manifests: Vec<ManifestFile> = manifest_list.entries().to_vec();
 
         // The filter pass replaces the residual-write loop that lived inline here.
         // It loads each manifest with bounded concurrency, drops manifests whose

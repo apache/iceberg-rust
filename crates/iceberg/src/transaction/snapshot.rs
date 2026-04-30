@@ -123,12 +123,12 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
 pub(crate) struct DefaultManifestProcess;
 
 impl ManifestProcess for DefaultManifestProcess {
-    fn process_manifests(
+    async fn process_manifests(
         &self,
         _snapshot_produce: &SnapshotProducer<'_>,
         manifests: Vec<ManifestFile>,
-    ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send {
-        async move { Ok(manifests) }
+    ) -> Result<Vec<ManifestFile>> {
+        Ok(manifests)
     }
 }
 
