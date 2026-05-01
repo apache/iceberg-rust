@@ -27,13 +27,14 @@
 //! plays in Java's type hierarchy.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::Result;
 use crate::spec::{DataFile, ManifestFile, TableProperties};
 use crate::table::Table;
 use crate::transaction::manifest_filter::ManifestFilterManager;
 use crate::transaction::manifest_merge::ManifestMergeManager;
-use crate::transaction::snapshot::SnapshotProducer;
+use crate::transaction::snapshot::{ManifestProcess, SnapshotProducer};
 
 pub(crate) struct MergingState {
     data_filter: ManifestFilterManager,
@@ -116,7 +117,22 @@ impl MergingState {
             .clean_uncommitted(file_io, committed_paths)
             .await;
     }
+}
 
+/// `Arc<MergingState>` is the natural shape callers hold; impl-on-Arc lets the
+/// action pass it directly to `SnapshotProducer::commit` without a forwarder.
+impl ManifestProcess for Arc<MergingState> {
+    async fn process_manifests(
+        &self,
+        snapshot_produce: &SnapshotProducer<'_>,
+        manifests: Vec<ManifestFile>,
+    ) -> Result<Vec<ManifestFile>> {
+        self.merge_manifests(snapshot_produce, manifests).await
+    }
+
+    fn replaced_manifests_count(&self) -> u64 {
+        MergingState::replaced_manifests_count(self)
+    }
 }
 
 fn parse_or_default<T: std::str::FromStr>(

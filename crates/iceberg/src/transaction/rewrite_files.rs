@@ -27,7 +27,7 @@ use crate::error::Result;
 use crate::spec::{DataFile, ManifestEntry, ManifestFile, ManifestStatus, Operation};
 use crate::table::Table;
 use crate::transaction::merging_state::MergingState;
-use crate::transaction::snapshot::{ManifestProcess, SnapshotProduceOperation, SnapshotProducer};
+use crate::transaction::snapshot::{SnapshotProduceOperation, SnapshotProducer};
 use crate::transaction::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind};
 
@@ -208,11 +208,8 @@ impl TransactionAction for RewriteFilesAction {
             validate_from_snapshot_id: self.validate_from_snapshot_id,
             state: state.clone(),
         };
-        let process = RewriteManifestProcess {
-            state: state.clone(),
-        };
 
-        match snapshot_producer.commit(rewrite_op, process).await {
+        match snapshot_producer.commit(rewrite_op, state.clone()).await {
             Ok(commit) => Ok(commit),
             Err(err) => {
                 // Do not clean up on error: commit may have actually succeeded but the ACK was lost.
@@ -227,24 +224,6 @@ struct RewriteOperation {
     files_to_delete: HashSet<String>,
     validate_from_snapshot_id: Option<i64>,
     state: Arc<MergingState>,
-}
-
-struct RewriteManifestProcess {
-    state: Arc<MergingState>,
-}
-
-impl ManifestProcess for RewriteManifestProcess {
-    async fn process_manifests(
-        &self,
-        snapshot_produce: &SnapshotProducer<'_>,
-        manifests: Vec<ManifestFile>,
-    ) -> Result<Vec<ManifestFile>> {
-        self.state.merge_manifests(snapshot_produce, manifests).await
-    }
-
-    fn replaced_manifests_count(&self) -> u64 {
-        self.state.replaced_manifests_count()
-    }
 }
 
 impl SnapshotProduceOperation for RewriteOperation {

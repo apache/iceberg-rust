@@ -22,9 +22,9 @@
 //!
 //! Java analog: `org.apache.iceberg.ManifestMergeManager`.
 //!
-//! Concurrency footgun: locks on `cache` and `cleanup_paths` must NEVER be held
-//! across an `.await`. `DashMap` looks tempting but its `RefMut` guard is not
-//! async-aware and can deadlock if held across an await point.
+//! Concurrency footgun: the `cache` lock must NEVER be held across an `.await`.
+//! `DashMap` looks tempting but its `RefMut` guard is not async-aware and can
+//! deadlock if held across an await point.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -54,7 +54,6 @@ pub(crate) struct ManifestMergeManager {
     /// same input bin returns the same `ManifestFile` — Java's idempotent retry
     /// contract.
     cache: Arc<Mutex<HashMap<Vec<String>, ManifestFile>>>,
-    cleanup_paths: Arc<Mutex<Vec<String>>>,
     replaced_count: Arc<AtomicU64>,
 }
 
@@ -65,7 +64,6 @@ impl ManifestMergeManager {
             min_count_to_merge,
             merge_enabled,
             cache: Arc::new(Mutex::new(HashMap::new())),
-            cleanup_paths: Arc::new(Mutex::new(Vec::new())),
             replaced_count: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -101,7 +99,7 @@ impl ManifestMergeManager {
         let mut spec_ids: Vec<i32> = groups.keys().copied().collect();
         spec_ids.sort_unstable_by(|a, b| b.cmp(a));
 
-        let packer = ListPacker::<ManifestFile>::new(self.target_size_bytes, 1, false);
+        let packer = ListPacker::new(self.target_size_bytes, 1);
         let mut sequenced_bins: Vec<(usize, i32, Vec<ManifestFile>)> = Vec::new();
         let mut seq = 0usize;
         for spec_id in spec_ids {
@@ -259,10 +257,6 @@ impl ManifestMergeManager {
         {
             let mut guard = self.cache.lock().expect("merge cache mutex");
             guard.insert(cache_key, merged.clone());
-        }
-        {
-            let mut guard = self.cleanup_paths.lock().expect("merge cleanup mutex");
-            guard.push(merged.manifest_path.clone());
         }
         // Only count manifests carried in from prior snapshots — the "first"
         // manifest from this commit wasn't replaced by the merge, it was created.

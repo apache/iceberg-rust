@@ -53,6 +53,7 @@ const CHANGED_PARTITION_PREFIX: &str = "partitions.";
 pub(crate) const MANIFESTS_CREATED: &str = "manifests-created";
 pub(crate) const MANIFESTS_REPLACED: &str = "manifests-replaced";
 pub(crate) const MANIFESTS_KEPT: &str = "manifests-kept";
+pub(crate) const ENTRIES_PROCESSED: &str = "entries-processed";
 
 /// `SnapshotSummaryCollector` collects and aggregates snapshot update metrics.
 /// It gathers metrics about added or removed data files and manifests, and tracks

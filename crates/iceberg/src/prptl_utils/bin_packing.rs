@@ -24,39 +24,29 @@ use std::collections::VecDeque;
 /// Packs items into weight-bounded bins. Each item goes into the first active bin
 /// (within a window of `lookback` open bins) that still fits its weight without
 /// exceeding `target_weight`; otherwise a new bin opens. Once the active window
-/// exceeds `lookback`, one bin closes — the front by default, or the heaviest when
-/// `largest_bin_first` is set.
+/// exceeds `lookback`, the front bin closes.
 ///
 /// Java analog: `org.apache.iceberg.util.BinPacking::ListPacker`.
-pub(crate) struct ListPacker<T> {
+pub(crate) struct ListPacker {
     target_weight: u64,
     lookback: usize,
-    largest_bin_first: bool,
-    _marker: std::marker::PhantomData<fn() -> T>,
 }
 
-impl<T> ListPacker<T> {
+impl ListPacker {
     /// `lookback` must be `>= 1`; `0` collapses every output to a single-item bin.
-    pub(crate) fn new(target_weight: u64, lookback: usize, largest_bin_first: bool) -> Self {
+    pub(crate) fn new(target_weight: u64, lookback: usize) -> Self {
         assert!(lookback >= 1, "ListPacker lookback must be >= 1");
         Self {
             target_weight,
             lookback,
-            largest_bin_first,
-            _marker: std::marker::PhantomData,
         }
-    }
-
-    /// Pack items in input order.
-    pub(crate) fn pack(&self, items: Vec<T>, weigh: impl Fn(&T) -> u64) -> Vec<Vec<T>> {
-        self.pack_iter(items.into_iter(), weigh)
     }
 
     /// Pack as if iterating in reverse, restoring the original orientation on both the
     /// outer list and each bin's contents. The item at input index 0 ends up in the
     /// first output bin — used by `ManifestMergeManager` to surface the new "first"
     /// manifest where the first-guard can find it.
-    pub(crate) fn pack_end(&self, items: Vec<T>, weigh: impl Fn(&T) -> u64) -> Vec<Vec<T>> {
+    pub(crate) fn pack_end<T>(&self, items: Vec<T>, weigh: impl Fn(&T) -> u64) -> Vec<Vec<T>> {
         let reversed: Vec<T> = items.into_iter().rev().collect();
         let mut packed = self.pack(reversed, weigh);
         packed.reverse();
@@ -66,7 +56,7 @@ impl<T> ListPacker<T> {
         packed
     }
 
-    fn pack_iter<I: Iterator<Item = T>>(&self, items: I, weigh: impl Fn(&T) -> u64) -> Vec<Vec<T>> {
+    fn pack<T>(&self, items: Vec<T>, weigh: impl Fn(&T) -> u64) -> Vec<Vec<T>> {
         let mut active: VecDeque<Bin<T>> = VecDeque::new();
         let mut output: Vec<Vec<T>> = Vec::new();
 
@@ -87,17 +77,7 @@ impl<T> ListPacker<T> {
             active.push_back(bin);
 
             if active.len() > self.lookback {
-                let evicted = if self.largest_bin_first {
-                    let max_idx = active
-                        .iter()
-                        .enumerate()
-                        .max_by_key(|(_, b)| b.weight)
-                        .map(|(i, _)| i)
-                        .expect("active is non-empty here");
-                    active.remove(max_idx).expect("index came from this deque")
-                } else {
-                    active.pop_front().expect("active is non-empty here")
-                };
+                let evicted = active.pop_front().expect("active is non-empty here");
                 output.push(evicted.items);
             }
         }
@@ -148,50 +128,38 @@ mod tests {
 
     #[test]
     fn pack_single_bin_when_total_below_target() {
-        let packer = ListPacker::new(100, 1, false);
+        let packer = ListPacker::new(100, 1);
         let bins = packer.pack(vec![10u64, 20, 30], |w| *w);
         assert_eq!(bins, vec![vec![10, 20, 30]]);
     }
 
     #[test]
     fn pack_splits_when_exceeds_target() {
-        let packer = ListPacker::new(50, 1, false);
+        let packer = ListPacker::new(50, 1);
         let bins = packer.pack(vec![30u64, 30, 30], |w| *w);
         assert_eq!(bins, vec![vec![30], vec![30], vec![30]]);
     }
 
     #[test]
     fn pack_first_fit_within_lookback_one() {
-        let packer = ListPacker::new(50, 1, false);
+        let packer = ListPacker::new(50, 1);
         let bins = packer.pack(vec![20u64, 10, 25, 20], |w| *w);
         assert_eq!(bins, vec![vec![20, 10], vec![25, 20]]);
     }
 
     #[test]
     fn pack_lookback_two_keeps_earlier_bin_open() {
-        let packer = ListPacker::new(50, 2, false);
+        let packer = ListPacker::new(50, 2);
         let bins = packer.pack(vec![40u64, 20, 10], |w| *w);
         // 10 fits back into bin0 because lookback=2 keeps it active when bin1 opens.
         assert_eq!(bins, vec![vec![40, 10], vec![20]]);
     }
 
     #[test]
-    fn pack_largest_bin_first_eviction() {
-        // Same input under both policies; differs only in which bin gets evicted when
-        // the active window overflows.
-        let target = 70u64;
-        let items = vec![20u64, 30, 50, 25, 5];
-        let largest = ListPacker::<u64>::new(target, 2, true).pack(items.clone(), |w| *w);
-        let front = ListPacker::<u64>::new(target, 2, false).pack(items, |w| *w);
-        assert_eq!(largest, vec![vec![50], vec![20, 30, 5], vec![25]]);
-        assert_eq!(front, vec![vec![20, 30], vec![50, 5], vec![25]]);
-    }
-
-    #[test]
     fn pack_end_round_trips_when_layout_is_symmetric() {
         // Some inputs pack identically forward and reversed; verify both code paths
         // agree there so a future change to pack_end can't silently regress.
-        let packer = ListPacker::new(50, 1, false);
+        let packer = ListPacker::new(50, 1);
         let input = vec![20u64, 30, 10, 25];
         assert_eq!(packer.pack(input.clone(), |w| *w), vec![vec![20, 30], vec![10, 25]]);
         assert_eq!(packer.pack_end(input, |w| *w), vec![vec![20, 30], vec![10, 25]]);
@@ -199,7 +167,7 @@ mod tests {
 
     #[test]
     fn pack_end_surfaces_first_item_in_first_bin() {
-        let packer = ListPacker::new(50, 1, false);
+        let packer = ListPacker::new(50, 1);
         let bins = packer.pack_end(vec![10u64, 20, 25, 25], |w| *w);
         assert_eq!(bins, vec![vec![10, 20], vec![25, 25]]);
         // The input's head item must land in the first output bin; this is the
@@ -211,14 +179,14 @@ mod tests {
     fn pack_oversized_item_lands_in_its_own_bin() {
         // 100 > target=50, but it isn't rejected — it sits alone in its bin, and the
         // next items pack into a fresh one.
-        let packer = ListPacker::new(50, 1, false);
+        let packer = ListPacker::new(50, 1);
         let bins = packer.pack(vec![100u64, 10, 20], |w| *w);
         assert_eq!(bins, vec![vec![100], vec![10, 20]]);
     }
 
     #[test]
     fn pack_no_items_returns_empty() {
-        let packer = ListPacker::new(50, 1, false);
+        let packer = ListPacker::new(50, 1);
         assert!(packer.pack(Vec::<u64>::new(), |w| *w).is_empty());
         assert!(packer.pack_end(Vec::<u64>::new(), |w| *w).is_empty());
     }
@@ -229,7 +197,7 @@ mod tests {
         // and no items can be lost or duplicated. Singletons may exceed the target —
         // the algorithm doesn't reject oversized inputs.
         let target: u64 = 1_000;
-        let packer = ListPacker::new(target, 1, false);
+        let packer = ListPacker::new(target, 1);
 
         for seed in 0..200u64 {
             let mut rng = StdRng::seed_from_u64(seed);
@@ -270,7 +238,7 @@ mod tests {
         // Java parity: 6 items at 5 MB, target 12 MB → 3 bins of 2.
         // Mirrors `TestRewriteManifests.testReplaceManifestsMaxSize`.
         let target = 12u64 * 1024 * 1024;
-        let packer = ListPacker::new(target, 1, false);
+        let packer = ListPacker::new(target, 1);
         let bins = packer.pack(vec![5 * 1024 * 1024; 6], |w| *w);
         assert_eq!(bins.len(), 3);
         for bin in &bins {

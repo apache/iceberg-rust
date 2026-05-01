@@ -120,22 +120,25 @@ impl ManifestFilterManager {
                 continue;
             }
 
-            let has_deletions = manifest
-                .entries()
-                .iter()
-                .any(|e| e.is_alive() && deleted_paths.contains(e.file_path()));
+            // Single pass over entries: classify and bucket survivors at once,
+            // tracking whether anything was deleted from this manifest.
+            let mut had_deletion = false;
+            let mut survivors: Vec<&ManifestEntry> = Vec::new();
+            for entry in manifest.entries() {
+                if !entry.is_alive() {
+                    continue;
+                }
+                if deleted_paths.contains(entry.file_path()) {
+                    had_deletion = true;
+                } else {
+                    survivors.push(entry.as_ref());
+                }
+            }
 
-            if !has_deletions {
+            if !had_deletion {
                 result.push(ml_entry);
                 continue;
             }
-
-            let survivors: Vec<&ManifestEntry> = manifest
-                .entries()
-                .iter()
-                .filter(|e| e.is_alive() && !deleted_paths.contains(e.file_path()))
-                .map(|e| e.as_ref())
-                .collect();
 
             if survivors.is_empty() {
                 // Drop the manifest entirely; the delete pass will mark its entries
@@ -227,10 +230,6 @@ async fn write_residual(
         (FormatVersion::V3, ManifestContentType::Deletes) => builder.build_v3_deletes(),
     };
     for me in survivors {
-        let mut me = (*me).clone();
-        // Defensive: `load_manifest` already inherits these fields, but a future
-        // refactor of the loader path shouldn't silently lose them.
-        me.inherit_data(source);
         writer.add_existing_file(
             me.data_file.clone(),
             me.snapshot_id.unwrap_or(0),
