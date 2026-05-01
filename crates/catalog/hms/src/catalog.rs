@@ -56,7 +56,7 @@ pub const HMS_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 pub struct HmsCatalogBuilder {
     config: HmsCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
-    runtime: Runtime,
+    runtime: Option<Runtime>,
 }
 
 impl Default for HmsCatalogBuilder {
@@ -70,7 +70,7 @@ impl Default for HmsCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
-            runtime: Runtime::default(),
+            runtime: None,
         }
     }
 }
@@ -84,7 +84,7 @@ impl CatalogBuilder for HmsCatalogBuilder {
     }
 
     fn with_runtime(mut self, runtime: Runtime) -> Self {
-        self.runtime = runtime;
+        self.runtime = Some(runtime);
         self
     }
 
@@ -123,26 +123,31 @@ impl CatalogBuilder for HmsCatalogBuilder {
             })
             .collect();
 
-        let result = {
+        let result = (|| -> Result<HmsCatalog> {
             if self.config.name.is_none() {
-                Err(Error::new(
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name is required",
-                ))
-            } else if self.config.address.is_empty() {
-                Err(Error::new(
+                ));
+            }
+            if self.config.address.is_empty() {
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog address is required",
-                ))
-            } else if self.config.warehouse.is_empty() {
-                Err(Error::new(
+                ));
+            }
+            if self.config.warehouse.is_empty() {
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog warehouse is required",
-                ))
-            } else {
-                HmsCatalog::new(self.config, self.storage_factory, self.runtime)
+                ));
             }
-        };
+            let runtime = match self.runtime {
+                Some(rt) => rt,
+                None => Runtime::try_current()?,
+            };
+            HmsCatalog::new(self.config, self.storage_factory, runtime)
+        })();
 
         std::future::ready(result)
     }

@@ -37,7 +37,7 @@ pub struct TableBuilder {
     readonly: bool,
     disable_cache: bool,
     cache_size_bytes: Option<u64>,
-    runtime: Runtime,
+    runtime: Option<Runtime>,
 }
 
 impl TableBuilder {
@@ -50,7 +50,7 @@ impl TableBuilder {
             readonly: false,
             disable_cache: false,
             cache_size_bytes: None,
-            runtime: Runtime::default(),
+            runtime: None,
         }
     }
 
@@ -100,7 +100,7 @@ impl TableBuilder {
 
     /// Set the Runtime for this table to use when spawning tasks.
     pub fn runtime(mut self, runtime: Runtime) -> Self {
-        self.runtime = runtime;
+        self.runtime = Some(runtime);
         self
     }
 
@@ -170,7 +170,10 @@ pub struct Table {
     identifier: TableIdent,
     readonly: bool,
     object_cache: Arc<ObjectCache>,
-    runtime: Runtime,
+    /// Runtime explicitly attached at build time. `None` means "resolve from
+    /// the ambient tokio runtime on demand", so metadata-only operations on
+    /// `Table` do not require a tokio context.
+    runtime: Option<Runtime>,
 }
 
 impl Table {
@@ -242,9 +245,15 @@ impl Table {
         MetadataTable::new(self)
     }
 
-    /// Returns a reference to the Runtime.
-    pub(crate) fn runtime(&self) -> &Runtime {
-        &self.runtime
+    /// Returns a resolved [`Runtime`] for this table.
+    ///
+    /// If a runtime was set via [`TableBuilder::runtime`], it is returned.
+    /// Otherwise, this borrows the ambient tokio runtime via
+    /// [`Runtime::current`], which panics if called outside a tokio context.
+    ///
+    /// Metadata-only operations on `Table` never call this.
+    pub(crate) fn runtime(&self) -> Runtime {
+        self.runtime.clone().unwrap_or_else(Runtime::current)
     }
 
     /// Returns the flag indicating whether the `Table` is readonly or not
@@ -258,8 +267,11 @@ impl Table {
     }
 
     /// Create a reader for the table.
+    ///
+    /// Requires that a [`Runtime`] was set on the builder or that this is
+    /// called from within a tokio runtime context; panics otherwise.
     pub fn reader_builder(&self) -> ArrowReaderBuilder {
-        ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
+        ArrowReaderBuilder::new(self.file_io.clone(), self.runtime())
     }
 }
 
@@ -343,7 +355,7 @@ impl StaticTable {
 
     /// Create a reader for the table.
     pub fn reader_builder(&self) -> ArrowReaderBuilder {
-        ArrowReaderBuilder::new(self.0.file_io.clone(), self.0.runtime.clone())
+        self.0.reader_builder()
     }
 }
 

@@ -745,7 +745,7 @@ mod tests {
         let file_io = FileIO::new_with_fs();
 
         let delete_file_loader =
-            CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::default());
+            CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::current());
 
         let file_scan_tasks = setup(table_location);
 
@@ -967,7 +967,7 @@ mod tests {
 
         // Load the deletes - should handle both types without error
         let delete_file_loader =
-            CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::default());
+            CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::current());
         let delete_filter = delete_file_loader
             .load_deletes(&file_scan_task.deletes, file_scan_task.schema_ref())
             .await
@@ -1040,7 +1040,7 @@ mod tests {
         let file_io = FileIO::new_with_fs();
 
         let delete_file_loader =
-            CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::default());
+            CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::current());
 
         let file_scan_tasks = setup(table_location);
 

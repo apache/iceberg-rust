@@ -211,7 +211,7 @@ impl<'a> TableScanBuilder<'a> {
                         concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
                         row_group_filtering_enabled: self.row_group_filtering_enabled,
                         row_selection_enabled: self.row_selection_enabled,
-                        runtime: self.table.runtime().clone(),
+                        runtime: self.table.runtime(),
                     });
                 };
                 current_snapshot_id.clone()
@@ -305,7 +305,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
-            runtime: self.table.runtime().clone(),
+            runtime: self.table.runtime(),
         })
     }
 }
@@ -1230,8 +1230,8 @@ pub mod tests {
         }
     }
 
-    #[test]
-    fn test_table_scan_columns() {
+    #[tokio::test]
+    async fn test_table_scan_columns() {
         let table = TableTestFixture::new().table;
 
         let table_scan = table.scan().select(["x", "y"]).build().unwrap();
@@ -1249,8 +1249,8 @@ pub mod tests {
         assert_eq!(Some(vec!["z".to_string()]), table_scan.column_names);
     }
 
-    #[test]
-    fn test_select_all() {
+    #[tokio::test]
+    async fn test_select_all() {
         let table = TableTestFixture::new().table;
 
         let table_scan = table.scan().select_all().build().unwrap();
@@ -1265,8 +1265,8 @@ pub mod tests {
         assert!(table_scan.is_err());
     }
 
-    #[test]
-    fn test_table_scan_default_snapshot_id() {
+    #[tokio::test]
+    async fn test_table_scan_default_snapshot_id() {
         let table = TableTestFixture::new().table;
 
         let table_scan = table.scan().build().unwrap();
@@ -1284,8 +1284,8 @@ pub mod tests {
         assert!(table_scan.is_err());
     }
 
-    #[test]
-    fn test_table_scan_with_snapshot_id() {
+    #[tokio::test]
+    async fn test_table_scan_with_snapshot_id() {
         let table = TableTestFixture::new().table;
 
         let table_scan = table
@@ -1396,7 +1396,7 @@ pub mod tests {
 
         let reader = ArrowReaderBuilder::new(
             fixture.table.file_io().clone(),
-            fixture.table.runtime().clone(),
+            fixture.table.runtime(),
         )
         .build();
         let batch_stream = reader
@@ -1408,7 +1408,7 @@ pub mod tests {
 
         let reader = ArrowReaderBuilder::new(
             fixture.table.file_io().clone(),
-            fixture.table.runtime().clone(),
+            fixture.table.runtime(),
         )
         .build();
         let batch_stream = reader

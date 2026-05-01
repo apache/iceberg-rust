@@ -71,7 +71,7 @@ struct S3TablesCatalogConfig {
 pub struct S3TablesCatalogBuilder {
     config: S3TablesCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
-    runtime: Runtime,
+    runtime: Option<Runtime>,
 }
 
 /// Default builder for [`S3TablesCatalog`].
@@ -86,7 +86,7 @@ impl Default for S3TablesCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
-            runtime: Runtime::default(),
+            runtime: None,
         }
     }
 }
@@ -135,7 +135,7 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
     }
 
     fn with_runtime(mut self, runtime: Runtime) -> Self {
-        self.runtime = runtime;
+        self.runtime = Some(runtime);
         self
     }
 
@@ -179,7 +179,11 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
                     "Table bucket ARN is required",
                 ))
             } else {
-                S3TablesCatalog::new(self.config, self.storage_factory, self.runtime).await
+                let runtime = match self.runtime {
+                    Some(rt) => rt,
+                    None => Runtime::try_current()?,
+                };
+                S3TablesCatalog::new(self.config, self.storage_factory, runtime).await
             }
         }
     }
@@ -739,7 +743,7 @@ mod tests {
         };
 
         Ok(Some(
-            S3TablesCatalog::new(config, None, Runtime::default()).await?,
+            S3TablesCatalog::new(config, None, Runtime::current()).await?,
         ))
     }
 

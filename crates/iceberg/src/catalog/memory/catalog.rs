@@ -46,7 +46,7 @@ const LOCATION: &str = "location";
 pub struct MemoryCatalogBuilder {
     config: MemoryCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
-    runtime: Runtime,
+    runtime: Option<Runtime>,
 }
 
 impl Default for MemoryCatalogBuilder {
@@ -58,7 +58,7 @@ impl Default for MemoryCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
-            runtime: Runtime::default(),
+            runtime: None,
         }
     }
 }
@@ -72,7 +72,7 @@ impl CatalogBuilder for MemoryCatalogBuilder {
     }
 
     fn with_runtime(mut self, runtime: Runtime) -> Self {
-        self.runtime = runtime;
+        self.runtime = Some(runtime);
         self
     }
 
@@ -108,7 +108,8 @@ impl CatalogBuilder for MemoryCatalogBuilder {
                     "Catalog warehouse is required",
                 ))
             } else {
-                MemoryCatalog::new(self.config, self.storage_factory, self.runtime)
+                let runtime = self.runtime.unwrap_or_else(Runtime::current);
+                MemoryCatalog::new(self.config, self.storage_factory, runtime)
             }
         };
 

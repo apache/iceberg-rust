@@ -321,7 +321,7 @@ mod tests {
 
         let (file_io, schema, table_location, _temp_dir) =
             setup_kleene_logic(data_for_col_a, DataType::Utf8);
-        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         let result_data = test_perform_read(predicate, schema, table_location, reader).await;
 
@@ -343,7 +343,7 @@ mod tests {
 
         let (file_io, schema, table_location, _temp_dir) =
             setup_kleene_logic(data_for_col_a, DataType::Utf8);
-        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         let result_data = test_perform_read(predicate, schema, table_location, reader).await;
 
@@ -407,7 +407,7 @@ mod tests {
 
         let (file_io, schema, table_location, _temp_dir) =
             setup_kleene_logic(data_for_col_a, DataType::LargeUtf8);
-        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         for (predicate, expected) in predicates {
             println!("testing predicate {predicate}");
@@ -514,7 +514,7 @@ mod tests {
         );
 
         let file_io = FileIO::new_with_fs();
-        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         // Task 1: read only the first row group
         let task1 = FileScanTask {

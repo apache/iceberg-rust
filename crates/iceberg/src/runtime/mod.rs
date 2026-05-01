@@ -142,18 +142,29 @@ impl Runtime {
         }
     }
 
-    /// Create a Runtime that borrows the tokio runtime the caller is currently
-    /// running in.
+    /// Borrows the tokio runtime the caller is currently running in.
     ///
-    /// Returns an error if this is not called from within a tokio runtime
-    /// context. This is the preferred path for callers who already manage a
-    /// tokio runtime (e.g. `#[tokio::main]`, datafusion, axum): iceberg will
-    /// reuse that runtime rather than spawning its own.
-    pub fn try_from_current() -> Result<Self> {
+    /// Panics if called outside a tokio runtime context. Use
+    /// [`Runtime::try_current`] for a fallible version.
+    ///
+    /// Iceberg never implicitly spawns its own runtime; callers outside a
+    /// tokio context must construct one explicitly via [`Runtime::new`] or
+    /// [`Runtime::new_with_split`].
+    pub fn current() -> Self {
+        Self::try_current().expect(
+            "Runtime::current() called outside a tokio runtime context. \
+             Call it from within #[tokio::main] / #[tokio::test], or construct \
+             a Runtime explicitly via Runtime::new / Runtime::new_with_split.",
+        )
+    }
+
+    /// Fallible variant of [`Runtime::current`]. Returns an error if no tokio
+    /// runtime is available in the current context.
+    pub fn try_current() -> Result<Self> {
         let handle = tokio::runtime::Handle::try_current().map_err(|e| {
             Error::new(
                 ErrorKind::Unexpected,
-                "no tokio runtime in context; call Runtime::try_from_current() \
+                "no tokio runtime in context; call Runtime::try_current() \
                  from within a tokio runtime, or construct a Runtime explicitly \
                  via Runtime::new / Runtime::new_with_split",
             )
@@ -174,17 +185,6 @@ impl Runtime {
     /// Handle for CPU-bound work (decoding, predicate eval, projection).
     pub fn cpu(&self) -> &RuntimeHandle {
         &self.cpu
-    }
-}
-
-impl Default for Runtime {
-    /// Borrows the current tokio runtime via [`Handle::try_current`].
-    fn default() -> Self {
-        Self::try_from_current().expect(
-            "Runtime::default() called outside a tokio runtime context. \
-             Call it from within #[tokio::main] / #[tokio::test], or construct \
-             a Runtime explicitly via Runtime::new / Runtime::new_with_split.",
-        )
     }
 }
 
@@ -293,8 +293,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_try_from_current_in_runtime() {
-        let rt = Runtime::try_from_current().expect("should find current runtime");
+    async fn test_try_current_in_runtime() {
+        let rt = Runtime::try_current().expect("should find current runtime");
         let result = rt.io().spawn(async { 7 }).await.unwrap();
         assert_eq!(result, 7);
         // Borrowed: no owned Arc.
@@ -303,8 +303,8 @@ mod tests {
     }
 
     #[test]
-    fn test_try_from_current_outside_runtime() {
-        let err = Runtime::try_from_current().expect_err("must fail outside runtime");
+    fn test_try_current_outside_runtime() {
+        let err = Runtime::try_current().expect_err("must fail outside runtime");
         assert_eq!(err.kind(), ErrorKind::Unexpected);
     }
 }

@@ -303,7 +303,7 @@ pub(crate) mod tests {
         let file_io = FileIO::new_with_fs();
 
         let delete_file_loader =
-            CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::default());
+            CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::current());
 
         let file_scan_tasks = setup(table_location);
 
@@ -514,7 +514,7 @@ pub(crate) mod tests {
             case_sensitive: true,
         };
 
-        let filter = DeleteFilter::new(Runtime::default());
+        let filter = DeleteFilter::new(Runtime::current());
 
         // ---------- insert equality delete predicate ----------
         let pred = Reference::new("id").equal_to(Datum::long(10));

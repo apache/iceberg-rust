@@ -67,7 +67,7 @@ static TEST_BEFORE_ACQUIRE: bool = true; // Default the health-check of each con
 pub struct SqlCatalogBuilder {
     config: SqlCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
-    runtime: Runtime,
+    runtime: Option<Runtime>,
 }
 
 impl Default for SqlCatalogBuilder {
@@ -81,7 +81,7 @@ impl Default for SqlCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
-            runtime: Runtime::default(),
+            runtime: None,
         }
     }
 }
@@ -146,7 +146,7 @@ impl CatalogBuilder for SqlCatalogBuilder {
     }
 
     fn with_runtime(mut self, runtime: Runtime) -> Self {
-        self.runtime = runtime;
+        self.runtime = Some(runtime);
         self
     }
 
@@ -197,7 +197,11 @@ impl CatalogBuilder for SqlCatalogBuilder {
                 ))
             } else {
                 self.config.name = name;
-                SqlCatalog::new(self.config, self.storage_factory, self.runtime).await
+                let runtime = match self.runtime {
+                    Some(rt) => rt,
+                    None => Runtime::try_current()?,
+                };
+                SqlCatalog::new(self.config, self.storage_factory, runtime).await
             }
         }
     }

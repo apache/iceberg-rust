@@ -433,7 +433,7 @@ mod tests {
 
         // Step 3: Read the data file with the delete applied
         let file_io = FileIO::new_with_fs();
-        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         let task = FileScanTask {
             file_size_in_bytes: std::fs::metadata(&data_file_path).unwrap().len(),
@@ -653,7 +653,7 @@ mod tests {
         );
 
         let file_io = FileIO::new_with_fs();
-        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         // Create FileScanTask that reads ONLY row group 1 via byte range filtering
         let task = FileScanTask {
@@ -868,7 +868,7 @@ mod tests {
         let rg1_length = row_group_1.compressed_size() as u64;
 
         let file_io = FileIO::new_with_fs();
-        let reader = ArrowReaderBuilder::new(file_io, Runtime::default()).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         // Create FileScanTask that reads ONLY row group 1 via byte range filtering
         let task = FileScanTask {

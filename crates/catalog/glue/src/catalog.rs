@@ -58,7 +58,7 @@ pub const GLUE_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 pub struct GlueCatalogBuilder {
     config: GlueCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
-    runtime: Runtime,
+    runtime: Option<Runtime>,
 }
 
 impl Default for GlueCatalogBuilder {
@@ -72,7 +72,7 @@ impl Default for GlueCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
-            runtime: Runtime::default(),
+            runtime: None,
         }
     }
 }
@@ -86,7 +86,7 @@ impl CatalogBuilder for GlueCatalogBuilder {
     }
 
     fn with_runtime(mut self, runtime: Runtime) -> Self {
-        self.runtime = runtime;
+        self.runtime = Some(runtime);
         self
     }
 
@@ -136,7 +136,11 @@ impl CatalogBuilder for GlueCatalogBuilder {
                 ));
             }
 
-            GlueCatalog::new(self.config, self.storage_factory, self.runtime).await
+            let runtime = match self.runtime {
+                Some(rt) => rt,
+                None => Runtime::try_current()?,
+            };
+            GlueCatalog::new(self.config, self.storage_factory, runtime).await
         }
     }
 }
