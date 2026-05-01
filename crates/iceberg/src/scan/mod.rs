@@ -1394,11 +1394,9 @@ pub mod tests {
             .unwrap();
         assert_eq!(plan_task.len(), 2);
 
-        let reader = ArrowReaderBuilder::new(
-            fixture.table.file_io().clone(),
-            fixture.table.runtime(),
-        )
-        .build();
+        let reader =
+            ArrowReaderBuilder::new(fixture.table.file_io().clone(), fixture.table.runtime())
+                .build();
         let batch_stream = reader
             .clone()
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
@@ -1406,11 +1404,9 @@ pub mod tests {
             .stream();
         let batch_1: Vec<_> = batch_stream.try_collect().await.unwrap();
 
-        let reader = ArrowReaderBuilder::new(
-            fixture.table.file_io().clone(),
-            fixture.table.runtime(),
-        )
-        .build();
+        let reader =
+            ArrowReaderBuilder::new(fixture.table.file_io().clone(), fixture.table.runtime())
+                .build();
         let batch_stream = reader
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
             .unwrap()
