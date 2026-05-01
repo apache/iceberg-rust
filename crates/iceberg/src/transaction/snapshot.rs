@@ -409,6 +409,63 @@ impl<'a> SnapshotProducer<'a> {
         Ok(())
     }
 
+    /// Validates that every data file in `files` is still alive in the current
+    /// snapshot. This ensures that a concurrent rewrite or delete hasn't already
+    /// removed the files being replaced.
+    ///
+    /// Java analog: `MergingSnapshotProducer.validateDataFilesExist`
+    pub(crate) async fn validate_data_files_exist(
+        &self,
+        files: &HashSet<String>,
+    ) -> Result<()> {
+        if files.is_empty() {
+            return Ok(());
+        }
+
+        let Some(current_snapshot) = self.table.metadata().current_snapshot() else {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Cannot validate file existence on a table with no snapshots",
+            ));
+        };
+
+        let manifest_list = current_snapshot
+            .load_manifest_list(self.table.file_io(), &self.table.metadata_ref())
+            .await?;
+
+        let mut found_files = HashSet::new();
+        for manifest_list_entry in manifest_list.entries() {
+            let manifest = self
+                .table
+                .object_cache()
+                .get_manifest(manifest_list_entry)
+                .await?;
+            for entry in manifest.entries() {
+                if entry.is_alive() && files.contains(entry.file_path()) {
+                    found_files.insert(entry.file_path().to_string());
+                }
+            }
+        }
+
+        let missing: Vec<&str> = files
+            .iter()
+            .map(|s| s.as_str())
+            .filter(|p| !found_files.contains(*p))
+            .collect();
+
+        if !missing.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot commit, files being replaced are no longer alive in the current snapshot: {}",
+                    missing.join(", ")
+                ),
+            ));
+        }
+
+        Ok(())
+    }
+
     fn generate_unique_snapshot_id(table: &Table) -> i64 {
         let generate_random_id = || -> i64 {
             let (lhs, rhs) = Uuid::new_v4().as_u64_pair();

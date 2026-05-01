@@ -196,6 +196,10 @@ impl TransactionAction for RewriteFilesAction {
                     &replaced_paths,
                 )
                 .await?;
+
+            snapshot_producer
+                .validate_data_files_exist(&replaced_paths)
+                .await?;
         }
 
         let state = self.merging_state(table);
@@ -1572,5 +1576,91 @@ mod tests {
         );
         let _ = action.clone().commit(&table).await.unwrap();
         let _ = action.commit(&table).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_parallel_rewrites_targeting_same_file_rejected() {
+        // Compaction A and Compaction B both plan against snapshot S0, both
+        // target file F. A commits first. B's validation must see that F is no
+        // longer alive in the current snapshot (because A replaced it) and
+        // reject B's commit.
+        let mut table = make_v2_minimal_table();
+        let f1 = make_data_file(&table, "data/f1.parquet", 10);
+        table = append_files(table, vec![f1.clone()]).await;
+
+        let s0_id = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        // Compaction A
+        let new_a = make_data_file(&table, "data/new_a.parquet", 10);
+        let action_a = Arc::new(
+            Transaction::new(&table)
+                .rewrite_files()
+                .delete_files(vec![f1.clone()])
+                .add_files(vec![new_a])
+                .validate_from_snapshot(s0_id),
+        );
+
+        // Compaction B
+        let new_b = make_data_file(&table, "data/new_b.parquet", 10);
+        let action_b = Arc::new(
+            Transaction::new(&table)
+                .rewrite_files()
+                .delete_files(vec![f1.clone()])
+                .add_files(vec![new_b])
+                .validate_from_snapshot(s0_id),
+        );
+
+        // A commits first
+        let updates_a = action_a.commit(&table).await.unwrap().take_updates();
+        table = apply_updates_to_table(&table, &updates_a);
+
+        // B attempts to commit against the new table state
+        let Err(err) = action_b.commit(&table).await else {
+            panic!("Parallel rewrite targeting same file must be rejected");
+        };
+
+        assert!(
+            err.to_string().contains("files being replaced are no longer alive"),
+            "Error was: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_parallel_rewrites_disjoint_files_both_succeed() {
+        let mut table = make_v2_minimal_table();
+        let f1 = make_data_file(&table, "data/f1.parquet", 10);
+        let f2 = make_data_file(&table, "data/f2.parquet", 10);
+        table = append_files(table, vec![f1.clone(), f2.clone()]).await;
+
+        let s0_id = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        // Compaction A targets f1
+        let new_a = make_data_file(&table, "data/new_a.parquet", 10);
+        let action_a = Arc::new(
+            Transaction::new(&table)
+                .rewrite_files()
+                .delete_files(vec![f1])
+                .add_files(vec![new_a])
+                .validate_from_snapshot(s0_id),
+        );
+
+        // Compaction B targets f2
+        let new_b = make_data_file(&table, "data/new_b.parquet", 10);
+        let action_b = Arc::new(
+            Transaction::new(&table)
+                .rewrite_files()
+                .delete_files(vec![f2])
+                .add_files(vec![new_b])
+                .validate_from_snapshot(s0_id),
+        );
+
+        // A commits first
+        let updates_a = action_a.commit(&table).await.unwrap().take_updates();
+        table = apply_updates_to_table(&table, &updates_a);
+
+        // B attempts to commit against the new table state and should succeed
+        // because f2 is still alive.
+        let result_b = action_b.commit(&table).await;
+        assert!(result_b.is_ok(), "Parallel disjoint rewrite failed: {:?}", result_b.err());
     }
 }
