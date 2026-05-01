@@ -249,8 +249,6 @@ impl Table {
     /// If a runtime was set via [`TableBuilder::runtime`], it is returned.
     /// Otherwise, this borrows the ambient tokio runtime via
     /// [`Runtime::current`], which panics if called outside a tokio context.
-    ///
-    /// Metadata-only operations on `Table` never call this.
     pub(crate) fn runtime(&self) -> Runtime {
         self.runtime.clone().unwrap_or_else(Runtime::current)
     }
