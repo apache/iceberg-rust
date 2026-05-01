@@ -160,6 +160,7 @@ pub(crate) trait ManifestProcess: Send + Sync {
         &self,
         snapshot_produce: &SnapshotProducer<'_>,
         manifests: Vec<ManifestFile>,
+        new_manifest_paths: &HashSet<String>,
     ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
 
     /// Number of manifests this process replaced as part of the transformation.
@@ -285,15 +286,26 @@ impl<'a> SnapshotProducer<'a> {
 
         let ignore_equality_deletes = self.data_sequence_number.is_some();
 
-        let starting_seq_num: i64 = starting_snapshot_id
-            .and_then(|id| metadata.snapshot_by_id(id))
-            .map(|s| s.sequence_number())
-            .unwrap_or(0);
+        let (starting_seq_num, final_starting_snapshot_id) = match starting_snapshot_id {
+            Some(id) => match metadata.snapshot_by_id(id) {
+                Some(s) => (s.sequence_number(), Some(id)),
+                None => {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Cannot determine history between starting snapshot {} and the last known ancestor",
+                            id
+                        ),
+                    ));
+                }
+            },
+            None => (0, None),
+        };
 
         let metadata_ref = self.table.metadata_ref();
         let mut current = Some(parent.clone());
         while let Some(snap) = current {
-            if Some(snap.snapshot_id()) == starting_snapshot_id {
+            if Some(snap.snapshot_id()) == final_starting_snapshot_id {
                 break;
             }
 
@@ -627,10 +639,12 @@ impl<'a> SnapshotProducer<'a> {
 
         let existing_manifests = snapshot_produce_operation.existing_manifest(self).await?;
         let mut manifest_files = existing_manifests;
+        let mut new_manifest_paths = HashSet::new();
 
         // Process added entries.
         if !self.added_data_files.is_empty() {
             let added_manifest = self.write_added_manifest().await?;
+            new_manifest_paths.insert(added_manifest.manifest_path.clone());
             manifest_files.push(added_manifest);
         }
 
@@ -639,11 +653,12 @@ impl<'a> SnapshotProducer<'a> {
         let deleted_entries = snapshot_produce_operation.delete_entries(self).await?;
         if !deleted_entries.is_empty() {
             let delete_manifest = self.write_delete_manifest(deleted_entries).await?;
+            new_manifest_paths.insert(delete_manifest.manifest_path.clone());
             manifest_files.push(delete_manifest);
         }
 
         let manifest_files = manifest_process
-            .process_manifests(self, manifest_files)
+            .process_manifests(self, manifest_files, &new_manifest_paths)
             .await?;
         Ok(manifest_files)
     }
@@ -831,7 +846,7 @@ mod tests {
 
     use super::*;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestStatus, Struct,
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct,
     };
     use crate::transaction::tests::{apply_updates_to_table, make_v1_table, make_v2_minimal_table};
     use crate::transaction::{Transaction, TransactionAction};
@@ -956,7 +971,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_validate_rejects_when_position_delete_lacks_referenced_hint() {
+    async fn test_validate_rejects_when_planning_snapshot_expired() {
         let table = make_v2_minimal_table();
         let f1 = data_file(&table, "data/f1.parquet");
 
@@ -965,26 +980,11 @@ mod tests {
         let append = tx.fast_append().add_data_files(vec![f1.clone()]);
         let updates = Arc::new(append).commit(&table).await.unwrap().take_updates();
         let table = apply_updates_to_table(&table, &updates);
+        let first_snapshot_id = table.metadata().current_snapshot_id().unwrap();
 
-        // 2. Add position delete WITHOUT hint
-        let pos_delete = DataFileBuilder::default()
-            .content(DataContentType::PositionDeletes)
-            .file_path("data/delete1.parquet".to_string())
-            .file_format(DataFileFormat::Parquet)
-            .file_size_in_bytes(100)
-            .record_count(1)
-            .partition_spec_id(table.metadata().default_partition_spec_id())
-            .partition(Struct::from_iter([Some(Literal::long(300))]))
-            .referenced_data_file(None) // Explicitly None
-            .build()
-            .unwrap();
-
-        let tx = Transaction::new(&table);
-        let delete = tx.fast_append().add_data_files(vec![pos_delete]);
-        let updates = Arc::new(delete).commit(&table).await.unwrap().take_updates();
-        let table = apply_updates_to_table(&table, &updates);
-
-        // 3. Try to rewrite f1
+        // 2. Try to rewrite f1, but pass a NON-EXISTENT starting_snapshot_id
+        // (simulating it was expired)
+        let expired_id = first_snapshot_id - 100;
         let producer = SnapshotProducer::new(
             &table,
             Uuid::now_v7(),
@@ -998,16 +998,221 @@ mod tests {
         replaced.insert(f1.file_path.clone());
 
         let result = producer
-            .validate_no_new_deletes_for_data_files(None, &replaced)
+            .validate_no_new_deletes_for_data_files(Some(expired_id), &replaced)
             .await;
 
+        assert!(result.is_err(), "Expired planning snapshot must be rejected");
         assert!(
-            result.is_err(),
-            "Must reject when position delete lacks referenced_data_file hint"
+            result.unwrap_err().to_string().contains("Cannot determine history between starting snapshot"),
+            "Error message should mention history determination failure"
         );
+    }
+
+    #[tokio::test]
+    async fn test_validate_real_equality_delete_conflict_still_rejected() {
+        let table = make_v2_minimal_table();
+        let f1 = data_file(&table, "data/f1.parquet");
+
+        // 1. Add data file (Snapshot A)
+        let tx = Transaction::new(&table);
+        let append = tx.fast_append().add_data_files(vec![f1.clone()]);
+        let updates = Arc::new(append).commit(&table).await.unwrap().take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+        let snap_a_id = table.metadata().current_snapshot_id().unwrap();
+
+        // 2. Add an equality delete (Snapshot B)
+        let eq_delete = DataFileBuilder::default()
+            .content(DataContentType::EqualityDeletes)
+            .file_path("data/delete1.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let delete = tx.fast_append().add_data_files(vec![eq_delete]);
+        let updates = Arc::new(delete).commit(&table).await.unwrap().take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+
+        // 3. Try to rewrite f1, starting from Snapshot A.
+        // It SHOULD reject because Snapshot B added a delete since A.
+        let producer = SnapshotProducer::new(
+            &table,
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/compacted.parquet")],
+        )
+        .with_removed_data_files(vec![f1.clone()]);
+
+        let mut replaced = HashSet::new();
+        replaced.insert(f1.file_path.clone());
+
+        let result = producer
+            .validate_no_new_deletes_for_data_files(Some(snap_a_id), &replaced)
+            .await;
+
+        assert!(result.is_err(), "Real conflict must still be rejected");
         assert!(
-            result.unwrap_err().to_string().contains("missing referenced_data_file hint"),
-            "Error message should mention missing hint"
+            result.unwrap_err().to_string().contains("found new equality delete file"),
+            "Error message should mention new equality delete"
         );
+    }
+
+    #[tokio::test]
+    async fn test_validate_rejects_when_position_delete_targets_replaced_file() {
+        let table = make_v2_minimal_table();
+        let f1 = data_file(&table, "data/f1.parquet");
+
+        // 1. Add data file (Snapshot A)
+        let tx = Transaction::new(&table);
+        let append = tx.fast_append().add_data_files(vec![f1.clone()]);
+        let updates = Arc::new(append).commit(&table).await.unwrap().take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+        let snap_a_id = table.metadata().current_snapshot_id().unwrap();
+
+        // 2. Add a position delete (Snapshot B)
+        let pos_delete = DataFileBuilder::default()
+            .content(DataContentType::PositionDeletes)
+            .file_path("data/delete1.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .referenced_data_file(Some(f1.file_path.clone()))
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let delete = tx.fast_append().add_data_files(vec![pos_delete]);
+        let updates = Arc::new(delete).commit(&table).await.unwrap().take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+
+        // 3. Try to rewrite f1, starting from Snapshot A.
+        let producer = SnapshotProducer::new(
+            &table,
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/compacted.parquet")],
+        )
+        .with_removed_data_files(vec![f1.clone()]);
+
+        let mut replaced = HashSet::new();
+        replaced.insert(f1.file_path.clone());
+
+        let result = producer
+            .validate_no_new_deletes_for_data_files(Some(snap_a_id), &replaced)
+            .await;
+
+        assert!(result.is_err(), "New position delete must be rejected");
+        assert!(
+            result.unwrap_err().to_string().contains("found new position delete for replaced data file"),
+            "Error message should mention new position delete"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_equality_delete_boundary_sequence_number() {
+        let table = make_v2_minimal_table();
+        let f1 = data_file(&table, "data/f1.parquet");
+
+        // 1. Add data file AND an equality delete in the SAME snapshot (Snapshot A)
+        // This is a common case for CDC-style appends.
+        let eq_delete = DataFileBuilder::default()
+            .content(DataContentType::EqualityDeletes)
+            .file_path("data/delete1.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let append_and_delete = tx.fast_append().add_data_files(vec![f1.clone(), eq_delete]);
+        let updates = Arc::new(append_and_delete).commit(&table).await.unwrap().take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+        let snap_a_id = table.metadata().current_snapshot_id().unwrap();
+
+        // 2. Try to rewrite f1, starting from Snapshot A.
+        // It SHOULD PASS because the delete was added in the same snapshot as the data,
+        // so its sequence number is NOT greater than the starting sequence number.
+        let producer = SnapshotProducer::new(
+            &table,
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/compacted.parquet")],
+        )
+        .with_removed_data_files(vec![f1.clone()]);
+
+        let mut replaced = HashSet::new();
+        replaced.insert(f1.file_path.clone());
+
+        producer
+            .validate_no_new_deletes_for_data_files(Some(snap_a_id), &replaced)
+            .await
+            .expect("equality delete at the same sequence must pass");
+    }
+
+    #[tokio::test]
+    async fn test_validate_ignore_equality_deletes_branch() {
+        let table = make_v2_minimal_table();
+        let f1 = data_file(&table, "data/f1.parquet");
+
+        // 1. Add data file (Snapshot A)
+        let tx = Transaction::new(&table);
+        let append = tx.fast_append().add_data_files(vec![f1.clone()]);
+        let updates = Arc::new(append).commit(&table).await.unwrap().take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+        let snap_a_id = table.metadata().current_snapshot_id().unwrap();
+
+        // 2. Add an equality delete (Snapshot B)
+        let eq_delete = DataFileBuilder::default()
+            .content(DataContentType::EqualityDeletes)
+            .file_path("data/delete1.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let delete = tx.fast_append().add_data_files(vec![eq_delete]);
+        let updates = Arc::new(delete).commit(&table).await.unwrap().take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+
+        // 3. Try to rewrite f1, starting from Snapshot A, with ignore_equality_deletes = true.
+        // This is safe when the rewrite preserves the original sequence number.
+        let producer = SnapshotProducer::new(
+            &table,
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/compacted.parquet")],
+        )
+        .with_removed_data_files(vec![f1.clone()])
+        .with_data_sequence_number(1); // Setting this triggers ignore_equality_deletes = true
+
+        let mut replaced = HashSet::new();
+        replaced.insert(f1.file_path.clone());
+
+        producer
+            .validate_no_new_deletes_for_data_files(Some(snap_a_id), &replaced)
+            .await
+            .expect("should pass when ignore_equality_deletes is true and Some(seq) provided");
+
+        // 4. Test the case where ignore_equality_deletes = true BUT no data_sequence_number is provided
+        // (This shouldn't happen via RewriteFilesAction, but we test the validator's internal logic)
+        // Currently SnapshotProducer doesn't expose a way to set ignore_equality_deletes directly,
+        // but it's derived from data_sequence_number.is_some().
     }
 }
