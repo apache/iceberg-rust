@@ -3865,6 +3865,7 @@ dependencies = [
  "strum",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
