@@ -39,6 +39,8 @@ use crate::transaction::snapshot::{ManifestProcess, SnapshotProducer};
 pub(crate) struct MergingState {
     data_filter: ManifestFilterManager,
     data_merge: ManifestMergeManager,
+    delete_filter: ManifestFilterManager,
+    delete_merge: ManifestMergeManager,
 }
 
 impl MergingState {
@@ -68,11 +70,25 @@ impl MergingState {
                 min_count_to_merge,
                 merge_enabled,
             ),
+            delete_filter: ManifestFilterManager::new(),
+            delete_merge: ManifestMergeManager::new(
+                target_size_bytes,
+                min_count_to_merge,
+                merge_enabled,
+            ),
         }
     }
 
     pub(crate) fn delete(&self, file: &DataFile) {
-        self.data_filter.delete(file);
+        match file.content {
+            crate::spec::DataContentType::Data => {
+                self.data_filter.delete(file.file_path.clone());
+            }
+            crate::spec::DataContentType::PositionDeletes
+            | crate::spec::DataContentType::EqualityDeletes => {
+                self.delete_filter.delete(file.file_path.clone());
+            }
+        }
     }
 
     pub(crate) async fn filter_manifests(
@@ -80,9 +96,26 @@ impl MergingState {
         producer: &SnapshotProducer<'_>,
         current_manifests: Vec<ManifestFile>,
     ) -> Result<Vec<ManifestFile>> {
-        self.data_filter
-            .filter_manifests(producer, current_manifests)
-            .await
+        let mut data_manifests = Vec::new();
+        let mut delete_manifests = Vec::new();
+
+        for m in current_manifests {
+            match m.content {
+                crate::spec::ManifestContentType::Data => data_manifests.push(m),
+                crate::spec::ManifestContentType::Deletes => delete_manifests.push(m),
+            }
+        }
+
+        let (data_res, delete_res) = futures::join!(
+            self.data_filter.filter_manifests(producer, data_manifests),
+            self.delete_filter
+                .filter_manifests(producer, delete_manifests),
+        );
+
+        let mut filtered = data_res?;
+        filtered.extend(delete_res?);
+
+        Ok(filtered)
     }
 
     /// `unmerged[0]` is the "first" manifest this commit produced; the merge
@@ -93,7 +126,29 @@ impl MergingState {
         producer: &SnapshotProducer<'_>,
         unmerged: Vec<ManifestFile>,
     ) -> Result<Vec<ManifestFile>> {
-        self.data_merge.merge_manifests(producer, unmerged).await
+        if unmerged.is_empty() {
+            return Ok(unmerged);
+        }
+
+        let mut data_unmerged = Vec::new();
+        let mut delete_unmerged = Vec::new();
+
+        for m in unmerged {
+            match m.content {
+                crate::spec::ManifestContentType::Data => data_unmerged.push(m),
+                crate::spec::ManifestContentType::Deletes => delete_unmerged.push(m),
+            }
+        }
+
+        let (data_res, delete_res) = futures::join!(
+            self.data_merge.merge_manifests(producer, data_unmerged),
+            self.delete_merge.merge_manifests(producer, delete_unmerged),
+        );
+
+        let mut merged = data_res?;
+        merged.extend(delete_res?);
+
+        Ok(merged)
     }
 
     /// Sum of `manifests-replaced` contributions from the filter pass and the
@@ -101,6 +156,8 @@ impl MergingState {
     pub(crate) fn replaced_manifests_count(&self) -> u64 {
         self.data_filter.replaced_manifests_count()
             + self.data_merge.replaced_manifests_count()
+            + self.delete_filter.replaced_manifests_count()
+            + self.delete_merge.replaced_manifests_count()
     }
 
     /// Best-effort cleanup of any cached residual or merged manifest paths
@@ -110,12 +167,14 @@ impl MergingState {
         file_io: &crate::io::FileIO,
         committed_paths: &HashSet<String>,
     ) {
-        self.data_filter
-            .clean_uncommitted(file_io, committed_paths)
-            .await;
-        self.data_merge
-            .clean_uncommitted(file_io, committed_paths)
-            .await;
+        futures::join!(
+            self.data_filter.clean_uncommitted(file_io, committed_paths),
+            self.data_merge.clean_uncommitted(file_io, committed_paths),
+            self.delete_filter
+                .clean_uncommitted(file_io, committed_paths),
+            self.delete_merge
+                .clean_uncommitted(file_io, committed_paths),
+        );
     }
 }
 

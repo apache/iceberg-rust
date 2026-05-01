@@ -65,11 +65,11 @@ impl ManifestFilterManager {
     }
 
     /// Mark a path for removal in the next filter pass.
-    pub(crate) fn delete(&self, file: &DataFile) {
+    pub(crate) fn delete(&self, path: String) {
         self.deleted_paths
             .lock()
             .expect("filter deleted-paths mutex")
-            .insert(file.file_path.clone());
+            .insert(path);
     }
 
     pub(crate) fn replaced_manifests_count(&self) -> u64 {
@@ -272,20 +272,9 @@ mod tests {
 
     #[test]
     fn delete_dedupes_paths() {
-        use crate::spec::{DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct};
         let filter = ManifestFilterManager::new();
-        let f = DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path("data/x.parquet".to_string())
-            .file_format(DataFileFormat::Parquet)
-            .file_size_in_bytes(10)
-            .record_count(1)
-            .partition_spec_id(0)
-            .partition(Struct::from_iter([Some(Literal::long(1))]))
-            .build()
-            .unwrap();
-        filter.delete(&f);
-        filter.delete(&f);
+        filter.delete("data/x.parquet".to_string());
+        filter.delete("data/x.parquet".to_string());
         assert_eq!(
             filter.deleted_paths.lock().expect("test mutex").len(),
             1
