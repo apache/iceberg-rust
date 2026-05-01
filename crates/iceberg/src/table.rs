@@ -171,8 +171,7 @@ pub struct Table {
     readonly: bool,
     object_cache: Arc<ObjectCache>,
     /// Runtime explicitly attached at build time. `None` means "resolve from
-    /// the ambient tokio runtime on demand", so metadata-only operations on
-    /// `Table` do not require a tokio context.
+    /// the ambient tokio runtime on demand"
     runtime: Option<Runtime>,
 }
 
