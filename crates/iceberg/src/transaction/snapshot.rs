@@ -319,16 +319,28 @@ impl<'a> SnapshotProducer<'a> {
                     let f = &entry.data_file;
                     match f.content_type() {
                         DataContentType::PositionDeletes => {
-                            if let Some(ref_path) = f.referenced_data_file()
-                                && replaced_data_files.contains(&ref_path)
-                            {
-                                return Err(Error::new(
-                                    ErrorKind::DataInvalid,
-                                    format!(
-                                        "Cannot commit, found new position delete \
-                                         for replaced data file: {ref_path}"
-                                    ),
-                                ));
+                            match f.referenced_data_file() {
+                                Some(ref_path) => {
+                                    if replaced_data_files.contains(&ref_path) {
+                                        return Err(Error::new(
+                                            ErrorKind::DataInvalid,
+                                            format!(
+                                                "Cannot commit, found new position delete \
+                                                 for replaced data file: {ref_path}"
+                                            ),
+                                        ));
+                                    }
+                                }
+                                None => {
+                                    return Err(Error::new(
+                                        ErrorKind::DataInvalid,
+                                        format!(
+                                            "Cannot commit, found new position delete file {} \
+                                             missing referenced_data_file hint",
+                                            f.file_path
+                                        ),
+                                    ));
+                                }
                             }
                         }
                         DataContentType::EqualityDeletes => {
@@ -884,7 +896,61 @@ mod tests {
             .validate_no_new_deletes_for_data_files(None, &other)
             .await
             .expect("path not present in any ancestor still passes");
+    }
 
-        let _ = ManifestStatus::Added;
+    #[tokio::test]
+    async fn test_validate_rejects_when_position_delete_lacks_referenced_hint() {
+        let table = make_v2_minimal_table();
+        let f1 = data_file(&table, "data/f1.parquet");
+
+        // 1. Add data file
+        let tx = Transaction::new(&table);
+        let append = tx.fast_append().add_data_files(vec![f1.clone()]);
+        let updates = Arc::new(append).commit(&table).await.unwrap().take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+
+        // 2. Add position delete WITHOUT hint
+        let pos_delete = DataFileBuilder::default()
+            .content(DataContentType::PositionDeletes)
+            .file_path("data/delete1.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .referenced_data_file(None) // Explicitly None
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let delete = tx.fast_append().add_data_files(vec![pos_delete]);
+        let updates = Arc::new(delete).commit(&table).await.unwrap().take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+
+        // 3. Try to rewrite f1
+        let producer = SnapshotProducer::new(
+            &table,
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/compacted.parquet")],
+        )
+        .with_removed_data_files(vec![f1.clone()]);
+
+        let mut replaced = HashSet::new();
+        replaced.insert(f1.file_path.clone());
+
+        let result = producer
+            .validate_no_new_deletes_for_data_files(None, &replaced)
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Must reject when position delete lacks referenced_data_file hint"
+        );
+        assert!(
+            result.unwrap_err().to_string().contains("missing referenced_data_file hint"),
+            "Error message should mention missing hint"
+        );
     }
 }
