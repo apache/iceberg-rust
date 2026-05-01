@@ -26,8 +26,9 @@ use aws_sdk_glue::operation::create_table::CreateTableError;
 use aws_sdk_glue::operation::update_table::UpdateTableError;
 use aws_sdk_glue::types::TableInput;
 use iceberg::io::{
-    FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
-    S3_SESSION_TOKEN, StorageFactory,
+    FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ASSUME_ROLE_ARN, S3_ASSUME_ROLE_EXTERNAL_ID,
+    S3_ASSUME_ROLE_SESSION_NAME, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN,
+    StorageFactory,
 };
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
@@ -43,7 +44,9 @@ use crate::utils::{
     get_default_table_location, get_metadata_location, validate_namespace,
 };
 use crate::{
-    AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, with_catalog_id,
+    AWS_ACCESS_KEY_ID, AWS_ASSUME_ROLE_ARN, AWS_ASSUME_ROLE_EXTERNAL_ID,
+    AWS_ASSUME_ROLE_SESSION_NAME, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
+    with_catalog_id,
 };
 
 /// Glue catalog URI
@@ -196,6 +199,30 @@ impl GlueCatalog {
             && let Some(aws_endpoint) = config.uri.as_ref()
         {
             file_io_props.insert(S3_ENDPOINT.to_string(), aws_endpoint.to_string());
+        }
+        // Propagate STS assume-role properties so that the S3 FileIO also
+        // operates under the assumed role (using the same property keys that
+        // the S3 storage config already understands).
+        if !file_io_props.contains_key(S3_ASSUME_ROLE_ARN)
+            && let Some(role_arn) = file_io_props.get(AWS_ASSUME_ROLE_ARN)
+        {
+            file_io_props.insert(S3_ASSUME_ROLE_ARN.to_string(), role_arn.to_string());
+        }
+        if !file_io_props.contains_key(S3_ASSUME_ROLE_EXTERNAL_ID)
+            && let Some(external_id) = file_io_props.get(AWS_ASSUME_ROLE_EXTERNAL_ID)
+        {
+            file_io_props.insert(
+                S3_ASSUME_ROLE_EXTERNAL_ID.to_string(),
+                external_id.to_string(),
+            );
+        }
+        if !file_io_props.contains_key(S3_ASSUME_ROLE_SESSION_NAME)
+            && let Some(session_name) = file_io_props.get(AWS_ASSUME_ROLE_SESSION_NAME)
+        {
+            file_io_props.insert(
+                S3_ASSUME_ROLE_SESSION_NAME.to_string(),
+                session_name.to_string(),
+            );
         }
 
         let client = aws_sdk_glue::Client::new(&sdk_config);
