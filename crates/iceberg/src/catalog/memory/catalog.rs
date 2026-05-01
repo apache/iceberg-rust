@@ -1885,6 +1885,11 @@ pub(crate) mod tests {
         // Assert the table doesn't contain the update yet
         assert!(!table.metadata().properties().contains_key("key"));
 
+        // `last_updated_ms` is millisecond-resolution `chrono::Utc::now()`.
+        // Without this sleep, create and commit can land in the same
+        // millisecond and the `<` assertion below flakes.
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+
         // Update table metadata
         let tx = Transaction::new(&table);
         let updated_table = tx
