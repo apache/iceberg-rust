@@ -44,8 +44,7 @@ impl ListPacker {
 
     /// Pack as if iterating in reverse, restoring the original orientation on both the
     /// outer list and each bin's contents. The item at input index 0 ends up in the
-    /// first output bin — used by `ManifestMergeManager` to surface the new "first"
-    /// manifest where the first-guard can find it.
+    /// first output bin.
     pub(crate) fn pack_end<T>(&self, items: Vec<T>, weigh: impl Fn(&T) -> u64) -> Vec<Vec<T>> {
         let reversed: Vec<T> = items.into_iter().rev().collect();
         let mut packed = self.pack(reversed, weigh);

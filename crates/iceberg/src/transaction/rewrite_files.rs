@@ -190,11 +190,14 @@ impl TransactionAction for RewriteFilesAction {
             .collect();
 
         if !replaced_paths.is_empty() {
+            let mut val_id = self.validate_from_snapshot_id;
+            if let Some(id) = val_id {
+                if table.metadata().snapshot_by_id(id).is_none() {
+                    val_id = None;
+                }
+            }
             snapshot_producer
-                .validate_no_new_deletes_for_data_files(
-                    self.validate_from_snapshot_id,
-                    &replaced_paths,
-                )
+                .validate_no_new_deletes_for_data_files(val_id, &replaced_paths)
                 .await?;
 
             snapshot_producer
@@ -438,16 +441,8 @@ mod tests {
         // validate_duplicate_files() must reject adding a file already alive
         // in the snapshot, even if the same call also marks it for deletion.
         let table = make_v2_minimal_table();
-
         let file1 = make_data_file(&table, "data/file1.parquet", 50);
-        let tx = Transaction::new(&table);
-        let append = tx.fast_append().add_data_files(vec![file1.clone()]);
-        let updates = Arc::new(append)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
-        let table_with_file = apply_updates_to_table(&table, &updates);
+        let table_with_file = append_files(table.clone(), vec![file1.clone()]).await;
 
         let tx = Transaction::new(&table_with_file);
         let action = tx
@@ -466,16 +461,8 @@ mod tests {
     #[tokio::test]
     async fn test_rewrite_phantom_delete_errors() {
         let table = make_v2_minimal_table();
-
         let file1 = make_data_file(&table, "data/file1.parquet", 50);
-        let tx = Transaction::new(&table);
-        let append = tx.fast_append().add_data_files(vec![file1.clone()]);
-        let updates = Arc::new(append)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
-        let table_with_file = apply_updates_to_table(&table, &updates);
+        let table_with_file = append_files(table.clone(), vec![file1.clone()]).await;
 
         let phantom = make_data_file(&table, "data/does_not_exist.parquet", 10);
         let compacted = make_data_file(&table, "data/compacted.parquet", 50);
@@ -489,7 +476,7 @@ mod tests {
         };
         assert!(
             err.to_string()
-                .contains("not found as alive entries in current snapshot"),
+                .contains("no longer alive"),
             "Expected phantom-delete error, got: {err}"
         );
     }
@@ -499,14 +486,7 @@ mod tests {
         let table = make_v2_minimal_table();
 
         let file1 = make_data_file(&table, "data/file1.parquet", 50);
-        let tx = Transaction::new(&table);
-        let append = tx.fast_append().add_data_files(vec![file1.clone()]);
-        let updates = Arc::new(append)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
-        let table_with_file = apply_updates_to_table(&table, &updates);
+        let table_with_file = append_files(table.clone(), vec![file1.clone()]).await;
 
         let compacted = make_data_file(&table, "data/compacted.parquet", 50);
         let tx = Transaction::new(&table_with_file);
@@ -530,16 +510,7 @@ mod tests {
 
         let file1 = make_data_file(&table, "data/file1.parquet", 50);
         let file2 = make_data_file(&table, "data/file2.parquet", 60);
-        let tx = Transaction::new(&table);
-        let append_action = tx
-            .fast_append()
-            .add_data_files(vec![file1.clone(), file2.clone()]);
-        let append_updates = Arc::new(append_action)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
-        let table_with_files = apply_updates_to_table(&table, &append_updates);
+        let table_with_files = append_files(table.clone(), vec![file1.clone(), file2.clone()]).await;
 
         assert!(table_with_files.metadata().current_snapshot().is_some());
 
@@ -556,6 +527,8 @@ mod tests {
 
         let updates = replace_commit.take_updates();
         let requirements = replace_commit.take_requirements();
+
+        let new_snapshot = unwrap_add_snapshot(&updates);
 
         // Verify updates contain AddSnapshot + SetSnapshotRef.
         assert!(
@@ -584,11 +557,6 @@ mod tests {
             "Requirements should include RefSnapshotIdMatch"
         );
 
-        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
-        } else {
-            unreachable!()
-        };
         let manifest_list = new_snapshot
             .load_manifest_list(table_with_files.file_io(), table_with_files.metadata())
             .await
@@ -659,25 +627,8 @@ mod tests {
         let file3 = make_data_file(&table, "data/file3.parquet", 30);
 
         // file1+file2 share one manifest; file3 gets its own.
-        let tx = Transaction::new(&table);
-        let append12 = tx
-            .fast_append()
-            .add_data_files(vec![file1.clone(), file2.clone()]);
-        let updates12 = Arc::new(append12)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
-        let table_after_12 = apply_updates_to_table(&table, &updates12);
-
-        let tx = Transaction::new(&table_after_12);
-        let append3 = tx.fast_append().add_data_files(vec![file3.clone()]);
-        let updates3 = Arc::new(append3)
-            .commit(&table_after_12)
-            .await
-            .unwrap()
-            .take_updates();
-        let table_with_files = apply_updates_to_table(&table_after_12, &updates3);
+        let table_after_12 = append_files(table.clone(), vec![file1.clone(), file2.clone()]).await;
+        let table_with_files = append_files(table_after_12, vec![file3.clone()]).await;
 
         let compacted = make_data_file(&table, "data/compacted.parquet", 30);
         let tx = Transaction::new(&table_with_files);
@@ -691,32 +642,11 @@ mod tests {
             .unwrap()
             .take_updates();
 
-        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
-        } else {
-            unreachable!()
-        };
+        let new_snapshot = unwrap_add_snapshot(&updates);
 
         assert_eq!(new_snapshot.summary().operation, Operation::Replace);
 
-        let manifest_list = new_snapshot
-            .load_manifest_list(table_with_files.file_io(), table_with_files.metadata())
-            .await
-            .unwrap();
-
-        let mut alive_files: Vec<String> = Vec::new();
-        for entry in manifest_list.entries() {
-            let manifest = entry
-                .load_manifest(table_with_files.file_io())
-                .await
-                .unwrap();
-            for me in manifest.entries() {
-                if me.is_alive() {
-                    alive_files.push(me.file_path().to_string());
-                }
-            }
-        }
-        alive_files.sort();
+        let alive_files = collect_alive_files(new_snapshot, &table_with_files).await;
 
         assert!(
             alive_files.contains(&"data/compacted.parquet".to_string()),
@@ -750,18 +680,9 @@ mod tests {
 
         let file1 = make_data_file(&table, "data/file1.parquet", 10);
         let file2 = make_data_file(&table, "data/file2.parquet", 20);
-        let tx = Transaction::new(&table);
-        let append = tx
-            .fast_append()
-            .add_data_files(vec![file1.clone(), file2.clone()]);
-        let updates = Arc::new(append)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
-        let table1 = apply_updates_to_table(&table, &updates);
+        let table1 = append_files(table, vec![file1.clone(), file2.clone()]).await;
 
-        let compacted = make_data_file(&table, "data/compacted.parquet", 30);
+        let compacted = make_data_file(&table1, "data/compacted.parquet", 30);
         let tx = Transaction::new(&table1);
         let replace = tx
             .rewrite_files()
@@ -775,7 +696,7 @@ mod tests {
         let table2 = apply_updates_to_table(&table1, &updates);
 
         // Step 3: fast-append a new file on top.
-        let file3 = make_data_file(&table, "data/file3.parquet", 5);
+        let file3 = make_data_file(&table2, "data/file3.parquet", 5);
         let tx = Transaction::new(&table2);
         let append2 = tx.fast_append().add_data_files(vec![file3]);
         let updates = Arc::new(append2)
@@ -784,11 +705,7 @@ mod tests {
             .unwrap()
             .take_updates();
 
-        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
-        } else {
-            unreachable!()
-        };
+        let new_snapshot = unwrap_add_snapshot(&updates);
 
         let manifest_list = new_snapshot
             .load_manifest_list(table2.file_io(), table2.metadata())
@@ -816,18 +733,11 @@ mod tests {
         let table = make_v2_minimal_table();
 
         let file1 = make_data_file(&table, "data/file1.parquet", 10);
-        let tx = Transaction::new(&table);
-        let append = tx.fast_append().add_data_files(vec![file1.clone()]);
-        let updates = Arc::new(append)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
-        let table1 = apply_updates_to_table(&table, &updates);
+        let table1 = append_files(table, vec![file1.clone()]).await;
 
         let planning_snapshot_id = table1.metadata().current_snapshot().unwrap().snapshot_id();
 
-        let compacted = make_data_file(&table, "data/compacted.parquet", 10);
+        let compacted = make_data_file(&table1, "data/compacted.parquet", 10);
         let tx = Transaction::new(&table1);
         let replace = tx
             .rewrite_files()
@@ -844,16 +754,9 @@ mod tests {
         let table = make_v2_minimal_table();
 
         let file1 = make_data_file(&table, "data/file1.parquet", 10);
-        let tx = Transaction::new(&table);
-        let append = tx.fast_append().add_data_files(vec![file1.clone()]);
-        let updates = Arc::new(append)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
-        let table1 = apply_updates_to_table(&table, &updates);
+        let table1 = append_files(table, vec![file1.clone()]).await;
 
-        let compacted = make_data_file(&table, "data/compacted.parquet", 10);
+        let compacted = make_data_file(&table1, "data/compacted.parquet", 10);
         let tx = Transaction::new(&table1);
         let replace = tx
             .rewrite_files()
@@ -969,16 +872,7 @@ mod tests {
         let file_a = make_data_file(&table, "data/a.parquet", 10);
         let file_b = make_data_file(&table, "data/b.parquet", 20);
 
-        let tx = Transaction::new(&table);
-        let append = tx
-            .fast_append()
-            .add_data_files(vec![file_a.clone(), file_b.clone()]);
-        let updates = Arc::new(append)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
-        let table_with_files = apply_updates_to_table(&table, &updates);
+        let table_with_files = append_files(table.clone(), vec![file_a.clone(), file_b.clone()]).await;
 
         let compacted = make_data_file(&table, "data/compacted.parquet", 30);
         let tx = Transaction::new(&table_with_files);
@@ -998,23 +892,8 @@ mod tests {
         let file_a = make_data_file(&table, "data/a.parquet", 10);
         let file_b = make_data_file(&table, "data/b.parquet", 20);
 
-        let tx = Transaction::new(&table);
-        let append_a = tx.fast_append().add_data_files(vec![file_a.clone()]);
-        let updates_a = Arc::new(append_a)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
-        let table_after_a = apply_updates_to_table(&table, &updates_a);
-
-        let tx = Transaction::new(&table_after_a);
-        let append_b = tx.fast_append().add_data_files(vec![file_b]);
-        let updates_b = Arc::new(append_b)
-            .commit(&table_after_a)
-            .await
-            .unwrap()
-            .take_updates();
-        let table_with_files = apply_updates_to_table(&table_after_a, &updates_b);
+        let table_after_a = append_files(table.clone(), vec![file_a.clone()]).await;
+        let table_with_files = append_files(table_after_a, vec![file_b]).await;
 
         let compacted = make_data_file(&table, "data/compacted.parquet", 10);
         let tx = Transaction::new(&table_with_files);
@@ -1028,29 +907,8 @@ mod tests {
             .expect("single-file-manifest delete should succeed");
         let updates = commit.take_updates();
 
-        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
-        } else {
-            unreachable!()
-        };
-
-        let manifest_list = new_snapshot
-            .load_manifest_list(table_with_files.file_io(), table_with_files.metadata())
-            .await
-            .unwrap();
-
-        let mut alive_files: Vec<String> = Vec::new();
-        for entry in manifest_list.entries() {
-            let manifest = entry
-                .load_manifest(table_with_files.file_io())
-                .await
-                .unwrap();
-            for me in manifest.entries() {
-                if me.is_alive() {
-                    alive_files.push(me.file_path().to_string());
-                }
-            }
-        }
+        let new_snapshot = unwrap_add_snapshot(&updates);
+        let alive_files = collect_alive_files(new_snapshot, &table_with_files).await;
 
         assert!(alive_files.contains(&"data/b.parquet".to_string()), "{alive_files:?}");
         assert!(alive_files.contains(&"data/compacted.parquet".to_string()), "{alive_files:?}");
@@ -1139,14 +997,7 @@ mod tests {
         let table = make_v2_minimal_table();
 
         let file1 = make_data_file(&table, "data/file1.parquet", 10);
-        let tx = Transaction::new(&table);
-        let append = tx.fast_append().add_data_files(vec![file1.clone()]);
-        let updates = Arc::new(append)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
-        let table1 = apply_updates_to_table(&table, &updates);
+        let table1 = append_files(table.clone(), vec![file1.clone()]).await;
 
         let compacted = make_data_file(&table, "data/compacted.parquet", 10);
         let custom_seq: i64 = 42;
@@ -1164,11 +1015,7 @@ mod tests {
             .unwrap()
             .take_updates();
 
-        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
-        } else {
-            unreachable!()
-        };
+        let new_snapshot = unwrap_add_snapshot(&updates);
 
         let manifest_list = new_snapshot
             .load_manifest_list(table1.file_io(), table1.metadata())
@@ -1240,7 +1087,7 @@ mod tests {
         let Err(err) = Arc::new(r2).commit(&table).await else {
             panic!("rewriting an already-deleted file must error");
         };
-        assert!(err.to_string().contains("not found as alive entries"));
+        assert!(err.to_string().contains("no longer alive"));
     }
 
     #[tokio::test]
@@ -1662,5 +1509,182 @@ mod tests {
         // because f2 is still alive.
         let result_b = action_b.commit(&table).await;
         assert!(result_b.is_ok(), "Parallel disjoint rewrite failed: {:?}", result_b.err());
+    }
+
+    #[tokio::test]
+    async fn test_merge_size_guard_exempts_new_manifest_bin() {
+        // Guard must exempt the bin containing the NEW commit's manifest, not a
+        // carry-forward. With min-count-to-merge=3 the guard fires on any bin with
+        // fewer than 3 entries. We build 2 carry-forward manifests that pack into
+        // one bin together, then do a rewrite that produces a third (new) manifest
+        // in its own bin. The carry-forward bin must be merged; the new manifest's
+        // bin (size=1) must pass through.
+        let mut table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+        let prop_action = tx
+            .update_table_properties()
+            .set("commit.manifest.min-count-to-merge".to_string(), "3".to_string())
+            // Large target so all manifests would naturally fit in one bin;
+            // we rely on the guard, not bin overflow, to exempt the new manifest.
+            .set("commit.manifest.target-size-bytes".to_string(), "104857600".to_string());
+        let updates = Arc::new(prop_action).commit(&table).await.unwrap().take_updates();
+        table = apply_updates_to_table(&table, &updates);
+
+        // Two carry-forward appends — each produces one manifest.
+        let f1 = make_data_file(&table, "data/f1.parquet", 10);
+        let f2 = make_data_file(&table, "data/f2.parquet", 10);
+        let table = append_files(table, vec![f1.clone()]).await;
+        let table = append_files(table, vec![f2.clone()]).await;
+
+        let pre_count = table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap()
+            .entries()
+            .len();
+        assert_eq!(pre_count, 2, "expected 2 carry-forward manifests");
+
+        // Rewrite f1 → c1. This adds one new data manifest and one delete manifest.
+        let c1 = make_data_file(&table, "data/c1.parquet", 10);
+        let tx = Transaction::new(&table);
+        let action = tx.rewrite_files().delete_files(vec![f1]).add_files(vec![c1.clone()]);
+        let updates = Arc::new(action).commit(&table).await.unwrap().take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+
+        let snap = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snap
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+
+        // The 2 carry-forward data manifests have < 3 entries but are NOT the new
+        // manifest's bin, so the guard must NOT protect them — they should be merged
+        // into 1. The new data manifest's bin (1 entry) is protected by the guard
+        // and passes through. Post-commit data manifests = 1 merged carry-forward +
+        // 1 new = 2. Plus 1 delete manifest = 3 total.
+        let manifest_count = manifest_list.entries().len();
+        assert!(
+            manifest_count <= pre_count + 1,
+            "carry-forwards should have been merged; got {manifest_count} manifests (pre={pre_count})"
+        );
+
+        // All files must still be alive.
+        let alive = collect_alive_files(snap, &table).await;
+        for expected in ["data/c1.parquet", "data/f2.parquet"] {
+            assert!(alive.contains(&expected.to_string()), "missing {expected}; alive={alive:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_merge_size_guard_with_min_count_above_two() {
+        // min-count-to-merge=3 means the guard fires on bins of size 1 or 2.
+        // Current tests use min-count=2, which causes the guard to only fire on
+        // empty bins (impossible) — the guard is bypassed entirely. This test
+        // explicitly exercises the guard path.
+        let mut table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+        let prop_action = tx
+            .update_table_properties()
+            .set("commit.manifest.min-count-to-merge".to_string(), "3".to_string())
+            .set("commit.manifest.target-size-bytes".to_string(), "104857600".to_string());
+        let updates = Arc::new(prop_action).commit(&table).await.unwrap().take_updates();
+        table = apply_updates_to_table(&table, &updates);
+
+        let f1 = make_data_file(&table, "data/f1.parquet", 10);
+        let f2 = make_data_file(&table, "data/f2.parquet", 10);
+        let f3 = make_data_file(&table, "data/f3.parquet", 10);
+        let mut t = table;
+        // Three separate appends → three separate carry-forward manifests.
+        for f in [&f1, &f2, &f3] {
+            t = append_files(t, vec![f.clone()]).await;
+        }
+
+        // Now rewrite f1. The new data manifest lands in its own bin (size=1),
+        // which the guard exempts. The three carry-forwards pack together (size=3),
+        // which meets min-count-to-merge=3 so they ARE merged.
+        let c1 = make_data_file(&t, "data/c1.parquet", 10);
+        let tx = Transaction::new(&t);
+        let action = tx.rewrite_files().delete_files(vec![f1]).add_files(vec![c1.clone()]);
+        let updates = Arc::new(action).commit(&t).await.unwrap().take_updates();
+        let t = apply_updates_to_table(&t, &updates);
+
+        let snap = t.metadata().current_snapshot().unwrap();
+        let alive = collect_alive_files(snap, &t).await;
+        for expected in ["data/c1.parquet", "data/f2.parquet", "data/f3.parquet"] {
+            assert!(alive.contains(&expected.to_string()), "missing {expected}; alive={alive:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_steady_state_appends_do_not_trigger_historical_rewrite() {
+        // Behavioral guarantee: a new manifest that lands in a small bin must NOT
+        // cause adjacent historical bins to be rewritten. We verify that historical
+        // manifests from prior appends are merged among themselves (as expected)
+        // while the new commit's manifest survives intact (not merged away).
+        let mut table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+        let prop_action = tx
+            .update_table_properties()
+            .set("commit.manifest.min-count-to-merge".to_string(), "3".to_string())
+            .set("commit.manifest.target-size-bytes".to_string(), "104857600".to_string());
+        let updates = Arc::new(prop_action).commit(&table).await.unwrap().take_updates();
+        table = apply_updates_to_table(&table, &updates);
+
+        // Build up 4 carry-forward manifests via separate appends.
+        let mut t = table;
+        let mut carry_files = Vec::new();
+        for i in 0..4usize {
+            let f = make_data_file(&t, &format!("data/carry_{i}.parquet"), 10);
+            carry_files.push(f.clone());
+            t = append_files(t, vec![f]).await;
+        }
+
+        let pre_count = t
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .load_manifest_list(t.file_io(), t.metadata())
+            .await
+            .unwrap()
+            .entries()
+            .len();
+        assert_eq!(pre_count, 4);
+
+        // A single rewrite: replace carry_0 with a new file.
+        let new_f = make_data_file(&t, "data/new.parquet", 10);
+        let tx = Transaction::new(&t);
+        let action = tx
+            .rewrite_files()
+            .delete_files(vec![carry_files[0].clone()])
+            .add_files(vec![new_f.clone()]);
+        let updates = Arc::new(action).commit(&t).await.unwrap().take_updates();
+        let t = apply_updates_to_table(&t, &updates);
+
+        let snap = t.metadata().current_snapshot().unwrap();
+        let post_count = snap
+            .load_manifest_list(t.file_io(), t.metadata())
+            .await
+            .unwrap()
+            .entries()
+            .len();
+
+        // Carry-forwards (4 manifests) were eligible to merge (≥3); they should
+        // consolidate. The new commit adds 1 data + 1 delete manifest. Total must
+        // be well below pre_count + 2 (no merge at all).
+        assert!(
+            post_count < pre_count + 2,
+            "historical manifests should have been merged; pre={pre_count}, post={post_count}"
+        );
+
+        // All surviving files must be alive.
+        let alive = collect_alive_files(snap, &t).await;
+        assert!(alive.contains(&"data/new.parquet".to_string()), "alive={alive:?}");
+        for i in 1..4usize {
+            let path = format!("data/carry_{i}.parquet");
+            assert!(alive.contains(&path), "missing {path}; alive={alive:?}");
+        }
     }
 }

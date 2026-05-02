@@ -26,7 +26,7 @@
 //! `DashMap` looks tempting but its `RefMut` guard is not async-aware and can
 //! deadlock if held across an await point.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -72,19 +72,15 @@ impl ManifestMergeManager {
         self.replaced_count.load(Ordering::Relaxed)
     }
 
-    /// `unmerged[0]` must be the new "first" manifest this commit produced; the
-    /// bin containing it is exempted when it has fewer than `min_count_to_merge`
-    /// siblings, so a cluster of small commits doesn't trigger a historical rewrite.
     pub(crate) async fn merge_manifests(
         &self,
         producer: &SnapshotProducer<'_>,
         unmerged: Vec<ManifestFile>,
+        new_manifest_paths: &HashSet<String>,
     ) -> Result<Vec<ManifestFile>> {
         if !self.merge_enabled || unmerged.len() < 2 {
             return Ok(unmerged);
         }
-
-        let first_path = unmerged[0].manifest_path.clone();
 
         let mut groups: HashMap<i32, Vec<ManifestFile>> = HashMap::new();
         for m in unmerged {
@@ -113,9 +109,8 @@ impl ManifestMergeManager {
         let merge_futures = sequenced_bins
             .into_iter()
             .map(|(idx, spec_id, bin)| {
-                let first_path = first_path.clone();
                 async move {
-                    let out = self.process_bin(producer, spec_id, bin, &first_path).await?;
+                    let out = self.process_bin(producer, spec_id, bin, new_manifest_paths).await?;
                     Ok::<_, crate::Error>((idx, out))
                 }
             });
@@ -135,16 +130,15 @@ impl ManifestMergeManager {
         producer: &SnapshotProducer<'_>,
         spec_id: i32,
         bin: Vec<ManifestFile>,
-        first_path: &str,
+        new_manifest_paths: &HashSet<String>,
     ) -> Result<Vec<ManifestFile>> {
         if bin.len() == 1 {
             return Ok(bin);
         }
-        // First-guard (Java parity): a small bin holding the new first manifest
-        // passes through unmerged so a cluster of small commits doesn't trigger
-        // a historical rewrite.
-        let contains_first = bin.iter().any(|m| m.manifest_path == first_path);
-        if contains_first && (bin.len() as u32) < self.min_count_to_merge {
+        // First-guard: a small bin containing any manifest written this commit
+        // passes through unmerged so small commits don't trigger historical rewrites.
+        let contains_new = bin.iter().any(|m| new_manifest_paths.contains(&m.manifest_path));
+        if contains_new && (bin.len() as u32) < self.min_count_to_merge {
             return Ok(bin);
         }
         let merged = self.create_manifest(producer, spec_id, bin).await?;

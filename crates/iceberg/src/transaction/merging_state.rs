@@ -118,13 +118,11 @@ impl MergingState {
         Ok(filtered)
     }
 
-    /// `unmerged[0]` is the "first" manifest this commit produced; the merge
-    /// manager exempts the bin containing it when it has fewer than
-    /// `min_count_to_merge` siblings.
     pub(crate) async fn merge_manifests(
         &self,
         producer: &SnapshotProducer<'_>,
         unmerged: Vec<ManifestFile>,
+        new_manifest_paths: &HashSet<String>,
     ) -> Result<Vec<ManifestFile>> {
         if unmerged.is_empty() {
             return Ok(unmerged);
@@ -141,8 +139,8 @@ impl MergingState {
         }
 
         let (data_res, delete_res) = futures::join!(
-            self.data_merge.merge_manifests(producer, data_unmerged),
-            self.delete_merge.merge_manifests(producer, delete_unmerged),
+            self.data_merge.merge_manifests(producer, data_unmerged, new_manifest_paths),
+            self.delete_merge.merge_manifests(producer, delete_unmerged, new_manifest_paths),
         );
 
         let mut merged = data_res?;
@@ -185,8 +183,9 @@ impl ManifestProcess for Arc<MergingState> {
         &self,
         snapshot_produce: &SnapshotProducer<'_>,
         manifests: Vec<ManifestFile>,
+        new_manifest_paths: &HashSet<String>,
     ) -> Result<Vec<ManifestFile>> {
-        self.merge_manifests(snapshot_produce, manifests).await
+        self.merge_manifests(snapshot_produce, manifests, new_manifest_paths).await
     }
 
     fn replaced_manifests_count(&self) -> u64 {
