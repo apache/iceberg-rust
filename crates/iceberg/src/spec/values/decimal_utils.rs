@@ -202,7 +202,6 @@ pub fn i128_to_be_bytes_min(value: i128) -> Vec<u8> {
 /// The result is sign-extended or trimmed to exactly the number of bytes
 /// required for the given precision, matching the Java implementation in
 /// `DecimalUtil.toReusedFixLengthBytes`.
-///
 pub fn decimal_to_fixed_length_bytes(value: i128, precision: u32) -> Vec<u8> {
     let required_len = parquet_decimal_byte_length(precision);
     let be_bytes = value.to_be_bytes(); // 16 bytes, big-endian, two's complement

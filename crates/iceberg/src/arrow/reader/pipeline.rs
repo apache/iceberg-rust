@@ -744,8 +744,10 @@ impl FileScanTaskReader {
         let mut result = Vec::with_capacity(candidate_row_groups.len());
 
         for &rg_idx in candidate_row_groups {
-            let mut bloom_filters: HashMap<i32, (parquet::bloom_filter::Sbbf, parquet::basic::Type)> =
-                HashMap::new();
+            let mut bloom_filters: HashMap<
+                i32,
+                (parquet::bloom_filter::Sbbf, parquet::basic::Type),
+            > = HashMap::new();
 
             for &field_id in &bloom_filter_field_ids {
                 let col_idx = field_id_map[&field_id];

@@ -68,9 +68,7 @@ impl<'a> BloomFilterEvaluator<'a> {
 
 /// Collects field IDs that appear in `eq` or `in` predicates — the only
 /// predicate types that benefit from bloom filter checks.
-pub(crate) fn collect_bloom_filter_field_ids(
-    predicate: &BoundPredicate,
-) -> Result<HashSet<i32>> {
+pub(crate) fn collect_bloom_filter_field_ids(predicate: &BoundPredicate) -> Result<HashSet<i32>> {
     let mut visitor = BloomFilterFieldIdCollector {
         field_ids: HashSet::new(),
     };
@@ -134,12 +132,7 @@ impl BoundPredicateVisitor for BloomFilterFieldIdCollector {
         Ok(())
     }
 
-    fn greater_than(
-        &mut self,
-        _r: &BoundReference,
-        _l: &Datum,
-        _p: &BoundPredicate,
-    ) -> Result<()> {
+    fn greater_than(&mut self, _r: &BoundReference, _l: &Datum, _p: &BoundPredicate) -> Result<()> {
         Ok(())
     }
 
@@ -161,12 +154,7 @@ impl BoundPredicateVisitor for BloomFilterFieldIdCollector {
         Ok(())
     }
 
-    fn starts_with(
-        &mut self,
-        _r: &BoundReference,
-        _l: &Datum,
-        _p: &BoundPredicate,
-    ) -> Result<()> {
+    fn starts_with(&mut self, _r: &BoundReference, _l: &Datum, _p: &BoundPredicate) -> Result<()> {
         Ok(())
     }
 
@@ -236,8 +224,7 @@ fn check_in_bloom_filter(sbbf: &Sbbf, datum: &Datum, physical_type: PhysicalType
                     // to_be_bytes() truncated to the column's fixed length.
                     // We use the Iceberg type's precision to determine the
                     // byte length, which must match the file's fixed length.
-                    let crate::spec::PrimitiveType::Decimal { precision, .. } =
-                        datum.data_type()
+                    let crate::spec::PrimitiveType::Decimal { precision, .. } = datum.data_type()
                     else {
                         return true;
                     };
@@ -465,7 +452,13 @@ mod tests {
     #[test]
     fn test_eq_value_present() {
         let schema = create_test_schema();
-        let bloom_filters = HashMap::from([(1, (create_bloom_filter_with_values_i32(&[1, 2, 3]), PhysicalType::INT32))]);
+        let bloom_filters = HashMap::from([(
+            1,
+            (
+                create_bloom_filter_with_values_i32(&[1, 2, 3]),
+                PhysicalType::INT32,
+            ),
+        )]);
 
         let predicate = Reference::new("id")
             .equal_to(Datum::int(2))
@@ -479,7 +472,13 @@ mod tests {
     #[test]
     fn test_eq_value_absent() {
         let schema = create_test_schema();
-        let bloom_filters = HashMap::from([(1, (create_bloom_filter_with_values_i32(&[1, 2, 3]), PhysicalType::INT32))]);
+        let bloom_filters = HashMap::from([(
+            1,
+            (
+                create_bloom_filter_with_values_i32(&[1, 2, 3]),
+                PhysicalType::INT32,
+            ),
+        )]);
 
         let predicate = Reference::new("id")
             .equal_to(Datum::int(999))
@@ -513,7 +512,13 @@ mod tests {
     #[test]
     fn test_in_all_absent() {
         let schema = create_test_schema();
-        let bloom_filters = HashMap::from([(1, (create_bloom_filter_with_values_i32(&[1, 2, 3]), PhysicalType::INT32))]);
+        let bloom_filters = HashMap::from([(
+            1,
+            (
+                create_bloom_filter_with_values_i32(&[1, 2, 3]),
+                PhysicalType::INT32,
+            ),
+        )]);
 
         let predicate = Reference::new("id")
             .is_in([Datum::int(100), Datum::int(200), Datum::int(300)])
@@ -530,7 +535,13 @@ mod tests {
     #[test]
     fn test_in_some_present() {
         let schema = create_test_schema();
-        let bloom_filters = HashMap::from([(1, (create_bloom_filter_with_values_i32(&[1, 2, 3]), PhysicalType::INT32))]);
+        let bloom_filters = HashMap::from([(
+            1,
+            (
+                create_bloom_filter_with_values_i32(&[1, 2, 3]),
+                PhysicalType::INT32,
+            ),
+        )]);
 
         let predicate = Reference::new("id")
             .is_in([Datum::int(2), Datum::int(200)])
@@ -548,8 +559,20 @@ mod tests {
     fn test_and_one_absent() {
         let schema = create_test_schema();
         let bloom_filters = HashMap::from([
-            (1, (create_bloom_filter_with_values_i32(&[1, 2, 3]), PhysicalType::INT32)),
-            (2, (create_bloom_filter_with_values_str(&["alice", "bob"]), PhysicalType::BYTE_ARRAY)),
+            (
+                1,
+                (
+                    create_bloom_filter_with_values_i32(&[1, 2, 3]),
+                    PhysicalType::INT32,
+                ),
+            ),
+            (
+                2,
+                (
+                    create_bloom_filter_with_values_str(&["alice", "bob"]),
+                    PhysicalType::BYTE_ARRAY,
+                ),
+            ),
         ]);
 
         // id = 999 AND name = 'alice'
@@ -570,7 +593,13 @@ mod tests {
     #[test]
     fn test_or_one_present() {
         let schema = create_test_schema();
-        let bloom_filters = HashMap::from([(1, (create_bloom_filter_with_values_i32(&[1, 2, 3]), PhysicalType::INT32))]);
+        let bloom_filters = HashMap::from([(
+            1,
+            (
+                create_bloom_filter_with_values_i32(&[1, 2, 3]),
+                PhysicalType::INT32,
+            ),
+        )]);
 
         // id = 999 OR id = 2
         // id=2 is present, so OR should be true
@@ -587,7 +616,13 @@ mod tests {
     #[test]
     fn test_not_always_might_match() {
         let schema = create_test_schema();
-        let bloom_filters = HashMap::from([(1, (create_bloom_filter_with_values_i32(&[1, 2, 3]), PhysicalType::INT32))]);
+        let bloom_filters = HashMap::from([(
+            1,
+            (
+                create_bloom_filter_with_values_i32(&[1, 2, 3]),
+                PhysicalType::INT32,
+            ),
+        )]);
 
         // NOT(id = 999) — even though 999 is absent, NOT should still return true
         let predicate = Reference::new("id")
@@ -603,7 +638,13 @@ mod tests {
     #[test]
     fn test_range_predicates_always_might_match() {
         let schema = create_test_schema();
-        let bloom_filters = HashMap::from([(1, (create_bloom_filter_with_values_i32(&[1, 2, 3]), PhysicalType::INT32))]);
+        let bloom_filters = HashMap::from([(
+            1,
+            (
+                create_bloom_filter_with_values_i32(&[1, 2, 3]),
+                PhysicalType::INT32,
+            ),
+        )]);
 
         let predicate = Reference::new("id")
             .less_than(Datum::int(0))
@@ -617,8 +658,13 @@ mod tests {
     #[test]
     fn test_string_eq_present() {
         let schema = create_test_schema();
-        let bloom_filters =
-            HashMap::from([(2, (create_bloom_filter_with_values_str(&["alice", "bob"]), PhysicalType::BYTE_ARRAY))]);
+        let bloom_filters = HashMap::from([(
+            2,
+            (
+                create_bloom_filter_with_values_str(&["alice", "bob"]),
+                PhysicalType::BYTE_ARRAY,
+            ),
+        )]);
 
         let predicate = Reference::new("name")
             .equal_to(Datum::string("alice"))
@@ -632,8 +678,13 @@ mod tests {
     #[test]
     fn test_string_eq_absent() {
         let schema = create_test_schema();
-        let bloom_filters =
-            HashMap::from([(2, (create_bloom_filter_with_values_str(&["alice", "bob"]), PhysicalType::BYTE_ARRAY))]);
+        let bloom_filters = HashMap::from([(
+            2,
+            (
+                create_bloom_filter_with_values_str(&["alice", "bob"]),
+                PhysicalType::BYTE_ARRAY,
+            ),
+        )]);
 
         let predicate = Reference::new("name")
             .equal_to(Datum::string("charlie"))
@@ -652,12 +703,14 @@ mod tests {
     fn create_decimal_schema(precision: u32, scale: u32) -> Schema {
         Schema::builder()
             .with_schema_id(1)
-            .with_fields(vec![NestedField::required(
-                1,
-                "amount",
-                Type::Primitive(PrimitiveType::Decimal { precision, scale }),
-            )
-            .into()])
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "amount",
+                    Type::Primitive(PrimitiveType::Decimal { precision, scale }),
+                )
+                .into(),
+            ])
             .build()
             .unwrap()
     }
@@ -677,10 +730,13 @@ mod tests {
         let bloom_filters = HashMap::from([(1, (sbbf, PhysicalType::INT32))]);
 
         let predicate = Reference::new("amount")
-            .equal_to(Datum::decimal_with_precision(
-                crate::spec::decimal_utils::decimal_from_i128_with_scale(12345, 2),
-                9,
-            ).unwrap())
+            .equal_to(
+                Datum::decimal_with_precision(
+                    crate::spec::decimal_utils::decimal_from_i128_with_scale(12345, 2),
+                    9,
+                )
+                .unwrap(),
+            )
             .bind(schema.into(), true)
             .unwrap();
 
@@ -700,10 +756,13 @@ mod tests {
 
         // Value "999.99" has mantissa 99999, not in the bloom filter
         let predicate = Reference::new("amount")
-            .equal_to(Datum::decimal_with_precision(
-                crate::spec::decimal_utils::decimal_from_i128_with_scale(99999, 2),
-                9,
-            ).unwrap())
+            .equal_to(
+                Datum::decimal_with_precision(
+                    crate::spec::decimal_utils::decimal_from_i128_with_scale(99999, 2),
+                    9,
+                )
+                .unwrap(),
+            )
             .bind(schema.into(), true)
             .unwrap();
 
@@ -724,10 +783,13 @@ mod tests {
         let bloom_filters = HashMap::from([(1, (sbbf, PhysicalType::INT64))]);
 
         let predicate = Reference::new("amount")
-            .equal_to(Datum::decimal_with_precision(
-                crate::spec::decimal_utils::decimal_from_i128_with_scale(mantissa as i128, 2),
-                15,
-            ).unwrap())
+            .equal_to(
+                Datum::decimal_with_precision(
+                    crate::spec::decimal_utils::decimal_from_i128_with_scale(mantissa as i128, 2),
+                    15,
+                )
+                .unwrap(),
+            )
             .bind(schema.into(), true)
             .unwrap();
 
@@ -745,10 +807,13 @@ mod tests {
         let bloom_filters = HashMap::from([(1, (sbbf, PhysicalType::INT64))]);
 
         let predicate = Reference::new("amount")
-            .equal_to(Datum::decimal_with_precision(
-                crate::spec::decimal_utils::decimal_from_i128_with_scale(999999999999999, 2),
-                15,
-            ).unwrap())
+            .equal_to(
+                Datum::decimal_with_precision(
+                    crate::spec::decimal_utils::decimal_from_i128_with_scale(999999999999999, 2),
+                    15,
+                )
+                .unwrap(),
+            )
             .bind(schema.into(), true)
             .unwrap();
 
@@ -771,10 +836,13 @@ mod tests {
         let bloom_filters = HashMap::from([(1, (sbbf, PhysicalType::FIXED_LEN_BYTE_ARRAY))]);
 
         let predicate = Reference::new("amount")
-            .equal_to(Datum::decimal_with_precision(
-                crate::spec::decimal_utils::decimal_from_i128_with_scale(mantissa, 2),
-                25,
-            ).unwrap())
+            .equal_to(
+                Datum::decimal_with_precision(
+                    crate::spec::decimal_utils::decimal_from_i128_with_scale(mantissa, 2),
+                    25,
+                )
+                .unwrap(),
+            )
             .bind(schema.into(), true)
             .unwrap();
 
@@ -799,10 +867,16 @@ mod tests {
 
         // Different value not in the bloom filter
         let predicate = Reference::new("amount")
-            .equal_to(Datum::decimal_with_precision(
-                crate::spec::decimal_utils::decimal_from_i128_with_scale(99999999999999999999, 2),
-                25,
-            ).unwrap())
+            .equal_to(
+                Datum::decimal_with_precision(
+                    crate::spec::decimal_utils::decimal_from_i128_with_scale(
+                        99999999999999999999,
+                        2,
+                    ),
+                    25,
+                )
+                .unwrap(),
+            )
             .bind(schema.into(), true)
             .unwrap();
 
@@ -825,10 +899,13 @@ mod tests {
         let bloom_filters = HashMap::from([(1, (sbbf, PhysicalType::INT32))]);
 
         let predicate = Reference::new("amount")
-            .equal_to(Datum::decimal_with_precision(
-                crate::spec::decimal_utils::decimal_from_i128_with_scale(-12345, 2),
-                9,
-            ).unwrap())
+            .equal_to(
+                Datum::decimal_with_precision(
+                    crate::spec::decimal_utils::decimal_from_i128_with_scale(-12345, 2),
+                    9,
+                )
+                .unwrap(),
+            )
             .bind(schema.into(), true)
             .unwrap();
 
@@ -849,10 +926,13 @@ mod tests {
         let bloom_filters = HashMap::from([(1, (sbbf, PhysicalType::FIXED_LEN_BYTE_ARRAY))]);
 
         let predicate = Reference::new("amount")
-            .equal_to(Datum::decimal_with_precision(
-                crate::spec::decimal_utils::decimal_from_i128_with_scale(mantissa, 2),
-                25,
-            ).unwrap())
+            .equal_to(
+                Datum::decimal_with_precision(
+                    crate::spec::decimal_utils::decimal_from_i128_with_scale(mantissa, 2),
+                    25,
+                )
+                .unwrap(),
+            )
             .bind(schema.into(), true)
             .unwrap();
 
@@ -878,8 +958,7 @@ mod tests {
         let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
         sbbf.insert(&ByteArray::from(bytes));
 
-        let bloom_filters =
-            HashMap::from([(1, (sbbf, PhysicalType::FIXED_LEN_BYTE_ARRAY))]);
+        let bloom_filters = HashMap::from([(1, (sbbf, PhysicalType::FIXED_LEN_BYTE_ARRAY))]);
 
         let predicate = Reference::new("amount")
             .equal_to(
