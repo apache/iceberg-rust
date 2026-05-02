@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub(crate) mod bloom_filter_evaluator;
 pub(crate) mod bound_predicate_visitor;
 pub(crate) mod expression_evaluator;
 pub(crate) mod inclusive_metrics_evaluator;

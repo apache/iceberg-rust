@@ -196,6 +196,41 @@ pub fn i128_to_be_bytes_min(value: i128) -> Vec<u8> {
     bytes[start..].to_vec()
 }
 
+/// Encode an i128 decimal value as a fixed-length big-endian byte array,
+/// matching how Parquet stores `FIXED_LEN_BYTE_ARRAY` decimals.
+///
+/// The result is sign-extended or trimmed to exactly the number of bytes
+/// required for the given precision, matching the Java implementation in
+/// `DecimalUtil.toReusedFixLengthBytes`.
+///
+pub fn decimal_to_fixed_length_bytes(value: i128, precision: u32) -> Vec<u8> {
+    let required_len = parquet_decimal_byte_length(precision);
+    let be_bytes = value.to_be_bytes(); // 16 bytes, big-endian, two's complement
+
+    if required_len >= 16 {
+        // Sign-extend to the required length
+        let fill_byte = if value < 0 { 0xFF } else { 0x00 };
+        let mut buf = vec![fill_byte; required_len];
+        let offset = required_len - 16;
+        buf[offset..].copy_from_slice(&be_bytes);
+        buf
+    } else {
+        // Trim leading bytes (value fits in fewer bytes)
+        let offset = 16 - required_len;
+        be_bytes[offset..].to_vec()
+    }
+}
+
+/// Returns the number of bytes required to store a decimal with the given
+/// precision as a Parquet `FIXED_LEN_BYTE_ARRAY`.
+///
+/// Mirrors `parquet::arrow::schema::decimal_length_from_precision` which is
+/// not publicly accessible outside the parquet crate without the `experimental`
+/// feature flag.
+fn parquet_decimal_byte_length(precision: u32) -> usize {
+    (((10.0_f64.powi(precision as i32) + 1.0).log2() + 1.0) / 8.0).ceil() as usize
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,6 +388,63 @@ mod tests {
                 i128_from_be_bytes(&bytes),
                 Some(val),
                 "Round trip failed for {val}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parquet_decimal_byte_length() {
+        // INT32 range (precision 1-9) should need <= 4 bytes
+        assert!(parquet_decimal_byte_length(1) <= 4);
+        assert!(parquet_decimal_byte_length(9) <= 4);
+        // INT64 range (precision 10-18) should need <= 8 bytes
+        assert!(parquet_decimal_byte_length(10) <= 8);
+        assert!(parquet_decimal_byte_length(18) <= 8);
+        // FIXED_LEN_BYTE_ARRAY range (precision 19+)
+        assert_eq!(parquet_decimal_byte_length(19), 9);
+        assert_eq!(parquet_decimal_byte_length(38), 16);
+    }
+
+    #[test]
+    fn test_decimal_to_parquet_fixed_bytes_positive() {
+        // 12345 with precision 20 (requires 9 bytes)
+        let bytes = decimal_to_fixed_length_bytes(12345, 20);
+        assert_eq!(bytes.len(), parquet_decimal_byte_length(20));
+        // Should be big-endian, zero-padded on the left
+        assert_eq!(bytes[bytes.len() - 2], 0x30); // 12345 = 0x3039
+        assert_eq!(bytes[bytes.len() - 1], 0x39);
+        // Leading bytes should be 0x00 (positive)
+        assert!(bytes[..bytes.len() - 2].iter().all(|&b| b == 0x00));
+    }
+
+    #[test]
+    fn test_decimal_to_parquet_fixed_bytes_negative() {
+        // -1 with precision 20
+        let bytes = decimal_to_fixed_length_bytes(-1, 20);
+        assert_eq!(bytes.len(), parquet_decimal_byte_length(20));
+        // All bytes should be 0xFF (-1 in two's complement)
+        assert!(bytes.iter().all(|&b| b == 0xFF));
+    }
+
+    #[test]
+    fn test_decimal_to_parquet_fixed_bytes_round_trip() {
+        // Verify that encoding then decoding via i128_from_be_bytes gives back
+        // the original value
+        for (value, precision) in [
+            (0i128, 20),
+            (1, 20),
+            (-1, 20),
+            (12345, 20),
+            (-12345, 20),
+            (i64::MAX as i128, 20),
+            (i64::MIN as i128, 20),
+        ] {
+            let bytes = decimal_to_fixed_length_bytes(value, precision);
+            let decoded = i128_from_be_bytes(&bytes);
+            assert_eq!(
+                decoded,
+                Some(value),
+                "Round trip failed for value={value}, precision={precision}"
             );
         }
     }
