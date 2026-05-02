@@ -146,6 +146,7 @@ impl ManifestProcess for DefaultManifestProcess {
         &self,
         _snapshot_produce: &SnapshotProducer<'_>,
         manifests: Vec<ManifestFile>,
+        _new_manifest_paths: &HashSet<String>,
     ) -> Result<Vec<ManifestFile>> {
         Ok(manifests)
     }
