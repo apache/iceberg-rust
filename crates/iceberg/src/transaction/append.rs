@@ -103,6 +103,7 @@ impl TransactionAction for FastAppendAction {
         snapshot_producer
             .commit(FastAppendOperation, DefaultManifestProcess)
             .await
+            .map(|(commit, _)| commit)
     }
 }
 

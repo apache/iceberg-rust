@@ -33,7 +33,7 @@ use tracing::warn;
 
 use crate::Result;
 use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, Manifest, ManifestContentType, ManifestEntry,
+    DataFileFormat, FormatVersion, Manifest, ManifestContentType, ManifestEntry,
     ManifestFile, ManifestWriterBuilder,
 };
 use crate::transaction::snapshot::{META_ROOT_PATH, SnapshotProducer};
@@ -44,12 +44,9 @@ const MANIFEST_READ_CONCURRENCY: usize = 32;
 
 pub(crate) struct ManifestFilterManager {
     deleted_paths: Mutex<HashSet<String>>,
-    /// `original_manifest_path → rewritten_residual`. Persists across commit retries
-    /// so identical inputs produce identical residuals — Java's idempotent retry
-    /// contract.
-    cache: Mutex<HashMap<String, ManifestFile>>,
-    /// Paths written this attempt; `clean_uncommitted` reads these on commit failure.
-    cleanup_paths: Mutex<Vec<String>>,
+    /// `source_manifest_path → rewritten_residual (None = fully dropped)`. Persists
+    /// across commit retries — Java's idempotent retry contract.
+    cache: Mutex<HashMap<String, Option<ManifestFile>>>,
     /// Drives the `manifests-replaced` snapshot summary key.
     replaced_count: AtomicU64,
 }
@@ -59,7 +56,6 @@ impl ManifestFilterManager {
         Self {
             deleted_paths: Mutex::new(HashSet::new()),
             cache: Mutex::new(HashMap::new()),
-            cleanup_paths: Mutex::new(Vec::new()),
             replaced_count: AtomicU64::new(0),
         }
     }
@@ -111,12 +107,14 @@ impl ManifestFilterManager {
 
         let mut result = Vec::with_capacity(loaded.len());
         for (ml_entry, manifest) in loaded.into_iter() {
-            // Cache check (lock-clone-release).
-            if let Some(cached) = {
+            // Cache hit: Some(mf) = prior residual, None = was fully dropped.
+            if let Some(cached_opt) = {
                 let g = self.cache.lock().expect("filter cache mutex");
                 g.get(&ml_entry.manifest_path).cloned()
             } {
-                result.push(cached);
+                if let Some(cached) = cached_opt {
+                    result.push(cached);
+                }
                 continue;
             }
 
@@ -141,20 +139,18 @@ impl ManifestFilterManager {
             }
 
             if survivors.is_empty() {
-                // Drop the manifest entirely; the delete pass will mark its entries
-                // as Deleted in the new snapshot.
                 self.replaced_count.fetch_add(1, Ordering::Relaxed);
+                self.cache
+                    .lock()
+                    .expect("filter cache mutex")
+                    .insert(ml_entry.manifest_path.clone(), None);
                 continue;
             }
 
             let residual = write_residual(producer, &ml_entry, &survivors).await?;
             {
-                let mut g = self.cleanup_paths.lock().expect("filter cleanup-paths mutex");
-                g.push(residual.manifest_path.clone());
-            }
-            {
                 let mut g = self.cache.lock().expect("filter cache mutex");
-                g.insert(ml_entry.manifest_path.clone(), residual.clone());
+                g.insert(ml_entry.manifest_path.clone(), Some(residual.clone()));
             }
             self.replaced_count.fetch_add(1, Ordering::Relaxed);
             result.push(residual);
@@ -163,28 +159,36 @@ impl ManifestFilterManager {
         Ok(result)
     }
 
-    /// Best-effort delete of cached residuals not in `committed_paths`. IO errors
-    /// are logged, never propagated — the orphan-file sweep catches anything missed.
+    /// Best-effort delete of uncommitted residuals not in `committed_paths`. IO errors
+    /// are logged, never propagated. `None` cache entries (fully-dropped manifests)
+    /// are kept for retry idempotency.
     pub(crate) async fn clean_uncommitted(
         &self,
         file_io: &crate::io::FileIO,
         committed_paths: &HashSet<String>,
     ) {
-        let paths_snapshot = {
-            let g = self.cleanup_paths.lock().expect("filter cleanup-paths mutex");
-            g.clone()
+        let entries: Vec<(String, Option<ManifestFile>)> = {
+            let g = self.cache.lock().expect("filter cache mutex");
+            g.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
         };
-        for path in paths_snapshot {
-            if committed_paths.contains(&path) {
+        for (source_path, cached) in entries {
+            let Some(ref mf) = cached else {
+                continue;
+            };
+            if committed_paths.contains(&mf.manifest_path) {
                 continue;
             }
-            if let Err(e) = file_io.delete(&path).await {
+            if let Err(e) = file_io.delete(&mf.manifest_path).await {
                 warn!(
-                    path = %path,
+                    path = %mf.manifest_path,
                     error = %e,
                     "manifest_filter: orphan residual delete failed; orphan-file sweeper will reclaim"
                 );
             }
+            self.cache
+                .lock()
+                .expect("filter cache mutex")
+                .remove(&source_path);
         }
     }
 }
@@ -260,6 +264,28 @@ fn residual_suffix(source_path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::io::FileIO;
+
+    fn fake_manifest(path: &str) -> ManifestFile {
+        ManifestFile {
+            manifest_path: path.to_string(),
+            manifest_length: 0,
+            partition_spec_id: 0,
+            content: ManifestContentType::Data,
+            sequence_number: 0,
+            min_sequence_number: 0,
+            added_snapshot_id: 0,
+            added_files_count: None,
+            existing_files_count: None,
+            deleted_files_count: None,
+            added_rows_count: None,
+            existing_rows_count: None,
+            deleted_rows_count: None,
+            partitions: None,
+            key_metadata: None,
+            first_row_id: None,
+        }
+    }
 
     #[test]
     fn residual_suffix_is_stable() {
@@ -278,6 +304,68 @@ mod tests {
         assert_eq!(
             filter.deleted_paths.lock().expect("test mutex").len(),
             1
+        );
+    }
+
+    /// clean_uncommitted removes cache entries for residuals not in committed_paths.
+    #[tokio::test]
+    async fn clean_uncommitted_removes_uncommitted_residual_from_cache() {
+        let mgr = ManifestFilterManager::new();
+        let residual = fake_manifest("mem:///meta/residual.avro");
+        mgr.cache
+            .lock()
+            .unwrap()
+            .insert("mem:///meta/source.avro".to_string(), Some(residual));
+
+        mgr.clean_uncommitted(&FileIO::new_with_memory(), &HashSet::new())
+            .await;
+
+        assert!(
+            mgr.cache.lock().unwrap().is_empty(),
+            "uncommitted residual should be removed from cache"
+        );
+    }
+
+    /// clean_uncommitted preserves cache entries for residuals in committed_paths.
+    #[tokio::test]
+    async fn clean_uncommitted_preserves_committed_residual_in_cache() {
+        let mgr = ManifestFilterManager::new();
+        let residual = fake_manifest("mem:///meta/residual.avro");
+        mgr.cache
+            .lock()
+            .unwrap()
+            .insert("mem:///meta/source.avro".to_string(), Some(residual.clone()));
+
+        let mut committed = HashSet::new();
+        committed.insert("mem:///meta/residual.avro".to_string());
+        mgr.clean_uncommitted(&FileIO::new_with_memory(), &committed)
+            .await;
+
+        assert_eq!(
+            mgr.cache.lock().unwrap().get("mem:///meta/source.avro"),
+            Some(&Some(residual)),
+            "committed residual must stay in cache"
+        );
+    }
+
+    /// clean_uncommitted keeps None (fully-dropped) entries for retry idempotency.
+    #[tokio::test]
+    async fn clean_uncommitted_keeps_dropped_sentinel_in_cache() {
+        let mgr = ManifestFilterManager::new();
+        mgr.cache
+            .lock()
+            .unwrap()
+            .insert("mem:///meta/source.avro".to_string(), None);
+
+        mgr.clean_uncommitted(&FileIO::new_with_memory(), &HashSet::new())
+            .await;
+
+        assert!(
+            mgr.cache
+                .lock()
+                .unwrap()
+                .contains_key("mem:///meta/source.avro"),
+            "None sentinel must be kept for retry idempotency"
         );
     }
 }

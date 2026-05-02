@@ -737,12 +737,13 @@ impl<'a> SnapshotProducer<'a> {
         )
     }
 
-    /// Finished building the action and return the [`ActionCommit`] to the transaction.
+    /// Finished building the action and return the [`ActionCommit`] to the transaction
+    /// along with the set of committed manifest paths for `clean_uncommitted`.
     pub(crate) async fn commit<OP: SnapshotProduceOperation, MP: ManifestProcess>(
         mut self,
         snapshot_produce_operation: OP,
         process: MP,
-    ) -> Result<ActionCommit> {
+    ) -> Result<(ActionCommit, HashSet<String>)> {
         let manifest_list_path = self.generate_manifest_list_file_path(0);
         let next_seq_num = self.table.metadata().next_sequence_number();
         let first_row_id = self.table.metadata().next_row_id();
@@ -783,6 +784,11 @@ impl<'a> SnapshotProducer<'a> {
         let new_manifests = self
             .manifest_file(&snapshot_produce_operation, &process)
             .await?;
+
+        let committed_manifest_paths: HashSet<String> = new_manifests
+            .iter()
+            .map(|m| m.manifest_path.clone())
+            .collect();
 
         inject_manifest_summary_keys(
             &mut summary,
@@ -837,7 +843,7 @@ impl<'a> SnapshotProducer<'a> {
             },
         ];
 
-        Ok(ActionCommit::new(updates, requirements))
+        Ok((ActionCommit::new(updates, requirements), committed_manifest_paths))
     }
 }
 

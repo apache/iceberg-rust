@@ -217,7 +217,12 @@ impl TransactionAction for RewriteFilesAction {
         };
 
         match snapshot_producer.commit(rewrite_op, state.clone()).await {
-            Ok(commit) => Ok(commit),
+            Ok((commit, committed_paths)) => {
+                state
+                    .clean_uncommitted(table.file_io(), &committed_paths)
+                    .await;
+                Ok(commit)
+            }
             Err(err) => {
                 // Do not clean up on error: commit may have actually succeeded but the ACK was lost.
                 // Deleting here risks removing committed manifests, leading to silent table corruption.
@@ -371,6 +376,7 @@ mod tests {
         DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
         ManifestStatus, Operation, Struct,
     };
+    use crate::transaction::action::ActionCommit;
     use crate::transaction::tests::{apply_updates_to_table, make_v2_minimal_table};
     use crate::transaction::{Transaction, TransactionAction};
     use crate::{TableRequirement, TableUpdate};
@@ -1423,6 +1429,43 @@ mod tests {
         );
         let _ = action.clone().commit(&table).await.unwrap();
         let _ = action.commit(&table).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_idempotent_replaced_count() {
+        let table = make_v2_minimal_table();
+        let f1 = make_data_file(&table, "data/f1.parquet", 10);
+        let table = append_files(table, vec![f1.clone()]).await;
+
+        let c1 = make_data_file(&table, "data/c1.parquet", 10);
+        let action = Arc::new(
+            Transaction::new(&table)
+                .rewrite_files()
+                .delete_files(vec![f1])
+                .add_files(vec![c1]),
+        );
+
+        fn replaced_count(ac: &mut ActionCommit) -> String {
+            for u in ac.take_updates() {
+                if let TableUpdate::AddSnapshot { snapshot } = u {
+                    if let Some(v) = snapshot
+                        .summary()
+                        .additional_properties
+                        .get("manifests-replaced")
+                    {
+                        return v.clone();
+                    }
+                }
+            }
+            panic!("no manifests-replaced in snapshot summary");
+        }
+
+        let count1 = replaced_count(&mut action.clone().commit(&table).await.unwrap());
+        let count2 = replaced_count(&mut action.commit(&table).await.unwrap());
+        assert_eq!(
+            count1, count2,
+            "manifests-replaced must be stable across retries"
+        );
     }
 
     #[tokio::test]

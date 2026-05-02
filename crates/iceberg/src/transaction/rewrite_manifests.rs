@@ -280,6 +280,7 @@ impl TransactionAction for RewriteManifestsAction {
                 DefaultManifestProcess,
             )
             .await
+            .map(|(commit, _)| commit)
     }
 }
 
