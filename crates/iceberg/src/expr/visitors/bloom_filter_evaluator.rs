@@ -191,20 +191,8 @@ impl BoundPredicateVisitor for BloomFilterFieldIdCollector {
 ///
 /// The value must be checked using the same physical encoding the Parquet
 /// writer used when inserting into the bloom filter. We use the actual
-/// physical type from the column metadata (not inferred from precision)
-/// to ensure correctness regardless of which writer produced the file.
-///
-/// The encoding for each physical type is defined by the Parquet column
-/// writer in `parquet::column::writer::encoder`:
-///
-///   `bloom_filter.insert(value)` where `value` is the physical type `T::T`
-///
-/// The arrow writer's conversion from logical to physical is in
-/// `parquet::arrow::arrow_writer`:
-///
-/// - **INT32**: `|v: i128| v as i32`
-/// - **INT64**: `|v: i128| v as i64`
-/// - **FIXED_LEN_BYTE_ARRAY**: `i128.to_be_bytes()[(16-size)..]`
+/// physical type from the column metadata to ensure correctness regardless
+/// of which writer produced the file.
 fn check_in_bloom_filter(sbbf: &Sbbf, datum: &Datum, physical_type: PhysicalType) -> bool {
     match datum.literal() {
         PrimitiveLiteral::Boolean(v) => sbbf.check(v),
