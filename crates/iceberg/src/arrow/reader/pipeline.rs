@@ -638,14 +638,20 @@ impl FileScanTaskReader {
             }
 
             if self.bloom_filter_enabled {
-                let candidate_rgs = selected_row_group_indices.clone().unwrap_or_else(|| {
-                    (0..record_batch_stream_builder.metadata().num_row_groups()).collect()
-                });
+                let all_rgs;
+                let candidate_rgs = match &selected_row_group_indices {
+                    Some(indices) => indices.as_slice(),
+                    None => {
+                        all_rgs = (0..record_batch_stream_builder.metadata().num_row_groups())
+                            .collect::<Vec<_>>();
+                        &all_rgs
+                    }
+                };
 
                 let bloom_filtered = Self::filter_row_groups_by_bloom_filter(
                     &predicate,
                     &mut record_batch_stream_builder,
-                    &candidate_rgs,
+                    candidate_rgs,
                     &field_id_map,
                 )
                 .await?;
