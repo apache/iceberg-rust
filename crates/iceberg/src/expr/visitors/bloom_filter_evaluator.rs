@@ -862,4 +862,40 @@ mod tests {
             "Negative decimal FIXED_LEN_BYTE_ARRAY present should might-match"
         );
     }
+
+    /// A Parquet writer other than arrow-rs (e.g. Spark, Java Parquet) might
+    /// choose FIXED_LEN_BYTE_ARRAY for a low-precision decimal rather than INT32.
+    /// The evaluator must use the physical type from the file metadata, not assume
+    /// a mapping based on precision.
+    #[test]
+    fn test_decimal_low_precision_stored_as_fixed_len_byte_array() {
+        let schema = create_decimal_schema(5, 2);
+
+        // Simulate a file where decimal(5,2) was stored as FIXED_LEN_BYTE_ARRAY
+        let mantissa: i128 = 12345;
+        let bytes = decimal_to_fixed_length_bytes(mantissa, 5);
+
+        let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
+        sbbf.insert(&ByteArray::from(bytes));
+
+        let bloom_filters =
+            HashMap::from([(1, (sbbf, PhysicalType::FIXED_LEN_BYTE_ARRAY))]);
+
+        let predicate = Reference::new("amount")
+            .equal_to(
+                Datum::decimal_with_precision(
+                    crate::spec::decimal_utils::decimal_from_i128_with_scale(mantissa, 2),
+                    5,
+                )
+                .unwrap(),
+            )
+            .bind(schema.into(), true)
+            .unwrap();
+
+        let result = BloomFilterEvaluator::eval(&predicate, &bloom_filters).unwrap();
+        assert!(
+            result,
+            "Should match when physical type is FIXED_LEN_BYTE_ARRAY even for low-precision decimal"
+        );
+    }
 }
