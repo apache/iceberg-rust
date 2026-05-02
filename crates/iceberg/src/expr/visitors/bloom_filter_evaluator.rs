@@ -71,18 +71,18 @@ impl<'a> BloomFilterEvaluator<'a> {
 pub(crate) fn collect_bloom_filter_field_ids(
     predicate: &BoundPredicate,
 ) -> Result<HashSet<i32>> {
-    let mut visitor = EqualityFieldIdCollector {
+    let mut visitor = BloomFilterFieldIdCollector {
         field_ids: HashSet::new(),
     };
     visit(&mut visitor, predicate)?;
     Ok(visitor.field_ids)
 }
 
-struct EqualityFieldIdCollector {
+struct BloomFilterFieldIdCollector {
     field_ids: HashSet<i32>,
 }
 
-impl BoundPredicateVisitor for EqualityFieldIdCollector {
+impl BoundPredicateVisitor for BloomFilterFieldIdCollector {
     type T = ();
 
     fn always_true(&mut self) -> Result<()> {
