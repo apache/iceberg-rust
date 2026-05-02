@@ -39,7 +39,6 @@ async fn rest_catalog() -> RestCatalog {
     let fixture = get_test_fixture();
     RestCatalogBuilder::default()
         .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
-            configured_scheme: "s3".to_string(),
             customized_credential_load: None,
         }))
         .load("rest", fixture.catalog_config.clone())

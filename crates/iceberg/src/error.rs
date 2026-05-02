@@ -18,6 +18,7 @@
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
+use std::sync::PoisonError;
 
 use chrono::{DateTime, TimeZone as _, Utc};
 
@@ -421,6 +422,11 @@ define_from_err!(
 );
 
 define_from_err!(std::io::Error, ErrorKind::Unexpected, "IO Operation failed");
+
+/// Converts a [`PoisonError`] from a poisoned lock into an [`Error`].
+pub(crate) fn lock_error<T>(e: PoisonError<T>) -> Error {
+    Error::new(ErrorKind::Unexpected, format!("Lock poisoned: {e}"))
+}
 
 /// Converts a timestamp in milliseconds to `DateTime<Utc>`, handling errors.
 ///
