@@ -272,15 +272,15 @@ impl TransactionAction for RewriteManifestsAction {
         let mut all_manifests = kept_manifests;
         all_manifests.extend(new_manifests);
 
-        snapshot_producer
+        let result = snapshot_producer
             .commit(
                 RewriteManifestsOperation {
                     manifests: all_manifests,
                 },
                 DefaultManifestProcess,
             )
-            .await
-            .map(|(commit, _)| commit)
+            .await?;
+        Ok(result.commit)
     }
 }
 

@@ -35,6 +35,13 @@ use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 pub(crate) const META_ROOT_PATH: &str = "metadata";
 
+pub(crate) struct CommitResult {
+    pub commit: ActionCommit,
+    /// Manifest paths written into the new snapshot. Pass to `clean_uncommitted`
+    /// to delete orphaned prior-attempt residuals. See `RewriteFilesAction` for usage.
+    pub committed_manifest_paths: HashSet<String>,
+}
+
 /// Set the per-commit manifest activity counters on `summary` from the final
 /// manifest list and the action's replaced count.
 ///
@@ -743,7 +750,7 @@ impl<'a> SnapshotProducer<'a> {
         mut self,
         snapshot_produce_operation: OP,
         process: MP,
-    ) -> Result<(ActionCommit, HashSet<String>)> {
+    ) -> Result<CommitResult> {
         let manifest_list_path = self.generate_manifest_list_file_path(0);
         let next_seq_num = self.table.metadata().next_sequence_number();
         let first_row_id = self.table.metadata().next_row_id();
@@ -843,7 +850,10 @@ impl<'a> SnapshotProducer<'a> {
             },
         ];
 
-        Ok((ActionCommit::new(updates, requirements), committed_manifest_paths))
+        Ok(CommitResult {
+            commit: ActionCommit::new(updates, requirements),
+            committed_manifest_paths,
+        })
     }
 }
 

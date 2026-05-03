@@ -27,7 +27,7 @@ use crate::error::Result;
 use crate::spec::{DataFile, ManifestEntry, ManifestFile, ManifestStatus, Operation};
 use crate::table::Table;
 use crate::transaction::merging_state::MergingState;
-use crate::transaction::snapshot::{SnapshotProduceOperation, SnapshotProducer};
+use crate::transaction::snapshot::{CommitResult, SnapshotProduceOperation, SnapshotProducer};
 use crate::transaction::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind};
 
@@ -216,19 +216,17 @@ impl TransactionAction for RewriteFilesAction {
             state: state.clone(),
         };
 
-        match snapshot_producer.commit(rewrite_op, state.clone()).await {
-            Ok((commit, committed_paths)) => {
-                state
-                    .clean_uncommitted(table.file_io(), &committed_paths)
-                    .await;
-                Ok(commit)
-            }
-            Err(err) => {
-                // Do not clean up on error: commit may have actually succeeded but the ACK was lost.
-                // Deleting here risks removing committed manifests, leading to silent table corruption.
-                Err(err)
-            }
-        }
+        let CommitResult {
+            commit,
+            committed_manifest_paths,
+        } = snapshot_producer.commit(rewrite_op, state.clone()).await?;
+        // Only clean up on confirmed success. On error the commit may have reached the
+        // catalog (ACK loss) — deleting committed manifests would cause silent corruption.
+        // Java analog: MergingSnapshotProducer#cleanUncommitted.
+        state
+            .clean_uncommitted(table.file_io(), &committed_manifest_paths)
+            .await;
+        Ok(commit)
     }
 }
 

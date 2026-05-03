@@ -107,15 +107,16 @@ impl ManifestFilterManager {
 
         let mut result = Vec::with_capacity(loaded.len());
         for (ml_entry, manifest) in loaded.into_iter() {
-            // Cache hit: Some(mf) = prior residual, None = was fully dropped.
-            if let Some(cached_opt) = {
-                let g = self.cache.lock().expect("filter cache mutex");
-                g.get(&ml_entry.manifest_path).cloned()
-            } {
-                if let Some(cached) = cached_opt {
+            match self.cache.lock().expect("filter cache mutex")
+                .get(&ml_entry.manifest_path)
+                .cloned()
+            {
+                Some(Some(cached)) => {
                     result.push(cached);
+                    continue;
                 }
-                continue;
+                Some(None) => continue, // fully-dropped sentinel
+                None => {}              // not yet cached, fall through
             }
 
             // Single pass over entries: classify and bucket survivors at once,
