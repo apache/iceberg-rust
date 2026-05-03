@@ -523,20 +523,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_failure_cleans_up_manifests() {
-        // clean_uncommitted is called on the success path after commit.
-        // Verify that after a successful commit, re-committing the same Arc
-        // (OnceLock short-circuit) still produces a valid result.
-        let table = make_v2_minimal_table();
-        let f1 = make_data_file(&table, "data/f1.parquet", 10);
-        let action = Arc::new(Transaction::new(&table).merge_append().add_data_files(vec![f1]));
-
-        let first = action.clone().commit(&table).await.unwrap();
-        let _ = action.commit(&table).await.unwrap(); // second attempt via same Arc (idempotency)
-        drop(first);
-    }
-
-    #[tokio::test]
     async fn test_recovery_reuses_manifest() {
         // A second commit() call on the same Arc<MergeAppendAction> reuses the
         // cached MergingState (OnceLock short-circuit) — idempotency guarantee.
