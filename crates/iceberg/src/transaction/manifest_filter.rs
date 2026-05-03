@@ -140,11 +140,11 @@ impl ManifestFilterManager {
             }
 
             if survivors.is_empty() {
-                self.replaced_count.fetch_add(1, Ordering::Relaxed);
                 self.cache
                     .lock()
                     .expect("filter cache mutex")
                     .insert(ml_entry.manifest_path.clone(), None);
+                self.replaced_count.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
 
@@ -168,28 +168,32 @@ impl ManifestFilterManager {
         file_io: &crate::io::FileIO,
         committed_paths: &HashSet<String>,
     ) {
-        let entries: Vec<(String, Option<ManifestFile>)> = {
+        let entries: Vec<(String, ManifestFile)> = {
             let g = self.cache.lock().expect("filter cache mutex");
-            g.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+            g.iter()
+                .filter_map(|(k, v)| v.as_ref().map(|mf| (k.clone(), mf.clone())))
+                .collect()
         };
-        for (source_path, cached) in entries {
-            let Some(ref mf) = cached else {
-                continue;
-            };
+        for (source_path, mf) in entries {
             if committed_paths.contains(&mf.manifest_path) {
                 continue;
             }
-            if let Err(e) = file_io.delete(&mf.manifest_path).await {
-                warn!(
-                    path = %mf.manifest_path,
-                    error = %e,
-                    "manifest_filter: orphan residual delete failed; orphan-file sweeper will reclaim"
-                );
+            match file_io.delete(&mf.manifest_path).await {
+                Ok(()) => {
+                    self.cache
+                        .lock()
+                        .expect("filter cache mutex")
+                        .remove(&source_path);
+                }
+                Err(e) => {
+                    warn!(
+                        path = %mf.manifest_path,
+                        error = %e,
+                        "manifest_filter: orphan residual delete failed; \
+                         cache entry kept for retry; sweeper will reclaim if not retried"
+                    );
+                }
             }
-            self.cache
-                .lock()
-                .expect("filter cache mutex")
-                .remove(&source_path);
         }
     }
 }
@@ -248,6 +252,12 @@ async fn write_residual(
 /// Hash a source manifest's basename to a stable 16-char hex suffix. Same input
 /// produces the same suffix across retries, letting the cache short-circuit
 /// rewrites that would otherwise write the same residual twice.
+///
+/// `DefaultHasher::new()` uses fixed SipHash-1-3 keys (k0=0, k1=0), so identical
+/// input produces identical output across processes today. The std docs don't
+/// formally guarantee this across compiler versions — if the algorithm ever changes,
+/// retries would write new paths and orphan the old ones (orphan-file sweeper reclaims
+/// them).
 fn residual_suffix(source_path: &str) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};

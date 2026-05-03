@@ -279,20 +279,25 @@ impl ManifestMergeManager {
             if committed_paths.contains(&merged.manifest_path) {
                 continue;
             }
-            if let Err(e) = file_io.delete(&merged.manifest_path).await {
-                warn!(
-                    path = %merged.manifest_path,
-                    error = %e,
-                    "manifest_merge: orphan merge delete failed; orphan-file sweeper will reclaim"
-                );
-            }
-            // Roll back the cache + count for this bin. The Java analog decrements
-            // per prior-snapshot source; the cache key only stores paths so we use
-            // bin size as the upper bound. The next merge recomputes from scratch.
-            let mut guard = self.cache.lock().expect("merge cache mutex");
-            if guard.remove(&key).is_some() {
-                self.replaced_count
-                    .fetch_sub(key.len().saturating_sub(1) as u64, Ordering::Relaxed);
+            match file_io.delete(&merged.manifest_path).await {
+                Ok(()) => {
+                    // Roll back the cache + count for this bin. The Java analog decrements
+                    // per prior-snapshot source; the cache key only stores paths so we use
+                    // bin size as the upper bound. The next merge recomputes from scratch.
+                    let mut guard = self.cache.lock().expect("merge cache mutex");
+                    if guard.remove(&key).is_some() {
+                        self.replaced_count
+                            .fetch_sub(key.len().saturating_sub(1) as u64, Ordering::Relaxed);
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        path = %merged.manifest_path,
+                        error = %e,
+                        "manifest_merge: orphan merge delete failed; \
+                         cache entry kept for retry; sweeper will reclaim if not retried"
+                    );
+                }
             }
         }
     }
@@ -300,6 +305,12 @@ impl ManifestMergeManager {
 
 /// Stable hash of a bin's source paths, so retries on the same bin produce the
 /// same merged-manifest path and the cache short-circuits.
+///
+/// `DefaultHasher::new()` uses fixed SipHash-1-3 keys (k0=0, k1=0), so identical
+/// input produces identical output across processes today. The std docs don't
+/// formally guarantee this across compiler versions — if the algorithm ever changes,
+/// retries would write new paths and orphan the old ones (orphan-file sweeper reclaims
+/// them).
 fn merge_suffix(source_paths: &[String]) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
