@@ -78,9 +78,12 @@ impl MergeAppendAction {
 
     /// Set whether to scan existing manifests for duplicate file paths before committing.
     ///
-    /// Defaults to `false` (matches Java). Enable only when the caller cannot
-    /// guarantee path uniqueness — the scan is O(N×M): it reads every manifest
-    /// in the current snapshot and compares each entry against all added files.
+    /// Defaults to `false`. Enable only when the caller cannot guarantee path
+    /// uniqueness. The scan deserializes every manifest in the current snapshot
+    /// and probes each entry against a HashSet of the new paths — O(P + E) where
+    /// P is the number of added files and E is the total manifest entries. The
+    /// dominant cost is I/O, not comparison. Java's `MergeAppend` has no
+    /// equivalent check; this is a Rust-specific safety option.
     pub fn with_check_duplicate(mut self, v: bool) -> Self {
         self.check_duplicate = v;
         self
