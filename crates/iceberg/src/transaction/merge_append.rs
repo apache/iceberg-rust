@@ -60,7 +60,7 @@ impl MergeAppendAction {
         let num_cpus = available_parallelism().get();
         Self {
             added_data_files: vec![],
-            check_duplicate: true,
+            check_duplicate: false,
             commit_uuid: None,
             key_metadata: None,
             snapshot_properties: HashMap::default(),
@@ -76,11 +76,11 @@ impl MergeAppendAction {
         self
     }
 
-    /// Set whether to check for duplicate files.
+    /// Set whether to scan existing manifests for duplicate file paths before committing.
     ///
-    /// Set `false` for ingest paths that guarantee path uniqueness (e.g.,
-    /// UUID-named Parquet files) — `validate_duplicate_files` reads all N
-    /// existing manifests and is the dominant per-commit read cost.
+    /// Defaults to `false` (matches Java). Enable only when the caller cannot
+    /// guarantee path uniqueness — the scan is O(N×M): it reads every manifest
+    /// in the current snapshot and compares each entry against all added files.
     pub fn with_check_duplicate(mut self, v: bool) -> Self {
         self.check_duplicate = v;
         self
@@ -225,7 +225,7 @@ mod tests {
         make_v2_minimal_table,
     };
     use crate::transaction::{Transaction, TransactionAction};
-    use crate::{TableUpdate};
+    use crate::TableUpdate;
 
     // ─── helpers ────────────────────────────────────────────────────────────────
 

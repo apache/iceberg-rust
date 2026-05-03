@@ -298,7 +298,7 @@ mod tests {
             .unwrap()
     }
 
-    pub fn make_v2_table() -> Table {
+    pub(crate) fn make_v2_table() -> Table {
         let file = File::open(format!(
             "{}/testdata/table_metadata/{}",
             env!("CARGO_MANIFEST_DIR"),
@@ -317,7 +317,7 @@ mod tests {
             .unwrap()
     }
 
-    pub fn make_v2_minimal_table() -> Table {
+    pub(crate) fn make_v2_minimal_table() -> Table {
         let file = File::open(format!(
             "{}/testdata/table_metadata/{}",
             env!("CARGO_MANIFEST_DIR"),
@@ -336,7 +336,7 @@ mod tests {
             .unwrap()
     }
 
-    pub fn apply_updates_to_table(table: &Table, updates: &[TableUpdate]) -> Table {
+    pub(crate) fn apply_updates_to_table(table: &Table, updates: &[TableUpdate]) -> Table {
         let mut builder = table.metadata().clone().into_builder(None);
         for update in updates {
             builder = update.clone().apply(builder).unwrap();
@@ -345,7 +345,7 @@ mod tests {
         table.clone().with_metadata(metadata)
     }
 
-    pub fn make_data_file(table: &Table, path: &str, record_count: u64) -> DataFile {
+    pub(crate) fn make_data_file(table: &Table, path: &str, record_count: u64) -> DataFile {
         DataFileBuilder::default()
             .content(DataContentType::Data)
             .file_path(path.to_string())
@@ -358,7 +358,7 @@ mod tests {
             .unwrap()
     }
 
-    pub async fn append_files(table: Table, files: Vec<DataFile>) -> Table {
+    pub(crate) async fn append_files(table: Table, files: Vec<DataFile>) -> Table {
         let tx = Transaction::new(&table);
         let append = tx.fast_append().add_data_files(files);
         let updates = Arc::new(append)
@@ -369,7 +369,7 @@ mod tests {
         apply_updates_to_table(&table, &updates)
     }
 
-    pub async fn collect_alive_files(snapshot: &Snapshot, table: &Table) -> Vec<String> {
+    pub(crate) async fn collect_alive_files(snapshot: &Snapshot, table: &Table) -> Vec<String> {
         let manifest_list = snapshot
             .load_manifest_list(table.file_io(), table.metadata())
             .await
