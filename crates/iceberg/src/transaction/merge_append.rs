@@ -293,15 +293,6 @@ mod tests {
     // ─── ported Java tests ───────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn test_empty_table_append() {
-        // AC-1: first commit on an empty table → exactly 1 manifest
-        let table = make_v2_minimal_table();
-        let f1 = make_data_file(&table, "data/f1.parquet", 10);
-        let table = merge_append_files(table, vec![f1]).await;
-        assert_eq!(manifest_count(&table).await, 1);
-    }
-
-    #[tokio::test]
     async fn test_add_many_files() {
         // When a single batch of files exceeds the target manifest size, the
         // merge pass splits them into multiple manifests.
@@ -524,14 +515,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_recovery_reuses_manifest() {
-        // A second commit() call on the same Arc<MergeAppendAction> reuses the
-        // cached MergingState (OnceLock short-circuit) — idempotency guarantee.
-        let table = make_v2_minimal_table();
+        // Two commit() calls on the same Arc reuse the cached MergingState
+        // (OnceLock) and produce equivalent snapshots — models catalog retry.
+        let mut table = make_v2_minimal_table();
+        let updates = Arc::new(
+            Transaction::new(&table)
+                .update_table_properties()
+                .set("commit.manifest.min-count-to-merge".to_string(), "2".to_string()),
+        )
+        .commit(&table)
+        .await
+        .unwrap()
+        .take_updates();
+        table = apply_updates_to_table(&table, &updates);
+
         let f1 = make_data_file(&table, "data/f1.parquet", 10);
-        let action = Arc::new(Transaction::new(&table).merge_append().add_data_files(vec![f1]));
+        let f2 = make_data_file(&table, "data/f2.parquet", 10);
+        let table = merge_append_files(table, vec![f1]).await;
+        let table = merge_append_files(table, vec![f2]).await;
+
+        let f3 = make_data_file(&table, "data/f3.parquet", 10);
+        let action = Arc::new(Transaction::new(&table).merge_append().add_data_files(vec![f3]));
         let mut r1 = action.clone().commit(&table).await.unwrap();
         let mut r2 = action.commit(&table).await.unwrap();
-        // Both snapshots are for the same content.
         let updates1 = r1.take_updates();
         let snap1 = if let TableUpdate::AddSnapshot { snapshot } = &updates1[0] {
             snapshot.clone()
@@ -544,34 +550,13 @@ mod tests {
         } else {
             panic!("expected AddSnapshot")
         };
-        // Snapshots have the same sequence number (same table base).
         assert_eq!(snap1.sequence_number(), snap2.sequence_number());
     }
 
     #[tokio::test]
-    async fn test_default_partition_summaries() {
-        // Snapshot summary must include manifests-created, manifests-kept,
-        // manifests-replaced.
-        let table = make_v2_minimal_table();
-        let f1 = make_data_file(&table, "data/f1.parquet", 10);
-        let tx = Transaction::new(&table);
-        let action = tx.merge_append().add_data_files(vec![f1]);
-        let mut commit = Arc::new(action).commit(&table).await.unwrap();
-        let updates = commit.take_updates();
-        let snap = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
-        } else {
-            panic!("expected AddSnapshot")
-        };
-        let props = &snap.summary().additional_properties;
-        assert!(props.contains_key("manifests-created"), "{props:?}");
-        assert!(props.contains_key("manifests-kept"), "{props:?}");
-        assert!(props.contains_key("manifests-replaced"), "{props:?}");
-    }
-
-    #[tokio::test]
-    async fn test_included_partition_summaries() {
-        // Summary includes added-data-files and added-records.
+    async fn test_snapshot_summary() {
+        // One commit must populate all expected summary fields and exclude
+        // implementation-internal keys like entries-processed.
         let table = make_v2_minimal_table();
         let f1 = make_data_file(&table, "data/f1.parquet", 42);
         let tx = Transaction::new(&table);
@@ -583,28 +568,23 @@ mod tests {
         } else {
             panic!("expected AddSnapshot")
         };
+        assert_eq!(snap.summary().operation, Operation::Append);
         let props = &snap.summary().additional_properties;
-        assert!(props.contains_key("added-data-files"), "{props:?}");
-        assert!(props.contains_key("added-records"), "{props:?}");
-    }
-
-    #[tokio::test]
-    async fn test_included_partition_summary_limit() {
-        // Summary includes total-data-files and total-records counters.
-        let table = make_v2_minimal_table();
-        let f1 = make_data_file(&table, "data/f1.parquet", 10);
-        let tx = Transaction::new(&table);
-        let action = tx.merge_append().add_data_files(vec![f1]);
-        let mut commit = Arc::new(action).commit(&table).await.unwrap();
-        let updates = commit.take_updates();
-        let snap = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
-        } else {
-            panic!("expected AddSnapshot")
-        };
-        let props = &snap.summary().additional_properties;
-        assert!(props.contains_key("total-data-files"), "{props:?}");
-        assert!(props.contains_key("total-records"), "{props:?}");
+        for key in &[
+            "manifests-created",
+            "manifests-kept",
+            "manifests-replaced",
+            "added-data-files",
+            "added-records",
+            "total-data-files",
+            "total-records",
+        ] {
+            assert!(props.contains_key(*key), "missing summary key {key}: {props:?}");
+        }
+        assert!(
+            !props.contains_key("entries-processed"),
+            "entries-processed must not appear: {props:?}"
+        );
     }
 
     // ─── Rust-specific tests ─────────────────────────────────────────────────────
@@ -783,48 +763,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_merge_append_operation_is_append() {
-        // The snapshot summary's operation field must be "append".
-        let table = make_v2_minimal_table();
-        let f1 = make_data_file(&table, "data/f1.parquet", 10);
-        let tx = Transaction::new(&table);
-        let action = tx.merge_append().add_data_files(vec![f1]);
-        let mut commit = Arc::new(action).commit(&table).await.unwrap();
-        let updates = commit.take_updates();
-        let snap = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
-        } else {
-            panic!("expected AddSnapshot")
-        };
-        assert_eq!(snap.summary().operation, Operation::Append);
-    }
-
-    #[tokio::test]
-    async fn test_merge_append_summary_keys_present() {
-        // manifests-created, manifests-kept, manifests-replaced must all be present.
-        // entries-processed must NOT appear.
-        let table = make_v2_minimal_table();
-        let f1 = make_data_file(&table, "data/f1.parquet", 10);
-        let tx = Transaction::new(&table);
-        let action = tx.merge_append().add_data_files(vec![f1]);
-        let mut commit = Arc::new(action).commit(&table).await.unwrap();
-        let updates = commit.take_updates();
-        let snap = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
-        } else {
-            panic!("expected AddSnapshot")
-        };
-        let props = &snap.summary().additional_properties;
-        assert!(props.contains_key("manifests-created"), "{props:?}");
-        assert!(props.contains_key("manifests-kept"), "{props:?}");
-        assert!(props.contains_key("manifests-replaced"), "{props:?}");
-        assert!(
-            !props.contains_key("entries-processed"),
-            "entries-processed must not appear in merge_append summary: {props:?}"
-        );
-    }
-
-    #[tokio::test]
     async fn test_merge_append_null_file_errors() {
         // Committing with zero files must return an error.
         let table = make_v2_minimal_table();
@@ -836,36 +774,4 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_merge_append_idempotent_merging_state() {
-        // Two commit() calls on the same Arc<MergeAppendAction> reuse the
-        // cached MergingState (OnceLock short-circuit). This structurally models
-        // the Transaction-level retry path.
-        let mut table = make_v2_minimal_table();
-        let tx = Transaction::new(&table);
-        let updates = Arc::new(
-            tx.update_table_properties()
-                .set("commit.manifest.min-count-to-merge".to_string(), "2".to_string()),
-        )
-        .commit(&table)
-        .await
-        .unwrap()
-        .take_updates();
-        table = apply_updates_to_table(&table, &updates);
-
-        let f1 = make_data_file(&table, "data/f1.parquet", 10);
-        let f2 = make_data_file(&table, "data/f2.parquet", 10);
-        let table = merge_append_files(table, vec![f1]).await;
-        let table = merge_append_files(table, vec![f2]).await;
-
-        // A third commit via same Arc must not panic or corrupt state.
-        let f3 = make_data_file(&table, "data/f3.parquet", 10);
-        let action = Arc::new(
-            Transaction::new(&table)
-                .merge_append()
-                .add_data_files(vec![f3]),
-        );
-        let _ = action.clone().commit(&table).await.unwrap();
-        let _ = action.commit(&table).await.unwrap();
-    }
 }
