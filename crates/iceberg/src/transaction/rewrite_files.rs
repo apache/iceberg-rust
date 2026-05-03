@@ -104,12 +104,15 @@ impl RewriteFilesAction {
         self
     }
 
-    fn merging_state(&self, table: &Table) -> Arc<MergingState> {
+    fn merging_state(&self, table: &Table) -> Result<Arc<MergingState>> {
+        if let Some(state) = self.merging_state.get() {
+            return Ok(state.clone());
+        }
         let read = self.manifest_read_concurrency;
         let write = self.manifest_write_concurrency;
-        self.merging_state
-            .get_or_init(|| Arc::new(MergingState::from_table(table, read, write)))
-            .clone()
+        let state = Arc::new(MergingState::from_table(table, read, write)?);
+        let _ = self.merging_state.set(state);
+        Ok(self.merging_state.get().expect("just initialized").clone())
     }
 
     /// Old files being replaced. Paths cannot also appear in `add_files`:
@@ -226,7 +229,7 @@ impl TransactionAction for RewriteFilesAction {
                 .await?;
         }
 
-        let state = self.merging_state(table);
+        let state = self.merging_state(table)?;
         for f in &self.files_to_delete {
             state.delete(f);
         }

@@ -51,6 +51,7 @@ pub use statistic_file::*;
 pub use table_metadata::*;
 pub(crate) use table_metadata_builder::FIRST_FIELD_ID;
 pub use table_properties::*;
+pub(crate) use table_properties::parse_property;
 pub use transform::*;
 pub(crate) use values::decimal_utils;
 pub use values::*;

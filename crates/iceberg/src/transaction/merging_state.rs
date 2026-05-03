@@ -29,9 +29,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::Result;
-use crate::spec::{DataFile, ManifestFile, TableProperties};
+use crate::spec::{DataFile, ManifestFile, TableProperties, parse_property};
 use crate::table::Table;
+use crate::{Error, ErrorKind, Result};
 use crate::transaction::manifest_filter::ManifestFilterManager;
 use crate::transaction::manifest_merge::ManifestMergeManager;
 use crate::transaction::snapshot::{ManifestProcess, SnapshotProducer};
@@ -49,25 +49,25 @@ impl MergingState {
         table: &Table,
         manifest_read_concurrency: usize,
         manifest_write_concurrency: usize,
-    ) -> Self {
+    ) -> Result<Self> {
         let props = table.metadata().properties();
-        let target_size_bytes = parse_or_default(
+        let target_size_bytes = parse_property(
             props,
             TableProperties::PROPERTY_COMMIT_MANIFEST_TARGET_SIZE_BYTES,
             TableProperties::PROPERTY_COMMIT_MANIFEST_TARGET_SIZE_BYTES_DEFAULT,
-        );
-        let min_count_to_merge = parse_or_default(
+        ).map_err(|e| Error::new(ErrorKind::DataInvalid, "Invalid manifest merge property").with_source(e))?;
+        let min_count_to_merge = parse_property(
             props,
             TableProperties::PROPERTY_COMMIT_MANIFEST_MIN_MERGE_COUNT,
             TableProperties::PROPERTY_COMMIT_MANIFEST_MIN_MERGE_COUNT_DEFAULT,
-        );
-        let merge_enabled = parse_or_default(
+        ).map_err(|e| Error::new(ErrorKind::DataInvalid, "Invalid manifest merge property").with_source(e))?;
+        let merge_enabled = parse_property(
             props,
             TableProperties::PROPERTY_COMMIT_MANIFEST_MERGE_ENABLED,
             TableProperties::PROPERTY_COMMIT_MANIFEST_MERGE_ENABLED_DEFAULT,
-        );
+        ).map_err(|e| Error::new(ErrorKind::DataInvalid, "Invalid manifest merge property").with_source(e))?;
 
-        Self {
+        Ok(Self {
             data_filter: ManifestFilterManager::new(manifest_read_concurrency),
             data_merge: ManifestMergeManager::new(
                 target_size_bytes,
@@ -82,7 +82,7 @@ impl MergingState {
                 merge_enabled,
                 manifest_write_concurrency,
             ),
-        }
+        })
     }
 
     pub(crate) fn delete(&self, file: &DataFile) {
@@ -199,49 +199,14 @@ impl ManifestProcess for Arc<MergingState> {
     }
 }
 
-fn parse_or_default<T: std::str::FromStr>(
-    props: &std::collections::HashMap<String, String>,
-    key: &str,
-    default: T,
-) -> T {
-    props
-        .get(key)
-        .and_then(|s| s.parse::<T>().ok())
-        .unwrap_or(default)
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
     use crate::transaction::tests::make_v2_minimal_table;
 
     #[test]
-    fn from_table_constructs_without_panic_when_properties_absent() {
-        // `make_v2_minimal_table` carries none of the merge properties; constructor
-        // must fall back to defaults rather than failing parse_or_default.
+    fn from_table_constructs_with_default_properties() {
         let table = make_v2_minimal_table();
-        let _state = MergingState::from_table(&table, 4, 2);
-    }
-
-    #[test]
-    fn parse_or_default_uses_present_value() {
-        let mut props = HashMap::new();
-        props.insert("k".to_string(), "42".to_string());
-        let v: u64 = parse_or_default(&props, "k", 7);
-        assert_eq!(v, 42);
-        let missing: u64 = parse_or_default(&props, "missing", 7);
-        assert_eq!(missing, 7);
-    }
-
-    #[test]
-    fn parse_or_default_falls_back_on_invalid() {
-        let mut props = HashMap::new();
-        props.insert("k".to_string(), "not-a-number".to_string());
-        let v: u64 = parse_or_default(&props, "k", 7);
-        // Garbage values must not panic; a malformed property setting silently
-        // falls back to the Java-parity default.
-        assert_eq!(v, 7);
+        MergingState::from_table(&table, 4, 2).expect("default properties must parse");
     }
 }

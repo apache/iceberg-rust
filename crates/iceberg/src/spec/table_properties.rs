@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 // Helper function to parse a property from a HashMap
 // If the property is not found, use the default value
-fn parse_property<T: std::str::FromStr>(
+pub(crate) fn parse_property<T: std::str::FromStr>(
     properties: &HashMap<String, String>,
     key: &str,
     default: T,
