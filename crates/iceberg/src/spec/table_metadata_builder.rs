@@ -570,7 +570,7 @@ impl TableMetadataBuilder {
 
     /// Remove a reference
     ///
-    /// If `ref_name='main'` the current snapshot id is set to -1.
+    /// If `ref_name='main'` the current snapshot id is set to `None`.
     pub fn remove_ref(mut self, ref_name: &str) -> Self {
         if ref_name == MAIN_BRANCH {
             self.metadata.current_snapshot_id = None;
