@@ -394,38 +394,14 @@ impl SnapshotProduceOperation for RewriteOperation {
 mod tests {
     use std::sync::Arc;
 
-    use crate::spec::{
-        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
-        ManifestStatus, Operation, Struct,
-    };
+    use crate::spec::{MAIN_BRANCH, ManifestStatus, Operation};
     use crate::transaction::action::ActionCommit;
-    use crate::transaction::tests::{apply_updates_to_table, make_v2_minimal_table};
+    use crate::transaction::tests::{
+        append_files, apply_updates_to_table, collect_alive_files, make_data_file,
+        make_v2_minimal_table,
+    };
     use crate::transaction::{Transaction, TransactionAction};
     use crate::{TableRequirement, TableUpdate};
-
-    fn make_data_file(table: &crate::table::Table, path: &str, record_count: u64) -> DataFile {
-        DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path(path.to_string())
-            .file_format(DataFileFormat::Parquet)
-            .file_size_in_bytes(100)
-            .record_count(record_count)
-            .partition_spec_id(table.metadata().default_partition_spec_id())
-            .partition(Struct::from_iter([Some(Literal::long(300))]))
-            .build()
-            .unwrap()
-    }
-
-    async fn append_files(table: crate::table::Table, files: Vec<DataFile>) -> crate::table::Table {
-        let tx = Transaction::new(&table);
-        let append = tx.fast_append().add_data_files(files);
-        let updates = Arc::new(append)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
-        apply_updates_to_table(&table, &updates)
-    }
 
     fn unwrap_add_snapshot(updates: &[TableUpdate]) -> &crate::spec::Snapshot {
         if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
@@ -433,27 +409,6 @@ mod tests {
         } else {
             panic!("expected AddSnapshot update at index 0")
         }
-    }
-
-    async fn collect_alive_files(
-        snapshot: &crate::spec::Snapshot,
-        table: &crate::table::Table,
-    ) -> Vec<String> {
-        let manifest_list = snapshot
-            .load_manifest_list(table.file_io(), table.metadata())
-            .await
-            .unwrap();
-        let mut alive_files: Vec<String> = Vec::new();
-        for mf in manifest_list.entries() {
-            let manifest = mf.load_manifest(table.file_io()).await.unwrap();
-            for me in manifest.entries() {
-                if me.is_alive() {
-                    alive_files.push(me.file_path().to_string());
-                }
-            }
-        }
-        alive_files.sort();
-        alive_files
     }
 
     #[tokio::test]

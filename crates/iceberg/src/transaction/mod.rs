@@ -57,6 +57,7 @@ mod merging_state;
 
 pub use action::*;
 mod append;
+mod merge_append;
 mod rewrite_files;
 mod rewrite_manifests;
 mod snapshot;
@@ -76,6 +77,7 @@ use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
+use crate::transaction::merge_append::MergeAppendAction;
 use crate::transaction::rewrite_files::RewriteFilesAction;
 use crate::transaction::rewrite_manifests::RewriteManifestsAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
@@ -146,6 +148,16 @@ impl Transaction {
     /// Creates a fast append action.
     pub fn fast_append(&self) -> FastAppendAction {
         FastAppendAction::new()
+    }
+
+    /// Creates a merge-append action.
+    ///
+    /// Appends new data files and runs the full merging snapshot producer
+    /// filter+merge pipeline on each commit, consolidating small sibling
+    /// manifests by partition spec and target size. Prefer this over
+    /// `fast_append` for workloads that benefit from bounded manifest counts.
+    pub fn merge_append(&self) -> MergeAppendAction {
+        MergeAppendAction::new()
     }
 
     /// Creates a rewrite-files action for compaction operations.
@@ -259,9 +271,12 @@ mod tests {
 
     use crate::catalog::{MockCatalog, TableUpdate};
     use crate::io::FileIO;
-    use crate::spec::TableMetadata;
+    use crate::spec::{
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, Snapshot, Struct,
+        TableMetadata,
+    };
     use crate::table::Table;
-    use crate::transaction::{ApplyTransactionAction, Transaction};
+    use crate::transaction::{ApplyTransactionAction, Transaction, TransactionAction};
     use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
 
     pub fn make_v1_table() -> Table {
@@ -328,6 +343,48 @@ mod tests {
         }
         let metadata = Arc::new(builder.build().unwrap().metadata);
         table.clone().with_metadata(metadata)
+    }
+
+    pub fn make_data_file(table: &Table, path: &str, record_count: u64) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(record_count)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap()
+    }
+
+    pub async fn append_files(table: Table, files: Vec<DataFile>) -> Table {
+        let tx = Transaction::new(&table);
+        let append = tx.fast_append().add_data_files(files);
+        let updates = Arc::new(append)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        apply_updates_to_table(&table, &updates)
+    }
+
+    pub async fn collect_alive_files(snapshot: &Snapshot, table: &Table) -> Vec<String> {
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let mut alive_files: Vec<String> = Vec::new();
+        for mf in manifest_list.entries() {
+            let manifest = mf.load_manifest(table.file_io()).await.unwrap();
+            for me in manifest.entries() {
+                if me.is_alive() {
+                    alive_files.push(me.file_path().to_string());
+                }
+            }
+        }
+        alive_files.sort();
+        alive_files
     }
 
     pub(crate) async fn make_v3_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
