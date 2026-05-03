@@ -45,7 +45,6 @@ use crate::{Error, ErrorKind};
 /// Java analog: `org.apache.iceberg.MergeAppend` extending `MergingSnapshotProducer`.
 pub struct MergeAppendAction {
     added_data_files: Vec<DataFile>,
-    check_duplicate: bool,
     commit_uuid: Option<Uuid>,
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
@@ -60,7 +59,6 @@ impl MergeAppendAction {
         let num_cpus = available_parallelism().get();
         Self {
             added_data_files: vec![],
-            check_duplicate: false,
             commit_uuid: None,
             key_metadata: None,
             snapshot_properties: HashMap::default(),
@@ -73,19 +71,6 @@ impl MergeAppendAction {
     /// Add data files to the snapshot.
     pub fn add_data_files(mut self, files: impl IntoIterator<Item = DataFile>) -> Self {
         self.added_data_files.extend(files);
-        self
-    }
-
-    /// Set whether to scan existing manifests for duplicate file paths before committing.
-    ///
-    /// Defaults to `false`. Enable only when the caller cannot guarantee path
-    /// uniqueness. The scan deserializes every manifest in the current snapshot
-    /// and probes each entry against a HashSet of the new paths — O(P + E) where
-    /// P is the number of added files and E is the total manifest entries. The
-    /// dominant cost is I/O, not comparison. Java's `MergeAppend` has no
-    /// equivalent check; this is a Rust-specific safety option.
-    pub fn with_check_duplicate(mut self, v: bool) -> Self {
-        self.check_duplicate = v;
         self
     }
 
@@ -150,10 +135,6 @@ impl TransactionAction for MergeAppendAction {
         );
 
         snapshot_producer.validate_added_data_files()?;
-
-        if self.check_duplicate {
-            snapshot_producer.validate_duplicate_files().await?;
-        }
 
         let state = self.merging_state(table)?;
         // NO state.delete() — pure append
