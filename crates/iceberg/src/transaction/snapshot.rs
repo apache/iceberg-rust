@@ -1050,7 +1050,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let table = commit_files_unchecked(&table, vec![eq_delete]).await;
+        let tx = Transaction::new(&table);
+        let delete = tx.fast_append().add_data_files(vec![eq_delete]);
+        let updates = Arc::new(delete).commit(&table).await.unwrap().take_updates();
+        let table = apply_updates_to_table(&table, &updates);
 
         // 3. Try to rewrite f1, starting from Snapshot A.
         // It SHOULD reject because Snapshot B added a delete since A.
@@ -1103,7 +1106,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let table = commit_files_unchecked(&table, vec![pos_delete]).await;
+        let tx = Transaction::new(&table);
+        let delete = tx.fast_append().add_data_files(vec![pos_delete]);
+        let updates = Arc::new(delete).commit(&table).await.unwrap().take_updates();
+        let table = apply_updates_to_table(&table, &updates);
 
         // 3. Try to rewrite f1, starting from Snapshot A.
         let producer = SnapshotProducer::new(
@@ -1148,7 +1154,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let table = commit_files_unchecked(&table, vec![f1.clone(), eq_delete]).await;
+        let tx = Transaction::new(&table);
+        let append_and_delete = tx.fast_append().add_data_files(vec![f1.clone(), eq_delete]);
+        let updates = Arc::new(append_and_delete).commit(&table).await.unwrap().take_updates();
+        let table = apply_updates_to_table(&table, &updates);
         let snap_a_id = table.metadata().current_snapshot_id().unwrap();
 
         // 2. Try to rewrite f1, starting from Snapshot A.
@@ -1197,7 +1206,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let table = commit_files_unchecked(&table, vec![eq_delete]).await;
+        let tx = Transaction::new(&table);
+        let delete = tx.fast_append().add_data_files(vec![eq_delete]);
+        let updates = Arc::new(delete).commit(&table).await.unwrap().take_updates();
+        let table = apply_updates_to_table(&table, &updates);
 
         // 3. Try to rewrite f1, starting from Snapshot A, with ignore_equality_deletes = true.
         // This is safe when the rewrite preserves the original sequence number.

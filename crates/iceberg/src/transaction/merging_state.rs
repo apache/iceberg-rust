@@ -45,7 +45,11 @@ pub(crate) struct MergingState {
 
 impl MergingState {
     /// Reads the merge-related table properties once. Defaults are Java-parity.
-    pub(crate) fn from_table(table: &Table) -> Self {
+    pub(crate) fn from_table(
+        table: &Table,
+        manifest_read_concurrency: usize,
+        manifest_write_concurrency: usize,
+    ) -> Self {
         let props = table.metadata().properties();
         let target_size_bytes = parse_or_default(
             props,
@@ -64,17 +68,19 @@ impl MergingState {
         );
 
         Self {
-            data_filter: ManifestFilterManager::new(),
+            data_filter: ManifestFilterManager::new(manifest_read_concurrency),
             data_merge: ManifestMergeManager::new(
                 target_size_bytes,
                 min_count_to_merge,
                 merge_enabled,
+                manifest_write_concurrency,
             ),
-            delete_filter: ManifestFilterManager::new(),
+            delete_filter: ManifestFilterManager::new(manifest_read_concurrency),
             delete_merge: ManifestMergeManager::new(
                 target_size_bytes,
                 min_count_to_merge,
                 merge_enabled,
+                manifest_write_concurrency,
             ),
         }
     }
@@ -216,7 +222,7 @@ mod tests {
         // `make_v2_minimal_table` carries none of the merge properties; constructor
         // must fall back to defaults rather than failing parse_or_default.
         let table = make_v2_minimal_table();
-        let _state = MergingState::from_table(&table);
+        let _state = MergingState::from_table(&table, 4, 2);
     }
 
     #[test]

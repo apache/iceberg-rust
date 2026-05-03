@@ -29,6 +29,7 @@ use crate::table::Table;
 use crate::transaction::merging_state::MergingState;
 use crate::transaction::snapshot::{CommitResult, SnapshotProduceOperation, SnapshotProducer};
 use crate::transaction::{ActionCommit, TransactionAction};
+use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
 
 /// Action to rewrite data files in a table — primarily compaction.
@@ -69,10 +70,13 @@ pub struct RewriteFilesAction {
     /// Initialized on the first commit attempt and shared across catalog retries
     /// so the filter+merge caches survive — Java's idempotent retry contract.
     merging_state: OnceLock<Arc<MergingState>>,
+    manifest_read_concurrency: usize,
+    manifest_write_concurrency: usize,
 }
 
 impl RewriteFilesAction {
     pub(crate) fn new() -> Self {
+        let num_cpus = available_parallelism().get();
         Self {
             commit_uuid: None,
             key_metadata: None,
@@ -82,12 +86,29 @@ impl RewriteFilesAction {
             validate_from_snapshot_id: None,
             data_sequence_number: None,
             merging_state: OnceLock::new(),
+            manifest_read_concurrency: num_cpus,
+            manifest_write_concurrency: std::cmp::max(1, num_cpus / 4),
         }
     }
 
+    /// Override the number of manifests read concurrently during the filter pass.
+    pub fn with_manifest_read_concurrency(mut self, n: usize) -> Self {
+        self.manifest_read_concurrency = std::cmp::max(1, n);
+        self
+    }
+
+    /// Override the number of manifest bins written concurrently during the merge pass.
+    /// Each write task buffers a full bin's entries; lower values protect memory.
+    pub fn with_manifest_write_concurrency(mut self, n: usize) -> Self {
+        self.manifest_write_concurrency = std::cmp::max(1, n);
+        self
+    }
+
     fn merging_state(&self, table: &Table) -> Arc<MergingState> {
+        let read = self.manifest_read_concurrency;
+        let write = self.manifest_write_concurrency;
         self.merging_state
-            .get_or_init(|| Arc::new(MergingState::from_table(table)))
+            .get_or_init(|| Arc::new(MergingState::from_table(table, read, write)))
             .clone()
     }
 

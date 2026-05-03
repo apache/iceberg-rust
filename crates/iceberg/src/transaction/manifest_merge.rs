@@ -42,10 +42,6 @@ use crate::spec::{
 use crate::transaction::snapshot::{META_ROOT_PATH, SnapshotProducer};
 use crate::prptl_utils::bin_packing::ListPacker;
 
-/// Bounds storage-client write concurrency and per-task working-set memory
-/// (each task buffers a full bin's worth of entries while writing).
-const MANIFEST_WRITE_CONCURRENCY: usize = 8;
-
 pub(crate) struct ManifestMergeManager {
     target_size_bytes: u64,
     min_count_to_merge: u32,
@@ -55,16 +51,25 @@ pub(crate) struct ManifestMergeManager {
     /// contract.
     cache: Arc<Mutex<HashMap<Vec<String>, ManifestFile>>>,
     replaced_count: Arc<AtomicU64>,
+    /// Each write task buffers a full bin's entries, so lower concurrency than
+    /// reads protects per-process memory under large merge bins.
+    write_concurrency: usize,
 }
 
 impl ManifestMergeManager {
-    pub(crate) fn new(target_size_bytes: u64, min_count_to_merge: u32, merge_enabled: bool) -> Self {
+    pub(crate) fn new(
+        target_size_bytes: u64,
+        min_count_to_merge: u32,
+        merge_enabled: bool,
+        write_concurrency: usize,
+    ) -> Self {
         Self {
             target_size_bytes,
             min_count_to_merge,
             merge_enabled,
             cache: Arc::new(Mutex::new(HashMap::new())),
             replaced_count: Arc::new(AtomicU64::new(0)),
+            write_concurrency,
         }
     }
 
@@ -117,7 +122,7 @@ impl ManifestMergeManager {
 
         let mut results: Vec<(usize, Vec<ManifestFile>)> =
             futures::stream::iter(merge_futures)
-                .buffer_unordered(MANIFEST_WRITE_CONCURRENCY)
+                .buffer_unordered(self.write_concurrency)
                 .try_collect()
                 .await?;
         results.sort_by_key(|(idx, _)| *idx);
@@ -341,7 +346,7 @@ mod tests {
 
     #[test]
     fn replaced_count_starts_at_zero() {
-        let mgr = ManifestMergeManager::new(1024, 100, true);
+        let mgr = ManifestMergeManager::new(1024, 100, true, 4);
         assert_eq!(mgr.replaced_manifests_count(), 0);
     }
 }

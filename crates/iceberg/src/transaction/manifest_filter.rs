@@ -38,10 +38,6 @@ use crate::spec::{
 };
 use crate::transaction::snapshot::{META_ROOT_PATH, SnapshotProducer};
 
-/// Cap concurrent manifest reads so a table with thousands of manifests doesn't
-/// blow out the storage client's connection pool.
-const MANIFEST_READ_CONCURRENCY: usize = 32;
-
 pub(crate) struct ManifestFilterManager {
     deleted_paths: Mutex<HashSet<String>>,
     /// `source_manifest_path → rewritten_residual (None = fully dropped)`. Persists
@@ -49,14 +45,16 @@ pub(crate) struct ManifestFilterManager {
     cache: Mutex<HashMap<String, Option<ManifestFile>>>,
     /// Drives the `manifests-replaced` snapshot summary key.
     replaced_count: AtomicU64,
+    read_concurrency: usize,
 }
 
 impl ManifestFilterManager {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(read_concurrency: usize) -> Self {
         Self {
             deleted_paths: Mutex::new(HashSet::new()),
             cache: Mutex::new(HashMap::new()),
             replaced_count: AtomicU64::new(0),
+            read_concurrency,
         }
     }
 
@@ -99,7 +97,7 @@ impl ManifestFilterManager {
             }
         });
         let mut loaded: Vec<(ManifestFile, std::sync::Arc<Manifest>)> = futures::stream::iter(read_futures)
-            .buffer_unordered(MANIFEST_READ_CONCURRENCY)
+            .buffer_unordered(self.read_concurrency)
             .try_collect()
             .await?;
         // Restore deterministic order by source manifest path.
@@ -309,7 +307,7 @@ mod tests {
 
     #[test]
     fn delete_dedupes_paths() {
-        let filter = ManifestFilterManager::new();
+        let filter = ManifestFilterManager::new(4);
         filter.delete("data/x.parquet".to_string());
         filter.delete("data/x.parquet".to_string());
         assert_eq!(
@@ -321,7 +319,7 @@ mod tests {
     /// clean_uncommitted removes cache entries for residuals not in committed_paths.
     #[tokio::test]
     async fn clean_uncommitted_removes_uncommitted_residual_from_cache() {
-        let mgr = ManifestFilterManager::new();
+        let mgr = ManifestFilterManager::new(4);
         let residual = fake_manifest("mem:///meta/residual.avro");
         mgr.cache
             .lock()
@@ -340,7 +338,7 @@ mod tests {
     /// clean_uncommitted preserves cache entries for residuals in committed_paths.
     #[tokio::test]
     async fn clean_uncommitted_preserves_committed_residual_in_cache() {
-        let mgr = ManifestFilterManager::new();
+        let mgr = ManifestFilterManager::new(4);
         let residual = fake_manifest("mem:///meta/residual.avro");
         mgr.cache
             .lock()
@@ -362,7 +360,7 @@ mod tests {
     /// clean_uncommitted keeps None (fully-dropped) entries for retry idempotency.
     #[tokio::test]
     async fn clean_uncommitted_keeps_dropped_sentinel_in_cache() {
-        let mgr = ManifestFilterManager::new();
+        let mgr = ManifestFilterManager::new(4);
         mgr.cache
             .lock()
             .unwrap()
