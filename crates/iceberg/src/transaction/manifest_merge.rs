@@ -46,10 +46,11 @@ pub(crate) struct ManifestMergeManager {
     target_size_bytes: u64,
     min_count_to_merge: u32,
     merge_enabled: bool,
-    /// `bin (source paths) → merged manifest`. Persists across retries so the
-    /// same input bin returns the same `ManifestFile` — Java's idempotent retry
-    /// contract.
-    cache: Arc<Mutex<HashMap<Vec<String>, ManifestFile>>>,
+    /// `bin (source paths) → (merged manifest, replaced_count increment)`. Persists
+    /// across retries so the same input bin returns the same `ManifestFile` — Java's
+    /// idempotent retry contract. The stored increment lets rollback subtract the
+    /// exact amount added, matching Java's per-source decrement in cleanUncommitted.
+    cache: Arc<Mutex<HashMap<Vec<String>, (ManifestFile, u64)>>>,
     replaced_count: Arc<AtomicU64>,
     /// Each write task buffers a full bin's entries, so lower concurrency than
     /// reads protects per-process memory under large merge bins.
@@ -159,7 +160,7 @@ impl ManifestMergeManager {
         let cache_key: Vec<String> = bin.iter().map(|m| m.manifest_path.clone()).collect();
 
         // Lock-clone-release: never hold a Mutex guard across an `.await`.
-        if let Some(cached) = {
+        if let Some((cached, _)) = {
             let guard = self.cache.lock().expect("merge cache mutex");
             guard.get(&cache_key).cloned()
         } {
@@ -253,17 +254,16 @@ impl ManifestMergeManager {
 
         let merged = writer.write_manifest_file().await?;
 
+        // Count prior-snapshot sources only — Java's same rule in createManifest.
+        let increment: u64 = bin
+            .iter()
+            .filter(|m| m.added_snapshot_id != snap_id)
+            .count() as u64;
         {
             let mut guard = self.cache.lock().expect("merge cache mutex");
-            guard.insert(cache_key, merged.clone());
+            guard.insert(cache_key, (merged.clone(), increment));
         }
-        // Only count manifests carried in from prior snapshots — the "first"
-        // manifest from this commit wasn't replaced by the merge, it was created.
-        for source in &bin {
-            if source.added_snapshot_id != snap_id {
-                self.replaced_count.fetch_add(1, Ordering::Relaxed);
-            }
-        }
+        self.replaced_count.fetch_add(increment, Ordering::Relaxed);
 
         Ok(merged)
     }
@@ -275,24 +275,23 @@ impl ManifestMergeManager {
         file_io: &crate::io::FileIO,
         committed_paths: &std::collections::HashSet<String>,
     ) {
-        let entries: Vec<(Vec<String>, ManifestFile)> = {
+        let entries: Vec<(Vec<String>, ManifestFile, u64)> = {
             let guard = self.cache.lock().expect("merge cache mutex");
-            guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+            guard
+                .iter()
+                .map(|(k, (mf, inc))| (k.clone(), mf.clone(), *inc))
+                .collect()
         };
 
-        for (key, merged) in entries {
+        for (key, merged, increment) in entries {
             if committed_paths.contains(&merged.manifest_path) {
                 continue;
             }
             match file_io.delete(&merged.manifest_path).await {
                 Ok(()) => {
-                    // Roll back the cache + count for this bin. The Java analog decrements
-                    // per prior-snapshot source; the cache key only stores paths so we use
-                    // bin size as the upper bound. The next merge recomputes from scratch.
                     let mut guard = self.cache.lock().expect("merge cache mutex");
                     if guard.remove(&key).is_some() {
-                        self.replaced_count
-                            .fetch_sub(key.len().saturating_sub(1) as u64, Ordering::Relaxed);
+                        self.replaced_count.fetch_sub(increment, Ordering::Relaxed);
                     }
                 }
                 Err(e) => {
