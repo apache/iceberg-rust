@@ -108,6 +108,7 @@ Bump all components' version in the project to the new iceberg version.
 Please note that this version is the exact version of the release, not the release candidate version.
 
 - rust core: bump version in `Cargo.toml`
+- python binding: bump version in `bindings/python/Cargo.toml`
 
 ### Update docs
 
@@ -159,6 +160,7 @@ dist
 ├── apache-iceberg-rust-0.2.0.tar.gz.asc
 └── apache-iceberg-rust-0.2.0.tar.gz.sha512
 ```
+It is recommended to verify the artifacts yourself before uploading them to the SVN dist repo, see [How to verify a release](#how-to-verify-a-release)
 
 ### Upload artifacts to the SVN dist repo
 
@@ -175,7 +177,9 @@ svn co https://dist.apache.org/repos/dist/dev/iceberg/ /tmp/iceberg-dist-dev
 
 Then, upload the artifacts:
 
-> The `${release_version}` here should be like `0.2.0-rc.1`
+> The `${release_version}` here should be like `0.2.0-rc1`
+
+Example of uploaded artifacts can be found at: https://dist.apache.org/repos/dist/dev/iceberg/apache-iceberg-rust-0.9.1-rc3/
 
 ```shell
 # create a directory named by version
@@ -189,7 +193,8 @@ cd /tmp/iceberg-dist-dev/
 
 # check svn status
 svn status
-
+```
+```shell
 # add to svn
 svn add apache-iceberg-rust-${release_version}
 
@@ -219,11 +224,11 @@ Title:
 Content:
 
 ```
-Hello, Apache Iceberg Rust Community,
+Hello Apache Iceberg Rust Community,
 
-This is a call for a vote to release Apache Iceberg rust version ${iceberg_version}.
+This is a call for a vote to release Apache Iceberg Rust version ${iceberg_version}.
 
-The tag to be voted on is v${release_version}.
+The tag to be voted on is: v${release_version}.
 
 The release candidate:
 
@@ -237,30 +242,30 @@ Git tag for the release:
 
 https://github.com/apache/iceberg-rust/releases/tag/v${release_version}
 
-Please download, verify, and test.
+Please download, verify, and test the release candidate.
 
-The VOTE will be open for at least 72 hours and until the necessary
-number of votes are reached.
+This vote will be open for at least 72 hours and will remain open until the required number of votes is reached.
 
-[ ] +1 approve
-[ ] +0 no opinion
-[ ] -1 disapprove with the reason
+Please vote accordingly:
+[ ] +1 Approve
+[ ] +0 No opinion
+[ ] -1 Disapprove (please provide a reason)
 
-To learn more about Apache Iceberg, please see https://rust.iceberg.apache.org/
+To learn more about Apache Iceberg, please visit:
+https://rust.iceberg.apache.org/
 
 Checklist for reference:
-
-[ ] Download links are valid.
-[ ] Checksums and signatures.
-[ ] LICENSE/NOTICE files exist
-[ ] No unexpected binary files
+[ ] Download links are valid
+[ ] Checksums and signatures are correct
+[ ] LICENSE and NOTICE files are present
+[ ] No unexpected binary files are included
 [ ] All source files have ASF headers
-[ ] Can compile from source
+[ ] The project builds successfully from source
 
-More details please refer to https://rust.iceberg.apache.org/release.html#how-to-verify-a-release.
+For more details, please refer to:
+https://rust.iceberg.apache.org/release.html#how-to-verify-a-release
 
-Thanks
-
+Thanks,
 ${name}
 ```
 
@@ -277,7 +282,7 @@ Title:
 Content:
 
 ```
-Hello, Apache Iceberg Rust Community,
+Hello Apache Iceberg Rust Community,
 
 The vote to release Apache Iceberg Rust ${release_version} has passed.
 
@@ -295,8 +300,7 @@ Non-Binding votes:
 
 Vote thread: ${vote_thread_url}
 
-Thanks
-
+Thanks,
 ${name}
 ```
 

@@ -26,8 +26,8 @@ runs:
   using: "composite"
   steps:
     - name: Setup specified Rust toolchain
-      shell: bash
       if: ${{ inputs.rust-version != '' }}
+      shell: bash
       env:
         RUST_VERSION: ${{ inputs.rust-version }}
       run: |

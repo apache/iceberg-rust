@@ -61,7 +61,6 @@ use iceberg_storage_opendal::OpenDalStorageFactory;
 async fn main() -> iceberg::Result<()> {
     let catalog = RestCatalogBuilder::default()
         .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
-            configured_scheme: "s3".to_string(),
             customized_credential_load: None,
         }))
         .load(
