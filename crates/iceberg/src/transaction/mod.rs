@@ -370,6 +370,23 @@ mod tests {
         table.clone().with_metadata(metadata)
     }
 
+    pub(crate) fn make_file_with_content(
+        table: &Table,
+        path: &str,
+        content: DataContentType,
+    ) -> DataFile {
+        DataFileBuilder::default()
+            .content(content)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap()
+    }
+
     pub(crate) fn make_data_file(table: &Table, path: &str, record_count: u64) -> DataFile {
         DataFileBuilder::default()
             .content(DataContentType::Data)

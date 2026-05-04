@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::spec::{DataFile, FormatVersion, ManifestEntry, ManifestFile, Operation};
+use crate::spec::{DataContentType, DataFile, FormatVersion, ManifestEntry, ManifestFile, Operation};
 use crate::table::Table;
 use crate::transaction::merging_state::MergingState;
 use crate::transaction::snapshot::{CommitResult, SnapshotProduceOperation, SnapshotProducer};
@@ -126,6 +126,22 @@ impl DeleteFilesAction {
         self
     }
 
+    fn validate_deleted_data_files(&self) -> Result<()> {
+        for f in &self.deleted_data_files {
+            if f.content_type() != DataContentType::Data {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "DeleteFiles only accepts data files; got {:?}: {}",
+                        f.content_type(),
+                        f.file_path
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn merging_state(&self, table: &Table) -> Result<Arc<MergingState>> {
         if let Some(state) = self.merging_state.get() {
             return Ok(state.clone());
@@ -150,9 +166,11 @@ impl TransactionAction for DeleteFilesAction {
             ));
         }
 
+        self.validate_deleted_data_files()?;
+
         if table.metadata().format_version() == FormatVersion::V1 {
             return Err(Error::new(
-                ErrorKind::DataInvalid,
+                ErrorKind::FeatureUnsupported,
                 "DeleteFiles is not supported for V1 tables",
             ));
         }
@@ -175,8 +193,7 @@ impl TransactionAction for DeleteFilesAction {
         );
 
         if self.validate_files_exist {
-            let paths: HashSet<String> = deduped.iter().map(|f| f.file_path.clone()).collect();
-            snapshot_producer.validate_data_files_exist(&paths).await?;
+            snapshot_producer.validate_data_files_exist(&seen_paths).await?;
         }
 
         let state = self.merging_state(table)?;
@@ -238,6 +255,8 @@ impl SnapshotProduceOperation for DeleteFilesOperation {
             .await
     }
 
+    // Always true: DeleteFilesAction passes added_data_files=[] so the
+    // manifest_file() empty-content guard must be bypassed via this hook.
     fn has_pending_content(&self) -> bool {
         true
     }
@@ -247,28 +266,18 @@ impl SnapshotProduceOperation for DeleteFilesOperation {
 mod tests {
     use std::sync::Arc;
 
-    use crate::spec::DataFile;
+    use crate::spec::{DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct};
     use crate::transaction::tests::{
-        apply_updates_to_table, collect_alive_files, make_data_file, make_v2_minimal_table,
+        append_files, apply_updates_to_table, collect_alive_files, make_data_file,
+        make_v2_minimal_table,
     };
     use crate::transaction::{Transaction, TransactionAction};
-
-    async fn append_file(table: crate::table::Table, file: DataFile) -> crate::table::Table {
-        let tx = Transaction::new(&table);
-        let action = tx.fast_append().add_data_files(vec![file]);
-        let updates = Arc::new(action)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
-        apply_updates_to_table(&table, &updates)
-    }
 
     #[tokio::test]
     async fn test_delete_files_produces_deleted_manifest_entries() {
         let mut table = make_v2_minimal_table();
         let f1 = make_data_file(&table, "data/f1.parquet", 10);
-        table = append_file(table, f1.clone()).await;
+        table = append_files(table, vec![f1.clone()]).await;
 
         let alive_before = collect_alive_files(table.metadata().current_snapshot().unwrap(), &table).await;
         assert!(alive_before.contains(&"data/f1.parquet".to_string()));
@@ -310,7 +319,7 @@ mod tests {
     async fn test_delete_files_deduplicates_paths() {
         let mut table = make_v2_minimal_table();
         let f1 = make_data_file(&table, "data/f1.parquet", 10);
-        table = append_file(table, f1.clone()).await;
+        table = append_files(table, vec![f1.clone()]).await;
 
         // Pass the same file twice — should succeed silently, not double-delete.
         let tx = Transaction::new(&table);
@@ -330,17 +339,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_files_missing_path_silent_without_validate() {
+        // Absent paths without validate_files_exist are a silent no-op (Java StreamingDelete
+        // default). The commit succeeds and produces a snapshot with an empty manifest list.
         let table = make_v2_minimal_table();
         let f1 = make_data_file(&table, "data/ghost.parquet", 10);
 
-        // ghost path never appended, no validate_files_exist → must succeed.
         let tx = Transaction::new(&table);
         let action = tx.delete_files().delete_file(f1.clone());
-        // This should error because there is no snapshot to filter.
-        // With no snapshot, existing_manifest returns [] and has_pending_content=true
-        // so it commits an empty snapshot.
-        let _ = Arc::new(action).commit(&table).await;
-        // Outcome doesn't matter much — just must not panic.
+        let result = Arc::new(action).commit(&table).await;
+        assert!(result.is_ok(), "absent path without validate_files_exist must succeed silently");
     }
 
     #[tokio::test]
@@ -350,7 +357,7 @@ mod tests {
         // manifest list either has a residual without f1 or no manifests at all.
         let mut table = make_v2_minimal_table();
         let f1 = make_data_file(&table, "data/f1.parquet", 10);
-        table = append_file(table, f1.clone()).await;
+        table = append_files(table, vec![f1.clone()]).await;
 
         let tx = Transaction::new(&table);
         let action = tx.delete_files().delete_file(f1.clone());
@@ -366,5 +373,25 @@ mod tests {
             !alive.contains(&"data/f1.parquet".to_string()),
             "f1 must not be alive in the snapshot after deletion"
         );
+    }
+
+    #[tokio::test]
+    async fn test_delete_files_rejects_non_data_files() {
+        let table = make_v2_minimal_table();
+        let eq_delete = DataFileBuilder::default()
+            .content(DataContentType::EqualityDeletes)
+            .file_path("deletes/eq1.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx.delete_files().delete_file(eq_delete);
+        let result = Arc::new(action).commit(&table).await;
+        assert!(result.is_err(), "DeleteFiles must reject equality-delete files");
     }
 }
