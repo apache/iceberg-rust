@@ -51,10 +51,13 @@
 /// The `ApplyTransactionAction` trait provides an `apply` method
 /// that allows users to apply a transaction action to a `Transaction`.
 mod action;
+mod manifest_filter;
+mod manifest_merge;
+mod merging_state;
 
 pub use action::*;
 mod append;
-mod replace_data_files;
+mod rewrite_files;
 mod rewrite_manifests;
 mod snapshot;
 mod sort_order;
@@ -73,7 +76,7 @@ use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
-use crate::transaction::replace_data_files::ReplaceDataFilesAction;
+use crate::transaction::rewrite_files::RewriteFilesAction;
 use crate::transaction::rewrite_manifests::RewriteManifestsAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
@@ -145,9 +148,14 @@ impl Transaction {
         FastAppendAction::new()
     }
 
-    /// Creates a replace data files action for compaction operations.
-    pub fn replace_data_files(&self) -> ReplaceDataFilesAction {
-        ReplaceDataFilesAction::new()
+    /// Creates a rewrite-files action for compaction operations.
+    ///
+    /// Atomically replaces N existing data files with M new data files. Every
+    /// commit also runs the merging snapshot producer's filter+merge pipeline,
+    /// rewriting any manifest with replaced entries and bin-packing siblings —
+    /// see [`RewriteFilesAction`] for the full sequence.
+    pub fn rewrite_files(&self) -> RewriteFilesAction {
+        RewriteFilesAction::new()
     }
 
     /// Creates a rewrite manifests action.

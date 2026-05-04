@@ -2339,7 +2339,12 @@ mod tests {
     fn test_strip_metadata_list_of_primitives() {
         let schema = ArrowSchema::new(vec![simple_field(
             "tags",
-            DataType::List(Arc::new(simple_field("element", DataType::Int32, false, "2"))),
+            DataType::List(Arc::new(simple_field(
+                "element",
+                DataType::Int32,
+                false,
+                "2",
+            ))),
             true,
             "1",
         )]);
@@ -2444,7 +2449,12 @@ mod tests {
             "record",
             DataType::Struct(Fields::from(vec![
                 simple_field("id", DataType::Int64, false, "2"),
-                simple_field("attrs", DataType::Map(Arc::new(map_entries), false), true, "3"),
+                simple_field(
+                    "attrs",
+                    DataType::Map(Arc::new(map_entries), false),
+                    true,
+                    "3",
+                ),
             ])),
             false,
             "1",
@@ -2464,7 +2474,11 @@ mod tests {
             "record",
             DataType::Struct(Fields::from(vec![
                 Field::new("id", DataType::Int64, false),
-                Field::new("attrs", DataType::Map(Arc::new(expected_entries), false), true),
+                Field::new(
+                    "attrs",
+                    DataType::Map(Arc::new(expected_entries), false),
+                    true,
+                ),
             ])),
             false,
         )]);

@@ -100,9 +100,10 @@ impl TransactionAction for FastAppendAction {
             snapshot_producer.validate_duplicate_files().await?;
         }
 
-        snapshot_producer
+        let result = snapshot_producer
             .commit(FastAppendOperation, DefaultManifestProcess)
-            .await
+            .await?;
+        Ok(result.commit)
     }
 }
 

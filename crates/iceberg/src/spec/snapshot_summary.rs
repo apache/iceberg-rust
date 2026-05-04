@@ -48,6 +48,13 @@ const TOTAL_FILE_SIZE: &str = "total-files-size";
 const CHANGED_PARTITION_COUNT_PROP: &str = "changed-partition-count";
 const CHANGED_PARTITION_PREFIX: &str = "partitions.";
 
+/// Per-commit manifest activity counters. Java parity:
+/// `org.apache.iceberg.SnapshotSummary::CREATED_MANIFESTS_COUNT` etc.
+pub(crate) const MANIFESTS_CREATED: &str = "manifests-created";
+pub(crate) const MANIFESTS_REPLACED: &str = "manifests-replaced";
+pub(crate) const MANIFESTS_KEPT: &str = "manifests-kept";
+pub(crate) const ENTRIES_PROCESSED: &str = "entries-processed";
+
 /// `SnapshotSummaryCollector` collects and aggregates snapshot update metrics.
 /// It gathers metrics about added or removed data files and manifests, and tracks
 /// partition-specific updates.

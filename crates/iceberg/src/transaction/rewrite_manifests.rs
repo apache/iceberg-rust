@@ -24,6 +24,9 @@ use uuid::Uuid;
 
 use crate::TableRequirement;
 use crate::error::Result;
+use crate::spec::snapshot_summary::{
+    ENTRIES_PROCESSED, MANIFESTS_CREATED, MANIFESTS_KEPT, MANIFESTS_REPLACED,
+};
 use crate::spec::{
     DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry, ManifestFile,
     ManifestWriterBuilder, Operation, Struct,
@@ -175,18 +178,15 @@ impl TransactionAction for RewriteManifestsAction {
         let mut snapshot_properties = self.snapshot_properties.clone();
         snapshot_properties.insert("rewrite-manifests".to_string(), "true".to_string());
         snapshot_properties.insert(
-            "manifests-created".to_string(),
+            MANIFESTS_CREATED.to_string(),
             partition_entries.len().to_string(),
         );
         snapshot_properties.insert(
-            "manifests-replaced".to_string(),
+            MANIFESTS_REPLACED.to_string(),
             manifests_replaced.to_string(),
         );
-        snapshot_properties.insert("manifests-kept".to_string(), manifests_kept.to_string());
-        snapshot_properties.insert(
-            "entries-processed".to_string(),
-            entries_processed.to_string(),
-        );
+        snapshot_properties.insert(MANIFESTS_KEPT.to_string(), manifests_kept.to_string());
+        snapshot_properties.insert(ENTRIES_PROCESSED.to_string(), entries_processed.to_string());
 
         // Construct SnapshotProducer first so we can read the generated snapshot_id.
         // The snapshot_id is needed as added_snapshot_id in the new manifest files so
@@ -275,14 +275,15 @@ impl TransactionAction for RewriteManifestsAction {
         let mut all_manifests = kept_manifests;
         all_manifests.extend(new_manifests);
 
-        snapshot_producer
+        let result = snapshot_producer
             .commit(
                 RewriteManifestsOperation {
                     manifests: all_manifests,
                 },
                 DefaultManifestProcess,
             )
-            .await
+            .await?;
+        Ok(result.commit)
     }
 }
 
