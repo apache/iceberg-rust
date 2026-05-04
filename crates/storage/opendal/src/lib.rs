@@ -267,16 +267,17 @@ impl OpenDalStorage {
             }
             #[cfg(feature = "opendal-s3")]
             OpenDalStorage::S3 {
-                configured_scheme,
+                configured_scheme: _,
                 config,
                 customized_credential_load,
             } => {
                 // Normalize s3a:// to s3:// so paths are consistent regardless
                 // of which scheme the REST catalog returns.
                 let normalized;
-                let (op_path, original_scheme_len) = if path.starts_with("s3a://") {
-                    normalized = format!("s3://{}", &path[6..]);
-                    (normalized.as_str(), 6) // "s3a://".len()
+                let (op_path, original_scheme_len) = if let Some(rest) = path.strip_prefix("s3a://")
+                {
+                    normalized = format!("s3://{}", rest);
+                    (normalized.as_str(), "s3a://".len())
                 } else {
                     (path, 4) // "s3://".len()
                 };
@@ -284,8 +285,9 @@ impl OpenDalStorage {
                 let op = s3_config_build(config, customized_credential_load, op_path)?;
                 let op_info = op.info();
 
-                // Check prefix of s3 path (against the normalized path).
-                let prefix = format!("{}://{}/", configured_scheme, op_info.name());
+                // Validate against `op_path`, which always uses the `s3` scheme after normalization
+                // above (`configured_scheme` may still be `s3a` for Glue / REST catalogs).
+                let prefix = format!("s3://{}/", op_info.name());
                 if op_path.starts_with(&prefix) {
                     // Return a slice into the original path to satisfy the lifetime.
                     let relative_start = original_scheme_len + op_info.name().len() + 1; // scheme + bucket + "/"

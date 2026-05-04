@@ -335,6 +335,7 @@ impl ArrowReader {
         Ok(stream)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn process_file_scan_task(
         task: FileScanTask,
         batch_size: Option<usize>,

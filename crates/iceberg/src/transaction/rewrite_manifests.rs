@@ -316,15 +316,15 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use crate::TableUpdate;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, MAIN_BRANCH,
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
         ManifestContentType, ManifestEntry, ManifestFile, ManifestListWriter, ManifestStatus,
         ManifestWriterBuilder, Operation, PartitionSpec, Schema, Snapshot, SnapshotReference,
         SnapshotRetention, Struct, Summary,
     };
     use crate::transaction::tests::make_v2_minimal_table;
-    use crate::transaction::{ApplyTransactionAction, Transaction, TransactionAction};
-    use crate::{TableRequirement, TableUpdate};
+    use crate::transaction::{Transaction, TransactionAction};
 
     // ---------------------------------------------------------------------------
     // Helpers

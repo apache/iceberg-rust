@@ -49,6 +49,7 @@ pub(crate) struct ManifestMergeManager {
     /// across retries so the same input bin returns the same `ManifestFile` — Java's
     /// idempotent retry contract. The stored increment lets rollback subtract the
     /// exact amount added, matching Java's per-source decrement in cleanUncommitted.
+    #[allow(clippy::type_complexity)]
     cache: Arc<Mutex<HashMap<Vec<String>, (ManifestFile, u64)>>>,
     replaced_count: Arc<AtomicU64>,
     /// Each write task buffers a full bin's entries, so lower concurrency than

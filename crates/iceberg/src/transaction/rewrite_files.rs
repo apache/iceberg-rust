@@ -215,10 +215,8 @@ impl TransactionAction for RewriteFilesAction {
 
         if !replaced_paths.is_empty() {
             let mut val_id = self.validate_from_snapshot_id;
-            if let Some(id) = val_id {
-                if table.metadata().snapshot_by_id(id).is_none() {
-                    val_id = None;
-                }
+            if val_id.is_some_and(|id| table.metadata().snapshot_by_id(id).is_none()) {
+                val_id = None;
             }
             snapshot_producer
                 .validate_no_new_deletes_for_data_files(val_id, &replaced_paths)
@@ -1479,14 +1477,13 @@ mod tests {
 
         fn replaced_count(ac: &mut ActionCommit) -> String {
             for u in ac.take_updates() {
-                if let TableUpdate::AddSnapshot { snapshot } = u {
-                    if let Some(v) = snapshot
+                if let TableUpdate::AddSnapshot { snapshot } = u
+                    && let Some(v) = snapshot
                         .summary()
                         .additional_properties
                         .get("manifests-replaced")
-                    {
-                        return v.clone();
-                    }
+                {
+                    return v.clone();
                 }
             }
             panic!("no manifests-replaced in snapshot summary");
