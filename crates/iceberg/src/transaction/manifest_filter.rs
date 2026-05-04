@@ -214,7 +214,19 @@ async fn write_residual(
     let file_io = producer.table.file_io();
     let metadata = producer.table.metadata();
     let schema = metadata.current_schema().clone();
-    let spec = metadata.default_partition_spec().as_ref().clone();
+    let spec = metadata
+        .partition_spec_by_id(source.partition_spec_id)
+        .ok_or_else(|| {
+            crate::Error::new(
+                crate::ErrorKind::DataInvalid,
+                format!(
+                    "residual: partition spec id {} not in table metadata",
+                    source.partition_spec_id
+                ),
+            )
+        })?
+        .as_ref()
+        .clone();
     let fmt = metadata.format_version();
 
     // Stable per-source suffix so retries reproduce the same path and the cache
