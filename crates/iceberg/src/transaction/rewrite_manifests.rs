@@ -316,6 +316,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use crate::TableUpdate;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
         ManifestContentType, ManifestEntry, ManifestFile, ManifestListWriter, ManifestStatus,
@@ -324,7 +325,6 @@ mod tests {
     };
     use crate::transaction::tests::make_v2_minimal_table;
     use crate::transaction::{Transaction, TransactionAction};
-    use crate::TableUpdate;
 
     // ---------------------------------------------------------------------------
     // Helpers
