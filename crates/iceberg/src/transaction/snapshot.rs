@@ -63,34 +63,15 @@ fn inject_manifest_summary_keys(
     }
     // Do not overwrite values that may have been explicitly set by an action
     // like RewriteManifestsAction. Only insert counters if they are absent.
-    use std::collections::hash_map::Entry;
-    match summary
-        .additional_properties
+    summary.additional_properties
         .entry(MANIFESTS_CREATED.to_string())
-    {
-        Entry::Vacant(v) => {
-            v.insert(created.to_string());
-        }
-        Entry::Occupied(_) => {}
-    }
-    match summary
-        .additional_properties
+        .or_insert_with(|| created.to_string());
+    summary.additional_properties
         .entry(MANIFESTS_KEPT.to_string())
-    {
-        Entry::Vacant(v) => {
-            v.insert(kept.to_string());
-        }
-        Entry::Occupied(_) => {}
-    }
-    match summary
-        .additional_properties
+        .or_insert_with(|| kept.to_string());
+    summary.additional_properties
         .entry(MANIFESTS_REPLACED.to_string())
-    {
-        Entry::Vacant(v) => {
-            v.insert(replaced_count.to_string());
-        }
-        Entry::Occupied(_) => {}
-    }
+        .or_insert_with(|| replaced_count.to_string());
 }
 
 /// A trait that defines how different table operations produce new snapshots.
@@ -147,8 +128,8 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
 
     /// Returns delete files (equality/position deletes) to be written into a new
     /// `ManifestContent::Deletes` manifest for this snapshot. Default: empty.
-    fn added_delete_entries(&self) -> Vec<DataFile> {
-        vec![]
+    fn added_delete_entries(&self) -> &[DataFile] {
+        &[]
     }
 
     /// Returns `true` when the operation has content to commit even if
@@ -610,49 +591,38 @@ impl<'a> SnapshotProducer<'a> {
                 "No added data files found when write an added manifest file",
             ));
         }
+        self.write_entries_as_manifest(&added_data_files, ManifestContentType::Data, self.data_sequence_number).await
+    }
 
+    async fn write_added_delete_manifest(&mut self, delete_files: &[DataFile]) -> Result<ManifestFile> {
+        self.write_entries_as_manifest(delete_files, ManifestContentType::Deletes, None).await
+    }
+
+    async fn write_entries_as_manifest(
+        &mut self,
+        files: &[DataFile],
+        content: ManifestContentType,
+        data_seq_num: Option<i64>,
+    ) -> Result<ManifestFile> {
         let snapshot_id = self.snapshot_id;
         let format_version = self.table.metadata().format_version();
-        let data_sequence_number = self.data_sequence_number;
-        let manifest_entries = added_data_files.into_iter().map(|data_file| {
+        let entries = files.iter().map(|data_file| {
             let builder = ManifestEntry::builder()
                 .status(crate::spec::ManifestStatus::Added)
-                .data_file(data_file);
+                .data_file(data_file.clone());
             if format_version == FormatVersion::V1 {
                 builder.snapshot_id(snapshot_id).build()
-            } else if let Some(seq_num) = data_sequence_number {
+            } else if let Some(seq_num) = data_seq_num {
                 // Explicitly set sequence number instead of inheriting from the new snapshot.
                 // Required when compacting files that predate an equality delete: the compacted
                 // files must retain the original sequence number so equality deletes with a higher
                 // sequence number continue to apply.
                 builder.sequence_number(seq_num).build()
             } else {
-                // For format version > 1, we set the snapshot id at the inherited time to avoid rewrite the manifest file when
-                // commit failed.
                 builder.build()
             }
         });
-        let mut writer = self.new_manifest_writer(ManifestContentType::Data)?;
-        for entry in manifest_entries {
-            writer.add_entry(entry)?;
-        }
-        writer.write_manifest_file().await
-    }
-
-    async fn write_added_delete_manifest(&mut self, delete_files: Vec<DataFile>) -> Result<ManifestFile> {
-        let snapshot_id = self.snapshot_id;
-        let format_version = self.table.metadata().format_version();
-        let entries = delete_files.into_iter().map(|data_file| {
-            let builder = ManifestEntry::builder()
-                .status(crate::spec::ManifestStatus::Added)
-                .data_file(data_file);
-            if format_version == FormatVersion::V1 {
-                builder.snapshot_id(snapshot_id).build()
-            } else {
-                builder.build()
-            }
-        });
-        let mut writer = self.new_manifest_writer(ManifestContentType::Deletes)?;
+        let mut writer = self.new_manifest_writer(content)?;
         for entry in entries {
             writer.add_entry(entry)?;
         }
@@ -746,7 +716,7 @@ impl<'a> SnapshotProducer<'a> {
 
         for data_file in snapshot_produce_operation.added_delete_entries() {
             summary_collector.add_file(
-                &data_file,
+                data_file,
                 table_metadata.current_schema().clone(),
                 table_metadata.default_partition_spec().clone(),
             );
