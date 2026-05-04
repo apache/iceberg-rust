@@ -303,7 +303,7 @@ impl PlanContext {
                 && matches!(entry.data_file().content_type(), DataContentType::Data)
                 && entry
                     .snapshot_id()
-                    .map_or(true, |id| snapshot_ids_for_filter.contains(&id))
+                    .is_none_or(|id| snapshot_ids_for_filter.contains(&id))
         });
 
         let has_predicate = self.predicate.is_some();
