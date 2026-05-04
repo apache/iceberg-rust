@@ -178,9 +178,7 @@ async fn test_catalog_schema_add_nested_and_delete_column(#[case] kind: CatalogK
 #[case::s3tables_catalog(CatalogKind::S3Tables)]
 #[case::memory_catalog(CatalogKind::Memory)]
 #[tokio::test]
-async fn test_catalog_schema_delete_invalid_column_errors(
-    #[case] kind: CatalogKind,
-) -> Result<()> {
+async fn test_catalog_schema_delete_invalid_column_errors(#[case] kind: CatalogKind) -> Result<()> {
     let Some(harness) = load_catalog(kind).await else {
         return Ok(());
     };
@@ -216,10 +214,7 @@ async fn test_catalog_schema_delete_invalid_column_errors(
 
     // Deleting a nonexistent field must fail.
     let tx = Transaction::new(&table);
-    let tx = tx
-        .update_schema()
-        .delete_column("nonexistent")
-        .apply(tx)?;
+    let tx = tx.update_schema().delete_column("nonexistent").apply(tx)?;
     let err = tx.commit(catalog.as_ref()).await.unwrap_err();
     assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
 
