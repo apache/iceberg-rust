@@ -1477,14 +1477,13 @@ mod tests {
 
         fn replaced_count(ac: &mut ActionCommit) -> String {
             for u in ac.take_updates() {
-                if let TableUpdate::AddSnapshot { snapshot } = u {
-                    if let Some(v) = snapshot
+                if let TableUpdate::AddSnapshot { snapshot } = u
+                    && let Some(v) = snapshot
                         .summary()
                         .additional_properties
                         .get("manifests-replaced")
-                    {
-                        return v.clone();
-                    }
+                {
+                    return v.clone();
                 }
             }
             panic!("no manifests-replaced in snapshot summary");
