@@ -386,11 +386,44 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires DeleteFilesAction to write inline DELETED manifest entries; re-enable once DeleteFilesAction is implemented"]
     async fn test_merge_after_delete_entry() {
-        // Java's testMergeWithExistingManifestAfterDelete writes DELETED entries
-        // inline via ManifestFilterManager. Rust's design never writes inline
-        // tombstones; requires a Rust DeleteFilesAction first.
+        // Port of Java's testMergeWithExistingManifestAfterDelete.
+        //
+        // Rust's ManifestFilterManager never writes inline DELETED tombstones; it
+        // drops entries (or whole manifests) from the snapshot. So after step (b)
+        // f1 is simply absent from the snapshot, not present with DELETED status.
+        // Assertions follow Rust's tombstone-suppression behavior, consistent with
+        // test_merge_append_tombstone_suppression.
+        let mut table = make_v2_minimal_table();
+
+        // (a) Append f1.
+        let f1 = make_data_file(&table, "data/f1.parquet", 10);
+        table = merge_append_files(table, vec![f1.clone()]).await;
+
+        let alive = collect_alive_files(table.metadata().current_snapshot().unwrap(), &table).await;
+        assert!(alive.contains(&"data/f1.parquet".to_string()), "f1 must be alive after append");
+
+        // (b) Delete f1 via DeleteFilesAction.
+        let tx = Transaction::new(&table);
+        let action = tx.delete_files().delete_file(f1.clone());
+        let updates = Arc::new(action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        table = apply_updates_to_table(&table, &updates);
+
+        let alive_after_delete = collect_alive_files(table.metadata().current_snapshot().unwrap(), &table).await;
+        assert!(!alive_after_delete.contains(&"data/f1.parquet".to_string()), "f1 must not be alive after deletion");
+
+        // (c) Append f2 via merge_append.
+        let f2 = make_data_file(&table, "data/f2.parquet", 20);
+        table = merge_append_files(table, vec![f2.clone()]).await;
+
+        // (d) f2 must be alive; f1 must still be absent (Rust never resurfaces tombstones).
+        let alive_final = collect_alive_files(table.metadata().current_snapshot().unwrap(), &table).await;
+        assert!(alive_final.contains(&"data/f2.parquet".to_string()), "f2 must be alive after merge-append");
+        assert!(!alive_final.contains(&"data/f1.parquet".to_string()), "f1 must remain absent after subsequent merge-append");
     }
 
     #[tokio::test]

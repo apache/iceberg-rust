@@ -57,9 +57,11 @@ mod merging_state;
 
 pub use action::*;
 mod append;
+mod delete_files;
 mod merge_append;
 mod rewrite_files;
 mod rewrite_manifests;
+mod row_delta;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -77,9 +79,11 @@ use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
+use crate::transaction::delete_files::DeleteFilesAction;
 use crate::transaction::merge_append::MergeAppendAction;
 use crate::transaction::rewrite_files::RewriteFilesAction;
 use crate::transaction::rewrite_manifests::RewriteManifestsAction;
+use crate::transaction::row_delta::RowDeltaAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -158,6 +162,27 @@ impl Transaction {
     /// `fast_append` for workloads that benefit from bounded manifest counts.
     pub fn merge_append(&self) -> MergeAppendAction {
         MergeAppendAction::new()
+    }
+
+    /// Creates a row-delta action for writing delete files (equality or position deletes).
+    ///
+    /// Appends the supplied delete files into a new `ManifestContent::Deletes` manifest
+    /// and commits a `Operation::Delete` snapshot. Runs the full merging snapshot
+    /// producer filter+merge pipeline on each commit.
+    ///
+    /// Java analog: `org.apache.iceberg.RowDelta`.
+    pub fn row_delta(&self) -> RowDeltaAction {
+        RowDeltaAction::new()
+    }
+
+    /// Creates a delete-files action to mark existing data files as deleted.
+    ///
+    /// Rewrites manifests so that each registered data file is marked with
+    /// `ManifestStatus::Deleted` and commits an `Operation::Delete` snapshot.
+    ///
+    /// Java analog: `org.apache.iceberg.DeleteFiles` / `StreamingDelete`.
+    pub fn delete_files(&self) -> DeleteFilesAction {
+        DeleteFilesAction::new()
     }
 
     /// Creates a rewrite-files action for compaction operations.
