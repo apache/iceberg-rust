@@ -398,22 +398,21 @@ mod test {
         );
 
         // Default: unset → None
-        let unset = DataFileWriterBuilder::new(rolling.clone()).build(None).await?;
+        let unset = DataFileWriterBuilder::new(rolling.clone())
+            .build(None)
+            .await?;
         // Stamped: Some(42)
         let stamped = DataFileWriterBuilder::new(rolling)
             .with_sort_order_id(42)
             .build(None)
             .await?;
 
-        let arrow_schema = arrow_schema::Schema::new(vec![Field::new(
-            "ts",
-            DataType::Int64,
-            false,
-        )
-        .with_metadata(HashMap::from([(
-            PARQUET_FIELD_ID_META_KEY.to_string(),
-            7.to_string(),
-        )]))]);
+        let arrow_schema = arrow_schema::Schema::new(vec![
+            Field::new("ts", DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                7.to_string(),
+            )])),
+        ]);
         let batch = RecordBatch::try_new(Arc::new(arrow_schema), vec![Arc::new(
             arrow_array::Int64Array::from(vec![1_i64, 2, 3]),
         )])?;

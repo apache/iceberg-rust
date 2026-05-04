@@ -200,6 +200,7 @@ impl SnapshotProduceOperation for MergeAppendOperation {
 mod tests {
     use std::sync::Arc;
 
+    use crate::TableUpdate;
     use crate::spec::{
         DataContentType, DataFile, DataFileBuilder, DataFileFormat, ManifestStatus, Operation,
         Struct, UnboundPartitionSpec,
@@ -209,7 +210,6 @@ mod tests {
         make_v2_minimal_table,
     };
     use crate::transaction::{Transaction, TransactionAction};
-    use crate::TableUpdate;
 
     // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -256,10 +256,10 @@ mod tests {
         let table = make_v2_minimal_table();
         // Add an unpartitioned spec (spec 1) and set it as default.
         let tx = Transaction::new(&table);
-        let updates = Arc::new(
-            tx.update_table_properties()
-                .set("commit.manifest.min-count-to-merge".to_string(), "3".to_string()),
-        )
+        let updates = Arc::new(tx.update_table_properties().set(
+            "commit.manifest.min-count-to-merge".to_string(),
+            "3".to_string(),
+        ))
         .commit(&table)
         .await
         .unwrap()
@@ -284,8 +284,14 @@ mod tests {
         let tx = Transaction::new(&table);
         let updates = Arc::new(
             tx.update_table_properties()
-                .set("commit.manifest.target-size-bytes".to_string(), "100".to_string())
-                .set("commit.manifest.min-count-to-merge".to_string(), "2".to_string()),
+                .set(
+                    "commit.manifest.target-size-bytes".to_string(),
+                    "100".to_string(),
+                )
+                .set(
+                    "commit.manifest.min-count-to-merge".to_string(),
+                    "2".to_string(),
+                ),
         )
         .commit(&table)
         .await
@@ -298,11 +304,7 @@ mod tests {
             .collect();
         let table = merge_append_files(table, files.clone()).await;
 
-        let alive = collect_alive_files(
-            table.metadata().current_snapshot().unwrap(),
-            &table,
-        )
-        .await;
+        let alive = collect_alive_files(table.metadata().current_snapshot().unwrap(), &table).await;
         // All 10 files must be alive.
         assert_eq!(alive.len(), 10);
     }
@@ -318,15 +320,21 @@ mod tests {
         let table = merge_append_files(table, vec![f1, f2, f3]).await;
 
         let snap = table.metadata().current_snapshot().unwrap();
-        let ml = snap.load_manifest_list(table.file_io(), table.metadata()).await.unwrap();
-        let manifest = ml.entries()[0].load_manifest(table.file_io()).await.unwrap();
-        let paths: Vec<&str> = manifest
-            .entries()
-            .iter()
-            .map(|e| e.file_path())
-            .collect();
+        let ml = snap
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let manifest = ml.entries()[0]
+            .load_manifest(table.file_io())
+            .await
+            .unwrap();
+        let paths: Vec<&str> = manifest.entries().iter().map(|e| e.file_path()).collect();
         // All three paths present in original insertion order.
-        assert_eq!(paths, ["data/a.parquet", "data/b.parquet", "data/c.parquet"]);
+        assert_eq!(paths, [
+            "data/a.parquet",
+            "data/b.parquet",
+            "data/c.parquet"
+        ]);
     }
 
     #[tokio::test]
@@ -340,7 +348,11 @@ mod tests {
             .with_manifest_read_concurrency(2)
             .with_manifest_write_concurrency(1)
             .add_data_files(vec![f1]);
-        let updates = Arc::new(action).commit(&table).await.unwrap().take_updates();
+        let updates = Arc::new(action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
         let table = apply_updates_to_table(&table, &updates);
         assert_eq!(manifest_count(&table).await, 1);
     }
@@ -350,10 +362,10 @@ mod tests {
         // Second merge_append consolidates the first manifest with the new one.
         let mut table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let updates = Arc::new(
-            tx.update_table_properties()
-                .set("commit.manifest.min-count-to-merge".to_string(), "2".to_string()),
-        )
+        let updates = Arc::new(tx.update_table_properties().set(
+            "commit.manifest.min-count-to-merge".to_string(),
+            "2".to_string(),
+        ))
         .commit(&table)
         .await
         .unwrap()
@@ -386,10 +398,10 @@ mod tests {
         // With min-count-to-merge=3, bins with fewer than 3 siblings are not merged.
         let mut table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let updates = Arc::new(
-            tx.update_table_properties()
-                .set("commit.manifest.min-count-to-merge".to_string(), "3".to_string()),
-        )
+        let updates = Arc::new(tx.update_table_properties().set(
+            "commit.manifest.min-count-to-merge".to_string(),
+            "3".to_string(),
+        ))
         .commit(&table)
         .await
         .unwrap()
@@ -405,7 +417,10 @@ mod tests {
 
         // With only 2 sibling manifests, min-count-to-merge=3 prevents merging.
         assert_eq!(count_after_first, 1, "first append: 1 manifest");
-        assert_eq!(count_after_second, 2, "second append: still 2, no merge yet");
+        assert_eq!(
+            count_after_second, 2,
+            "second append: still 2, no merge yet"
+        );
     }
 
     #[tokio::test]
@@ -417,7 +432,10 @@ mod tests {
         let tx = Transaction::new(&table);
         let updates = Arc::new(
             tx.update_table_properties()
-                .set("commit.manifest.min-count-to-merge".to_string(), "2".to_string())
+                .set(
+                    "commit.manifest.min-count-to-merge".to_string(),
+                    "2".to_string(),
+                )
                 .set(
                     "commit.manifest.target-size-bytes".to_string(),
                     "1".to_string(), // 1 byte — every manifest goes into its own bin
@@ -460,12 +478,21 @@ mod tests {
         let table = merge_append_files(table, vec![f1]).await;
 
         let snap = table.metadata().current_snapshot().unwrap();
-        let ml = snap.load_manifest_list(table.file_io(), table.metadata()).await.unwrap();
+        let ml = snap
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
 
         // Both spec 0 and spec 1 manifests must be present.
         let spec_ids: Vec<i32> = ml.entries().iter().map(|e| e.partition_spec_id).collect();
-        assert!(spec_ids.contains(&0), "spec 0 manifest must be present: {spec_ids:?}");
-        assert!(spec_ids.contains(&1), "spec 1 manifest must be present: {spec_ids:?}");
+        assert!(
+            spec_ids.contains(&0),
+            "spec 0 manifest must be present: {spec_ids:?}"
+        );
+        assert!(
+            spec_ids.contains(&1),
+            "spec 1 manifest must be present: {spec_ids:?}"
+        );
     }
 
     #[tokio::test]
@@ -474,10 +501,10 @@ mod tests {
         // merged across spec boundaries.
         let mut table = make_table_with_two_specs().await;
         let tx = Transaction::new(&table);
-        let updates = Arc::new(
-            tx.update_table_properties()
-                .set("commit.manifest.min-count-to-merge".to_string(), "2".to_string()),
-        )
+        let updates = Arc::new(tx.update_table_properties().set(
+            "commit.manifest.min-count-to-merge".to_string(),
+            "2".to_string(),
+        ))
         .commit(&table)
         .await
         .unwrap()
@@ -502,11 +529,10 @@ mod tests {
         // Two commit() calls on the same Arc reuse the cached MergingState
         // (OnceLock) and produce equivalent snapshots — models catalog retry.
         let mut table = make_v2_minimal_table();
-        let updates = Arc::new(
-            Transaction::new(&table)
-                .update_table_properties()
-                .set("commit.manifest.min-count-to-merge".to_string(), "2".to_string()),
-        )
+        let updates = Arc::new(Transaction::new(&table).update_table_properties().set(
+            "commit.manifest.min-count-to-merge".to_string(),
+            "2".to_string(),
+        ))
         .commit(&table)
         .await
         .unwrap()
@@ -519,7 +545,11 @@ mod tests {
         let table = merge_append_files(table, vec![f2]).await;
 
         let f3 = make_data_file(&table, "data/f3.parquet", 10);
-        let action = Arc::new(Transaction::new(&table).merge_append().add_data_files(vec![f3]));
+        let action = Arc::new(
+            Transaction::new(&table)
+                .merge_append()
+                .add_data_files(vec![f3]),
+        );
         let mut r1 = action.clone().commit(&table).await.unwrap();
         let mut r2 = action.commit(&table).await.unwrap();
         let updates1 = r1.take_updates();
@@ -563,7 +593,10 @@ mod tests {
             "total-data-files",
             "total-records",
         ] {
-            assert!(props.contains_key(*key), "missing summary key {key}: {props:?}");
+            assert!(
+                props.contains_key(*key),
+                "missing summary key {key}: {props:?}"
+            );
         }
         assert!(
             !props.contains_key("entries-processed"),
@@ -578,10 +611,10 @@ mod tests {
         // commit.manifest-merge.enabled=false → manifest count grows linearly.
         let mut table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let updates = Arc::new(
-            tx.update_table_properties()
-                .set("commit.manifest-merge.enabled".to_string(), "false".to_string()),
-        )
+        let updates = Arc::new(tx.update_table_properties().set(
+            "commit.manifest-merge.enabled".to_string(),
+            "false".to_string(),
+        ))
         .commit(&table)
         .await
         .unwrap()
@@ -614,10 +647,10 @@ mod tests {
         // 20 serial appends with min-count-to-merge=3 must produce ≤5 manifests.
         let mut table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let updates = Arc::new(
-            tx.update_table_properties()
-                .set("commit.manifest.min-count-to-merge".to_string(), "3".to_string()),
-        )
+        let updates = Arc::new(tx.update_table_properties().set(
+            "commit.manifest.min-count-to-merge".to_string(),
+            "3".to_string(),
+        ))
         .commit(&table)
         .await
         .unwrap()
@@ -641,10 +674,10 @@ mod tests {
         // Tombstones from a prior RewriteFilesAction must not survive a merge pass.
         let mut table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let updates = Arc::new(
-            tx.update_table_properties()
-                .set("commit.manifest.min-count-to-merge".to_string(), "2".to_string()),
-        )
+        let updates = Arc::new(tx.update_table_properties().set(
+            "commit.manifest.min-count-to-merge".to_string(),
+            "2".to_string(),
+        ))
         .commit(&table)
         .await
         .unwrap()
@@ -665,7 +698,11 @@ mod tests {
             .rewrite_files()
             .delete_files(vec![f1])
             .add_files(vec![c1]);
-        let updates = Arc::new(action).commit(&table).await.unwrap().take_updates();
+        let updates = Arc::new(action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
         let table = apply_updates_to_table(&table, &updates);
 
         // Step 3: merge_append appends a new file — the merge pass runs and must
@@ -675,7 +712,10 @@ mod tests {
 
         let snap = table.metadata().current_snapshot().unwrap();
         let current_snap_id = snap.snapshot_id();
-        let ml = snap.load_manifest_list(table.file_io(), table.metadata()).await.unwrap();
+        let ml = snap
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
         let mut prior_tombstones = 0u64;
         for entry in ml.entries() {
             let manifest = entry.load_manifest(table.file_io()).await.unwrap();
@@ -687,7 +727,10 @@ mod tests {
                 }
             }
         }
-        assert_eq!(prior_tombstones, 0, "no prior-snapshot tombstones after merge_append");
+        assert_eq!(
+            prior_tombstones, 0,
+            "no prior-snapshot tombstones after merge_append"
+        );
     }
 
     #[tokio::test]
@@ -700,8 +743,14 @@ mod tests {
 
         let snap = table.metadata().current_snapshot().unwrap();
         let expected_seq = snap.sequence_number();
-        let ml = snap.load_manifest_list(table.file_io(), table.metadata()).await.unwrap();
-        let manifest = ml.entries()[0].load_manifest(table.file_io()).await.unwrap();
+        let ml = snap
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let manifest = ml.entries()[0]
+            .load_manifest(table.file_io())
+            .await
+            .unwrap();
         let entry = &manifest.entries()[0];
         assert_eq!(
             entry.sequence_number(),
@@ -721,10 +770,10 @@ mod tests {
         // MergeAppendAction has been used on the same table.
         let mut table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let updates = Arc::new(
-            tx.update_table_properties()
-                .set("commit.manifest-merge.enabled".to_string(), "false".to_string()),
-        )
+        let updates = Arc::new(tx.update_table_properties().set(
+            "commit.manifest-merge.enabled".to_string(),
+            "false".to_string(),
+        ))
         .commit(&table)
         .await
         .unwrap()
@@ -757,5 +806,4 @@ mod tests {
             "expected error for empty file list"
         );
     }
-
 }
