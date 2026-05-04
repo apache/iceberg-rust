@@ -25,6 +25,7 @@ use tokio::sync::oneshot::{Receiver, channel};
 
 use super::delete_filter::{DeleteFilter, PosDelLoadAction};
 use crate::arrow::delete_file_loader::BasicDeleteFileLoader;
+use crate::arrow::scan_metrics::ScanMetrics;
 use crate::arrow::{arrow_primitive_to_literal, arrow_schema_to_schema};
 use crate::delete_vector::DeleteVector;
 use crate::expr::Predicate::AlwaysTrue;
@@ -77,11 +78,20 @@ enum ParsedDeleteFileContext {
 #[allow(unused_variables)]
 impl CachingDeleteFileLoader {
     pub(crate) fn new(file_io: FileIO, concurrency_limit_data_files: usize) -> Self {
+        let scan_metrics = ScanMetrics::new();
         CachingDeleteFileLoader {
-            basic_delete_file_loader: BasicDeleteFileLoader::new(file_io),
+            basic_delete_file_loader: BasicDeleteFileLoader::new(file_io, scan_metrics),
             concurrency_limit_data_files,
             delete_filter: DeleteFilter::default(),
         }
+    }
+
+    pub(crate) fn with_scan_metrics(mut self, scan_metrics: ScanMetrics) -> Self {
+        self.basic_delete_file_loader = BasicDeleteFileLoader::new(
+            self.basic_delete_file_loader.file_io().clone(),
+            scan_metrics,
+        );
+        self
     }
 
     /// Initiates loading of all deletes for all the specified tasks
@@ -612,7 +622,8 @@ mod tests {
 
         let eq_delete_file_path = setup_write_equality_delete_file_1(table_location);
 
-        let basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
+        let basic_delete_file_loader =
+            BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new());
         let record_batch_stream = basic_delete_file_loader
             .parquet_to_batch_stream(
                 &eq_delete_file_path,
@@ -808,7 +819,8 @@ mod tests {
         };
 
         let file_io = FileIO::new_with_fs();
-        let basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
+        let basic_delete_file_loader =
+            BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new());
 
         let batch_stream = basic_delete_file_loader
             .parquet_to_batch_stream(
@@ -994,7 +1006,8 @@ mod tests {
         writer.write(&record_batch).unwrap();
         writer.close().unwrap();
 
-        let basic_delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
+        let basic_delete_file_loader =
+            BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new());
         let record_batch_stream = basic_delete_file_loader
             .parquet_to_batch_stream(&path, std::fs::metadata(&path).unwrap().len())
             .await

@@ -18,7 +18,9 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY};
+use iceberg::io::{
+    S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_ACCESS_KEY,
+};
 use iceberg_catalog_rest::REST_CATALOG_PROP_URI;
 use iceberg_test_utils::{get_minio_endpoint, get_rest_catalog_endpoint, set_up};
 
@@ -45,6 +47,7 @@ impl GlobalTestFixture {
             (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
             (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
             (S3_REGION.to_string(), "us-east-1".to_string()),
+            (S3_PATH_STYLE_ACCESS.to_string(), "true".to_string()),
         ]);
 
         GlobalTestFixture { catalog_config }

@@ -77,7 +77,7 @@ pub(crate) fn zstd_compressed_metric_blob_0_metadata() -> BlobMetadata {
         sequence_number: METRIC_BLOB_0_SEQUENCE_NUMBER,
         offset: 4,
         length: 22,
-        compression_codec: CompressionCodec::Zstd,
+        compression_codec: CompressionCodec::zstd_default(),
         properties: HashMap::new(),
     }
 }
@@ -134,7 +134,7 @@ pub(crate) fn zstd_compressed_metric_blob_1_metadata() -> BlobMetadata {
         sequence_number: METRIC_BLOB_1_SEQUENCE_NUMBER,
         offset: 26,
         length: 77,
-        compression_codec: CompressionCodec::Zstd,
+        compression_codec: CompressionCodec::zstd_default(),
         properties: HashMap::new(),
     }
 }
