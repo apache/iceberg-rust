@@ -274,9 +274,10 @@ impl OpenDalStorage {
                 // Normalize s3a:// to s3:// so paths are consistent regardless
                 // of which scheme the REST catalog returns.
                 let normalized;
-                let (op_path, original_scheme_len) = if path.starts_with("s3a://") {
-                    normalized = format!("s3://{}", &path[6..]);
-                    (normalized.as_str(), 6) // "s3a://".len()
+                let (op_path, original_scheme_len) = if let Some(rest) = path.strip_prefix("s3a://")
+                {
+                    normalized = format!("s3://{}", rest);
+                    (normalized.as_str(), "s3a://".len())
                 } else {
                     (path, 4) // "s3://".len()
                 };
