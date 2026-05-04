@@ -57,9 +57,11 @@ mod merging_state;
 
 pub use action::*;
 mod append;
+mod delete_files;
 mod merge_append;
 mod rewrite_files;
 mod rewrite_manifests;
+mod row_delta;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -77,9 +79,11 @@ use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
+use crate::transaction::delete_files::DeleteFilesAction;
 use crate::transaction::merge_append::MergeAppendAction;
 use crate::transaction::rewrite_files::RewriteFilesAction;
 use crate::transaction::rewrite_manifests::RewriteManifestsAction;
+use crate::transaction::row_delta::RowDeltaAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -158,6 +162,27 @@ impl Transaction {
     /// `fast_append` for workloads that benefit from bounded manifest counts.
     pub fn merge_append(&self) -> MergeAppendAction {
         MergeAppendAction::new()
+    }
+
+    /// Creates a row-delta action for writing delete files (equality or position deletes).
+    ///
+    /// Appends the supplied delete files into a new `ManifestContent::Deletes` manifest
+    /// and commits a `Operation::Delete` snapshot. Runs the full merging snapshot
+    /// producer filter+merge pipeline on each commit.
+    ///
+    /// Java analog: `org.apache.iceberg.RowDelta`.
+    pub fn row_delta(&self) -> RowDeltaAction {
+        RowDeltaAction::new()
+    }
+
+    /// Creates a delete-files action to mark existing data files as deleted.
+    ///
+    /// Rewrites manifests so that each registered data file is marked with
+    /// `ManifestStatus::Deleted` and commits an `Operation::Delete` snapshot.
+    ///
+    /// Java analog: `org.apache.iceberg.DeleteFiles` / `StreamingDelete`.
+    pub fn delete_files(&self) -> DeleteFilesAction {
+        DeleteFilesAction::new()
     }
 
     /// Creates a rewrite-files action for compaction operations.
@@ -343,6 +368,23 @@ mod tests {
         }
         let metadata = Arc::new(builder.build().unwrap().metadata);
         table.clone().with_metadata(metadata)
+    }
+
+    pub(crate) fn make_file_with_content(
+        table: &Table,
+        path: &str,
+        content: DataContentType,
+    ) -> DataFile {
+        DataFileBuilder::default()
+            .content(content)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap()
     }
 
     pub(crate) fn make_data_file(table: &Table, path: &str, record_count: u64) -> DataFile {

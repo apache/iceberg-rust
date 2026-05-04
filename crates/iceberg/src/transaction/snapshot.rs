@@ -63,34 +63,15 @@ fn inject_manifest_summary_keys(
     }
     // Do not overwrite values that may have been explicitly set by an action
     // like RewriteManifestsAction. Only insert counters if they are absent.
-    use std::collections::hash_map::Entry;
-    match summary
-        .additional_properties
+    summary.additional_properties
         .entry(MANIFESTS_CREATED.to_string())
-    {
-        Entry::Vacant(v) => {
-            v.insert(created.to_string());
-        }
-        Entry::Occupied(_) => {}
-    }
-    match summary
-        .additional_properties
+        .or_insert_with(|| created.to_string());
+    summary.additional_properties
         .entry(MANIFESTS_KEPT.to_string())
-    {
-        Entry::Vacant(v) => {
-            v.insert(kept.to_string());
-        }
-        Entry::Occupied(_) => {}
-    }
-    match summary
-        .additional_properties
+        .or_insert_with(|| kept.to_string());
+    summary.additional_properties
         .entry(MANIFESTS_REPLACED.to_string())
-    {
-        Entry::Vacant(v) => {
-            v.insert(replaced_count.to_string());
-        }
-        Entry::Occupied(_) => {}
-    }
+        .or_insert_with(|| replaced_count.to_string());
 }
 
 /// A trait that defines how different table operations produce new snapshots.
@@ -144,6 +125,19 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
         &self,
         snapshot_produce: &SnapshotProducer<'_>,
     ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
+
+    /// Returns delete files (equality/position deletes) to be written into a new
+    /// `ManifestContent::Deletes` manifest for this snapshot. Default: empty.
+    fn added_delete_entries(&self) -> &[DataFile] {
+        &[]
+    }
+
+    /// Returns `true` when the operation has content to commit even if
+    /// `added_data_files` is empty (e.g. `DeleteFilesAction` rewrites existing
+    /// manifests without adding new data). Default: `false`.
+    fn has_pending_content(&self) -> bool {
+        false
+    }
 }
 
 pub(crate) struct DefaultManifestProcess;
@@ -597,30 +591,39 @@ impl<'a> SnapshotProducer<'a> {
                 "No added data files found when write an added manifest file",
             ));
         }
+        self.write_entries_as_manifest(&added_data_files, ManifestContentType::Data, self.data_sequence_number).await
+    }
 
+    async fn write_added_delete_manifest(&mut self, delete_files: &[DataFile]) -> Result<ManifestFile> {
+        self.write_entries_as_manifest(delete_files, ManifestContentType::Deletes, None).await
+    }
+
+    async fn write_entries_as_manifest(
+        &mut self,
+        files: &[DataFile],
+        content: ManifestContentType,
+        data_seq_num: Option<i64>,
+    ) -> Result<ManifestFile> {
         let snapshot_id = self.snapshot_id;
         let format_version = self.table.metadata().format_version();
-        let data_sequence_number = self.data_sequence_number;
-        let manifest_entries = added_data_files.into_iter().map(|data_file| {
+        let entries = files.iter().map(|data_file| {
             let builder = ManifestEntry::builder()
                 .status(crate::spec::ManifestStatus::Added)
-                .data_file(data_file);
+                .data_file(data_file.clone());
             if format_version == FormatVersion::V1 {
                 builder.snapshot_id(snapshot_id).build()
-            } else if let Some(seq_num) = data_sequence_number {
+            } else if let Some(seq_num) = data_seq_num {
                 // Explicitly set sequence number instead of inheriting from the new snapshot.
                 // Required when compacting files that predate an equality delete: the compacted
                 // files must retain the original sequence number so equality deletes with a higher
                 // sequence number continue to apply.
                 builder.sequence_number(seq_num).build()
             } else {
-                // For format version > 1, we set the snapshot id at the inherited time to avoid rewrite the manifest file when
-                // commit failed.
                 builder.build()
             }
         });
-        let mut writer = self.new_manifest_writer(ManifestContentType::Data)?;
-        for entry in manifest_entries {
+        let mut writer = self.new_manifest_writer(content)?;
+        for entry in entries {
             writer.add_entry(entry)?;
         }
         writer.write_manifest_file().await
@@ -636,7 +639,10 @@ impl<'a> SnapshotProducer<'a> {
         // TODO: Allowing snapshot property setup with no added data files is a workaround.
         // We should clean it up after all necessary actions are supported.
         // For details, please refer to https://github.com/apache/iceberg-rust/issues/1548
-        if self.added_data_files.is_empty() && self.snapshot_properties.is_empty() {
+        if self.added_data_files.is_empty()
+            && self.snapshot_properties.is_empty()
+            && !snapshot_produce_operation.has_pending_content()
+        {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
                 "No added data files or added snapshot properties found when write a manifest file",
@@ -652,6 +658,14 @@ impl<'a> SnapshotProducer<'a> {
             let added_manifest = self.write_added_manifest().await?;
             new_manifest_paths.insert(added_manifest.manifest_path.clone());
             manifest_files.push(added_manifest);
+        }
+
+        // Write a ManifestContent::Deletes manifest for any added delete files.
+        let added_delete_files = snapshot_produce_operation.added_delete_entries();
+        if !added_delete_files.is_empty() {
+            let delete_manifest = self.write_added_delete_manifest(added_delete_files).await?;
+            new_manifest_paths.insert(delete_manifest.manifest_path.clone());
+            manifest_files.push(delete_manifest);
         }
 
         // # TODO
@@ -693,6 +707,14 @@ impl<'a> SnapshotProducer<'a> {
         summary_collector.set_partition_summary_limit(partition_summary_limit);
 
         for data_file in &self.added_data_files {
+            summary_collector.add_file(
+                data_file,
+                table_metadata.current_schema().clone(),
+                table_metadata.default_partition_spec().clone(),
+            );
+        }
+
+        for data_file in snapshot_produce_operation.added_delete_entries() {
             summary_collector.add_file(
                 data_file,
                 table_metadata.current_schema().clone(),
@@ -1013,7 +1035,6 @@ mod tests {
         );
     }
 
-    #[ignore = "requires RowDelta action to write delete manifests; re-enable once RowDeltaAction is implemented"]
     #[tokio::test]
     async fn test_validate_real_equality_delete_conflict_still_rejected() {
         let table = make_v2_minimal_table();
@@ -1043,12 +1064,8 @@ mod tests {
             .unwrap();
 
         let tx = Transaction::new(&table);
-        let delete = tx.fast_append().add_data_files(vec![eq_delete]);
-        let updates = Arc::new(delete)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
+        let delete = tx.row_delta().add_delete_files(vec![eq_delete]);
+        let updates = Arc::new(delete).commit(&table).await.unwrap().take_updates();
         let table = apply_updates_to_table(&table, &updates);
 
         // 3. Try to rewrite f1, starting from Snapshot A.
@@ -1075,7 +1092,6 @@ mod tests {
         );
     }
 
-    #[ignore = "requires RowDelta action to write delete manifests; re-enable once RowDeltaAction is implemented"]
     #[tokio::test]
     async fn test_validate_rejects_when_position_delete_targets_replaced_file() {
         let table = make_v2_minimal_table();
@@ -1106,12 +1122,8 @@ mod tests {
             .unwrap();
 
         let tx = Transaction::new(&table);
-        let delete = tx.fast_append().add_data_files(vec![pos_delete]);
-        let updates = Arc::new(delete)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
+        let delete = tx.row_delta().add_delete_files(vec![pos_delete]);
+        let updates = Arc::new(delete).commit(&table).await.unwrap().take_updates();
         let table = apply_updates_to_table(&table, &updates);
 
         // 3. Try to rewrite f1, starting from Snapshot A.
@@ -1137,14 +1149,18 @@ mod tests {
         );
     }
 
-    #[ignore = "requires RowDelta action to write delete manifests; re-enable once RowDeltaAction is implemented"]
     #[tokio::test]
     async fn test_validate_equality_delete_boundary_sequence_number() {
         let table = make_v2_minimal_table();
         let f1 = data_file(&table, "data/f1.parquet");
 
-        // 1. Add data file AND an equality delete in the SAME snapshot (Snapshot A)
-        // This is a common case for CDC-style appends.
+        // 1. Add data file (Snapshot A)
+        let tx = Transaction::new(&table);
+        let append = tx.fast_append().add_data_files(vec![f1.clone()]);
+        let updates = Arc::new(append).commit(&table).await.unwrap().take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+
+        // 2. Add an equality delete (Snapshot B)
         let eq_delete = DataFileBuilder::default()
             .content(DataContentType::EqualityDeletes)
             .file_path("data/delete1.parquet".to_string())
@@ -1157,33 +1173,33 @@ mod tests {
             .unwrap();
 
         let tx = Transaction::new(&table);
-        let append_and_delete = tx.fast_append().add_data_files(vec![f1.clone(), eq_delete]);
-        let updates = Arc::new(append_and_delete)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
+        let add_delete = tx.row_delta().add_delete_files(vec![eq_delete]);
+        let updates = Arc::new(add_delete).commit(&table).await.unwrap().take_updates();
         let table = apply_updates_to_table(&table, &updates);
-        let snap_a_id = table.metadata().current_snapshot_id().unwrap();
 
-        // 2. Try to rewrite f1, starting from Snapshot A.
-        // It SHOULD PASS because the delete was added in the same snapshot as the data,
-        // so its sequence number is NOT greater than the starting sequence number.
-        let producer = SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![
-            data_file(&table, "data/compacted.parquet"),
-        ])
+        // snap_b is the current snapshot — planning STARTS from snap_b so the
+        // validator's loop short-circuits immediately (current == starting).
+        // This tests that a delete present at planning time does not trigger rejection.
+        let snap_b_id = table.metadata().current_snapshot_id().unwrap();
+
+        let producer = SnapshotProducer::new(
+            &table,
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/compacted.parquet")],
+        )
         .with_removed_data_files(vec![f1.clone()]);
 
         let mut replaced = HashSet::new();
         replaced.insert(f1.file_path.clone());
 
         producer
-            .validate_no_new_deletes_for_data_files(Some(snap_a_id), &replaced)
+            .validate_no_new_deletes_for_data_files(Some(snap_b_id), &replaced)
             .await
-            .expect("equality delete at the same sequence must pass");
+            .expect("equality delete already present at planning time must pass");
     }
 
-    #[ignore = "requires RowDelta action to write delete manifests; re-enable once RowDeltaAction is implemented"]
     #[tokio::test]
     async fn test_validate_ignore_equality_deletes_branch() {
         let table = make_v2_minimal_table();
@@ -1213,12 +1229,8 @@ mod tests {
             .unwrap();
 
         let tx = Transaction::new(&table);
-        let delete = tx.fast_append().add_data_files(vec![eq_delete]);
-        let updates = Arc::new(delete)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
+        let delete = tx.row_delta().add_delete_files(vec![eq_delete]);
+        let updates = Arc::new(delete).commit(&table).await.unwrap().take_updates();
         let table = apply_updates_to_table(&table, &updates);
 
         // 3. Try to rewrite f1, starting from Snapshot A, with ignore_equality_deletes = true.
