@@ -22,7 +22,9 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::spec::{DataContentType, DataFile, FormatVersion, ManifestEntry, ManifestFile, Operation};
+use crate::spec::{
+    DataContentType, DataFile, FormatVersion, ManifestEntry, ManifestFile, Operation,
+};
 use crate::table::Table;
 use crate::transaction::merging_state::MergingState;
 use crate::transaction::snapshot::{CommitResult, SnapshotProduceOperation, SnapshotProducer};
@@ -212,7 +214,9 @@ impl TransactionAction for DeleteFilesAction {
         );
 
         if self.validate_files_exist {
-            snapshot_producer.validate_data_files_exist(&seen_paths).await?;
+            snapshot_producer
+                .validate_data_files_exist(&seen_paths)
+                .await?;
         }
 
         // Only count files that are actually alive in the current snapshot toward
@@ -309,7 +313,8 @@ mod tests {
         let f1 = make_data_file(&table, "data/f1.parquet", 10);
         table = append_files(table, vec![f1.clone()]).await;
 
-        let alive_before = collect_alive_files(table.metadata().current_snapshot().unwrap(), &table).await;
+        let alive_before =
+            collect_alive_files(table.metadata().current_snapshot().unwrap(), &table).await;
         assert!(alive_before.contains(&"data/f1.parquet".to_string()));
 
         let tx = Transaction::new(&table);
@@ -322,8 +327,12 @@ mod tests {
         table = apply_updates_to_table(&table, &updates);
 
         // f1 must no longer be alive after delete.
-        let alive_after = collect_alive_files(table.metadata().current_snapshot().unwrap(), &table).await;
-        assert!(!alive_after.contains(&"data/f1.parquet".to_string()), "f1 must not be alive after deletion");
+        let alive_after =
+            collect_alive_files(table.metadata().current_snapshot().unwrap(), &table).await;
+        assert!(
+            !alive_after.contains(&"data/f1.parquet".to_string()),
+            "f1 must not be alive after deletion"
+        );
     }
 
     #[tokio::test]
@@ -353,9 +362,7 @@ mod tests {
 
         // Pass the same file twice — should succeed silently, not double-delete.
         let tx = Transaction::new(&table);
-        let action = tx
-            .delete_files()
-            .delete_files(vec![f1.clone(), f1.clone()]);
+        let action = tx.delete_files().delete_files(vec![f1.clone(), f1.clone()]);
         let updates = Arc::new(action)
             .commit(&table)
             .await
@@ -377,7 +384,10 @@ mod tests {
         let tx = Transaction::new(&table);
         let action = tx.delete_files().delete_file(f1.clone());
         let result = Arc::new(action).commit(&table).await;
-        assert!(result.is_ok(), "absent path without validate_files_exist must succeed silently");
+        assert!(
+            result.is_ok(),
+            "absent path without validate_files_exist must succeed silently"
+        );
     }
 
     #[tokio::test]
@@ -422,6 +432,9 @@ mod tests {
         let tx = Transaction::new(&table);
         let action = tx.delete_files().delete_file(eq_delete);
         let result = Arc::new(action).commit(&table).await;
-        assert!(result.is_err(), "DeleteFiles must reject equality-delete files");
+        assert!(
+            result.is_err(),
+            "DeleteFiles must reject equality-delete files"
+        );
     }
 }

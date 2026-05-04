@@ -22,7 +22,9 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::spec::{DataContentType, DataFile, FormatVersion, ManifestEntry, ManifestFile, Operation};
+use crate::spec::{
+    DataContentType, DataFile, FormatVersion, ManifestEntry, ManifestFile, Operation,
+};
 use crate::table::Table;
 use crate::transaction::merging_state::MergingState;
 use crate::transaction::snapshot::{CommitResult, SnapshotProduceOperation, SnapshotProducer};
@@ -239,7 +241,9 @@ mod tests {
     use std::sync::Arc;
 
     use crate::spec::{DataContentType, ManifestContentType, ManifestStatus};
-    use crate::transaction::tests::{apply_updates_to_table, make_file_with_content, make_v2_minimal_table};
+    use crate::transaction::tests::{
+        apply_updates_to_table, make_file_with_content, make_v2_minimal_table,
+    };
     use crate::transaction::{Transaction, TransactionAction};
 
     #[tokio::test]
@@ -255,7 +259,11 @@ mod tests {
     async fn test_row_delta_adds_delete_manifest() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let eq_delete = make_file_with_content(&table, "deletes/eq1.parquet", DataContentType::EqualityDeletes);
+        let eq_delete = make_file_with_content(
+            &table,
+            "deletes/eq1.parquet",
+            DataContentType::EqualityDeletes,
+        );
         let action = tx.row_delta().add_delete_files(vec![eq_delete]);
         let updates = Arc::new(action)
             .commit(&table)
@@ -278,23 +286,29 @@ mod tests {
 
         assert_eq!(deletes_manifests.len(), 1, "expected one deletes manifest");
 
-        let manifest = deletes_manifests[0].load_manifest(table.file_io()).await.unwrap();
+        let manifest = deletes_manifests[0]
+            .load_manifest(table.file_io())
+            .await
+            .unwrap();
         assert_eq!(manifest.entries().len(), 1);
-        assert_eq!(
-            manifest.entries()[0].status(),
-            ManifestStatus::Added
-        );
+        assert_eq!(manifest.entries()[0].status(), ManifestStatus::Added);
     }
 
     #[tokio::test]
     async fn test_row_delta_equality_delete() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let eq_delete = make_file_with_content(&table, "deletes/eq1.parquet", DataContentType::EqualityDeletes);
-        let pos_delete = make_file_with_content(&table, "deletes/pos1.parquet", DataContentType::PositionDeletes);
-        let action = tx
-            .row_delta()
-            .add_delete_files(vec![eq_delete, pos_delete]);
+        let eq_delete = make_file_with_content(
+            &table,
+            "deletes/eq1.parquet",
+            DataContentType::EqualityDeletes,
+        );
+        let pos_delete = make_file_with_content(
+            &table,
+            "deletes/pos1.parquet",
+            DataContentType::PositionDeletes,
+        );
+        let action = tx.row_delta().add_delete_files(vec![eq_delete, pos_delete]);
         let updates = Arc::new(action)
             .commit(&table)
             .await

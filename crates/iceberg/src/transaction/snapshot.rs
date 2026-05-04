@@ -63,13 +63,16 @@ fn inject_manifest_summary_keys(
     }
     // Do not overwrite values that may have been explicitly set by an action
     // like RewriteManifestsAction. Only insert counters if they are absent.
-    summary.additional_properties
+    summary
+        .additional_properties
         .entry(MANIFESTS_CREATED.to_string())
         .or_insert_with(|| created.to_string());
-    summary.additional_properties
+    summary
+        .additional_properties
         .entry(MANIFESTS_KEPT.to_string())
         .or_insert_with(|| kept.to_string());
-    summary.additional_properties
+    summary
+        .additional_properties
         .entry(MANIFESTS_REPLACED.to_string())
         .or_insert_with(|| replaced_count.to_string());
 }
@@ -591,11 +594,20 @@ impl<'a> SnapshotProducer<'a> {
                 "No added data files found when write an added manifest file",
             ));
         }
-        self.write_entries_as_manifest(&added_data_files, ManifestContentType::Data, self.data_sequence_number).await
+        self.write_entries_as_manifest(
+            &added_data_files,
+            ManifestContentType::Data,
+            self.data_sequence_number,
+        )
+        .await
     }
 
-    async fn write_added_delete_manifest(&mut self, delete_files: &[DataFile]) -> Result<ManifestFile> {
-        self.write_entries_as_manifest(delete_files, ManifestContentType::Deletes, None).await
+    async fn write_added_delete_manifest(
+        &mut self,
+        delete_files: &[DataFile],
+    ) -> Result<ManifestFile> {
+        self.write_entries_as_manifest(delete_files, ManifestContentType::Deletes, None)
+            .await
     }
 
     async fn write_entries_as_manifest(
@@ -1065,7 +1077,11 @@ mod tests {
 
         let tx = Transaction::new(&table);
         let delete = tx.row_delta().add_delete_files(vec![eq_delete]);
-        let updates = Arc::new(delete).commit(&table).await.unwrap().take_updates();
+        let updates = Arc::new(delete)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
         let table = apply_updates_to_table(&table, &updates);
 
         // 3. Try to rewrite f1, starting from Snapshot A.
@@ -1123,7 +1139,11 @@ mod tests {
 
         let tx = Transaction::new(&table);
         let delete = tx.row_delta().add_delete_files(vec![pos_delete]);
-        let updates = Arc::new(delete).commit(&table).await.unwrap().take_updates();
+        let updates = Arc::new(delete)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
         let table = apply_updates_to_table(&table, &updates);
 
         // 3. Try to rewrite f1, starting from Snapshot A.
@@ -1157,7 +1177,11 @@ mod tests {
         // 1. Add data file (Snapshot A)
         let tx = Transaction::new(&table);
         let append = tx.fast_append().add_data_files(vec![f1.clone()]);
-        let updates = Arc::new(append).commit(&table).await.unwrap().take_updates();
+        let updates = Arc::new(append)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
         let table = apply_updates_to_table(&table, &updates);
 
         // 2. Add an equality delete (Snapshot B)
@@ -1174,7 +1198,11 @@ mod tests {
 
         let tx = Transaction::new(&table);
         let add_delete = tx.row_delta().add_delete_files(vec![eq_delete]);
-        let updates = Arc::new(add_delete).commit(&table).await.unwrap().take_updates();
+        let updates = Arc::new(add_delete)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
         let table = apply_updates_to_table(&table, &updates);
 
         // snap_b is the current snapshot — planning STARTS from snap_b so the
@@ -1182,13 +1210,9 @@ mod tests {
         // This tests that a delete present at planning time does not trigger rejection.
         let snap_b_id = table.metadata().current_snapshot_id().unwrap();
 
-        let producer = SnapshotProducer::new(
-            &table,
-            Uuid::now_v7(),
-            None,
-            HashMap::new(),
-            vec![data_file(&table, "data/compacted.parquet")],
-        )
+        let producer = SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![
+            data_file(&table, "data/compacted.parquet"),
+        ])
         .with_removed_data_files(vec![f1.clone()]);
 
         let mut replaced = HashSet::new();
@@ -1230,7 +1254,11 @@ mod tests {
 
         let tx = Transaction::new(&table);
         let delete = tx.row_delta().add_delete_files(vec![eq_delete]);
-        let updates = Arc::new(delete).commit(&table).await.unwrap().take_updates();
+        let updates = Arc::new(delete)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
         let table = apply_updates_to_table(&table, &updates);
 
         // 3. Try to rewrite f1, starting from Snapshot A, with ignore_equality_deletes = true.
