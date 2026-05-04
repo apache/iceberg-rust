@@ -478,8 +478,7 @@ mod tests {
     use as_any::Downcast;
 
     use crate::spec::{
-        DEFAULT_SCHEMA_ID, Literal, NestedField, PrimitiveType, Schema, StructType, TableMetadata,
-        Type,
+        DEFAULT_SCHEMA_ID, Literal, NestedField, PrimitiveType, StructType, TableMetadata, Type,
     };
     use crate::table::Table;
     use crate::transaction::Transaction;
