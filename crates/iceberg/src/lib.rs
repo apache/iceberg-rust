@@ -92,9 +92,9 @@ mod runtime;
 
 pub mod arrow;
 pub(crate) mod delete_file_index;
+mod prptl_utils;
 pub mod test_utils;
 mod utils;
-mod prptl_utils;
 pub mod writer;
 
 mod delete_vector;

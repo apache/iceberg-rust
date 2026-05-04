@@ -595,7 +595,6 @@ impl CurrentFileStatus for ParquetWriter {
             0
         }
     }
-
 }
 
 impl RowGroupFlushable for ParquetWriter {

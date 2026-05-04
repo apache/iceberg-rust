@@ -33,8 +33,8 @@ use tracing::warn;
 
 use crate::Result;
 use crate::spec::{
-    DataFileFormat, FormatVersion, Manifest, ManifestContentType, ManifestEntry,
-    ManifestFile, ManifestWriterBuilder,
+    DataFileFormat, FormatVersion, Manifest, ManifestContentType, ManifestEntry, ManifestFile,
+    ManifestWriterBuilder,
 };
 use crate::transaction::snapshot::{META_ROOT_PATH, SnapshotProducer};
 
@@ -80,7 +80,10 @@ impl ManifestFilterManager {
     ) -> Result<Vec<ManifestFile>> {
         // Lock-clone-release: never hold a Mutex guard across an `.await`.
         let deleted_paths: HashSet<String> = {
-            let g = self.deleted_paths.lock().expect("filter deleted-paths mutex");
+            let g = self
+                .deleted_paths
+                .lock()
+                .expect("filter deleted-paths mutex");
             g.clone()
         };
         if deleted_paths.is_empty() || current_manifests.is_empty() {
@@ -96,16 +99,20 @@ impl ManifestFilterManager {
                 Ok::<_, crate::Error>((m, loaded))
             }
         });
-        let mut loaded: Vec<(ManifestFile, std::sync::Arc<Manifest>)> = futures::stream::iter(read_futures)
-            .buffer_unordered(self.read_concurrency)
-            .try_collect()
-            .await?;
+        let mut loaded: Vec<(ManifestFile, std::sync::Arc<Manifest>)> =
+            futures::stream::iter(read_futures)
+                .buffer_unordered(self.read_concurrency)
+                .try_collect()
+                .await?;
         // Restore deterministic order by source manifest path.
         loaded.sort_by(|(a, _), (b, _)| a.manifest_path.cmp(&b.manifest_path));
 
         let mut result = Vec::with_capacity(loaded.len());
         for (ml_entry, manifest) in loaded.into_iter() {
-            match self.cache.lock().expect("filter cache mutex")
+            match self
+                .cache
+                .lock()
+                .expect("filter cache mutex")
                 .get(&ml_entry.manifest_path)
                 .cloned()
             {
@@ -310,10 +317,7 @@ mod tests {
         let filter = ManifestFilterManager::new(4);
         filter.delete("data/x.parquet".to_string());
         filter.delete("data/x.parquet".to_string());
-        assert_eq!(
-            filter.deleted_paths.lock().expect("test mutex").len(),
-            1
-        );
+        assert_eq!(filter.deleted_paths.lock().expect("test mutex").len(), 1);
     }
 
     /// clean_uncommitted removes cache entries for residuals not in committed_paths.
@@ -340,10 +344,10 @@ mod tests {
     async fn clean_uncommitted_preserves_committed_residual_in_cache() {
         let mgr = ManifestFilterManager::new(4);
         let residual = fake_manifest("mem:///meta/residual.avro");
-        mgr.cache
-            .lock()
-            .unwrap()
-            .insert("mem:///meta/source.avro".to_string(), Some(residual.clone()));
+        mgr.cache.lock().unwrap().insert(
+            "mem:///meta/source.avro".to_string(),
+            Some(residual.clone()),
+        );
 
         let mut committed = HashSet::new();
         committed.insert("mem:///meta/residual.avro".to_string());

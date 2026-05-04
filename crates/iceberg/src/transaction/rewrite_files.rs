@@ -503,8 +503,7 @@ mod tests {
             panic!("expected phantom-delete error");
         };
         assert!(
-            err.to_string()
-                .contains("no longer alive"),
+            err.to_string().contains("no longer alive"),
             "Expected phantom-delete error, got: {err}"
         );
     }
@@ -538,7 +537,8 @@ mod tests {
 
         let file1 = make_data_file(&table, "data/file1.parquet", 50);
         let file2 = make_data_file(&table, "data/file2.parquet", 60);
-        let table_with_files = append_files(table.clone(), vec![file1.clone(), file2.clone()]).await;
+        let table_with_files =
+            append_files(table.clone(), vec![file1.clone(), file2.clone()]).await;
 
         assert!(table_with_files.metadata().current_snapshot().is_some());
 
@@ -695,9 +695,18 @@ mod tests {
 
         // 3 data files initially; rewrote 2, added 1 → total 2.
         let summary_props = &new_snapshot.summary().additional_properties;
-        assert_eq!(summary_props.get("total-data-files").map(String::as_str), Some("2"));
-        assert_eq!(summary_props.get("added-data-files").map(String::as_str), Some("1"));
-        assert_eq!(summary_props.get("deleted-data-files").map(String::as_str), Some("2"));
+        assert_eq!(
+            summary_props.get("total-data-files").map(String::as_str),
+            Some("2")
+        );
+        assert_eq!(
+            summary_props.get("added-data-files").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            summary_props.get("deleted-data-files").map(String::as_str),
+            Some("2")
+        );
     }
 
     #[tokio::test]
@@ -879,16 +888,31 @@ mod tests {
             }
         }
 
-        assert!(alive_files.contains(&"data/b.parquet".to_string()), "{alive_files:?}");
-        assert!(alive_files.contains(&"data/c.parquet".to_string()), "{alive_files:?}");
-        assert!(alive_files.contains(&"data/compacted.parquet".to_string()), "{alive_files:?}");
-        assert!(!alive_files.contains(&"data/a.parquet".to_string()), "{alive_files:?}");
+        assert!(
+            alive_files.contains(&"data/b.parquet".to_string()),
+            "{alive_files:?}"
+        );
+        assert!(
+            alive_files.contains(&"data/c.parquet".to_string()),
+            "{alive_files:?}"
+        );
+        assert!(
+            alive_files.contains(&"data/compacted.parquet".to_string()),
+            "{alive_files:?}"
+        );
+        assert!(
+            !alive_files.contains(&"data/a.parquet".to_string()),
+            "{alive_files:?}"
+        );
 
         let b_entry = existing_entries
             .iter()
             .find(|(p, _)| p == "data/b.parquet")
             .expect("file_b must have an Existing entry");
-        assert!(b_entry.1.is_some(), "surviving file_b must keep a sequence_number");
+        assert!(
+            b_entry.1.is_some(),
+            "surviving file_b must keep a sequence_number"
+        );
     }
 
     #[tokio::test]
@@ -900,7 +924,8 @@ mod tests {
         let file_a = make_data_file(&table, "data/a.parquet", 10);
         let file_b = make_data_file(&table, "data/b.parquet", 20);
 
-        let table_with_files = append_files(table.clone(), vec![file_a.clone(), file_b.clone()]).await;
+        let table_with_files =
+            append_files(table.clone(), vec![file_a.clone(), file_b.clone()]).await;
 
         let compacted = make_data_file(&table, "data/compacted.parquet", 30);
         let tx = Transaction::new(&table_with_files);
@@ -938,9 +963,18 @@ mod tests {
         let new_snapshot = unwrap_add_snapshot(&updates);
         let alive_files = collect_alive_files(new_snapshot, &table_with_files).await;
 
-        assert!(alive_files.contains(&"data/b.parquet".to_string()), "{alive_files:?}");
-        assert!(alive_files.contains(&"data/compacted.parquet".to_string()), "{alive_files:?}");
-        assert!(!alive_files.contains(&"data/a.parquet".to_string()), "{alive_files:?}");
+        assert!(
+            alive_files.contains(&"data/b.parquet".to_string()),
+            "{alive_files:?}"
+        );
+        assert!(
+            alive_files.contains(&"data/compacted.parquet".to_string()),
+            "{alive_files:?}"
+        );
+        assert!(
+            !alive_files.contains(&"data/a.parquet".to_string()),
+            "{alive_files:?}"
+        );
     }
 
     #[tokio::test]
@@ -974,11 +1008,26 @@ mod tests {
         let new_snapshot = unwrap_add_snapshot(&updates);
         let alive_files = collect_alive_files(new_snapshot, &table_with_files).await;
 
-        assert!(alive_files.contains(&"data/b.parquet".to_string()), "{alive_files:?}");
-        assert!(alive_files.contains(&"data/d.parquet".to_string()), "{alive_files:?}");
-        assert!(alive_files.contains(&"data/compacted.parquet".to_string()), "{alive_files:?}");
-        assert!(!alive_files.contains(&"data/a.parquet".to_string()), "{alive_files:?}");
-        assert!(!alive_files.contains(&"data/c.parquet".to_string()), "{alive_files:?}");
+        assert!(
+            alive_files.contains(&"data/b.parquet".to_string()),
+            "{alive_files:?}"
+        );
+        assert!(
+            alive_files.contains(&"data/d.parquet".to_string()),
+            "{alive_files:?}"
+        );
+        assert!(
+            alive_files.contains(&"data/compacted.parquet".to_string()),
+            "{alive_files:?}"
+        );
+        assert!(
+            !alive_files.contains(&"data/a.parquet".to_string()),
+            "{alive_files:?}"
+        );
+        assert!(
+            !alive_files.contains(&"data/c.parquet".to_string()),
+            "{alive_files:?}"
+        );
     }
 
     #[tokio::test]
@@ -1102,16 +1151,15 @@ mod tests {
             .rewrite_files()
             .delete_files(vec![f1.clone()])
             .add_files(vec![new1]);
-        let updates = Arc::new(r1)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
+        let updates = Arc::new(r1).commit(&table).await.unwrap().take_updates();
         let table = apply_updates_to_table(&table, &updates);
 
         let new2 = make_data_file(&table, "data/new2.parquet", 10);
         let tx = Transaction::new(&table);
-        let r2 = tx.rewrite_files().delete_files(vec![f1]).add_files(vec![new2]);
+        let r2 = tx
+            .rewrite_files()
+            .delete_files(vec![f1])
+            .add_files(vec![new2]);
         let Err(err) = Arc::new(r2).commit(&table).await else {
             panic!("rewriting an already-deleted file must error");
         };
@@ -1265,11 +1313,7 @@ mod tests {
             .rewrite_files()
             .delete_files(vec![f1])
             .add_files(vec![c1]);
-        let updates = Arc::new(action)
-            .commit(&t)
-            .await
-            .unwrap()
-            .take_updates();
+        let updates = Arc::new(action).commit(&t).await.unwrap().take_updates();
         let t = apply_updates_to_table(&t, &updates);
 
         let post_count = t
@@ -1281,12 +1325,19 @@ mod tests {
             .unwrap()
             .entries()
             .len();
-        assert!(post_count <= pre_count, "pre={pre_count}, post={post_count}");
+        assert!(
+            post_count <= pre_count,
+            "pre={pre_count}, post={post_count}"
+        );
 
         let snap = t.metadata().current_snapshot().unwrap();
         let alive = collect_alive_files(snap, &t).await;
-        for expected in ["data/c1.parquet", "data/f2.parquet", "data/f3.parquet", "data/f4.parquet"]
-        {
+        for expected in [
+            "data/c1.parquet",
+            "data/f2.parquet",
+            "data/f3.parquet",
+            "data/f4.parquet",
+        ] {
             assert!(alive.contains(&expected.to_string()), "{alive:?}");
         }
     }
@@ -1311,7 +1362,11 @@ mod tests {
 
         let stays_alive = make_data_file(&table, "data/stays.parquet", 10);
         let table = append_files(table, vec![stays_alive.clone()]).await;
-        let stays_seq = table.metadata().current_snapshot().unwrap().sequence_number();
+        let stays_seq = table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .sequence_number();
 
         let other = make_data_file(&table, "data/other.parquet", 10);
         let table = append_files(table, vec![other.clone()]).await;
@@ -1532,7 +1587,8 @@ mod tests {
         };
 
         assert!(
-            err.to_string().contains("files being replaced are no longer alive"),
+            err.to_string()
+                .contains("files being replaced are no longer alive"),
             "Error was: {err}"
         );
     }
@@ -1573,7 +1629,11 @@ mod tests {
         // B attempts to commit against the new table state and should succeed
         // because f2 is still alive.
         let result_b = action_b.commit(&table).await;
-        assert!(result_b.is_ok(), "Parallel disjoint rewrite failed: {:?}", result_b.err());
+        assert!(
+            result_b.is_ok(),
+            "Parallel disjoint rewrite failed: {:?}",
+            result_b.err()
+        );
     }
 
     #[tokio::test]
@@ -1588,11 +1648,21 @@ mod tests {
         let tx = Transaction::new(&table);
         let prop_action = tx
             .update_table_properties()
-            .set("commit.manifest.min-count-to-merge".to_string(), "3".to_string())
+            .set(
+                "commit.manifest.min-count-to-merge".to_string(),
+                "3".to_string(),
+            )
             // Large target so all manifests would naturally fit in one bin;
             // we rely on the guard, not bin overflow, to exempt the new manifest.
-            .set("commit.manifest.target-size-bytes".to_string(), "104857600".to_string());
-        let updates = Arc::new(prop_action).commit(&table).await.unwrap().take_updates();
+            .set(
+                "commit.manifest.target-size-bytes".to_string(),
+                "104857600".to_string(),
+            );
+        let updates = Arc::new(prop_action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
         table = apply_updates_to_table(&table, &updates);
 
         // Two carry-forward appends — each produces one manifest.
@@ -1615,8 +1685,15 @@ mod tests {
         // Rewrite f1 → c1. This adds one new data manifest and one delete manifest.
         let c1 = make_data_file(&table, "data/c1.parquet", 10);
         let tx = Transaction::new(&table);
-        let action = tx.rewrite_files().delete_files(vec![f1]).add_files(vec![c1.clone()]);
-        let updates = Arc::new(action).commit(&table).await.unwrap().take_updates();
+        let action = tx
+            .rewrite_files()
+            .delete_files(vec![f1])
+            .add_files(vec![c1.clone()]);
+        let updates = Arc::new(action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
         let table = apply_updates_to_table(&table, &updates);
 
         let snap = table.metadata().current_snapshot().unwrap();
@@ -1639,7 +1716,10 @@ mod tests {
         // All files must still be alive.
         let alive = collect_alive_files(snap, &table).await;
         for expected in ["data/c1.parquet", "data/f2.parquet"] {
-            assert!(alive.contains(&expected.to_string()), "missing {expected}; alive={alive:?}");
+            assert!(
+                alive.contains(&expected.to_string()),
+                "missing {expected}; alive={alive:?}"
+            );
         }
     }
 
@@ -1653,9 +1733,19 @@ mod tests {
         let tx = Transaction::new(&table);
         let prop_action = tx
             .update_table_properties()
-            .set("commit.manifest.min-count-to-merge".to_string(), "3".to_string())
-            .set("commit.manifest.target-size-bytes".to_string(), "104857600".to_string());
-        let updates = Arc::new(prop_action).commit(&table).await.unwrap().take_updates();
+            .set(
+                "commit.manifest.min-count-to-merge".to_string(),
+                "3".to_string(),
+            )
+            .set(
+                "commit.manifest.target-size-bytes".to_string(),
+                "104857600".to_string(),
+            );
+        let updates = Arc::new(prop_action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
         table = apply_updates_to_table(&table, &updates);
 
         let f1 = make_data_file(&table, "data/f1.parquet", 10);
@@ -1672,14 +1762,20 @@ mod tests {
         // which meets min-count-to-merge=3 so they ARE merged.
         let c1 = make_data_file(&t, "data/c1.parquet", 10);
         let tx = Transaction::new(&t);
-        let action = tx.rewrite_files().delete_files(vec![f1]).add_files(vec![c1.clone()]);
+        let action = tx
+            .rewrite_files()
+            .delete_files(vec![f1])
+            .add_files(vec![c1.clone()]);
         let updates = Arc::new(action).commit(&t).await.unwrap().take_updates();
         let t = apply_updates_to_table(&t, &updates);
 
         let snap = t.metadata().current_snapshot().unwrap();
         let alive = collect_alive_files(snap, &t).await;
         for expected in ["data/c1.parquet", "data/f2.parquet", "data/f3.parquet"] {
-            assert!(alive.contains(&expected.to_string()), "missing {expected}; alive={alive:?}");
+            assert!(
+                alive.contains(&expected.to_string()),
+                "missing {expected}; alive={alive:?}"
+            );
         }
     }
 
@@ -1693,9 +1789,19 @@ mod tests {
         let tx = Transaction::new(&table);
         let prop_action = tx
             .update_table_properties()
-            .set("commit.manifest.min-count-to-merge".to_string(), "3".to_string())
-            .set("commit.manifest.target-size-bytes".to_string(), "104857600".to_string());
-        let updates = Arc::new(prop_action).commit(&table).await.unwrap().take_updates();
+            .set(
+                "commit.manifest.min-count-to-merge".to_string(),
+                "3".to_string(),
+            )
+            .set(
+                "commit.manifest.target-size-bytes".to_string(),
+                "104857600".to_string(),
+            );
+        let updates = Arc::new(prop_action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
         table = apply_updates_to_table(&table, &updates);
 
         // Build up 4 carry-forward manifests via separate appends.
@@ -1746,7 +1852,10 @@ mod tests {
 
         // All surviving files must be alive.
         let alive = collect_alive_files(snap, &t).await;
-        assert!(alive.contains(&"data/new.parquet".to_string()), "alive={alive:?}");
+        assert!(
+            alive.contains(&"data/new.parquet".to_string()),
+            "alive={alive:?}"
+        );
         for i in 1..4usize {
             let path = format!("data/carry_{i}.parquet");
             assert!(alive.contains(&path), "missing {path}; alive={alive:?}");

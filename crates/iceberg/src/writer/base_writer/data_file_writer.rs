@@ -20,9 +20,9 @@
 use arrow_array::RecordBatch;
 
 use crate::spec::{DataContentType, DataFile, PartitionKey};
-use crate::writer::file_writer::{FileWriterBuilder, RowGroupFlushable};
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
 use crate::writer::file_writer::rolling_writer::{RollingFileWriter, RollingFileWriterBuilder};
+use crate::writer::file_writer::{FileWriterBuilder, RowGroupFlushable};
 use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 

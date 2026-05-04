@@ -27,20 +27,19 @@
 //! deadlock if held across an await point.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use futures::stream::{StreamExt, TryStreamExt};
 use tracing::warn;
 
 use crate::Result;
+use crate::prptl_utils::bin_packing::ListPacker;
 use crate::spec::{
     DataFileFormat, FormatVersion, ManifestContentType, ManifestFile, ManifestStatus,
     ManifestWriterBuilder,
 };
 use crate::transaction::snapshot::{META_ROOT_PATH, SnapshotProducer};
-use crate::prptl_utils::bin_packing::ListPacker;
 
 pub(crate) struct ManifestMergeManager {
     target_size_bytes: u64,
@@ -90,10 +89,7 @@ impl ManifestMergeManager {
 
         let mut groups: HashMap<i32, Vec<ManifestFile>> = HashMap::new();
         for m in unmerged {
-            groups
-                .entry(m.partition_spec_id)
-                .or_default()
-                .push(m);
+            groups.entry(m.partition_spec_id).or_default().push(m);
         }
 
         // Reverse-sorted spec ids match Java's iteration order, keeping output
@@ -114,18 +110,17 @@ impl ManifestMergeManager {
 
         let merge_futures = sequenced_bins
             .into_iter()
-            .map(|(idx, spec_id, bin)| {
-                async move {
-                    let out = self.process_bin(producer, spec_id, bin, new_manifest_paths).await?;
-                    Ok::<_, crate::Error>((idx, out))
-                }
+            .map(|(idx, spec_id, bin)| async move {
+                let out = self
+                    .process_bin(producer, spec_id, bin, new_manifest_paths)
+                    .await?;
+                Ok::<_, crate::Error>((idx, out))
             });
 
-        let mut results: Vec<(usize, Vec<ManifestFile>)> =
-            futures::stream::iter(merge_futures)
-                .buffer_unordered(self.write_concurrency)
-                .try_collect()
-                .await?;
+        let mut results: Vec<(usize, Vec<ManifestFile>)> = futures::stream::iter(merge_futures)
+            .buffer_unordered(self.write_concurrency)
+            .try_collect()
+            .await?;
         results.sort_by_key(|(idx, _)| *idx);
 
         Ok(results.into_iter().flat_map(|(_, mfs)| mfs).collect())
@@ -143,7 +138,9 @@ impl ManifestMergeManager {
         }
         // First-guard: a small bin containing any manifest written this commit
         // passes through unmerged so small commits don't trigger historical rewrites.
-        let contains_new = bin.iter().any(|m| new_manifest_paths.contains(&m.manifest_path));
+        let contains_new = bin
+            .iter()
+            .any(|m| new_manifest_paths.contains(&m.manifest_path));
         if contains_new && (bin.len() as u32) < self.min_count_to_merge {
             return Ok(bin);
         }

@@ -160,8 +160,13 @@ mod tests {
         // agree there so a future change to pack_end can't silently regress.
         let packer = ListPacker::new(50, 1);
         let input = vec![20u64, 30, 10, 25];
-        assert_eq!(packer.pack(input.clone(), |w| *w), vec![vec![20, 30], vec![10, 25]]);
-        assert_eq!(packer.pack_end(input, |w| *w), vec![vec![20, 30], vec![10, 25]]);
+        assert_eq!(packer.pack(input.clone(), |w| *w), vec![
+            vec![20, 30],
+            vec![10, 25]
+        ]);
+        assert_eq!(packer.pack_end(input, |w| *w), vec![vec![20, 30], vec![
+            10, 25
+        ]]);
     }
 
     #[test]
@@ -226,7 +231,10 @@ mod tests {
             for bin in &bins_end {
                 let w: u64 = bin.iter().copied().sum();
                 if bin.len() > 1 {
-                    assert!(w <= target, "seed={seed}: pack_end weight {w} > target {target}");
+                    assert!(
+                        w <= target,
+                        "seed={seed}: pack_end weight {w} > target {target}"
+                    );
                 }
             }
         }

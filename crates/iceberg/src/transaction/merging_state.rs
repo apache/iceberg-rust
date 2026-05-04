@@ -31,10 +31,10 @@ use std::sync::Arc;
 
 use crate::spec::{DataFile, ManifestFile, TableProperties, parse_property};
 use crate::table::Table;
-use crate::{Error, ErrorKind, Result};
 use crate::transaction::manifest_filter::ManifestFilterManager;
 use crate::transaction::manifest_merge::ManifestMergeManager;
 use crate::transaction::snapshot::{ManifestProcess, SnapshotProducer};
+use crate::{Error, ErrorKind, Result};
 
 pub(crate) struct MergingState {
     data_filter: ManifestFilterManager,
@@ -55,17 +55,26 @@ impl MergingState {
             props,
             TableProperties::PROPERTY_COMMIT_MANIFEST_TARGET_SIZE_BYTES,
             TableProperties::PROPERTY_COMMIT_MANIFEST_TARGET_SIZE_BYTES_DEFAULT,
-        ).map_err(|e| Error::new(ErrorKind::DataInvalid, "Invalid manifest merge property").with_source(e))?;
+        )
+        .map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, "Invalid manifest merge property").with_source(e)
+        })?;
         let min_count_to_merge = parse_property(
             props,
             TableProperties::PROPERTY_COMMIT_MANIFEST_MIN_MERGE_COUNT,
             TableProperties::PROPERTY_COMMIT_MANIFEST_MIN_MERGE_COUNT_DEFAULT,
-        ).map_err(|e| Error::new(ErrorKind::DataInvalid, "Invalid manifest merge property").with_source(e))?;
+        )
+        .map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, "Invalid manifest merge property").with_source(e)
+        })?;
         let merge_enabled = parse_property(
             props,
             TableProperties::PROPERTY_COMMIT_MANIFEST_MERGE_ENABLED,
             TableProperties::PROPERTY_COMMIT_MANIFEST_MERGE_ENABLED_DEFAULT,
-        ).map_err(|e| Error::new(ErrorKind::DataInvalid, "Invalid manifest merge property").with_source(e))?;
+        )
+        .map_err(|e| {
+            Error::new(ErrorKind::DataInvalid, "Invalid manifest merge property").with_source(e)
+        })?;
 
         Ok(Self {
             data_filter: ManifestFilterManager::new(manifest_read_concurrency),
@@ -145,8 +154,10 @@ impl MergingState {
         }
 
         let (data_res, delete_res) = futures::join!(
-            self.data_merge.merge_manifests(producer, data_unmerged, new_manifest_paths),
-            self.delete_merge.merge_manifests(producer, delete_unmerged, new_manifest_paths),
+            self.data_merge
+                .merge_manifests(producer, data_unmerged, new_manifest_paths),
+            self.delete_merge
+                .merge_manifests(producer, delete_unmerged, new_manifest_paths),
         );
 
         let mut merged = data_res?;
@@ -191,7 +202,8 @@ impl ManifestProcess for Arc<MergingState> {
         manifests: Vec<ManifestFile>,
         new_manifest_paths: &HashSet<String>,
     ) -> Result<Vec<ManifestFile>> {
-        self.merge_manifests(snapshot_produce, manifests, new_manifest_paths).await
+        self.merge_manifests(snapshot_produce, manifests, new_manifest_paths)
+            .await
     }
 
     fn replaced_manifests_count(&self) -> u64 {

@@ -181,7 +181,10 @@ impl TransactionAction for RewriteManifestsAction {
             MANIFESTS_CREATED.to_string(),
             partition_entries.len().to_string(),
         );
-        snapshot_properties.insert(MANIFESTS_REPLACED.to_string(), manifests_replaced.to_string());
+        snapshot_properties.insert(
+            MANIFESTS_REPLACED.to_string(),
+            manifests_replaced.to_string(),
+        );
         snapshot_properties.insert(MANIFESTS_KEPT.to_string(), manifests_kept.to_string());
         snapshot_properties.insert(ENTRIES_PROCESSED.to_string(), entries_processed.to_string());
 
