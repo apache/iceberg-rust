@@ -146,7 +146,7 @@ impl TransactionAction for RowDeltaAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
         if table.metadata().format_version() == FormatVersion::V1 {
             return Err(Error::new(
-                ErrorKind::DataInvalid,
+                ErrorKind::FeatureUnsupported,
                 "RowDelta is not supported for V1 tables",
             ));
         }
@@ -194,11 +194,7 @@ struct RowDeltaOperation {
 
 impl SnapshotProduceOperation for RowDeltaOperation {
     fn operation(&self) -> Operation {
-        if !self.added_delete_files.is_empty() {
-            Operation::Delete
-        } else {
-            Operation::Append
-        }
+        Operation::Delete
     }
 
     async fn delete_entries(
@@ -229,8 +225,8 @@ impl SnapshotProduceOperation for RowDeltaOperation {
             .await
     }
 
-    fn added_delete_entries(&self) -> Vec<DataFile> {
-        self.added_delete_files.clone()
+    fn added_delete_entries(&self) -> &[DataFile] {
+        &self.added_delete_files
     }
 
     fn has_pending_content(&self) -> bool {
@@ -242,32 +238,15 @@ impl SnapshotProduceOperation for RowDeltaOperation {
 mod tests {
     use std::sync::Arc;
 
-    use crate::spec::{
-        DataContentType, DataFile, DataFileBuilder, DataFileFormat, ManifestContentType,
-        ManifestStatus,
-    };
-    use crate::transaction::tests::{apply_updates_to_table, make_v2_minimal_table};
+    use crate::spec::{DataContentType, ManifestContentType, ManifestStatus};
+    use crate::transaction::tests::{apply_updates_to_table, make_file_with_content, make_v2_minimal_table};
     use crate::transaction::{Transaction, TransactionAction};
-
-    fn delete_file(table: &crate::table::Table, path: &str, content: DataContentType) -> DataFile {
-        use crate::spec::{Literal, Struct};
-        DataFileBuilder::default()
-            .content(content)
-            .file_path(path.to_string())
-            .file_format(DataFileFormat::Parquet)
-            .file_size_in_bytes(100)
-            .record_count(1)
-            .partition_spec_id(table.metadata().default_partition_spec_id())
-            .partition(Struct::from_iter([Some(Literal::long(300))]))
-            .build()
-            .unwrap()
-    }
 
     #[tokio::test]
     async fn test_row_delta_rejects_data_files() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let df = delete_file(&table, "data/x.parquet", DataContentType::Data);
+        let df = make_file_with_content(&table, "data/x.parquet", DataContentType::Data);
         let action = tx.row_delta().add_delete_files(vec![df]);
         assert!(Arc::new(action).commit(&table).await.is_err());
     }
@@ -276,7 +255,7 @@ mod tests {
     async fn test_row_delta_adds_delete_manifest() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let eq_delete = delete_file(&table, "deletes/eq1.parquet", DataContentType::EqualityDeletes);
+        let eq_delete = make_file_with_content(&table, "deletes/eq1.parquet", DataContentType::EqualityDeletes);
         let action = tx.row_delta().add_delete_files(vec![eq_delete]);
         let updates = Arc::new(action)
             .commit(&table)
@@ -311,8 +290,8 @@ mod tests {
     async fn test_row_delta_equality_delete() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
-        let eq_delete = delete_file(&table, "deletes/eq1.parquet", DataContentType::EqualityDeletes);
-        let pos_delete = delete_file(&table, "deletes/pos1.parquet", DataContentType::PositionDeletes);
+        let eq_delete = make_file_with_content(&table, "deletes/eq1.parquet", DataContentType::EqualityDeletes);
+        let pos_delete = make_file_with_content(&table, "deletes/pos1.parquet", DataContentType::PositionDeletes);
         let action = tx
             .row_delta()
             .add_delete_files(vec![eq_delete, pos_delete]);
