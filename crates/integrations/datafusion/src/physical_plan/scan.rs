@@ -51,7 +51,7 @@ pub struct IcebergTableScan {
     table_arrow_schema: ArrowSchemaRef,
     /// Stores certain, often expensive to compute,
     /// plan properties used in query optimization.
-    plan_properties: PlanProperties,
+    plan_properties: Arc<PlanProperties>,
     /// Projection column names, None means all columns
     projection: Option<Vec<String>>,
     /// Filters to apply to the table scan
@@ -111,16 +111,16 @@ impl IcebergTableScan {
     }
 
     /// Computes [`PlanProperties`] used in query optimization.
-    fn compute_properties(schema: ArrowSchemaRef) -> PlanProperties {
+    fn compute_properties(schema: ArrowSchemaRef) -> Arc<PlanProperties> {
         // TODO:
         // This is more or less a placeholder, to be replaced
         // once we support output-partitioning
-        PlanProperties::new(
+        Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Incremental,
             Boundedness::Bounded,
-        )
+        ))
     }
 }
 
@@ -144,7 +144,7 @@ impl ExecutionPlan for IcebergTableScan {
         Ok(self)
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.plan_properties
     }
 
@@ -204,7 +204,11 @@ impl DisplayAs for IcebergTableScan {
             self.predicates
                 .clone()
                 .map_or(String::from(""), |p| format!("{p}"))
-        )
+        )?;
+        if let Some(limit) = self.limit {
+            write!(f, " limit:[{limit}]")?;
+        }
+        Ok(())
     }
 }
 

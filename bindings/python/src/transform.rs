@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayData, make_array};
+use arrow::array::{ArrayData, make_array};
 use arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use iceberg::spec::Transform;
 use iceberg::transform::create_transform_function;
@@ -70,7 +70,7 @@ fn apply(py: Python, array: Py<PyAny>, transform: Transform) -> PyResult<Py<PyAn
     let transform_function = create_transform_function(&transform).map_err(to_py_err)?;
     let array = transform_function.transform(array).map_err(to_py_err)?;
     // export
-    let array = array.into_data();
+    let array = array.to_data();
     Ok(array.to_pyarrow(py)?.unbind())
 }
 

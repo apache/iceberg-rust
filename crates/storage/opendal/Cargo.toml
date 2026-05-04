@@ -49,6 +49,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 typetag = { workspace = true }
 url = { workspace = true }
+futures = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }

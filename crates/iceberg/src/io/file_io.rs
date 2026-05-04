@@ -19,6 +19,7 @@ use std::ops::Range;
 use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
+use futures::{Stream, StreamExt};
 
 use super::storage::{
     LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig, StorageFactory,
@@ -140,6 +141,18 @@ impl FileIO {
         self.get_storage()?.delete_prefix(path.as_ref()).await
     }
 
+    /// Delete multiple files from a stream of paths.
+    ///
+    /// # Arguments
+    ///
+    /// * paths: A stream of absolute paths starting with the scheme string used to construct [`FileIO`].
+    pub async fn delete_stream(
+        &self,
+        paths: impl Stream<Item = String> + Send + 'static,
+    ) -> Result<()> {
+        self.get_storage()?.delete_stream(paths.boxed()).await
+    }
+
     /// Check file exists.
     ///
     /// # Arguments
@@ -240,6 +253,13 @@ pub trait FileRead: Send + Sync + Unpin + 'static {
     ///
     /// TODO: we can support reading non-contiguous bytes in the future.
     async fn read(&self, range: Range<u64>) -> crate::Result<Bytes>;
+}
+
+#[async_trait::async_trait]
+impl<T: AsRef<dyn FileRead> + Send + Sync + Unpin + 'static> FileRead for T {
+    async fn read(&self, range: Range<u64>) -> crate::Result<Bytes> {
+        self.as_ref().read(range).await
+    }
 }
 
 /// Input file is used for reading from files.

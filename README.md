@@ -27,13 +27,18 @@ Rust implementation of [Apache Iceberg™](https://iceberg.apache.org/).
 
 The Apache Iceberg Rust project is composed of the following components:
 
-| Name                     | Release                                                         | Docs                                                                                                  |
-|--------------------------|-----------------------------------------------------------------|-------------------------------------------------------------------------------------------------------|
-| [iceberg]                | [![iceberg image]][iceberg link]                                | [![docs release]][iceberg release docs] [![docs dev]][iceberg dev docs]                               |
-| [iceberg-datafusion]     | [![iceberg-datafusion image]][iceberg-datafusion link]          | [![docs release]][iceberg-datafusion release docs] [![docs dev]][iceberg-datafusion dev docs]         |
-| [iceberg-catalog-glue]   | [![iceberg-catalog-glue image]][iceberg-catalog-glue link]      | [![docs release]][iceberg-catalog-glue release docs] [![docs dev]][iceberg-catalog-glue dev docs]     |
-| [iceberg-catalog-hms]    | [![iceberg-catalog-hms image]][iceberg-catalog-hms link]        | [![docs release]][iceberg-catalog-hms release docs] [![docs dev]][iceberg-catalog-hms dev docs]       |
-| [iceberg-catalog-rest]   | [![iceberg-catalog-rest image]][iceberg-catalog-rest link]      | [![docs release]][iceberg-catalog-rest release docs] [![docs dev]][iceberg-catalog-rest dev docs]     |
+| Name                          | Release                                                                  | Docs                                                                                                            |
+|-------------------------------|--------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------|
+| [iceberg]                     | [![iceberg image]][iceberg link]                                         | [![docs release]][iceberg release docs] [![docs dev]][iceberg dev docs]                                         |
+| [iceberg-catalog-loader]      | [![iceberg-catalog-loader image]][iceberg-catalog-loader link]           | [![docs release]][iceberg-catalog-loader release docs] [![docs dev]][iceberg-catalog-loader dev docs]           |
+| [iceberg-catalog-glue]        | [![iceberg-catalog-glue image]][iceberg-catalog-glue link]               | [![docs release]][iceberg-catalog-glue release docs] [![docs dev]][iceberg-catalog-glue dev docs]               |
+| [iceberg-catalog-hms]         | [![iceberg-catalog-hms image]][iceberg-catalog-hms link]                 | [![docs release]][iceberg-catalog-hms release docs] [![docs dev]][iceberg-catalog-hms dev docs]                 |
+| [iceberg-catalog-rest]        | [![iceberg-catalog-rest image]][iceberg-catalog-rest link]               | [![docs release]][iceberg-catalog-rest release docs] [![docs dev]][iceberg-catalog-rest dev docs]               |
+| [iceberg-catalog-s3tables]    | [![iceberg-catalog-s3tables image]][iceberg-catalog-s3tables link]       | [![docs release]][iceberg-catalog-s3tables release docs] [![docs dev]][iceberg-catalog-s3tables dev docs]       |
+| [iceberg-catalog-sql]         | [![iceberg-catalog-sql image]][iceberg-catalog-sql link]                 | [![docs release]][iceberg-catalog-sql release docs] [![docs dev]][iceberg-catalog-sql dev docs]                 |
+| [iceberg-cache-moka]          | [![iceberg-cache-moka image]][iceberg-cache-moka link]                   | [![docs release]][iceberg-cache-moka release docs] [![docs dev]][iceberg-cache-moka dev docs]                   |
+| [iceberg-datafusion]          | [![iceberg-datafusion image]][iceberg-datafusion link]                   | [![docs release]][iceberg-datafusion release docs] [![docs dev]][iceberg-datafusion dev docs]                   |
+| [iceberg-storage-opendal]     | [![iceberg-storage-opendal image]][iceberg-storage-opendal link]         | [![docs release]][iceberg-storage-opendal release docs] [![docs dev]][iceberg-storage-opendal dev docs]         |
 
 [docs release]: https://img.shields.io/badge/docs-release-blue
 [docs dev]: https://img.shields.io/badge/docs-dev-blue
@@ -61,12 +66,41 @@ The Apache Iceberg Rust project is composed of the following components:
 [iceberg-catalog-hms release docs]: https://docs.rs/iceberg-catalog-hms
 [iceberg-catalog-hms dev docs]: https://rust.iceberg.apache.org/api/iceberg_catalog_hms/
 
-
 [iceberg-catalog-rest]: crates/catalog/rest/README.md
 [iceberg-catalog-rest image]: https://img.shields.io/crates/v/iceberg-catalog-rest.svg
 [iceberg-catalog-rest link]: https://crates.io/crates/iceberg-catalog-rest
 [iceberg-catalog-rest release docs]: https://docs.rs/iceberg-catalog-rest
 [iceberg-catalog-rest dev docs]: https://rust.iceberg.apache.org/api/iceberg_catalog_rest/
+
+[iceberg-catalog-sql]: crates/catalog/sql
+[iceberg-catalog-sql image]: https://img.shields.io/crates/v/iceberg-catalog-sql.svg
+[iceberg-catalog-sql link]: https://crates.io/crates/iceberg-catalog-sql
+[iceberg-catalog-sql release docs]: https://docs.rs/iceberg-catalog-sql
+[iceberg-catalog-sql dev docs]: https://rust.iceberg.apache.org/api/iceberg_catalog_sql/
+
+[iceberg-catalog-s3tables]: crates/catalog/s3tables/README.md
+[iceberg-catalog-s3tables image]: https://img.shields.io/crates/v/iceberg-catalog-s3tables.svg
+[iceberg-catalog-s3tables link]: https://crates.io/crates/iceberg-catalog-s3tables
+[iceberg-catalog-s3tables release docs]: https://docs.rs/iceberg-catalog-s3tables
+[iceberg-catalog-s3tables dev docs]: https://rust.iceberg.apache.org/api/iceberg_catalog_s3tables/
+
+[iceberg-storage-opendal]: crates/storage/opendal/README.md
+[iceberg-storage-opendal image]: https://img.shields.io/crates/v/iceberg-storage-opendal.svg
+[iceberg-storage-opendal link]: https://crates.io/crates/iceberg-storage-opendal
+[iceberg-storage-opendal release docs]: https://docs.rs/iceberg-storage-opendal
+[iceberg-storage-opendal dev docs]: https://rust.iceberg.apache.org/api/iceberg_storage_opendal/
+
+[iceberg-catalog-loader]: crates/catalog/loader
+[iceberg-catalog-loader image]: https://img.shields.io/crates/v/iceberg-catalog-loader.svg
+[iceberg-catalog-loader link]: https://crates.io/crates/iceberg-catalog-loader
+[iceberg-catalog-loader release docs]: https://docs.rs/iceberg-catalog-loader
+[iceberg-catalog-loader dev docs]: https://rust.iceberg.apache.org/api/iceberg_catalog_loader/
+
+[iceberg-cache-moka]: crates/integrations/cache-moka
+[iceberg-cache-moka image]: https://img.shields.io/crates/v/iceberg-cache-moka.svg
+[iceberg-cache-moka link]: https://crates.io/crates/iceberg-cache-moka
+[iceberg-cache-moka release docs]: https://docs.rs/iceberg-cache-moka
+[iceberg-cache-moka dev docs]: https://rust.iceberg.apache.org/api/iceberg_cache_moka/
 
 ## Iceberg Rust Implementation Status
 
@@ -99,6 +133,7 @@ The Apache Iceberg community is built on the principles described in the [Apache
 - [RisingWave](https://github.com/risingwavelabs/risingwave): A Postgres-compatible SQL database designed for real-time event streaming data processing, analysis, and management.
 - [Wrappers](https://github.com/supabase/wrappers): Postgres Foreign Data Wrapper development framework in Rust.
 - [ETL](https://github.com/supabase/etl): Stream your Postgres data anywhere in real-time.
+- [Apache DataFusion Comet](https://github.com/apache/datafusion-comet): High-performance accelerator for Apache Spark, built on top of the powerful Apache DataFusion query engine.
 
 ## License
 

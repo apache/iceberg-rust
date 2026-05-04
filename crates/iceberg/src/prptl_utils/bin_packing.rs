@@ -205,8 +205,8 @@ mod tests {
 
         for seed in 0..200u64 {
             let mut rng = StdRng::seed_from_u64(seed);
-            let n: usize = rng.gen_range(0..200);
-            let items: Vec<u64> = (0..n).map(|_| rng.gen_range(0..2_000)).collect();
+            let n: usize = rng.random_range(0..200);
+            let items: Vec<u64> = (0..n).map(|_| rng.random_range(0..2_000)).collect();
             let bins = packer.pack(items.clone(), |w| *w);
             let total_in: u64 = items.iter().sum();
             let total_out: u64 = bins.iter().flat_map(|b| b.iter().copied()).sum();

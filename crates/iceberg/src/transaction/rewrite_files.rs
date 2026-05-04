@@ -29,7 +29,7 @@ use crate::table::Table;
 use crate::transaction::merging_state::MergingState;
 use crate::transaction::snapshot::{CommitResult, SnapshotProduceOperation, SnapshotProducer};
 use crate::transaction::{ActionCommit, TransactionAction};
-use crate::utils::available_parallelism;
+use crate::util::available_parallelism;
 use crate::{Error, ErrorKind};
 
 /// Action to rewrite data files in a table — primarily compaction.

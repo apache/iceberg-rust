@@ -199,7 +199,10 @@ fn visit_struct<V: ArrowSchemaVisitor>(fields: &Fields, visitor: &mut V) -> Resu
 }
 
 /// Visit schema in post order.
-fn visit_schema<V: ArrowSchemaVisitor>(schema: &ArrowSchema, visitor: &mut V) -> Result<V::U> {
+pub(crate) fn visit_schema<V: ArrowSchemaVisitor>(
+    schema: &ArrowSchema,
+    visitor: &mut V,
+) -> Result<V::U> {
     let mut results = Vec::with_capacity(schema.fields().len());
     for field in schema.fields() {
         visitor.before_field(field)?;
@@ -757,6 +760,11 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Arc<dyn ArrowDatum + Send
         (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(value)) => {
             let bytes = Uuid::from_u128(*value).into_bytes();
             let array = FixedSizeBinaryArray::try_from_iter(vec![bytes].into_iter()).unwrap();
+            Ok(Arc::new(Scalar::new(array)))
+        }
+        (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(value)) => {
+            let array = FixedSizeBinaryArray::try_from_iter(std::iter::once(value.as_slice()))
+                .map_err(|e| Error::new(ErrorKind::DataInvalid, e.to_string()))?;
             Ok(Arc::new(Scalar::new(array)))
         }
 
@@ -2177,6 +2185,18 @@ mod tests {
                 .unwrap();
             assert!(is_scalar);
             assert_eq!(array.value(0), [66u8; 16]);
+        }
+        {
+            let datum = Datum::fixed(vec![1u8, 2, 3, 4, 5, 6, 7, 8]);
+            let arrow_datum = get_arrow_datum(&datum).unwrap();
+            let (array, is_scalar) = arrow_datum.get();
+            let array = array
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .unwrap();
+            assert!(is_scalar);
+            assert_eq!(array.value_length(), 8);
+            assert_eq!(array.value(0), &[1u8, 2, 3, 4, 5, 6, 7, 8]);
         }
     }
 

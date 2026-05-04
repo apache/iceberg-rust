@@ -985,6 +985,9 @@ mod tests {
         assert!(result.is_ok());
         let metadata = result.unwrap();
         assert_eq!(metadata.blobs.len(), 1);
-        assert_eq!(metadata.blobs[0].compression_codec, CompressionCodec::Gzip);
+        assert_eq!(
+            metadata.blobs[0].compression_codec,
+            CompressionCodec::gzip_default()
+        );
     }
 }
