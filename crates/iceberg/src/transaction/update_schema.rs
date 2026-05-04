@@ -32,7 +32,7 @@ use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
 /// Sentinel parent ID representing the table root (top-level columns).
 const TABLE_ROOT_ID: i32 = -1;
 // Default ID for a new column. This will be re-assigned to a fresh ID at commit time.
-const DEFAULT_ID: i32 = 0;
+const DEFAULT_FIELD_ID: i32 = 0;
 
 /// Declarative specification for adding a column in [`UpdateSchemaAction`].
 ///
@@ -80,7 +80,7 @@ impl AddColumn {
 
     fn to_nested_field(&self) -> NestedFieldRef {
         let mut field = NestedField::new(
-            DEFAULT_ID,
+            DEFAULT_FIELD_ID,
             self.name.clone(),
             self.field_type.clone(),
             self.required,
@@ -118,7 +118,6 @@ impl AddColumn {
 pub struct UpdateSchemaAction {
     additions: Vec<AddColumn>,
     deletes: Vec<String>,
-    auto_assign_ids: bool,
 }
 
 impl UpdateSchemaAction {
@@ -127,7 +126,6 @@ impl UpdateSchemaAction {
         Self {
             additions: Vec::new(),
             deletes: Vec::new(),
-            auto_assign_ids: true,
         }
     }
 
@@ -152,13 +150,6 @@ impl UpdateSchemaAction {
         self.deletes.push(name.to_string());
         self
     }
-
-    /// Disable automatic field ID assignment. When disabled, the placeholder IDs
-    /// provided in builder methods are used as-is.
-    pub fn disable_id_auto_assignment(mut self) -> Self {
-        self.auto_assign_ids = false;
-        self
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -171,7 +162,7 @@ impl UpdateSchemaAction {
 /// from `crate::spec::schema::id_reassigner`, but operates on new fields with placeholder
 /// IDs rather than reassigning an existing schema. `ReassignFieldIds` cannot be used
 /// directly here because it rejects duplicate old IDs (all new fields share placeholder
-/// ID `DEFAULT_ID`).
+/// ID `DEFAULT_FIELD_ID`).
 fn assign_fresh_ids(field: &NestedField, next_id: &mut i32) -> NestedFieldRef {
     *next_id += 1;
     let new_id = *next_id;
@@ -444,11 +435,7 @@ impl TransactionAction for UpdateSchemaAction {
             };
 
             // Assign fresh IDs immediately, preserving insertion order.
-            let field = if self.auto_assign_ids {
-                assign_fresh_ids(&pending_field, &mut last_column_id)
-            } else {
-                pending_field
-            };
+            let field = assign_fresh_ids(&pending_field, &mut last_column_id);
 
             additions_by_parent
                 .entry(parent_id)
@@ -491,13 +478,14 @@ mod tests {
     use as_any::Downcast;
 
     use crate::spec::{
-        Literal, NestedField, PrimitiveType, Schema, StructType, TableMetadata, Type,
+        DEFAULT_SCHEMA_ID, Literal, NestedField, PrimitiveType, Schema, StructType, TableMetadata,
+        Type,
     };
     use crate::table::Table;
     use crate::transaction::Transaction;
     use crate::transaction::action::{ApplyTransactionAction, TransactionAction};
     use crate::transaction::tests::make_v2_table;
-    use crate::transaction::update_schema::{AddColumn, DEFAULT_ID, UpdateSchemaAction};
+    use crate::transaction::update_schema::{AddColumn, DEFAULT_FIELD_ID, UpdateSchemaAction};
     use crate::{ErrorKind, TableIdent, TableRequirement, TableUpdate};
 
     // The V2 test table has:
@@ -628,17 +616,16 @@ mod tests {
             other => panic!("expected AddSchema, got {other:?}"),
         };
 
-        let mut expected_fields = table
+        let expected_schema = table
             .metadata()
             .current_schema()
-            .as_struct()
-            .fields()
-            .to_vec();
-        expected_fields
-            .push(NestedField::optional(4, "new_col", Type::Primitive(PrimitiveType::Int)).into());
-        let expected_schema = Schema::builder()
-            .with_fields(expected_fields)
-            .with_identifier_field_ids(table.metadata().current_schema().identifier_field_ids())
+            .as_ref()
+            .clone()
+            .into_builder()
+            .with_schema_id(DEFAULT_SCHEMA_ID)
+            .with_fields([
+                NestedField::optional(4, "new_col", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
             .build()
             .unwrap();
         assert_eq!(new_schema, &expected_schema);
@@ -1113,17 +1100,25 @@ mod tests {
     #[tokio::test]
     async fn test_add_nested_struct_type_with_fresh_ids() {
         // Adding a new column whose TYPE contains nested fields (e.g. a struct column). All sub-fields must receive
-        // fresh IDs, not placeholder `DEFAULT_ID`.
+        // fresh IDs, not placeholder `DEFAULT_FIELD_ID`.
         let table = make_v2_table();
         let tx = Transaction::new(&table);
 
         let action = tx.update_schema().add_column(AddColumn::optional(
             "address",
             Type::Struct(StructType::new(vec![
-                NestedField::optional(DEFAULT_ID, "street", Type::Primitive(PrimitiveType::String))
-                    .into(),
-                NestedField::optional(DEFAULT_ID, "city", Type::Primitive(PrimitiveType::String))
-                    .into(),
+                NestedField::optional(
+                    DEFAULT_FIELD_ID,
+                    "street",
+                    Type::Primitive(PrimitiveType::String),
+                )
+                .into(),
+                NestedField::optional(
+                    DEFAULT_FIELD_ID,
+                    "city",
+                    Type::Primitive(PrimitiveType::String),
+                )
+                .into(),
             ])),
         ));
 
