@@ -30,7 +30,6 @@ use iceberg::io::{
     StorageFactory,
 };
 use iceberg::{Error, ErrorKind, Result};
-use opendal::Scheme;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -52,26 +51,24 @@ pub const SCHEME_ABFS: &str = "abfs";
 pub const SCHEME_WASBS: &str = "wasbs";
 pub const SCHEME_WASB: &str = "wasb";
 
-/// Parse a URL scheme string into an [`opendal::Scheme`].
-fn parse_scheme(scheme: &str) -> Result<Scheme> {
+/// Parse a URL scheme string.
+fn parse_scheme(scheme: &str) -> Result<&'static str> {
     match scheme {
-        SCHEME_MEMORY => Ok(Scheme::Memory),
-        SCHEME_FILE | "" => Ok(Scheme::Fs),
-        SCHEME_S3 | SCHEME_S3A | SCHEME_S3N => Ok(Scheme::S3),
-        SCHEME_GS | SCHEME_GCS => Ok(Scheme::Gcs),
-        SCHEME_OSS => Ok(Scheme::Oss),
-        SCHEME_ABFSS | SCHEME_ABFS | SCHEME_WASBS | SCHEME_WASB => Ok(Scheme::Azdls),
-        s => s.parse::<Scheme>().map_err(|e| {
-            Error::new(
-                ErrorKind::FeatureUnsupported,
-                format!("Unsupported storage scheme: {s}: {e}"),
-            )
-        }),
+        SCHEME_MEMORY => Ok("memory"),
+        SCHEME_FILE | "" => Ok("file"),
+        SCHEME_S3 | SCHEME_S3A | SCHEME_S3N => Ok("s3"),
+        SCHEME_GS | SCHEME_GCS => Ok("gcs"),
+        SCHEME_OSS => Ok("oss"),
+        SCHEME_ABFSS | SCHEME_ABFS | SCHEME_WASBS | SCHEME_WASB => Ok("azdls"),
+        s => Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            format!("Unsupported storage scheme: {s}"),
+        )),
     }
 }
 
-/// Extract the [`Scheme`] family from a path URL.
-fn extract_scheme(path: &str) -> Result<Scheme> {
+/// Extract the scheme from a path URL.
+fn extract_scheme(path: &str) -> Result<&'static str> {
     let url = Url::parse(path).map_err(|e| {
         Error::new(
             ErrorKind::DataInvalid,
@@ -83,13 +80,13 @@ fn extract_scheme(path: &str) -> Result<Scheme> {
 
 /// Build an [`OpenDalStorage`] variant for the given scheme and config properties.
 fn build_storage_for_scheme(
-    scheme: Scheme,
+    scheme: &'static str,
     props: &HashMap<String, String>,
     #[cfg(feature = "opendal-s3")] customized_credential_load: &Option<CustomAwsCredentialLoader>,
 ) -> Result<OpenDalStorage> {
     match scheme {
         #[cfg(feature = "opendal-s3")]
-        Scheme::S3 => {
+        "s3" => {
             let config = crate::s3::s3_config_parse(props.clone())?;
             Ok(OpenDalStorage::S3 {
                 config: Arc::new(config),
@@ -97,30 +94,30 @@ fn build_storage_for_scheme(
             })
         }
         #[cfg(feature = "opendal-gcs")]
-        Scheme::Gcs => {
+        "gcs" => {
             let config = crate::gcs::gcs_config_parse(props.clone())?;
             Ok(OpenDalStorage::Gcs {
                 config: Arc::new(config),
             })
         }
         #[cfg(feature = "opendal-oss")]
-        Scheme::Oss => {
+        "oss" => {
             let config = crate::oss::oss_config_parse(props.clone())?;
             Ok(OpenDalStorage::Oss {
                 config: Arc::new(config),
             })
         }
         #[cfg(feature = "opendal-azdls")]
-        Scheme::Azdls => {
+        "azdls" => {
             let config = crate::azdls::azdls_config_parse(props.clone())?;
             Ok(OpenDalStorage::Azdls {
                 config: Arc::new(config),
             })
         }
         #[cfg(feature = "opendal-fs")]
-        Scheme::Fs => Ok(OpenDalStorage::LocalFs),
+        "file" => Ok(OpenDalStorage::LocalFs),
         #[cfg(feature = "opendal-memory")]
-        Scheme::Memory => Ok(OpenDalStorage::Memory(crate::memory::memory_config_build()?)),
+        "memory" => Ok(OpenDalStorage::Memory(crate::memory::memory_config_build()?)),
         unsupported => Err(Error::new(
             ErrorKind::FeatureUnsupported,
             format!("Unsupported storage scheme: {unsupported}"),
@@ -201,7 +198,7 @@ pub struct OpenDalResolvingStorage {
     props: HashMap<String, String>,
     /// Cache of scheme to storage mappings.
     #[serde(skip, default)]
-    storages: RwLock<HashMap<Scheme, Arc<OpenDalStorage>>>,
+    storages: RwLock<HashMap<&'static str, Arc<OpenDalStorage>>>,
     /// Custom AWS credential loader for S3 storage.
     #[cfg(feature = "opendal-s3")]
     #[serde(skip)]
@@ -286,7 +283,7 @@ impl Storage for OpenDalResolvingStorage {
     async fn delete_stream(&self, mut paths: BoxStream<'static, String>) -> Result<()> {
         // Group paths by scheme so each resolved storage receives a batch,
         // avoiding repeated operator creation per path.
-        let mut grouped: HashMap<Scheme, Vec<String>> = HashMap::new();
+        let mut grouped: HashMap<&'static str, Vec<String>> = HashMap::new();
         while let Some(path) = paths.next().await {
             let scheme = extract_scheme(&path)?;
             grouped.entry(scheme).or_default().push(path);
