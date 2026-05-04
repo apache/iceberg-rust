@@ -306,8 +306,6 @@ mod tests {
     fn test_convert_to_glue_table() -> Result<()> {
         let table_name = "my_table".to_string();
         let location = "s3a://warehouse/hive".to_string();
-        let metadata_location = MetadataLocation::new_with_table_location(location).to_string();
-        let properties = HashMap::new();
         let schema = Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
@@ -316,6 +314,8 @@ mod tests {
             .build()?;
 
         let metadata = create_metadata(schema)?;
+        let metadata_location =
+            MetadataLocation::new_with_metadata(location, &metadata).to_string();
 
         let parameters = HashMap::from([
             (ICEBERG_FIELD_ID.to_string(), "1".to_string()),
@@ -336,8 +336,13 @@ mod tests {
             .location(metadata.location())
             .build();
 
-        let result =
-            convert_to_glue_table(&table_name, metadata_location, &metadata, &properties, None)?;
+        let result = convert_to_glue_table(
+            &table_name,
+            metadata_location,
+            &metadata,
+            metadata.properties(),
+            None,
+        )?;
 
         assert_eq!(result.name(), &table_name);
         assert_eq!(result.description(), None);

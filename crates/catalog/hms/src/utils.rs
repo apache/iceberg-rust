@@ -311,8 +311,8 @@ fn get_current_time() -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
-    use iceberg::spec::{NestedField, PrimitiveType, Type};
-    use iceberg::{MetadataLocation, Namespace, NamespaceIdent};
+    use iceberg::spec::{NestedField, PrimitiveType, TableMetadataBuilder, Type};
+    use iceberg::{MetadataLocation, Namespace, NamespaceIdent, TableCreation};
 
     use super::*;
 
@@ -343,8 +343,6 @@ mod tests {
         let db_name = "my_db".to_string();
         let table_name = "my_table".to_string();
         let location = "s3a://warehouse/hms".to_string();
-        let metadata_location =
-            MetadataLocation::new_with_table_location(location.clone()).to_string();
         let properties = HashMap::new();
         let schema = Schema::builder()
             .with_schema_id(1)
@@ -353,6 +351,18 @@ mod tests {
                 NestedField::required(2, "bar", Type::Primitive(PrimitiveType::Int)).into(),
             ])
             .build()?;
+
+        let table_creation = TableCreation::builder()
+            .name(table_name.clone())
+            .location(location.clone())
+            .schema(schema.clone())
+            .properties(properties.clone())
+            .build();
+        let metadata = TableMetadataBuilder::from_table_creation(table_creation)?
+            .build()?
+            .metadata;
+        let metadata_location =
+            MetadataLocation::new_with_metadata(location.clone(), &metadata).to_string();
 
         let result = convert_to_hive_table(
             db_name.clone(),

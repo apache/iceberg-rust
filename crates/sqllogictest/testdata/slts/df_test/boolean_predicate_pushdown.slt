@@ -39,8 +39,7 @@ logical_plan
 physical_plan
 01)FilterExec: is_active@1
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-03)----CooperativeExec
-04)------IcebergTableScan projection:[id,is_active,description] predicate:[is_active = true]
+03)----IcebergTableScan projection:[id,is_active,description] predicate:[is_active = true]
 
 # Query with is_active = true
 query ITT rowsort
@@ -60,8 +59,7 @@ logical_plan
 physical_plan
 01)FilterExec: NOT is_active@1
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-03)----CooperativeExec
-04)------IcebergTableScan projection:[id,is_active,description] predicate:[is_active = false]
+03)----IcebergTableScan projection:[id,is_active,description] predicate:[is_active = false]
 
 # Query with is_active = false
 query ITT rowsort
@@ -80,8 +78,7 @@ logical_plan
 physical_plan
 01)FilterExec: NOT is_active@1
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-03)----CooperativeExec
-04)------IcebergTableScan projection:[id,is_active,description] predicate:[is_active = false]
+03)----IcebergTableScan projection:[id,is_active,description] predicate:[is_active = false]
 
 # Query with is_active != true (includes false and NULL)
 query ITT rowsort

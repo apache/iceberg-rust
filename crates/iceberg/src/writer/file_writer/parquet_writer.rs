@@ -820,7 +820,7 @@ mod tests {
         // write data
         let mut pw = ParquetWriterBuilder::new(
             WriterProperties::builder()
-                .set_max_row_group_size(128)
+                .set_max_row_group_row_count(Some(128))
                 .build(),
             Arc::new(to_write.schema().as_ref().try_into().unwrap()),
         )
