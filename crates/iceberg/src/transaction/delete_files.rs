@@ -156,6 +156,25 @@ impl DeleteFilesAction {
     }
 }
 
+async fn collect_alive_paths(table: &Table, paths: &HashSet<String>) -> Result<HashSet<String>> {
+    let Some(current_snapshot) = table.metadata().current_snapshot() else {
+        return Ok(HashSet::new());
+    };
+    let manifest_list = current_snapshot
+        .load_manifest_list(table.file_io(), &table.metadata_ref())
+        .await?;
+    let mut found = HashSet::new();
+    for ml_entry in manifest_list.entries() {
+        let manifest = table.object_cache().get_manifest(ml_entry).await?;
+        for entry in manifest.entries() {
+            if entry.is_alive() && paths.contains(entry.file_path()) {
+                found.insert(entry.file_path().to_string());
+            }
+        }
+    }
+    Ok(found)
+}
+
 #[async_trait]
 impl TransactionAction for DeleteFilesAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
@@ -195,6 +214,17 @@ impl TransactionAction for DeleteFilesAction {
         if self.validate_files_exist {
             snapshot_producer.validate_data_files_exist(&seen_paths).await?;
         }
+
+        // Only count files that are actually alive in the current snapshot toward
+        // summary stats. Ghost files (absent from all manifests) are silently no-oped
+        // and must not be subtracted from totals — they were never counted as added.
+        let alive_paths = collect_alive_paths(table, &seen_paths).await?;
+        let actually_removed: Vec<DataFile> = deduped
+            .iter()
+            .filter(|f| alive_paths.contains(f.file_path()))
+            .cloned()
+            .collect();
+        let snapshot_producer = snapshot_producer.with_removed_data_files(actually_removed);
 
         let state = self.merging_state(table)?;
 
