@@ -35,6 +35,8 @@ use crate::transaction::ActionCommit;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
+/// Control the number of threads used to verify duplicate files.
+/// This needs to balance the degree of parallelism and resource utilisation.
 const NUM_THREADS_VALIDATE_DUPLICATE_FILES: usize = 32;
 
 /// A trait that defines how different table operations produce new snapshots.
