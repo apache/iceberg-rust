@@ -35,6 +35,7 @@ use crate::transaction::ActionCommit;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
+const NUM_THREADS_VALIDATE_DUPLICATE_FILES: usize = 32;
 
 /// A trait that defines how different table operations produce new snapshots.
 ///
@@ -184,7 +185,7 @@ impl<'a> SnapshotProducer<'a> {
                     let file_io = self.table.file_io().clone();
                     spawn(async move { entry.load_manifest(&file_io).await })
                 })
-                .buffer_unordered(32)
+                .buffer_unordered(NUM_THREADS_VALIDATE_DUPLICATE_FILES)
                 .try_for_each(|manifest| {
                     for entry in manifest.entries() {
                         let file_path = entry.file_path();
