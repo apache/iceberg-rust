@@ -19,12 +19,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
-use futures::future::try_join_all;
-use tracing::warn;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::spec::{DataFile, ManifestEntry, ManifestFile, ManifestStatus, Operation};
+use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
 use crate::table::Table;
 use crate::transaction::merging_state::MergingState;
 use crate::transaction::snapshot::{CommitResult, SnapshotProduceOperation, SnapshotProducer};
@@ -214,12 +212,11 @@ impl TransactionAction for RewriteFilesAction {
             .collect();
 
         if !replaced_paths.is_empty() {
-            let mut val_id = self.validate_from_snapshot_id;
-            if val_id.is_some_and(|id| table.metadata().snapshot_by_id(id).is_none()) {
-                val_id = None;
-            }
             snapshot_producer
-                .validate_no_new_deletes_for_data_files(val_id, &replaced_paths)
+                .validate_no_new_deletes_for_data_files(
+                    self.validate_from_snapshot_id,
+                    &replaced_paths,
+                )
                 .await?;
 
             snapshot_producer
@@ -233,8 +230,6 @@ impl TransactionAction for RewriteFilesAction {
         }
 
         let rewrite_op = RewriteOperation {
-            files_to_delete: replaced_paths,
-            validate_from_snapshot_id: self.validate_from_snapshot_id,
             state: state.clone(),
         };
 
@@ -253,8 +248,6 @@ impl TransactionAction for RewriteFilesAction {
 }
 
 struct RewriteOperation {
-    files_to_delete: HashSet<String>,
-    validate_from_snapshot_id: Option<i64>,
     state: Arc<MergingState>,
 }
 
@@ -265,103 +258,9 @@ impl SnapshotProduceOperation for RewriteOperation {
 
     async fn delete_entries(
         &self,
-        snapshot_produce: &SnapshotProducer<'_>,
+        _snapshot_produce: &SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestEntry>> {
-        if self.files_to_delete.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let (snapshot, fell_back) = if let Some(snap_id) = self.validate_from_snapshot_id {
-            match snapshot_produce.table.metadata().snapshot_by_id(snap_id) {
-                Some(s) => (s, false),
-                None => {
-                    // Planning snapshot was expired by the catalog between plan and
-                    // commit (common on long compaction runs). Fall back to the
-                    // current snapshot — the validation only needs to confirm the
-                    // files are still alive somewhere.
-                    warn!(
-                        "validate_from_snapshot {} not found (likely expired by catalog); \
-                         falling back to current snapshot for file-existence validation",
-                        snap_id
-                    );
-                    let s = snapshot_produce
-                        .table
-                        .metadata()
-                        .current_snapshot()
-                        .ok_or_else(|| {
-                            Error::new(
-                                ErrorKind::DataInvalid,
-                                "Cannot delete files from a table with no snapshots",
-                            )
-                        })?;
-                    (s, true)
-                }
-            }
-        } else {
-            let s = snapshot_produce
-                .table
-                .metadata()
-                .current_snapshot()
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Cannot delete files from a table with no snapshots",
-                    )
-                })?;
-            (s, false)
-        };
-
-        let manifest_list = snapshot
-            .load_manifest_list(
-                snapshot_produce.table.file_io(),
-                &snapshot_produce.table.metadata_ref(),
-            )
-            .await?;
-
-        let object_cache = snapshot_produce.table.object_cache();
-        let manifests = try_join_all(
-            manifest_list
-                .entries()
-                .iter()
-                .map(|e| object_cache.get_manifest(e)),
-        )
-        .await?;
-
-        let mut deleted_entries = Vec::new();
-        let mut found_paths = HashSet::new();
-        for manifest in &manifests {
-            for entry in manifest.entries() {
-                if entry.is_alive() && self.files_to_delete.contains(entry.file_path()) {
-                    found_paths.insert(entry.file_path().to_string());
-                    let mut deleted_entry = (**entry).clone();
-                    deleted_entry.status = ManifestStatus::Deleted;
-                    deleted_entries.push(deleted_entry);
-                }
-            }
-        }
-
-        let missing: Vec<&str> = self
-            .files_to_delete
-            .iter()
-            .map(|s| s.as_str())
-            .filter(|p| !found_paths.contains(*p))
-            .collect();
-        if !missing.is_empty() {
-            let snapshot_label = match (self.validate_from_snapshot_id, fell_back) {
-                (Some(id), false) => format!("snapshot {id}"),
-                (Some(_), true) => "current snapshot (planning snapshot expired)".to_string(),
-                (None, _) => "current snapshot".to_string(),
-            };
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Files in files_to_delete not found as alive entries in {snapshot_label}: {}",
-                    missing.join(", ")
-                ),
-            ));
-        }
-
-        Ok(deleted_entries)
+        Ok(vec![])
     }
 
     async fn existing_manifest(
@@ -545,8 +444,8 @@ mod tests {
 
         assert_eq!(
             manifest_list.entries().len(),
-            2,
-            "Expected 2 manifests: added + deleted"
+            1,
+            "Expected 1 manifest: added only"
         );
 
         let mut added_files: Vec<String> = Vec::new();
@@ -566,12 +465,9 @@ mod tests {
         }
 
         assert_eq!(added_files, vec!["data/compacted.parquet"]);
-
-        deleted_files.sort();
-        assert_eq!(
-            deleted_files,
-            vec!["data/file1.parquet", "data/file2.parquet"],
-            "Old files should appear as Deleted entries"
+        assert!(
+            deleted_files.is_empty(),
+            "No DELETED entries should exist after fix"
         );
 
         // Pin total-data-files = 1 (had 2; rewrote 2, added 1) — regression
@@ -663,62 +559,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_rewrite_then_fast_append_preserves_delete_manifest() {
-        // Regression for apache/iceberg-rust PR #2149: a FastAppend after a
-        // rewrite must not drop the delete-only manifest.
-        let table = make_v2_minimal_table();
-
-        let file1 = make_data_file(&table, "data/file1.parquet", 10);
-        let file2 = make_data_file(&table, "data/file2.parquet", 20);
-        let table1 = append_files(table, vec![file1.clone(), file2.clone()]).await;
-
-        let compacted = make_data_file(&table1, "data/compacted.parquet", 30);
-        let tx = Transaction::new(&table1);
-        let replace = tx
-            .rewrite_files()
-            .delete_files(vec![file1, file2])
-            .add_files(vec![compacted.clone()]);
-        let updates = Arc::new(replace)
-            .commit(&table1)
-            .await
-            .unwrap()
-            .take_updates();
-        let table2 = apply_updates_to_table(&table1, &updates);
-
-        // Step 3: fast-append a new file on top.
-        let file3 = make_data_file(&table2, "data/file3.parquet", 5);
-        let tx = Transaction::new(&table2);
-        let append2 = tx.fast_append().add_data_files(vec![file3]);
-        let updates = Arc::new(append2)
-            .commit(&table2)
-            .await
-            .unwrap()
-            .take_updates();
-
-        let new_snapshot = unwrap_add_snapshot(&updates);
-
-        let manifest_list = new_snapshot
-            .load_manifest_list(table2.file_io(), table2.metadata())
-            .await
-            .unwrap();
-
-        let deleted_count: usize = {
-            let mut count = 0;
-            for entry in manifest_list.entries() {
-                let manifest = entry.load_manifest(table2.file_io()).await.unwrap();
-                for me in manifest.entries() {
-                    if matches!(me.status(), ManifestStatus::Deleted) {
-                        count += 1;
-                    }
-                }
-            }
-            count
-        };
-
-        assert_eq!(deleted_count, 2);
-    }
-
-    #[tokio::test]
     async fn test_rewrite_validate_from_snapshot_succeeds() {
         let table = make_v2_minimal_table();
 
@@ -738,9 +578,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_rewrite_validate_from_snapshot_expired_falls_back_to_current() {
-        // Non-existent planning snapshot ID falls back to the current snapshot.
-        // The commit succeeds when the files-to-delete are still alive there.
+    async fn test_rewrite_validate_from_snapshot_expired_errors() {
+        // Expired planning snapshot is a hard error; the message must mention
+        // the expired ID so callers can debug.
         let table = make_v2_minimal_table();
 
         let file1 = make_data_file(&table, "data/file1.parquet", 10);
@@ -753,47 +593,12 @@ mod tests {
             .validate_from_snapshot(999_999_999)
             .delete_files(vec![file1])
             .add_files(vec![compacted]);
-        assert!(Arc::new(replace).commit(&table1).await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_rewrite_validate_from_snapshot_expired_file_concurrently_deleted() {
-        // Expired planning snapshot AND the file was concurrently removed: must
-        // fail, and the error must point to the current snapshot (not the
-        // expired ID) so callers can debug the cause.
-        let table = make_v2_minimal_table();
-
-        let file1 = make_data_file(&table, "data/file1.parquet", 10);
-        let table1 = append_files(table.clone(), vec![file1.clone()]).await;
-
-        let replacement = make_data_file(&table, "data/replacement.parquet", 10);
-        let tx = Transaction::new(&table1);
-        let replace_concurrent = tx
-            .rewrite_files()
-            .delete_files(vec![file1.clone()])
-            .add_files(vec![replacement]);
-        let updates2 = Arc::new(replace_concurrent)
-            .commit(&table1)
-            .await
-            .unwrap()
-            .take_updates();
-        let table2 = apply_updates_to_table(&table1, &updates2);
-
-        let compacted = make_data_file(&table, "data/compacted.parquet", 10);
-        let tx = Transaction::new(&table2);
-        let replace_stale = tx
-            .rewrite_files()
-            .validate_from_snapshot(999_999_999)
-            .delete_files(vec![file1])
-            .add_files(vec![compacted]);
-
-        let Err(err) = Arc::new(replace_stale).commit(&table2).await else {
-            panic!("commit should fail: file1 is no longer alive in current snapshot");
+        let Err(err) = Arc::new(replace).commit(&table1).await else {
+            panic!("expected hard error on expired planning snapshot");
         };
-
         let msg = err.to_string();
-        assert!(msg.contains("current snapshot"), "got: {msg}");
-        assert!(!msg.contains("999999999"), "got: {msg}");
+        assert!(msg.contains("Cannot determine history"), "got: {msg}");
+        assert!(msg.contains("999999999"), "got: {msg}");
     }
 
     #[tokio::test]
@@ -1356,78 +1161,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_rewrite_tombstone_suppression_across_merges() {
-        // Prior-snapshot tombstones must NOT survive into a merged manifest —
-        // this is the load-bearing rule that stops manifest-entry count from
-        // growing monotonically across many compactions.
-        let mut table = make_v2_minimal_table();
-        let tx = Transaction::new(&table);
-        let prop_action = tx.update_table_properties().set(
-            "commit.manifest.min-count-to-merge".to_string(),
-            "2".to_string(),
-        );
-        let updates = Arc::new(prop_action)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
-        table = apply_updates_to_table(&table, &updates);
-
-        let f1 = make_data_file(&table, "data/f1.parquet", 10);
-        let f2 = make_data_file(&table, "data/f2.parquet", 10);
-        let table = append_files(table, vec![f1.clone()]).await;
-        let table = append_files(table, vec![f2.clone()]).await;
-
-        let c1 = make_data_file(&table, "data/c1.parquet", 10);
-        let tx = Transaction::new(&table);
-        let action = tx
-            .rewrite_files()
-            .delete_files(vec![f1])
-            .add_files(vec![c1]);
-        let updates = Arc::new(action)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
-        let table = apply_updates_to_table(&table, &updates);
-
-        // Compacting f2 should fold the previous compaction's delete-manifest
-        // (still carrying f1's tombstone) into a merged manifest, dropping the
-        // tombstone in the process.
-        let c2 = make_data_file(&table, "data/c2.parquet", 10);
-        let tx = Transaction::new(&table);
-        let action = tx
-            .rewrite_files()
-            .delete_files(vec![f2])
-            .add_files(vec![c2]);
-        let updates = Arc::new(action)
-            .commit(&table)
-            .await
-            .unwrap()
-            .take_updates();
-        let table = apply_updates_to_table(&table, &updates);
-
-        let snap = table.metadata().current_snapshot().unwrap();
-        let current_snap_id = snap.snapshot_id();
-        let manifest_list = snap
-            .load_manifest_list(table.file_io(), table.metadata())
-            .await
-            .unwrap();
-        let mut prior_tombstones = 0u64;
-        for ml in manifest_list.entries() {
-            let manifest = ml.load_manifest(table.file_io()).await.unwrap();
-            for entry in manifest.entries() {
-                if entry.status() == ManifestStatus::Deleted
-                    && entry.snapshot_id() != Some(current_snap_id)
-                {
-                    prior_tombstones += 1;
-                }
-            }
-        }
-        assert_eq!(prior_tombstones, 0);
-    }
-
-    #[tokio::test]
     async fn test_rewrite_idempotent_merging_state() {
         // Re-invoking commit() on the same Arc<RewriteFilesAction> structurally
         // models the Transaction-level retry path. The merging-state caches
@@ -1634,7 +1367,7 @@ mod tests {
             .len();
         assert_eq!(pre_count, 2, "expected 2 carry-forward manifests");
 
-        // Rewrite f1 → c1. This adds one new data manifest and one delete manifest.
+        // Rewrite f1 → c1. This adds one new data manifest.
         let c1 = make_data_file(&table, "data/c1.parquet", 10);
         let tx = Transaction::new(&table);
         let action = tx
@@ -1657,8 +1390,7 @@ mod tests {
         // The 2 carry-forward data manifests have < 3 entries but are NOT the new
         // manifest's bin, so the guard must NOT protect them — they should be merged
         // into 1. The new data manifest's bin (1 entry) is protected by the guard
-        // and passes through. Post-commit data manifests = 1 merged carry-forward +
-        // 1 new = 2. Plus 1 delete manifest = 3 total.
+        // and passes through. Post-commit: 1 merged carry-forward + 1 new = 2 total.
         let manifest_count = manifest_list.entries().len();
         assert!(
             manifest_count <= pre_count + 1,
@@ -1795,7 +1527,7 @@ mod tests {
             .len();
 
         // Carry-forwards (4 manifests) were eligible to merge (≥3); they should
-        // consolidate. The new commit adds 1 data + 1 delete manifest. Total must
+        // consolidate. The new commit adds 1 data manifest. Total must
         // be well below pre_count + 2 (no merge at all).
         assert!(
             post_count < pre_count + 2,
@@ -1812,5 +1544,201 @@ mod tests {
             let path = format!("data/carry_{i}.parquet");
             assert!(alive.contains(&path), "missing {path}; alive={alive:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_action_manifest_count_does_not_grow() {
+        // Regression: each compaction cycle must produce exactly 1 manifest.
+        // With the fix, delete_entries returns empty so no tombstone manifest
+        // is written; prior bloat was +1 manifest per compaction run.
+        let table = make_v2_minimal_table();
+
+        let f1 = make_data_file(&table, "data/f1.parquet", 10);
+        let f2 = make_data_file(&table, "data/f2.parquet", 10);
+        let mut t = append_files(table, vec![f1.clone(), f2.clone()]).await;
+        let mut current = vec![f1, f2];
+
+        for i in 0..3usize {
+            let compacted = make_data_file(&t, &format!("data/c{i}.parquet"), 20);
+            let tx = Transaction::new(&t);
+            let action = tx
+                .rewrite_files()
+                .delete_files(current.clone())
+                .add_files(vec![compacted.clone()]);
+            let updates = Arc::new(action).commit(&t).await.unwrap().take_updates();
+            t = apply_updates_to_table(&t, &updates);
+
+            let snap = t.metadata().current_snapshot().unwrap();
+            let count = snap
+                .load_manifest_list(t.file_io(), t.metadata())
+                .await
+                .unwrap()
+                .entries()
+                .len();
+            assert_eq!(
+                count, 1,
+                "cycle {i}: manifest count should be 1, got {count}"
+            );
+
+            current = vec![compacted];
+        }
+    }
+
+    #[tokio::test]
+    async fn test_filter_manifests_drops_existing_tombstone_manifest() {
+        // Verify that a tombstone-only manifest injected from a hypothetical
+        // prior buggy compaction run is cleaned up by the merge pass when the
+        // next compaction runs. With min-count-to-merge=2 the bin containing
+        // [tombstone, new_added] (size=2) is merged; the merge pass drops
+        // prior-snapshot Deleted entries, so the tombstone path disappears.
+        use std::collections::HashMap;
+
+        use crate::spec::{
+            ManifestListWriter, ManifestWriterBuilder, SnapshotReference, SnapshotRetention,
+            Summary,
+        };
+
+        let mut table = make_v2_minimal_table();
+
+        // min-count-to-merge=2 ensures a bin of [tombstone + new_added] (size=2)
+        // is merged rather than guarded.
+        let tx = Transaction::new(&table);
+        let prop = tx.update_table_properties().set(
+            "commit.manifest.min-count-to-merge".to_string(),
+            "2".to_string(),
+        );
+        let updates = Arc::new(prop).commit(&table).await.unwrap().take_updates();
+        table = apply_updates_to_table(&table, &updates);
+
+        let f1 = make_data_file(&table, "data/f1.parquet", 10);
+        let mut table = append_files(table, vec![f1.clone()]).await;
+
+        let prior_snap = table.metadata().current_snapshot().unwrap();
+        let prior_snap_id = prior_snap.snapshot_id();
+        let prior_seq_num = prior_snap.sequence_number();
+
+        let existing_manifests: Vec<crate::spec::ManifestFile> = prior_snap
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap()
+            .entries()
+            .to_vec();
+
+        // Write a tombstone Avro manifest simulating a prior buggy compaction.
+        let tombstone_path = format!(
+            "{}/metadata/tombstone-test-m0.avro",
+            table.metadata().location()
+        );
+        let output = table.file_io().new_output(&tombstone_path).unwrap();
+        let mut writer = ManifestWriterBuilder::new(
+            output,
+            Some(prior_snap_id),
+            None,
+            table.metadata().current_schema().clone(),
+            table.metadata().default_partition_spec().as_ref().clone(),
+        )
+        .build_v2_data();
+
+        writer
+            .add_delete_file(f1.clone(), prior_seq_num, Some(prior_seq_num))
+            .unwrap();
+        let mut tombstone_mf = writer.write_manifest_file().await.unwrap();
+
+        // Set concrete sequence numbers so ManifestListWriter skips the
+        // added_snapshot_id consistency check (our injected snap has a different id).
+        tombstone_mf.sequence_number = prior_seq_num;
+        tombstone_mf.min_sequence_number = prior_seq_num;
+
+        // Write a new manifest list containing the original data manifests
+        // plus the synthetic tombstone manifest.
+        let injected_snap_id = prior_snap_id + 1_000_000;
+        let injected_seq_num = prior_seq_num + 1;
+        let injected_ml_path = format!(
+            "{}/metadata/snap-injected.avro",
+            table.metadata().location()
+        );
+        let ml_output = table.file_io().new_output(&injected_ml_path).unwrap();
+        let mut ml_writer = ManifestListWriter::v2(
+            ml_output,
+            injected_snap_id,
+            Some(prior_snap_id),
+            injected_seq_num,
+        );
+        let mut all_manifests = existing_manifests;
+        all_manifests.push(tombstone_mf.clone());
+        ml_writer.add_manifests(all_manifests.into_iter()).unwrap();
+        ml_writer.close().await.unwrap();
+
+        // Build a synthetic snapshot pointing to the injected manifest list.
+        let injected_snap = crate::spec::Snapshot::builder()
+            .with_snapshot_id(injected_snap_id)
+            .with_parent_snapshot_id(Some(prior_snap_id))
+            .with_sequence_number(injected_seq_num)
+            .with_timestamp_ms(prior_snap.timestamp_ms() + 1)
+            .with_manifest_list(injected_ml_path)
+            .with_summary(Summary {
+                operation: Operation::Replace,
+                additional_properties: HashMap::new(),
+            })
+            .build();
+
+        let injected_updates = vec![
+            TableUpdate::AddSnapshot {
+                snapshot: injected_snap,
+            },
+            TableUpdate::SetSnapshotRef {
+                ref_name: MAIN_BRANCH.to_string(),
+                reference: SnapshotReference::new(injected_snap_id, SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                }),
+            },
+        ];
+        table = apply_updates_to_table(&table, &injected_updates);
+
+        // Confirm tombstone is present before compaction.
+        let pre_ml = table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        assert!(
+            pre_ml
+                .entries()
+                .iter()
+                .any(|e| e.manifest_path == tombstone_mf.manifest_path),
+            "tombstone should be present before compaction"
+        );
+
+        // Compact: replace f1 with c1.
+        let c1 = make_data_file(&table, "data/c1.parquet", 10);
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_files()
+            .delete_files(vec![f1])
+            .add_files(vec![c1]);
+        let updates = Arc::new(action)
+            .commit(&table)
+            .await
+            .unwrap()
+            .take_updates();
+        let table = apply_updates_to_table(&table, &updates);
+
+        // Tombstone path must be absent from the new snapshot's manifest list.
+        let snap = table.metadata().current_snapshot().unwrap();
+        let post_ml = snap
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        assert!(
+            !post_ml
+                .entries()
+                .iter()
+                .any(|e| e.manifest_path == tombstone_mf.manifest_path),
+            "tombstone manifest must be gone after compaction (merged away by merge pass)"
+        );
     }
 }
