@@ -100,8 +100,8 @@ fn inject_manifest_summary_keys(
 ///    - An `Append` operation typically includes all existing manifests plus new ones
 ///    - An `Overwrite` operation might exclude manifests for partitions being overwritten
 ///
-/// 3. **Delete Entry Processing**: The `delete_entries()` method is intended for future delete
-///    operations to specify which manifest entries should be marked as deleted.
+/// 3. **Delete Entry Processing**: The `delete_entries()` method returns empty for all current
+///    implementations; see `added_delete_entries` for V2 delete files.
 pub(crate) trait SnapshotProduceOperation: Send + Sync {
     /// Returns the operation type that will be recorded in the snapshot summary.
     ///
@@ -568,23 +568,6 @@ impl<'a> SnapshotProducer<'a> {
         Ok(())
     }
 
-    // Write a manifest containing deleted entries and return the ManifestFile for the ManifestList.
-    //
-    // ManifestContentType::Data is correct here: we are writing a data manifest that records
-    // which data files were deleted (Deleted-status entries). This is distinct from
-    // ManifestContentType::Deletes, which is for Iceberg v2 delete files (position/equality
-    // deletes). Do not change this to ManifestContentType::Deletes.
-    async fn write_delete_manifest(
-        &mut self,
-        deleted_entries: Vec<ManifestEntry>,
-    ) -> Result<ManifestFile> {
-        let mut writer = self.new_manifest_writer(ManifestContentType::Data)?;
-        for entry in deleted_entries {
-            writer.add_delete_entry(entry)?;
-        }
-        writer.write_manifest_file().await
-    }
-
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
     async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
         let added_data_files = std::mem::take(&mut self.added_data_files);
@@ -680,15 +663,6 @@ impl<'a> SnapshotProducer<'a> {
             manifest_files.push(delete_manifest);
         }
 
-        // # TODO
-        // Support process delete entries.
-        let deleted_entries = snapshot_produce_operation.delete_entries(self).await?;
-        if !deleted_entries.is_empty() {
-            let delete_manifest = self.write_delete_manifest(deleted_entries).await?;
-            new_manifest_paths.insert(delete_manifest.manifest_path.clone());
-            manifest_files.push(delete_manifest);
-        }
-
         let manifest_files = manifest_process
             .process_manifests(self, manifest_files, &new_manifest_paths)
             .await?;
@@ -735,8 +709,7 @@ impl<'a> SnapshotProducer<'a> {
         }
 
         // NOTE: summary statistics for removed files (deleted-records, removed-files-size, etc.)
-        // come from the caller-supplied DataFile structs, not from the actual snapshot entries.
-        // delete_entries() validates that paths exist but does not verify metadata matches.
+        // come from the caller-supplied DataFile structs, not from actual snapshot entries.
         // Callers must ensure the DataFile statistics they pass are accurate.
         for data_file in &self.removed_data_files {
             summary_collector.remove_file(
