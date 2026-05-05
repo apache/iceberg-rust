@@ -54,7 +54,5 @@ futures = { workspace = true }
 [dev-dependencies]
 async-trait = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
-reqsign-aws-v4 = { version = "3.0.0" }
-reqsign-core = { version = "3.0.0" }
 reqwest = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -204,7 +204,7 @@ mod tests {
             ),
             Err(e) => {
                 assert!(
-                    e.to_string().contains("credential"),
+                    e.to_string().contains("failed to load signing credential"),
                     "unexpected error: {e}"
                 );
             }
