@@ -196,12 +196,14 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
-    use arrow_array::{ArrayRef, LargeStringArray, RecordBatch, StringArray};
+    use arrow_array::{ArrayRef, LargeStringArray, RecordBatch, StringArray, StructArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use futures::TryStreamExt;
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
     use parquet::file::properties::WriterProperties;
+    use parquet::schema::parser::parse_message_type;
+    use parquet::schema::types::SchemaDescriptor;
     use tempfile::TempDir;
 
     use crate::arrow::{ArrowReader, ArrowReaderBuilder};
@@ -420,6 +422,168 @@ mod tests {
 
             assert_eq!(result_data, expected, "predicate={predicate}");
         }
+    }
+
+    /// Predicate filters that reference a nested-leaf column used to be
+    /// rejected wholesale by `PredicateConverter::bound_reference` because the
+    /// parquet column root for a nested leaf is the surrounding group. The
+    /// downstream filter pipeline (`ProjectionMask::leaves` -> `ArrowPredicateFn`
+    /// -> `RowFilter`) handles nested struct leaves correctly, so the converter
+    /// should accept them.
+    #[test]
+    fn test_get_row_filter_accepts_predicate_on_nested_leaf() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(
+                        2,
+                        "nested",
+                        Type::Struct(crate::spec::StructType::new(vec![
+                            NestedField::required(3, "value", Type::Primitive(PrimitiveType::Long))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let message_type = "
+message schema {
+  required int32 id = 1;
+  required group nested = 2 {
+    required int64 value = 3;
+  }
+}
+        ";
+        let parquet_type = parse_message_type(message_type).expect("parse parquet message type");
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
+
+        let predicate = Reference::new("nested.value").equal_to(Datum::long(42));
+        let bound_predicate = predicate.bind(schema.clone(), true).unwrap();
+        let (iceberg_field_ids, field_id_map) =
+            ArrowReader::build_field_id_set_and_map(&parquet_schema, &bound_predicate)
+                .expect("build field id map");
+
+        ArrowReader::get_row_filter(
+            &bound_predicate,
+            &parquet_schema,
+            &iceberg_field_ids,
+            &field_id_map,
+        )
+        .expect("get_row_filter should accept a predicate on a nested struct leaf");
+    }
+
+    /// End-to-end check that a predicate on a nested-leaf column actually
+    /// filters rows through the full Arrow reader pipeline.
+    #[tokio::test]
+    async fn test_perform_read_with_nested_leaf_predicate() {
+        use arrow_array::{Int32Array, Int64Array};
+        use arrow_schema::Fields;
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(
+                        2,
+                        "nested",
+                        Type::Struct(crate::spec::StructType::new(vec![
+                            NestedField::required(3, "value", Type::Primitive(PrimitiveType::Long))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let value_arrow_field = Field::new("value", DataType::Int64, false).with_metadata(
+            HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string())]),
+        );
+        let nested_struct_fields = Fields::from(vec![value_arrow_field.clone()]);
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("nested", DataType::Struct(nested_struct_fields.clone()), false)
+                .with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "2".to_string(),
+                )])),
+        ]));
+
+        let id_data = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let value_data = Arc::new(Int64Array::from(vec![10_i64, 20, 30])) as ArrayRef;
+        let nested_data = Arc::new(StructArray::from(vec![(
+            Arc::new(value_arrow_field),
+            value_data,
+        )])) as ArrayRef;
+        let to_write =
+            RecordBatch::try_new(arrow_schema.clone(), vec![id_data, nested_data]).unwrap();
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIO::new_with_fs();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
+        let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
+        writer.write(&to_write).expect("Writing batch");
+        writer.close().unwrap();
+
+        let predicate = Reference::new("nested.value").equal_to(Datum::long(20));
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask {
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
+                    .unwrap()
+                    .len(),
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: format!("{table_location}/1.parquet"),
+                data_file_format: DataFileFormat::Parquet,
+                schema: schema.clone(),
+                project_field_ids: vec![1, 2],
+                predicate: Some(predicate.bind(schema.clone(), true).unwrap()),
+                deletes: vec![],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: true,
+            })]
+            .into_iter(),
+        )) as FileScanTaskStream;
+
+        let reader = ArrowReaderBuilder::new(file_io).build();
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        let total_rows: usize = result.iter().map(RecordBatch::num_rows).sum();
+        assert_eq!(
+            total_rows, 1,
+            "predicate on nested leaf should leave exactly one row"
+        );
+
+        let id_column = result[0].column_by_name("id").expect("id column present");
+        let id_values = id_column
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("id is int32");
+        assert_eq!(id_values.values(), &[2_i32], "expected the row with value=20");
     }
 
     /// Verifies that file splits respect byte ranges and only read specific row groups.
