@@ -592,7 +592,7 @@ pub mod tests {
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::{FileIO, OutputFile};
-    use crate::metadata_columns::RESERVED_COL_NAME_FILE;
+    use crate::metadata_columns::{RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_POS};
     use crate::scan::FileScanTask;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestEntry,
@@ -2159,6 +2159,142 @@ pub mod tests {
                 arrow_schema::DataType::RunEndEncoded(_, _)
             ),
             "_file column (duplicate) should use RunEndEncoded type"
+        );
+    }
+
+    /// Collects `_pos` values from every batch as a sorted multiset.
+    fn collect_sorted_pos(batches: &[RecordBatch]) -> Vec<i64> {
+        let mut values: Vec<i64> = batches
+            .iter()
+            .flat_map(|b| {
+                let pos_col = b.column_by_name(RESERVED_COL_NAME_POS).unwrap();
+                let int64 = pos_col.as_any().downcast_ref::<Int64Array>().unwrap();
+                (0..int64.len()).map(|i| int64.value(i)).collect::<Vec<_>>()
+            })
+            .collect();
+        values.sort();
+        values
+    }
+
+    #[tokio::test]
+    async fn test_select_pos_column_basic() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_POS, "z"])
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let schema = batches[0].schema();
+        assert_eq!(schema.field(0).name(), "x");
+        assert_eq!(schema.field(1).name(), RESERVED_COL_NAME_POS);
+        assert_eq!(schema.field(2).name(), "z");
+        assert!(matches!(
+            schema.field(1).data_type(),
+            arrow_schema::DataType::Int64
+        ));
+        assert!(!schema.field(1).is_nullable());
+
+        // Two 1024-row files; expect each position 0..1024 twice.
+        let mut expected: Vec<i64> = (0..1024).chain(0..1024).collect();
+        expected.sort();
+        assert_eq!(collect_sorted_pos(&batches), expected);
+    }
+
+    #[tokio::test]
+    async fn test_pos_column_with_predicate_pushdown() {
+        // y is [2; 512] + [3; 200] + [4; 300] + [5; 12]; `y < 3` keeps
+        // positions 0..511. Retained `_pos` values must be original file
+        // positions, not 0..N/2.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["y", RESERVED_COL_NAME_POS])
+            .with_filter(Reference::new("y").less_than(Datum::long(3)))
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let mut expected: Vec<i64> = (0..512).chain(0..512).collect();
+        expected.sort();
+        assert_eq!(
+            collect_sorted_pos(&batches),
+            expected,
+            "_pos must reflect original-file row indices, not post-filter indices"
+        );
+
+        for batch in &batches {
+            let y = batch
+                .column_by_name("y")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap();
+            for i in 0..y.len() {
+                assert_eq!(y.value(i), 2);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pos_column_with_row_selection_preserves_file_positions() {
+        // `y >= 5` keeps positions 1012..1023 (last 12 rows). Exercises the
+        // RowSelection path used by positional deletes: `_pos` must survive
+        // a contiguous-prefix skip and coexist with `_file`.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let table_scan = fixture
+            .table
+            .scan()
+            .select([RESERVED_COL_NAME_POS, "y", RESERVED_COL_NAME_FILE])
+            .with_filter(Reference::new("y").greater_than_or_equal_to(Datum::long(5)))
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let schema = batches[0].schema();
+        assert_eq!(schema.field(0).name(), RESERVED_COL_NAME_POS);
+        assert_eq!(schema.field(1).name(), "y");
+        assert_eq!(schema.field(2).name(), RESERVED_COL_NAME_FILE);
+
+        let mut expected: Vec<i64> = (1012..1024).chain(1012..1024).collect();
+        expected.sort();
+        assert_eq!(
+            collect_sorted_pos(&batches),
+            expected,
+            "_pos must survive row-selection-based skipping with original positions"
         );
     }
 
