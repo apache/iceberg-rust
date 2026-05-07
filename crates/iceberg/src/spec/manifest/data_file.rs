@@ -292,6 +292,10 @@ impl DataFile {
     pub fn content_size_in_bytes(&self) -> Option<i64> {
         self.content_size_in_bytes
     }
+    /// Replace the partition tuple of this data file.
+    pub fn set_partition(&mut self, partition: Struct) {
+        self.partition = partition;
+    }
 }
 
 /// Convert data files to avro bytes and write to writer.
