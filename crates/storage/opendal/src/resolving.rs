@@ -191,7 +191,7 @@ impl StorageFactory for OpenDalResolvingStorageFactory {
 ///
 /// Sub-storages are lazily created on first use for each scheme and cached
 /// for subsequent operations. Scheme aliases like `s3`/`s3a`/`s3n` map to
-/// the same [`Scheme`] variant, so they share a storage instance.
+/// the same canonical scheme, so they share a storage instance.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OpenDalResolvingStorage {
     /// Configuration properties shared across all backends.
