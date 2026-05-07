@@ -193,6 +193,7 @@ impl TransactionAction for RewriteManifestsAction {
         // that ManifestListWriter::assign_sequence_numbers passes for V2/V3.
         let snapshot_producer = SnapshotProducer::new(
             table,
+            SnapshotProducer::generate_unique_snapshot_id(table),
             commit_uuid,
             self.key_metadata.clone(),
             snapshot_properties,

@@ -51,6 +51,7 @@
 /// The `ApplyTransactionAction` trait provides an `apply` method
 /// that allows users to apply a transaction action to a `Transaction`.
 mod action;
+mod commit_ids;
 mod manifest_filter;
 mod manifest_merge;
 mod merging_state;
@@ -226,6 +227,7 @@ impl Transaction {
 
         let backoff = Self::build_backoff(table_props)?;
         let tx = self;
+        let table_ident = tx.table.identifier().clone();
 
         (|mut tx: Transaction| async {
             let result = tx.do_commit(catalog).await;
@@ -235,6 +237,14 @@ impl Transaction {
         .sleep(tokio::time::sleep)
         .context(tx)
         .when(|e| e.retryable())
+        .notify(move |err, dur| {
+            tracing::warn!(
+                table = %table_ident,
+                error = %err,
+                backoff_ms = dur.as_millis() as u64,
+                "OCC commit conflict; retrying",
+            );
+        })
         .await
         .1
     }
@@ -409,6 +419,39 @@ mod tests {
             .unwrap()
             .take_updates();
         apply_updates_to_table(&table, &updates)
+    }
+
+    pub(crate) fn snapshot_id_from(updates: &[TableUpdate]) -> i64 {
+        for u in updates {
+            if let TableUpdate::AddSnapshot { snapshot } = u {
+                return snapshot.snapshot_id();
+            }
+        }
+        panic!("no AddSnapshot in updates");
+    }
+
+    pub(crate) fn commit_uuid_from(updates: &[TableUpdate]) -> uuid::Uuid {
+        for u in updates {
+            if let TableUpdate::AddSnapshot { snapshot } = u {
+                let stem = snapshot
+                    .manifest_list()
+                    .rsplit('/')
+                    .next()
+                    .and_then(|s| s.strip_suffix(".avro"))
+                    .expect("manifest_list path must end in .avro");
+                // Filename: snap-{snapshot_id}-{attempt}-{uuid}, where uuid is
+                // hyphen-separated into 5 hex groups. Take the last 5 segments.
+                let segments: Vec<&str> = stem.split('-').collect();
+                assert!(
+                    segments.len() >= 5,
+                    "manifest_list filename has too few segments: {stem}"
+                );
+                let uuid_str = segments[segments.len() - 5..].join("-");
+                return uuid::Uuid::parse_str(&uuid_str)
+                    .expect("manifest_list filename must encode a valid UUID");
+            }
+        }
+        panic!("no AddSnapshot in updates");
     }
 
     pub(crate) async fn collect_alive_files(snapshot: &Snapshot, table: &Table) -> Vec<String> {
