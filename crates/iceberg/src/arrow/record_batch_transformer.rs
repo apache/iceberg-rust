@@ -28,8 +28,8 @@ use arrow_schema::{
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::value::{create_primitive_array_repeated, create_primitive_array_single_element};
-use crate::arrow::{datum_to_arrow_type_with_ree, schema_to_arrow_schema};
-use crate::metadata_columns::get_metadata_field;
+use crate::arrow::{datum_to_arrow_type_with_ree, schema_to_arrow_schema, type_to_arrow_type};
+use crate::metadata_columns::{get_metadata_field, is_reader_supplied_metadata_field};
 use crate::spec::{
     Datum, Literal, PartitionSpec, PrimitiveLiteral, Schema as IcebergSchema, Struct, Transform,
 };
@@ -394,6 +394,19 @@ impl RecordBatchTransformer {
                                 .with_metadata(field.metadata().clone());
                         Ok(Arc::new(constant_field))
                     }
+                } else if is_reader_supplied_metadata_field(*field_id) {
+                    // Reader-supplied virtual field (e.g. `_pos`) is absent from
+                    // the snapshot schema; build its target field from the
+                    // iceberg metadata-column definition.
+                    let iceberg_field = get_metadata_field(*field_id)?;
+                    let arrow_type = type_to_arrow_type(&iceberg_field.field_type)?;
+                    let arrow_field =
+                        Field::new(&iceberg_field.name, arrow_type, !iceberg_field.required)
+                            .with_metadata(HashMap::from([(
+                                PARQUET_FIELD_ID_META_KEY.to_string(),
+                                iceberg_field.id.to_string(),
+                            )]));
+                    Ok(Arc::new(arrow_field))
                 } else {
                     // Regular field - use schema as-is
                     Ok(field_id_to_mapped_schema_map
@@ -456,6 +469,16 @@ impl RecordBatchTransformer {
                 return SchemaComparison::Different;
             }
 
+            // Same type at the same position with different field ids means
+            // the columns are actually reordered; force the field-id-aware path.
+            if let (Some(source_id), Some(target_id)) = (
+                source_field.metadata().get(PARQUET_FIELD_ID_META_KEY),
+                target_field.metadata().get(PARQUET_FIELD_ID_META_KEY),
+            ) && source_id != target_id
+            {
+                return SchemaComparison::Different;
+            }
+
             if source_field.name() != target_field.name() {
                 names_changed = true;
             }
@@ -490,6 +513,23 @@ impl RecordBatchTransformer {
                     return Ok(ColumnSource::Add {
                         value: Some(datum.literal().clone()),
                         target_type: arrow_type,
+                    });
+                }
+
+                if is_reader_supplied_metadata_field(*field_id) {
+                    // Routed by field id from the source batch (parquet virtual column).
+                    let (_, source_index) = field_id_to_source_schema_map
+                        .get(field_id)
+                        .ok_or_else(|| {
+                            Error::new(
+                                ErrorKind::Unexpected,
+                                format!(
+                                    "reader-supplied virtual field id {field_id} not found in source batch"
+                                ),
+                            )
+                        })?;
+                    return Ok(ColumnSource::PassThrough {
+                        source_index: *source_index,
                     });
                 }
 

@@ -40,6 +40,7 @@ mod positional_deletes;
 mod predicate_visitor;
 mod projection;
 mod row_filter;
+mod virtual_columns;
 pub use file_reader::ArrowFileReader;
 pub(crate) use options::ParquetReadOptions;
 use predicate_visitor::{CollectFieldIdVisitor, PredicateConverter};

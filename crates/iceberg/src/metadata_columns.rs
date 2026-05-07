@@ -453,6 +453,12 @@ pub fn get_metadata_field_id(column_name: &str) -> Result<i32> {
     }
 }
 
+/// Returns `true` if the metadata field is produced by the file reader
+/// (e.g. `_pos` via Parquet virtual columns) rather than added as a constant.
+pub fn is_reader_supplied_metadata_field(field_id: i32) -> bool {
+    matches!(field_id, RESERVED_FIELD_ID_POS)
+}
+
 /// Checks if a field ID is a metadata field.
 ///
 /// # Arguments
