@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 
 use http::StatusCode;
 use iceberg::{Error, ErrorKind, Result};
@@ -26,6 +27,7 @@ use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
 
 use crate::RestCatalogConfig;
+use crate::signing::HttpRequestSigner;
 use crate::types::{ErrorResponse, TokenResponse};
 
 pub(crate) struct HttpClient {
@@ -45,6 +47,8 @@ pub(crate) struct HttpClient {
     extra_oauth_params: HashMap<String, String>,
     /// Whether to disable header redaction in error logs (defaults to false for security).
     disable_header_redaction: bool,
+    /// Optional request signer applied to outgoing requests.
+    signer: Option<Arc<dyn HttpRequestSigner>>,
 }
 
 impl Debug for HttpClient {
@@ -58,7 +62,10 @@ impl Debug for HttpClient {
 
 impl HttpClient {
     /// Create a new http client.
-    pub fn new(cfg: &RestCatalogConfig) -> Result<Self> {
+    pub fn new(
+        cfg: &RestCatalogConfig,
+        signer_override: Option<Arc<dyn HttpRequestSigner>>,
+    ) -> Result<Self> {
         let extra_headers = cfg.extra_headers()?;
         Ok(HttpClient {
             client: cfg.client().unwrap_or_default(),
@@ -68,6 +75,7 @@ impl HttpClient {
             extra_headers,
             extra_oauth_params: cfg.extra_oauth_params(),
             disable_header_redaction: cfg.disable_header_redaction(),
+            signer: signer_override.or(cfg.signer()?),
         })
     }
 
@@ -96,6 +104,7 @@ impl HttpClient {
                 self.extra_oauth_params
             },
             disable_header_redaction: cfg.disable_header_redaction(),
+            signer: self.signer.or(cfg.signer()?),
         })
     }
 
@@ -253,6 +262,9 @@ impl HttpClient {
     /// Executes the given `Request` and returns a `Response`.
     pub async fn execute(&self, mut request: Request) -> Result<Response> {
         request.headers_mut().extend(self.extra_headers.clone());
+        if let Some(signer) = &self.signer {
+            request = signer.sign_request(request).await?;
+        }
         Ok(self.client.execute(request).await?)
     }
 

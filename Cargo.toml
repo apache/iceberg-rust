@@ -110,6 +110,9 @@ pilota = "0.11.10"
 pretty_assertions = "1.4"
 rand = "0.9.3"
 regex = "1.11.3"
+reqsign-aws-v4 = "3.0.0"
+reqsign-core = "3.0.0"
+reqsign-file-read-tokio = "3.0.0"
 reqwest = { version = "0.12.12", default-features = false, features = ["json"] }
 roaring = { version = "0.11" }
 rstest = "0.26"
