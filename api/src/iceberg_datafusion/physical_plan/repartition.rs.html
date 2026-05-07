@@ -222,7 +222,7 @@
 <a href=#222 id=222 data-nosnippet>222</a>            .metadata(table_metadata.metadata)
 <a href=#223 id=223 data-nosnippet>223</a>            .identifier(TableIdent::from_strs([<span class="string">"test"</span>, <span class="string">"table"</span>]).unwrap())
 <a href=#224 id=224 data-nosnippet>224</a>            .file_io(FileIO::new_with_fs())
-<a href=#225 id=225 data-nosnippet>225</a>            .metadata_location(<span class="string">"/test/metadata.json"</span>.to_string())
+<a href=#225 id=225 data-nosnippet>225</a>            .metadata_location(<span class="string">"/test/metadata.json"</span>)
 <a href=#226 id=226 data-nosnippet>226</a>            .build()
 <a href=#227 id=227 data-nosnippet>227</a>            .unwrap()
 <a href=#228 id=228 data-nosnippet>228</a>    }
@@ -379,7 +379,7 @@
 <a href=#379 id=379 data-nosnippet>379</a>            .metadata(table_metadata.metadata)
 <a href=#380 id=380 data-nosnippet>380</a>            .identifier(TableIdent::from_strs([<span class="string">"test"</span>, <span class="string">"bucketed_table"</span>]).unwrap())
 <a href=#381 id=381 data-nosnippet>381</a>            .file_io(FileIO::new_with_fs())
-<a href=#382 id=382 data-nosnippet>382</a>            .metadata_location(<span class="string">"/test/bucketed_metadata.json"</span>.to_string())
+<a href=#382 id=382 data-nosnippet>382</a>            .metadata_location(<span class="string">"/test/bucketed_metadata.json"</span>)
 <a href=#383 id=383 data-nosnippet>383</a>            .build()
 <a href=#384 id=384 data-nosnippet>384</a>            .unwrap();
 <a href=#385 id=385 data-nosnippet>385</a>
@@ -464,7 +464,7 @@
 <a href=#464 id=464 data-nosnippet>464</a>            .metadata(table_metadata.metadata)
 <a href=#465 id=465 data-nosnippet>465</a>            .identifier(TableIdent::from_strs([<span class="string">"test"</span>, <span class="string">"partitioned_bucketed_table"</span>]).unwrap())
 <a href=#466 id=466 data-nosnippet>466</a>            .file_io(FileIO::new_with_fs())
-<a href=#467 id=467 data-nosnippet>467</a>            .metadata_location(<span class="string">"/test/partitioned_bucketed_metadata.json"</span>.to_string())
+<a href=#467 id=467 data-nosnippet>467</a>            .metadata_location(<span class="string">"/test/partitioned_bucketed_metadata.json"</span>)
 <a href=#468 id=468 data-nosnippet>468</a>            .build()
 <a href=#469 id=469 data-nosnippet>469</a>            .unwrap();
 <a href=#470 id=470 data-nosnippet>470</a>
@@ -548,7 +548,7 @@
 <a href=#548 id=548 data-nosnippet>548</a>            .metadata(table_metadata.metadata)
 <a href=#549 id=549 data-nosnippet>549</a>            .identifier(TableIdent::from_strs([<span class="string">"test"</span>, <span class="string">"none_table"</span>]).unwrap())
 <a href=#550 id=550 data-nosnippet>550</a>            .file_io(FileIO::new_with_fs())
-<a href=#551 id=551 data-nosnippet>551</a>            .metadata_location(<span class="string">"/test/none_metadata.json"</span>.to_string())
+<a href=#551 id=551 data-nosnippet>551</a>            .metadata_location(<span class="string">"/test/none_metadata.json"</span>)
 <a href=#552 id=552 data-nosnippet>552</a>            .build()
 <a href=#553 id=553 data-nosnippet>553</a>            .unwrap();
 <a href=#554 id=554 data-nosnippet>554</a>
@@ -620,7 +620,7 @@
 <a href=#620 id=620 data-nosnippet>620</a>            .metadata(table_metadata.metadata)
 <a href=#621 id=621 data-nosnippet>621</a>            .identifier(TableIdent::from_strs([<span class="string">"test"</span>, <span class="string">"range_only_table"</span>]).unwrap())
 <a href=#622 id=622 data-nosnippet>622</a>            .file_io(FileIO::new_with_fs())
-<a href=#623 id=623 data-nosnippet>623</a>            .metadata_location(<span class="string">"/test/range_only_metadata.json"</span>.to_string())
+<a href=#623 id=623 data-nosnippet>623</a>            .metadata_location(<span class="string">"/test/range_only_metadata.json"</span>)
 <a href=#624 id=624 data-nosnippet>624</a>            .build()
 <a href=#625 id=625 data-nosnippet>625</a>            .unwrap();
 <a href=#626 id=626 data-nosnippet>626</a>
@@ -695,7 +695,7 @@
 <a href=#695 id=695 data-nosnippet>695</a>            .metadata(table_metadata.metadata)
 <a href=#696 id=696 data-nosnippet>696</a>            .identifier(TableIdent::from_strs([<span class="string">"test"</span>, <span class="string">"mixed_transforms_table"</span>]).unwrap())
 <a href=#697 id=697 data-nosnippet>697</a>            .file_io(FileIO::new_with_fs())
-<a href=#698 id=698 data-nosnippet>698</a>            .metadata_location(<span class="string">"/test/mixed_transforms_metadata.json"</span>.to_string())
+<a href=#698 id=698 data-nosnippet>698</a>            .metadata_location(<span class="string">"/test/mixed_transforms_metadata.json"</span>)
 <a href=#699 id=699 data-nosnippet>699</a>            .build()
 <a href=#700 id=700 data-nosnippet>700</a>            .unwrap();
 <a href=#701 id=701 data-nosnippet>701</a>
@@ -778,7 +778,7 @@
 <a href=#778 id=778 data-nosnippet>778</a>            .metadata(table_metadata.metadata)
 <a href=#779 id=779 data-nosnippet>779</a>            .identifier(TableIdent::from_strs([<span class="string">"test"</span>, <span class="string">"temporal_partition"</span>]).unwrap())
 <a href=#780 id=780 data-nosnippet>780</a>            .file_io(FileIO::new_with_fs())
-<a href=#781 id=781 data-nosnippet>781</a>            .metadata_location(<span class="string">"/test/temporal_metadata.json"</span>.to_string())
+<a href=#781 id=781 data-nosnippet>781</a>            .metadata_location(<span class="string">"/test/temporal_metadata.json"</span>)
 <a href=#782 id=782 data-nosnippet>782</a>            .build()
 <a href=#783 id=783 data-nosnippet>783</a>            .unwrap();
 <a href=#784 id=784 data-nosnippet>784</a>
@@ -851,7 +851,7 @@
 <a href=#851 id=851 data-nosnippet>851</a>            .metadata(table_metadata.metadata)
 <a href=#852 id=852 data-nosnippet>852</a>            .identifier(TableIdent::from_strs([<span class="string">"test"</span>, <span class="string">"identity_partition"</span>]).unwrap())
 <a href=#853 id=853 data-nosnippet>853</a>            .file_io(FileIO::new_with_fs())
-<a href=#854 id=854 data-nosnippet>854</a>            .metadata_location(<span class="string">"/test/identity_metadata.json"</span>.to_string())
+<a href=#854 id=854 data-nosnippet>854</a>            .metadata_location(<span class="string">"/test/identity_metadata.json"</span>)
 <a href=#855 id=855 data-nosnippet>855</a>            .build()
 <a href=#856 id=856 data-nosnippet>856</a>            .unwrap();
 <a href=#857 id=857 data-nosnippet>857</a>
