@@ -1888,60 +1888,59 @@
 <a href=#1888 id=1888 data-nosnippet>1888</a>
 <a href=#1889 id=1889 data-nosnippet>1889</a>        <span class="macro">assert_eq!</span>(table.identifier(), updated_table.identifier());
 <a href=#1890 id=1890 data-nosnippet>1890</a>        <span class="macro">assert_eq!</span>(table.metadata().uuid(), updated_table.metadata().uuid());
-<a href=#1891 id=1891 data-nosnippet>1891</a>        <span class="macro">assert!</span>(table.metadata().last_updated_ms() &lt; updated_table.metadata().last_updated_ms());
-<a href=#1892 id=1892 data-nosnippet>1892</a>        <span class="macro">assert_ne!</span>(table.metadata_location(), updated_table.metadata_location());
-<a href=#1893 id=1893 data-nosnippet>1893</a>
-<a href=#1894 id=1894 data-nosnippet>1894</a>        <span class="macro">assert!</span>(
-<a href=#1895 id=1895 data-nosnippet>1895</a>            table.metadata().metadata_log().len() &lt; updated_table.metadata().metadata_log().len()
-<a href=#1896 id=1896 data-nosnippet>1896</a>        );
-<a href=#1897 id=1897 data-nosnippet>1897</a>    }
-<a href=#1898 id=1898 data-nosnippet>1898</a>
-<a href=#1899 id=1899 data-nosnippet>1899</a>    <span class="attr">#[tokio::test]
-<a href=#1900 id=1900 data-nosnippet>1900</a>    </span><span class="kw">async fn </span>test_update_table_fails_if_table_doesnt_exist() {
-<a href=#1901 id=1901 data-nosnippet>1901</a>        <span class="kw">let </span>catalog = new_memory_catalog().<span class="kw">await</span>;
-<a href=#1902 id=1902 data-nosnippet>1902</a>
-<a href=#1903 id=1903 data-nosnippet>1903</a>        <span class="kw">let </span>namespace_ident = NamespaceIdent::new(<span class="string">"a"</span>.into());
-<a href=#1904 id=1904 data-nosnippet>1904</a>        create_namespace(<span class="kw-2">&amp;</span>catalog, <span class="kw-2">&amp;</span>namespace_ident).<span class="kw">await</span>;
-<a href=#1905 id=1905 data-nosnippet>1905</a>
-<a href=#1906 id=1906 data-nosnippet>1906</a>        <span class="comment">// This table is not known to the catalog.
-<a href=#1907 id=1907 data-nosnippet>1907</a>        </span><span class="kw">let </span>table_ident = TableIdent::new(namespace_ident, <span class="string">"test"</span>.to_string());
-<a href=#1908 id=1908 data-nosnippet>1908</a>        <span class="kw">let </span>table = build_table(table_ident);
-<a href=#1909 id=1909 data-nosnippet>1909</a>
-<a href=#1910 id=1910 data-nosnippet>1910</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
-<a href=#1911 id=1911 data-nosnippet>1911</a>        <span class="kw">let </span>err = tx
-<a href=#1912 id=1912 data-nosnippet>1912</a>            .update_table_properties()
-<a href=#1913 id=1913 data-nosnippet>1913</a>            .set(<span class="string">"key"</span>.to_string(), <span class="string">"value"</span>.to_string())
-<a href=#1914 id=1914 data-nosnippet>1914</a>            .apply(tx)
-<a href=#1915 id=1915 data-nosnippet>1915</a>            .unwrap()
-<a href=#1916 id=1916 data-nosnippet>1916</a>            .commit(<span class="kw-2">&amp;</span>catalog)
-<a href=#1917 id=1917 data-nosnippet>1917</a>            .<span class="kw">await
-<a href=#1918 id=1918 data-nosnippet>1918</a>            </span>.unwrap_err();
-<a href=#1919 id=1919 data-nosnippet>1919</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::TableNotFound);
-<a href=#1920 id=1920 data-nosnippet>1920</a>    }
-<a href=#1921 id=1921 data-nosnippet>1921</a>
-<a href=#1922 id=1922 data-nosnippet>1922</a>    <span class="kw">fn </span>build_table(ident: TableIdent) -&gt; Table {
-<a href=#1923 id=1923 data-nosnippet>1923</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
-<a href=#1924 id=1924 data-nosnippet>1924</a>
-<a href=#1925 id=1925 data-nosnippet>1925</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
-<a href=#1926 id=1926 data-nosnippet>1926</a>        <span class="kw">let </span>location = temp_dir.path().to_str().unwrap().to_string();
-<a href=#1927 id=1927 data-nosnippet>1927</a>
-<a href=#1928 id=1928 data-nosnippet>1928</a>        <span class="kw">let </span>table_creation = TableCreation::builder()
-<a href=#1929 id=1929 data-nosnippet>1929</a>            .name(ident.name().to_string())
-<a href=#1930 id=1930 data-nosnippet>1930</a>            .schema(simple_table_schema())
-<a href=#1931 id=1931 data-nosnippet>1931</a>            .location(location)
-<a href=#1932 id=1932 data-nosnippet>1932</a>            .build();
-<a href=#1933 id=1933 data-nosnippet>1933</a>        <span class="kw">let </span>metadata = TableMetadataBuilder::from_table_creation(table_creation)
-<a href=#1934 id=1934 data-nosnippet>1934</a>            .unwrap()
-<a href=#1935 id=1935 data-nosnippet>1935</a>            .build()
-<a href=#1936 id=1936 data-nosnippet>1936</a>            .unwrap()
-<a href=#1937 id=1937 data-nosnippet>1937</a>            .metadata;
-<a href=#1938 id=1938 data-nosnippet>1938</a>
-<a href=#1939 id=1939 data-nosnippet>1939</a>        Table::builder()
-<a href=#1940 id=1940 data-nosnippet>1940</a>            .identifier(ident)
-<a href=#1941 id=1941 data-nosnippet>1941</a>            .metadata(metadata)
-<a href=#1942 id=1942 data-nosnippet>1942</a>            .file_io(file_io)
-<a href=#1943 id=1943 data-nosnippet>1943</a>            .build()
-<a href=#1944 id=1944 data-nosnippet>1944</a>            .unwrap()
-<a href=#1945 id=1945 data-nosnippet>1945</a>    }
-<a href=#1946 id=1946 data-nosnippet>1946</a>}
+<a href=#1891 id=1891 data-nosnippet>1891</a>        <span class="macro">assert_ne!</span>(table.metadata_location(), updated_table.metadata_location());
+<a href=#1892 id=1892 data-nosnippet>1892</a>
+<a href=#1893 id=1893 data-nosnippet>1893</a>        <span class="macro">assert!</span>(
+<a href=#1894 id=1894 data-nosnippet>1894</a>            table.metadata().metadata_log().len() &lt; updated_table.metadata().metadata_log().len()
+<a href=#1895 id=1895 data-nosnippet>1895</a>        );
+<a href=#1896 id=1896 data-nosnippet>1896</a>    }
+<a href=#1897 id=1897 data-nosnippet>1897</a>
+<a href=#1898 id=1898 data-nosnippet>1898</a>    <span class="attr">#[tokio::test]
+<a href=#1899 id=1899 data-nosnippet>1899</a>    </span><span class="kw">async fn </span>test_update_table_fails_if_table_doesnt_exist() {
+<a href=#1900 id=1900 data-nosnippet>1900</a>        <span class="kw">let </span>catalog = new_memory_catalog().<span class="kw">await</span>;
+<a href=#1901 id=1901 data-nosnippet>1901</a>
+<a href=#1902 id=1902 data-nosnippet>1902</a>        <span class="kw">let </span>namespace_ident = NamespaceIdent::new(<span class="string">"a"</span>.into());
+<a href=#1903 id=1903 data-nosnippet>1903</a>        create_namespace(<span class="kw-2">&amp;</span>catalog, <span class="kw-2">&amp;</span>namespace_ident).<span class="kw">await</span>;
+<a href=#1904 id=1904 data-nosnippet>1904</a>
+<a href=#1905 id=1905 data-nosnippet>1905</a>        <span class="comment">// This table is not known to the catalog.
+<a href=#1906 id=1906 data-nosnippet>1906</a>        </span><span class="kw">let </span>table_ident = TableIdent::new(namespace_ident, <span class="string">"test"</span>.to_string());
+<a href=#1907 id=1907 data-nosnippet>1907</a>        <span class="kw">let </span>table = build_table(table_ident);
+<a href=#1908 id=1908 data-nosnippet>1908</a>
+<a href=#1909 id=1909 data-nosnippet>1909</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
+<a href=#1910 id=1910 data-nosnippet>1910</a>        <span class="kw">let </span>err = tx
+<a href=#1911 id=1911 data-nosnippet>1911</a>            .update_table_properties()
+<a href=#1912 id=1912 data-nosnippet>1912</a>            .set(<span class="string">"key"</span>.to_string(), <span class="string">"value"</span>.to_string())
+<a href=#1913 id=1913 data-nosnippet>1913</a>            .apply(tx)
+<a href=#1914 id=1914 data-nosnippet>1914</a>            .unwrap()
+<a href=#1915 id=1915 data-nosnippet>1915</a>            .commit(<span class="kw-2">&amp;</span>catalog)
+<a href=#1916 id=1916 data-nosnippet>1916</a>            .<span class="kw">await
+<a href=#1917 id=1917 data-nosnippet>1917</a>            </span>.unwrap_err();
+<a href=#1918 id=1918 data-nosnippet>1918</a>        <span class="macro">assert_eq!</span>(err.kind(), ErrorKind::TableNotFound);
+<a href=#1919 id=1919 data-nosnippet>1919</a>    }
+<a href=#1920 id=1920 data-nosnippet>1920</a>
+<a href=#1921 id=1921 data-nosnippet>1921</a>    <span class="kw">fn </span>build_table(ident: TableIdent) -&gt; Table {
+<a href=#1922 id=1922 data-nosnippet>1922</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
+<a href=#1923 id=1923 data-nosnippet>1923</a>
+<a href=#1924 id=1924 data-nosnippet>1924</a>        <span class="kw">let </span>temp_dir = TempDir::new().unwrap();
+<a href=#1925 id=1925 data-nosnippet>1925</a>        <span class="kw">let </span>location = temp_dir.path().to_str().unwrap().to_string();
+<a href=#1926 id=1926 data-nosnippet>1926</a>
+<a href=#1927 id=1927 data-nosnippet>1927</a>        <span class="kw">let </span>table_creation = TableCreation::builder()
+<a href=#1928 id=1928 data-nosnippet>1928</a>            .name(ident.name().to_string())
+<a href=#1929 id=1929 data-nosnippet>1929</a>            .schema(simple_table_schema())
+<a href=#1930 id=1930 data-nosnippet>1930</a>            .location(location)
+<a href=#1931 id=1931 data-nosnippet>1931</a>            .build();
+<a href=#1932 id=1932 data-nosnippet>1932</a>        <span class="kw">let </span>metadata = TableMetadataBuilder::from_table_creation(table_creation)
+<a href=#1933 id=1933 data-nosnippet>1933</a>            .unwrap()
+<a href=#1934 id=1934 data-nosnippet>1934</a>            .build()
+<a href=#1935 id=1935 data-nosnippet>1935</a>            .unwrap()
+<a href=#1936 id=1936 data-nosnippet>1936</a>            .metadata;
+<a href=#1937 id=1937 data-nosnippet>1937</a>
+<a href=#1938 id=1938 data-nosnippet>1938</a>        Table::builder()
+<a href=#1939 id=1939 data-nosnippet>1939</a>            .identifier(ident)
+<a href=#1940 id=1940 data-nosnippet>1940</a>            .metadata(metadata)
+<a href=#1941 id=1941 data-nosnippet>1941</a>            .file_io(file_io)
+<a href=#1942 id=1942 data-nosnippet>1942</a>            .build()
+<a href=#1943 id=1943 data-nosnippet>1943</a>            .unwrap()
+<a href=#1944 id=1944 data-nosnippet>1944</a>    }
+<a href=#1945 id=1945 data-nosnippet>1945</a>}
 </code></pre></div></section></main></body></html>
