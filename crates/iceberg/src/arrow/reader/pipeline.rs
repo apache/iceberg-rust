@@ -27,6 +27,7 @@ use futures::{StreamExt, TryStreamExt};
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ParquetRecordBatchStreamBuilder};
 
+use super::virtual_columns::collect_arrow_virtual_columns;
 use super::{
     ArrowFileReader, ArrowReader, ParquetReadOptions, add_fallback_field_ids_to_arrow_schema,
     apply_name_mapping_to_arrow_schema,
@@ -133,6 +134,9 @@ impl FileScanTaskReader {
             .next()
             .is_some_and(|f| f.metadata().get(PARQUET_FIELD_ID_META_KEY).is_none());
 
+        // Reader-supplied metadata columns (e.g. `_pos`) requested via projection.
+        let virtual_columns = collect_arrow_virtual_columns(task.project_field_ids())?;
+
         // Three-branch schema resolution strategy matching Java's ReadConf constructor
         //
         // Per Iceberg spec Column Projection rules:
@@ -148,44 +152,60 @@ impl FileScanTaskReader {
         // - Branch 1: hasIds(fileSchema) → trust embedded field IDs, use pruneColumns()
         // - Branch 2: nameMapping present → applyNameMapping(), then pruneColumns()
         // - Branch 3: fallback → addFallbackIds(), then pruneColumnsFallback()
-        let arrow_metadata = if missing_field_ids {
-            // Parquet file lacks field IDs - must assign them before reading
-            let arrow_schema = if let Some(name_mapping) = &task.name_mapping {
-                // Branch 2: Apply name mapping to assign correct Iceberg field IDs
-                // Per spec rule #2: "Use schema.name-mapping.default metadata to map field id
-                // to columns without field id"
-                // Corresponds to Java's ParquetSchemaUtil.applyNameMapping()
-                apply_name_mapping_to_arrow_schema(
-                    Arc::clone(arrow_metadata.schema()),
-                    name_mapping,
-                )?
-            } else {
-                // Branch 3: No name mapping - use position-based fallback IDs
-                // Corresponds to Java's ParquetSchemaUtil.addFallbackIds()
-                add_fallback_field_ids_to_arrow_schema(arrow_metadata.schema())
-            };
+        let arrow_metadata =
+            if missing_field_ids {
+                // Parquet file lacks field IDs - must assign them before reading
+                let arrow_schema = if let Some(name_mapping) = &task.name_mapping {
+                    // Branch 2: Apply name mapping to assign correct Iceberg field IDs
+                    // Per spec rule #2: "Use schema.name-mapping.default metadata to map field id
+                    // to columns without field id"
+                    // Corresponds to Java's ParquetSchemaUtil.applyNameMapping()
+                    apply_name_mapping_to_arrow_schema(
+                        Arc::clone(arrow_metadata.schema()),
+                        name_mapping,
+                    )?
+                } else {
+                    // Branch 3: No name mapping - use position-based fallback IDs
+                    // Corresponds to Java's ParquetSchemaUtil.addFallbackIds()
+                    add_fallback_field_ids_to_arrow_schema(arrow_metadata.schema())
+                };
 
-            let options = ArrowReaderOptions::new().with_schema(arrow_schema);
-            ArrowReaderMetadata::try_new(Arc::clone(arrow_metadata.metadata()), options).map_err(
-                |e| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "Failed to create ArrowReaderMetadata with field ID schema",
-                    )
-                    .with_source(e)
-                },
-            )?
-        } else {
-            // Branch 1: File has embedded field IDs - trust them
-            arrow_metadata
-        };
+                let options = ArrowReaderOptions::new()
+                    .with_schema(arrow_schema)
+                    .with_virtual_columns(virtual_columns.clone())?;
+                ArrowReaderMetadata::try_new(Arc::clone(arrow_metadata.metadata()), options)
+                    .map_err(|e| {
+                        Error::new(
+                            ErrorKind::Unexpected,
+                            "Failed to create ArrowReaderMetadata with field ID schema",
+                        )
+                        .with_source(e)
+                    })?
+            } else if !virtual_columns.is_empty() {
+                // Branch 1 with virtual columns: rebuild metadata so arrow-rs emits them.
+                let options =
+                    ArrowReaderOptions::new().with_virtual_columns(virtual_columns.clone())?;
+                ArrowReaderMetadata::try_new(Arc::clone(arrow_metadata.metadata()), options)
+                    .map_err(|e| {
+                        Error::new(
+                            ErrorKind::Unexpected,
+                            "Failed to create ArrowReaderMetadata with virtual columns",
+                        )
+                        .with_source(e)
+                    })?
+            } else {
+                // Branch 1: File has embedded field IDs - trust them
+                arrow_metadata
+            };
 
         // Coerce INT96 timestamp columns to the resolution specified by the Iceberg schema.
         // This must happen before building the stream reader to avoid i64 overflow in arrow-rs.
         let arrow_metadata = if let Some(coerced_schema) =
             coerce_int96_timestamps(arrow_metadata.schema(), &task.schema)
         {
-            let options = ArrowReaderOptions::new().with_schema(Arc::clone(&coerced_schema));
+            let options = ArrowReaderOptions::new()
+                .with_schema(Arc::clone(&coerced_schema))
+                .with_virtual_columns(virtual_columns.clone())?;
             ArrowReaderMetadata::try_new(Arc::clone(arrow_metadata.metadata()), options).map_err(
                 |e| {
                     Error::new(

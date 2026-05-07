@@ -229,7 +229,8 @@ impl ArrowReader {
             if parquet_pos < parquet_root_fields.len() {
                 root_indices.push(parquet_pos);
             }
-            // RecordBatchTransformer adds missing columns with NULL values
+            // Missing columns are filled post-read by RecordBatchTransformer
+            // (with NULLs) or by the parquet reader's virtual-columns mechanism.
         }
 
         if root_indices.is_empty() {
