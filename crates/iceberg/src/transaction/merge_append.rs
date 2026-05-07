@@ -19,11 +19,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
-use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
 use crate::table::Table;
+use crate::transaction::commit_ids::CommitIds;
 use crate::transaction::merging_state::MergingState;
 use crate::transaction::snapshot::{CommitResult, SnapshotProduceOperation, SnapshotProducer};
 use crate::transaction::{ActionCommit, TransactionAction};
@@ -45,7 +45,7 @@ use crate::{Error, ErrorKind};
 /// Java analog: `org.apache.iceberg.MergeAppend` extending `MergingSnapshotProducer`.
 pub struct MergeAppendAction {
     added_data_files: Vec<DataFile>,
-    commit_uuid: Option<Uuid>,
+    ids: CommitIds,
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     manifest_read_concurrency: usize,
@@ -59,7 +59,7 @@ impl MergeAppendAction {
         let num_cpus = available_parallelism().get();
         Self {
             added_data_files: vec![],
-            commit_uuid: None,
+            ids: CommitIds::new(),
             key_metadata: None,
             snapshot_properties: HashMap::default(),
             manifest_read_concurrency: num_cpus,
@@ -83,12 +83,6 @@ impl MergeAppendAction {
     /// Override the number of manifest bins written concurrently during the merge pass.
     pub fn with_manifest_write_concurrency(mut self, n: usize) -> Self {
         self.manifest_write_concurrency = std::cmp::max(1, n);
-        self
-    }
-
-    /// Set commit UUID for the snapshot.
-    pub fn set_commit_uuid(mut self, commit_uuid: Uuid) -> Self {
-        self.commit_uuid = Some(commit_uuid);
         self
     }
 
@@ -128,7 +122,8 @@ impl TransactionAction for MergeAppendAction {
 
         let snapshot_producer = SnapshotProducer::new(
             table,
-            self.commit_uuid.unwrap_or_else(Uuid::now_v7),
+            self.ids.snapshot_id(table),
+            self.ids.commit_uuid(),
             self.key_metadata.clone(),
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
@@ -206,8 +201,8 @@ mod tests {
         Struct, UnboundPartitionSpec,
     };
     use crate::transaction::tests::{
-        append_files, apply_updates_to_table, collect_alive_files, make_data_file,
-        make_v2_minimal_table,
+        append_files, apply_updates_to_table, collect_alive_files, commit_uuid_from,
+        make_data_file, make_v2_minimal_table, snapshot_id_from,
     };
     use crate::transaction::{Transaction, TransactionAction};
 
@@ -851,6 +846,46 @@ mod tests {
         assert!(
             Arc::new(action).commit(&table).await.is_err(),
             "expected error for empty file list"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_occ_retry_stable_ids() {
+        let mut table = make_v2_minimal_table();
+        let updates = Arc::new(Transaction::new(&table).update_table_properties().set(
+            "commit.manifest.min-count-to-merge".to_string(),
+            "2".to_string(),
+        ))
+        .commit(&table)
+        .await
+        .unwrap()
+        .take_updates();
+        table = apply_updates_to_table(&table, &updates);
+
+        let f1 = make_data_file(&table, "data/f1.parquet", 10);
+        let f2 = make_data_file(&table, "data/f2.parquet", 10);
+        let table = merge_append_files(table, vec![f1]).await;
+        let table = merge_append_files(table, vec![f2]).await;
+
+        let f3 = make_data_file(&table, "data/f3.parquet", 10);
+        let action = Arc::new(
+            Transaction::new(&table)
+                .merge_append()
+                .add_data_files(vec![f3]),
+        );
+
+        let updates1 = action.clone().commit(&table).await.unwrap().take_updates();
+        let updates2 = action.commit(&table).await.unwrap().take_updates();
+
+        assert_eq!(
+            snapshot_id_from(&updates1),
+            snapshot_id_from(&updates2),
+            "snapshot_id must be stable across OCC retries"
+        );
+        assert_eq!(
+            commit_uuid_from(&updates1),
+            commit_uuid_from(&updates2),
+            "commit_uuid must be stable across OCC retries"
         );
     }
 }

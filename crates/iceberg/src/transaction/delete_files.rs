@@ -19,13 +19,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
-use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{
     DataContentType, DataFile, FormatVersion, ManifestEntry, ManifestFile, Operation,
 };
 use crate::table::Table;
+use crate::transaction::commit_ids::CommitIds;
 use crate::transaction::merging_state::MergingState;
 use crate::transaction::snapshot::{CommitResult, SnapshotProduceOperation, SnapshotProducer};
 use crate::transaction::{ActionCommit, TransactionAction};
@@ -54,7 +54,7 @@ use crate::{Error, ErrorKind};
 pub struct DeleteFilesAction {
     deleted_data_files: Vec<DataFile>,
     validate_files_exist: bool,
-    commit_uuid: Option<Uuid>,
+    ids: CommitIds,
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     manifest_read_concurrency: usize,
@@ -68,7 +68,7 @@ impl DeleteFilesAction {
         Self {
             deleted_data_files: vec![],
             validate_files_exist: false,
-            commit_uuid: None,
+            ids: CommitIds::new(),
             key_metadata: None,
             snapshot_properties: HashMap::default(),
             manifest_read_concurrency: num_cpus,
@@ -95,12 +95,6 @@ impl DeleteFilesAction {
     /// Default: off (absent paths are silently ignored — Java `StreamingDelete` default).
     pub fn validate_files_exist(mut self) -> Self {
         self.validate_files_exist = true;
-        self
-    }
-
-    /// Set commit UUID for the snapshot.
-    pub fn set_commit_uuid(mut self, commit_uuid: Uuid) -> Self {
-        self.commit_uuid = Some(commit_uuid);
         self
     }
 
@@ -207,7 +201,8 @@ impl TransactionAction for DeleteFilesAction {
 
         let snapshot_producer = SnapshotProducer::new(
             table,
-            self.commit_uuid.unwrap_or_else(Uuid::now_v7),
+            self.ids.snapshot_id(table),
+            self.ids.commit_uuid(),
             self.key_metadata.clone(),
             self.snapshot_properties.clone(),
             vec![],
@@ -302,8 +297,8 @@ mod tests {
 
     use crate::spec::{DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct};
     use crate::transaction::tests::{
-        append_files, apply_updates_to_table, collect_alive_files, make_data_file,
-        make_v2_minimal_table,
+        append_files, apply_updates_to_table, collect_alive_files, commit_uuid_from,
+        make_data_file, make_v2_minimal_table, snapshot_id_from,
     };
     use crate::transaction::{Transaction, TransactionAction};
 
@@ -435,6 +430,29 @@ mod tests {
         assert!(
             result.is_err(),
             "DeleteFiles must reject equality-delete files"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_occ_retry_stable_ids() {
+        let table = make_v2_minimal_table();
+        let f1 = make_data_file(&table, "data/f1.parquet", 10);
+        let table = append_files(table, vec![f1.clone()]).await;
+
+        let action = Arc::new(Transaction::new(&table).delete_files().delete_file(f1));
+
+        let updates1 = action.clone().commit(&table).await.unwrap().take_updates();
+        let updates2 = action.commit(&table).await.unwrap().take_updates();
+
+        assert_eq!(
+            snapshot_id_from(&updates1),
+            snapshot_id_from(&updates2),
+            "snapshot_id must be stable across OCC retries"
+        );
+        assert_eq!(
+            commit_uuid_from(&updates1),
+            commit_uuid_from(&updates2),
+            "commit_uuid must be stable across OCC retries"
         );
     }
 }

@@ -19,11 +19,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
-use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
 use crate::table::Table;
+use crate::transaction::commit_ids::CommitIds;
 use crate::transaction::merging_state::MergingState;
 use crate::transaction::snapshot::{CommitResult, SnapshotProduceOperation, SnapshotProducer};
 use crate::transaction::{ActionCommit, TransactionAction};
@@ -53,7 +53,7 @@ use crate::{Error, ErrorKind};
 /// Java analog: `org.apache.iceberg.BaseRewriteFiles` extending
 /// `MergingSnapshotProducer`.
 pub struct RewriteFilesAction {
-    commit_uuid: Option<Uuid>,
+    ids: CommitIds,
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     files_to_delete: Vec<DataFile>,
@@ -76,7 +76,7 @@ impl RewriteFilesAction {
     pub(crate) fn new() -> Self {
         let num_cpus = available_parallelism().get();
         Self {
-            commit_uuid: None,
+            ids: CommitIds::new(),
             key_metadata: None,
             snapshot_properties: HashMap::default(),
             files_to_delete: vec![],
@@ -123,12 +123,6 @@ impl RewriteFilesAction {
     /// Add files to add (new files replacing old ones).
     pub fn add_files(mut self, files: impl IntoIterator<Item = DataFile>) -> Self {
         self.files_to_add.extend(files);
-        self
-    }
-
-    /// Set commit UUID.
-    pub fn set_commit_uuid(mut self, commit_uuid: Uuid) -> Self {
-        self.commit_uuid = Some(commit_uuid);
         self
     }
 
@@ -188,10 +182,10 @@ impl TransactionAction for RewriteFilesAction {
 
         // `commit` takes `Arc<Self>` and can't move out of fields, so the file
         // vectors must be cloned. Non-trivial for large compaction jobs.
-        let commit_uuid = self.commit_uuid.unwrap_or_else(Uuid::now_v7);
         let mut snapshot_producer = SnapshotProducer::new(
             table,
-            commit_uuid,
+            self.ids.snapshot_id(table),
+            self.ids.commit_uuid(),
             self.key_metadata.clone(),
             self.snapshot_properties.clone(),
             self.files_to_add.clone(),
@@ -294,8 +288,8 @@ mod tests {
     use crate::spec::{MAIN_BRANCH, ManifestStatus, Operation};
     use crate::transaction::action::ActionCommit;
     use crate::transaction::tests::{
-        append_files, apply_updates_to_table, collect_alive_files, make_data_file,
-        make_v2_minimal_table,
+        append_files, apply_updates_to_table, collect_alive_files, commit_uuid_from,
+        make_data_file, make_v2_minimal_table, snapshot_id_from,
     };
     use crate::transaction::{Transaction, TransactionAction};
     use crate::{TableRequirement, TableUpdate};
@@ -1739,6 +1733,35 @@ mod tests {
                 .iter()
                 .any(|e| e.manifest_path == tombstone_mf.manifest_path),
             "tombstone manifest must be gone after compaction (merged away by merge pass)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_occ_retry_stable_ids() {
+        let table = make_v2_minimal_table();
+        let f1 = make_data_file(&table, "data/f1.parquet", 10);
+        let table = append_files(table, vec![f1.clone()]).await;
+        let c1 = make_data_file(&table, "data/c1.parquet", 10);
+
+        let action = Arc::new(
+            Transaction::new(&table)
+                .rewrite_files()
+                .delete_files(vec![f1])
+                .add_files(vec![c1]),
+        );
+
+        let updates1 = action.clone().commit(&table).await.unwrap().take_updates();
+        let updates2 = action.commit(&table).await.unwrap().take_updates();
+
+        assert_eq!(
+            snapshot_id_from(&updates1),
+            snapshot_id_from(&updates2),
+            "snapshot_id must be stable across OCC retries"
+        );
+        assert_eq!(
+            commit_uuid_from(&updates1),
+            commit_uuid_from(&updates2),
+            "commit_uuid must be stable across OCC retries"
         );
     }
 }

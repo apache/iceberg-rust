@@ -86,6 +86,7 @@ impl TransactionAction for FastAppendAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
         let snapshot_producer = SnapshotProducer::new(
             table,
+            SnapshotProducer::generate_unique_snapshot_id(table),
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
             self.key_metadata.clone(),
             self.snapshot_properties.clone(),

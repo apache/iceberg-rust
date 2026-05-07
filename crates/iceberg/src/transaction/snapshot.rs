@@ -198,6 +198,7 @@ pub(crate) struct SnapshotProducer<'a> {
 impl<'a> SnapshotProducer<'a> {
     pub(crate) fn new(
         table: &'a Table,
+        snapshot_id: i64,
         commit_uuid: Uuid,
         key_metadata: Option<Vec<u8>>,
         snapshot_properties: HashMap<String, String>,
@@ -205,7 +206,7 @@ impl<'a> SnapshotProducer<'a> {
     ) -> Self {
         Self {
             table,
-            snapshot_id: Self::generate_unique_snapshot_id(table),
+            snapshot_id,
             commit_uuid,
             key_metadata,
             snapshot_properties,
@@ -481,7 +482,7 @@ impl<'a> SnapshotProducer<'a> {
         Ok(())
     }
 
-    fn generate_unique_snapshot_id(table: &Table) -> i64 {
+    pub(crate) fn generate_unique_snapshot_id(table: &Table) -> i64 {
         let generate_random_id = || -> i64 {
             let (lhs, rhs) = Uuid::new_v4().as_u64_pair();
             let snapshot_id = (lhs ^ rhs) as i64;
@@ -493,11 +494,7 @@ impl<'a> SnapshotProducer<'a> {
         };
         let mut snapshot_id = generate_random_id();
 
-        while table
-            .metadata()
-            .snapshots()
-            .any(|s| s.snapshot_id() == snapshot_id)
-        {
+        while table.metadata().snapshot_by_id(snapshot_id).is_some() {
             snapshot_id = generate_random_id();
         }
         snapshot_id
@@ -887,9 +884,14 @@ mod tests {
     #[tokio::test]
     async fn validate_no_new_deletes_short_circuits_for_v1() {
         let table = make_v1_table();
-        let producer = SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![
-            data_file(&table, "data/x.parquet"),
-        ]);
+        let producer = SnapshotProducer::new(
+            &table,
+            SnapshotProducer::generate_unique_snapshot_id(&table),
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/x.parquet")],
+        );
         let mut replaced = HashSet::new();
         replaced.insert("data/replaced.parquet".to_string());
 
@@ -902,9 +904,14 @@ mod tests {
     #[tokio::test]
     async fn validate_no_new_deletes_short_circuits_for_empty_table() {
         let table = make_v2_minimal_table();
-        let producer = SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![
-            data_file(&table, "data/x.parquet"),
-        ]);
+        let producer = SnapshotProducer::new(
+            &table,
+            SnapshotProducer::generate_unique_snapshot_id(&table),
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/x.parquet")],
+        );
         let mut replaced = HashSet::new();
         replaced.insert("data/replaced.parquet".to_string());
 
@@ -927,9 +934,14 @@ mod tests {
             .take_updates();
         let table = apply_updates_to_table(&table, &updates);
 
-        let producer = SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![
-            data_file(&table, "data/y.parquet"),
-        ]);
+        let producer = SnapshotProducer::new(
+            &table,
+            SnapshotProducer::generate_unique_snapshot_id(&table),
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/y.parquet")],
+        );
         let replaced = HashSet::new();
 
         producer
@@ -954,9 +966,14 @@ mod tests {
             .take_updates();
         let table = apply_updates_to_table(&table, &updates);
 
-        let producer = SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![
-            data_file(&table, "data/compacted.parquet"),
-        ])
+        let producer = SnapshotProducer::new(
+            &table,
+            SnapshotProducer::generate_unique_snapshot_id(&table),
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/compacted.parquet")],
+        )
         .with_removed_data_files(vec![f1.clone()]);
 
         let mut replaced = HashSet::new();
@@ -995,9 +1012,14 @@ mod tests {
         // 2. Try to rewrite f1, but pass a NON-EXISTENT starting_snapshot_id
         // (simulating it was expired)
         let expired_id = first_snapshot_id - 100;
-        let producer = SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![
-            data_file(&table, "data/compacted.parquet"),
-        ])
+        let producer = SnapshotProducer::new(
+            &table,
+            SnapshotProducer::generate_unique_snapshot_id(&table),
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/compacted.parquet")],
+        )
         .with_removed_data_files(vec![f1.clone()]);
 
         let mut replaced = HashSet::new();
@@ -1059,9 +1081,14 @@ mod tests {
 
         // 3. Try to rewrite f1, starting from Snapshot A.
         // It SHOULD reject because Snapshot B added a delete since A.
-        let producer = SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![
-            data_file(&table, "data/compacted.parquet"),
-        ])
+        let producer = SnapshotProducer::new(
+            &table,
+            SnapshotProducer::generate_unique_snapshot_id(&table),
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/compacted.parquet")],
+        )
         .with_removed_data_files(vec![f1.clone()]);
 
         let mut replaced = HashSet::new();
@@ -1120,9 +1147,14 @@ mod tests {
         let table = apply_updates_to_table(&table, &updates);
 
         // 3. Try to rewrite f1, starting from Snapshot A.
-        let producer = SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![
-            data_file(&table, "data/compacted.parquet"),
-        ])
+        let producer = SnapshotProducer::new(
+            &table,
+            SnapshotProducer::generate_unique_snapshot_id(&table),
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/compacted.parquet")],
+        )
         .with_removed_data_files(vec![f1.clone()]);
 
         let mut replaced = HashSet::new();
@@ -1183,9 +1215,14 @@ mod tests {
         // This tests that a delete present at planning time does not trigger rejection.
         let snap_b_id = table.metadata().current_snapshot_id().unwrap();
 
-        let producer = SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![
-            data_file(&table, "data/compacted.parquet"),
-        ])
+        let producer = SnapshotProducer::new(
+            &table,
+            SnapshotProducer::generate_unique_snapshot_id(&table),
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/compacted.parquet")],
+        )
         .with_removed_data_files(vec![f1.clone()]);
 
         let mut replaced = HashSet::new();
@@ -1236,9 +1273,14 @@ mod tests {
 
         // 3. Try to rewrite f1, starting from Snapshot A, with ignore_equality_deletes = true.
         // This is safe when the rewrite preserves the original sequence number.
-        let producer = SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![
-            data_file(&table, "data/compacted.parquet"),
-        ])
+        let producer = SnapshotProducer::new(
+            &table,
+            SnapshotProducer::generate_unique_snapshot_id(&table),
+            Uuid::now_v7(),
+            None,
+            HashMap::new(),
+            vec![data_file(&table, "data/compacted.parquet")],
+        )
         .with_removed_data_files(vec![f1.clone()])
         .with_data_sequence_number(1); // Setting this triggers ignore_equality_deletes = true
 
