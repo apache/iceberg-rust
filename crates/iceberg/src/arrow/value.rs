@@ -206,6 +206,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
 
     fn primitive(&mut self, p: &PrimitiveType, partner: &ArrayRef) -> Result<Vec<Option<Literal>>> {
         match p {
+            PrimitiveType::Unknown => Ok(vec![None; partner.len()]),
             PrimitiveType::Boolean => {
                 let array = partner
                     .as_any()
@@ -629,6 +630,7 @@ pub(crate) fn create_primitive_array_single_element(
     prim_lit: &Option<PrimitiveLiteral>,
 ) -> Result<ArrayRef> {
     match (data_type, prim_lit) {
+        (DataType::Null, _) => Ok(Arc::new(arrow_array::NullArray::new(1))),
         (DataType::Boolean, Some(PrimitiveLiteral::Boolean(v))) => {
             Ok(Arc::new(BooleanArray::from(vec![*v])))
         }

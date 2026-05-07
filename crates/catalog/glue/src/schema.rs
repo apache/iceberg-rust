@@ -157,6 +157,12 @@ impl SchemaVisitor for GlueSchemaBuilder {
 
     fn primitive(&mut self, p: &iceberg::spec::PrimitiveType) -> iceberg::Result<Self::T> {
         let glue_type = match p {
+            PrimitiveType::Unknown => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!("Conversion from {p:?} is not supported"),
+                ));
+            }
             PrimitiveType::Boolean => "boolean".to_string(),
             PrimitiveType::Int => "int".to_string(),
             PrimitiveType::Long => "bigint".to_string(),

@@ -661,7 +661,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (420034, 412007)"),
+            Some("name IN (412007, 420034)"),
         )?;
 
         fixture.assert_projection(
@@ -807,7 +807,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (47, 46)"),
+            Some("name IN (46, 47)"),
         )?;
 
         fixture.assert_projection(
@@ -879,7 +879,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (47, 46)"),
+            Some("name IN (46, 47)"),
         )?;
 
         fixture.assert_projection(
@@ -951,7 +951,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (0, -1)"),
+            Some("name IN (-1, 0)"),
         )?;
 
         fixture.assert_projection(
@@ -1023,7 +1023,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (575, 574)"),
+            Some("name IN (574, 575)"),
         )?;
 
         fixture.assert_projection(
@@ -1094,7 +1094,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (-10, -9, -12, -11)"),
+            Some("name IN (-12, -11, -10, -9)"),
         )?;
 
         fixture.assert_projection(
@@ -1240,7 +1240,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (1970-01-01, 1969-12-31)"),
+            Some("name IN (1969-12-31, 1970-01-01)"),
         )?;
 
         fixture.assert_projection(
@@ -1314,7 +1314,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (2017-12-02, 2017-12-01)"),
+            Some("name IN (2017-12-01, 2017-12-02)"),
         )?;
 
         fixture.assert_projection(
@@ -1388,7 +1388,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (1969-01-02, 1969-01-01, 1969-01-03)"),
+            Some("name IN (1969-01-01, 1969-01-02, 1969-01-03)"),
         )?;
 
         fixture.assert_projection(
@@ -1462,7 +1462,7 @@ mod test {
                 Datum::timestamp_from_str(value)?,
                 Datum::timestamp_from_str(another)?,
             ]),
-            Some("name IN (2017-12-02, 2017-12-01)"),
+            Some("name IN (2017-12-01, 2017-12-02)"),
         )?;
 
         fixture.assert_projection(
@@ -1740,7 +1740,7 @@ mod test {
                 Datum::date_from_str(value)?,
                 Datum::date_from_str(another)?,
             ]),
-            Some("name IN (-1, -12, -11, 0)"),
+            Some("name IN (-12, -11, -1, 0)"),
         )?;
 
         fixture.assert_projection(
@@ -1808,7 +1808,7 @@ mod test {
                 Datum::date_from_str(value)?,
                 Datum::date_from_str(another)?,
             ]),
-            Some("name IN (575, 564)"),
+            Some("name IN (564, 575)"),
         )?;
 
         fixture.assert_projection(
@@ -1876,7 +1876,7 @@ mod test {
                 Datum::date_from_str(value)?,
                 Datum::date_from_str(another)?,
             ]),
-            Some("name IN (-1, -12, -11, 0)"),
+            Some("name IN (-12, -11, -1, 0)"),
         )?;
 
         fixture.assert_projection(
@@ -1944,7 +1944,7 @@ mod test {
                 Datum::date_from_str(value)?,
                 Datum::date_from_str(another)?,
             ]),
-            Some("name IN (575, 564)"),
+            Some("name IN (564, 575)"),
         )?;
 
         fixture.assert_projection(
@@ -2012,7 +2012,7 @@ mod test {
                 Datum::date_from_str(value)?,
                 Datum::date_from_str(another)?,
             ]),
-            Some("name IN (0, -1)"),
+            Some("name IN (-1, 0)"),
         )?;
 
         fixture.assert_projection(
@@ -2079,7 +2079,7 @@ mod test {
                 Datum::date_from_str(value)?,
                 Datum::date_from_str(another)?,
             ]),
-            Some("name IN (0, -1)"),
+            Some("name IN (-1, 0)"),
         )?;
 
         fixture.assert_projection(
@@ -2147,7 +2147,7 @@ mod test {
                 Datum::date_from_str(value)?,
                 Datum::date_from_str(another)?,
             ]),
-            Some("name IN (47, 46)"),
+            Some("name IN (46, 47)"),
         )?;
 
         fixture.assert_projection(
@@ -2215,7 +2215,7 @@ mod test {
                 Datum::date_from_str(value)?,
                 Datum::date_from_str(another)?,
             ]),
-            Some("name IN (0, -1)"),
+            Some("name IN (-1, 0)"),
         )?;
 
         fixture.assert_projection(
@@ -2283,7 +2283,7 @@ mod test {
                 Datum::date_from_str(value)?,
                 Datum::date_from_str(another)?,
             ]),
-            Some("name IN (47, 46)"),
+            Some("name IN (46, 47)"),
         )?;
 
         fixture.assert_projection(

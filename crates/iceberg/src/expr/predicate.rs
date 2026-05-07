@@ -310,7 +310,12 @@ impl<T: Bind> Bind for SetExpression<T> {
 
 impl<T: Display + Debug> Display for SetExpression<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut literal_strs = self.literals.iter().map(|l| format!("{l}"));
+        let mut literals = self.literals.iter().collect_vec();
+        literals.sort_by(|left, right| {
+            left.partial_cmp(right)
+                .unwrap_or_else(|| left.to_string().cmp(&right.to_string()))
+        });
+        let mut literal_strs = literals.into_iter().map(ToString::to_string);
 
         write!(f, "{} {} ({})", self.term, self.op, literal_strs.join(", "))
     }
@@ -1363,7 +1368,7 @@ mod tests {
         let schema = table_schema_simple();
         let expr = Reference::new("bar").is_in([Datum::int(10), Datum::int(20)]);
         let bound_expr = expr.bind(schema, true).unwrap();
-        assert_eq!(&format!("{bound_expr}"), "bar IN (20, 10)");
+        assert_eq!(&format!("{bound_expr}"), "bar IN (10, 20)");
         test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
@@ -1398,7 +1403,7 @@ mod tests {
         let schema = table_schema_simple();
         let expr = Reference::new("bar").is_not_in([Datum::int(10), Datum::int(20)]);
         let bound_expr = expr.bind(schema, true).unwrap();
-        assert_eq!(&format!("{bound_expr}"), "bar NOT IN (20, 10)");
+        assert_eq!(&format!("{bound_expr}"), "bar NOT IN (10, 20)");
         test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
@@ -1571,13 +1576,7 @@ mod tests {
         let expected_bound = expected_predicate.bind(schema, true).unwrap();
 
         assert_eq!(result, expected_bound);
-        // Note: HashSet order may vary, so we check that it contains the expected format
-        let result_str = format!("{result}");
-        assert!(
-            result_str.contains("bar NOT IN")
-                && result_str.contains("10")
-                && result_str.contains("20")
-        );
+        assert_eq!(&format!("{result}"), "bar NOT IN (10, 20)");
     }
 
     #[test]

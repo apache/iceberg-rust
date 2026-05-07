@@ -424,7 +424,7 @@ mod tests {
                 .bind(schema.clone(), false)
                 .unwrap();
         let result = strict_projection.strict_project(&predicate).unwrap();
-        assert_eq!(result.to_string(), "((((pcol1 NOT IN (0, -1)) AND (pcol2 NOT IN (0, -1))) AND (pcol3 NOT IN (0, -1))) AND (pcol4 NOT IN (0, -1))) AND (pcol5 NOT IN (0, -1))".to_string());
+        assert_eq!(result.to_string(), "((((pcol1 NOT IN (-1, 0)) AND (pcol2 NOT IN (-1, 0))) AND (pcol3 NOT IN (-1, 0))) AND (pcol4 NOT IN (-1, 0))) AND (pcol5 NOT IN (-1, 0))".to_string());
 
         // test in
         let predicate =
@@ -658,7 +658,7 @@ mod tests {
             .bind(schema.clone(), false)
             .unwrap();
         let result = strict_projection.strict_project(&predicate).unwrap();
-        assert_eq!(result.to_string(), "((((pcol1 NOT IN (575, 564)) AND (pcol2 NOT IN (575, 564))) AND (pcol3 NOT IN (575, 564))) AND (pcol4 NOT IN (575, 564))) AND (pcol5 NOT IN (575, 564))".to_string());
+        assert_eq!(result.to_string(), "((((pcol1 NOT IN (564, 575)) AND (pcol2 NOT IN (564, 575))) AND (pcol3 NOT IN (564, 575))) AND (pcol4 NOT IN (564, 575))) AND (pcol5 NOT IN (564, 575))".to_string());
 
         // test in
         let predicate = Reference::new("col1")
@@ -886,7 +886,7 @@ mod tests {
             .bind(schema.clone(), false)
             .unwrap();
         let result = strict_projection.strict_project(&predicate).unwrap();
-        assert_eq!(result.to_string(), "((((pcol1 NOT IN (-1, -12)) AND (pcol2 NOT IN (-1, -12))) AND (pcol3 NOT IN (-1, -12))) AND (pcol4 NOT IN (-1, -12))) AND (pcol5 NOT IN (-1, -12))".to_string());
+        assert_eq!(result.to_string(), "((((pcol1 NOT IN (-12, -1)) AND (pcol2 NOT IN (-12, -1))) AND (pcol3 NOT IN (-12, -1))) AND (pcol4 NOT IN (-12, -1))) AND (pcol5 NOT IN (-12, -1))".to_string());
 
         // test in
         let predicate = Reference::new("col1")
@@ -1114,7 +1114,7 @@ mod tests {
             .bind(schema.clone(), false)
             .unwrap();
         let result = strict_projection.strict_project(&predicate).unwrap();
-        assert_eq!(result.to_string(), "((((pcol1 NOT IN (575, 564)) AND (pcol2 NOT IN (575, 564))) AND (pcol3 NOT IN (575, 564))) AND (pcol4 NOT IN (575, 564))) AND (pcol5 NOT IN (575, 564))".to_string());
+        assert_eq!(result.to_string(), "((((pcol1 NOT IN (564, 575)) AND (pcol2 NOT IN (564, 575))) AND (pcol3 NOT IN (564, 575))) AND (pcol4 NOT IN (564, 575))) AND (pcol5 NOT IN (564, 575))".to_string());
 
         // test in
         let predicate = Reference::new("col1")
@@ -1724,7 +1724,7 @@ mod tests {
             .bind(schema.clone(), false)
             .unwrap();
         let result = strict_projection.strict_project(&predicate).unwrap();
-        assert_eq!(result.to_string(), "((((pcol1 NOT IN (1969-12-31, 1969-12-30)) AND (pcol2 NOT IN (1969-12-31, 1969-12-30))) AND (pcol3 NOT IN (1969-12-31, 1969-12-30))) AND (pcol4 NOT IN (1969-12-31, 1969-12-30))) AND (pcol5 NOT IN (1969-12-31, 1969-12-30))".to_string());
+        assert_eq!(result.to_string(), "((((pcol1 NOT IN (1969-12-30, 1969-12-31)) AND (pcol2 NOT IN (1969-12-30, 1969-12-31))) AND (pcol3 NOT IN (1969-12-30, 1969-12-31))) AND (pcol4 NOT IN (1969-12-30, 1969-12-31))) AND (pcol5 NOT IN (1969-12-30, 1969-12-31))".to_string());
 
         // test in
         let predicate = Reference::new("col1")
@@ -1952,7 +1952,7 @@ mod tests {
             .bind(schema.clone(), false)
             .unwrap();
         let result = strict_projection.strict_project(&predicate).unwrap();
-        assert_eq!(result.to_string(), "((((pcol1 NOT IN (47, 46)) AND (pcol2 NOT IN (47, 46))) AND (pcol3 NOT IN (47, 46))) AND (pcol4 NOT IN (47, 46))) AND (pcol5 NOT IN (47, 46))".to_string());
+        assert_eq!(result.to_string(), "((((pcol1 NOT IN (46, 47)) AND (pcol2 NOT IN (46, 47))) AND (pcol3 NOT IN (46, 47))) AND (pcol4 NOT IN (46, 47))) AND (pcol5 NOT IN (46, 47))".to_string());
 
         // test in
         let predicate = Reference::new("col1")
@@ -2384,7 +2384,7 @@ mod tests {
             .bind(schema.clone(), false)
             .unwrap();
         let result = strict_projection.strict_project(&predicate).unwrap();
-        assert_eq!(result.to_string(), "((((pcol1 NOT IN (47, 46)) AND (pcol2 NOT IN (47, 46))) AND (pcol3 NOT IN (47, 46))) AND (pcol4 NOT IN (47, 46))) AND (pcol5 NOT IN (47, 46))".to_string());
+        assert_eq!(result.to_string(), "((((pcol1 NOT IN (46, 47)) AND (pcol2 NOT IN (46, 47))) AND (pcol3 NOT IN (46, 47))) AND (pcol4 NOT IN (46, 47))) AND (pcol5 NOT IN (46, 47))".to_string());
 
         // test in
         let predicate = Reference::new("col1")
@@ -2593,7 +2593,7 @@ mod tests {
                 .bind(schema.clone(), false)
                 .unwrap();
         let result = strict_projection.strict_project(&predicate).unwrap();
-        assert_eq!(result.to_string(), "(((((pcol1 NOT IN (8, 7, 6)) AND (pcol2 NOT IN (8, 7, 6))) AND (pcol3 NOT IN (6, 2))) AND (pcol4 NOT IN (9, 4))) AND (pcol5 NOT IN (4, 6))) AND (pcol6 NOT IN (4, 6))".to_string());
+        assert_eq!(result.to_string(), "(((((pcol1 NOT IN (6, 7, 8)) AND (pcol2 NOT IN (6, 7, 8))) AND (pcol3 NOT IN (2, 6))) AND (pcol4 NOT IN (4, 9))) AND (pcol5 NOT IN (4, 6))) AND (pcol6 NOT IN (4, 6))".to_string());
     }
 
     #[tokio::test]
@@ -2690,7 +2690,7 @@ mod tests {
             .bind(schema.clone(), false)
             .unwrap();
         let result = strict_projection.strict_project(&predicate).unwrap();
-        assert_eq!(result.to_string(), "pcol1 IN (101, 100)".to_string());
+        assert_eq!(result.to_string(), "pcol1 IN (100, 101)".to_string());
 
         // test not in
         let predicate = Reference::new("col1")
@@ -2698,7 +2698,7 @@ mod tests {
             .bind(schema.clone(), false)
             .unwrap();
         let result = strict_projection.strict_project(&predicate).unwrap();
-        assert_eq!(result.to_string(), "pcol1 NOT IN (101, 100)".to_string());
+        assert_eq!(result.to_string(), "pcol1 NOT IN (100, 101)".to_string());
     }
 
     #[tokio::test]
@@ -2880,7 +2880,7 @@ mod tests {
         let result = strict_projection.strict_project(&predicate).unwrap();
         assert_eq!(
             result.to_string(),
-            "((pcol1 NOT IN (100, 90)) AND (pcol2 NOT IN (100, 90))) AND (pcol3 NOT IN (10000, 10100, 9900))"
+            "((pcol1 NOT IN (90, 100)) AND (pcol2 NOT IN (90, 100))) AND (pcol3 NOT IN (9900, 10000, 10100))"
                 .to_string()
         );
 
@@ -3103,7 +3103,7 @@ mod tests {
         let result = strict_projection.strict_project(&predicate).unwrap();
         assert_eq!(
             result.to_string(),
-            "((pcol1 NOT IN (100, 90)) AND (pcol2 NOT IN (100, 90))) AND (pcol3 NOT IN (9890, 9990, 10090))"
+            "((pcol1 NOT IN (90, 100)) AND (pcol2 NOT IN (90, 100))) AND (pcol3 NOT IN (9890, 9990, 10090))"
                 .to_string()
         );
 

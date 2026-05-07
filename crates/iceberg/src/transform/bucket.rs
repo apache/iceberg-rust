@@ -519,7 +519,7 @@ mod test {
                 Datum::string(value),
                 Datum::string(another),
             ]),
-            Some("name IN (9, 4)"),
+            Some("name IN (4, 9)"),
         )?;
 
         fixture.assert_projection(
@@ -656,7 +656,7 @@ mod test {
                 Datum::long(value),
                 Datum::long(value + 1),
             ]),
-            Some("name IN (8, 7, 6)"),
+            Some("name IN (6, 7, 8)"),
         )?;
 
         fixture.assert_projection(
@@ -716,7 +716,7 @@ mod test {
                 Datum::int(value),
                 Datum::int(value + 1),
             ]),
-            Some("name IN (8, 7, 6)"),
+            Some("name IN (6, 7, 8)"),
         )?;
 
         fixture.assert_projection(

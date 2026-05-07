@@ -469,7 +469,7 @@ mod test {
                 Datum::decimal_from_str(curr)?,
                 Datum::decimal_from_str(next)?,
             ]),
-            Some("name IN (10000, 10100, 9900)"),
+            Some("name IN (9900, 10000, 10100)"),
         )?;
 
         fixture.assert_projection(
@@ -524,7 +524,7 @@ mod test {
                 Datum::long(value),
                 Datum::long(value + 1),
             ]),
-            Some("name IN (100, 90)"),
+            Some("name IN (90, 100)"),
         )?;
 
         fixture.assert_projection(
@@ -579,7 +579,7 @@ mod test {
                 Datum::long(value),
                 Datum::long(value + 1),
             ]),
-            Some("name IN (100, 90)"),
+            Some("name IN (90, 100)"),
         )?;
 
         fixture.assert_projection(
@@ -634,7 +634,7 @@ mod test {
                 Datum::int(value),
                 Datum::int(value + 1),
             ]),
-            Some("name IN (100, 90)"),
+            Some("name IN (90, 100)"),
         )?;
 
         fixture.assert_projection(
@@ -689,7 +689,7 @@ mod test {
                 Datum::int(value),
                 Datum::int(value + 1),
             ]),
-            Some("name IN (100, 90)"),
+            Some("name IN (90, 100)"),
         )?;
 
         fixture.assert_projection(
