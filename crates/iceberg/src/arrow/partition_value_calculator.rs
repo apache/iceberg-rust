@@ -23,7 +23,7 @@
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, RecordBatch, StructArray};
-use arrow_schema::{DataType, Schema as ArrowSchema, SchemaRef};
+use arrow_schema::{DataType, Schema as ArrowSchema};
 
 use super::record_batch_projector::{RecordBatchProjector, parquet_field_id};
 use super::schema::schema_to_arrow_schema;
@@ -43,7 +43,7 @@ use crate::{Error, ErrorKind, Result};
 pub struct PartitionValueCalculator {
     source_field_ids: Vec<i32>,
     cached_projector: RecordBatchProjector,
-    expected_arrow_schema: SchemaRef,
+    expected_field_ids: Vec<i64>,
     transform_functions: Vec<BoxedTransformFunction>,
     partition_type: StructType,
     partition_arrow_type: DataType,
@@ -96,13 +96,31 @@ impl PartitionValueCalculator {
             |_| true,
         )?;
 
+        // `schema_to_arrow_schema` always emits PARQUET:field_id on top-level
+        // fields; treat absence as a corruption rather than a soft mismatch.
+        let expected_field_ids: Vec<i64> = expected_arrow_schema
+            .fields()
+            .iter()
+            .map(|f| {
+                parquet_field_id(f)?.ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "iceberg-derived arrow field {} is missing PARQUET:field_id",
+                            f.name()
+                        ),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         let partition_type = partition_spec.partition_type(table_schema)?;
         let partition_arrow_type = type_to_arrow_type(&Type::Struct(partition_type.clone()))?;
 
         Ok(Self {
             source_field_ids,
             cached_projector,
-            expected_arrow_schema,
+            expected_field_ids,
             transform_functions,
             partition_type,
             partition_arrow_type,
@@ -141,7 +159,7 @@ impl PartitionValueCalculator {
     /// - Transform application fails
     /// - StructArray construction fails
     pub fn calculate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        let source_columns = if shapes_match(&self.expected_arrow_schema, batch.schema_ref()) {
+        let source_columns = if positions_aligned(&self.expected_field_ids, batch.schema_ref()) {
             self.cached_projector.project_column(batch.columns())?
         } else {
             RecordBatchProjector::project_columns_by_field_id(batch, &self.source_field_ids)?
@@ -178,34 +196,43 @@ impl PartitionValueCalculator {
     }
 }
 
-/// Structural equivalence between two arrow schemas, ignoring field names
-/// and metadata. Compares column count, per-field nullability, and data
-/// types via [`DataType::equals_datatype`] (which recursively compares
-/// nested types in `List`, `Map`, `Struct`, etc. without considering
-/// names or metadata).
+/// Whether the cached positional projector is safe to use for `actual`.
 ///
-/// Names are ignored on purpose: DataFusion's INSERT path delivers batches
-/// whose top-level columns may carry generated names like `column1`,
-/// `column2`, ... while still being positionally aligned with the iceberg
-/// schema. Cached positional projection is correct in that case.
-fn shapes_match(expected: &ArrowSchema, actual: &ArrowSchema) -> bool {
-    let ef = expected.fields();
+/// For each actual column that carries a `PARQUET:field_id`, the id must
+/// equal the expected id at the same position; columns without an id defer
+/// to the producer's positional contract. Data types are deliberately not
+/// compared — the projector is purely positional.
+fn positions_aligned(expected_ids: &[i64], actual: &ArrowSchema) -> bool {
     let af = actual.fields();
-    ef.len() == af.len()
-        && ef.iter().zip(af).all(|(e, a)| {
-            e.is_nullable() == a.is_nullable() && e.data_type().equals_datatype(a.data_type())
-        })
+    if expected_ids.len() != af.len() {
+        return false;
+    }
+    for (&expected_id, a_field) in expected_ids.iter().zip(af.iter()) {
+        let Ok(Some(actual_id)) = parquet_field_id(a_field) else {
+            continue;
+        };
+        if expected_id != actual_id {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use arrow_array::{Int32Array, RecordBatch, StringArray};
     use arrow_schema::Field;
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
     use super::*;
     use crate::spec::{NestedField, PartitionSpecBuilder, PrimitiveType, Transform};
+
+    fn field_id_meta(id: i32) -> HashMap<String, String> {
+        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string())])
+    }
 
     #[test]
     fn test_partition_calculator_identity_transform() {
@@ -263,14 +290,6 @@ mod tests {
     /// by cached position.
     #[test]
     fn test_partition_calculator_runtime_field_id_fallback() {
-        use std::collections::HashMap;
-
-        use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
-
-        let field_id_meta = |id: i32| -> HashMap<String, String> {
-            HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string())])
-        };
-
         // Iceberg has 3 fields. Partition source is `value` (id=2).
         let table_schema = Schema::builder()
             .with_schema_id(0)
@@ -393,6 +412,115 @@ mod tests {
             .unwrap();
         assert_eq!(id_partition.value(0), 1);
         assert_eq!(id_partition.value(1), 2);
+    }
+
+    /// A same-typed reshuffle (here a swap of two `Int` columns with their
+    /// field-ids preserved) must be detected — otherwise a type-fingerprint
+    /// gate would silently accept it and the cached projector would grab
+    /// the wrong source column. The per-column field-id gate sees the ID
+    /// swap and routes to the field-id fallback, which resolves the correct
+    /// array.
+    #[test]
+    fn test_partition_calculator_detects_same_typed_field_id_swap() {
+        let table_schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "b", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_spec = PartitionSpecBuilder::new(Arc::new(table_schema.clone()))
+            .add_partition_field("b", "b_partition", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let calculator = PartitionValueCalculator::try_new(&partition_spec, &table_schema).unwrap();
+
+        // Per-position types match iceberg (both Int) but the IDs are
+        // swapped: position 0 carries the column for `b` (id=2), position 1
+        // carries the column for `a` (id=1).
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("a", DataType::Int32, false).with_metadata(field_id_meta(2)),
+            Field::new("b", DataType::Int32, false).with_metadata(field_id_meta(1)),
+        ]));
+
+        let batch = RecordBatch::try_new(arrow_schema, vec![
+            Arc::new(Int32Array::from(vec![100, 200, 300])),
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+        ])
+        .unwrap();
+
+        let result = calculator.calculate(&batch).unwrap();
+        let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
+        let b_partition = struct_array
+            .column_by_name("b_partition")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        // Field-id resolution picks the column carrying id=2, at position 0.
+        assert_eq!(b_partition.value(0), 100);
+        assert_eq!(b_partition.value(1), 200);
+        assert_eq!(b_partition.value(2), 300);
+    }
+
+    /// Mixed metadata: some columns carry field-ids, some don't, with one
+    /// of the no-ID columns also showing a type variant (`Utf8View` where
+    /// the iceberg schema declares `Utf8`). The per-column rule verifies
+    /// the ID-bearing columns positionally and trusts the contract for the
+    /// rest, so the cached path is reachable. Covers two regressions a
+    /// type-fingerprint gate would have produced: rejecting the type
+    /// variant, and ignoring the ID-bearing positional checks.
+    #[test]
+    fn test_partition_calculator_accepts_mixed_field_id_metadata() {
+        use arrow_array::StringViewArray;
+
+        let table_schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(3, "value", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_spec = PartitionSpecBuilder::new(Arc::new(table_schema.clone()))
+            .add_partition_field("id", "id_partition", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let calculator = PartitionValueCalculator::try_new(&partition_spec, &table_schema).unwrap();
+
+        // id and value carry field-ids in correct positions; name is Utf8View
+        // with no field-id metadata (a synthesized/coerced column).
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(field_id_meta(1)),
+            Field::new("name", DataType::Utf8View, false),
+            Field::new("value", DataType::Int32, false).with_metadata(field_id_meta(3)),
+        ]));
+
+        let batch = RecordBatch::try_new(arrow_schema, vec![
+            Arc::new(Int32Array::from(vec![10, 20])),
+            Arc::new(StringViewArray::from(vec!["a", "b"])),
+            Arc::new(Int32Array::from(vec![1, 2])),
+        ])
+        .unwrap();
+
+        let result = calculator.calculate(&batch).unwrap();
+        let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
+        let id_partition = struct_array
+            .column_by_name("id_partition")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_partition.value(0), 10);
+        assert_eq!(id_partition.value(1), 20);
     }
 
     #[test]
