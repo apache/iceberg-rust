@@ -237,7 +237,10 @@ mod tests {
 
     use crate::catalog::MockCatalog;
     use crate::io::FileIO;
-    use crate::spec::TableMetadata;
+    use crate::memory::tests::new_memory_catalog;
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
+    };
     use crate::table::Table;
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
@@ -498,6 +501,52 @@ mod tests {
             assert!(err.retryable(), "Error should be retryable");
         }
     }
+
+    #[tokio::test]
+    async fn test_transaction_snapshot_summary() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let mut file_seq = 0u32;
+        let mut append_file = |table: &crate::table::Table, record_count: u64, file_size: u64| {
+            file_seq += 1;
+            let file = DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_path(format!("test/{file_seq}.parquet"))
+                .file_format(DataFileFormat::Parquet)
+                .file_size_in_bytes(file_size)
+                .record_count(record_count)
+                .partition(Struct::from_iter([Some(Literal::long(1))]))
+                .partition_spec_id(0)
+                .build()
+                .unwrap();
+            let tx = Transaction::new(table);
+            tx.fast_append()
+                .add_data_files(vec![file])
+                .apply(tx)
+                .unwrap()
+        };
+
+        let table = append_file(&table, /*record_count=*/ 10, /*file_size=*/ 100)
+            .commit(&catalog)
+            .await
+            .unwrap();
+        let table = append_file(&table, /*record_count=*/ 20, /*file_size=*/ 200)
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        let summary = &table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .summary()
+            .additional_properties;
+
+        assert_eq!(summary.get("total-records").unwrap(), "30");
+        assert_eq!(summary.get("total-data-files").unwrap(), "2");
+        assert_eq!(summary.get("total-files-size").unwrap(), "300");
+    }
 }
 
 #[cfg(test)]
@@ -582,59 +631,5 @@ mod test_row_lineage {
         assert_eq!(manifest_list.entries().len(), 2);
         let manifest_file = &manifest_list.entries()[1];
         assert_eq!(manifest_file.first_row_id, Some(30));
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::memory::tests::new_memory_catalog;
-    use crate::spec::{DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct};
-    use crate::transaction::tests::make_v3_minimal_table_in_catalog;
-    use crate::transaction::{ApplyTransactionAction, Transaction};
-
-    #[tokio::test]
-    async fn test_transaction_snapshot_summary() {
-        let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
-
-        let mut file_seq = 0u32;
-        let mut append_file = |table: &crate::table::Table, record_count: u64, file_size: u64| {
-            file_seq += 1;
-            let file = DataFileBuilder::default()
-                .content(DataContentType::Data)
-                .file_path(format!("test/{file_seq}.parquet"))
-                .file_format(DataFileFormat::Parquet)
-                .file_size_in_bytes(file_size)
-                .record_count(record_count)
-                .partition(Struct::from_iter([Some(Literal::long(1))]))
-                .partition_spec_id(0)
-                .build()
-                .unwrap();
-            let tx = Transaction::new(table);
-            tx.fast_append()
-                .add_data_files(vec![file])
-                .apply(tx)
-                .unwrap()
-        };
-
-        let table = append_file(&table, /*record_count=*/ 10, /*file_size=*/ 100)
-            .commit(&catalog)
-            .await
-            .unwrap();
-        let table = append_file(&table, /*record_count=*/ 20, /*file_size=*/ 200)
-            .commit(&catalog)
-            .await
-            .unwrap();
-
-        let summary = &table
-            .metadata()
-            .current_snapshot()
-            .unwrap()
-            .summary()
-            .additional_properties;
-
-        assert_eq!(summary.get("total-records").unwrap(), "30");
-        assert_eq!(summary.get("total-data-files").unwrap(), "2");
-        assert_eq!(summary.get("total-files-size").unwrap(), "300");
     }
 }
