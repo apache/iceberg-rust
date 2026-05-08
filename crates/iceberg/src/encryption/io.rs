@@ -168,3 +168,47 @@ fn build_cipher(metadata: &StandardKeyMetadata) -> Result<Arc<AesGcmCipher>> {
     let key = SecureKey::new(metadata.encryption_key().as_bytes())?;
     Ok(Arc::new(AesGcmCipher::new(key)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::FileIO;
+
+    fn key_metadata() -> StandardKeyMetadata {
+        StandardKeyMetadata::new(b"0123456789abcdef").with_aad_prefix(b"test-aad-prefix!")
+    }
+
+    #[tokio::test]
+    async fn test_write_read_roundtrip() {
+        let fileio = FileIO::new_with_memory();
+        let path = "memory:///test/io_roundtrip.bin";
+        let plaintext = b"Hello from EncryptedInputFile/EncryptedOutputFile!";
+
+        let output = EncryptedOutputFile::new(fileio.new_output(path).unwrap(), key_metadata());
+        output.write(Bytes::from(plaintext.to_vec())).await.unwrap();
+
+        let input = EncryptedInputFile::new(fileio.new_input(path).unwrap(), key_metadata());
+        let content = input.read().await.unwrap();
+        assert_eq!(&content[..], plaintext);
+    }
+
+    #[tokio::test]
+    async fn test_metadata_returns_plaintext_size() {
+        let fileio = FileIO::new_with_memory();
+        let path = "memory:///test/io_metadata.bin";
+        let plaintext = b"some bytes to measure";
+
+        let output = EncryptedOutputFile::new(fileio.new_output(path).unwrap(), key_metadata());
+        output.write(Bytes::from(plaintext.to_vec())).await.unwrap();
+
+        let raw_size = fileio.new_input(path).unwrap().metadata().await.unwrap().size;
+        assert!(
+            raw_size > plaintext.len() as u64,
+            "encrypted file should be larger than plaintext (header + nonce + tag)"
+        );
+
+        let input = EncryptedInputFile::new(fileio.new_input(path).unwrap(), key_metadata());
+        let meta = input.metadata().await.unwrap();
+        assert_eq!(meta.size, plaintext.len() as u64);
+    }
+}
