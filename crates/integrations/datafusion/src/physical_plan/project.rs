@@ -587,4 +587,178 @@ mod tests {
             "Schema validation should pass even with metadata differences"
         );
     }
+
+    /// Regression: PartitionExpr declares no children, so ProjectionPushdown
+    /// can fuse a NULL-filling alignment ProjectionExec into the partition
+    /// projection and leave PartitionExpr evaluating against an un-aligned
+    /// input. The partition-source lookup must resolve by iceberg field id at
+    /// runtime — cached positions become wrong after the rewrite.
+    #[tokio::test]
+    async fn test_partition_expr_survives_projection_unification() {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Int32Array, TimestampMicrosecondArray};
+        use datafusion::arrow::datatypes::TimeUnit;
+        use datafusion::common::ScalarValue;
+        use datafusion::config::ConfigOptions;
+        use datafusion::datasource::{MemTable, TableProvider};
+        use datafusion::physical_expr::expressions::Literal;
+        use datafusion::physical_optimizer::PhysicalOptimizerRule;
+        use datafusion::physical_optimizer::projection_pushdown::ProjectionPushdown;
+        use datafusion::prelude::SessionContext;
+        use iceberg::TableIdent;
+        use iceberg::io::FileIO;
+        use iceberg::spec::{
+            FormatVersion, NestedField, PrimitiveType, Schema, SortOrder, TableMetadataBuilder,
+            Transform, Type,
+        };
+
+        // Iceberg schema: [a, b, c, d] with partition source `c` (id=3).
+        // Column `b` will be NULL-filled by the upstream alignment projection.
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "b", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::required(3, "c", Type::Primitive(PrimitiveType::Timestamptz))
+                        .into(),
+                    NestedField::required(4, "d", Type::Primitive(PrimitiveType::Timestamptz))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let partition_spec = iceberg::spec::PartitionSpec::builder(table_schema.clone())
+            .add_partition_field("c", "c_day", Transform::Day)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let sort_order = SortOrder::builder().build(&table_schema).unwrap();
+
+        let table_metadata = TableMetadataBuilder::new(
+            (*table_schema).clone(),
+            partition_spec,
+            sort_order,
+            "/test/table".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+
+        let table = iceberg::table::Table::builder()
+            .metadata(table_metadata.metadata)
+            .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
+            .file_io(FileIO::new_with_fs())
+            .metadata_location("/test/metadata.json".to_string())
+            .build()
+            .unwrap();
+
+        // Source plan: 3 columns [a, c, d] carrying PARQUET:field_id, as the
+        // parquet read path produces in production.
+        let field_id_meta = |id: i32| -> HashMap<String, String> {
+            HashMap::from([(
+                parquet::arrow::PARQUET_FIELD_ID_META_KEY.to_string(),
+                id.to_string(),
+            )])
+        };
+        let source_arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("a", DataType::Int32, false).with_metadata(field_id_meta(1)),
+            Field::new(
+                "c",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                false,
+            )
+            .with_metadata(field_id_meta(3)),
+            Field::new(
+                "d",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                false,
+            )
+            .with_metadata(field_id_meta(4)),
+        ]));
+
+        // c values: Day(c) = [0, 1]. d values: Day(d) = [100, 200].
+        // Distinct enough to tell the two apart in the assertion.
+        const MICROS_PER_DAY: i64 = 86_400_000_000;
+        let batch = RecordBatch::try_new(source_arrow_schema.clone(), vec![
+            Arc::new(Int32Array::from(vec![10, 20])),
+            Arc::new(
+                TimestampMicrosecondArray::from(vec![0, MICROS_PER_DAY]).with_timezone("+00:00"),
+            ),
+            Arc::new(
+                TimestampMicrosecondArray::from(vec![100 * MICROS_PER_DAY, 200 * MICROS_PER_DAY])
+                    .with_timezone("+00:00"),
+            ),
+        ])
+        .unwrap();
+
+        let ctx = SessionContext::new();
+        let mem_table = MemTable::try_new(source_arrow_schema, vec![vec![batch]]).unwrap();
+        let source_plan = mem_table.scan(&ctx.state(), None, &[], None).await.unwrap();
+
+        // NULL-filling alignment projection — what DataFusion's INSERT
+        // analyzer emits to coerce a source to the table schema.
+        let null_b: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(ScalarValue::Utf8(None)));
+        let aligned_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![
+            (Arc::new(Column::new("a", 0)), "a".to_string()),
+            (null_b, "b".to_string()),
+            (Arc::new(Column::new("c", 1)), "c".to_string()),
+            (Arc::new(Column::new("d", 2)), "d".to_string()),
+        ];
+        let aligned_plan: Arc<dyn ExecutionPlan> =
+            Arc::new(ProjectionExec::try_new(aligned_exprs, source_plan).unwrap());
+
+        let unoptimized_plan = project_with_partition(aligned_plan, &table).unwrap();
+
+        let optimized_plan = ProjectionPushdown::new()
+            .optimize(unoptimized_plan, &ConfigOptions::default())
+            .unwrap();
+
+        // Precondition: the two ProjectionExecs must actually have fused;
+        // otherwise this regression test is vacuous.
+        assert!(
+            !optimized_plan.children()[0].as_any().is::<ProjectionExec>(),
+            "ProjectionPushdown did not fuse the two ProjectionExecs",
+        );
+
+        let results = datafusion::physical_plan::collect(optimized_plan, ctx.task_ctx())
+            .await
+            .unwrap();
+        let partitions = extract_c_day_partitions(&results);
+
+        // Without runtime field-id lookup, the cached positions select
+        // column `d` (Day=[100, 200]) instead of `c` (Day=[0, 1]).
+        assert_eq!(partitions, vec![0, 1]);
+    }
+
+    fn extract_c_day_partitions(batches: &[datafusion::arrow::array::RecordBatch]) -> Vec<i32> {
+        use datafusion::arrow::array::{Array, Date32Array, StructArray};
+
+        let mut out = vec![];
+        for batch in batches {
+            let partition_idx = batch
+                .schema()
+                .index_of(PROJECTED_PARTITION_VALUE_COLUMN)
+                .expect("_partition column missing from output");
+            let struct_array = batch
+                .column(partition_idx)
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .expect("_partition should be a StructArray");
+            let c_day = struct_array
+                .column_by_name("c_day")
+                .expect("c_day field missing from _partition struct")
+                .as_any()
+                .downcast_ref::<Date32Array>()
+                .expect("c_day should be Date32 (Day transform output)");
+            for i in 0..c_day.len() {
+                out.push(c_day.value(i));
+            }
+        }
+        out
+    }
 }

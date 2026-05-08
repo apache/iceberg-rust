@@ -38,6 +38,22 @@ pub struct RecordBatchProjector {
     projected_schema: SchemaRef,
 }
 
+/// Read a `PARQUET:field_id` from `field`'s metadata, parsing it as `i64`.
+///
+/// Returns `Ok(None)` when the field has no field-id metadata, and an error
+/// when the metadata is present but unparseable.
+pub(crate) fn parquet_field_id(field: &Field) -> Result<Option<i64>> {
+    let Some(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) else {
+        return Ok(None);
+    };
+    let id = value.parse::<i32>().map_err(|e| {
+        Error::new(ErrorKind::DataInvalid, "Failed to parse field id")
+            .with_context("value", value)
+            .with_source(e)
+    })?;
+    Ok(Some(id as i64))
+}
+
 impl RecordBatchProjector {
     /// Init ArrowFieldProjector
     ///
@@ -93,30 +109,11 @@ impl RecordBatchProjector {
         target_field_ids: &[i32],
     ) -> Result<Self> {
         let arrow_schema_with_ids = Arc::new(schema_to_arrow_schema(&iceberg_schema)?);
-
-        let field_id_fetch_func = |field: &Field| -> Result<Option<i64>> {
-            if let Some(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
-                let field_id = value.parse::<i32>().map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Failed to parse field id".to_string(),
-                    )
-                    .with_context("value", value)
-                    .with_source(e)
-                })?;
-                Ok(Some(field_id as i64))
-            } else {
-                Ok(None)
-            }
-        };
-
-        let searchable_field_func = |_field: &Field| -> bool { true };
-
         Self::new(
             arrow_schema_with_ids,
             target_field_ids,
-            field_id_fetch_func,
-            searchable_field_func,
+            parquet_field_id,
+            |_| true,
         )
     }
 
@@ -178,7 +175,21 @@ impl RecordBatchProjector {
             .collect::<Result<Vec<_>>>()
     }
 
-    fn get_column_by_field_index(batch: &[ArrayRef], field_index: &[usize]) -> Result<ArrayRef> {
+    /// Project columns by looking up each target field id in the runtime
+    /// batch's `PARQUET:field_id` metadata. Returns an error if any target
+    /// field id is missing from the batch's schema.
+    pub fn project_columns_by_field_id(
+        batch: &RecordBatch,
+        target_field_ids: &[i32],
+    ) -> Result<Vec<ArrayRef>> {
+        let projector = Self::new(batch.schema(), target_field_ids, parquet_field_id, |_| true)?;
+        projector.project_column(batch.columns())
+    }
+
+    pub(crate) fn get_column_by_field_index(
+        batch: &[ArrayRef],
+        field_index: &[usize],
+    ) -> Result<ArrayRef> {
         let mut rev_iterator = field_index.iter().rev();
         let mut array = batch[*rev_iterator.next().unwrap()].clone();
         let mut null_buffer = array.logical_nulls();
