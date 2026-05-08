@@ -201,7 +201,13 @@ mod tests {
         let output = EncryptedOutputFile::new(fileio.new_output(path).unwrap(), key_metadata());
         output.write(Bytes::from(plaintext.to_vec())).await.unwrap();
 
-        let raw_size = fileio.new_input(path).unwrap().metadata().await.unwrap().size;
+        let raw_size = fileio
+            .new_input(path)
+            .unwrap()
+            .metadata()
+            .await
+            .unwrap()
+            .size;
         assert!(
             raw_size > plaintext.len() as u64,
             "encrypted file should be larger than plaintext (header + nonce + tag)"
