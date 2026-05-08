@@ -21,8 +21,10 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
-use super::file_decryptor::AesGcmFileDecryptor;
-use super::file_encryptor::AesGcmFileEncryptor;
+use super::crypto::{AesGcmCipher, SecureKey};
+use super::key_metadata::StandardKeyMetadata;
+use super::stream::{AesGcmFileRead, AesGcmFileWrite};
+use crate::Result;
 use crate::io::{FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
 
 /// An AGS1 stream-encrypted input file wrapping a plain [`InputFile`].
@@ -30,13 +32,16 @@ use crate::io::{FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
 /// Transparently decrypts on read.
 pub struct EncryptedInputFile {
     inner: InputFile,
-    decryptor: Arc<AesGcmFileDecryptor>,
+    key_metadata: StandardKeyMetadata,
 }
 
 impl EncryptedInputFile {
     /// Creates a new encrypted input file.
-    pub fn new(inner: InputFile, decryptor: Arc<AesGcmFileDecryptor>) -> Self {
-        Self { inner, decryptor }
+    pub fn new(inner: InputFile, key_metadata: StandardKeyMetadata) -> Self {
+        Self {
+            inner,
+            key_metadata,
+        }
     }
 
     /// Absolute path of the file.
@@ -45,33 +50,41 @@ impl EncryptedInputFile {
     }
 
     /// Check if file exists.
-    pub async fn exists(&self) -> crate::Result<bool> {
+    pub async fn exists(&self) -> Result<bool> {
         self.inner.exists().await
     }
 
     /// Fetch and returns metadata of file.
     ///
     /// The returned size is the **plaintext** size.
-    pub async fn metadata(&self) -> crate::Result<FileMetadata> {
+    pub async fn metadata(&self) -> Result<FileMetadata> {
         let raw_meta = self.inner.metadata().await?;
-        let plaintext_size = self.decryptor.plaintext_length(raw_meta.size)?;
+        let plaintext_size = AesGcmFileRead::calculate_plaintext_length(raw_meta.size)?;
         Ok(FileMetadata {
             size: plaintext_size,
         })
     }
 
     /// Read and returns whole content of file (decrypted plaintext).
-    pub async fn read(&self) -> crate::Result<Bytes> {
+    pub async fn read(&self) -> Result<Bytes> {
         let meta = self.metadata().await?;
         let reader = self.reader().await?;
         reader.read(0..meta.size).await
     }
 
     /// Creates a reader that transparently decrypts on each read.
-    pub async fn reader(&self) -> crate::Result<Box<dyn FileRead>> {
+    pub async fn reader(&self) -> Result<Box<dyn FileRead>> {
         let raw_meta = self.inner.metadata().await?;
         let raw_reader = self.inner.reader().await?;
-        self.decryptor.wrap_reader(raw_reader, raw_meta.size)
+        let cipher = build_cipher(&self.key_metadata)?;
+        let aad_prefix: Box<[u8]> = self.key_metadata.aad_prefix().unwrap_or_default().into();
+        let decrypting = AesGcmFileRead::new(raw_reader, cipher, aad_prefix, raw_meta.size)?;
+        Ok(Box::new(decrypting))
+    }
+
+    /// Returns a reference to the file's key metadata.
+    pub fn key_metadata(&self) -> &StandardKeyMetadata {
+        &self.key_metadata
     }
 
     /// Consumes self and returns the underlying plain input file.
@@ -93,26 +106,20 @@ impl std::fmt::Debug for EncryptedInputFile {
 /// Transparently encrypts on write.
 pub struct EncryptedOutputFile {
     inner: OutputFile,
-    key_metadata: Box<[u8]>,
-    encryptor: Arc<AesGcmFileEncryptor>,
+    key_metadata: StandardKeyMetadata,
 }
 
 impl EncryptedOutputFile {
     /// Creates a new encrypted output file.
-    pub fn new(
-        inner: OutputFile,
-        key_metadata: Box<[u8]>,
-        encryptor: Arc<AesGcmFileEncryptor>,
-    ) -> Self {
+    pub fn new(inner: OutputFile, key_metadata: StandardKeyMetadata) -> Self {
         Self {
             inner,
             key_metadata,
-            encryptor,
         }
     }
 
-    /// Returns the key metadata bytes (for storage in manifest/data files).
-    pub fn key_metadata(&self) -> &[u8] {
+    /// Returns a reference to the file's key metadata.
+    pub fn key_metadata(&self) -> &StandardKeyMetadata {
         &self.key_metadata
     }
 
@@ -122,20 +129,24 @@ impl EncryptedOutputFile {
     }
 
     /// Creates a writer that transparently encrypts on each write.
-    pub async fn writer(&self) -> crate::Result<Box<dyn FileWrite>> {
+    pub async fn writer(&self) -> Result<Box<dyn FileWrite>> {
         let raw_writer = self.inner.writer().await?;
-        Ok(self.encryptor.wrap_writer(raw_writer))
+        let cipher = build_cipher(&self.key_metadata)?;
+        let aad_prefix: Box<[u8]> = self.key_metadata.aad_prefix().unwrap_or_default().into();
+        Ok(Box::new(AesGcmFileWrite::new(
+            raw_writer, cipher, aad_prefix,
+        )))
     }
 
     /// Write bytes to file (transparently encrypted).
-    pub async fn write(&self, bs: Bytes) -> crate::Result<()> {
+    pub async fn write(&self, bs: Bytes) -> Result<()> {
         let mut writer = self.writer().await?;
         writer.write(bs).await?;
         writer.close().await
     }
 
     /// Deletes the underlying file.
-    pub async fn delete(&self) -> crate::Result<()> {
+    pub async fn delete(&self) -> Result<()> {
         self.inner.delete().await
     }
 
@@ -151,4 +162,9 @@ impl std::fmt::Debug for EncryptedOutputFile {
             .field("path", &self.inner.location())
             .finish_non_exhaustive()
     }
+}
+
+fn build_cipher(metadata: &StandardKeyMetadata) -> Result<Arc<AesGcmCipher>> {
+    let key = SecureKey::new(metadata.encryption_key().as_bytes())?;
+    Ok(Arc::new(AesGcmCipher::new(key)))
 }

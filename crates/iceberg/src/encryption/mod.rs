@@ -21,8 +21,6 @@
 //! for encrypting and decrypting data in Iceberg tables.
 
 mod crypto;
-mod file_decryptor;
-mod file_encryptor;
 pub(crate) mod io;
 pub(crate) mod key_metadata;
 pub mod kms;
@@ -30,8 +28,6 @@ mod manager;
 mod stream;
 
 pub use crypto::{AesGcmCipher, AesKeySize, SecureKey, SensitiveBytes};
-pub use file_decryptor::AesGcmFileDecryptor;
-pub use file_encryptor::AesGcmFileEncryptor;
 pub use io::{EncryptedInputFile, EncryptedOutputFile};
 pub use key_metadata::StandardKeyMetadata;
 pub use kms::{GeneratedKey, KeyManagementClient};

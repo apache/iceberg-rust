@@ -37,8 +37,6 @@ use uuid::Uuid;
 const MILLIS_IN_DAY: i64 = 24 * 60 * 60 * 1000;
 
 use super::crypto::{AesGcmCipher, AesKeySize, SecureKey, SensitiveBytes};
-use super::file_decryptor::AesGcmFileDecryptor;
-use super::file_encryptor::AesGcmFileEncryptor;
 use super::io::{EncryptedInputFile, EncryptedOutputFile};
 use super::key_metadata::StandardKeyMetadata;
 use super::kms::KeyManagementClient;
@@ -106,34 +104,18 @@ impl EncryptionManager {
     ///
     /// Returns an [`EncryptedOutputFile`] that transparently encrypts on
     /// write, along with key metadata for later decryption.
-    pub fn encrypt(&self, raw_output: OutputFile) -> Result<EncryptedOutputFile> {
+    pub fn encrypt(&self, raw_output: OutputFile) -> EncryptedOutputFile {
         let dek = SecureKey::generate(self.key_size);
         let aad_prefix = Self::generate_aad_prefix();
-
-        let key_metadata_bytes = StandardKeyMetadata::new(dek.as_bytes())
-            .with_aad_prefix(&aad_prefix)
-            .encode()?;
-
-        let encryptor = Arc::new(AesGcmFileEncryptor::new(dek.as_bytes(), aad_prefix)?);
-
-        Ok(EncryptedOutputFile::new(
-            raw_output,
-            key_metadata_bytes,
-            encryptor,
-        ))
+        let metadata = StandardKeyMetadata::new(dek.as_bytes()).with_aad_prefix(&aad_prefix);
+        EncryptedOutputFile::new(raw_output, metadata)
     }
 
     /// Decrypt an encrypted input file, returning an [`EncryptedInputFile`]
     /// that transparently decrypts on read.
     pub fn decrypt(&self, input: InputFile, key_metadata: &[u8]) -> Result<EncryptedInputFile> {
         let metadata = StandardKeyMetadata::decode(key_metadata)?;
-
-        let decryptor = Arc::new(AesGcmFileDecryptor::new(
-            metadata.encryption_key().as_bytes(),
-            metadata.aad_prefix().unwrap_or_default(),
-        )?);
-
-        Ok(EncryptedInputFile::new(input, decryptor))
+        Ok(EncryptedInputFile::new(input, metadata))
     }
 
     /// Wrap key metadata bytes with a KEK for storage in table metadata.
@@ -549,19 +531,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_decrypt_with_known_key() {
-        use crate::io::FileIO;
+        use crate::io::{FileIO, FileWrite};
 
         let io = FileIO::new_with_memory();
         let path = "memory:///test/encrypted.bin";
 
-        // Encrypt data using AesGcmFileEncryptor directly (independent of EncryptionManager)
+        // Encrypt data using AesGcmFileWrite directly (independent of EncryptionManager)
         let dek = b"0123456789abcdef";
-        let aad_prefix = b"test-aad-prefix!";
+        let aad_prefix: Box<[u8]> = b"test-aad-prefix!".as_slice().into();
         let plaintext = b"Hello, encrypted Iceberg!";
 
-        let encryptor = AesGcmFileEncryptor::new(dek.as_slice(), aad_prefix.as_slice()).unwrap();
+        let cipher = Arc::new(AesGcmCipher::new(SecureKey::new(dek.as_slice()).unwrap()));
         let output = io.new_output(path).unwrap();
-        let mut writer = encryptor.wrap_writer(output.writer().await.unwrap());
+        let mut writer = crate::encryption::AesGcmFileWrite::new(
+            output.writer().await.unwrap(),
+            cipher,
+            aad_prefix.clone(),
+        );
         writer
             .write(bytes::Bytes::from(plaintext.to_vec()))
             .await
@@ -570,7 +556,7 @@ mod tests {
 
         // Build key metadata with the known DEK
         let key_metadata_bytes = StandardKeyMetadata::new(dek.as_slice())
-            .with_aad_prefix(aad_prefix)
+            .with_aad_prefix(&aad_prefix)
             .encode()
             .unwrap();
 
@@ -684,16 +670,17 @@ mod tests {
             .build();
 
         let output = io.new_output(path).unwrap();
-        let encrypted_output = mgr.encrypt(output).unwrap();
+        let encrypted_output = mgr.encrypt(output);
 
         let plaintext = b"Hello, encrypted Iceberg round-trip!";
+        let serialized_metadata = encrypted_output.key_metadata().encode().unwrap();
         encrypted_output
             .write(bytes::Bytes::from(plaintext.to_vec()))
             .await
             .unwrap();
 
         let input = io.new_input(path).unwrap();
-        let decrypted_file = mgr.decrypt(input, encrypted_output.key_metadata()).unwrap();
+        let decrypted_file = mgr.decrypt(input, &serialized_metadata).unwrap();
 
         let content = decrypted_file.read().await.unwrap();
         assert_eq!(&content[..], plaintext);
