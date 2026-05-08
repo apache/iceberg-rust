@@ -482,7 +482,11 @@ impl Storage for OpenDalStorage {
         } else {
             format!("{relative_path}/")
         };
-        Ok(op.remove_all(&path).await.map_err(from_opendal_error)?)
+        Ok(op
+            .delete_with(&path)
+            .recursive(true)
+            .await
+            .map_err(from_opendal_error)?)
     }
 
     async fn delete_stream(&self, mut paths: BoxStream<'static, String>) -> Result<()> {
