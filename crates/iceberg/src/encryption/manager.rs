@@ -136,18 +136,6 @@ impl EncryptionManager {
         Ok(EncryptedInputFile::new(input, decryptor))
     }
 
-    /// Generate key material for Parquet Modular Encryption (PME).
-    ///
-    /// Returns a [`StandardKeyMetadata`] containing a fresh DEK and AAD prefix.
-    /// The caller should pass this to the Parquet writer to configure
-    /// `FileEncryptionProperties`, and serialize it for storage in the manifest.
-    #[allow(dead_code)]
-    pub(crate) fn generate_native_key_metadata(&self) -> Result<StandardKeyMetadata> {
-        let dek = SecureKey::generate(self.key_size);
-        let aad_prefix = Self::generate_aad_prefix();
-        Ok(StandardKeyMetadata::new(dek.as_bytes()).with_aad_prefix(&aad_prefix))
-    }
-
     /// Wrap key metadata bytes with a KEK for storage in table metadata.
     ///
     /// Returns `(wrapped_entry, optional_new_kek)`. The wrapped entry
