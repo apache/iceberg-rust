@@ -37,7 +37,7 @@ use uuid::Uuid;
 const MILLIS_IN_DAY: i64 = 24 * 60 * 60 * 1000;
 
 use super::crypto::{AesGcmCipher, AesKeySize, SecureKey, SensitiveBytes};
-use super::io::{EncryptedInputFile, EncryptedOutputFile};
+use super::io::EncryptedOutputFile;
 use super::key_metadata::StandardKeyMetadata;
 use super::kms::KeyManagementClient;
 use crate::io::OutputFile;
@@ -349,6 +349,7 @@ impl EncryptionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::encryption::EncryptedInputFile;
     use crate::encryption::kms::MemoryKeyManagementClient;
 
     fn create_test_kms() -> Arc<dyn KeyManagementClient> {
