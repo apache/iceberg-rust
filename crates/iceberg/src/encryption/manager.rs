@@ -40,7 +40,7 @@ use super::crypto::{AesGcmCipher, AesKeySize, SecureKey, SensitiveBytes};
 use super::io::{EncryptedInputFile, EncryptedOutputFile};
 use super::key_metadata::StandardKeyMetadata;
 use super::kms::KeyManagementClient;
-use crate::io::{InputFile, OutputFile};
+use crate::io::OutputFile;
 use crate::spec::EncryptedKey;
 use crate::{Error, ErrorKind, Result};
 
@@ -109,13 +109,6 @@ impl EncryptionManager {
         let aad_prefix = Self::generate_aad_prefix();
         let metadata = StandardKeyMetadata::new(dek.as_bytes()).with_aad_prefix(&aad_prefix);
         EncryptedOutputFile::new(raw_output, metadata)
-    }
-
-    /// Decrypt an encrypted input file, returning an [`EncryptedInputFile`]
-    /// that transparently decrypts on read.
-    pub fn decrypt(&self, input: InputFile, key_metadata: &[u8]) -> Result<EncryptedInputFile> {
-        let metadata = StandardKeyMetadata::decode(key_metadata)?;
-        Ok(EncryptedInputFile::new(input, metadata))
     }
 
     /// Wrap key metadata bytes with a KEK for storage in table metadata.
@@ -530,55 +523,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_decrypt_with_known_key() {
-        use crate::io::{FileIO, FileWrite};
-
-        let io = FileIO::new_with_memory();
-        let path = "memory:///test/encrypted.bin";
-
-        // Encrypt data using AesGcmFileWrite directly (independent of EncryptionManager)
-        let dek = b"0123456789abcdef";
-        let aad_prefix: Box<[u8]> = b"test-aad-prefix!".as_slice().into();
-        let plaintext = b"Hello, encrypted Iceberg!";
-
-        let cipher = Arc::new(AesGcmCipher::new(SecureKey::new(dek.as_slice()).unwrap()));
-        let output = io.new_output(path).unwrap();
-        let mut writer = crate::encryption::AesGcmFileWrite::new(
-            output.writer().await.unwrap(),
-            cipher,
-            aad_prefix.clone(),
-        );
-        writer
-            .write(bytes::Bytes::from(plaintext.to_vec()))
-            .await
-            .unwrap();
-        writer.close().await.unwrap();
-
-        // Build key metadata with the known DEK
-        let key_metadata_bytes = StandardKeyMetadata::new(dek.as_slice())
-            .with_aad_prefix(&aad_prefix)
-            .encode()
-            .unwrap();
-
-        // Decrypt via EncryptionManager
-        let kms = MemoryKeyManagementClient::new();
-        kms.add_master_key("master-1").unwrap();
-        let mgr = EncryptionManager::builder()
-            .kms_client(Arc::new(kms) as Arc<dyn KeyManagementClient>)
-            .table_key_id("master-1")
-            .build();
-
-        let input_file = io.new_input(path).unwrap();
-        let decrypted_file = mgr.decrypt(input_file, &key_metadata_bytes).unwrap();
-
-        let content = decrypted_file.read().await.unwrap();
-        assert_eq!(&content[..], plaintext);
-
-        let meta = decrypted_file.metadata().await.unwrap();
-        assert_eq!(meta.size, plaintext.len() as u64);
-    }
-
-    #[tokio::test]
     async fn test_unwrap_fails_when_kek_missing_timestamp() {
         let kms = create_test_kms();
         let mgr = EncryptionManager::builder()
@@ -680,7 +624,8 @@ mod tests {
             .unwrap();
 
         let input = io.new_input(path).unwrap();
-        let decrypted_file = mgr.decrypt(input, &serialized_metadata).unwrap();
+        let parsed_metadata = StandardKeyMetadata::decode(&serialized_metadata).unwrap();
+        let decrypted_file = EncryptedInputFile::new(input, parsed_metadata);
 
         let content = decrypted_file.read().await.unwrap();
         assert_eq!(&content[..], plaintext);
