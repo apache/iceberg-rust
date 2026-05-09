@@ -29,6 +29,7 @@ use serde::de::{Error, IntoDeserializer};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value as JsonValue;
 
+use super::FormatVersion;
 use super::values::Literal;
 use crate::ensure_data_valid;
 use crate::error::Result;
@@ -250,6 +251,29 @@ pub enum PrimitiveType {
 }
 
 impl PrimitiveType {
+    /// Returns the minimum table format version required by this primitive type.
+    ///
+    /// Returns [`None`] if the type is supported in all format versions.
+    pub const fn min_format_version(&self) -> Option<FormatVersion> {
+        match self {
+            Self::TimestampNs | Self::TimestamptzNs => Some(FormatVersion::V3),
+            Self::Boolean
+            | Self::Int
+            | Self::Long
+            | Self::Float
+            | Self::Double
+            | Self::Decimal { .. }
+            | Self::Date
+            | Self::Time
+            | Self::Timestamp
+            | Self::Timestamptz
+            | Self::String
+            | Self::Uuid
+            | Self::Fixed(_)
+            | Self::Binary => None,
+        }
+    }
+
     /// Check whether literal is compatible with the type.
     pub fn compatible(&self, literal: &PrimitiveLiteral) -> bool {
         matches!(
