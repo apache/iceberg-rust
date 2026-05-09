@@ -116,6 +116,18 @@ impl Type {
         matches!(self, Type::Struct(_))
     }
 
+    /// Whether the type is list type.
+    #[inline(always)]
+    pub fn is_list(&self) -> bool {
+        matches!(self, Type::List(_))
+    }
+
+    /// Whether the type is map type.
+    #[inline(always)]
+    pub fn is_map(&self) -> bool {
+        matches!(self, Type::Map(_))
+    }
+
     /// Whether the type is nested type.
     #[inline(always)]
     pub fn is_nested(&self) -> bool {
@@ -665,6 +677,18 @@ impl NestedField {
     /// Set the id of the field.
     pub(crate) fn with_id(mut self, id: i32) -> Self {
         self.id = id;
+        self
+    }
+
+    /// Set the type of the field
+    pub(crate) fn of_type(mut self, field_type: Box<Type>) -> Self {
+        self.field_type = field_type;
+        self
+    }
+
+    /// Set the name of the field.
+    pub(crate) fn with_name(mut self, name: impl ToString) -> Self {
+        self.name = name.to_string();
         self
     }
 }
