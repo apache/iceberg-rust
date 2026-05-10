@@ -178,6 +178,12 @@ impl SchemaVisitor for GlueSchemaBuilder {
             PrimitiveType::Decimal { precision, scale } => {
                 format!("decimal({precision},{scale})")
             }
+            PrimitiveType::Variant => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Conversion from Variant to Glue type is not supported",
+                ));
+            }
         };
 
         Ok(glue_type)
