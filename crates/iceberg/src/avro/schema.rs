@@ -237,6 +237,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
             PrimitiveType::Uuid => AvroSchema::Uuid,
             PrimitiveType::Fixed(len) => avro_fixed_schema((*len) as usize)?,
             PrimitiveType::Binary => AvroSchema::Bytes,
+            PrimitiveType::Variant => AvroSchema::Bytes,
             PrimitiveType::Decimal { precision, scale } => {
                 avro_decimal_schema(*precision as usize, *scale as usize)?
             }

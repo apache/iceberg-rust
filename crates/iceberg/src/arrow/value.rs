@@ -424,6 +424,10 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                     ))
                 }
             }
+            PrimitiveType::Variant => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Arrow value extraction for Variant is not yet implemented",
+            )),
         }
     }
 }

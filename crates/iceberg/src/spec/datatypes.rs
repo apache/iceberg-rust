@@ -247,6 +247,8 @@ pub enum PrimitiveType {
     Fixed(u64),
     /// Arbitrary-length byte array.
     Binary,
+    /// Semi-structured data type (Iceberg spec v3). Stored in Parquet as `LogicalType::Variant`.
+    Variant,
 }
 
 impl PrimitiveType {
@@ -382,6 +384,7 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Uuid => write!(f, "uuid"),
             PrimitiveType::Fixed(size) => write!(f, "fixed({size})"),
             PrimitiveType::Binary => write!(f, "binary"),
+            PrimitiveType::Variant => write!(f, "variant"),
         }
     }
 }
@@ -884,7 +887,8 @@ mod tests {
             {"id": 13, "name": "uuid_field", "required": true, "type": "uuid"},
             {"id": 14, "name": "fixed_field", "required": true, "type": "fixed[10]"},
             {"id": 15, "name": "binary_field", "required": true, "type": "binary"},
-            {"id": 16, "name": "string_field", "required": true, "type": "string"}
+            {"id": 16, "name": "string_field", "required": true, "type": "string"},
+            {"id": 17, "name": "variant_field", "required": false, "type": "variant"}
         ]
     }
     "#;
@@ -962,6 +966,12 @@ mod tests {
                         16,
                         "string_field",
                         Type::Primitive(PrimitiveType::String),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        17,
+                        "variant_field",
+                        Type::Primitive(PrimitiveType::Variant),
                     )
                     .into(),
                 ],
@@ -1319,5 +1329,26 @@ mod tests {
                 .to_string()
                 .contains("expected type 'struct'")
         );
+    }
+
+    #[test]
+    fn variant_type_display() {
+        assert_eq!(PrimitiveType::Variant.to_string(), "variant");
+    }
+
+    #[test]
+    fn variant_type_serde() {
+        let json = r#"{"id": 1, "name": "v", "required": false, "type": "variant"}"#;
+        let field: NestedField = serde_json::from_str(json).unwrap();
+        assert_eq!(*field.field_type, Type::Primitive(PrimitiveType::Variant));
+        let serialized = serde_json::to_string(&field).unwrap();
+        assert!(serialized.contains("\"variant\""));
+    }
+
+    #[test]
+    fn variant_type_not_compatible_with_literals() {
+        assert!(!PrimitiveType::Variant.compatible(&PrimitiveLiteral::Boolean(true)));
+        assert!(!PrimitiveType::Variant.compatible(&PrimitiveLiteral::Int(0)));
+        assert!(!PrimitiveType::Variant.compatible(&PrimitiveLiteral::Binary(vec![])));
     }
 }

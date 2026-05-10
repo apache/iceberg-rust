@@ -419,6 +419,7 @@ impl Datum {
             }
             PrimitiveType::Fixed(_) => PrimitiveLiteral::Binary(Vec::from(bytes)),
             PrimitiveType::Binary => PrimitiveLiteral::Binary(Vec::from(bytes)),
+            PrimitiveType::Variant => PrimitiveLiteral::Binary(Vec::from(bytes)),
             PrimitiveType::Decimal { .. } => {
                 PrimitiveLiteral::Int128(i128_from_be_bytes(bytes).ok_or_else(|| {
                     Error::new(
