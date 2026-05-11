@@ -133,7 +133,7 @@ impl EncryptionManager {
             }
         };
 
-        let kek_bytes = self.unwrap_kek(&kek).await?;
+        let kek_bytes = self.unwrap_key_encryption_key(&kek).await?;
 
         // Use the KEK timestamp as AAD to prevent timestamp tampering attacks.
         let aad = Self::kek_timestamp_aad(&kek)?;
@@ -245,7 +245,7 @@ impl EncryptionManager {
     }
 
     /// Unwrap a KEK using the KMS, with caching to avoid repeated calls.
-    async fn unwrap_kek(&self, kek: &EncryptedKey) -> Result<SensitiveBytes> {
+    async fn unwrap_key_encryption_key(&self, kek: &EncryptedKey) -> Result<SensitiveBytes> {
         let cache_key = kek.key_id().to_string();
 
         if let Some(cached) = self.kek_cache.get(&cache_key).await {
@@ -286,7 +286,7 @@ impl EncryptionManager {
         // KEK timestamp as AAD prevents timestamp tampering.
         let aad = Self::kek_timestamp_aad(kek)?;
 
-        let kek_bytes = self.unwrap_kek(kek).await?;
+        let kek_bytes = self.unwrap_key_encryption_key(kek).await?;
         self.unwrap_dek_with_kek(wrapped_dek, &kek_bytes, Some(aad))
             .map_err(|e| {
                 Error::new(
