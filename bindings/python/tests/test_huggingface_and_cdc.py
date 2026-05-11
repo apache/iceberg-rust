@@ -21,7 +21,7 @@ CDC options are standard Iceberg table properties and work in both Rust and PyIc
 automatically — no special API is required beyond setting string properties.
 
 HF credentials are passed as file_io_properties to IcebergDataFusionTable.
-Tests requiring a real HF token are skipped when HF_OPENDAL_TOKEN is not set.
+Tests requiring live HF credentials are skipped when HF_TOKEN or HF_DATASET is not set.
 """
 
 import os
@@ -37,16 +37,6 @@ requires_datafusion_53 = pytest.mark.skipif(
     Version(datafusion.__version__) < Version("53.0.0"),
     reason="IcebergDataFusionTable requires datafusion>=53 for FFI compatibility",
 )
-
-# Property name constants — same strings as the Rust TableProperties constants.
-HF_TOKEN = "hf.token"
-HF_ENDPOINT = "hf.endpoint"
-HF_REVISION = "hf.revision"
-
-PARQUET_CDC_ENABLED = "write.parquet.content-defined-chunking.enabled"
-PARQUET_CDC_MIN_CHUNK_SIZE = "write.parquet.content-defined-chunking.min-chunk-size"
-PARQUET_CDC_MAX_CHUNK_SIZE = "write.parquet.content-defined-chunking.max-chunk-size"
-PARQUET_CDC_NORM_LEVEL = "write.parquet.content-defined-chunking.norm-level"
 
 
 # ---------------------------------------------------------------------------
@@ -87,16 +77,18 @@ def test_cdc_table_properties_are_persisted(local_catalog, sample_table):
         "cdc_ns.cdc_persist",
         schema=sample_table.schema,
         properties={
-            PARQUET_CDC_MIN_CHUNK_SIZE: "65536",
-            PARQUET_CDC_MAX_CHUNK_SIZE: "524288",
-            PARQUET_CDC_NORM_LEVEL: "2",
+            "write.parquet.content-defined-chunking.min-chunk-size": "65536",
+            "write.parquet.content-defined-chunking.max-chunk-size": "524288",
+            "write.parquet.content-defined-chunking.norm-level": "2",
         },
     )
 
     props = tbl.properties
-    assert props.get(PARQUET_CDC_MIN_CHUNK_SIZE) == "65536"
-    assert props.get(PARQUET_CDC_MAX_CHUNK_SIZE) == "524288"
-    assert props.get(PARQUET_CDC_NORM_LEVEL) == "2"
+    assert props.get("write.parquet.content-defined-chunking.min-chunk-size") == "65536"
+    assert (
+        props.get("write.parquet.content-defined-chunking.max-chunk-size") == "524288"
+    )
+    assert props.get("write.parquet.content-defined-chunking.norm-level") == "2"
 
 
 def test_cdc_write_via_pyiceberg(local_catalog, sample_table):
@@ -106,7 +98,7 @@ def test_cdc_write_via_pyiceberg(local_catalog, sample_table):
     tbl = local_catalog.create_table_if_not_exists(
         "cdc_ns.cdc_pyiceberg_write",
         schema=sample_table.schema,
-        properties={PARQUET_CDC_ENABLED: "true"},
+        properties={"write.parquet.content-defined-chunking.enabled": "true"},
     )
     tbl.append(sample_table)
 
@@ -122,7 +114,7 @@ def test_cdc_write_and_read_via_datafusion(local_catalog, sample_table):
     tbl = local_catalog.create_table_if_not_exists(
         "cdc_ns.cdc_write_read",
         schema=sample_table.schema,
-        properties={PARQUET_CDC_ENABLED: "true"},
+        properties={"write.parquet.content-defined-chunking.enabled": "true"},
     )
     tbl.append(sample_table)
 
@@ -137,38 +129,66 @@ def test_cdc_write_and_read_via_datafusion(local_catalog, sample_table):
     assert ctx.table("cdc_table").count() == len(sample_table)
 
 
-
 # ---------------------------------------------------------------------------
-# HF tests — skipped when HF_OPENDAL_TOKEN is not set
+# HF + CDC tests — skipped when HF_TOKEN or HF_DATASET is not set
 # ---------------------------------------------------------------------------
-
-HF_TOKEN_ENV = "HF_OPENDAL_TOKEN"
-HF_TABLE_METADATA_ENV = "HF_OPENDAL_TABLE_METADATA"
 
 requires_hf = pytest.mark.skipif(
-    not os.environ.get(HF_TOKEN_ENV) or not os.environ.get(HF_TABLE_METADATA_ENV),
-    reason=f"{HF_TOKEN_ENV} or {HF_TABLE_METADATA_ENV} not set",
+    not os.environ.get("HF_TOKEN") or not os.environ.get("HF_DATASET"),
+    reason="HF_TOKEN or HF_DATASET not set",
 )
+
+
+@pytest.fixture(scope="module")
+def hf_cdc_table(sample_table):
+    """Write a CDC-enabled Iceberg table to HF Hub once; share across HF tests.
+
+    Uses FsspecFileIO backed by huggingface_hub's HfFileSystem (hf:// in fsspec).
+    HF_TOKEN is read from the environment automatically by HfFileSystem.
+    """
+    token = os.environ["HF_TOKEN"]
+    dataset = os.environ["HF_DATASET"]
+
+    warehouse = f"hf://datasets/{dataset}/iceberg-ci-{os.getpid()}"
+    catalog = load_catalog(
+        "hf_test",
+        **{
+            "uri": "sqlite:///:memory:",
+            "warehouse": warehouse,
+            "py-io-impl": "pyiceberg.io.fsspec.FsspecFileIO",
+        },
+    )
+    catalog.create_namespace("ns")
+    tbl = catalog.create_table(
+        "ns.cdc_tbl",
+        schema=sample_table.schema,
+        properties={"write.parquet.content-defined-chunking.enabled": "true"},
+    )
+    tbl.append(sample_table)
+    # HfFileSystem.dircache may reflect the pre-write state; invalidate it so
+    # subsequent reads (info/open) see the files just uploaded via xet.
+    tbl.io.get_fs("hf").invalidate_cache()
+    return tbl, token
+
+
+@requires_hf
+def test_hf_cdc_write_and_read_via_pyarrow(hf_cdc_table, sample_table):
+    """PyIceberg writes CDC parquet to HF Hub; PyArrow scan reads it back."""
+    tbl, _ = hf_cdc_table
+    result = tbl.scan().to_arrow()
+    assert len(result) == len(sample_table)
 
 
 @requires_hf
 @requires_datafusion_53
-def test_hf_file_io_properties_accepted():
-    """IcebergDataFusionTable accepts hf.token in file_io_properties without auth/URI errors.
-
-    HF_OPENDAL_TABLE_METADATA must point to a valid metadata JSON file; the test
-    verifies that HF credentials are wired correctly and the table can be read.
-    """
-    token = os.environ[HF_TOKEN_ENV]
-    metadata_location = os.environ[HF_TABLE_METADATA_ENV]
-
+def test_hf_cdc_write_and_read_via_datafusion(hf_cdc_table, sample_table):
+    """PyIceberg writes CDC parquet to HF Hub; IcebergDataFusionTable reads it back via opendal-hf."""
+    tbl, token = hf_cdc_table
     provider = IcebergDataFusionTable(
-        identifier=["default", "hf_test"],
-        metadata_location=metadata_location,
-        file_io_properties={HF_TOKEN: token},
+        identifier=tbl.name(),
+        metadata_location=tbl.metadata_location,
+        file_io_properties={"hf.token": token},
     )
-
     ctx = SessionContext()
     ctx.register_table("hf_table", provider)
-    # A successful count proves the HF backend can read the table's data files.
-    assert ctx.table("hf_table").count() >= 0
+    assert ctx.table("hf_table").count() == len(sample_table)

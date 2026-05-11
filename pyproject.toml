@@ -54,21 +54,13 @@ ignore = ["F403", "F405"]
 [tool.pytest.ini_options]
 filterwarnings = [
   "error",
-  # huggingface_hub uses hf_xet.upload_files() internally which is deprecated in hf_xet
-  "ignore::DeprecationWarning:huggingface_hub",
 ]
 
 [dependency-groups]
 dev = [
     "maturin>=1.0,<2.0",
     "pytest>=8.3.2",
-    "datafusion==53.*",
-    # Set a PyIceberg lower bound; otherwise the resolver may select the
-    # unrelated 0.0.2 stub.
-    # Keep pyarrow direct because current pyiceberg[pyarrow] releases depend on
-    # pyiceberg-core, which conflicts with this local pyiceberg-core project.
-    "pyiceberg[sql-sqlite]>=0.11",
-    "pyarrow>=17",
+    "datafusion==52.*",
+    "pyiceberg[sql-sqlite,pyarrow]",
     "fastavro>=1.11.1",
-    "huggingface_hub>=0.20",
 ]

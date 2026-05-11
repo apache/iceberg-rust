@@ -18,12 +18,12 @@
 //! Integration tests for FileIO HuggingFace Hub.
 //!
 //! These tests require a real HuggingFace token and are skipped when
-//! `HF_OPENDAL_TOKEN` is not set in the environment.
+//! `HF_TOKEN` is not set in the environment.
 //!
 //! The following environment variables are used:
-//! - `HF_OPENDAL_TOKEN`  — HuggingFace API token (required)
-//! - `HF_OPENDAL_BUCKET` — `owner/repo` for a bucket-type repo (required when running bucket tests)
-//! - `HF_OPENDAL_DATASET` — `owner/repo` for a dataset-type repo (required when running dataset tests)
+//! - `HF_TOKEN`          — HuggingFace API token (required)
+//! - `HF_BUCKET` — `owner/repo` for a bucket-type repo (required when running bucket tests)
+//! - `HF_DATASET` — `owner/repo` for a dataset-type repo (required when running dataset tests)
 
 #[cfg(feature = "opendal-hf")]
 mod tests {
@@ -35,9 +35,9 @@ mod tests {
     use iceberg_storage_opendal::{OpenDalResolvingStorageFactory, OpenDalStorageFactory};
     use iceberg_test_utils::{normalize_test_name_with_parts, set_up};
 
-    const ENV_HF_TOKEN: &str = "HF_OPENDAL_TOKEN";
-    const ENV_HF_BUCKET: &str = "HF_OPENDAL_BUCKET";
-    const ENV_HF_DATASET: &str = "HF_OPENDAL_DATASET";
+    const ENV_HF_TOKEN: &str = "HF_TOKEN";
+    const ENV_HF_BUCKET: &str = "HF_BUCKET";
+    const ENV_HF_DATASET: &str = "HF_DATASET";
 
     macro_rules! require_env {
         ($var:expr) => {
