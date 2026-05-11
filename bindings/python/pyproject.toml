@@ -60,7 +60,7 @@ filterwarnings = [
 dev = [
     "maturin>=1.0,<2.0",
     "pytest>=8.3.2",
-    "datafusion==52.*",
+    "datafusion==53.*",
     # Set a PyIceberg lower bound; otherwise the resolver may select the
     # unrelated 0.0.2 stub.
     # Keep pyarrow direct because current pyiceberg[pyarrow] releases depend on
