@@ -116,6 +116,18 @@ impl Type {
         matches!(self, Type::Struct(_))
     }
 
+    /// Whether the type is list type.
+    #[inline(always)]
+    pub fn is_list(&self) -> bool {
+        matches!(self, Type::List(_))
+    }
+
+    /// Whether the type is map type.
+    #[inline(always)]
+    pub fn is_map(&self) -> bool {
+        matches!(self, Type::Map(_))
+    }
+
     /// Whether the type is nested type.
     #[inline(always)]
     pub fn is_nested(&self) -> bool {
@@ -160,7 +172,7 @@ impl Type {
         Ok(REQUIRED_LENGTH[precision as usize - 1])
     }
 
-    /// Creates  decimal type.
+    /// Creates decimal type.
     #[inline(always)]
     pub fn decimal(precision: u32, scale: u32) -> Result<Self> {
         ensure_data_valid!(
@@ -634,6 +646,16 @@ impl NestedField {
         Self::new(id, LIST_FIELD_NAME, field_type, required)
     }
 
+    /// Construct required list type's element field.
+    pub fn list_required_element(id: i32, field_type: Type) -> Self {
+        Self::list_element(id, field_type, true)
+    }
+
+    /// Construct optional list type's element field.
+    pub fn list_optional_element(id: i32, field_type: Type) -> Self {
+        Self::list_element(id, field_type, false)
+    }
+
     /// Construct map type's key field.
     pub fn map_key_element(id: i32, field_type: Type) -> Self {
         Self::required(id, MAP_KEY_FIELD_NAME, field_type)
@@ -667,6 +689,18 @@ impl NestedField {
         self.id = id;
         self
     }
+
+    /// Set the type of the field
+    pub(crate) fn of_type(mut self, field_type: Box<Type>) -> Self {
+        self.field_type = field_type;
+        self
+    }
+
+    /// Set the name of the field.
+    pub(crate) fn with_name(mut self, name: impl ToString) -> Self {
+        self.name = name.to_string();
+        self
+    }
 }
 
 impl fmt::Display for NestedField {
@@ -698,6 +732,20 @@ impl ListType {
     /// Construct a list type with the given element field.
     pub fn new(element_field: NestedFieldRef) -> Self {
         Self { element_field }
+    }
+
+    /// Construct an optional list type with the given element field.
+    pub fn optional(element_id: i32, element_type: Type) -> Self {
+        Self {
+            element_field: NestedField::list_element(element_id, element_type, false).into(),
+        }
+    }
+
+    /// Construct a required list type with the given element field.
+    pub fn required(element_id: i32, element_type: Type) -> Self {
+        Self {
+            element_field: NestedField::list_element(element_id, element_type, true).into(),
+        }
     }
 }
 
