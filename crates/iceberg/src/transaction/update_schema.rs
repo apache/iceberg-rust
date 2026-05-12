@@ -29,8 +29,6 @@ use crate::table::Table;
 use crate::transaction::action::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
 
-/// Sentinel parent ID representing the table root (top-level columns).
-const TABLE_ROOT_ID: i32 = -1;
 // Default ID for a new column. This will be re-assigned to a fresh ID at commit time.
 const DEFAULT_FIELD_ID: i32 = 0;
 
@@ -257,18 +255,18 @@ fn resolve_parent_target<'a>(
 // ---------------------------------------------------------------------------
 
 /// Rebuild a slice of fields, applying deletions and additions at every level,
-/// plus any root-level additions keyed by `TABLE_ROOT_ID`.
+/// plus any additions keyed by `parent_id` (`None` represents the table root).
 fn rebuild_fields(
     fields: &[NestedFieldRef],
-    adds: &HashMap<i32, Vec<NestedFieldRef>>,
+    adds: &HashMap<Option<i32>, Vec<NestedFieldRef>>,
     delete_ids: &HashSet<i32>,
-    root_id: i32,
+    parent_id: Option<i32>,
 ) -> Vec<NestedFieldRef> {
     fields
         .iter()
         .filter(|f| !delete_ids.contains(&f.id))
         .map(|f| rebuild_field(f, adds, delete_ids))
-        .chain(adds.get(&root_id).into_iter().flatten().cloned())
+        .chain(adds.get(&parent_id).into_iter().flatten().cloned())
         .collect()
 }
 
@@ -277,13 +275,13 @@ fn rebuild_fields(
 /// Fields whose IDs appear in `delete_ids` are filtered out at every struct level.
 fn rebuild_field(
     field: &NestedFieldRef,
-    adds: &HashMap<i32, Vec<NestedFieldRef>>,
+    adds: &HashMap<Option<i32>, Vec<NestedFieldRef>>,
     delete_ids: &HashSet<i32>,
 ) -> NestedFieldRef {
     match field.field_type.as_ref() {
         Type::Primitive(_) => field.clone(),
         Type::Struct(s) => {
-            let new_fields = rebuild_fields(s.fields(), adds, delete_ids, field.id);
+            let new_fields = rebuild_fields(s.fields(), adds, delete_ids, Some(field.id));
             Arc::new(NestedField {
                 id: field.id,
                 name: field.name.clone(),
@@ -368,7 +366,7 @@ impl TransactionAction for UpdateSchemaAction {
         // --- 2. Resolve parents, validate additions, assign IDs, and group by parent ID ---
         // We assign IDs inline (before grouping) to preserve the caller's insertion order,
         // since HashMap iteration order is non-deterministic.
-        let mut additions_by_parent: HashMap<i32, Vec<NestedFieldRef>> = HashMap::new();
+        let mut additions_by_parent: HashMap<Option<i32>, Vec<NestedFieldRef>> = HashMap::new();
 
         for add in &self.additions {
             let pending_field = add.to_nested_field();
@@ -409,17 +407,17 @@ impl TransactionAction for UpdateSchemaAction {
                             ),
                         ));
                     }
-                    TABLE_ROOT_ID
+                    None
                 }
                 Some(parent_path) => {
                     // Nested: resolve parent, check name conflict within parent struct.
-                    let (parent_id, parent_struct) =
+                    let (resolved_parent_id, parent_struct) =
                         resolve_parent_target(base_schema, parent_path)?;
 
                     if parent_struct.fields().iter().any(|f| {
                         f.name == pending_field.name
                             && !delete_ids.contains(&f.id)
-                            && !delete_ids.contains(&parent_id)
+                            && !delete_ids.contains(&resolved_parent_id)
                     }) {
                         return Err(Error::new(
                             ErrorKind::PreconditionFailed,
@@ -430,7 +428,7 @@ impl TransactionAction for UpdateSchemaAction {
                         ));
                     }
 
-                    parent_id
+                    Some(resolved_parent_id)
                 }
             };
 
@@ -448,7 +446,7 @@ impl TransactionAction for UpdateSchemaAction {
             base_schema.as_struct().fields(),
             &additions_by_parent,
             &delete_ids,
-            TABLE_ROOT_ID,
+            None,
         );
 
         // --- 5. Build the new schema ---
