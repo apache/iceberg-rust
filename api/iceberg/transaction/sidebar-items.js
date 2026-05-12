@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["ActionCommit","Transaction"],"trait":["ApplyTransactionAction"]};
+window.SIDEBAR_ITEMS = {"struct":["ActionCommit","AddColumn","Transaction"],"trait":["ApplyTransactionAction"]};
