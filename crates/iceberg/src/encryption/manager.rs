@@ -187,7 +187,7 @@ impl EncryptionManager {
             .decrypt_dek(kek_key_id, encrypted_key.encrypted_key_metadata())
             .await?;
 
-        StandardKeyMetadata::decode(&bytes)
+        StandardKeyMetadata::decode(bytes.as_bytes())
     }
 
     /// Snapshot of the encryption keys held by this manager.
@@ -309,7 +309,7 @@ impl EncryptionManager {
 
     /// Decrypt a wrapped DEK using the KEK identified by `kek_key_id`,
     /// looked up in the manager's own `encryption_keys` map.
-    async fn decrypt_dek(&self, kek_key_id: &str, wrapped_dek: &[u8]) -> Result<Vec<u8>> {
+    async fn decrypt_dek(&self, kek_key_id: &str, wrapped_dek: &[u8]) -> Result<SensitiveBytes> {
         let kek = self
             .encryption_keys
             .read()
@@ -379,10 +379,10 @@ impl EncryptionManager {
         wrapped_dek: &[u8],
         kek: &SensitiveBytes,
         aad: Option<&[u8]>,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<SensitiveBytes> {
         let key = SecureKey::try_from(kek.clone())?;
         let cipher = AesGcmCipher::new(key);
-        cipher.decrypt(wrapped_dek, aad)
+        cipher.decrypt(wrapped_dek, aad).map(SensitiveBytes::new)
     }
 }
 
