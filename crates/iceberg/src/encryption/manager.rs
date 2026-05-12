@@ -190,15 +190,17 @@ impl EncryptionManager {
         StandardKeyMetadata::decode(bytes.as_bytes())
     }
 
-    /// Snapshot of the encryption keys held by this manager.
+    /// Borrow the encryption keys held by this manager.
     ///
     /// Use at commit time to persist newly created KEKs and wrapped
     /// manifest-list entries into `TableMetadata.encryption_keys`.
-    pub fn encryption_keys(&self) -> HashMap<String, EncryptedKey> {
-        self.encryption_keys
+    pub fn with_encryption_keys<F, R>(&self, f: F) -> R
+    where F: FnOnce(&HashMap<String, EncryptedKey>) -> R {
+        let keys = self
+            .encryption_keys
             .read()
-            .expect("encryption_keys lock poisoned")
-            .clone()
+            .expect("encryption_keys lock poisoned");
+        f(&keys)
     }
 
     fn insert_encryption_key(&self, key: EncryptedKey) {
@@ -431,7 +433,7 @@ mod tests {
             .unwrap();
 
         // First wrap should create a new KEK and the wrapped entry — both stored on the manager
-        assert_eq!(mgr.encryption_keys().len(), 2);
+        assert_eq!(mgr.with_encryption_keys(|k| k.len()), 2);
 
         let decrypted = mgr
             .decrypt_manifest_list_key_metadata(&key_id)
@@ -449,23 +451,24 @@ mod tests {
             .encrypt_manifest_list_key_metadata(&sample_key_metadata())
             .await
             .unwrap();
-        let after_first = mgr.encryption_keys();
-        assert_eq!(after_first.len(), 2);
-        let kek_id = after_first
-            .values()
-            .find(|k| k.encrypted_by_id() == Some("master-1"))
-            .unwrap()
-            .key_id()
-            .to_string();
+        let kek_id = mgr.with_encryption_keys(|keys| {
+            assert_eq!(keys.len(), 2);
+            keys.values()
+                .find(|k| k.encrypted_by_id() == Some("master-1"))
+                .unwrap()
+                .key_id()
+                .to_string()
+        });
 
         // Second wrap should reuse the existing KEK (only adds 1 new wrapped entry)
         let id2 = mgr
             .encrypt_manifest_list_key_metadata(&sample_key_metadata())
             .await
             .unwrap();
-        assert_eq!(mgr.encryption_keys().len(), 3);
-
-        let entry2 = mgr.encryption_keys().get(&id2).cloned().unwrap();
+        let entry2 = mgr.with_encryption_keys(|keys| {
+            assert_eq!(keys.len(), 3);
+            keys.get(&id2).cloned().unwrap()
+        });
         assert_eq!(entry2.encrypted_by_id(), Some(kek_id.as_str()));
     }
 
@@ -504,7 +507,9 @@ mod tests {
             .encrypt_manifest_list_key_metadata(&sample_key_metadata())
             .await
             .unwrap();
-        let entry = mgr.encryption_keys().get(&new_entry_id).cloned().unwrap();
+        let entry = mgr
+            .with_encryption_keys(|keys| keys.get(&new_entry_id).cloned())
+            .unwrap();
         let used_kek_id = entry.encrypted_by_id().unwrap();
         assert_ne!(used_kek_id, old_kek.key_id());
     }
@@ -558,7 +563,7 @@ mod tests {
 
         // Find the KEK that wrapped the entry and replace it with a copy that
         // is missing the KEY_TIMESTAMP property, simulating a malformed table.
-        let mut keys = mgr.encryption_keys();
+        let mut keys = mgr.with_encryption_keys(|k| k.clone());
         let kek_id = keys
             .get(&entry_id)
             .unwrap()
@@ -600,7 +605,7 @@ mod tests {
             .unwrap();
 
         // Tamper with the KEK timestamp (change the AAD)
-        let mut keys = mgr.encryption_keys();
+        let mut keys = mgr.with_encryption_keys(|k| k.clone());
         let kek_id = keys
             .get(&entry_id)
             .unwrap()
