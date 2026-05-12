@@ -855,6 +855,22 @@ impl MapType {
             value_field,
         }
     }
+
+    /// Construct an optional map type with the given key and value fields.
+    pub fn optional(key_id: i32, key_type: Type, value_id: i32, value_type: Type) -> Self {
+        Self {
+            key_field: NestedField::map_key_element(key_id, key_type).into(),
+            value_field: NestedField::map_value_element(value_id, value_type, false).into(),
+        }
+    }
+
+    /// Construct a required map type with the given key and value fields.
+    pub fn required(key_id: i32, key_type: Type, value_id: i32, value_type: Type) -> Self {
+        Self {
+            key_field: NestedField::map_key_element(key_id, key_type).into(),
+            value_field: NestedField::map_value_element(value_id, value_type, true).into(),
+        }
+    }
 }
 
 /// Variant type - can hold semi-structured data of any type.
@@ -1200,6 +1216,16 @@ mod tests {
                 .into(),
             }),
         );
+
+        check_type_serde(
+            record,
+            Type::Map(MapType::optional(
+                4,
+                Type::Primitive(PrimitiveType::String),
+                5,
+                Type::Primitive(PrimitiveType::Double),
+            )),
+        );
     }
 
     #[test]
@@ -1227,6 +1253,40 @@ mod tests {
                 )
                 .into(),
             }),
+        );
+
+        check_type_serde(
+            record,
+            Type::Map(MapType::optional(
+                4,
+                Type::Primitive(PrimitiveType::Int),
+                5,
+                Type::Primitive(PrimitiveType::String),
+            )),
+        );
+    }
+
+    #[test]
+    fn map_required_int() {
+        let record = r#"
+        {
+            "type": "map",
+            "key-id": 4,
+            "key": "int",
+            "value-id": 5,
+            "value-required": true,
+            "value": "string"
+        }
+        "#;
+
+        check_type_serde(
+            record,
+            Type::Map(MapType::required(
+                4,
+                Type::Primitive(PrimitiveType::Int),
+                5,
+                Type::Primitive(PrimitiveType::String),
+            )),
         );
     }
 
