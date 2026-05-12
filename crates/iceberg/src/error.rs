@@ -469,6 +469,16 @@ macro_rules! ensure_data_valid {
     };
 }
 
+/// Helper macro to check preconditions.
+#[macro_export]
+macro_rules! ensure_precondition {
+    ($cond: expr, $fmt: literal, $($arg:tt)*) => {
+        if !$cond {
+            return Err($crate::error::Error::new($crate::error::ErrorKind::PreconditionFailed, format!($fmt, $($arg)*)))
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;

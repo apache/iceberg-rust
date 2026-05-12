@@ -25,7 +25,7 @@ use crate::spec::{
     ListType, Literal, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema, SchemaRef,
     SchemaVisitor, StructType, Type, visit_schema,
 };
-use crate::{Error, ErrorKind, Result, ensure_data_valid};
+use crate::{Error, ErrorKind, Result, ensure_precondition};
 
 const TABLE_ROOT_ID: i32 = -1;
 
@@ -59,6 +59,12 @@ pub struct AddColumn {
     default_value: Option<Literal>,
 }
 
+impl From<AddColumn> for SchemaOperation {
+    fn from(add: AddColumn) -> Self {
+        SchemaOperation::Add(add)
+    }
+}
+
 /// A column to be deleted from the schema.
 pub struct DeleteColumn {
     name: String,
@@ -71,6 +77,12 @@ impl DeleteColumn {
     }
 }
 
+impl From<DeleteColumn> for SchemaOperation {
+    fn from(delete: DeleteColumn) -> Self {
+        SchemaOperation::Delete(delete)
+    }
+}
+
 /// A column to be renamed in the schema.
 #[derive(TypedBuilder)]
 pub struct RenameColumn {
@@ -78,6 +90,12 @@ pub struct RenameColumn {
     name: String,
     #[builder(setter(into))]
     new_name: String,
+}
+
+impl From<RenameColumn> for SchemaOperation {
+    fn from(rename: RenameColumn) -> Self {
+        SchemaOperation::Rename(rename)
+    }
 }
 
 /// A column to be updated in the schema.
@@ -93,11 +111,23 @@ pub struct UpdateColumn {
     new_default_value: Option<Option<Literal>>,
 }
 
+impl From<UpdateColumn> for SchemaOperation {
+    fn from(update: UpdateColumn) -> Self {
+        SchemaOperation::Update(update)
+    }
+}
+
 /// A column to be moved in the schema.
 pub struct MoveColumn {
     name: String,
     reference_name: String,
     move_type: MoveType,
+}
+
+impl From<MoveColumn> for SchemaOperation {
+    fn from(move_col: MoveColumn) -> Self {
+        SchemaOperation::Move(move_col)
+    }
 }
 
 impl MoveColumn {
@@ -215,7 +245,7 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
                     } else {
                         parent_field
                     };
-                    ensure_data_valid!(
+                    ensure_precondition!(
                         parent_field.field_type.is_struct(),
                         "Cannot add to non-struct column: {}: {}",
                         &parent,
@@ -224,12 +254,12 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
                     parent_id = parent_field.id;
                     let full_name = format!("{}.{}", parent, name);
                     let current_field = schema.field_by_name(&full_name);
-                    ensure_data_valid!(
+                    ensure_precondition!(
                         !deletes.contains(&parent_id),
                         "Can not add a column that will be deleted: {}",
                         name
                     );
-                    ensure_data_valid!(
+                    ensure_precondition!(
                         current_field.is_none() || deletes.contains(&current_field.unwrap().id),
                         "Cannot add column, name already exists: {}",
                         &name
@@ -237,14 +267,14 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
                     full_name
                 } else {
                     let current_field = schema.field_by_name(name);
-                    ensure_data_valid!(
+                    ensure_precondition!(
                         current_field.is_none() || deletes.contains(&current_field.unwrap().id),
                         "Cannot add column, name already exists: {}",
                         &name
                     );
                     name.clone()
                 };
-                ensure_data_valid!(
+                ensure_precondition!(
                     default_value.is_some() || is_optional,
                     "Incompatible change: cannot add required column without a default value: {}",
                     full_name
@@ -277,12 +307,12 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
                         format!("Cannot delete missing column: {}", delete.name),
                     )
                 })?;
-                ensure_data_valid!(
+                ensure_precondition!(
                     !parent_to_added_ids.contains_key(&field.id),
                     "Cannot delete a column that has updates: {}",
                     delete.name
                 );
-                ensure_data_valid!(
+                ensure_precondition!(
                     !updates.contains_key(&field.id),
                     "Cannot delete a column that has updates: {}",
                     delete.name
@@ -295,7 +325,7 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
                     ErrorKind::PreconditionFailed,
                     format!("Cannot rename missing column: {}", name),
                 ))?;
-                ensure_data_valid!(
+                ensure_precondition!(
                     !deletes.contains(&field.id),
                     "Cannot rename a column that will be deleted: {}",
                     name
@@ -323,10 +353,10 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
                 );
                 let field = find_for_update(name, schema.clone(), &updates, &added_name_to_id)?
                     .ok_or(Error::new(
-                        ErrorKind::DataInvalid,
+                        ErrorKind::PreconditionFailed,
                         format!("Cannot update missing column: {}", name),
                     ))?;
-                ensure_data_valid!(
+                ensure_precondition!(
                     !deletes.contains(&field.id),
                     "Cannot update column that will be deleted: {}",
                     name,
@@ -348,7 +378,7 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
                     (&r#move.name, &r#move.reference_name, &r#move.move_type);
                 let field_id =
                     find_for_move(name, schema.clone(), &added_name_to_id)?.ok_or(Error::new(
-                        ErrorKind::DataInvalid,
+                        ErrorKind::PreconditionFailed,
                         format!("Cannot move missing column: {}", name),
                     ))?;
                 let r#move = if move_type == &MoveType::First {
@@ -360,7 +390,7 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
                         &added_name_to_id,
                     )?
                     .ok_or(Error::new(
-                        ErrorKind::DataInvalid,
+                        ErrorKind::PreconditionFailed,
                         format!("Cannot move relative to missing column: {}", reference_name),
                     ))?;
                     match move_type {
@@ -372,13 +402,13 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
                 let parent_id = id_to_parent.get(&field_id);
                 if let Some(&parent_id) = parent_id {
                     let parent = schema.field_by_id(parent_id).unwrap();
-                    ensure_data_valid!(
+                    ensure_precondition!(
                         parent.field_type.is_struct(),
                         "Cannot move field in non-struct type: {}",
                         parent
                     );
                     if r#move.r#type == MoveType::After || r#move.r#type == MoveType::Before {
-                        ensure_data_valid!(
+                        ensure_precondition!(
                             parent_id == *id_to_parent.get(&r#move.reference_field_id).unwrap(),
                             "Cannot move field {} to a different struct",
                             name,
@@ -387,7 +417,7 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
                     moves.entry(parent_id).or_default().push(r#move);
                 } else {
                     if move_type == &MoveType::After || move_type == &MoveType::Before {
-                        ensure_data_valid!(
+                        ensure_precondition!(
                             !id_to_parent.contains_key(&r#move.reference_field_id),
                             "Cannot move field {} to a different struct",
                             name,
@@ -395,6 +425,27 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
                     }
                     moves.entry(TABLE_ROOT_ID).or_default().push(r#move);
                 }
+            }
+        }
+    }
+    for &id in &identifier_field_ids {
+        let field = schema.field_by_id(id);
+        if let Some(field) = field {
+            // TODO: add support for `setIdentifierFields` to update identifier fields
+            ensure_precondition!(
+                !deletes.contains(&id),
+                "Cannot delete identifier field: {}.",
+                field.name
+            );
+            let mut parent_id = id_to_parent.get(&id);
+            while let Some(p_id) = parent_id {
+                ensure_precondition!(
+                    !deletes.contains(p_id),
+                    "Cannot delete field {} as it will delete nested identifier field {}.",
+                    p_id,
+                    field.name
+                );
+                parent_id = id_to_parent.get(p_id);
             }
         }
     }
