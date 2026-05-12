@@ -273,13 +273,65 @@ mod tests {
         let blobs = vec![blob_0(), blob_1()];
         let blobs_with_compression = blobs_with_compression(blobs.clone(), CompressionCodec::Lz4);
 
-        assert_eq!(
-            write_puffin_file(&temp_dir, blobs_with_compression, file_properties())
-                .await
-                .unwrap_err()
-                .to_string(),
-            "FeatureUnsupported => LZ4 compression is not supported currently"
-        );
+        let input_file = write_puffin_file(&temp_dir, blobs_with_compression, file_properties())
+            .await
+            .unwrap()
+            .to_input_file();
+
+        // Blob round-trip must yield the original bytes after LZ4 framed decompression.
+        assert_eq!(read_all_blobs_from_puffin_file(input_file).await, blobs);
+    }
+
+    /// Regression for https://github.com/apache/iceberg-rust/issues/2419 —
+    /// the PuffinWriter previously claimed LZ4 compression on the footer (by setting
+    /// the FooterPayloadCompressed flag) but wrote the raw uncompressed JSON, which
+    /// produced unreadable files. The writer now actually LZ4-encodes the footer when
+    /// compress_footer=true, and the reader round-trips it.
+    #[tokio::test]
+    async fn test_compress_footer_lz4_round_trips() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let path = temp_dir.path().join("compressed_footer.bin");
+        let output_file = file_io.new_output(path.to_str().unwrap()).unwrap();
+
+        // compress_footer=true sets the footer codec to LZ4.
+        let mut writer = PuffinWriter::new(&output_file, file_properties(), true)
+            .await
+            .unwrap();
+        writer.add(blob_0(), CompressionCodec::None).await.unwrap();
+        writer.close().await.unwrap();
+
+        // Reader must be able to LZ4-decompress the footer and recover both the
+        // file metadata and the blob payload.
+        let input_file = output_file.to_input_file();
+        let metadata = FileMetadata::read(&input_file).await.unwrap();
+        assert_eq!(metadata.properties, file_properties());
+        assert_eq!(metadata.blobs.len(), 1);
+        assert_eq!(read_all_blobs_from_puffin_file(input_file).await, vec![
+            blob_0()
+        ]);
+    }
+
+    /// Direct adaptation of the reproducer from
+    /// https://github.com/apache/iceberg-rust/issues/2419 — close must succeed when
+    /// compress_footer=true even with no blobs written.
+    #[tokio::test]
+    async fn test_compress_empty_footer_lz4_succeeds() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let path = temp_dir.path().join("compressed_empty_footer.bin");
+        let output_file = file_io.new_output(path.to_str().unwrap()).unwrap();
+
+        let writer = PuffinWriter::new(&output_file, HashMap::new(), true)
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+
+        // The compressed empty footer must still parse back to an empty FileMetadata.
+        let input_file = output_file.to_input_file();
+        let metadata = FileMetadata::read(&input_file).await.unwrap();
+        assert!(metadata.blobs.is_empty());
+        assert!(metadata.properties.is_empty());
     }
 
     async fn get_file_as_byte_vec(input_file: InputFile) -> Vec<u8> {
