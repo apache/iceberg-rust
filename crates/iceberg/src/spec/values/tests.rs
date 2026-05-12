@@ -1352,3 +1352,34 @@ fn test_date_from_json_as_number() {
 
     // Both formats should produce the same Literal value
 }
+
+#[test]
+fn test_json_serde_binary() {
+    // "00ff05" covers both round-trip and zero-padding for bytes < 0x10.
+    check_json_serde(
+        "\"00ff05\"",
+        Literal::Primitive(PrimitiveLiteral::Binary(vec![0x00, 0xff, 0x05])),
+        &Type::Primitive(PrimitiveType::Binary),
+    );
+}
+
+#[test]
+fn test_json_serde_fixed() {
+    check_json_serde(
+        "\"deadbeef\"",
+        Literal::Primitive(PrimitiveLiteral::Binary(vec![0xde, 0xad, 0xbe, 0xef])),
+        &Type::Primitive(PrimitiveType::Fixed(4)),
+    );
+}
+
+#[test]
+fn test_try_from_json_fixed_length_mismatch() {
+    let raw = JsonValue::String("deadbeef".into());
+    assert!(Literal::try_from_json(raw, &Type::Primitive(PrimitiveType::Fixed(5))).is_err());
+}
+
+#[test]
+fn test_try_from_json_binary_invalid_hex() {
+    let raw = JsonValue::String("zz".into());
+    assert!(Literal::try_from_json(raw, &Type::Primitive(PrimitiveType::Binary)).is_err());
+}

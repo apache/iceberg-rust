@@ -422,6 +422,17 @@ impl Literal {
         }
     }
 
+    fn parse_hex_bytes(s: &str) -> Result<Vec<u8>> {
+        let invalid = || Error::new(ErrorKind::DataInvalid, format!("invalid hex string: {s}"));
+        if !s.is_ascii() || !s.len().is_multiple_of(2) {
+            return Err(invalid());
+        }
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| invalid()))
+            .collect()
+    }
+
     /// Create iceberg value from a json value
     ///
     /// See [this spec](https://iceberg.apache.org/spec/#json-single-value-serialization) for reference.
@@ -499,8 +510,22 @@ impl Literal {
                 (PrimitiveType::Uuid, JsonValue::String(s)) => Ok(Some(Literal::Primitive(
                     PrimitiveLiteral::UInt128(Uuid::parse_str(&s)?.as_u128()),
                 ))),
-                (PrimitiveType::Fixed(_), JsonValue::String(_)) => todo!(),
-                (PrimitiveType::Binary, JsonValue::String(_)) => todo!(),
+                (PrimitiveType::Fixed(n), JsonValue::String(s)) => {
+                    let bytes = Self::parse_hex_bytes(&s)?;
+                    if bytes.len() as u64 != *n {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "fixed literal length mismatch: expected {n}, got {}",
+                                bytes.len()
+                            ),
+                        ));
+                    }
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Binary(bytes))))
+                }
+                (PrimitiveType::Binary, JsonValue::String(s)) => Ok(Some(Literal::Primitive(
+                    PrimitiveLiteral::Binary(Self::parse_hex_bytes(&s)?),
+                ))),
                 (
                     PrimitiveType::Decimal {
                         precision: _,
@@ -662,7 +687,7 @@ impl Literal {
                 (_, PrimitiveLiteral::Binary(val)) => Ok(JsonValue::String(val.iter().fold(
                     String::new(),
                     |mut acc, x| {
-                        acc.push_str(&format!("{x:x}"));
+                        acc.push_str(&format!("{x:02x}"));
                         acc
                     },
                 ))),
