@@ -28,11 +28,23 @@ keywords = ["iceberg", "opendal", "storage"]
 
 [features]
 default = ["opendal-memory", "opendal-fs", "opendal-s3"]
-opendal-all = ["opendal-memory", "opendal-fs", "opendal-s3", "opendal-gcs", "opendal-oss", "opendal-azdls", "opendal-hf"]
+opendal-all = [
+    "opendal-memory",
+    "opendal-fs",
+    "opendal-s3",
+    "opendal-gcs",
+    "opendal-oss",
+    "opendal-azdls",
+    "opendal-hf",
+    "opendal-hdfs-native",
+]
 
 opendal-azdls = ["opendal/services-azdls"]
 opendal-fs = ["opendal/services-fs"]
 opendal-gcs = ["opendal/services-gcs"]
+# Requires `libgssapi_krb5` at the OS level (e.g. `brew install krb5` on macOS,
+# `apt install libgssapi-krb5-2` on Debian).
+opendal-hdfs-native = ["opendal/services-hdfs-native"]
 opendal-hf = ["opendal/services-hf"]
 opendal-memory = ["opendal/services-memory"]
 opendal-oss = ["opendal/services-oss"]

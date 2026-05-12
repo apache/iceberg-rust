@@ -75,6 +75,14 @@ cfg_if! {
 }
 
 cfg_if! {
+    if #[cfg(feature = "opendal-hdfs-native")] {
+        mod hdfs;
+        use hdfs::*;
+        use std::sync::RwLock;
+    }
+}
+
+cfg_if! {
     if #[cfg(feature = "opendal-memory")] {
         mod memory;
         use memory::*;
@@ -131,6 +139,9 @@ pub enum OpenDalStorageFactory {
     /// HuggingFace Hub storage factory.
     #[cfg(feature = "opendal-hf")]
     Hf,
+    /// HDFS storage factory (via OpenDAL `services-hdfs-native`).
+    #[cfg(feature = "opendal-hdfs-native")]
+    Hdfs,
 }
 
 #[typetag::serde(name = "OpenDalStorageFactory")]
@@ -167,6 +178,10 @@ impl StorageFactory for OpenDalStorageFactory {
             OpenDalStorageFactory::Hf => Ok(Arc::new(OpenDalStorage::Hf {
                 config: hf_config_parse(config.props().clone())?.into(),
             })),
+            #[cfg(feature = "opendal-hdfs-native")]
+            OpenDalStorageFactory::Hdfs => Ok(Arc::new(OpenDalStorage::Hdfs {
+                operators: Arc::new(RwLock::new(HashMap::new())),
+            })),
             #[cfg(all(
                 not(feature = "opendal-memory"),
                 not(feature = "opendal-fs"),
@@ -175,6 +190,7 @@ impl StorageFactory for OpenDalStorageFactory {
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
+                not(feature = "opendal-hdfs-native"),
             ))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -243,6 +259,20 @@ pub enum OpenDalStorage {
     Hf {
         /// HuggingFace Hub configuration (token + endpoint).
         config: Arc<HfConfig>,
+    },
+    /// HDFS storage variant (via OpenDAL `services-hdfs-native`).
+    ///
+    /// Accepts paths of the form `hdfs://<authority>/<rel>` (or
+    /// `hdfs:///<rel>` for authority-less paths, which defer to
+    /// `fs.defaultFS` from the `hdfs-native`-loaded Hadoop config). The
+    /// authority - or `None` when absent - keys a per-name-node `Operator`
+    /// cache, so distinct name nodes coexist in a single storage instance.
+    #[cfg(feature = "opendal-hdfs-native")]
+    Hdfs {
+        /// Operator cache. `Some("hdfs://<authority>")` for paths with an
+        /// authority; `None` for authority-less paths (`fs.defaultFS`).
+        #[serde(skip, default)]
+        operators: Arc<RwLock<HashMap<Option<String>, Operator>>>,
     },
 }
 
@@ -339,6 +369,33 @@ impl OpenDalStorage {
             OpenDalStorage::Azdls { config } => azdls_create_operator(path, config)?,
             #[cfg(feature = "opendal-hf")]
             OpenDalStorage::Hf { config } => hf_config_build(config, path)?,
+            #[cfg(feature = "opendal-hdfs-native")]
+            OpenDalStorage::Hdfs { operators } => {
+                let (name_node, rel) = parse_hdfs_path(path)?;
+
+                if let Some(op) = operators
+                    .read()
+                    .map_err(|_| {
+                        Error::new(ErrorKind::Unexpected, "HDFS operator cache lock poisoned")
+                    })?
+                    .get(&name_node)
+                {
+                    (op.clone(), rel)
+                } else {
+                    let mut cache = operators.write().map_err(|_| {
+                        Error::new(ErrorKind::Unexpected, "HDFS operator cache lock poisoned")
+                    })?;
+                    let op = match cache.get(&name_node) {
+                        Some(op) => op.clone(),
+                        None => {
+                            let op = hdfs_operator_build(name_node.as_deref())?;
+                            cache.insert(name_node, op.clone());
+                            op
+                        }
+                    };
+                    (op, rel)
+                }
+            }
             #[cfg(all(
                 not(feature = "opendal-s3"),
                 not(feature = "opendal-fs"),
@@ -346,6 +403,7 @@ impl OpenDalStorage {
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
+                not(feature = "opendal-hdfs-native"),
             ))]
             _ => {
                 return Err(Error::new(
@@ -459,6 +517,11 @@ impl OpenDalStorage {
                 })?;
                 Ok(&path[path.len() - parsed.path.len()..])
             }
+            #[cfg(feature = "opendal-hdfs-native")]
+            OpenDalStorage::Hdfs { .. } => {
+                let (_, rel) = parse_hdfs_path(path)?;
+                Ok(rel)
+            }
             #[cfg(all(
                 not(feature = "opendal-s3"),
                 not(feature = "opendal-fs"),
@@ -466,6 +529,7 @@ impl OpenDalStorage {
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
+                not(feature = "opendal-hdfs-native"),
             ))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -740,6 +804,47 @@ mod tests {
                 .relativize_path("s3://my-bucket/path/to/file.parquet")
                 .is_err()
         );
+    }
+
+    #[cfg(feature = "opendal-hdfs-native")]
+    #[test]
+    fn test_relativize_path_hdfs() {
+        let storage = OpenDalStorage::Hdfs {
+            operators: Arc::new(RwLock::new(HashMap::new())),
+        };
+
+        assert_eq!(
+            storage
+                .relativize_path("hdfs://nameservice1/a/b.parquet")
+                .unwrap(),
+            "/a/b.parquet"
+        );
+        assert_eq!(
+            storage
+                .relativize_path("hdfs://nn:8020/warehouse/db/t")
+                .unwrap(),
+            "/warehouse/db/t"
+        );
+    }
+
+    #[cfg(feature = "opendal-hdfs-native")]
+    #[test]
+    fn test_relativize_path_hdfs_authority_less() {
+        let storage = OpenDalStorage::Hdfs {
+            operators: Arc::new(RwLock::new(HashMap::new())),
+        };
+
+        assert_eq!(storage.relativize_path("hdfs:///a/b").unwrap(), "/a/b");
+    }
+
+    #[cfg(feature = "opendal-hdfs-native")]
+    #[test]
+    fn test_relativize_path_hdfs_wrong_scheme_errors() {
+        let storage = OpenDalStorage::Hdfs {
+            operators: Arc::new(RwLock::new(HashMap::new())),
+        };
+
+        assert!(storage.relativize_path("s3://bucket/x").is_err());
     }
 
     #[cfg(feature = "opendal-azdls")]

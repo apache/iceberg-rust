@@ -212,6 +212,20 @@ jobs:
             cargo test --no-fail-fast ${{ matrix.test-suite.args }}
           fi
 
+      # HDFS integration tests are `#[ignore]`d so a plain `cargo test`
+      # skips them locally on macOS/Windows where the docker fixture's
+      # host networking is unreliable; CI opts them in by filtering on
+      # the `file_io_hdfs` substring in the test name.
+      - name: Run HDFS integration tests
+        if: matrix.test-suite.name == 'default'
+        shell: bash
+        env:
+          RUSTFLAGS: "-C debuginfo=0"
+        run: |
+          cargo nextest run ${{ matrix.test-suite.args }} \
+            --run-ignored=only \
+            -E 'test(file_io_hdfs)'
+
       - name: Stop Docker containers
         if: always() && matrix.test-suite.name == 'default'
         run: make docker-down

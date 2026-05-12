@@ -148,6 +148,64 @@ services:
       retries: 5
 
   # =============================================================================
+  # HDFS - single-node NameNode + DataNode for HDFS tests
+  # =============================================================================
+  # Uses the official apache/hadoop image. Configuration is vendored as
+  # static core-site.xml / hdfs-site.xml under dev/hdfs/ (the apache image
+  # has no env-var-to-xml translator like the bde2020 images do, so the
+  # files are mounted directly into the image's $HADOOP_CONF_DIR).
+  #
+  # Host networking is required because hdfs-native 0.13.5 connects to the
+  # DataNode by IP from `DatanodeIdProto.ip_addr` (not by hostname). On a
+  # docker bridge the DN would register with an unroutable bridge IP; host
+  # networking lets it bind directly on the host network namespace so the
+  # registered address is host-reachable.
+  #
+  # This works on Linux CI runners. On macOS / Windows Docker Desktop
+  # host networking has known issues (e.g. unresolvable VM hostname), so
+  # the HDFS integration tests are `#[ignore]`d; CI explicitly opts them
+  # in via `cargo nextest --run-ignored=only` (see .github/workflows/ci.yml).
+  hdfs-namenode:
+    image: apache/hadoop:3.5.0
+    network_mode: "host"
+    command: ["hdfs", "namenode"]
+    environment:
+      # First-boot formats /tmp/hadoop-root/dfs/name when it doesn't exist
+      # (starter.sh in the image checks this var); matches dfs.namenode.name.dir
+      # in dev/hdfs/hdfs-site.xml.
+      ENSURE_NAMENODE_DIR: "/tmp/hadoop-root/dfs/name"
+    # Make `InetAddress.getLocalHost()` succeed inside the container even
+    # when the host's hostname isn't already in /etc/hosts (e.g. macOS
+    # Docker Desktop, where the VM hostname is `docker-desktop`). On Linux
+    # CI runners the real hostname resolves via the system /etc/hosts and
+    # these entries are harmless extras.
+    extra_hosts:
+      - "docker-desktop:127.0.0.1"
+    volumes:
+      - ./hdfs/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+      - ./hdfs/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "hdfs dfsadmin -safemode get | grep -q OFF"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  hdfs-datanode:
+    image: apache/hadoop:3.5.0
+    network_mode: "host"
+    command: ["hdfs", "datanode"]
+    depends_on:
+      hdfs-namenode:
+        condition: service_healthy
+    # See hdfs-namenode above for why docker-desktop is mapped here.
+    extra_hosts:
+      - "docker-desktop:127.0.0.1"
+    volumes:
+      - ./hdfs/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+      - ./hdfs/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
+
+  # =============================================================================
   # Fake GCS Server - GCS emulator for GCS tests
   # =============================================================================
   gcs-server:
