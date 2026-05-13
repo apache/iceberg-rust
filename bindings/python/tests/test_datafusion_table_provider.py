@@ -27,9 +27,9 @@ from pathlib import Path
 import datafusion
 from packaging.version import Version
 
-if Version(datafusion.__version__) < Version("52.0.0"):
+if Version(datafusion.__version__) < Version("53.0.0"):
     pytest.skip(
-        "Iceberg table provider requires datafusion>=52 for FFI compatibility",
+        "Iceberg table provider requires datafusion>=53 for FFI compatibility",
         allow_module_level=True,
     )
 

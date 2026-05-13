@@ -69,8 +69,14 @@ pub const S3_DISABLE_CONFIG_LOAD: &str = "s3.disable-config-load";
 ///
 /// This struct contains all the configuration options for connecting to Amazon S3.
 /// Use the builder pattern via `S3Config::builder()` to construct instances.
-/// ```
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
+///
+/// Defaults follow the Iceberg `S3FileIOProperties` spec (see
+/// [`PATH_STYLE_ACCESS_DEFAULT = false`](https://github.com/apache/iceberg/blob/main/aws/src/main/java/org/apache/iceberg/aws/s3/S3FileIOProperties.java)),
+/// i.e. virtual-host-style addressing is enabled unless
+/// `s3.path-style-access=true` is explicitly set. This matches what
+/// Java clients do out of the box and is required for a number of
+/// S3-compatible stores that do not support path-style URLs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
 pub struct S3Config {
     /// S3 endpoint URL.
     #[builder(default, setter(strip_option, into))]
@@ -88,7 +94,9 @@ pub struct S3Config {
     #[builder(default, setter(strip_option, into))]
     pub region: Option<String>,
     /// Enable virtual host style (opposite of path style access).
-    #[builder(default)]
+    ///
+    /// Defaults to `true` to match Iceberg `S3FileIOProperties.PATH_STYLE_ACCESS_DEFAULT = false`.
+    #[builder(default = true)]
     pub enable_virtual_host_style: bool,
     /// Server side encryption type.
     #[builder(default, setter(strip_option, into))]
@@ -123,6 +131,12 @@ pub struct S3Config {
     /// Disable config load.
     #[builder(default)]
     pub disable_config_load: bool,
+}
+
+impl Default for S3Config {
+    fn default() -> Self {
+        Self::builder().build()
+    }
 }
 
 impl TryFrom<&StorageConfig> for S3Config {
@@ -265,6 +279,17 @@ mod tests {
 
         // CLIENT_REGION should take precedence
         assert_eq!(s3_config.region.as_deref(), Some("eu-west-1"));
+    }
+
+    #[test]
+    fn test_s3_config_default_is_virtual_host_style() {
+        // Matches Iceberg S3FileIOProperties.PATH_STYLE_ACCESS_DEFAULT = false.
+        assert!(S3Config::default().enable_virtual_host_style);
+        assert!(
+            S3Config::try_from(&StorageConfig::new())
+                .unwrap()
+                .enable_virtual_host_style
+        );
     }
 
     #[test]

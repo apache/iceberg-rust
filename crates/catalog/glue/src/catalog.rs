@@ -203,7 +203,6 @@ impl GlueCatalog {
         // Use provided factory or default to OpenDalStorageFactory::S3
         let factory = storage_factory.unwrap_or_else(|| {
             Arc::new(OpenDalStorageFactory::S3 {
-                configured_scheme: "s3a".to_string(),
                 customized_credential_load: None,
             })
         });
@@ -657,6 +656,17 @@ impl Catalog for GlueCatalog {
         builder.send().await.map_err(from_aws_sdk_error)?;
 
         Ok(())
+    }
+
+    async fn purge_table(&self, table: &TableIdent) -> Result<()> {
+        let table_info = self.load_table(table).await?;
+        self.drop_table(table).await?;
+        iceberg::drop_table_data(
+            table_info.file_io(),
+            table_info.metadata(),
+            table_info.metadata_location(),
+        )
+        .await
     }
 
     /// Asynchronously checks the existence of a specified table

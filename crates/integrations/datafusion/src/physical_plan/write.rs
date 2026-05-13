@@ -64,7 +64,7 @@ pub(crate) struct IcebergWriteExec {
     table: Table,
     input: Arc<dyn ExecutionPlan>,
     result_schema: ArrowSchemaRef,
-    plan_properties: PlanProperties,
+    plan_properties: Arc<PlanProperties>,
 }
 
 impl IcebergWriteExec {
@@ -82,13 +82,13 @@ impl IcebergWriteExec {
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: ArrowSchemaRef,
-    ) -> PlanProperties {
-        PlanProperties::new(
+    ) -> Arc<PlanProperties> {
+        Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(input.output_partitioning().partition_count()),
             EmissionType::Final,
             Boundedness::Bounded,
-        )
+        ))
     }
 
     // Create a record batch with serialized data files
@@ -153,7 +153,7 @@ impl ExecutionPlan for IcebergWriteExec {
         vec![true; self.children().len()]
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.plan_properties
     }
 
@@ -336,17 +336,17 @@ mod tests {
     struct MockExecutionPlan {
         schema: ArrowSchemaRef,
         batches: Vec<RecordBatch>,
-        properties: PlanProperties,
+        properties: Arc<PlanProperties>,
     }
 
     impl MockExecutionPlan {
         fn new(schema: ArrowSchemaRef, batches: Vec<RecordBatch>) -> Self {
-            let properties = PlanProperties::new(
+            let properties = Arc::new(PlanProperties::new(
                 EquivalenceProperties::new(schema.clone()),
                 Partitioning::UnknownPartitioning(1),
                 EmissionType::Final,
                 Boundedness::Bounded,
-            );
+            ));
 
             Self {
                 schema,
@@ -383,7 +383,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             &self.properties
         }
 

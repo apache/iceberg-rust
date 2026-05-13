@@ -23,6 +23,7 @@ use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use crate::arrow::ArrowReader;
 use crate::arrow::reader::ParquetReadOptions;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
+use crate::arrow::scan_metrics::ScanMetrics;
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
 use crate::spec::{Schema, SchemaRef};
@@ -45,13 +46,22 @@ pub trait DeleteFileLoader {
 #[derive(Clone, Debug)]
 pub(crate) struct BasicDeleteFileLoader {
     file_io: FileIO,
+    scan_metrics: ScanMetrics,
 }
 
 #[allow(unused_variables)]
 impl BasicDeleteFileLoader {
-    pub fn new(file_io: FileIO) -> Self {
-        BasicDeleteFileLoader { file_io }
+    pub fn new(file_io: FileIO, scan_metrics: ScanMetrics) -> Self {
+        BasicDeleteFileLoader {
+            file_io,
+            scan_metrics,
+        }
     }
+
+    pub(crate) fn file_io(&self) -> &FileIO {
+        &self.file_io
+    }
+
     /// Loads a RecordBatchStream for a given datafile.
     pub(crate) async fn parquet_to_batch_stream(
         &self,
@@ -69,6 +79,7 @@ impl BasicDeleteFileLoader {
             &self.file_io,
             file_size_in_bytes,
             parquet_read_options,
+            self.scan_metrics.bytes_read_counter(),
         )
         .await?;
 
@@ -137,7 +148,8 @@ mod tests {
         let table_location = tmp_dir.path();
         let file_io = FileIO::new_with_fs();
 
-        let delete_file_loader = BasicDeleteFileLoader::new(file_io.clone());
+        let scan_metrics = ScanMetrics::new();
+        let delete_file_loader = BasicDeleteFileLoader::new(file_io.clone(), scan_metrics);
 
         let file_scan_tasks = setup(table_location);
 

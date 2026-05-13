@@ -363,6 +363,35 @@ impl RestCatalog {
         }
     }
 
+    /// Sends a DELETE request for the given table, optionally requesting purge.
+    async fn delete_table(&self, table: &TableIdent, purge: bool) -> Result<()> {
+        let context = self.context().await?;
+
+        let mut request_builder = context
+            .client
+            .request(Method::DELETE, context.config.table_endpoint(table));
+
+        if purge {
+            request_builder = request_builder.query(&[("purgeRequested", "true")]);
+        }
+
+        let request = request_builder.build()?;
+        let http_response = context.client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::TableNotFound,
+                "Tried to drop a table that does not exist",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                context.client.disable_header_redaction(),
+            )
+            .await),
+        }
+    }
+
     /// Gets the [`RestContext`] from the catalog.
     async fn context(&self) -> Result<&RestContext> {
         self.ctx
@@ -828,27 +857,13 @@ impl Catalog for RestCatalog {
 
     /// Drop a table from the catalog.
     async fn drop_table(&self, table: &TableIdent) -> Result<()> {
-        let context = self.context().await?;
+        self.delete_table(table, false).await
+    }
 
-        let request = context
-            .client
-            .request(Method::DELETE, context.config.table_endpoint(table))
-            .build()?;
-
-        let http_response = context.client.query_catalog(request).await?;
-
-        match http_response.status() {
-            StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
-            StatusCode::NOT_FOUND => Err(Error::new(
-                ErrorKind::TableNotFound,
-                "Tried to drop a table that does not exist",
-            )),
-            _ => Err(deserialize_unexpected_catalog_error(
-                http_response,
-                context.client.disable_header_redaction(),
-            )
-            .await),
-        }
+    /// Drop a table from the catalog and purge its data by sending
+    /// `purgeRequested=true` to the REST server.
+    async fn purge_table(&self, table: &TableIdent) -> Result<()> {
+        self.delete_table(table, true).await
     }
 
     /// Check if a table exists in the catalog.

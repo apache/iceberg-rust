@@ -32,6 +32,7 @@ use futures::{SinkExt, StreamExt, TryStreamExt};
 pub use task::*;
 
 use crate::arrow::ArrowReaderBuilder;
+pub use crate::arrow::{ScanMetrics, ScanResult};
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
@@ -40,7 +41,7 @@ use crate::metadata_columns::{get_metadata_field_id, is_metadata_column_name};
 use crate::runtime::spawn;
 use crate::spec::{DataContentType, SnapshotRef};
 use crate::table::Table;
-use crate::utils::available_parallelism;
+use crate::util::available_parallelism;
 use crate::{Error, ErrorKind, Result};
 
 /// A stream of arrow [`RecordBatch`]es.
@@ -441,7 +442,10 @@ impl TableScan {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
         }
 
-        arrow_reader_builder.build().read(self.plan_files().await?)
+        arrow_reader_builder
+            .build()
+            .read(self.plan_files().await?)
+            .map(|result| result.stream())
     }
 
     /// Returns a reference to the column names of the table scan.
@@ -667,6 +671,39 @@ pub mod tests {
                     table_metadata_1_location => &table_metadata1_location,
                 });
                 serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
+            };
+
+            let table = Table::builder()
+                .metadata(table_metadata)
+                .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
+                .file_io(file_io.clone())
+                .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
+                .build()
+                .unwrap();
+
+            Self {
+                table_location: table_location.to_str().unwrap().to_string(),
+                table,
+            }
+        }
+
+        /// Creates a fixture with 5 snapshots chained as:
+        ///   S1 (root) -> S2 -> S3 -> S4 -> S5 (current)
+        /// Useful for testing snapshot history traversal.
+        pub fn new_with_deep_history() -> Self {
+            let tmp_dir = TempDir::new().unwrap();
+            let table_location = tmp_dir.path().join("table1");
+            let table_metadata1_location = table_location.join("metadata/v1.json");
+
+            let file_io = FileIO::new_with_fs();
+
+            let table_metadata = {
+                let json_str = fs::read_to_string(format!(
+                    "{}/testdata/example_table_metadata_v2_deep_history.json",
+                    env!("CARGO_MANIFEST_DIR")
+                ))
+                .unwrap();
+                serde_json::from_str::<TableMetadata>(&json_str).unwrap()
             };
 
             let table = Table::builder()
@@ -1331,13 +1368,15 @@ pub mod tests {
         let batch_stream = reader
             .clone()
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
-            .unwrap();
+            .unwrap()
+            .stream();
         let batch_1: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         let reader = ArrowReaderBuilder::new(fixture.table.file_io().clone()).build();
         let batch_stream = reader
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
-            .unwrap();
+            .unwrap()
+            .stream();
         let batch_2: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         assert_eq!(batch_1, batch_2);

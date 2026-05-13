@@ -18,7 +18,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use iceberg::io::{
     CLIENT_REGION, S3_ACCESS_KEY_ID, S3_ALLOW_ANONYMOUS, S3_ASSUME_ROLE_ARN,
     S3_ASSUME_ROLE_EXTERNAL_ID, S3_ASSUME_ROLE_SESSION_NAME, S3_DISABLE_CONFIG_LOAD,
@@ -28,8 +27,11 @@ use iceberg::io::{
 use iceberg::{Error, ErrorKind, Result};
 use opendal::services::S3Config;
 use opendal::{Configurator, Operator};
-pub use reqsign::{AwsCredential, AwsCredentialLoad};
-use reqwest::Client;
+/// AWS credentials: access key ID, secret access key, and optional session token.
+pub use reqsign_aws_v4::Credential as AwsCredential;
+/// Trait for types that can asynchronously supply [`AwsCredential`] to a [`CustomAwsCredentialLoader`].
+pub use reqsign_core::ProvideCredential;
+use reqsign_core::{ProvideCredentialChain, ProvideCredentialDyn};
 use url::Url;
 
 use crate::utils::{from_opendal_error, is_truthy};
@@ -37,6 +39,12 @@ use crate::utils::{from_opendal_error, is_truthy};
 /// Parse iceberg props to s3 config.
 pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config> {
     let mut cfg = S3Config::default();
+    // Match Iceberg `S3FileIOProperties.PATH_STYLE_ACCESS_DEFAULT = false`:
+    // virtual-host-style addressing is the spec default. opendal's own
+    // default is path-style, which disagrees with the Java SDK and breaks
+    // S3-compatible stores that only accept virtual-hosted-style URLs.
+    // Any explicit `s3.path-style-access` property below overrides this.
+    cfg.enable_virtual_host_style = true;
     if let Some(endpoint) = m.remove(S3_ENDPOINT) {
         cfg.endpoint = Some(endpoint);
     };
@@ -137,20 +145,26 @@ pub(crate) fn s3_config_build(
         // Set bucket name.
         .bucket(bucket);
 
-    if let Some(customized_credential_load) = customized_credential_load {
-        builder = builder
-            .customized_credential_load(customized_credential_load.clone().into_opendal_loader());
+    if let Some(loader) = customized_credential_load {
+        let chain = ProvideCredentialChain::new().push(Arc::clone(&loader.0));
+        builder = builder.credential_provider_chain(chain);
     }
 
     Ok(Operator::new(builder).map_err(from_opendal_error)?.finish())
 }
 
 /// Custom AWS credential loader.
-/// This can be used to load credentials from a custom source, such as the AWS SDK.
 ///
-/// This should be set as an extension on `FileIOBuilder`.
-#[derive(Clone)]
-pub struct CustomAwsCredentialLoader(Arc<dyn AwsCredentialLoad>);
+/// Wraps any [`ProvideCredential`] implementation for use with the S3 storage backend.
+/// Use [`CustomAwsCredentialLoader::new`] to create one, then pass it to
+/// [`OpenDalStorageFactory::S3`](crate::OpenDalStorageFactory).
+pub struct CustomAwsCredentialLoader(Arc<dyn ProvideCredentialDyn<Credential = AwsCredential>>);
+
+impl Clone for CustomAwsCredentialLoader {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
 
 impl std::fmt::Debug for CustomAwsCredentialLoader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -160,20 +174,33 @@ impl std::fmt::Debug for CustomAwsCredentialLoader {
 }
 
 impl CustomAwsCredentialLoader {
-    /// Create a new custom AWS credential loader.
-    pub fn new(loader: Arc<dyn AwsCredentialLoad>) -> Self {
-        Self(loader)
-    }
-
-    /// Convert this loader into an opendal compatible loader for customized AWS credentials.
-    pub fn into_opendal_loader(self) -> Box<dyn AwsCredentialLoad> {
-        Box::new(self)
+    /// Create a new custom AWS credential loader from any [`ProvideCredential`] implementation.
+    pub fn new(provider: impl ProvideCredential<Credential = AwsCredential> + 'static) -> Self {
+        Self(Arc::new(provider) as Arc<dyn ProvideCredentialDyn<Credential = AwsCredential>>)
     }
 }
 
-#[async_trait]
-impl AwsCredentialLoad for CustomAwsCredentialLoader {
-    async fn load_credential(&self, client: Client) -> anyhow::Result<Option<AwsCredential>> {
-        self.0.load_credential(client).await
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use iceberg::io::S3_PATH_STYLE_ACCESS;
+
+    use super::s3_config_parse;
+
+    fn parse_with(prop: Option<&str>) -> bool {
+        let mut props = HashMap::new();
+        if let Some(v) = prop {
+            props.insert(S3_PATH_STYLE_ACCESS.to_string(), v.to_string());
+        }
+        s3_config_parse(props).unwrap().enable_virtual_host_style
+    }
+
+    #[test]
+    fn s3_config_parse_path_style_access() {
+        // Match Iceberg S3FileIOProperties.PATH_STYLE_ACCESS_DEFAULT = false.
+        assert!(parse_with(None));
+        assert!(parse_with(Some("false")));
+        assert!(!parse_with(Some("true")));
     }
 }

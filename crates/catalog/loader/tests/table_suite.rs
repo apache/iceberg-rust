@@ -274,3 +274,80 @@ async fn test_catalog_drop_table_missing_errors(#[case] kind: CatalogKind) -> Re
     assert!(catalog.drop_table(&table_ident).await.is_err());
     Ok(())
 }
+
+// Common behavior: purge_table removes the table from the catalog.
+#[rstest]
+#[case::rest_catalog(CatalogKind::Rest)]
+#[case::glue_catalog(CatalogKind::Glue)]
+#[case::hms_catalog(CatalogKind::Hms)]
+#[case::sql_catalog(CatalogKind::Sql)]
+#[case::s3tables_catalog(CatalogKind::S3Tables)]
+#[case::memory_catalog(CatalogKind::Memory)]
+#[tokio::test]
+async fn test_catalog_purge_table(#[case] kind: CatalogKind) -> Result<()> {
+    let Some(harness) = load_catalog(kind).await else {
+        return Ok(());
+    };
+    let catalog = harness.catalog;
+    let namespace = NamespaceIdent::new(normalize_test_name_with_parts!(
+        "catalog_purge_table",
+        harness.label
+    ));
+
+    cleanup_namespace_dyn(catalog.as_ref(), &namespace).await;
+    catalog.create_namespace(&namespace, HashMap::new()).await?;
+
+    let table_name = normalize_test_name_with_parts!("catalog_purge_table", harness.label, "table");
+    let table = catalog
+        .create_table(&namespace, table_creation(table_name))
+        .await?;
+    let ident = table.identifier().clone();
+
+    assert!(catalog.table_exists(&ident).await?);
+
+    // Capture metadata location and file_io before purge so we can verify
+    // that the underlying files are actually deleted.
+    let metadata_location = table.metadata_location().map(|s| s.to_string());
+    let file_io = table.file_io().clone();
+
+    catalog.purge_table(&ident).await?;
+    assert!(!catalog.table_exists(&ident).await?);
+
+    if let Some(location) = &metadata_location {
+        assert!(
+            !file_io.exists(location).await?,
+            "Metadata file should have been deleted after purge"
+        );
+    }
+
+    catalog.drop_namespace(&namespace).await?;
+
+    Ok(())
+}
+
+// Common behavior: purging a missing table should error.
+#[rstest]
+#[case::rest_catalog(CatalogKind::Rest)]
+#[case::glue_catalog(CatalogKind::Glue)]
+#[case::hms_catalog(CatalogKind::Hms)]
+#[case::sql_catalog(CatalogKind::Sql)]
+#[case::s3tables_catalog(CatalogKind::S3Tables)]
+#[case::memory_catalog(CatalogKind::Memory)]
+#[tokio::test]
+async fn test_catalog_purge_table_missing_errors(#[case] kind: CatalogKind) -> Result<()> {
+    let Some(harness) = load_catalog(kind).await else {
+        return Ok(());
+    };
+    let catalog = harness.catalog;
+    let namespace = NamespaceIdent::new(normalize_test_name_with_parts!(
+        "catalog_purge_table_missing_errors",
+        harness.label
+    ));
+
+    cleanup_namespace_dyn(catalog.as_ref(), &namespace).await;
+    catalog.create_namespace(&namespace, HashMap::new()).await?;
+
+    let table_ident = TableIdent::new(namespace.clone(), "missing".to_string());
+    assert!(catalog.purge_table(&table_ident).await.is_err());
+    Ok(())
+}

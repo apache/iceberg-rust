@@ -144,7 +144,7 @@ mod tests {
             sequence_number: 1,
             offset: 4,
             length: 10,
-            compression_codec: CompressionCodec::Gzip,
+            compression_codec: CompressionCodec::gzip_default(),
             properties: HashMap::new(),
         };
 
@@ -153,7 +153,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.to_string().contains("Gzip"));
+        assert!(err.to_string().contains("gzip"));
         assert!(
             err.to_string()
                 .contains("is not supported for Puffin files")

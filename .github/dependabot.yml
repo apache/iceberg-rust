@@ -17,6 +17,15 @@
 
 version: 2
 updates:
+  # Maintain dependencies for GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+    cooldown:
+      default-days: 7
+
   # Maintain dependencies for iceberg
   - package-ecosystem: "cargo"
     directory: "/"
@@ -35,3 +44,5 @@ updates:
         patterns:
           - "arrow*"
           - "parquet"
+    cooldown:
+      default-days: 7
