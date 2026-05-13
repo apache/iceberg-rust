@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["AesKeySize"],"mod":["kms"],"struct":["AesGcmCipher","AesGcmFileDecryptor","AesGcmFileEncryptor","AesGcmFileRead","AesGcmFileWrite","SecureKey","SensitiveBytes","StandardKeyMetadata"]};
+window.SIDEBAR_ITEMS = {"enum":["AesKeySize"],"mod":["kms"],"struct":["AesGcmCipher","AesGcmFileRead","AesGcmFileWrite","EncryptedInputFile","EncryptedOutputFile","EncryptionManager","SecureKey","SensitiveBytes","StandardKeyMetadata"]};
