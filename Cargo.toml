@@ -58,6 +58,8 @@ async-trait = "0.1.89"
 aws-config = "1.8.7"
 aws-sdk-glue = { version = "1.85", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-s3tables = { version = "1.28", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-kms = "1.97.0"
+aws-smithy-mocks = "0.2.6"
 backon = "1.5.1"
 base64 = "0.22.1"
 bimap = "0.6"

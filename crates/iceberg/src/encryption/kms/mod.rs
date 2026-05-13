@@ -20,8 +20,10 @@
 //! This module provides the [`KeyManagementClient`] trait for pluggable KMS
 //! integration and implementations for different key management systems.
 
+mod aws_kms;
 mod client;
 mod memory;
 
+pub use aws_kms::AwsKeyManagementClient;
 pub use client::{GeneratedKey, KeyManagementClient};
 pub use memory::MemoryKeyManagementClient;
