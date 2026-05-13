@@ -751,13 +751,11 @@ impl TableMetadata {
         Ok(())
     }
 
-    /// Validates that every type used across all schemas is supported by the
+    /// Validates that every type used in the current schema is supported by the
     /// table's format version.  Delegates to [`Schema::check_format_compatibility`].
     fn validate_schema_format_compatibility(&self) -> Result<()> {
-        for schema in self.schemas.values() {
-            schema.check_format_compatibility(self.format_version)?;
-        }
-        Ok(())
+        self.current_schema()
+            .check_format_compatibility(self.format_version)
     }
 }
 

@@ -42,11 +42,6 @@ pub const MAP_KEY_FIELD_NAME: &str = "key";
 /// Field name for map type's value.
 pub const MAP_VALUE_FIELD_NAME: &str = "value";
 
-/// Minimum format version required for nanosecond-precision timestamp types (v3).
-pub const MIN_FORMAT_VERSION_TIMESTAMP_NS: FormatVersion = FormatVersion::V3;
-/// Minimum format version required for the variant type (v3).
-pub const MIN_FORMAT_VERSION_VARIANT: FormatVersion = FormatVersion::V3;
-
 pub(crate) const MAX_DECIMAL_BYTES: u32 = 24;
 pub(crate) const MAX_DECIMAL_PRECISION: u32 = 38;
 
@@ -198,8 +193,8 @@ impl Type {
     pub fn min_format_version(&self) -> FormatVersion {
         match self {
             Type::Primitive(PrimitiveType::TimestampNs)
-            | Type::Primitive(PrimitiveType::TimestamptzNs) => MIN_FORMAT_VERSION_TIMESTAMP_NS,
-            Type::Variant(_) => MIN_FORMAT_VERSION_VARIANT,
+            | Type::Primitive(PrimitiveType::TimestamptzNs)
+            | Type::Variant(_) => FormatVersion::V3,
             _ => FormatVersion::V1,
         }
     }
