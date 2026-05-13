@@ -392,6 +392,7 @@ mod tests {
     use bytes::Bytes;
     use tempfile::TempDir;
 
+    use crate::ErrorKind;
     use crate::io::{FileIO, InputFile};
     use crate::puffin::metadata::{BlobMetadata, CompressionCodec, FileMetadata};
     use crate::puffin::test_utils::{
@@ -981,11 +982,16 @@ mod tests {
 
         let input_file = input_file_with_bytes(&temp_dir, &bytes).await;
 
-        assert!(FileMetadata::read(&input_file).await.is_err(),);
-        assert!(
+        assert_eq!(
+            FileMetadata::read(&input_file).await.unwrap_err().kind(),
+            ErrorKind::DataInvalid,
+        );
+        assert_eq!(
             FileMetadata::read_with_prefetch(&input_file, prefetch_hint)
                 .await
-                .is_err(),
+                .unwrap_err()
+                .kind(),
+            ErrorKind::DataInvalid,
         );
     }
 
