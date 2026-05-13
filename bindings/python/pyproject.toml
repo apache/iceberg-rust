@@ -69,4 +69,3 @@ dev = [
     "pyarrow>=17",
     "fastavro>=1.11.1",
 ]
- 
