@@ -464,7 +464,7 @@ impl Schema {
             Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!(
-                    "Invalid schema for v{format_version}:\n- {}",
+                    "Invalid schema for {format_version}:\n- {}",
                     problems.join("\n- ")
                 ),
             ))
