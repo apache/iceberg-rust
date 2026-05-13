@@ -268,10 +268,13 @@ impl PredicateConverter<'_> {
 /// `RecordBatch` to reach a primitive leaf. Top-level paths return the
 /// matching column directly; nested paths descend through `StructArray`
 /// children by name.
-fn project_column(batch: &RecordBatch, path: &[String]) -> std::result::Result<ArrayRef, ArrowError> {
-    let (root_name, rest) = path.split_first().ok_or_else(|| {
-        ArrowError::SchemaError("Predicate column path is empty.".to_string())
-    })?;
+fn project_column(
+    batch: &RecordBatch,
+    path: &[String],
+) -> std::result::Result<ArrayRef, ArrowError> {
+    let (root_name, rest) = path
+        .split_first()
+        .ok_or_else(|| ArrowError::SchemaError("Predicate column path is empty.".to_string()))?;
     let mut current = batch
         .column_by_name(root_name)
         .ok_or_else(|| {
@@ -281,12 +284,15 @@ fn project_column(batch: &RecordBatch, path: &[String]) -> std::result::Result<A
         })?
         .clone();
     for part in rest {
-        let struct_array = current.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
-            ArrowError::SchemaError(format!(
-                "Predicate column path expected a struct at `{part}` but got {:?}.",
-                current.data_type()
-            ))
-        })?;
+        let struct_array = current
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| {
+                ArrowError::SchemaError(format!(
+                    "Predicate column path expected a struct at `{part}` but got {:?}.",
+                    current.data_type()
+                ))
+            })?;
         current = struct_array
             .column_by_name(part)
             .ok_or_else(|| {

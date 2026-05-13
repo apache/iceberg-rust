@@ -512,11 +512,15 @@ message schema {
                 PARQUET_FIELD_ID_META_KEY.to_string(),
                 "1".to_string(),
             )])),
-            Field::new("nested", DataType::Struct(nested_struct_fields.clone()), false)
-                .with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "2".to_string(),
-                )])),
+            Field::new(
+                "nested",
+                DataType::Struct(nested_struct_fields.clone()),
+                false,
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
         ]));
 
         let id_data = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
@@ -583,7 +587,11 @@ message schema {
             .as_any()
             .downcast_ref::<Int32Array>()
             .expect("id is int32");
-        assert_eq!(id_values.values(), &[2_i32], "expected the row with value=20");
+        assert_eq!(
+            id_values.values(),
+            &[2_i32],
+            "expected the row with value=20"
+        );
     }
 
     /// Verifies that file splits respect byte ranges and only read specific row groups.
