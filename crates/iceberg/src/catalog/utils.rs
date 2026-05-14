@@ -22,6 +22,7 @@ use std::collections::HashSet;
 use futures::{TryStreamExt, stream};
 
 use crate::Result;
+use crate::encryption::EncryptionManager;
 use crate::io::FileIO;
 use crate::spec::{ManifestListReader, TableMetadata};
 
@@ -40,6 +41,7 @@ pub async fn drop_table_data(
     io: &FileIO,
     metadata: &TableMetadata,
     metadata_location: Option<&str>,
+    encryption_manager: Option<&EncryptionManager>,
 ) -> Result<()> {
     let mut manifest_lists_to_delete: HashSet<String> = HashSet::new();
     let mut manifests_to_delete: HashSet<String> = HashSet::new();

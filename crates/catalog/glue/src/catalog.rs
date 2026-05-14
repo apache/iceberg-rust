@@ -681,6 +681,7 @@ impl Catalog for GlueCatalog {
             table_info.file_io(),
             table_info.metadata(),
             table_info.metadata_location(),
+            table_info.encryption_manager(),
         )
         .await
     }
