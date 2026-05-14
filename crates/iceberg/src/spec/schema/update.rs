@@ -41,6 +41,8 @@ pub enum SchemaOperation {
     Delete(DeleteColumn),
     /// Move a column
     Move(MoveColumn),
+    /// Allow incompatible changes
+    AllowIncompatibleChanges,
 }
 
 /// A column to be added to the schema.
@@ -54,7 +56,7 @@ pub struct AddColumn {
     is_optional: bool,
     r#type: Type,
     #[builder(default, setter(strip_option))]
-    doc: Option<Option<String>>,
+    doc: Option<String>,
     #[builder(default, setter(strip_option))]
     default_value: Option<Literal>,
 }
@@ -99,22 +101,56 @@ impl From<RenameColumn> for SchemaOperation {
 }
 
 /// A column to be updated in the schema.
-#[derive(TypedBuilder)]
 pub struct UpdateColumn {
-    #[builder(setter(into))]
     name: String,
-    #[builder(default, setter(strip_option))]
-    new_type: Option<Type>,
-    #[builder(default, setter(strip_option))]
-    new_doc: Option<Option<String>>,
-    #[builder(default, setter(strip_option))]
-    new_default_value: Option<Option<Literal>>,
+    op: UpdateColumnOperation,
 }
 
 impl From<UpdateColumn> for SchemaOperation {
     fn from(update: UpdateColumn) -> Self {
         SchemaOperation::Update(update)
     }
+}
+
+impl UpdateColumn {
+    /// Create a new `UpdateColumn` to update the column's requiredness.
+    pub fn new_required(name: impl Into<String>, is_required: bool) -> Self {
+        Self {
+            name: name.into(),
+            op: UpdateColumnOperation::Required(is_required),
+        }
+    }
+
+    /// Create a new `UpdateColumn` to update the column's type.
+    pub fn new_type(name: impl Into<String>, new_type: PrimitiveType) -> Self {
+        Self {
+            name: name.into(),
+            op: UpdateColumnOperation::Type(new_type),
+        }
+    }
+
+    /// Create a new `UpdateColumn` to update the column's doc.
+    pub fn new_doc(name: impl Into<String>, new_doc: Option<String>) -> Self {
+        Self {
+            name: name.into(),
+            op: UpdateColumnOperation::Doc(new_doc),
+        }
+    }
+
+    /// Create a new `UpdateColumn` to update the column's default value.
+    pub fn new_default_value(name: impl Into<String>, new_default_value: Option<Literal>) -> Self {
+        Self {
+            name: name.into(),
+            op: UpdateColumnOperation::DefaultValue(new_default_value),
+        }
+    }
+}
+
+enum UpdateColumnOperation {
+    Required(bool),
+    Type(PrimitiveType),
+    Doc(Option<String>),
+    DefaultValue(Option<Literal>),
 }
 
 /// A column to be moved in the schema.
@@ -217,6 +253,7 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
     let mut last_column_id = schema.highest_field_id;
     let mut added_name_to_id = HashMap::new();
     let mut identifier_field_ids = schema.identifier_field_ids.clone();
+    let mut allow_incompatible_changes = false;
 
     for operation in operations {
         match operation {
@@ -275,7 +312,7 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
                     name.clone()
                 };
                 ensure_precondition!(
-                    default_value.is_some() || is_optional,
+                    default_value.is_some() || is_optional || allow_incompatible_changes,
                     "Incompatible change: cannot add required column without a default value: {}",
                     full_name
                 );
@@ -289,9 +326,7 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
                 // TODO: Maybe we can use `ReassignFieldIds`?
                 let assigned_type = assign_fresh_ids(field_type.clone(), &mut last_column_id);
                 let mut new_field = NestedField::new(new_id, name, assigned_type, !is_optional);
-                if let Some(doc) = doc {
-                    new_field.doc = doc.clone();
-                }
+                new_field.doc = doc.clone();
                 new_field.write_default = default_value.clone();
                 new_field.initial_default = default_value.clone();
                 updates.insert(new_id, new_field.into());
@@ -345,12 +380,7 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
                 }
             }
             SchemaOperation::Update(update) => {
-                let (name, new_type, new_doc, new_default_value) = (
-                    &update.name,
-                    &update.new_type,
-                    &update.new_doc,
-                    &update.new_default_value,
-                );
+                let (name, op) = (&update.name, &update.op);
                 let field = find_for_update(name, schema.clone(), &updates, &added_name_to_id)?
                     .ok_or(Error::new(
                         ErrorKind::PreconditionFailed,
@@ -362,14 +392,36 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
                     name,
                 );
                 let mut new_field = Arc::unwrap_or_clone(field.clone());
-                if let Some(new_type) = new_type {
-                    *new_field.field_type = new_type.clone();
-                }
-                if let Some(new_doc) = new_doc {
-                    new_field.doc = new_doc.clone();
-                }
-                if let Some(new_default_value) = new_default_value {
-                    new_field.write_default = new_default_value.clone();
+                match op {
+                    UpdateColumnOperation::Required(new_required) => {
+                        if (*new_required && !field.required) || (!*new_required && field.required)
+                        {
+                            let is_default_add = added_name_to_id.contains_key(name)
+                                && field.initial_default.is_some();
+                            ensure_precondition!(
+                                !*new_required || is_default_add || allow_incompatible_changes,
+                                "Cannot change column nullability: {}: optional -> required",
+                                name
+                            );
+                            new_field.required = *new_required;
+                        }
+                    }
+                    UpdateColumnOperation::Type(new_type) => {
+                        ensure_precondition!(
+                            is_promotion_allowed(field.field_type.as_ref(), new_type),
+                            "Cannot promote {} from type {} to type {}",
+                            name,
+                            field.field_type,
+                            new_type
+                        );
+                        *new_field.field_type = new_type.clone().into();
+                    }
+                    UpdateColumnOperation::Doc(new_doc) => {
+                        new_field.doc = new_doc.clone();
+                    }
+                    UpdateColumnOperation::DefaultValue(new_default_value) => {
+                        new_field.write_default = new_default_value.clone();
+                    }
                 }
                 updates.insert(field.id, Arc::new(new_field));
             }
@@ -426,6 +478,9 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
                     moves.entry(TABLE_ROOT_ID).or_default().push(r#move);
                 }
             }
+            SchemaOperation::AllowIncompatibleChanges => {
+                allow_incompatible_changes = true;
+            }
         }
     }
     for &id in &identifier_field_ids {
@@ -466,6 +521,35 @@ pub fn schema_update(schema: SchemaRef, operations: &[SchemaOperation]) -> Resul
         .with_identifier_field_ids(identifier_field_ids)
         .build()?
         .into())
+}
+
+fn is_promotion_allowed(from: &Type, to: &PrimitiveType) -> bool {
+    let from = match from {
+        Type::Primitive(p) => p,
+        _ => return false,
+    };
+    if from == to {
+        return true;
+    }
+    match from {
+        PrimitiveType::Int => {
+            matches!(to, PrimitiveType::Long)
+        }
+        PrimitiveType::Float => matches!(to, PrimitiveType::Double),
+        PrimitiveType::Decimal {
+            precision: p,
+            scale: s,
+        } => {
+            matches!(
+                to,
+                PrimitiveType::Decimal {
+                    precision: to_p,
+                    scale: to_s
+                } if to_p >= p && to_s == s
+            )
+        }
+        _ => false,
+    }
 }
 
 fn find_for_update(
@@ -812,11 +896,13 @@ fn move_fields(fields: &[NestedFieldRef], moves: &[Move]) -> Vec<NestedFieldRef>
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::sync::{Arc, LazyLock};
 
+    use crate::ErrorKind;
     use crate::spec::{
-        AddColumn, ListType, Literal, MapType, NestedField, PrimitiveType, RenameColumn, Schema,
-        SchemaOperation, StructType, Type, UpdateColumn, schema_update,
+        AddColumn, DeleteColumn, ListType, Literal, MapType, NestedField, PrimitiveType,
+        RenameColumn, Schema, SchemaOperation, StructType, Type, UpdateColumn, schema_update,
     };
 
     static SCHEMA: LazyLock<Schema> = LazyLock::new(|| {
@@ -862,15 +948,12 @@ mod tests {
                 NestedField::optional(
                     5,
                     "points",
-                    ListType::new(
-                        NestedField::list_optional_element(
-                            14,
-                            StructType::new(vec![
-                                NestedField::required(15, "x", PrimitiveType::Long.into()).into(),
-                                NestedField::required(16, "y", PrimitiveType::Long.into()).into(),
-                            ])
-                            .into(),
-                        )
+                    ListType::optional(
+                        14,
+                        StructType::new(vec![
+                            NestedField::required(15, "x", PrimitiveType::Long.into()).into(),
+                            NestedField::required(16, "y", PrimitiveType::Long.into()).into(),
+                        ])
                         .into(),
                     )
                     .into(),
@@ -880,10 +963,7 @@ mod tests {
                 NestedField::required(
                     6,
                     "doubles",
-                    ListType::new(
-                        NestedField::list_required_element(17, PrimitiveType::Double.into()).into(),
-                    )
-                    .into(),
+                    ListType::required(17, PrimitiveType::Double.into()).into(),
                 )
                 .into(),
                 NestedField::optional(
@@ -966,15 +1046,12 @@ mod tests {
                 NestedField::optional(
                     5,
                     "points",
-                    ListType::new(
-                        NestedField::list_optional_element(
-                            14,
-                            StructType::new(vec![
-                                NestedField::required(15, "x", PrimitiveType::Long.into()).into(),
-                                NestedField::required(16, "y", PrimitiveType::Long.into()).into(),
-                            ])
-                            .into(),
-                        )
+                    ListType::optional(
+                        14,
+                        StructType::new(vec![
+                            NestedField::required(15, "x", PrimitiveType::Long.into()).into(),
+                            NestedField::required(16, "y", PrimitiveType::Long.into()).into(),
+                        ])
                         .into(),
                     )
                     .into(),
@@ -984,10 +1061,7 @@ mod tests {
                 NestedField::required(
                     6,
                     "doubles",
-                    ListType::new(
-                        NestedField::list_required_element(17, PrimitiveType::Double.into()).into(),
-                    )
-                    .into(),
+                    ListType::required(17, PrimitiveType::Double.into()).into(),
                 )
                 .into(),
                 NestedField::optional(
@@ -1007,24 +1081,9 @@ mod tests {
             .build()
             .unwrap();
         let updated = schema_update(Arc::new(SCHEMA.clone()), &[
-            SchemaOperation::Update(
-                UpdateColumn::builder()
-                    .name("id")
-                    .new_type(PrimitiveType::Long.into())
-                    .build(),
-            ),
-            SchemaOperation::Update(
-                UpdateColumn::builder()
-                    .name("locations.lat")
-                    .new_type(PrimitiveType::Double.into())
-                    .build(),
-            ),
-            SchemaOperation::Update(
-                UpdateColumn::builder()
-                    .name("locations.long")
-                    .new_type(PrimitiveType::Double.into())
-                    .build(),
-            ),
+            UpdateColumn::new_type("id", PrimitiveType::Long).into(),
+            UpdateColumn::new_type("locations.lat", PrimitiveType::Double).into(),
+            UpdateColumn::new_type("locations.long", PrimitiveType::Double).into(),
         ])
         .unwrap();
         assert_eq!(&expected, updated.as_ref());
@@ -1055,50 +1114,122 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "not yet implemented"]
     fn update_failure() {
-        todo!()
+        let allowed_updates: HashSet<(PrimitiveType, PrimitiveType)> = HashSet::from([
+            (PrimitiveType::Int, PrimitiveType::Long),
+            (PrimitiveType::Float, PrimitiveType::Double),
+            (
+                PrimitiveType::Decimal {
+                    precision: 9,
+                    scale: 2,
+                },
+                PrimitiveType::Decimal {
+                    precision: 18,
+                    scale: 2,
+                },
+            ),
+        ]);
+        let primitives = vec![
+            PrimitiveType::Boolean,
+            PrimitiveType::Int,
+            PrimitiveType::Long,
+            PrimitiveType::Float,
+            PrimitiveType::Double,
+            PrimitiveType::Date,
+            PrimitiveType::Time,
+            PrimitiveType::Timestamp,
+            PrimitiveType::Timestamptz,
+            PrimitiveType::String,
+            PrimitiveType::Uuid,
+            PrimitiveType::Binary,
+            PrimitiveType::Fixed(3),
+            PrimitiveType::Fixed(4),
+            PrimitiveType::Decimal {
+                precision: 9,
+                scale: 2,
+            },
+            PrimitiveType::Decimal {
+                precision: 9,
+                scale: 3,
+            },
+            PrimitiveType::Decimal {
+                precision: 18,
+                scale: 2,
+            },
+            // TODO: Geometry types and Geography types
+        ];
+        for from in &primitives {
+            for to in &primitives {
+                let from_schema = Arc::new(
+                    Schema::builder()
+                        .with_fields(vec![
+                            NestedField::required(1, "col", from.clone().into()).into(),
+                        ])
+                        .build()
+                        .unwrap(),
+                );
+                if from == to || allowed_updates.contains(&(from.clone(), to.clone())) {
+                    let expected = Schema::builder()
+                        .with_fields(vec![
+                            NestedField::required(1, "col", to.clone().into()).into(),
+                        ])
+                        .build()
+                        .unwrap();
+                    let result =
+                        schema_update(from_schema, &[
+                            UpdateColumn::new_type("col", to.clone()).into()
+                        ])
+                        .unwrap();
+                    assert_eq!(&expected, result.as_ref());
+                    continue;
+                }
+                let result =
+                    schema_update(from_schema, &[
+                        UpdateColumn::new_type("col", to.clone()).into()
+                    ]);
+                let err = result.unwrap_err();
+                assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
+                assert_eq!(
+                    err.message(),
+                    format!("Cannot promote col from type {} to type {}", from, to)
+                );
+            }
+        }
     }
 
     #[test]
     fn rename() {
         let renamed = schema_update(Arc::new(SCHEMA.clone()), &[
-            SchemaOperation::Rename(
-                RenameColumn::builder()
-                    .name("data")
-                    .new_name("json")
-                    .build(),
-            ),
-            SchemaOperation::Rename(
-                RenameColumn::builder()
-                    .name("preferences")
-                    .new_name("options")
-                    .build(),
-            ),
-            SchemaOperation::Rename(
-                RenameColumn::builder()
-                    .name("preferences.feature2")
-                    .new_name("newfeature")
-                    .build(),
-            ),
-            SchemaOperation::Rename(
-                RenameColumn::builder()
-                    .name("locations.lat")
-                    .new_name("latitude")
-                    .build(),
-            ),
-            SchemaOperation::Rename(
-                RenameColumn::builder()
-                    .name("points.x")
-                    .new_name("X")
-                    .build(),
-            ),
-            SchemaOperation::Rename(
-                RenameColumn::builder()
-                    .name("points.y")
-                    .new_name("Y")
-                    .build(),
-            ),
+            RenameColumn::builder()
+                .name("data")
+                .new_name("json")
+                .build()
+                .into(),
+            RenameColumn::builder()
+                .name("preferences")
+                .new_name("options")
+                .build()
+                .into(),
+            RenameColumn::builder()
+                .name("preferences.feature2")
+                .new_name("newfeature")
+                .build()
+                .into(),
+            RenameColumn::builder()
+                .name("locations.lat")
+                .new_name("latitude")
+                .build()
+                .into(),
+            RenameColumn::builder()
+                .name("points.x")
+                .new_name("X")
+                .build()
+                .into(),
+            RenameColumn::builder()
+                .name("points.y")
+                .new_name("Y")
+                .build()
+                .into(),
         ]);
         let expected = Schema::builder()
             .with_fields(vec![
@@ -1119,32 +1250,22 @@ mod tests {
                 NestedField::required(
                     4,
                     "locations",
-                    MapType::new(
-                        NestedField::map_key_element(
-                            10,
-                            StructType::new(vec![
-                                NestedField::required(20, "address", PrimitiveType::String.into())
-                                    .into(),
-                                NestedField::required(21, "city", PrimitiveType::String.into())
-                                    .into(),
-                                NestedField::required(22, "state", PrimitiveType::String.into())
-                                    .into(),
-                                NestedField::required(23, "zip", PrimitiveType::Int.into()).into(),
-                            ])
-                            .into(),
-                        )
+                    MapType::required(
+                        10,
+                        StructType::new(vec![
+                            NestedField::required(20, "address", PrimitiveType::String.into())
+                                .into(),
+                            NestedField::required(21, "city", PrimitiveType::String.into()).into(),
+                            NestedField::required(22, "state", PrimitiveType::String.into()).into(),
+                            NestedField::required(23, "zip", PrimitiveType::Int.into()).into(),
+                        ])
                         .into(),
-                        NestedField::map_value_element(
-                            11,
-                            StructType::new(vec![
-                                NestedField::required(12, "latitude", PrimitiveType::Float.into())
-                                    .into(),
-                                NestedField::required(13, "long", PrimitiveType::Float.into())
-                                    .into(),
-                            ])
-                            .into(),
-                            true,
-                        )
+                        11,
+                        StructType::new(vec![
+                            NestedField::required(12, "latitude", PrimitiveType::Float.into())
+                                .into(),
+                            NestedField::required(13, "long", PrimitiveType::Float.into()).into(),
+                        ])
                         .into(),
                     )
                     .into(),
@@ -1154,16 +1275,12 @@ mod tests {
                 NestedField::optional(
                     5,
                     "points",
-                    ListType::new(
-                        NestedField::list_element(
-                            14,
-                            StructType::new(vec![
-                                NestedField::required(15, "X", PrimitiveType::Long.into()).into(),
-                                NestedField::required(16, "Y", PrimitiveType::Long.into()).into(),
-                            ])
-                            .into(),
-                            false,
-                        )
+                    ListType::optional(
+                        14,
+                        StructType::new(vec![
+                            NestedField::required(15, "X", PrimitiveType::Long.into()).into(),
+                            NestedField::required(16, "Y", PrimitiveType::Long.into()).into(),
+                        ])
                         .into(),
                     )
                     .into(),
@@ -1173,10 +1290,7 @@ mod tests {
                 NestedField::required(
                     6,
                     "doubles",
-                    ListType::new(
-                        NestedField::required(17, "element", PrimitiveType::Double.into()).into(),
-                    )
-                    .into(),
+                    ListType::required(17, PrimitiveType::Double.into()).into(),
                 )
                 .into(),
                 NestedField::optional(
@@ -1205,36 +1319,32 @@ mod tests {
     #[test]
     fn add_fields() {
         let added = schema_update(Arc::new(SCHEMA.clone()), &[
-            SchemaOperation::Add(
-                AddColumn::builder()
-                    .name("topLevel")
-                    .r#type(Type::Primitive(PrimitiveType::Decimal {
-                        precision: 9,
-                        scale: 2,
-                    }))
-                    .build(),
-            ),
-            SchemaOperation::Add(
-                AddColumn::builder()
-                    .parent("locations".to_string())
-                    .name("alt")
-                    .r#type(Type::Primitive(PrimitiveType::Float))
-                    .build(),
-            ),
-            SchemaOperation::Add(
-                AddColumn::builder()
-                    .parent("points".to_string())
-                    .name("z")
-                    .r#type(Type::Primitive(PrimitiveType::Long))
-                    .build(),
-            ),
-            SchemaOperation::Add(
-                AddColumn::builder()
-                    .parent("points".to_string())
-                    .name("t.t")
-                    .r#type(Type::Primitive(PrimitiveType::Long))
-                    .build(),
-            ),
+            AddColumn::builder()
+                .name("topLevel")
+                .r#type(Type::Primitive(PrimitiveType::Decimal {
+                    precision: 9,
+                    scale: 2,
+                }))
+                .build()
+                .into(),
+            AddColumn::builder()
+                .parent("locations".to_string())
+                .name("alt")
+                .r#type(Type::Primitive(PrimitiveType::Float))
+                .build()
+                .into(),
+            AddColumn::builder()
+                .parent("points".to_string())
+                .name("z")
+                .r#type(Type::Primitive(PrimitiveType::Long))
+                .build()
+                .into(),
+            AddColumn::builder()
+                .parent("points".to_string())
+                .name("t.t")
+                .r#type(Type::Primitive(PrimitiveType::Long))
+                .build()
+                .into(),
         ])
         .unwrap();
 
@@ -1256,34 +1366,22 @@ mod tests {
                 NestedField::required(
                     4,
                     "locations",
-                    MapType::new(
-                        NestedField::map_key_element(
-                            10,
-                            StructType::new(vec![
-                                NestedField::required(20, "address", PrimitiveType::String.into())
-                                    .into(),
-                                NestedField::required(21, "city", PrimitiveType::String.into())
-                                    .into(),
-                                NestedField::required(22, "state", PrimitiveType::String.into())
-                                    .into(),
-                                NestedField::required(23, "zip", PrimitiveType::Int.into()).into(),
-                            ])
-                            .into(),
-                        )
+                    MapType::required(
+                        10,
+                        StructType::new(vec![
+                            NestedField::required(20, "address", PrimitiveType::String.into())
+                                .into(),
+                            NestedField::required(21, "city", PrimitiveType::String.into()).into(),
+                            NestedField::required(22, "state", PrimitiveType::String.into()).into(),
+                            NestedField::required(23, "zip", PrimitiveType::Int.into()).into(),
+                        ])
                         .into(),
-                        NestedField::map_value_element(
-                            11,
-                            StructType::new(vec![
-                                NestedField::required(12, "lat", PrimitiveType::Float.into())
-                                    .into(),
-                                NestedField::required(13, "long", PrimitiveType::Float.into())
-                                    .into(),
-                                NestedField::optional(25, "alt", PrimitiveType::Float.into())
-                                    .into(),
-                            ])
-                            .into(),
-                            true,
-                        )
+                        11,
+                        StructType::new(vec![
+                            NestedField::required(12, "lat", PrimitiveType::Float.into()).into(),
+                            NestedField::required(13, "long", PrimitiveType::Float.into()).into(),
+                            NestedField::optional(25, "alt", PrimitiveType::Float.into()).into(),
+                        ])
                         .into(),
                     )
                     .into(),
@@ -1310,10 +1408,7 @@ mod tests {
                 NestedField::required(
                     6,
                     "doubles",
-                    ListType::new(
-                        NestedField::required(17, "element", PrimitiveType::Double.into()).into(),
-                    )
-                    .into(),
+                    ListType::required(17, PrimitiveType::Double.into()).into(),
                 )
                 .into(),
                 NestedField::optional(
@@ -1367,14 +1462,13 @@ mod tests {
             ])
             .build()
             .unwrap();
-        let result = schema_update(schema.clone(), &[SchemaOperation::Add(
-            AddColumn::builder()
-                .name("data")
-                .r#type(Type::Primitive(PrimitiveType::String))
-                .doc(Some("description".into()))
-                .default_value(Literal::string("unknown"))
-                .build(),
-        )])
+        let result = schema_update(schema.clone(), &[AddColumn::builder()
+            .name("data")
+            .r#type(Type::Primitive(PrimitiveType::String))
+            .doc("description".into())
+            .default_value(Literal::string("unknown"))
+            .build()
+            .into()])
         .unwrap();
         assert_eq!(&expected, result.as_ref());
     }
@@ -1399,18 +1493,12 @@ mod tests {
             .build()
             .unwrap();
         let result = schema_update(schema.clone(), &[
-            SchemaOperation::Add(
-                AddColumn::builder()
-                    .name("data")
-                    .r#type(PrimitiveType::String.into())
-                    .build(),
-            ),
-            SchemaOperation::Update(
-                UpdateColumn::builder()
-                    .name("data")
-                    .new_default_value(Some(Literal::string("unknown")))
-                    .build(),
-            ),
+            AddColumn::builder()
+                .name("data")
+                .r#type(PrimitiveType::String.into())
+                .build()
+                .into(),
+            UpdateColumn::new_default_value("data", Some(Literal::string("unknown"))).into(),
         ])
         .unwrap();
         assert_eq!(&expected, result.as_ref());
@@ -1447,12 +1535,11 @@ mod tests {
             .build()
             .unwrap();
 
-        let result = schema_update(schema.clone(), &[SchemaOperation::Add(
-            AddColumn::builder()
-                .name("location")
-                .r#type(Type::Struct(struct_type))
-                .build(),
-        )])
+        let result = schema_update(schema.clone(), &[AddColumn::builder()
+            .name("location")
+            .r#type(Type::Struct(struct_type))
+            .build()
+            .into()])
         .unwrap();
         assert_eq!(&expected, result.as_ref());
     }
@@ -1512,12 +1599,11 @@ mod tests {
             ])
             .into(),
         );
-        let result = schema_update(schema, &[SchemaOperation::Add(
-            AddColumn::builder()
-                .name("locations")
-                .r#type(map.into())
-                .build(),
-        )])
+        let result = schema_update(schema, &[AddColumn::builder()
+            .name("locations")
+            .r#type(map.into())
+            .build()
+            .into()])
         .unwrap();
         assert_eq!(&expected, result.as_ref())
     }
@@ -1559,14 +1645,269 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "not yet implemented"]
     fn make_column_optional() {
-        todo!()
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", PrimitiveType::Int.into()).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let expected = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
+            ])
+            .build()
+            .unwrap();
+        let result = schema_update(schema.clone(), &[
+            UpdateColumn::new_required("id", false).into()
+        ])
+        .unwrap();
+        assert_eq!(&expected, result.as_ref())
+    }
+
+    #[test]
+    fn require_column() {
+        let column = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
+            ])
+            .build()
+            .unwrap();
+        let expected = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", PrimitiveType::Int.into()).into(),
+            ])
+            .build()
+            .unwrap();
+
+        // required to required is not an incompatible change
+        assert_eq!(
+            schema_update(Arc::new(expected.clone()), &[UpdateColumn::new_required(
+                "id", true
+            )
+            .into()])
+            .unwrap()
+            .as_ref(),
+            &expected
+        );
+
+        let result = schema_update(Arc::new(column), &[
+            SchemaOperation::AllowIncompatibleChanges,
+            UpdateColumn::new_required("id", true).into(),
+        ])
+        .unwrap();
+        assert_eq!(&expected, result.as_ref());
+    }
+
+    #[test]
+    fn add_column_with_default_to_required_column() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let expected = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
+                NestedField::required(2, "data", PrimitiveType::String.into())
+                    .with_initial_default(Literal::string("unknown"))
+                    .with_write_default(Literal::string("unknown"))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+        let result = schema_update(schema.clone(), &[
+            AddColumn::builder()
+                .name("data")
+                .r#type(Type::Primitive(PrimitiveType::String))
+                .default_value(Literal::string("unknown"))
+                .build()
+                .into(),
+            UpdateColumn::new_required("data", true).into(),
+        ])
+        .unwrap();
+        assert_eq!(&expected, result.as_ref());
     }
 
     #[test]
     #[ignore = "not yet implemented"]
-    fn require_column() {
-        todo!()
+    fn add_column_with_update_column_default_to_required_column() {}
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn require_column_case_insensitive() {}
+
+    #[test]
+    fn test_mixed_changes() {
+        let expected = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", PrimitiveType::Long.into())
+                    .with_doc("unique id")
+                    .into(),
+                NestedField::required(2, "json", PrimitiveType::String.into()).into(),
+                NestedField::optional(
+                    3,
+                    "options",
+                    StructType::new(vec![
+                        NestedField::required(8, "feature1", PrimitiveType::Boolean.into()).into(),
+                        NestedField::optional(9, "newfeature", PrimitiveType::Boolean.into())
+                            .into(),
+                    ])
+                    .into(),
+                )
+                .with_doc("struct of named boolean options")
+                .into(),
+                NestedField::required(
+                    4,
+                    "locations",
+                    MapType::required(
+                        10,
+                        StructType::new(vec![
+                            NestedField::required(20, "address", PrimitiveType::String.into())
+                                .into(),
+                            NestedField::required(21, "city", PrimitiveType::String.into()).into(),
+                            NestedField::required(22, "state", PrimitiveType::String.into()).into(),
+                            NestedField::required(23, "zip", PrimitiveType::Int.into()).into(),
+                        ])
+                        .into(),
+                        11,
+                        StructType::new(vec![
+                            NestedField::required(12, "latitude", PrimitiveType::Double.into())
+                                .with_doc("latitude")
+                                .into(),
+                            NestedField::optional(25, "alt", PrimitiveType::Float.into()).into(),
+                            NestedField::required(28, "description", PrimitiveType::String.into())
+                                .with_doc("Location description")
+                                .into(),
+                        ])
+                        .into(),
+                    )
+                    .into(),
+                )
+                .with_doc("map of address to coordinate")
+                .into(),
+                NestedField::optional(
+                    5,
+                    "points",
+                    ListType::optional(
+                        14,
+                        StructType::new(vec![
+                            NestedField::optional(15, "X", PrimitiveType::Long.into()).into(),
+                            NestedField::required(16, "y.y", PrimitiveType::Long.into()).into(),
+                            NestedField::optional(26, "z", PrimitiveType::Long.into()).into(),
+                            NestedField::optional(27, "t.t", PrimitiveType::Long.into())
+                                .with_doc("name with '.'")
+                                .into(),
+                        ])
+                        .into(),
+                    )
+                    .into(),
+                )
+                .with_doc("2-D cartesian points")
+                .into(),
+                NestedField::required(
+                    6,
+                    "doubles",
+                    ListType::required(17, PrimitiveType::Double.into()).into(),
+                )
+                .into(),
+                NestedField::optional(
+                    24,
+                    "toplevel",
+                    PrimitiveType::Decimal {
+                        precision: 9,
+                        scale: 2,
+                    }
+                    .into(),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let updated = schema_update(Arc::new(SCHEMA.clone()), &[
+            AddColumn::builder()
+                .name("toplevel")
+                .r#type(Type::Primitive(PrimitiveType::Decimal {
+                    precision: 9,
+                    scale: 2,
+                }))
+                .build()
+                .into(),
+            AddColumn::builder()
+                .parent("locations".into())
+                .name("alt")
+                .r#type(Type::Primitive(PrimitiveType::Float))
+                .build()
+                .into(),
+            AddColumn::builder()
+                .parent("points".into())
+                .name("z")
+                .r#type(Type::Primitive(PrimitiveType::Long))
+                .build()
+                .into(),
+            AddColumn::builder()
+                .parent("points".to_string())
+                .name("t.t")
+                .r#type(Type::Primitive(PrimitiveType::Long))
+                .doc("name with '.'".into())
+                .build()
+                .into(),
+            RenameColumn::builder()
+                .name("data")
+                .new_name("json")
+                .build()
+                .into(),
+            RenameColumn::builder()
+                .name("preferences")
+                .new_name("options")
+                .build()
+                .into(),
+            RenameColumn::builder()
+                .name("preferences.feature2")
+                .new_name("newfeature")
+                .build()
+                .into(),
+            RenameColumn::builder()
+                .name("locations.lat")
+                .new_name("latitude")
+                .build()
+                .into(),
+            RenameColumn::builder()
+                .name("points.x")
+                .new_name("X")
+                .build()
+                .into(),
+            RenameColumn::builder()
+                .name("points.y")
+                .new_name("y.y")
+                .build()
+                .into(),
+            UpdateColumn::new_type("id", PrimitiveType::Long).into(),
+            UpdateColumn::new_doc("id", Some("unique id".into())).into(),
+            UpdateColumn::new_type("locations.lat", PrimitiveType::Double).into(),
+            UpdateColumn::new_doc("locations.lat", Some("latitude".into())).into(),
+            DeleteColumn::new("locations.long").into(),
+            DeleteColumn::new("properties").into(),
+            UpdateColumn::new_required("points.x", false).into(),
+            SchemaOperation::AllowIncompatibleChanges,
+            UpdateColumn::new_required("data", true).into(),
+            AddColumn::builder()
+                .parent("locations".into())
+                .name("description")
+                .r#type(Type::Primitive(PrimitiveType::String))
+                .is_optional(false)
+                .doc("Location description".into())
+                .build()
+                .into(),
+        ])
+        .unwrap();
+
+        assert_eq!(&expected, updated.as_ref());
     }
 }

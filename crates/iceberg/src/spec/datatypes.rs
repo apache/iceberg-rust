@@ -646,16 +646,6 @@ impl NestedField {
         Self::new(id, LIST_FIELD_NAME, field_type, required)
     }
 
-    /// Construct required list type's element field.
-    pub fn list_required_element(id: i32, field_type: Type) -> Self {
-        Self::list_element(id, field_type, true)
-    }
-
-    /// Construct optional list type's element field.
-    pub fn list_optional_element(id: i32, field_type: Type) -> Self {
-        Self::list_element(id, field_type, false)
-    }
-
     /// Construct map type's key field.
     pub fn map_key_element(id: i32, field_type: Type) -> Self {
         Self::required(id, MAP_KEY_FIELD_NAME, field_type)

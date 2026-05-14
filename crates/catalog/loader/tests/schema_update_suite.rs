@@ -153,8 +153,7 @@ async fn test_catalog_schema_add_nested_and_delete_column(#[case] kind: CatalogK
                     ])
                     .into(),
                 )
-                .build()
-                .into(),
+                .build(),
         )
         .apply(tx)?;
     let table = tx.commit(catalog.as_ref()).await?;
@@ -168,10 +167,9 @@ async fn test_catalog_schema_add_nested_and_delete_column(#[case] kind: CatalogK
                 .name("zip")
                 .r#type(PrimitiveType::String.into())
                 .parent("info".into())
-                .build()
-                .into(),
+                .build(),
         )
-        .push_operation(DeleteColumn::new("baz").into())
+        .push_operation(DeleteColumn::new("baz"))
         .apply(tx)?;
     let table = tx.commit(catalog.as_ref()).await?;
 
@@ -227,7 +225,7 @@ async fn test_catalog_schema_delete_invalid_column_errors(#[case] kind: CatalogK
     let tx = Transaction::new(&table);
     let tx = tx
         .update_schema()
-        .push_operation(DeleteColumn::new("bar").into())
+        .push_operation(DeleteColumn::new("bar"))
         .apply(tx)?;
     let err = tx.commit(catalog.as_ref()).await.unwrap_err();
     assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
@@ -236,7 +234,7 @@ async fn test_catalog_schema_delete_invalid_column_errors(#[case] kind: CatalogK
     let tx = Transaction::new(&table);
     let tx = tx
         .update_schema()
-        .push_operation(DeleteColumn::new("nonexistent").into())
+        .push_operation(DeleteColumn::new("nonexistent"))
         .apply(tx)?;
     let err = tx.commit(catalog.as_ref()).await.unwrap_err();
     assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
@@ -293,8 +291,7 @@ async fn test_catalog_schema_update_persisted_after_reload(
             AddColumn::builder()
                 .name("new_field")
                 .r#type(PrimitiveType::Long.into())
-                .build()
-                .into(),
+                .build(),
         )
         .apply(tx)?;
     tx.commit(catalog.as_ref()).await?;
