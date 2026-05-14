@@ -250,8 +250,8 @@ impl Table {
     }
 
     /// Returns the [`Runtime`] for this table.
-    pub(crate) fn runtime(&self) -> Runtime {
-        self.runtime.clone()
+    pub(crate) fn runtime(&self) -> &Runtime {
+        &self.runtime
     }
 
     /// Returns the flag indicating whether the `Table` is readonly or not
@@ -269,7 +269,7 @@ impl Table {
     /// Requires that a [`Runtime`] was set on the builder or that this is
     /// called from within a tokio runtime context; panics otherwise.
     pub fn reader_builder(&self) -> ArrowReaderBuilder {
-        ArrowReaderBuilder::new(self.file_io.clone(), self.runtime())
+        ArrowReaderBuilder::new(self.file_io.clone(), self.runtime().clone())
     }
 }
 

@@ -211,7 +211,7 @@ impl<'a> TableScanBuilder<'a> {
                         concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
                         row_group_filtering_enabled: self.row_group_filtering_enabled,
                         row_selection_enabled: self.row_selection_enabled,
-                        runtime: self.table.runtime(),
+                        runtime: self.table.runtime().clone(),
                     });
                 };
                 current_snapshot_id.clone()
@@ -305,7 +305,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
-            runtime: self.table.runtime(),
+            runtime: self.table.runtime().clone(),
         })
     }
 }
@@ -1399,9 +1399,11 @@ pub mod tests {
             .unwrap();
         assert_eq!(plan_task.len(), 2);
 
-        let reader =
-            ArrowReaderBuilder::new(fixture.table.file_io().clone(), fixture.table.runtime())
-                .build();
+        let reader = ArrowReaderBuilder::new(
+            fixture.table.file_io().clone(),
+            fixture.table.runtime().clone(),
+        )
+        .build();
         let batch_stream = reader
             .clone()
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
@@ -1409,9 +1411,11 @@ pub mod tests {
             .stream();
         let batch_1: Vec<_> = batch_stream.try_collect().await.unwrap();
 
-        let reader =
-            ArrowReaderBuilder::new(fixture.table.file_io().clone(), fixture.table.runtime())
-                .build();
+        let reader = ArrowReaderBuilder::new(
+            fixture.table.file_io().clone(),
+            fixture.table.runtime().clone(),
+        )
+        .build();
         let batch_stream = reader
             .read(Box::pin(stream::iter(vec![Ok(plan_task.remove(0))])))
             .unwrap()
