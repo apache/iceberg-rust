@@ -128,6 +128,9 @@ pub struct TableProperties {
     pub cdc_max_chunk_size: usize,
     /// Content-defined chunking normalization level (gearhash bit adjustment).
     pub cdc_norm_level: i32,
+    /// The master key id used to encrypt this table's manifest list and data
+    /// files. `None` if `encryption.key-id` is not set.
+    pub encryption_key_id: Option<String>,
 }
 
 impl TableProperties {
@@ -253,6 +256,10 @@ impl TableProperties {
         "write.parquet.content-defined-chunking.norm-level";
     /// Default matches `parquet::file::properties::DEFAULT_CDC_NORM_LEVEL`.
     pub const PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT: i32 = 0;
+
+    /// Property key for the master key id used to encrypt the table's manifest
+    /// list and data files. Matches Java's `TableProperties.ENCRYPTION_TABLE_KEY`.
+    pub const PROPERTY_ENCRYPTION_KEY_ID: &str = "encryption.key-id";
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
@@ -322,6 +329,9 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL,
                 TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT,
             )?,
+            encryption_key_id: props
+                .get(TableProperties::PROPERTY_ENCRYPTION_KEY_ID)
+                .cloned(),
         })
     }
 }

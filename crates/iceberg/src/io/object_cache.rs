@@ -18,6 +18,7 @@
 use std::mem::size_of_val;
 use std::sync::Arc;
 
+use crate::encryption::EncryptionManager;
 use crate::io::FileIO;
 use crate::spec::{
     FormatVersion, Manifest, ManifestFile, ManifestList, ManifestListReader, SchemaId, SnapshotRef,
@@ -45,20 +46,25 @@ pub struct ObjectCache {
     cache: moka::future::Cache<CachedObjectKey, CachedItem>,
     file_io: FileIO,
     cache_disabled: bool,
+    encryption_manager: Option<Arc<EncryptionManager>>,
 }
 
 impl ObjectCache {
     /// Creates a new [`ObjectCache`]
     /// with the default cache size
-    pub(crate) fn new(file_io: FileIO) -> Self {
-        Self::new_with_capacity(file_io, DEFAULT_CACHE_SIZE_BYTES)
+    pub(crate) fn new(file_io: FileIO, encryption_manager: Option<Arc<EncryptionManager>>) -> Self {
+        Self::new_with_capacity(file_io, DEFAULT_CACHE_SIZE_BYTES, encryption_manager)
     }
 
     /// Creates a new [`ObjectCache`]
     /// with a specific cache size
-    pub(crate) fn new_with_capacity(file_io: FileIO, cache_size_bytes: u64) -> Self {
+    pub(crate) fn new_with_capacity(
+        file_io: FileIO,
+        cache_size_bytes: u64,
+        encryption_manager: Option<Arc<EncryptionManager>>,
+    ) -> Self {
         if cache_size_bytes == 0 {
-            Self::with_disabled_cache(file_io)
+            Self::with_disabled_cache(file_io, encryption_manager)
         } else {
             Self {
                 cache: moka::future::Cache::builder()
@@ -70,17 +76,22 @@ impl ObjectCache {
                     .build(),
                 file_io,
                 cache_disabled: false,
+                encryption_manager,
             }
         }
     }
 
     /// Creates a new [`ObjectCache`]
     /// with caching disabled
-    pub(crate) fn with_disabled_cache(file_io: FileIO) -> Self {
+    pub(crate) fn with_disabled_cache(
+        file_io: FileIO,
+        encryption_manager: Option<Arc<EncryptionManager>>,
+    ) -> Self {
         Self {
             cache: moka::future::Cache::new(0),
             file_io,
             cache_disabled: true,
+            encryption_manager,
         }
     }
 
@@ -320,7 +331,7 @@ mod tests {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
-        let object_cache = ObjectCache::with_disabled_cache(fixture.table.file_io().clone());
+        let object_cache = ObjectCache::with_disabled_cache(fixture.table.file_io().clone(), None);
 
         let result_manifest_list = object_cache
             .get_manifest_list(
@@ -353,7 +364,7 @@ mod tests {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
-        let object_cache = ObjectCache::new(fixture.table.file_io().clone());
+        let object_cache = ObjectCache::new(fixture.table.file_io().clone(), None);
 
         // not in cache
         let result_manifest_list = object_cache

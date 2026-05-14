@@ -20,6 +20,8 @@
 use std::sync::Arc;
 
 use crate::arrow::ArrowReaderBuilder;
+use crate::encryption::EncryptionManager;
+use crate::encryption::kms::KeyManagementClient;
 use crate::inspect::MetadataTable;
 use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
@@ -34,6 +36,7 @@ pub struct TableBuilder {
     metadata_location: Option<String>,
     metadata: Option<TableMetadataRef>,
     identifier: Option<TableIdent>,
+    kms_client: Option<Arc<dyn KeyManagementClient>>,
     readonly: bool,
     disable_cache: bool,
     cache_size_bytes: Option<u64>,
@@ -47,6 +50,7 @@ impl TableBuilder {
             metadata_location: None,
             metadata: None,
             identifier: None,
+            kms_client: None,
             readonly: false,
             disable_cache: false,
             cache_size_bytes: None,
@@ -104,6 +108,16 @@ impl TableBuilder {
         self
     }
 
+    /// optional - sets the KMS client used to unwrap keys for table encryption.
+    ///
+    /// If the table metadata has the `encryption.key-id` property set, a
+    /// [`KeyManagementClient`] must be provided here so the table can build
+    /// an [`EncryptionManager`]; otherwise [`Self::build`] will return an error.
+    pub fn kms_client(mut self, kms_client: Arc<dyn KeyManagementClient>) -> Self {
+        self.kms_client = Some(kms_client);
+        self
+    }
+
     /// build the Table
     pub fn build(self) -> Result<Table> {
         let Self {
@@ -111,6 +125,7 @@ impl TableBuilder {
             metadata_location,
             metadata,
             identifier,
+            kms_client,
             readonly,
             disable_cache,
             cache_size_bytes,
@@ -145,15 +160,24 @@ impl TableBuilder {
             ));
         };
 
+        let encryption_manager = maybe_configure_encryption(kms_client.as_ref(), &metadata)?;
+
         let object_cache = if disable_cache {
-            Arc::new(ObjectCache::with_disabled_cache(file_io.clone()))
+            Arc::new(ObjectCache::with_disabled_cache(
+                file_io.clone(),
+                encryption_manager.clone(),
+            ))
         } else if let Some(cache_size_bytes) = cache_size_bytes {
             Arc::new(ObjectCache::new_with_capacity(
                 file_io.clone(),
                 cache_size_bytes,
+                encryption_manager.clone(),
             ))
         } else {
-            Arc::new(ObjectCache::new(file_io.clone()))
+            Arc::new(ObjectCache::new(
+                file_io.clone(),
+                encryption_manager.clone(),
+            ))
         };
 
         Ok(Table {
@@ -164,6 +188,7 @@ impl TableBuilder {
             readonly,
             object_cache,
             runtime,
+            encryption_manager,
         })
     }
 }
@@ -178,6 +203,7 @@ pub struct Table {
     readonly: bool,
     object_cache: Arc<ObjectCache>,
     runtime: Runtime,
+    encryption_manager: Option<Arc<EncryptionManager>>,
 }
 
 impl Table {
@@ -236,6 +262,16 @@ impl Table {
     /// Returns this table's object cache
     pub(crate) fn object_cache(&self) -> Arc<ObjectCache> {
         self.object_cache.clone()
+    }
+
+    /// Returns the [`EncryptionManager`] for this table, if encryption is
+    /// configured.
+    ///
+    /// A manager is present iff the table metadata has the
+    /// `encryption.key-id` property set and a [`KeyManagementClient`] was
+    /// supplied to the [`TableBuilder`].
+    pub fn encryption_manager(&self) -> Option<&EncryptionManager> {
+        self.encryption_manager.as_deref()
     }
 
     /// Creates a table scan.
@@ -361,9 +397,54 @@ impl StaticTable {
     }
 }
 
+/// If the table metadata sets the `encryption.key-id` property, build an
+/// [`EncryptionManager`] for the table.
+///
+/// Returns `Ok(None)` if the property is not set. Returns an error if the
+/// property is set but no [`KeyManagementClient`] was provided.
+fn maybe_configure_encryption(
+    kms_client: Option<&Arc<dyn KeyManagementClient>>,
+    metadata: &TableMetadataRef,
+) -> Result<Option<Arc<EncryptionManager>>> {
+    let Some(table_key_id) = metadata.table_properties()?.encryption_key_id else {
+        return Ok(None);
+    };
+
+    // Encryption is a v3 feature: `encryption-keys` table metadata and the
+    // snapshot `key-id` field are introduced in format version 3.
+    if metadata.format_version() < FormatVersion::V3 {
+        return Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            format!(
+                "Table encryption requires format version 3, found {}",
+                metadata.format_version()
+            ),
+        ));
+    }
+
+    let kms_client = kms_client.ok_or_else(|| {
+        Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Table has encryption.key-id set but no KeyManagementClient was provided to TableBuilder",
+        )
+    })?;
+
+    let em = EncryptionManager::builder()
+        .kms_client(Arc::clone(kms_client))
+        .table_key_id(table_key_id)
+        .encryption_keys(metadata.encryption_keys.clone())
+        .build();
+    Ok(Some(Arc::new(em)))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+    use crate::encryption::StandardKeyMetadata;
+    use crate::encryption::kms::MemoryKeyManagementClient;
+    use crate::spec::{ManifestListWriter, Operation, Snapshot, Summary, TableProperties};
 
     #[tokio::test]
     async fn test_static_table_from_file() {
@@ -436,5 +517,185 @@ mod tests {
             .unwrap();
         assert!(!table.readonly());
         assert_eq!(table.identifier.name(), "table");
+    }
+
+    const V3_METADATA: &str = r#"{
+        "format-version": 3,
+        "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+        "location": "memory:///table",
+        "last-sequence-number": 0,
+        "last-updated-ms": 1602638573590,
+        "last-column-id": 1,
+        "current-schema-id": 0,
+        "schemas": [{"type": "struct", "schema-id": 0, "fields": [
+            {"id": 1, "name": "x", "required": true, "type": "long"}
+        ]}],
+        "default-spec-id": 0,
+        "partition-specs": [{"spec-id": 0, "fields": []}],
+        "last-partition-id": 1000,
+        "default-sort-order-id": 0,
+        "sort-orders": [{"order-id": 0, "fields": []}],
+        "properties": {},
+        "snapshots": [],
+        "snapshot-log": [],
+        "metadata-log": [],
+        "refs": {},
+        "next-row-id": 0
+    }"#;
+
+    const V2_METADATA: &str = r#"{
+        "format-version": 2,
+        "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+        "location": "memory:///table",
+        "last-sequence-number": 0,
+        "last-updated-ms": 1602638573590,
+        "last-column-id": 1,
+        "current-schema-id": 0,
+        "schemas": [{"type": "struct", "schema-id": 0, "fields": [
+            {"id": 1, "name": "x", "required": true, "type": "long"}
+        ]}],
+        "default-spec-id": 0,
+        "partition-specs": [{"spec-id": 0, "fields": []}],
+        "last-partition-id": 1000,
+        "default-sort-order-id": 0,
+        "sort-orders": [{"order-id": 0, "fields": []}],
+        "properties": {},
+        "snapshots": [],
+        "snapshot-log": [],
+        "metadata-log": [],
+        "refs": {}
+    }"#;
+
+    fn make_kms() -> Arc<dyn KeyManagementClient> {
+        let kms = MemoryKeyManagementClient::new();
+        kms.add_master_key("master-1").unwrap();
+        Arc::new(kms)
+    }
+
+    async fn write_empty_manifest_list_bytes(io: &FileIO, path: &str) -> bytes::Bytes {
+        let output = io.new_output(path).unwrap();
+        let mut writer = ManifestListWriter::v3(output, 1, None, 0, Some(0));
+        writer.add_manifests(std::iter::empty()).unwrap();
+        writer.close().await.unwrap();
+        io.new_input(path).unwrap().read().await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn table_decrypts_manifest_list_via_object_cache() {
+        let io = FileIO::new_with_memory();
+        let plain_path = "memory:///table/metadata/manifest-list-plain.avro";
+        let encrypted_path = "memory:///table/metadata/manifest-list-enc.avro";
+
+        // Encrypt a real manifest list onto the encrypted path.
+        let raw = write_empty_manifest_list_bytes(&io, plain_path).await;
+        let kms = make_kms();
+        let mgr = EncryptionManager::builder()
+            .kms_client(Arc::clone(&kms))
+            .table_key_id("master-1")
+            .build();
+        let encrypted_output = mgr.encrypt(io.new_output(encrypted_path).unwrap());
+        let std_km: StandardKeyMetadata = encrypted_output.key_metadata().clone();
+        encrypted_output.write(raw).await.unwrap();
+        let key_id = mgr
+            .encrypt_manifest_list_key_metadata(&std_km)
+            .await
+            .unwrap();
+
+        // Snapshot the wrapped keys (manifest-list entry + KEK) the manager produced.
+        let encryption_keys = mgr.with_encryption_keys(|keys| keys.clone());
+
+        // Build a TableMetadata with those keys, the encryption.key-id property,
+        // and a snapshot whose encryption_key_id points at the wrapped entry.
+        let mut metadata: TableMetadata = serde_json::from_str(V3_METADATA).unwrap();
+        metadata.properties.insert(
+            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+            "master-1".to_string(),
+        );
+        metadata.encryption_keys = encryption_keys;
+
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_sequence_number(0)
+            .with_timestamp_ms(0)
+            .with_manifest_list(encrypted_path.to_string())
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .with_schema_id(0)
+            .with_encryption_key_id(Some(key_id))
+            .build();
+        let snapshot_ref = Arc::new(snapshot);
+        metadata
+            .snapshots
+            .insert(snapshot_ref.snapshot_id(), snapshot_ref.clone());
+        metadata.current_snapshot_id = Some(snapshot_ref.snapshot_id());
+
+        // Build the table with the KMS client, then read via the object cache.
+        let table = Table::builder()
+            .file_io(io)
+            .metadata(metadata)
+            .identifier(TableIdent::from_strs(["ns", "enc"]).unwrap())
+            .kms_client(kms)
+            .build()
+            .unwrap();
+        assert!(table.encryption_manager().is_some());
+
+        let manifest_list = table
+            .object_cache()
+            .get_manifest_list(&snapshot_ref, &table.metadata_ref())
+            .await
+            .unwrap();
+        assert_eq!(manifest_list.entries().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn table_builder_errors_when_encryption_key_id_set_but_no_kms() {
+        let mut metadata: TableMetadata = serde_json::from_str(V3_METADATA).unwrap();
+        metadata.properties.insert(
+            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+            "master-1".to_string(),
+        );
+
+        let err = Table::builder()
+            .file_io(FileIO::new_with_memory())
+            .metadata(metadata)
+            .identifier(TableIdent::from_strs(["ns", "enc"]).unwrap())
+            .build()
+            .unwrap_err();
+        assert_eq!(err.kind(), crate::ErrorKind::FeatureUnsupported);
+    }
+
+    #[tokio::test]
+    async fn table_builder_errors_when_encryption_set_on_pre_v3_table() {
+        // Encryption is a v3 spec feature; setting encryption.key-id on a v2 table
+        // must be rejected even when a KMS client is available.
+        let mut metadata: TableMetadata = serde_json::from_str(V2_METADATA).unwrap();
+        metadata.properties.insert(
+            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+            "master-1".to_string(),
+        );
+
+        let err = Table::builder()
+            .file_io(FileIO::new_with_memory())
+            .metadata(metadata)
+            .identifier(TableIdent::from_strs(["ns", "enc"]).unwrap())
+            .kms_client(make_kms())
+            .build()
+            .unwrap_err();
+        assert_eq!(err.kind(), crate::ErrorKind::FeatureUnsupported);
+    }
+
+    #[tokio::test]
+    async fn table_builder_skips_encryption_when_property_absent() {
+        let metadata: TableMetadata = serde_json::from_str(V2_METADATA).unwrap();
+        let table = Table::builder()
+            .file_io(FileIO::new_with_memory())
+            .metadata(metadata)
+            .identifier(TableIdent::from_strs(["ns", "plain"]).unwrap())
+            .kms_client(make_kms())
+            .build()
+            .unwrap();
+        assert!(table.encryption_manager().is_none());
     }
 }
