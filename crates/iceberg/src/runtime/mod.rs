@@ -20,7 +20,6 @@
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tokio::task;
@@ -119,7 +118,7 @@ impl fmt::Debug for Runtime {
 
 impl Runtime {
     /// Create a Runtime backed by a single tokio runtime for all work.
-    pub fn new(runtime: &tokio::runtime::Runtime>) -> Self {
+    pub fn new(runtime: &tokio::runtime::Runtime) -> Self {
         let handle = RuntimeHandle::from_tokio_handle(runtime.handle().clone());
         Self {
             io: handle.clone(),
@@ -191,19 +190,17 @@ mod tests {
     /// A test harness that owns a tokio runtime and exposes a `Runtime` handle
     /// plus a `block_on` helper for sync test bodies.
     struct TestRuntime {
-        tokio: Arc<tokio::runtime::Runtime>,
+        tokio: tokio::runtime::Runtime,
         rt: Runtime,
     }
 
     impl TestRuntime {
         fn new() -> Self {
-            let tokio = Arc::new(
-                tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                    .expect("Failed to build tokio runtime"),
-            );
-            let rt = Runtime::new(tokio.clone());
+            let tokio = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to build tokio runtime");
+            let rt = Runtime::new(&tokio);
             Self { tokio, rt }
         }
 
@@ -242,19 +239,15 @@ mod tests {
 
     #[test]
     fn test_runtime_split_uses_separate_handles() {
-        let io_rt = Arc::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
-        let cpu_rt = Arc::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
-        let rt = Runtime::new_with_split(io_rt.clone(), cpu_rt.clone());
+        let io_rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let cpu_rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let rt = Runtime::new_with_split(&io_rt, &cpu_rt);
         // Spawn on each and confirm both are distinct live runtimes. We use
         // `io_rt`/`cpu_rt` directly to `block_on` since our `Runtime` doesn't
         // expose one.
@@ -301,14 +294,13 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let owned = Arc::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
-        let rt = Runtime::new(owned.clone());
-        // Drop the caller's strong reference. `owned` was the only Arc.
+        let owned = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let rt = Runtime::new(&owned);
+        // Drop the caller's owned runtime. Our `Runtime` only holds a `Handle`,
+        // so this shuts down the underlying tokio runtime.
         drop(owned);
 
         // Spawning after shutdown returns a handle that resolves to a cancelled
