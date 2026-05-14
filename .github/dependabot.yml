@@ -46,3 +46,12 @@ updates:
           - "parquet"
     cooldown:
       default-days: 7
+
+  # Maintain dependencies for python bindings
+  - package-ecosystem: "uv"
+    directory: "/bindings/python"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+    cooldown:
+      default-days: 7
