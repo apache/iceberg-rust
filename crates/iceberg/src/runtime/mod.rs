@@ -119,7 +119,7 @@ impl fmt::Debug for Runtime {
 
 impl Runtime {
     /// Create a Runtime backed by a single tokio runtime for all work.
-    pub fn new(runtime: Arc<tokio::runtime::Runtime>) -> Self {
+    pub fn new(runtime: &tokio::runtime::Runtime>) -> Self {
         let handle = RuntimeHandle::from_tokio_handle(runtime.handle().clone());
         Self {
             io: handle.clone(),
