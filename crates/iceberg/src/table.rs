@@ -265,9 +265,6 @@ impl Table {
     }
 
     /// Create a reader for the table.
-    ///
-    /// Requires that a [`Runtime`] was set on the builder or that this is
-    /// called from within a tokio runtime context; panics otherwise.
     pub fn reader_builder(&self) -> ArrowReaderBuilder {
         ArrowReaderBuilder::new(self.file_io.clone(), self.runtime().clone())
     }
