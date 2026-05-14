@@ -223,7 +223,7 @@ mod tests {
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/metadata.json".to_string())
+            .metadata_location("/test/metadata.json")
             .runtime(test_runtime())
             .build()
             .unwrap()
@@ -381,7 +381,7 @@ mod tests {
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "bucketed_table"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/bucketed_metadata.json".to_string())
+            .metadata_location("/test/bucketed_metadata.json")
             .runtime(test_runtime())
             .build()
             .unwrap();
@@ -467,7 +467,7 @@ mod tests {
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "partitioned_bucketed_table"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/partitioned_bucketed_metadata.json".to_string())
+            .metadata_location("/test/partitioned_bucketed_metadata.json")
             .runtime(test_runtime())
             .build()
             .unwrap();
@@ -552,7 +552,7 @@ mod tests {
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "none_table"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/none_metadata.json".to_string())
+            .metadata_location("/test/none_metadata.json")
             .runtime(test_runtime())
             .build()
             .unwrap();
@@ -625,7 +625,7 @@ mod tests {
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "range_only_table"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/range_only_metadata.json".to_string())
+            .metadata_location("/test/range_only_metadata.json")
             .runtime(test_runtime())
             .build()
             .unwrap();
@@ -701,7 +701,7 @@ mod tests {
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "mixed_transforms_table"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/mixed_transforms_metadata.json".to_string())
+            .metadata_location("/test/mixed_transforms_metadata.json")
             .runtime(test_runtime())
             .build()
             .unwrap();
@@ -785,7 +785,7 @@ mod tests {
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "temporal_partition"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/temporal_metadata.json".to_string())
+            .metadata_location("/test/temporal_metadata.json")
             .runtime(test_runtime())
             .build()
             .unwrap();
@@ -859,7 +859,7 @@ mod tests {
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "identity_partition"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/identity_metadata.json".to_string())
+            .metadata_location("/test/identity_metadata.json")
             .runtime(test_runtime())
             .build()
             .unwrap();

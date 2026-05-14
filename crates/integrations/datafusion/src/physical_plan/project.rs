@@ -448,7 +448,7 @@ mod tests {
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/metadata.json".to_string())
+            .metadata_location("/test/metadata.json")
             .runtime(test_runtime())
             .build()
             .unwrap();
@@ -507,7 +507,7 @@ mod tests {
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/metadata.json".to_string())
+            .metadata_location("/test/metadata.json")
             .runtime(test_runtime())
             .build()
             .unwrap();
@@ -580,7 +580,7 @@ mod tests {
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/metadata.json".to_string())
+            .metadata_location("/test/metadata.json")
             .runtime(test_runtime())
             .build()
             .unwrap();
