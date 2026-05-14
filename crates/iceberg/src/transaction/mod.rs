@@ -239,6 +239,7 @@ mod tests {
     use crate::io::FileIO;
     use crate::spec::TableMetadata;
     use crate::table::Table;
+    use crate::test_utils::test_runtime;
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
 
@@ -257,6 +258,7 @@ mod tests {
             .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
             .file_io(FileIO::new_with_memory())
+            .runtime(test_runtime())
             .build()
             .unwrap()
     }
@@ -276,6 +278,7 @@ mod tests {
             .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
             .file_io(FileIO::new_with_memory())
+            .runtime(test_runtime())
             .build()
             .unwrap()
     }
@@ -295,6 +298,7 @@ mod tests {
             .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
             .file_io(FileIO::new_with_memory())
+            .runtime(test_runtime())
             .build()
             .unwrap()
     }

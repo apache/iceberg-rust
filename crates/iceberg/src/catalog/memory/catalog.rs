@@ -435,6 +435,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::io::FileIO;
     use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
+    use crate::test_utils::test_runtime;
     use crate::transaction::{ApplyTransactionAction, Transaction};
 
     fn temp_path() -> String {
@@ -1960,6 +1961,7 @@ pub(crate) mod tests {
             .identifier(ident)
             .metadata(metadata)
             .file_io(file_io)
+            .runtime(test_runtime())
             .build()
             .unwrap()
     }

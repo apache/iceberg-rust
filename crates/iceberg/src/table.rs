@@ -138,6 +138,13 @@ impl TableBuilder {
             ));
         };
 
+        let Some(runtime) = runtime else {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Runtime must be provided with TableBuilder.runtime()",
+            ));
+        };
+
         let object_cache = if disable_cache {
             Arc::new(ObjectCache::with_disabled_cache(file_io.clone()))
         } else if let Some(cache_size_bytes) = cache_size_bytes {
@@ -170,9 +177,7 @@ pub struct Table {
     identifier: TableIdent,
     readonly: bool,
     object_cache: Arc<ObjectCache>,
-    /// Runtime explicitly attached at build time. `None` means "resolve from
-    /// the ambient tokio runtime on demand"
-    runtime: Option<Runtime>,
+    runtime: Runtime,
 }
 
 impl Table {
@@ -244,13 +249,9 @@ impl Table {
         MetadataTable::new(self)
     }
 
-    /// Returns a resolved [`Runtime`] for this table.
-    ///
-    /// If a runtime was set via [`TableBuilder::runtime`], it is returned.
-    /// Otherwise, this borrows the ambient tokio runtime via
-    /// [`Runtime::current`], which panics if called outside a tokio context.
+    /// Returns the [`Runtime`] for this table.
     pub(crate) fn runtime(&self) -> Runtime {
-        self.runtime.clone().unwrap_or_else(Runtime::current)
+        self.runtime.clone()
     }
 
     /// Returns the flag indicating whether the `Table` is readonly or not
@@ -309,6 +310,7 @@ impl StaticTable {
             .metadata(metadata)
             .identifier(table_ident)
             .file_io(file_io.clone())
+            .runtime(Runtime::try_current()?)
             .readonly(true)
             .build();
 
@@ -327,6 +329,7 @@ impl StaticTable {
             .metadata_location(metadata_location)
             .identifier(table_ident)
             .file_io(file_io.clone())
+            .runtime(Runtime::try_current()?)
             .readonly(true)
             .build();
 
@@ -426,6 +429,7 @@ mod tests {
             .metadata(table_metadata)
             .identifier(static_identifier)
             .file_io(file_io.clone())
+            .runtime(Runtime::try_current().unwrap())
             .build()
             .unwrap();
         assert!(!table.readonly());

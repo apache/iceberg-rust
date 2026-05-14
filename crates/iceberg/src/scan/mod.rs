@@ -630,6 +630,7 @@ pub mod tests {
         PrimitiveType, Schema, Struct, StructType, TableMetadata, Type,
     };
     use crate::table::Table;
+    use crate::test_utils::test_runtime;
 
     fn render_template(template: &str, ctx: Value) -> String {
         let mut env = Environment::new();
@@ -673,6 +674,7 @@ pub mod tests {
                 .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
                 .file_io(file_io.clone())
                 .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
+                .runtime(test_runtime())
                 .build()
                 .unwrap();
 
@@ -708,6 +710,7 @@ pub mod tests {
                 .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
                 .file_io(file_io.clone())
                 .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
+                .runtime(test_runtime())
                 .build()
                 .unwrap();
 
@@ -741,6 +744,7 @@ pub mod tests {
                 .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
                 .file_io(file_io.clone())
                 .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
+                .runtime(test_runtime())
                 .build()
                 .unwrap();
 
@@ -786,6 +790,7 @@ pub mod tests {
                 .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
                 .file_io(file_io.clone())
                 .metadata_location(table_metadata1_location.to_str().unwrap())
+                .runtime(test_runtime())
                 .build()
                 .unwrap();
 

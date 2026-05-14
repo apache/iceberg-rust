@@ -1084,6 +1084,7 @@ mod tests {
         ViewVersion,
     };
     use crate::table::Table;
+    use crate::test_utils::test_runtime;
     use crate::{
         NamespaceIdent, TableCommit, TableCreation, TableIdent, TableRequirement, TableUpdate,
     };
@@ -2401,6 +2402,7 @@ mod tests {
                 .metadata_location("s3://bucket/test/location/metadata/00000-8a62c37d-4573-4021-952a-c0baef7d21d0.metadata.json".to_string())
                 .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
                 .file_io(FileIO::new_with_memory())
+                .runtime(test_runtime())
                 .build()
                 .unwrap()
         };

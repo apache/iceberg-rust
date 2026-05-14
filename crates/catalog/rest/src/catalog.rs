@@ -1089,6 +1089,7 @@ mod tests {
         SnapshotLog, SortDirection, SortField, SortOrder, Summary, Transform, Type,
         UnboundPartitionField, UnboundPartitionSpec,
     };
+    use iceberg::test_utils::test_runtime;
     use iceberg::transaction::{ApplyTransactionAction, Transaction};
     use mockito::{Mock, Server, ServerGuard};
     use serde_json::json;
@@ -2644,6 +2645,7 @@ mod tests {
                 .metadata_location(resp.metadata_location.unwrap())
                 .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
                 .file_io(FileIO::new_with_fs())
+                .runtime(test_runtime())
                 .build()
                 .unwrap()
         };
@@ -2788,6 +2790,7 @@ mod tests {
                 .metadata_location(resp.metadata_location.unwrap())
                 .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
                 .file_io(FileIO::new_with_fs())
+                .runtime(test_runtime())
                 .build()
                 .unwrap()
         };
