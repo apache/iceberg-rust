@@ -15,72 +15,60 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt;
-
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_kms::Client;
 use aws_sdk_kms::primitives::Blob;
 use aws_sdk_kms::types::DataKeySpec;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
 
-use crate::encryption::{GeneratedKey, KeyManagementClient, SensitiveBytes};
+use crate::encryption::{AesKeySize, GeneratedKey, KeyManagementClient, SensitiveBytes};
 use crate::{Error, ErrorKind};
 
-/// AWS KMS implementation
+/// AWS KMS implementation of [`KeyManagementClient`].
 ///
-/// ```
-/// use aws_sdk_kms::types::DataKeySpec;
+/// ```no_run
 /// use iceberg::encryption::KeyManagementClient;
 /// use iceberg::encryption::kms::AwsKeyManagementClient;
 ///
 /// async fn example() -> iceberg::Result<()> {
-///     let kms = AwsKeyManagementClient::new(DataKeySpec::Aes128).await;
+///     let kms = AwsKeyManagementClient::new().await;
 ///     let dek = vec![0u8; 32];
-///     let wrapped = kms.wrap_key(&dek, "arn:aws:kms:us-west-2:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab").await?;
-///     let unwrapped = kms.unwrap_key(&wrapped, "arn:aws:kms:us-west-2:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab").await?;
+///     const KMS_KEY_ID: &str =
+///         "arn:aws:kms:us-west-2:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab";
+///     let wrapped = kms.wrap_key(&dek, KMS_KEY_ID).await?;
+///     let unwrapped = kms.unwrap_key(&wrapped, KMS_KEY_ID).await?;
 ///     assert_eq!(dek.as_slice(), unwrapped.as_bytes());
 ///     Ok(())
 /// }
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AwsKeyManagementClient {
     kms_client: Client,
-    data_key_spec: DataKeySpec,
-}
-
-impl fmt::Debug for AwsKeyManagementClient {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AwsKeyManagementClient").finish()
-    }
 }
 
 impl AwsKeyManagementClient {
-    /// Creates an AwsKeyManagementClient with a default AWS KMS client and DataKeySpec
-    pub async fn new(data_key_spec: DataKeySpec) -> Self {
-        let region_provider = RegionProviderChain::default_provider().or_else("us-west-2");
+    /// Creates an `AwsKeyManagementClient` using AWS SDK default credential
+    /// and region resolution.
+    ///
+    /// AWS SDK config resolution (env vars, profiles, IMDS) runs once on construction;
+    /// callers should reuse a single instance rather than building per request.
+    pub async fn new() -> Self {
+        let region_provider = RegionProviderChain::default_provider();
 
-        // This line uses the default credential provider chain
         let config = aws_config::defaults(BehaviorVersion::v2026_01_12())
-            // region can also be loaded from AWS_DEFAULT_REGION, just remove this line.
             .region(region_provider)
             .load()
             .await;
 
         Self {
             kms_client: Client::new(&config),
-            data_key_spec,
         }
     }
 
-    /// Creates an AwsKeyManagementClient with a provided AWS KMS client and DataKeySpec
-    pub fn new_with_client(kms_client: Client, data_key_spec: DataKeySpec) -> Self {
-        Self {
-            kms_client,
-            data_key_spec,
-        }
+    /// Creates an `AwsKeyManagementClient` from a pre-configured AWS KMS client.
+    pub fn new_with_client(kms_client: Client) -> Self {
+        Self { kms_client }
     }
 }
 
@@ -95,17 +83,20 @@ impl KeyManagementClient for AwsKeyManagementClient {
             .key_id(wrapping_key_id)
             .plaintext(blob)
             .send()
-            .await;
-        let blob = resp
-            .map(|r| r.ciphertext_blob.expect("Could not get encrypted text"))
+            .await
             .map_err(|e| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    format!("Error encrypting wrapped key: {e}"),
-                )
+                Error::new(ErrorKind::Unexpected, "Failed to encrypt key via AWS KMS")
+                    .with_source(e)
             })?;
 
-        Ok(blob.into_inner())
+        let ciphertext = resp.ciphertext_blob.ok_or_else(|| {
+            Error::new(
+                ErrorKind::Unexpected,
+                "AWS KMS encrypt response missing ciphertext_blob",
+            )
+        })?;
+
+        Ok(ciphertext.into_inner())
     }
 
     async fn unwrap_key(
@@ -113,61 +104,87 @@ impl KeyManagementClient for AwsKeyManagementClient {
         wrapped_key: &[u8],
         wrapping_key_id: &str,
     ) -> crate::Result<SensitiveBytes> {
-        let wrapped_key = BASE64.decode(wrapped_key).map(Blob::new).map_err(|e| {
-            Error::new(
-                ErrorKind::Unexpected,
-                format!("Error base64 decoding wrapped key: {e}"),
-            )
-        })?;
+        let blob = Blob::new(wrapped_key);
 
         let resp = self
             .kms_client
             .decrypt()
             .key_id(wrapping_key_id)
-            .ciphertext_blob(wrapped_key)
+            .ciphertext_blob(blob)
             .send()
-            .await;
+            .await
+            .map_err(|e| {
+                Error::new(ErrorKind::Unexpected, "Failed to decrypt key via AWS KMS")
+                    .with_source(e)
+            })?;
 
-        let inner = resp.map(|r| r.plaintext.unwrap()).map_err(|e| {
+        let plaintext = resp.plaintext.ok_or_else(|| {
             Error::new(
                 ErrorKind::Unexpected,
-                format!("Error decrypting wrapped key: {e}"),
+                "AWS KMS decrypt response missing plaintext",
             )
         })?;
 
-        Ok(SensitiveBytes::new(inner.into_inner()))
+        Ok(SensitiveBytes::new(plaintext.into_inner()))
     }
 
     fn supports_key_generation(&self) -> bool {
         true
     }
 
-    async fn generate_key(&self, wrapping_key_id: &str) -> crate::Result<GeneratedKey> {
+    async fn generate_key(
+        &self,
+        wrapping_key_id: &str,
+        aes_key_size: AesKeySize,
+    ) -> crate::Result<GeneratedKey> {
+        let data_key_spec = match aes_key_size {
+            AesKeySize::Bits128 => Ok(DataKeySpec::Aes128),
+            AesKeySize::Bits192 => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "AWS KMS DataKeySpec doesn't support AES-192",
+            )),
+            AesKeySize::Bits256 => Ok(DataKeySpec::Aes256),
+        }?;
+
         let resp = self
             .kms_client
             .generate_data_key()
             .key_id(wrapping_key_id)
-            .key_spec(self.data_key_spec.clone())
+            .key_spec(data_key_spec)
             .send()
-            .await;
-
-        let key = resp
-            .map(|r| {
-                let wrapped_key = r
-                    .ciphertext_blob
-                    .expect("Could not get encrypted text")
-                    .into_inner();
-                let plaintext = r.plaintext.expect("Could not get plaintext");
-                GeneratedKey::new(SensitiveBytes::new(plaintext.into_inner()), wrapped_key)
-            })
+            .await
             .map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
-                    format!("Error generating wrapped key: {e}"),
+                    "Failed to generate data key via AWS KMS",
                 )
+                .with_source(e)
             })?;
 
-        Ok(key)
+        let wrapped_key = resp
+            .ciphertext_blob
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "AWS KMS generate_data_key response missing ciphertext_blob",
+                )
+            })?
+            .into_inner();
+
+        let plaintext = resp
+            .plaintext
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "AWS KMS generate_data_key response missing plaintext",
+                )
+            })?
+            .into_inner();
+
+        Ok(GeneratedKey::new(
+            SensitiveBytes::new(plaintext),
+            wrapped_key,
+        ))
     }
 }
 
@@ -182,7 +199,7 @@ mod tests {
     #[tokio::test]
     async fn test_wrap_key() {
         let encrypt_rule = mock!(Client::encrypt)
-            .match_requests(|req| req.key_id == Some(String::from("master-key-id")))
+            .match_requests(|req| req.key_id.as_deref() == Some("master-key-id"))
             .then_output(|| {
                 EncryptOutput::builder()
                     .ciphertext_blob(Blob::from(b"hello world".to_vec()))
@@ -191,7 +208,7 @@ mod tests {
 
         let client = mock_client!(aws_sdk_kms, [&encrypt_rule]);
 
-        let kms = AwsKeyManagementClient::new_with_client(client, DataKeySpec::Aes256);
+        let kms = AwsKeyManagementClient::new_with_client(client);
 
         assert_eq!(
             kms.wrap_key(b"123", "master-key-id").await.unwrap(),
@@ -202,7 +219,7 @@ mod tests {
     #[tokio::test]
     async fn test_unwrap_key() {
         let decrypt_rule = mock!(Client::decrypt)
-            .match_requests(|req| req.key_id == Some(String::from("master-key-id")))
+            .match_requests(|req| req.key_id.as_deref() == Some("master-key-id"))
             .then_output(|| {
                 DecryptOutput::builder()
                     .plaintext(Blob::from(b"hello world".to_vec()))
@@ -211,10 +228,10 @@ mod tests {
 
         let client = mock_client!(aws_sdk_kms, [&decrypt_rule]);
 
-        let kms = AwsKeyManagementClient::new_with_client(client, DataKeySpec::Aes128);
+        let kms = AwsKeyManagementClient::new_with_client(client);
 
         assert_eq!(
-            kms.unwrap_key(BASE64.encode(b"123").as_bytes(), "master-key-id")
+            kms.unwrap_key(b"encrypted-blob", "master-key-id")
                 .await
                 .unwrap(),
             SensitiveBytes::new(b"hello world".to_vec())

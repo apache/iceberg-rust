@@ -214,7 +214,10 @@ impl EncryptionManager {
     /// the manager's `encryption_keys` map.
     async fn create_kek(&self) -> Result<EncryptedKey> {
         let (plaintext_kek, wrapped_kek) = if self.kms_client.supports_key_generation() {
-            let result = self.kms_client.generate_key(&self.table_key_id).await?;
+            let result = self
+                .kms_client
+                .generate_key(&self.table_key_id, self.key_size)
+                .await?;
             (result.key().clone(), result.wrapped_key().to_vec())
         } else {
             let plaintext_key = SecureKey::generate(self.key_size);

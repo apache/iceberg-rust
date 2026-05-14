@@ -168,7 +168,11 @@ impl KeyManagementClient for MemoryKeyManagementClient {
         false
     }
 
-    async fn generate_key(&self, _wrapping_key_id: &str) -> Result<super::GeneratedKey> {
+    async fn generate_key(
+        &self,
+        _wrapping_key_id: &str,
+        _aes_key_size: AesKeySize,
+    ) -> Result<super::GeneratedKey> {
         Err(Error::new(
             ErrorKind::FeatureUnsupported,
             "MemoryKeyManagementClient does not support server-side key generation",
@@ -218,7 +222,7 @@ mod tests {
         let kms = MemoryKeyManagementClient::new();
         assert!(!kms.supports_key_generation());
 
-        let result = kms.generate_key("master-1").await;
+        let result = kms.generate_key("master-1", AesKeySize::Bits128).await;
         assert!(result.is_err());
     }
 

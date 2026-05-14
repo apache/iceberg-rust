@@ -22,7 +22,7 @@
 use async_trait::async_trait;
 
 use crate::Result;
-use crate::encryption::SensitiveBytes;
+use crate::encryption::{AesKeySize, SensitiveBytes};
 
 /// Result of a server-side key generation operation.
 ///
@@ -71,7 +71,11 @@ pub trait KeyManagementClient: Send + Sync + std::fmt::Debug {
     ///
     /// This is only supported when [`supports_key_generation`](Self::supports_key_generation)
     /// returns `true`.
-    async fn generate_key(&self, wrapping_key_id: &str) -> Result<GeneratedKey>;
+    async fn generate_key(
+        &self,
+        wrapping_key_id: &str,
+        key_size: AesKeySize,
+    ) -> Result<GeneratedKey>;
 }
 
 #[async_trait]
@@ -92,7 +96,11 @@ impl<T: AsRef<dyn KeyManagementClient> + Send + Sync + std::fmt::Debug> KeyManag
         self.as_ref().supports_key_generation()
     }
 
-    async fn generate_key(&self, wrapping_key_id: &str) -> Result<GeneratedKey> {
-        self.as_ref().generate_key(wrapping_key_id).await
+    async fn generate_key(
+        &self,
+        wrapping_key_id: &str,
+        key_size: AesKeySize,
+    ) -> Result<GeneratedKey> {
+        self.as_ref().generate_key(wrapping_key_id, key_size).await
     }
 }
