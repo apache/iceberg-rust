@@ -258,7 +258,7 @@ impl TableProperties {
     pub const PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT: i32 = 0;
 
     /// Property key for the master key id used to encrypt the table's manifest
-    /// list and data files. Matches Java's `TableProperties.ENCRYPTION_TABLE_KEY`.
+    /// list and data files as defined in https://iceberg.apache.org/docs/nightly/encryption/.
     pub const PROPERTY_ENCRYPTION_KEY_ID: &str = "encryption.key-id";
 }
 
