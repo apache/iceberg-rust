@@ -129,8 +129,8 @@ impl Runtime {
 
     /// Create a Runtime with separate tokio runtimes for IO and CPU work.
     pub fn new_with_split(
-        io_runtime: Arc<tokio::runtime::Runtime>,
-        cpu_runtime: Arc<tokio::runtime::Runtime>,
+        io_runtime: &tokio::runtime::Runtime,
+        cpu_runtime: &tokio::runtime::Runtime,
     ) -> Self {
         Self {
             io: RuntimeHandle::from_tokio_handle(io_runtime.handle().clone()),
