@@ -58,6 +58,7 @@ mod snapshot;
 mod sort_order;
 mod update_location;
 mod update_properties;
+mod update_schema;
 mod update_statistics;
 mod upgrade_format_version;
 
@@ -65,6 +66,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWithContext};
+pub use update_schema::AddColumn;
 
 use crate::error::Result;
 use crate::spec::TableProperties;
@@ -74,6 +76,7 @@ use crate::transaction::append::FastAppendAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
+use crate::transaction::update_schema::UpdateSchemaAction;
 use crate::transaction::update_statistics::UpdateStatisticsAction;
 use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
 use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
@@ -134,6 +137,11 @@ impl Transaction {
     /// Update table's property.
     pub fn update_table_properties(&self) -> UpdatePropertiesAction {
         UpdatePropertiesAction::new()
+    }
+
+    /// Creates an update schema action.
+    pub fn update_schema(&self) -> UpdateSchemaAction {
+        UpdateSchemaAction::new()
     }
 
     /// Creates a fast append action.
@@ -237,7 +245,10 @@ mod tests {
 
     use crate::catalog::MockCatalog;
     use crate::io::FileIO;
-    use crate::spec::TableMetadata;
+    use crate::memory::tests::new_memory_catalog;
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
+    };
     use crate::table::Table;
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
@@ -254,7 +265,7 @@ mod tests {
 
         Table::builder()
             .metadata(resp)
-            .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
+            .metadata_location("s3://bucket/test/location/metadata/v1.json")
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
             .file_io(FileIO::new_with_memory())
             .build()
@@ -273,7 +284,7 @@ mod tests {
 
         Table::builder()
             .metadata(resp)
-            .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
+            .metadata_location("s3://bucket/test/location/metadata/v1.json")
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
             .file_io(FileIO::new_with_memory())
             .build()
@@ -292,7 +303,7 @@ mod tests {
 
         Table::builder()
             .metadata(resp)
-            .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
+            .metadata_location("s3://bucket/test/location/metadata/v1.json")
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
             .file_io(FileIO::new_with_memory())
             .build()
@@ -497,6 +508,52 @@ mod tests {
             assert_eq!(err.message(), "Commit conflict");
             assert!(err.retryable(), "Error should be retryable");
         }
+    }
+
+    #[tokio::test]
+    async fn test_transaction_snapshot_summary() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let mut file_seq = 0u32;
+        let mut append_file = |table: &crate::table::Table, record_count: u64, file_size: u64| {
+            file_seq += 1;
+            let file = DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_path(format!("test/{file_seq}.parquet"))
+                .file_format(DataFileFormat::Parquet)
+                .file_size_in_bytes(file_size)
+                .record_count(record_count)
+                .partition(Struct::from_iter([Some(Literal::long(1))]))
+                .partition_spec_id(0)
+                .build()
+                .unwrap();
+            let tx = Transaction::new(table);
+            tx.fast_append()
+                .add_data_files(vec![file])
+                .apply(tx)
+                .unwrap()
+        };
+
+        let table = append_file(&table, /*record_count=*/ 10, /*file_size=*/ 100)
+            .commit(&catalog)
+            .await
+            .unwrap();
+        let table = append_file(&table, /*record_count=*/ 20, /*file_size=*/ 200)
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        let summary = &table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .summary()
+            .additional_properties;
+
+        assert_eq!(summary.get("total-records").unwrap(), "30");
+        assert_eq!(summary.get("total-data-files").unwrap(), "2");
+        assert_eq!(summary.get("total-files-size").unwrap(), "300");
     }
 }
 
