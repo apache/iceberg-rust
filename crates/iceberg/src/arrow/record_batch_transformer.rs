@@ -674,8 +674,8 @@ mod test {
     use std::sync::Arc;
 
     use arrow_array::{
-        Array, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
-        StringArray,
+        Array, Date32Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int32Array,
+        Int64Array, LargeBinaryArray, RecordBatch, StringArray, Time64MicrosecondArray,
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
@@ -2046,5 +2046,239 @@ mod test {
         // Must survive strict RecordBatch::try_new
         RecordBatch::try_new(result.schema(), result.columns().to_vec())
             .expect("result batch must pass strict schema validation");
+    }
+
+    /// Asserts that schema evolution correctly materializes a null-filled column when the
+    /// source Parquet file is missing the Binary column. Verifies it correctly handles the
+    /// conversion from Iceberg Binary to Arrow Binary.
+    ///
+    /// Before this was fixed, a schema evolution adding a binary column could results in
+    /// failures where the old parquet files could not be re-written due to
+    /// "Unexpected => unexpected target column type LargeBinary"
+    #[test]
+    fn schema_evolution_adds_binary_column_with_nulls() {
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(3, "bin_col", Type::Primitive(PrimitiveType::Binary))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let projected_iceberg_field_ids = [1, 2, 3];
+
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_iceberg_field_ids)
+                .build();
+
+        let file_schema = Arc::new(ArrowSchema::new(vec![
+            simple_field("id", DataType::Int32, false, "1"),
+            simple_field("name", DataType::Utf8, true, "2"),
+        ]));
+
+        let file_batch = RecordBatch::try_new(file_schema, vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec![
+                Some("Alice"),
+                Some("Bob"),
+                Some("Charlie"),
+            ])),
+        ])
+        .unwrap();
+
+        let result = transformer.process_record_batch(file_batch).unwrap();
+
+        assert_eq!(result.num_columns(), 3);
+        assert_eq!(result.num_rows(), 3);
+
+        let id_col = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_col.values(), &[1, 2, 3]);
+
+        let name_col = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(name_col.value(0), "Alice");
+        assert_eq!(name_col.value(1), "Bob");
+        assert_eq!(name_col.value(2), "Charlie");
+
+        let bin_col = result
+            .column(2)
+            .as_any()
+            .downcast_ref::<LargeBinaryArray>()
+            .unwrap();
+        assert!(bin_col.is_null(0));
+        assert!(bin_col.is_null(1));
+        assert!(bin_col.is_null(2));
+    }
+
+    /// Asserts that schema evolution correctly materializes a null-filled column when the
+    /// source Parquet file is missing the Time column. Verifies it correctly handles the
+    /// conversion from Iceberg Time to Arrow Time64(Microsecond).
+    #[test]
+    fn schema_evolution_adds_time_column_with_nulls() {
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(3, "time_col", Type::Primitive(PrimitiveType::Time))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let projected_iceberg_field_ids = [1, 2, 3];
+
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_iceberg_field_ids)
+                .build();
+
+        let file_schema = Arc::new(ArrowSchema::new(vec![
+            simple_field("id", DataType::Int32, false, "1"),
+            simple_field("name", DataType::Utf8, true, "2"),
+        ]));
+
+        let file_batch = RecordBatch::try_new(file_schema, vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec![
+                Some("Alice"),
+                Some("Bob"),
+                Some("Charlie"),
+            ])),
+        ])
+        .unwrap();
+
+        let result = transformer.process_record_batch(file_batch).unwrap();
+
+        assert_eq!(result.num_columns(), 3);
+        assert_eq!(result.num_rows(), 3);
+
+        let time_col = result
+            .column(2)
+            .as_any()
+            .downcast_ref::<Time64MicrosecondArray>()
+            .unwrap();
+        assert!(time_col.is_null(0));
+        assert!(time_col.is_null(1));
+        assert!(time_col.is_null(2));
+    }
+
+    /// Asserts that schema evolution correctly materializes a null-filled column when the
+    /// source Parquet file is missing the Uuid column. Verifies it correctly handles the
+    /// conversion from Iceberg Uuid to Arrow FixedSizeBinary(16).
+    #[test]
+    fn schema_evolution_adds_uuid_column_with_nulls() {
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(3, "uuid_col", Type::Primitive(PrimitiveType::Uuid))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let projected_iceberg_field_ids = [1, 2, 3];
+
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_iceberg_field_ids)
+                .build();
+
+        let file_schema = Arc::new(ArrowSchema::new(vec![
+            simple_field("id", DataType::Int32, false, "1"),
+            simple_field("name", DataType::Utf8, true, "2"),
+        ]));
+
+        let file_batch = RecordBatch::try_new(file_schema, vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec![
+                Some("Alice"),
+                Some("Bob"),
+                Some("Charlie"),
+            ])),
+        ])
+        .unwrap();
+
+        let result = transformer.process_record_batch(file_batch).unwrap();
+
+        assert_eq!(result.num_columns(), 3);
+        assert_eq!(result.num_rows(), 3);
+
+        let uuid_col = result
+            .column(2)
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(uuid_col.data_type(), &DataType::FixedSizeBinary(16));
+        assert!(uuid_col.is_null(0));
+        assert!(uuid_col.is_null(1));
+        assert!(uuid_col.is_null(2));
+    }
+
+    /// Asserts that schema evolution correctly materializes a null-filled column when the
+    /// source Parquet file is missing the Fixed column. Verifies it correctly handles the
+    /// conversion from Iceberg Fixed(len) to Arrow FixedSizeBinary(len).
+    #[test]
+    fn schema_evolution_adds_fixed_column_with_nulls() {
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(3, "fixed_col", Type::Primitive(PrimitiveType::Fixed(4)))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let projected_iceberg_field_ids = [1, 2, 3];
+
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_iceberg_field_ids)
+                .build();
+
+        let file_schema = Arc::new(ArrowSchema::new(vec![
+            simple_field("id", DataType::Int32, false, "1"),
+            simple_field("name", DataType::Utf8, true, "2"),
+        ]));
+
+        let file_batch = RecordBatch::try_new(file_schema, vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec![
+                Some("Alice"),
+                Some("Bob"),
+                Some("Charlie"),
+            ])),
+        ])
+        .unwrap();
+
+        let result = transformer.process_record_batch(file_batch).unwrap();
+
+        assert_eq!(result.num_columns(), 3);
+        assert_eq!(result.num_rows(), 3);
+
+        let fixed_col = result
+            .column(2)
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(fixed_col.data_type(), &DataType::FixedSizeBinary(4));
+        assert!(fixed_col.is_null(0));
+        assert!(fixed_col.is_null(1));
+        assert!(fixed_col.is_null(2));
     }
 }
