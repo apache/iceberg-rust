@@ -19,8 +19,6 @@
 
 use std::sync::Arc;
 
-use backon::BackoffBuilder;
-
 use crate::arrow::ArrowReaderBuilder;
 use crate::encryption::kms::KeyManagementClient;
 use crate::encryption::{AesKeySize, EncryptionManager};
