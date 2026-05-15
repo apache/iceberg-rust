@@ -19,9 +19,11 @@
 
 use std::sync::Arc;
 
+use backon::BackoffBuilder;
+
 use crate::arrow::ArrowReaderBuilder;
-use crate::encryption::EncryptionManager;
 use crate::encryption::kms::KeyManagementClient;
+use crate::encryption::{AesKeySize, EncryptionManager};
 use crate::inspect::MetadataTable;
 use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
@@ -406,7 +408,8 @@ fn maybe_configure_encryption(
     kms_client: Option<&Arc<dyn KeyManagementClient>>,
     metadata: &TableMetadataRef,
 ) -> Result<Option<Arc<EncryptionManager>>> {
-    let Some(table_key_id) = metadata.table_properties()?.encryption_key_id else {
+    let table_properties = metadata.table_properties()?;
+    let Some(table_key_id) = table_properties.encryption_key_id else {
         return Ok(None);
     };
 
@@ -433,6 +436,9 @@ fn maybe_configure_encryption(
         .kms_client(Arc::clone(kms_client))
         .table_key_id(table_key_id)
         .encryption_keys(metadata.encryption_keys.clone())
+        .key_size(AesKeySize::from_key_length(
+            table_properties.encryption_data_key_length,
+        )?)
         .build();
     Ok(Some(Arc::new(em)))
 }

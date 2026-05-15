@@ -131,6 +131,8 @@ pub struct TableProperties {
     /// The master key id used to encrypt this table's manifest list and data
     /// files. `None` if `encryption.key-id` is not set.
     pub encryption_key_id: Option<String>,
+    /// The encryption data encryption key length in bytes.
+    pub encryption_data_key_length: usize,
 }
 
 impl TableProperties {
@@ -260,6 +262,11 @@ impl TableProperties {
     /// Property key for the master key id used to encrypt the table's manifest
     /// list and data files as defined in https://iceberg.apache.org/docs/nightly/encryption/.
     pub const PROPERTY_ENCRYPTION_KEY_ID: &str = "encryption.key-id";
+
+    /// Property key for the encryption data encryption key (DEK) length in bytes.
+    pub const PROPERTY_ENCRYPTION_DATA_KEY_LENGTH: &str = "encryption.data-key-length";
+    /// Default value for the encryption DEK length (16 bytes = AES-128).
+    pub const PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT: usize = 16;
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
@@ -332,6 +339,11 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
             encryption_key_id: props
                 .get(TableProperties::PROPERTY_ENCRYPTION_KEY_ID)
                 .cloned(),
+            encryption_data_key_length: parse_property(
+                props,
+                TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
+                TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT,
+            )?,
         })
     }
 }
