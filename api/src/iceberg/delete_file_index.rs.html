@@ -23,7 +23,7 @@
 <a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>futures::channel::mpsc::{Sender, channel};
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>tokio::sync::Notify;
 <a href=#25 id=25 data-nosnippet>25</a>
-<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span><span class="kw">crate</span>::runtime::spawn;
+<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span><span class="kw">crate</span>::runtime::Runtime;
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span><span class="kw">crate</span>::scan::{DeleteFileContext, FileScanTaskDeleteFile};
 <a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span><span class="kw">crate</span>::spec::{DataContentType, DataFile, Struct};
 <a href=#29 id=29 data-nosnippet>29</a>
@@ -53,7 +53,7 @@
 <a href=#53 id=53 data-nosnippet>53</a>
 <a href=#54 id=54 data-nosnippet>54</a><span class="kw">impl </span>DeleteFileIndex {
 <a href=#55 id=55 data-nosnippet>55</a>    <span class="doccomment">/// create a new `DeleteFileIndex` along with the sender that populates it with delete files
-<a href=#56 id=56 data-nosnippet>56</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new() -&gt; (DeleteFileIndex, Sender&lt;DeleteFileContext&gt;) {
+<a href=#56 id=56 data-nosnippet>56</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(runtime: Runtime) -&gt; (DeleteFileIndex, Sender&lt;DeleteFileContext&gt;) {
 <a href=#57 id=57 data-nosnippet>57</a>        <span class="comment">// TODO: what should the channel limit be?
 <a href=#58 id=58 data-nosnippet>58</a>        </span><span class="kw">let </span>(tx, rx) = channel(<span class="number">10</span>);
 <a href=#59 id=59 data-nosnippet>59</a>        <span class="kw">let </span>notify = Arc::new(Notify::new());
@@ -62,7 +62,7 @@
 <a href=#62 id=62 data-nosnippet>62</a>        )));
 <a href=#63 id=63 data-nosnippet>63</a>        <span class="kw">let </span>delete_file_stream = rx.boxed();
 <a href=#64 id=64 data-nosnippet>64</a>
-<a href=#65 id=65 data-nosnippet>65</a>        spawn({
+<a href=#65 id=65 data-nosnippet>65</a>        runtime.io().spawn({
 <a href=#66 id=66 data-nosnippet>66</a>            <span class="kw">let </span>state = state.clone();
 <a href=#67 id=67 data-nosnippet>67</a>            <span class="kw">async move </span>{
 <a href=#68 id=68 data-nosnippet>68</a>                <span class="kw">let </span>delete_files: Vec&lt;DeleteFileContext&gt; =

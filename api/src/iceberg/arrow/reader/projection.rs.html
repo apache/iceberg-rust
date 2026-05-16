@@ -431,12 +431,12 @@
 <a href=#431 id=431 data-nosnippet>431</a>    <span class="kw">use </span>parquet::schema::types::SchemaDescriptor;
 <a href=#432 id=432 data-nosnippet>432</a>    <span class="kw">use </span>tempfile::TempDir;
 <a href=#433 id=433 data-nosnippet>433</a>
-<a href=#434 id=434 data-nosnippet>434</a>    <span class="kw">use </span><span class="kw">crate</span>::ErrorKind;
-<a href=#435 id=435 data-nosnippet>435</a>    <span class="kw">use </span><span class="kw">crate</span>::arrow::{ArrowReader, ArrowReaderBuilder};
-<a href=#436 id=436 data-nosnippet>436</a>    <span class="kw">use </span><span class="kw">crate</span>::expr::{Bind, Reference};
-<a href=#437 id=437 data-nosnippet>437</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
-<a href=#438 id=438 data-nosnippet>438</a>    <span class="kw">use </span><span class="kw">crate</span>::scan::{FileScanTask, FileScanTaskStream};
-<a href=#439 id=439 data-nosnippet>439</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{DataFileFormat, Datum, NestedField, PrimitiveType, Schema, Type};
+<a href=#434 id=434 data-nosnippet>434</a>    <span class="kw">use </span><span class="kw">crate</span>::arrow::{ArrowReader, ArrowReaderBuilder};
+<a href=#435 id=435 data-nosnippet>435</a>    <span class="kw">use </span><span class="kw">crate</span>::expr::{Bind, Reference};
+<a href=#436 id=436 data-nosnippet>436</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
+<a href=#437 id=437 data-nosnippet>437</a>    <span class="kw">use </span><span class="kw">crate</span>::scan::{FileScanTask, FileScanTaskStream};
+<a href=#438 id=438 data-nosnippet>438</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{DataFileFormat, Datum, NestedField, PrimitiveType, Schema, Type};
+<a href=#439 id=439 data-nosnippet>439</a>    <span class="kw">use crate</span>::{ErrorKind, Runtime};
 <a href=#440 id=440 data-nosnippet>440</a>
 <a href=#441 id=441 data-nosnippet>441</a>    <span class="attr">#[test]
 <a href=#442 id=442 data-nosnippet>442</a>    </span><span class="kw">fn </span>test_arrow_projection_mask() {
@@ -576,7 +576,7 @@
 <a href=#576 id=576 data-nosnippet>576</a>        writer.close().unwrap();
 <a href=#577 id=577 data-nosnippet>577</a>
 <a href=#578 id=578 data-nosnippet>578</a>        <span class="comment">// Read the old Parquet file using the NEW schema (with column 'b')
-<a href=#579 id=579 data-nosnippet>579</a>        </span><span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io).build();
+<a href=#579 id=579 data-nosnippet>579</a>        </span><span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 <a href=#580 id=580 data-nosnippet>580</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
 <a href=#581 id=581 data-nosnippet>581</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask {
 <a href=#582 id=582 data-nosnippet>582</a>                file_size_in_bytes: std::fs::metadata(<span class="macro">format!</span>(<span class="string">"{table_location}/old_file.parquet"</span>))
@@ -678,7 +678,7 @@
 <a href=#678 id=678 data-nosnippet>678</a>        writer.write(<span class="kw-2">&amp;</span>to_write).expect(<span class="string">"Writing batch"</span>);
 <a href=#679 id=679 data-nosnippet>679</a>        writer.close().unwrap();
 <a href=#680 id=680 data-nosnippet>680</a>
-<a href=#681 id=681 data-nosnippet>681</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io).build();
+<a href=#681 id=681 data-nosnippet>681</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 <a href=#682 id=682 data-nosnippet>682</a>
 <a href=#683 id=683 data-nosnippet>683</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
 <a href=#684 id=684 data-nosnippet>684</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask {
@@ -780,7 +780,7 @@
 <a href=#780 id=780 data-nosnippet>780</a>        writer.write(<span class="kw-2">&amp;</span>to_write).expect(<span class="string">"Writing batch"</span>);
 <a href=#781 id=781 data-nosnippet>781</a>        writer.close().unwrap();
 <a href=#782 id=782 data-nosnippet>782</a>
-<a href=#783 id=783 data-nosnippet>783</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io).build();
+<a href=#783 id=783 data-nosnippet>783</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 <a href=#784 id=784 data-nosnippet>784</a>
 <a href=#785 id=785 data-nosnippet>785</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
 <a href=#786 id=786 data-nosnippet>786</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask {
@@ -871,7 +871,7 @@
 <a href=#871 id=871 data-nosnippet>871</a>        writer.write(<span class="kw-2">&amp;</span>to_write).expect(<span class="string">"Writing batch"</span>);
 <a href=#872 id=872 data-nosnippet>872</a>        writer.close().unwrap();
 <a href=#873 id=873 data-nosnippet>873</a>
-<a href=#874 id=874 data-nosnippet>874</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io).build();
+<a href=#874 id=874 data-nosnippet>874</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 <a href=#875 id=875 data-nosnippet>875</a>
 <a href=#876 id=876 data-nosnippet>876</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
 <a href=#877 id=877 data-nosnippet>877</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask {
@@ -976,7 +976,7 @@
 <a href=#976 id=976 data-nosnippet>976</a>        }
 <a href=#977 id=977 data-nosnippet>977</a>        writer.close().unwrap();
 <a href=#978 id=978 data-nosnippet>978</a>
-<a href=#979 id=979 data-nosnippet>979</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io).build();
+<a href=#979 id=979 data-nosnippet>979</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 <a href=#980 id=980 data-nosnippet>980</a>
 <a href=#981 id=981 data-nosnippet>981</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
 <a href=#982 id=982 data-nosnippet>982</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask {
@@ -1110,7 +1110,7 @@
 <a href=#1110 id=1110 data-nosnippet>1110</a>        writer.write(<span class="kw-2">&amp;</span>to_write).expect(<span class="string">"Writing batch"</span>);
 <a href=#1111 id=1111 data-nosnippet>1111</a>        writer.close().unwrap();
 <a href=#1112 id=1112 data-nosnippet>1112</a>
-<a href=#1113 id=1113 data-nosnippet>1113</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io).build();
+<a href=#1113 id=1113 data-nosnippet>1113</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 <a href=#1114 id=1114 data-nosnippet>1114</a>
 <a href=#1115 id=1115 data-nosnippet>1115</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
 <a href=#1116 id=1116 data-nosnippet>1116</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask {
@@ -1211,7 +1211,7 @@
 <a href=#1211 id=1211 data-nosnippet>1211</a>        writer.write(<span class="kw-2">&amp;</span>to_write).expect(<span class="string">"Writing batch"</span>);
 <a href=#1212 id=1212 data-nosnippet>1212</a>        writer.close().unwrap();
 <a href=#1213 id=1213 data-nosnippet>1213</a>
-<a href=#1214 id=1214 data-nosnippet>1214</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io).build();
+<a href=#1214 id=1214 data-nosnippet>1214</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 <a href=#1215 id=1215 data-nosnippet>1215</a>
 <a href=#1216 id=1216 data-nosnippet>1216</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
 <a href=#1217 id=1217 data-nosnippet>1217</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask {
@@ -1322,7 +1322,7 @@
 <a href=#1322 id=1322 data-nosnippet>1322</a>        </span><span class="kw">let </span>predicate = Reference::new(<span class="string">"id"</span>).less_than(Datum::int(<span class="number">5</span>));
 <a href=#1323 id=1323 data-nosnippet>1323</a>
 <a href=#1324 id=1324 data-nosnippet>1324</a>        <span class="comment">// Enable both row_group_filtering and row_selection - triggered the panic
-<a href=#1325 id=1325 data-nosnippet>1325</a>        </span><span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io)
+<a href=#1325 id=1325 data-nosnippet>1325</a>        </span><span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io, Runtime::current())
 <a href=#1326 id=1326 data-nosnippet>1326</a>            .with_row_group_filtering_enabled(<span class="bool-val">true</span>)
 <a href=#1327 id=1327 data-nosnippet>1327</a>            .with_row_selection_enabled(<span class="bool-val">true</span>)
 <a href=#1328 id=1328 data-nosnippet>1328</a>            .build();
@@ -1470,7 +1470,7 @@
 <a href=#1470 id=1470 data-nosnippet>1470</a>        writer.close().unwrap();
 <a href=#1471 id=1471 data-nosnippet>1471</a>
 <a href=#1472 id=1472 data-nosnippet>1472</a>        <span class="comment">// Read the Parquet file with partition spec and data
-<a href=#1473 id=1473 data-nosnippet>1473</a>        </span><span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io).build();
+<a href=#1473 id=1473 data-nosnippet>1473</a>        </span><span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 <a href=#1474 id=1474 data-nosnippet>1474</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
 <a href=#1475 id=1475 data-nosnippet>1475</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask {
 <a href=#1476 id=1476 data-nosnippet>1476</a>                file_size_in_bytes: std::fs::metadata(<span class="macro">format!</span>(<span class="string">"{table_location}/data.parquet"</span>))
@@ -1680,7 +1680,7 @@
 <a href=#1680 id=1680 data-nosnippet>1680</a>
 <a href=#1681 id=1681 data-nosnippet>1681</a>        <span class="kw">let </span>predicate = Reference::new(<span class="string">"id"</span>).greater_than(Datum::int(<span class="number">1</span>));
 <a href=#1682 id=1682 data-nosnippet>1682</a>
-<a href=#1683 id=1683 data-nosnippet>1683</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(FileIO::new_with_fs())
+<a href=#1683 id=1683 data-nosnippet>1683</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
 <a href=#1684 id=1684 data-nosnippet>1684</a>            .with_row_group_filtering_enabled(<span class="bool-val">true</span>)
 <a href=#1685 id=1685 data-nosnippet>1685</a>            .with_row_selection_enabled(<span class="bool-val">true</span>)
 <a href=#1686 id=1686 data-nosnippet>1686</a>            .build();
