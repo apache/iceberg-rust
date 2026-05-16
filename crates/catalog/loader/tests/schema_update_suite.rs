@@ -25,7 +25,7 @@ use std::collections::HashMap;
 
 use common::{CatalogKind, cleanup_namespace_dyn, load_catalog};
 use iceberg::spec::{
-    AddColumn, DeleteColumn, NestedField, PrimitiveType, Schema, SchemaOperation, StructType, Type,
+    AddColumn, DeleteColumn, NestedField, PrimitiveType, Schema, StructType, Type,
 };
 use iceberg::transaction::Transaction;
 use iceberg::{ErrorKind, NamespaceIdent, Result, TableCreation, TableIdent};
@@ -83,12 +83,12 @@ async fn test_catalog_schema_add_column(#[case] kind: CatalogKind) -> Result<()>
     let tx = Transaction::new(&table);
     let tx = tx
         .update_schema()
-        .push_operation(SchemaOperation::Add(
+        .add(
             AddColumn::builder()
                 .name("a")
                 .r#type(PrimitiveType::Int.into())
                 .build(),
-        ))
+        )
         .apply(tx)?;
     let updated = tx.commit(catalog.as_ref()).await?;
 
@@ -144,7 +144,7 @@ async fn test_catalog_schema_add_nested_and_delete_column(#[case] kind: CatalogK
     let tx = Transaction::new(&table);
     let tx = tx
         .update_schema()
-        .push_operation(
+        .add(
             AddColumn::builder()
                 .name("info")
                 .r#type(
@@ -162,14 +162,14 @@ async fn test_catalog_schema_add_nested_and_delete_column(#[case] kind: CatalogK
     let tx = Transaction::new(&table);
     let tx = tx
         .update_schema()
-        .push_operation(
+        .add(
             AddColumn::builder()
                 .name("zip")
                 .r#type(PrimitiveType::String.into())
                 .parent("info".into())
                 .build(),
         )
-        .push_operation(DeleteColumn::new("baz"))
+        .delete(DeleteColumn::new("baz"))
         .apply(tx)?;
     let table = tx.commit(catalog.as_ref()).await?;
 
@@ -225,7 +225,7 @@ async fn test_catalog_schema_delete_invalid_column_errors(#[case] kind: CatalogK
     let tx = Transaction::new(&table);
     let tx = tx
         .update_schema()
-        .push_operation(DeleteColumn::new("bar"))
+        .delete(DeleteColumn::new("bar"))
         .apply(tx)?;
     let err = tx.commit(catalog.as_ref()).await.unwrap_err();
     assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
@@ -234,7 +234,7 @@ async fn test_catalog_schema_delete_invalid_column_errors(#[case] kind: CatalogK
     let tx = Transaction::new(&table);
     let tx = tx
         .update_schema()
-        .push_operation(DeleteColumn::new("nonexistent"))
+        .delete(DeleteColumn::new("nonexistent"))
         .apply(tx)?;
     let err = tx.commit(catalog.as_ref()).await.unwrap_err();
     assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
@@ -287,7 +287,7 @@ async fn test_catalog_schema_update_persisted_after_reload(
     let tx = Transaction::new(&table);
     let tx = tx
         .update_schema()
-        .push_operation(
+        .add(
             AddColumn::builder()
                 .name("new_field")
                 .r#type(PrimitiveType::Long.into())

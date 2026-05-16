@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::spec::{SchemaOperation, schema_update};
+use crate::spec::{
+    AddColumn, DeleteColumn, MoveColumn, RenameColumn, SchemaOperation, UpdateColumn, schema_update,
+};
 use crate::table::Table;
 use crate::transaction::{ActionCommit, TransactionAction};
 use crate::{Result, TableRequirement, TableUpdate};
@@ -29,21 +31,41 @@ pub struct UpdateSchemaAction {
 }
 
 impl UpdateSchemaAction {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             operations: Vec::new(),
         }
     }
 
-    pub fn push_operation(mut self, op: impl Into<SchemaOperation>) -> Self {
-        self.operations.push(op.into());
+    pub fn add(mut self, add: AddColumn) -> Self {
+        self.operations.push(add.into());
         self
     }
-}
 
-impl Default for UpdateSchemaAction {
-    fn default() -> Self {
-        Self::new()
+    pub fn update(mut self, update: UpdateColumn) -> Self {
+        self.operations.push(update.into());
+        self
+    }
+
+    pub fn rename(mut self, rename: RenameColumn) -> Self {
+        self.operations.push(rename.into());
+        self
+    }
+
+    pub fn delete(mut self, delete: DeleteColumn) -> Self {
+        self.operations.push(delete.into());
+        self
+    }
+
+    pub fn r#move(mut self, r#move: MoveColumn) -> Self {
+        self.operations.push(r#move.into());
+        self
+    }
+
+    pub fn allow_incompatible_changes(mut self) -> Self {
+        self.operations
+            .push(SchemaOperation::AllowIncompatibleChanges);
+        self
     }
 }
 
