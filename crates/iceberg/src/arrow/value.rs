@@ -427,11 +427,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
         }
     }
 
-    fn variant(
-        &mut self,
-        _v: &VariantType,
-        _partner: &ArrayRef,
-    ) -> Result<Vec<Option<Literal>>> {
+    fn variant(&mut self, _v: &VariantType, _partner: &ArrayRef) -> Result<Vec<Option<Literal>>> {
         Err(Error::new(
             ErrorKind::FeatureUnsupported,
             "Arrow value extraction for Variant is not yet implemented",

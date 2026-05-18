@@ -867,10 +867,6 @@ impl MapType {
 }
 
 /// Variant type (Iceberg spec v3).
-///
-/// Semi-structured value carried as a pair of binary blobs (metadata + value)
-/// per the parquet-format Variant encoding. Sits at the top level of `Type`
-/// (not inside `PrimitiveType`), matching Java `Types.VariantType implements Type`.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, Default)]
 pub struct VariantType;
 
@@ -1392,4 +1388,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn variant_type_display() {
+        assert_eq!(VariantType.to_string(), "variant");
+        assert_eq!(Type::Variant(VariantType).to_string(), "variant");
+    }
+
+    #[test]
+    fn variant_type_categories() {
+        let t = Type::Variant(VariantType);
+        assert!(!t.is_primitive());
+        assert!(!t.is_nested());
+        assert!(!t.is_struct());
+        assert!(t.is_variant());
+        assert!(t.as_primitive_type().is_none());
+        assert_eq!(t.as_variant_type(), Some(&VariantType));
+    }
+
+    #[test]
+    fn variant_type_field_serde_round_trip() {
+        let json = r#"{"id":17,"name":"v","required":false,"type":"variant"}"#;
+        let field: NestedField = serde_json::from_str(json).unwrap();
+        assert_eq!(*field.field_type, Type::Variant(VariantType));
+        let serialized = serde_json::to_string(&field).unwrap();
+        let reparsed: NestedField = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(field, reparsed);
+    }
+
+    #[test]
+    fn variant_type_rejects_other_strings() {
+        let err = serde_json::from_str::<VariantType>("\"binary\"").unwrap_err();
+        assert!(err.to_string().contains("expected type 'variant'"));
+    }
 }
