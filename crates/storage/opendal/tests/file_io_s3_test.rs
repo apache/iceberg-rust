@@ -23,16 +23,16 @@
 mod tests {
     use std::sync::Arc;
 
-    use async_trait::async_trait;
     use futures::StreamExt;
     use iceberg::io::{
         FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION,
         S3_SECRET_ACCESS_KEY,
     };
-    use iceberg_storage_opendal::{CustomAwsCredentialLoader, OpenDalStorageFactory};
+    use iceberg_storage_opendal::{
+        AwsCredential, CustomAwsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
+    };
     use iceberg_test_utils::{get_minio_endpoint, normalize_test_name_with_parts, set_up};
-    use reqsign::{AwsCredential, AwsCredentialLoad};
-    use reqwest::Client;
+    use reqsign_core::Context;
 
     async fn get_file_io() -> FileIO {
         set_up();
@@ -99,6 +99,7 @@ mod tests {
     }
 
     // Mock credential loader for testing
+    #[derive(Debug)]
     struct MockCredentialLoader {
         credential: Option<AwsCredential>,
     }
@@ -118,9 +119,13 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl AwsCredentialLoad for MockCredentialLoader {
-        async fn load_credential(&self, _client: Client) -> anyhow::Result<Option<AwsCredential>> {
+    impl ProvideCredential for MockCredentialLoader {
+        type Credential = AwsCredential;
+
+        async fn provide_credential(
+            &self,
+            _ctx: &Context,
+        ) -> reqsign_core::Result<Option<AwsCredential>> {
             Ok(self.credential.clone())
         }
     }
@@ -129,7 +134,7 @@ mod tests {
     fn test_custom_aws_credential_loader_instantiation() {
         // Test creating CustomAwsCredentialLoader with mock loader
         let mock_loader = MockCredentialLoader::new_minio();
-        let custom_loader = CustomAwsCredentialLoader::new(Arc::new(mock_loader));
+        let custom_loader = CustomAwsCredentialLoader::new(mock_loader);
 
         // Test that the loader can be used in FileIOBuilder with OpenDalStorageFactory
         let _builder = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
@@ -149,7 +154,7 @@ mod tests {
 
         // Create a mock credential loader
         let mock_loader = MockCredentialLoader::new_minio();
-        let custom_loader = CustomAwsCredentialLoader::new(Arc::new(mock_loader));
+        let custom_loader = CustomAwsCredentialLoader::new(mock_loader);
 
         let minio_endpoint = get_minio_endpoint();
 
@@ -177,7 +182,7 @@ mod tests {
 
         // Create a mock credential loader with no credentials
         let mock_loader = MockCredentialLoader::new(None);
-        let custom_loader = CustomAwsCredentialLoader::new(Arc::new(mock_loader));
+        let custom_loader = CustomAwsCredentialLoader::new(mock_loader);
 
         let minio_endpoint = get_minio_endpoint();
 
@@ -199,8 +204,8 @@ mod tests {
             ),
             Err(e) => {
                 assert!(
-                    e.to_string()
-                        .contains("no valid credential found and anonymous access is not allowed")
+                    e.to_string().contains("failed to load signing credential"),
+                    "unexpected error: {e}"
                 );
             }
         }

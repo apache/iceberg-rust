@@ -23,6 +23,7 @@ use crate::arrow::ArrowReaderBuilder;
 use crate::inspect::MetadataTable;
 use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
+use crate::runtime::Runtime;
 use crate::scan::TableScanBuilder;
 use crate::spec::{SchemaRef, TableMetadata, TableMetadataRef};
 use crate::{Error, ErrorKind, Result, TableIdent};
@@ -36,6 +37,7 @@ pub struct TableBuilder {
     readonly: bool,
     disable_cache: bool,
     cache_size_bytes: Option<u64>,
+    runtime: Option<Runtime>,
 }
 
 impl TableBuilder {
@@ -48,6 +50,7 @@ impl TableBuilder {
             readonly: false,
             disable_cache: false,
             cache_size_bytes: None,
+            runtime: None,
         }
     }
 
@@ -95,6 +98,12 @@ impl TableBuilder {
         self
     }
 
+    /// Set the Runtime for this table to use when spawning tasks.
+    pub fn runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = Some(runtime);
+        self
+    }
+
     /// build the Table
     pub fn build(self) -> Result<Table> {
         let Self {
@@ -105,6 +114,7 @@ impl TableBuilder {
             readonly,
             disable_cache,
             cache_size_bytes,
+            runtime,
         } = self;
 
         let Some(file_io) = file_io else {
@@ -128,6 +138,13 @@ impl TableBuilder {
             ));
         };
 
+        let Some(runtime) = runtime else {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Runtime must be provided with TableBuilder.runtime()",
+            ));
+        };
+
         let object_cache = if disable_cache {
             Arc::new(ObjectCache::with_disabled_cache(file_io.clone()))
         } else if let Some(cache_size_bytes) = cache_size_bytes {
@@ -146,6 +163,7 @@ impl TableBuilder {
             identifier,
             readonly,
             object_cache,
+            runtime,
         })
     }
 }
@@ -159,6 +177,7 @@ pub struct Table {
     identifier: TableIdent,
     readonly: bool,
     object_cache: Arc<ObjectCache>,
+    runtime: Runtime,
 }
 
 impl Table {
@@ -230,6 +249,11 @@ impl Table {
         MetadataTable::new(self)
     }
 
+    /// Returns the [`Runtime`] for this table.
+    pub(crate) fn runtime(&self) -> &Runtime {
+        &self.runtime
+    }
+
     /// Returns the flag indicating whether the `Table` is readonly or not
     pub fn readonly(&self) -> bool {
         self.readonly
@@ -242,7 +266,7 @@ impl Table {
 
     /// Create a reader for the table.
     pub fn reader_builder(&self) -> ArrowReaderBuilder {
-        ArrowReaderBuilder::new(self.file_io.clone())
+        ArrowReaderBuilder::new(self.file_io.clone(), self.runtime().clone())
     }
 }
 
@@ -283,6 +307,7 @@ impl StaticTable {
             .metadata(metadata)
             .identifier(table_ident)
             .file_io(file_io.clone())
+            .runtime(Runtime::try_current()?)
             .readonly(true)
             .build();
 
@@ -301,6 +326,7 @@ impl StaticTable {
             .metadata_location(metadata_location)
             .identifier(table_ident)
             .file_io(file_io.clone())
+            .runtime(Runtime::try_current()?)
             .readonly(true)
             .build();
 
@@ -326,7 +352,7 @@ impl StaticTable {
 
     /// Create a reader for the table.
     pub fn reader_builder(&self) -> ArrowReaderBuilder {
-        ArrowReaderBuilder::new(self.0.file_io.clone())
+        self.0.reader_builder()
     }
 }
 
@@ -400,6 +426,7 @@ mod tests {
             .metadata(table_metadata)
             .identifier(static_identifier)
             .file_io(file_io.clone())
+            .runtime(Runtime::try_current().unwrap())
             .build()
             .unwrap();
         assert!(!table.readonly());

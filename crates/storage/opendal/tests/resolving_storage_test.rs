@@ -257,19 +257,21 @@ mod tests {
     #[cfg(feature = "opendal-s3")]
     #[tokio::test]
     async fn test_with_custom_credential_loader() {
-        use async_trait::async_trait;
-        use iceberg_storage_opendal::CustomAwsCredentialLoader;
-        use reqsign::{AwsCredential, AwsCredentialLoad};
-        use reqwest::Client;
+        use iceberg_storage_opendal::{
+            AwsCredential, CustomAwsCredentialLoader, ProvideCredential,
+        };
+        use reqsign_core::Context;
 
+        #[derive(Debug)]
         struct MinioCredentialLoader;
 
-        #[async_trait]
-        impl AwsCredentialLoad for MinioCredentialLoader {
-            async fn load_credential(
+        impl ProvideCredential for MinioCredentialLoader {
+            type Credential = AwsCredential;
+
+            async fn provide_credential(
                 &self,
-                _client: Client,
-            ) -> anyhow::Result<Option<AwsCredential>> {
+                _ctx: &Context,
+            ) -> reqsign_core::Result<Option<AwsCredential>> {
                 Ok(Some(AwsCredential {
                     access_key_id: "admin".to_string(),
                     secret_access_key: "password".to_string(),
@@ -282,9 +284,8 @@ mod tests {
         set_up();
         let minio_endpoint = get_minio_endpoint();
 
-        let factory = OpenDalResolvingStorageFactory::new().with_s3_credential_loader(
-            CustomAwsCredentialLoader::new(Arc::new(MinioCredentialLoader)),
-        );
+        let factory = OpenDalResolvingStorageFactory::new()
+            .with_s3_credential_loader(CustomAwsCredentialLoader::new(MinioCredentialLoader));
 
         let file_io = FileIOBuilder::new(Arc::new(factory))
             .with_props(vec![

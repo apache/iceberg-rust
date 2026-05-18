@@ -456,6 +456,7 @@ mod tests {
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
+    use crate::Runtime;
     use crate::arrow::ArrowReaderBuilder;
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskStream};
@@ -487,7 +488,7 @@ mod tests {
         project_field_ids: Vec<i32>,
     ) -> Vec<RecordBatch> {
         let file_io = FileIO::new_with_fs();
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         let file_size = std::fs::metadata(file_path).unwrap().len();
         let task = FileScanTask {
@@ -698,7 +699,7 @@ mod tests {
         }
 
         // Read with concurrency=1 (fast-path)
-        let reader = ArrowReaderBuilder::new(file_io)
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
             .with_data_file_concurrency_limit(1)
             .build();
 
