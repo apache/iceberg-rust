@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use std::time::{Duration, Instant};
 
 use http::StatusCode;
 use iceberg::{Error, ErrorKind, Result};
@@ -28,13 +29,50 @@ use tokio::sync::Mutex;
 use crate::RestCatalogConfig;
 use crate::types::{ErrorResponse, TokenResponse};
 
+/// Refresh the token slightly before its server-side expiry so an in-flight
+/// request can't cross the boundary and arrive with an already-expired token.
+const TOKEN_EXPIRY_SAFETY_MARGIN: Duration = Duration::from_secs(30);
+
+/// A cached OAuth token together with its absolute expiry deadline, if known.
+///
+/// Tokens supplied directly via configuration have no `expires_in` and are
+/// treated as never-expiring from this client's perspective. Tokens minted by
+/// exchanging a credential carry the deadline derived from the server's
+/// `expires_in` (minus a safety margin).
+#[derive(Debug, Clone)]
+struct CachedToken {
+    token: String,
+    expires_at: Option<Instant>,
+}
+
+impl CachedToken {
+    fn new(token: String, expires_in: Option<u64>) -> Self {
+        let expires_at = expires_in.map(|secs| {
+            let lifetime = Duration::from_secs(secs).saturating_sub(TOKEN_EXPIRY_SAFETY_MARGIN);
+            Instant::now() + lifetime
+        });
+        Self { token, expires_at }
+    }
+
+    fn from_static(token: String) -> Self {
+        Self {
+            token,
+            expires_at: None,
+        }
+    }
+
+    fn is_expired(&self) -> bool {
+        self.expires_at.is_some_and(|at| Instant::now() >= at)
+    }
+}
+
 pub(crate) struct HttpClient {
     client: Client,
 
     /// The token to be used for authentication.
     ///
     /// It's possible to fetch the token from the server while needed.
-    token: Mutex<Option<String>>,
+    token: Mutex<Option<CachedToken>>,
     /// The token endpoint to be used for authentication.
     token_endpoint: String,
     /// The credential to be used for authentication.
@@ -62,7 +100,7 @@ impl HttpClient {
         let extra_headers = cfg.extra_headers()?;
         Ok(HttpClient {
             client: cfg.client().unwrap_or_default(),
-            token: Mutex::new(cfg.token()),
+            token: Mutex::new(cfg.token().map(CachedToken::from_static)),
             token_endpoint: cfg.get_token_endpoint(),
             credential: cfg.credential(),
             extra_headers,
@@ -82,7 +120,11 @@ impl HttpClient {
             .unwrap_or(self.extra_headers);
         Ok(HttpClient {
             client: cfg.client().unwrap_or(self.client),
-            token: Mutex::new(cfg.token().or_else(|| self.token.into_inner())),
+            token: Mutex::new(
+                cfg.token()
+                    .map(CachedToken::from_static)
+                    .or_else(|| self.token.into_inner()),
+            ),
             token_endpoint: if !cfg.get_token_endpoint().is_empty() {
                 cfg.get_token_endpoint()
             } else {
@@ -107,10 +149,10 @@ impl HttpClient {
             .build()
             .unwrap();
         self.authenticate(&mut req).await.ok();
-        self.token.lock().await.clone()
+        self.token.lock().await.as_ref().map(|c| c.token.clone())
     }
 
-    async fn exchange_credential_for_token(&self) -> Result<String> {
+    async fn exchange_credential_for_token(&self) -> Result<CachedToken> {
         // Credential must exist here.
         let (client_id, client_secret) = self.credential.as_ref().ok_or_else(|| {
             Error::new(
@@ -175,7 +217,7 @@ impl HttpClient {
             })?;
             Err(Error::from(e))
         }?;
-        Ok(auth_res.access_token)
+        Ok(CachedToken::new(auth_res.access_token, auth_res.expires_in))
     }
 
     /// Invalidate the current token without generating a new one. On the next request, the client
@@ -193,7 +235,7 @@ impl HttpClient {
     /// the current token unchanged.
     pub(crate) async fn regenerate_token(&self) -> Result<()> {
         let new_token = self.exchange_credential_for_token().await?;
-        *self.token.lock().await = Some(new_token.clone());
+        *self.token.lock().await = Some(new_token);
         Ok(())
     }
 
@@ -204,31 +246,44 @@ impl HttpClient {
     /// 1. **No authentication** - Skip authentication when both `credential` and `token` are missing.
     /// 2. **Token authentication** - Use the provided `token` directly for authentication.
     /// 3. **OAuth authentication** - Exchange `credential` for a token, cache it, then use it for authentication.
+    ///    When the cached token's `expires_in` deadline has passed, it is refreshed automatically.
     ///
     /// When both `credential` and `token` are present, `token` takes precedence.
-    ///
-    /// # TODO: Support automatic token refreshing.
     async fn authenticate(&self, req: &mut Request) -> Result<()> {
-        // Clone the token from lock without holding the lock for entire function.
-        let token = self.token.lock().await.clone();
+        let cached = self.token.lock().await.clone();
 
-        if self.credential.is_none() && token.is_none() {
+        if self.credential.is_none() && cached.is_none() {
             return Ok(());
         }
 
-        // Either use the provided token or exchange credential for token, cache and use that
-        let token = match token {
-            Some(token) => token,
-            None => {
-                let token = self.exchange_credential_for_token().await?;
-                // Update token so that we use it for next request instead of
-                // exchanging credential for token from the server again
-                *self.token.lock().await = Some(token.clone());
-                token
+        let token = match cached {
+            Some(c) if !c.is_expired() => c.token,
+            _ => {
+                if self.credential.is_some() {
+                    // Hold the lock across the exchange so concurrent callers
+                    // don't all stampede the token endpoint. Re-check after
+                    // acquisition in case another task has just refreshed.
+                    let mut guard = self.token.lock().await;
+                    match guard.as_ref() {
+                        Some(c) if !c.is_expired() => c.token.clone(),
+                        _ => {
+                            let new = self.exchange_credential_for_token().await?;
+                            let token = new.token.clone();
+                            *guard = Some(new);
+                            token
+                        }
+                    }
+                } else {
+                    // Static token with no credential — nothing to refresh
+                    // with. Pass it through; the server will reject if it has
+                    // truly expired (preserves prior behavior).
+                    cached
+                        .expect("cached must be Some when credential is None")
+                        .token
+                }
             }
         };
 
-        // Insert token in request.
         req.headers_mut().insert(
             http::header::AUTHORIZATION,
             format!("Bearer {token}").parse().map_err(|e| {
@@ -360,6 +415,40 @@ pub(crate) async fn deserialize_unexpected_catalog_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_cached_token_static_never_expires() {
+        let t = CachedToken::from_static("abc".to_string());
+        assert!(!t.is_expired());
+        assert!(t.expires_at.is_none());
+    }
+
+    #[test]
+    fn test_cached_token_with_long_expiry_is_not_expired() {
+        let t = CachedToken::new("abc".to_string(), Some(3600));
+        assert!(!t.is_expired());
+    }
+
+    #[test]
+    fn test_cached_token_with_short_expiry_is_immediately_expired() {
+        // expires_in (1s) is smaller than the 30s safety margin, so the
+        // computed lifetime saturates to zero and the token is expired now.
+        let t = CachedToken::new("abc".to_string(), Some(1));
+        assert!(t.is_expired());
+    }
+
+    #[test]
+    fn test_cached_token_with_zero_expiry_is_immediately_expired() {
+        let t = CachedToken::new("abc".to_string(), Some(0));
+        assert!(t.is_expired());
+    }
+
+    #[test]
+    fn test_cached_token_no_expires_in_never_expires() {
+        let t = CachedToken::new("abc".to_string(), None);
+        assert!(!t.is_expired());
+        assert!(t.expires_at.is_none());
+    }
 
     #[test]
     fn test_format_headers_redacted_empty() {
