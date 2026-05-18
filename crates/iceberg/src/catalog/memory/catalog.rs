@@ -345,6 +345,7 @@ impl Catalog for MemoryCatalog {
         self.drop_table(table_ident).await?;
         crate::catalog::utils::drop_table_data(
             table_info.file_io(),
+            &self.runtime,
             table_info.metadata(),
             table_info.metadata_location(),
         )

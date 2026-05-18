@@ -19,11 +19,12 @@
 
 use std::collections::HashSet;
 
-use futures::{TryStreamExt, stream};
+use futures::stream;
 
-use crate::Result;
 use crate::io::FileIO;
+use crate::runtime::Runtime;
 use crate::spec::TableMetadata;
+use crate::{Error, ErrorKind, Result};
 
 const DELETE_CONCURRENCY: usize = 10;
 
@@ -38,6 +39,7 @@ const DELETE_CONCURRENCY: usize = 10;
 /// may share the same data files.
 pub async fn drop_table_data(
     io: &FileIO,
+    runtime: &Runtime,
     metadata: &TableMetadata,
     metadata_location: Option<&str>,
 ) -> Result<()> {
@@ -63,7 +65,7 @@ pub async fn drop_table_data(
 
     // Delete data files only if gc.enabled is true, to avoid corrupting shared tables
     if metadata.table_properties()?.gc_enabled {
-        delete_data_files(io, &manifests_to_delete).await?;
+        delete_data_files(io, &runtime, &manifests_to_delete).await?;
     }
 
     // Delete manifest files
@@ -105,20 +107,43 @@ pub async fn drop_table_data(
 }
 
 /// Reads manifests concurrently and deletes the data files referenced within.
-async fn delete_data_files(io: &FileIO, manifest_paths: &HashSet<String>) -> Result<()> {
-    stream::iter(manifest_paths.iter().map(Ok))
-        .try_for_each_concurrent(DELETE_CONCURRENCY, |manifest_path| async move {
-            let input = io.new_input(manifest_path)?;
-            let manifest_content = input.read().await?;
-            let manifest = crate::spec::Manifest::parse_avro(&manifest_content)?;
+///
+/// Spawns tasks on the IO runtime, bounded by `DELETE_CONCURRENCY` using a
+/// semaphore to avoid overwhelming the object store.
+async fn delete_data_files(
+    io: &FileIO,
+    runtime: &Runtime,
+    manifest_paths: &HashSet<String>,
+) -> Result<()> {
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(DELETE_CONCURRENCY));
 
-            let data_file_paths = manifest
-                .entries()
-                .iter()
-                .map(|entry| entry.data_file.file_path().to_string())
-                .collect::<Vec<_>>();
+    let handles: Vec<_> = manifest_paths
+        .iter()
+        .map(|manifest_path| {
+            let io = io.clone();
+            let path = manifest_path.clone();
+            let sem = semaphore.clone();
+            runtime.io().spawn(async move {
+                let _permit = sem.acquire().await.map_err(|e| {
+                    Error::new(ErrorKind::Unexpected, "semaphore closed").with_source(e)
+                })?;
 
-            io.delete_stream(stream::iter(data_file_paths)).await
+                let input = io.new_input(&path)?;
+                let manifest_content = input.read().await?;
+                let manifest = crate::spec::Manifest::parse_avro(&manifest_content)?;
+
+                let data_file_paths = manifest
+                    .entries()
+                    .iter()
+                    .map(|entry| entry.data_file.file_path().to_string())
+                    .collect::<Vec<_>>();
+
+                io.delete_stream(stream::iter(data_file_paths)).await
+            })
         })
-        .await
+        .collect();
+
+    futures::future::try_join_all(handles.into_iter().map(|h| async move { h.await? })).await?;
+
+    Ok(())
 }
