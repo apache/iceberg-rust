@@ -776,7 +776,7 @@ impl Catalog for SqlCatalog {
         self.drop_table(table).await?;
         iceberg::drop_table_data(
             table_info.file_io(),
-            &self.runtime,
+            table_info.runtime(),
             table_info.metadata(),
             table_info.metadata_location(),
         )
