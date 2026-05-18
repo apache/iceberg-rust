@@ -80,7 +80,7 @@ mod _decimal {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-/// All data types are either primitives or nested types, which are maps, lists, or structs.
+/// All data types are either primitives, nested types (maps, lists, structs), or variant.
 pub enum Type {
     /// Primitive types
     Primitive(PrimitiveType),
@@ -90,6 +90,8 @@ pub enum Type {
     List(ListType),
     /// Map type
     Map(MapType),
+    /// Variant type (Iceberg v3): semi-structured data carried as a pair of binary blobs.
+    Variant(VariantType),
 }
 
 impl fmt::Display for Type {
@@ -99,6 +101,7 @@ impl fmt::Display for Type {
             Type::Struct(s) => write!(f, "{s}"),
             Type::List(_) => write!(f, "list"),
             Type::Map(_) => write!(f, "map"),
+            Type::Variant(v) => write!(f, "{v}"),
         }
     }
 }
@@ -122,10 +125,25 @@ impl Type {
         matches!(self, Type::Struct(_) | Type::List(_) | Type::Map(_))
     }
 
+    /// Whether the type is variant type.
+    #[inline(always)]
+    pub fn is_variant(&self) -> bool {
+        matches!(self, Type::Variant(_))
+    }
+
     /// Convert Type to reference of PrimitiveType
     pub fn as_primitive_type(&self) -> Option<&PrimitiveType> {
         if let Type::Primitive(primitive_type) = self {
             Some(primitive_type)
+        } else {
+            None
+        }
+    }
+
+    /// Convert Type to reference of VariantType.
+    pub fn as_variant_type(&self) -> Option<&VariantType> {
+        if let Type::Variant(v) = self {
+            Some(v)
         } else {
             None
         }
@@ -247,8 +265,6 @@ pub enum PrimitiveType {
     Fixed(u64),
     /// Arbitrary-length byte array.
     Binary,
-    /// Semi-structured data type (Iceberg spec v3). Stored in Parquet as `LogicalType::Variant`.
-    Variant,
 }
 
 impl PrimitiveType {
@@ -384,7 +400,6 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Uuid => write!(f, "uuid"),
             PrimitiveType::Fixed(size) => write!(f, "fixed({size})"),
             PrimitiveType::Binary => write!(f, "binary"),
-            PrimitiveType::Variant => write!(f, "variant"),
         }
     }
 }
@@ -713,6 +728,7 @@ pub(super) mod _serde {
     use crate::spec::datatypes::Type::Map;
     use crate::spec::datatypes::{
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
+        VariantType,
     };
 
     /// List type for serialization and deserialization
@@ -740,6 +756,7 @@ pub(super) mod _serde {
             value: Cow<'a, Type>,
         },
         Primitive(PrimitiveType),
+        Variant(VariantType),
     }
 
     impl From<SerdeType<'_>> for Type {
@@ -778,6 +795,7 @@ pub(super) mod _serde {
                     Self::Struct(StructType::new(fields.into_owned()))
                 }
                 SerdeType::Primitive(p) => Self::Primitive(p),
+                SerdeType::Variant(v) => Self::Variant(v),
             }
         }
     }
@@ -804,6 +822,7 @@ pub(super) mod _serde {
                     fields: Cow::Borrowed(&s.fields),
                 },
                 Type::Primitive(p) => SerdeType::Primitive(p.clone()),
+                Type::Variant(v) => SerdeType::Variant(*v),
             }
         }
     }
@@ -843,6 +862,53 @@ impl MapType {
         Self {
             key_field: NestedField::map_key_element(key_id, key_type).into(),
             value_field: NestedField::map_value_element(value_id, value_type, true).into(),
+        }
+    }
+}
+
+/// Variant type (Iceberg spec v3).
+///
+/// Semi-structured value carried as a pair of binary blobs (metadata + value)
+/// per the parquet-format Variant encoding. Sits at the top level of `Type`
+/// (not inside `PrimitiveType`), matching Java `Types.VariantType implements Type`.
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, Default)]
+pub struct VariantType;
+
+impl VariantType {
+    /// Canonical spec name.
+    pub const NAME: &'static str = "variant";
+}
+
+impl fmt::Display for VariantType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", Self::NAME)
+    }
+}
+
+impl From<VariantType> for Type {
+    fn from(_: VariantType) -> Self {
+        Type::Variant(VariantType)
+    }
+}
+
+impl Serialize for VariantType {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where S: Serializer {
+        serializer.serialize_str(Self::NAME)
+    }
+}
+
+impl<'de> Deserialize<'de> for VariantType {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where D: Deserializer<'de> {
+        let s = String::deserialize(deserializer)?;
+        if s == Self::NAME {
+            Ok(VariantType)
+        } else {
+            Err(serde::de::Error::custom(format!(
+                "expected type '{}', got '{s}'",
+                Self::NAME
+            )))
         }
     }
 }
@@ -968,12 +1034,7 @@ mod tests {
                         Type::Primitive(PrimitiveType::String),
                     )
                     .into(),
-                    NestedField::optional(
-                        17,
-                        "variant_field",
-                        Type::Primitive(PrimitiveType::Variant),
-                    )
-                    .into(),
+                    NestedField::optional(17, "variant_field", Type::Variant(VariantType)).into(),
                 ],
                 id_lookup: OnceLock::default(),
                 name_lookup: OnceLock::default(),
@@ -1331,24 +1392,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn variant_type_display() {
-        assert_eq!(PrimitiveType::Variant.to_string(), "variant");
-    }
-
-    #[test]
-    fn variant_type_serde() {
-        let json = r#"{"id": 1, "name": "v", "required": false, "type": "variant"}"#;
-        let field: NestedField = serde_json::from_str(json).unwrap();
-        assert_eq!(*field.field_type, Type::Primitive(PrimitiveType::Variant));
-        let serialized = serde_json::to_string(&field).unwrap();
-        assert!(serialized.contains("\"variant\""));
-    }
-
-    #[test]
-    fn variant_type_not_compatible_with_literals() {
-        assert!(!PrimitiveType::Variant.compatible(&PrimitiveLiteral::Boolean(true)));
-        assert!(!PrimitiveType::Variant.compatible(&PrimitiveLiteral::Int(0)));
-        assert!(!PrimitiveType::Variant.compatible(&PrimitiveLiteral::Binary(vec![])));
-    }
 }
