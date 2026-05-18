@@ -560,6 +560,10 @@ impl Literal {
                     ))
                 }
             }
+            Type::Variant(_) => Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Variant type is not supported for single-value JSON deserialization",
+            )),
             Type::Map(map) => {
                 if let JsonValue::Object(mut object) = value {
                     if let (Some(JsonValue::Array(keys)), Some(JsonValue::Array(values))) =
@@ -718,6 +722,10 @@ impl Literal {
                 object.insert("values".to_string(), JsonValue::Array(json_values));
                 Ok(JsonValue::Object(object))
             }
+            (_, Type::Variant(_)) => Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Variant type is not supported for single-value JSON serialization",
+            )),
             (value, r#type) => Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!("The iceberg value {value:?} doesn't fit to the iceberg type {type}."),
