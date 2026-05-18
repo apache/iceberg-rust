@@ -111,6 +111,35 @@ jobs:
       - name: Build
         run: make build
 
+  # Checks each crate individually to catch missing feature declarations that
+  # are otherwise masked by Cargo's feature unification across the workspace.
+  check_standalone:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+
+      - name: Cache Rust artifacts
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check each crate standalone
+        run: |
+          for pkg in $(cargo metadata --no-deps --format-version=1 | jq -r '.packages[].name'); do
+            echo "Checking $pkg..."
+            cargo check -p "$pkg" --all-targets || exit 1
+          done
+
+  # Verifies the core iceberg crate compiles without default features, ensuring
+  # optional functionality is properly gated behind feature flags.
   build_with_no_default_features:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -163,7 +192,7 @@ jobs:
 
       - name: Install cargo-nextest
         if: matrix.test-suite.name == 'default'
-        uses: taiki-e/install-action@db5fb34fa772531a3ece57ca434f579eb334e0fb # v2.75.30
+        uses: taiki-e/install-action@ec28e287910af896fd98e04056d31fa68607e7ad # v2.77.4
         with:
           tool: cargo-nextest
 
