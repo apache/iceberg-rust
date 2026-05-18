@@ -135,15 +135,16 @@ impl SchemaVisitor for HiveSchemaBuilder {
             PrimitiveType::Decimal { precision, scale } => {
                 format!("decimal({precision},{scale})")
             }
-            PrimitiveType::Variant => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    "Conversion from Variant to Hive type is not supported",
-                ));
-            }
         };
 
         Ok(hive_type)
+    }
+
+    fn variant(&mut self, _v: &iceberg::spec::VariantType) -> iceberg::Result<String> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Conversion from Variant to Hive type is not supported",
+        ))
     }
 }
 
