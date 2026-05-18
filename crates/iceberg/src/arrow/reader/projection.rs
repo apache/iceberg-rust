@@ -61,7 +61,7 @@ impl ArrowReader {
     /// Nested types (struct/list/map) are flattened in Parquet's columnar format.
     fn include_leaf_field_id(field: &NestedField, field_ids: &mut Vec<i32>) {
         match field.field_type.as_ref() {
-            Type::Primitive(_) => {
+            Type::Primitive(_) | Type::Variant(_) => {
                 field_ids.push(field.id);
             }
             Type::Struct(struct_type) => {
