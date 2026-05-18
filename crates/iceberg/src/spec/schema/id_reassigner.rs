@@ -66,6 +66,7 @@ impl ReassignFieldIds {
     fn reassign_ids_visit_type(&mut self, field_type: Type) -> Result<Type> {
         match field_type {
             Type::Primitive(s) => Ok(Type::Primitive(s)),
+            Type::Variant(v) => Ok(Type::Variant(v)),
             Type::Struct(s) => {
                 let new_fields = self.reassign_field_ids(s.fields().to_vec())?;
                 Ok(Type::Struct(StructType::new(new_fields)))
