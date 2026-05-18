@@ -173,6 +173,7 @@ async fn test_provider_list_table_names() -> Result<()> {
             "my_table",
             "my_table$snapshots",
             "my_table$manifests",
+            "my_table$history",
         ]
     "#]]
     .assert_debug_eq(&result);
@@ -435,6 +436,37 @@ async fn test_metadata_table() -> Result<()> {
             [
             ],
             partition_summaries: ListArray
+            [
+            ]"#]],
+        &[],
+        None,
+    );
+
+    let history = ctx
+        .sql("select * from catalog.ns.t1$history")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    check_record_batches(
+        history,
+        expect![[r#"
+            Field { "made_current_at": Timestamp(µs, "+00:00"), metadata: {"PARQUET:field_id": "1"} },
+            Field { "snapshot_id": Int64, metadata: {"PARQUET:field_id": "2"} },
+            Field { "parent_id": nullable Int64, metadata: {"PARQUET:field_id": "3"} },
+            Field { "is_current_ancestor": Boolean, metadata: {"PARQUET:field_id": "4"} }"#]],
+        expect![[r#"
+            made_current_at: PrimitiveArray<Timestamp(µs, "+00:00")>
+            [
+            ],
+            snapshot_id: PrimitiveArray<Int64>
+            [
+            ],
+            parent_id: PrimitiveArray<Int64>
+            [
+            ],
+            is_current_ancestor: BooleanArray
             [
             ]"#]],
         &[],
