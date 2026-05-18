@@ -35,7 +35,6 @@ use crate::expr::visitors::bound_predicate_visitor::visit;
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 use crate::spec::Schema;
-use crate::{Error, ErrorKind};
 
 impl ArrowReader {
     pub(super) fn get_row_filter(
@@ -90,32 +89,33 @@ impl ArrowReader {
         Ok(results)
     }
 
+    /// Computes a [`RowSelection`] by evaluating the filter predicate against
+    /// the Parquet page index (column index + offset index).
+    ///
+    /// Returns `Ok(None)` when the Parquet file lacks column or offset index
+    /// metadata (common with older files written before page indexes became
+    /// standard). In that case page-level pruning is simply skipped; row-group
+    /// filtering and the Arrow row filter still apply the predicate.
     pub(super) fn get_row_selection_for_filter_predicate(
         predicate: &BoundPredicate,
         parquet_metadata: &Arc<ParquetMetaData>,
         selected_row_groups: &Option<Vec<usize>>,
         field_id_map: &HashMap<i32, usize>,
         snapshot_schema: &Schema,
-    ) -> Result<RowSelection> {
+    ) -> Result<Option<RowSelection>> {
         let Some(column_index) = parquet_metadata.column_index() else {
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                "Parquet file metadata does not contain a column index",
-            ));
+            return Ok(None);
         };
 
         let Some(offset_index) = parquet_metadata.offset_index() else {
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                "Parquet file metadata does not contain an offset index",
-            ));
+            return Ok(None);
         };
 
         // If all row groups were filtered out, return an empty RowSelection (select no rows)
         if let Some(selected_row_groups) = selected_row_groups
             && selected_row_groups.is_empty()
         {
-            return Ok(RowSelection::from(Vec::new()));
+            return Ok(Some(RowSelection::from(Vec::new())));
         }
 
         let mut selected_row_groups_idx = 0;
@@ -155,7 +155,9 @@ impl ArrowReader {
             }
         }
 
-        Ok(results.into_iter().flatten().collect::<Vec<_>>().into())
+        Ok(Some(
+            results.into_iter().flatten().collect::<Vec<_>>().into(),
+        ))
     }
 
     /// Filters row groups by byte range to support Iceberg's file splitting.
