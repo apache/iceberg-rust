@@ -81,9 +81,6 @@ impl RuntimeHandle {
     }
 
     /// Spawn an async task.
-    ///
-    /// If a [`RuntimeTracer`] is attached, the future is wrapped with
-    /// instrumentation before spawning.
     pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
     where
         F: Future + Send + 'static,
@@ -99,9 +96,6 @@ impl RuntimeHandle {
     }
 
     /// Spawn a blocking task.
-    ///
-    /// If a [`RuntimeTracer`] is attached, the closure is wrapped with
-    /// instrumentation before spawning.
     pub fn spawn_blocking<F, T>(&self, f: F) -> JoinHandle<T>
     where
         F: FnOnce() -> T + Send + 'static,
