@@ -1143,6 +1143,29 @@ mod tests {
             .await
     }
 
+    async fn create_oauth_mock_with_expiry(
+        server: &mut ServerGuard,
+        token: &str,
+        expires_in: u64,
+        expect_calls: usize,
+    ) -> Mock {
+        let body = format!(
+            r#"{{
+                "access_token": "{token}",
+                "token_type": "Bearer",
+                "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                "expires_in": {expires_in}
+            }}"#
+        );
+        server
+            .mock("POST", "/v1/oauth/tokens")
+            .with_status(200)
+            .with_body(body)
+            .expect(expect_calls)
+            .create_async()
+            .await
+    }
+
     #[tokio::test]
     async fn test_oauth() {
         let mut server = Server::new_async().await;
@@ -1339,6 +1362,159 @@ mod tests {
 
         // original token is left intact
         assert_eq!(token, Some("ey000000000000".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_oauth_token_auto_refresh_on_expiry() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        // expires_in=1 falls under the 30s safety margin, so the cached token
+        // is considered expired immediately and must be refreshed before each
+        // authenticated request. Three exchanges total: one for the /v1/config
+        // bootstrap, then one before each of the two /v1/namespaces calls.
+        let oauth_mock =
+            create_oauth_mock_with_expiry(&mut server, "ey000000000000", 1, 3).await;
+        let list_ns_mock = server
+            .mock("GET", "/v1/namespaces")
+            .with_body(r#"{"namespaces":[["ns1"]]}"#)
+            .expect(2)
+            .create_async()
+            .await;
+
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+        );
+
+        catalog.list_namespaces(None).await.unwrap();
+        catalog.list_namespaces(None).await.unwrap();
+
+        config_mock.assert_async().await;
+        oauth_mock.assert_async().await;
+        list_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_oauth_token_not_refreshed_when_fresh() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        // expires_in=86400 — token stays valid; refresh must NOT fire.
+        let oauth_mock =
+            create_oauth_mock_with_expiry(&mut server, "ey000000000000", 86400, 1).await;
+        let list_ns_mock = server
+            .mock("GET", "/v1/namespaces")
+            .with_body(r#"{"namespaces":[["ns1"]]}"#)
+            .expect(2)
+            .create_async()
+            .await;
+
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+        );
+
+        catalog.list_namespaces(None).await.unwrap();
+        catalog.list_namespaces(None).await.unwrap();
+
+        config_mock.assert_async().await;
+        oauth_mock.assert_async().await;
+        list_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_static_token_never_auto_refreshes() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        // OAuth endpoint must NOT be hit when only a static token is configured.
+        let oauth_mock = server
+            .mock("POST", "/v1/oauth/tokens")
+            .with_status(200)
+            .expect(0)
+            .create_async()
+            .await;
+        let list_ns_mock = server
+            .mock("GET", "/v1/namespaces")
+            .with_body(r#"{"namespaces":[["ns1"]]}"#)
+            .expect(2)
+            .create_async()
+            .await;
+
+        let mut props = HashMap::new();
+        props.insert("token".to_string(), "static-token".to_string());
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+        );
+
+        catalog.list_namespaces(None).await.unwrap();
+        catalog.list_namespaces(None).await.unwrap();
+
+        config_mock.assert_async().await;
+        oauth_mock.assert_async().await;
+        list_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_requests_single_flight_refresh() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        // Five concurrent catalog calls with no cached token must coalesce
+        // into exactly ONE token exchange thanks to the lock held across
+        // the OAuth round-trip in authenticate().
+        let oauth_mock =
+            create_oauth_mock_with_expiry(&mut server, "ey000000000000", 86400, 1).await;
+        let list_ns_mock = server
+            .mock("GET", "/v1/namespaces")
+            .with_body(r#"{"namespaces":[["ns1"]]}"#)
+            .expect(5)
+            .create_async()
+            .await;
+
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let catalog = Arc::new(RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+        ));
+
+        // Materialize the context once so all five concurrent calls race only
+        // on the token cache (not on the /v1/config bootstrap).
+        catalog.context().await.unwrap();
+
+        let mut handles = Vec::with_capacity(5);
+        for _ in 0..5 {
+            let c = catalog.clone();
+            handles.push(tokio::spawn(async move {
+                c.list_namespaces(None).await.unwrap();
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        config_mock.assert_async().await;
+        oauth_mock.assert_async().await;
+        list_ns_mock.assert_async().await;
     }
 
     #[tokio::test]
