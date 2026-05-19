@@ -19,11 +19,11 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::ops::RangeFrom;
 
-use futures::{StreamExt, TryStreamExt};
+use futures::future::OptionFuture;
+use futures::{StreamExt, TryFutureExt, TryStreamExt};
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::runtime::spawn;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
     ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
@@ -35,9 +35,6 @@ use crate::transaction::ActionCommit;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
-/// Control the number of threads used to verify duplicate files.
-/// This needs to balance the degree of parallelism and resource utilisation.
-const NUM_THREADS_VALIDATE_DUPLICATE_FILES: usize = 32;
 
 /// A trait that defines how different table operations produce new snapshots.
 ///
@@ -175,30 +172,43 @@ impl<'a> SnapshotProducer<'a> {
             .map(|df| df.file_path.as_str())
             .collect();
 
-        let mut referenced_files = Vec::new();
-        if let Some(current_snapshot) = self.table.metadata().current_snapshot() {
-            let manifest_list = current_snapshot
-                .load_manifest_list(self.table.file_io(), &self.table.metadata_ref())
-                .await?;
+        let runtime = self.table.runtime().clone();
+        let file_io = self.table.file_io();
+        let metadata_ref = self.table.metadata_ref();
 
-            let entries: Vec<_> = manifest_list.consume_entries().into_iter().collect();
-            futures::stream::iter(entries)
-                .map(|entry| {
-                    let file_io = self.table.file_io().clone();
-                    spawn(async move { entry.load_manifest(&file_io).await })
-                })
-                .buffer_unordered(NUM_THREADS_VALIDATE_DUPLICATE_FILES)
-                .try_for_each(|manifest| {
-                    for entry in manifest.entries() {
-                        let file_path = entry.file_path();
-                        if new_files.contains(file_path) && entry.is_alive() {
-                            referenced_files.push(file_path.to_string());
-                        }
-                    }
-                    std::future::ready(Ok(()))
-                })
-                .await?;
-        }
+        let referenced_files: Vec<String> =
+            OptionFuture::from(self.table.metadata().current_snapshot().map(|snapshot| {
+                snapshot
+                    .load_manifest_list(&file_io, &metadata_ref)
+                    .and_then(|manifest_list| {
+                        futures::stream::iter(
+                            manifest_list
+                                .consume_entries()
+                                .into_iter()
+                                .map(|entry| {
+                                    let file_io = file_io.clone();
+                                    runtime
+                                        .io()
+                                        .spawn(async move { entry.load_manifest(&file_io).await })
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                        .then(|handle| async move { handle.await? })
+                        .try_fold(Vec::new(), |mut acc, manifest| {
+                            acc.extend(
+                                manifest
+                                    .entries()
+                                    .iter()
+                                    .filter(|e| new_files.contains(e.file_path()) && e.is_alive())
+                                    .map(|e| e.file_path().to_string()),
+                            );
+                            std::future::ready(Ok(acc))
+                        })
+                    })
+            }))
+            .await
+            .transpose()?
+            .unwrap_or_default();
 
         if !referenced_files.is_empty() {
             return Err(Error::new(
