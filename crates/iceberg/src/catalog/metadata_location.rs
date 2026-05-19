@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 
 use uuid::Uuid;
 
 use crate::compression::CompressionCodec;
-use crate::spec::{TableMetadata, parse_metadata_file_compression};
+use crate::spec::{TableMetadata, TableProperties};
 use crate::{Error, ErrorKind, Result};
 
 /// Helper for parsing a location of the format: `<location>/metadata/<version>-<uuid>.metadata.json`
@@ -38,8 +37,8 @@ pub struct MetadataLocation {
 impl MetadataLocation {
     /// Determines the compression codec from table properties.
     /// Parse errors result in CompressionCodec::None.
-    fn compression_from_properties(properties: &HashMap<String, String>) -> CompressionCodec {
-        parse_metadata_file_compression(properties).unwrap_or(CompressionCodec::None)
+    fn compression_from_properties(properties: &TableProperties) -> CompressionCodec {
+        properties.metadata_compression_codec
     }
 
     /// Creates a completely new metadata location starting at version 0.

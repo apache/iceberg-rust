@@ -2302,7 +2302,7 @@ mod tests {
                     "gzip".to_string()
                 )
             ]),
-            table.metadata().properties()
+            table.metadata().properties().as_raw()
         );
         assert_eq!(vec![&Arc::new(Snapshot::builder()
             .with_snapshot_id(3497810964824022504)
@@ -2517,7 +2517,7 @@ mod tests {
                     "zstd".to_string()
                 ),
             ]),
-            table.metadata().properties()
+            table.metadata().properties().as_raw()
         );
         assert!(table.metadata().current_snapshot().is_none());
         assert!(table.metadata().history().is_empty());
@@ -2718,7 +2718,7 @@ mod tests {
                     "zstd".to_string()
                 ),
             ]),
-            table.metadata().properties()
+            table.metadata().properties().as_raw()
         );
         assert!(table.metadata().current_snapshot().is_none());
         assert!(table.metadata().history().is_empty());

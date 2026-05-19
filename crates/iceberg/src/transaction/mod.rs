@@ -171,7 +171,7 @@ impl Transaction {
             return Ok(self.table);
         }
 
-        let table_props = self.table.metadata().table_properties()?;
+        let table_props = self.table.metadata().properties();
 
         let backoff = Self::build_backoff(table_props)?;
         let tx = self;
@@ -188,7 +188,7 @@ impl Transaction {
         .1
     }
 
-    fn build_backoff(props: TableProperties) -> Result<ExponentialBackoff> {
+    fn build_backoff(props: &TableProperties) -> Result<ExponentialBackoff> {
         Ok(ExponentialBuilder::new()
             .with_min_delay(Duration::from_millis(props.commit_min_retry_wait_ms))
             .with_max_delay(Duration::from_millis(props.commit_max_retry_wait_ms))

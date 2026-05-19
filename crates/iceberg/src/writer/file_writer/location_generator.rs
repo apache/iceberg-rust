@@ -150,7 +150,7 @@ pub(crate) mod test {
     use super::LocationGenerator;
     use crate::spec::{
         FormatVersion, Literal, NestedField, PartitionKey, PartitionSpec, PrimitiveType, Schema,
-        Struct, StructType, TableMetadata, Transform, Type,
+        Struct, StructType, TableMetadata, TableProperties, Transform, Type,
     };
     use crate::writer::file_writer::location_generator::{
         DefaultLocationGenerator, FileNameGenerator, WRITE_DATA_LOCATION,
@@ -176,7 +176,7 @@ pub(crate) mod test {
             snapshots: HashMap::default(),
             current_snapshot_id: None,
             last_sequence_number: 1,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: Vec::new(),
             metadata_log: vec![],
             refs: HashMap::new(),
@@ -200,10 +200,11 @@ pub(crate) mod test {
         assert_eq!(location, "s3://data.db/table/data/part-00000-test.parquet");
 
         // test custom data location
-        table_metadata.properties.insert(
+        table_metadata.properties = TableProperties::try_from(&HashMap::from([(
             WRITE_FOLDER_STORAGE_LOCATION.to_string(),
             "s3://data.db/table/data_1".to_string(),
-        );
+        )]))
+        .unwrap();
         let location_generator =
             super::DefaultLocationGenerator::new(table_metadata.clone()).unwrap();
         let location =
@@ -213,10 +214,17 @@ pub(crate) mod test {
             "s3://data.db/table/data_1/part-00001-test.parquet"
         );
 
-        table_metadata.properties.insert(
-            WRITE_DATA_LOCATION.to_string(),
-            "s3://data.db/table/data_2".to_string(),
-        );
+        table_metadata.properties = TableProperties::try_from(&HashMap::from([
+            (
+                WRITE_FOLDER_STORAGE_LOCATION.to_string(),
+                "s3://data.db/table/data_1".to_string(),
+            ),
+            (
+                WRITE_DATA_LOCATION.to_string(),
+                "s3://data.db/table/data_2".to_string(),
+            ),
+        ]))
+        .unwrap();
         let location_generator =
             super::DefaultLocationGenerator::new(table_metadata.clone()).unwrap();
         let location =
@@ -226,11 +234,11 @@ pub(crate) mod test {
             "s3://data.db/table/data_2/part-00002-test.parquet"
         );
 
-        table_metadata.properties.insert(
+        table_metadata.properties = TableProperties::try_from(&HashMap::from([(
             WRITE_DATA_LOCATION.to_string(),
-            // invalid table location
             "s3://data.db/data_3".to_string(),
-        );
+        )]))
+        .unwrap();
         let location_generator =
             super::DefaultLocationGenerator::new(table_metadata.clone()).unwrap();
         let location =
@@ -291,7 +299,7 @@ pub(crate) mod test {
             snapshots: HashMap::default(),
             current_snapshot_id: None,
             last_sequence_number: 1,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: Vec::new(),
             metadata_log: vec![],
             refs: HashMap::new(),

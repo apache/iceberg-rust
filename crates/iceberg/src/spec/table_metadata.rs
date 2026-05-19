@@ -35,7 +35,7 @@ pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataB
 use super::{
     DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
     SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
-    TableProperties, parse_metadata_file_compression,
+    TableProperties,
 };
 use crate::catalog::MetadataLocation;
 use crate::compression::CompressionCodec;
@@ -91,10 +91,10 @@ pub struct TableMetadata {
     pub(crate) default_partition_type: StructType,
     /// An integer; the highest assigned partition field ID across all partition specs for the table.
     pub(crate) last_partition_id: i32,
-    ///A string to string map of table properties. This is used to control settings that
-    /// affect reading and writing and is not intended to be used for arbitrary metadata.
-    /// For example, commit.retry.num-retries is used to control the number of commit retries.
-    pub(crate) properties: HashMap<String, String>,
+    /// Table properties combining typed, parsed fields (commit retries, file format,
+    /// compression, etc.) with the raw key-value map for arbitrary/unknown properties
+    /// and spec-compatible JSON serialization.
+    pub(crate) properties: TableProperties,
     /// long ID of the current table snapshot; must be the same as the current
     /// ID of the main branch in refs.
     pub(crate) current_snapshot_id: Option<i64>,
@@ -358,29 +358,12 @@ impl TableMetadata {
         self.default_sort_order_id
     }
 
-    /// Returns properties of table.
+    /// Returns table properties, providing both typed access to known properties
+    /// (e.g., `commit_num_retries`, `metadata_compression_codec`) and raw key-value
+    /// access for arbitrary/unknown properties via [`TableProperties::get`].
     #[inline]
-    pub fn properties(&self) -> &HashMap<String, String> {
+    pub fn properties(&self) -> &TableProperties {
         &self.properties
-    }
-
-    /// Returns the metadata compression codec from table properties.
-    ///
-    /// Returns `CompressionCodec::None` if compression is disabled or not configured.
-    /// Returns `CompressionCodec::Gzip` if gzip compression is enabled.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the compression codec property has an invalid value.
-    pub fn metadata_compression_codec(&self) -> Result<CompressionCodec> {
-        parse_metadata_file_compression(&self.properties)
-    }
-
-    /// Returns typed table properties parsed from the raw properties map with defaults.
-    pub fn table_properties(&self) -> Result<TableProperties> {
-        TableProperties::try_from(&self.properties).map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Invalid table properties").with_source(e)
-        })
     }
 
     /// Return location of statistics files.
@@ -487,7 +470,7 @@ impl TableMetadata {
         let json_data = serde_json::to_vec(self)?;
 
         // Check if compression codec from properties matches the one in metadata_location
-        let codec = parse_metadata_file_compression(&self.properties)?;
+        let codec = self.properties.metadata_compression_codec;
 
         if codec != metadata_location.compression_codec() {
             return Err(Error::new(
@@ -776,7 +759,7 @@ pub(super) mod _serde {
     use crate::spec::{
         EncryptedKey, INITIAL_ROW_ID, PartitionField, PartitionSpec, PartitionSpecRef,
         PartitionStatisticsFile, Schema, SchemaRef, Snapshot, SnapshotReference, SnapshotRetention,
-        SortOrder, StatisticsFile,
+        SortOrder, StatisticsFile, TableProperties,
     };
     use crate::{Error, ErrorKind};
 
@@ -1012,7 +995,11 @@ pub(super) mod _serde {
                 default_partition_type,
                 default_spec,
                 last_partition_id: value.last_partition_id,
-                properties: value.properties.unwrap_or_default(),
+                properties: TableProperties::try_from(&value.properties.unwrap_or_default())
+                    .map_err(|e| {
+                        Error::new(ErrorKind::DataInvalid, "Invalid table properties")
+                            .with_source(e)
+                    })?,
                 current_snapshot_id,
                 snapshots: snapshots
                     .map(|snapshots| {
@@ -1125,7 +1112,11 @@ pub(super) mod _serde {
                 default_partition_type,
                 default_spec,
                 last_partition_id: value.last_partition_id,
-                properties: value.properties.unwrap_or_default(),
+                properties: TableProperties::try_from(&value.properties.unwrap_or_default())
+                    .map_err(|e| {
+                        Error::new(ErrorKind::DataInvalid, "Invalid table properties")
+                            .with_source(e)
+                    })?,
                 current_snapshot_id,
                 snapshots: snapshots
                     .map(|snapshots| {
@@ -1277,7 +1268,11 @@ pub(super) mod _serde {
                     .unwrap_or_else(|| partition_specs.keys().copied().max().unwrap_or_default()),
                 partition_specs,
                 schemas,
-                properties: value.properties.unwrap_or_default(),
+                properties: TableProperties::try_from(&value.properties.unwrap_or_default())
+                    .map_err(|e| {
+                        Error::new(ErrorKind::DataInvalid, "Invalid table properties")
+                            .with_source(e)
+                    })?,
                 current_snapshot_id,
                 snapshots: value
                     .snapshots
@@ -1407,7 +1402,7 @@ pub(super) mod _serde {
                 properties: if v.properties.is_empty() {
                     None
                 } else {
-                    Some(v.properties)
+                    Some(v.properties.as_raw().clone())
                 },
                 current_snapshot_id: v.current_snapshot_id,
                 snapshot_log: if v.snapshot_log.is_empty() {
@@ -1476,7 +1471,7 @@ pub(super) mod _serde {
                 properties: if v.properties.is_empty() {
                     None
                 } else {
-                    Some(v.properties)
+                    Some(v.properties.as_raw().clone())
                 },
                 current_snapshot_id: v.current_snapshot_id,
                 snapshots: if v.snapshots.is_empty() {
@@ -1753,10 +1748,11 @@ mod tests {
             snapshots: HashMap::default(),
             current_snapshot_id: None,
             last_sequence_number: 1,
-            properties: HashMap::from_iter(vec![(
+            properties: TableProperties::try_from(&HashMap::from_iter(vec![(
                 "commit.retry.num-retries".to_string(),
                 "1".to_string(),
-            )]),
+            )]))
+            .unwrap(),
             snapshot_log: Vec::new(),
             metadata_log: vec![MetadataLog {
                 metadata_file: "s3://bucket/.../v1.json".to_string(),
@@ -1929,10 +1925,11 @@ mod tests {
             snapshots: HashMap::from_iter(vec![(1, snapshot.into())]),
             current_snapshot_id: None,
             last_sequence_number: 1,
-            properties: HashMap::from_iter(vec![(
+            properties: TableProperties::try_from(&HashMap::from_iter(vec![(
                 "commit.retry.num-retries".to_string(),
                 "1".to_string(),
-            )]),
+            )]))
+            .unwrap(),
             snapshot_log: Vec::new(),
             metadata_log: vec![MetadataLog {
                 metadata_file: "s3://bucket/.../v1.json".to_string(),
@@ -2109,7 +2106,7 @@ mod tests {
             snapshots: HashMap::from_iter(vec![(638933773299822130, Arc::new(snapshot))]),
             current_snapshot_id: Some(638933773299822130),
             last_sequence_number: 0,
-            properties: HashMap::from_iter(vec![("owner".to_string(), "root".to_string())]),
+            properties: TableProperties::try_from(&HashMap::from_iter(vec![("owner".to_string(), "root".to_string())])).unwrap(),
             snapshot_log: vec![SnapshotLog {
                 snapshot_id: 638933773299822130,
                 timestamp_ms: 1662532818843,
@@ -2208,7 +2205,7 @@ mod tests {
             snapshots: HashMap::default(),
             current_snapshot_id: None,
             last_sequence_number: 1,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: Vec::new(),
             metadata_log: vec![MetadataLog {
                 metadata_file: "s3://bucket/.../v1.json".to_string(),
@@ -2726,7 +2723,7 @@ mod tests {
             snapshots: HashMap::from_iter(vec![(3055729675574597004, Arc::new(snapshot))]),
             current_snapshot_id: Some(3055729675574597004),
             last_sequence_number: 34,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: Vec::new(),
             metadata_log: Vec::new(),
             statistics: HashMap::from_iter(vec![(3055729675574597004, StatisticsFile {
@@ -2868,7 +2865,7 @@ mod tests {
             snapshots: HashMap::from_iter(vec![(3055729675574597004, Arc::new(snapshot))]),
             current_snapshot_id: Some(3055729675574597004),
             last_sequence_number: 34,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: Vec::new(),
             metadata_log: Vec::new(),
             statistics: HashMap::new(),
@@ -2994,7 +2991,7 @@ mod tests {
             snapshots: HashMap::default(),
             current_snapshot_id: None,
             last_sequence_number: 34,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: Vec::new(),
             metadata_log: Vec::new(),
             refs: HashMap::new(),
@@ -3118,7 +3115,7 @@ mod tests {
             ]),
             current_snapshot_id: Some(3055729675574597004),
             last_sequence_number: 34,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: vec![
                 SnapshotLog {
                     snapshot_id: 3051729675574597004,
@@ -3220,7 +3217,7 @@ mod tests {
             snapshots: HashMap::default(),
             current_snapshot_id: None,
             last_sequence_number: 34,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: vec![],
             metadata_log: Vec::new(),
             refs: HashMap::new(),
@@ -3290,7 +3287,7 @@ mod tests {
             snapshots: HashMap::new(),
             current_snapshot_id: None,
             last_sequence_number: 0,
-            properties: HashMap::new(),
+            properties: TableProperties::default(),
             snapshot_log: vec![],
             metadata_log: Vec::new(),
             refs: HashMap::new(),
@@ -3671,7 +3668,7 @@ mod tests {
         let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
 
         // Modify properties to enable gzip compression (using mixed case to test case-insensitive matching)
-        let mut props = original_metadata.properties.clone();
+        let mut props = original_metadata.properties.as_raw().clone();
         props.insert(
             TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
             "GziP".to_string(),
@@ -4008,7 +4005,7 @@ mod tests {
         .unwrap()
         .metadata;
 
-        let props = metadata.table_properties().unwrap();
+        let props = metadata.properties();
 
         assert_eq!(
             props.commit_num_retries,
@@ -4055,7 +4052,7 @@ mod tests {
         .unwrap()
         .metadata;
 
-        let props = metadata.table_properties().unwrap();
+        let props = metadata.properties();
 
         assert_eq!(props.commit_num_retries, 10);
         assert_eq!(props.write_target_file_size_bytes, 1024);
@@ -4075,7 +4072,7 @@ mod tests {
             "not_a_number".to_string(),
         )]);
 
-        let metadata = TableMetadataBuilder::new(
+        let err = TableMetadataBuilder::new(
             schema,
             PartitionSpec::unpartition_spec().into_unbound(),
             SortOrder::unsorted_order(),
@@ -4083,14 +4080,8 @@ mod tests {
             FormatVersion::V2,
             properties,
         )
-        .unwrap()
-        .build()
-        .unwrap()
-        .metadata;
-
-        let err = metadata.table_properties().unwrap_err();
+        .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.message().contains("Invalid table properties"));
     }
 
     #[test]

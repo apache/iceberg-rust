@@ -541,7 +541,7 @@ pub(crate) mod tests {
             vec![&expected_sorted_order]
         );
 
-        assert_eq!(metadata.properties(), &HashMap::new());
+        assert_eq!(metadata.properties().as_raw(), &HashMap::new());
 
         assert!(!table.readonly());
     }
