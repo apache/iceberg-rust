@@ -46,26 +46,29 @@ pub trait RuntimeTracer: Send + Sync + 'static {
 
 /// Wraps a concrete future with the tracer, handling type erasure and
 /// restoration internally.
-pub(crate) fn trace_future<T, F>(tracer: &dyn RuntimeTracer, future: F) -> BoxFuture<'static, T>
+pub(crate) fn trace_future<T, F>(
+    tracer: &dyn RuntimeTracer,
+    future: F,
+) -> impl Future<Output = T> + Send + 'static
 where
     F: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
     let erased = async move { Box::new(future.await) as Box<dyn Any + Send> }.boxed();
 
-    tracer
-        .trace_future(erased)
-        .map(|any_box| {
-            *any_box
-                .downcast::<T>()
-                .expect("RuntimeTracer must preserve the future's output type")
-        })
-        .boxed()
+    tracer.trace_future(erased).map(|any_box| {
+        *any_box
+            .downcast::<T>()
+            .expect("RuntimeTracer must preserve the future's output type")
+    })
 }
 
 /// Wraps a concrete blocking closure with the tracer, handling type erasure and
 /// restoration internally.
-pub(crate) fn trace_block<T, F>(tracer: &dyn RuntimeTracer, f: F) -> Box<dyn FnOnce() -> T + Send>
+pub(crate) fn trace_block<T, F>(
+    tracer: &dyn RuntimeTracer,
+    f: F,
+) -> impl FnOnce() -> T + Send + 'static
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
@@ -75,9 +78,9 @@ where
 
     let traced = tracer.trace_block(erased);
 
-    Box::new(move || {
+    move || {
         *traced()
             .downcast::<T>()
             .expect("RuntimeTracer must preserve the closure's return type")
-    })
+    }
 }
