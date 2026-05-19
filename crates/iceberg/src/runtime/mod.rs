@@ -17,12 +17,16 @@
 
 // This module contains the async runtime abstraction for iceberg.
 
+mod tracer;
+
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tokio::task;
+pub use tracer::RuntimeTracer;
 
 use crate::{Error, ErrorKind, Result};
 
@@ -57,35 +61,59 @@ impl<T: Send + 'static> Future for JoinHandle<T> {
 #[derive(Clone)]
 pub struct RuntimeHandle {
     handle: tokio::runtime::Handle,
+    tracer: Option<Arc<dyn RuntimeTracer>>,
 }
 
 impl fmt::Debug for RuntimeHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RuntimeHandle").finish()
+        f.debug_struct("RuntimeHandle")
+            .field("has_tracer", &self.tracer.is_some())
+            .finish()
     }
 }
 
 impl RuntimeHandle {
     fn from_tokio_handle(handle: tokio::runtime::Handle) -> Self {
-        Self { handle }
+        Self {
+            handle,
+            tracer: None,
+        }
     }
 
     /// Spawn an async task.
+    ///
+    /// If a [`RuntimeTracer`] is attached, the future is wrapped with
+    /// instrumentation before spawning.
     pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        JoinHandle(self.handle.spawn(future))
+        match &self.tracer {
+            Some(tracer) => {
+                let traced = tracer::trace_future(tracer.as_ref(), future);
+                JoinHandle(self.handle.spawn(traced))
+            }
+            None => JoinHandle(self.handle.spawn(future)),
+        }
     }
 
     /// Spawn a blocking task.
+    ///
+    /// If a [`RuntimeTracer`] is attached, the closure is wrapped with
+    /// instrumentation before spawning.
     pub fn spawn_blocking<F, T>(&self, f: F) -> JoinHandle<T>
     where
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
-        JoinHandle(self.handle.spawn_blocking(f))
+        match &self.tracer {
+            Some(tracer) => {
+                let traced = tracer::trace_block(tracer.as_ref(), f);
+                JoinHandle(self.handle.spawn_blocking(traced))
+            }
+            None => JoinHandle(self.handle.spawn_blocking(f)),
+        }
     }
 }
 
@@ -135,6 +163,17 @@ impl Runtime {
             io: RuntimeHandle::from_tokio_handle(io_runtime.handle().clone()),
             cpu: RuntimeHandle::from_tokio_handle(cpu_runtime.handle().clone()),
         }
+    }
+
+    /// Attach a [`RuntimeTracer`] to both IO and CPU handles.
+    ///
+    /// Every future or blocking closure spawned through this runtime will be
+    /// passed through the tracer, allowing callers to inject instrumentation
+    /// (e.g. tracing spans, metrics) without modifying spawn sites.
+    pub fn with_tracer(mut self, tracer: Arc<dyn RuntimeTracer>) -> Self {
+        self.io.tracer = Some(tracer.clone());
+        self.cpu.tracer = Some(tracer);
+        self
     }
 
     /// Borrows the tokio runtime the caller is currently running in.
@@ -308,5 +347,123 @@ mod tests {
         let handle = rt.io().spawn(async { 1 });
         let result = driver.block_on(handle);
         assert!(result.is_err(), "expected error after runtime shutdown");
+    }
+
+    mod tracer_tests {
+        use std::any::Any;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use futures::future::BoxFuture;
+
+        use super::*;
+
+        struct CountingTracer {
+            futures_count: AtomicUsize,
+            blocks_count: AtomicUsize,
+        }
+
+        impl CountingTracer {
+            fn new() -> Self {
+                Self {
+                    futures_count: AtomicUsize::new(0),
+                    blocks_count: AtomicUsize::new(0),
+                }
+            }
+        }
+
+        impl RuntimeTracer for CountingTracer {
+            fn trace_future(
+                &self,
+                fut: BoxFuture<'static, Box<dyn Any + Send>>,
+            ) -> BoxFuture<'static, Box<dyn Any + Send>> {
+                self.futures_count.fetch_add(1, Ordering::Relaxed);
+                fut
+            }
+
+            fn trace_block(
+                &self,
+                f: Box<dyn FnOnce() -> Box<dyn Any + Send> + Send>,
+            ) -> Box<dyn FnOnce() -> Box<dyn Any + Send> + Send> {
+                self.blocks_count.fetch_add(1, Ordering::Relaxed);
+                f
+            }
+        }
+
+        #[test]
+        fn test_tracer_called_on_spawn() {
+            let tokio_rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let tracer = Arc::new(CountingTracer::new());
+            let rt = Runtime::new(&tokio_rt).with_tracer(tracer.clone());
+
+            let handle = rt.io().spawn(async { 42 });
+            let result = tokio_rt.block_on(handle).unwrap();
+            assert_eq!(result, 42);
+            assert_eq!(tracer.futures_count.load(Ordering::Relaxed), 1);
+        }
+
+        #[test]
+        fn test_tracer_called_on_spawn_blocking() {
+            let tokio_rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let tracer = Arc::new(CountingTracer::new());
+            let rt = Runtime::new(&tokio_rt).with_tracer(tracer.clone());
+
+            let handle = rt.cpu().spawn_blocking(|| 99);
+            let result = tokio_rt.block_on(handle).unwrap();
+            assert_eq!(result, 99);
+            assert_eq!(tracer.blocks_count.load(Ordering::Relaxed), 1);
+        }
+
+        #[test]
+        fn test_tracer_counts_multiple_spawns() {
+            let tokio_rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let tracer = Arc::new(CountingTracer::new());
+            let rt = Runtime::new(&tokio_rt).with_tracer(tracer.clone());
+
+            tokio_rt.block_on(async {
+                rt.io().spawn(async { 1 }).await.unwrap();
+                rt.io().spawn(async { 2 }).await.unwrap();
+                rt.cpu().spawn(async { 3 }).await.unwrap();
+                rt.cpu().spawn_blocking(|| 4).await.unwrap();
+                rt.cpu().spawn_blocking(|| 5).await.unwrap();
+            });
+
+            assert_eq!(tracer.futures_count.load(Ordering::Relaxed), 3);
+            assert_eq!(tracer.blocks_count.load(Ordering::Relaxed), 2);
+        }
+
+        #[test]
+        fn test_no_tracer_passthrough() {
+            let tokio_rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let rt = Runtime::new(&tokio_rt);
+
+            let handle = rt.io().spawn(async { "no tracer" });
+            let result = tokio_rt.block_on(handle).unwrap();
+            assert_eq!(result, "no tracer");
+        }
+
+        #[test]
+        fn test_with_tracer_debug_output() {
+            let tokio_rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let tracer = Arc::new(CountingTracer::new());
+            let rt = Runtime::new(&tokio_rt).with_tracer(tracer);
+
+            let debug_str = format!("{:?}", rt.io());
+            assert!(debug_str.contains("has_tracer: true"));
+        }
     }
 }
