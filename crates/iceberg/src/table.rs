@@ -641,6 +641,7 @@ mod tests {
             .metadata(metadata)
             .identifier(TableIdent::from_strs(["ns", "enc"]).unwrap())
             .kms_client(kms)
+            .runtime(Runtime::try_current().unwrap())
             .build()
             .unwrap();
         assert!(table.encryption_manager().is_some());
@@ -665,6 +666,7 @@ mod tests {
             .file_io(FileIO::new_with_memory())
             .metadata(metadata)
             .identifier(TableIdent::from_strs(["ns", "enc"]).unwrap())
+            .runtime(Runtime::try_current().unwrap())
             .build()
             .unwrap_err();
         assert_eq!(err.kind(), crate::ErrorKind::FeatureUnsupported);
@@ -685,6 +687,7 @@ mod tests {
             .metadata(metadata)
             .identifier(TableIdent::from_strs(["ns", "enc"]).unwrap())
             .kms_client(make_kms())
+            .runtime(Runtime::try_current().unwrap())
             .build()
             .unwrap_err();
         assert_eq!(err.kind(), crate::ErrorKind::FeatureUnsupported);
@@ -698,6 +701,7 @@ mod tests {
             .metadata(metadata)
             .identifier(TableIdent::from_strs(["ns", "plain"]).unwrap())
             .kms_client(make_kms())
+            .runtime(Runtime::try_current().unwrap())
             .build()
             .unwrap();
         assert!(table.encryption_manager().is_none());
