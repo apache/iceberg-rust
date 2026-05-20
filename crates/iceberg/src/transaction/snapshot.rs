@@ -179,7 +179,7 @@ impl<'a> SnapshotProducer<'a> {
         let referenced_files: Vec<String> =
             OptionFuture::from(self.table.metadata().current_snapshot().map(|snapshot| {
                 snapshot
-                    .load_manifest_list(&file_io, &metadata_ref)
+                    .load_manifest_list(file_io, &metadata_ref)
                     .and_then(|manifest_list| {
                         futures::stream::iter(
                             manifest_list
