@@ -33,7 +33,7 @@ use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
-    TableCommit, TableCreation, TableIdent,
+    Runtime, TableCommit, TableCreation, TableIdent,
 };
 use iceberg_storage_opendal::OpenDalStorageFactory;
 
@@ -58,6 +58,7 @@ pub const GLUE_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 pub struct GlueCatalogBuilder {
     config: GlueCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    runtime: Option<Runtime>,
 }
 
 impl Default for GlueCatalogBuilder {
@@ -71,6 +72,7 @@ impl Default for GlueCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
+            runtime: None,
         }
     }
 }
@@ -80,6 +82,11 @@ impl CatalogBuilder for GlueCatalogBuilder {
 
     fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
         self.storage_factory = Some(storage_factory);
+        self
+    }
+
+    fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = Some(runtime);
         self
     }
 
@@ -129,7 +136,11 @@ impl CatalogBuilder for GlueCatalogBuilder {
                 ));
             }
 
-            GlueCatalog::new(self.config, self.storage_factory).await
+            let runtime = match self.runtime {
+                Some(rt) => rt,
+                None => Runtime::try_current()?,
+            };
+            GlueCatalog::new(self.config, self.storage_factory, runtime).await
         }
     }
 }
@@ -151,6 +162,7 @@ pub struct GlueCatalog {
     config: GlueCatalogConfig,
     client: GlueClient,
     file_io: FileIO,
+    runtime: Runtime,
 }
 
 impl Debug for GlueCatalog {
@@ -166,6 +178,7 @@ impl GlueCatalog {
     async fn new(
         config: GlueCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
+        runtime: Runtime,
     ) -> Result<Self> {
         let sdk_config = create_sdk_config(&config.props, config.uri.as_ref()).await;
         let mut file_io_props = config.props.clone();
@@ -214,6 +227,7 @@ impl GlueCatalog {
             config,
             client: GlueClient(client),
             file_io,
+            runtime,
         })
     }
     /// Get the catalogs `FileIO`
@@ -272,6 +286,7 @@ impl GlueCatalog {
                 NamespaceIdent::new(db_name),
                 table_name.to_owned(),
             ))
+            .runtime(self.runtime.clone())
             .build()?;
 
         Ok((table, version_id))
@@ -611,6 +626,7 @@ impl Catalog for GlueCatalog {
             .metadata_location(metadata_location_str)
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
+            .runtime(self.runtime.clone())
             .build()
     }
 
@@ -845,6 +861,7 @@ impl Catalog for GlueCatalog {
             .metadata_location(metadata_location)
             .metadata(metadata)
             .file_io(self.file_io())
+            .runtime(self.runtime.clone())
             .build()?)
     }
 

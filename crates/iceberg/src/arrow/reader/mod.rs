@@ -19,6 +19,7 @@
 
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
 use crate::io::FileIO;
+use crate::runtime::Runtime;
 use crate::util::available_parallelism;
 
 /// Default gap between byte ranges below which they are coalesced into a
@@ -53,11 +54,12 @@ pub struct ArrowReaderBuilder {
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
     parquet_read_options: ParquetReadOptions,
+    runtime: Runtime,
 }
 
 impl ArrowReaderBuilder {
     /// Create a new ArrowReaderBuilder
-    pub fn new(file_io: FileIO) -> Self {
+    pub fn new(file_io: FileIO, runtime: Runtime) -> Self {
         let num_cpus = available_parallelism().get();
 
         ArrowReaderBuilder {
@@ -67,6 +69,7 @@ impl ArrowReaderBuilder {
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
             parquet_read_options: ParquetReadOptions::builder().build(),
+            runtime,
         }
     }
 
@@ -129,6 +132,7 @@ impl ArrowReaderBuilder {
             delete_file_loader: CachingDeleteFileLoader::new(
                 self.file_io.clone(),
                 self.concurrency_limit_data_files,
+                self.runtime.clone(),
             ),
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
