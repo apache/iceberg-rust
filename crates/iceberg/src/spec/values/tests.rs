@@ -252,6 +252,78 @@ fn json_decimal() {
 }
 
 #[test]
+fn test_should_serde_json_binary_if_value_is_hex_encoded() {
+    let record = r#""00010fff""#;
+
+    check_json_serde(
+        record,
+        Literal::Primitive(PrimitiveLiteral::Binary(vec![0, 1, 15, 255])),
+        &Type::Primitive(PrimitiveType::Binary),
+    );
+}
+
+#[test]
+fn test_should_serde_json_fixed_if_value_is_hex_encoded() {
+    let record = r#""00010fff""#;
+
+    check_json_serde(
+        record,
+        Literal::Primitive(PrimitiveLiteral::Binary(vec![0, 1, 15, 255])),
+        &Type::Primitive(PrimitiveType::Fixed(4)),
+    );
+}
+
+#[test]
+fn test_should_parse_json_binary_if_hex_uses_uppercase_digits() {
+    let result = Literal::try_from_json(
+        serde_json::json!("00010FFF"),
+        &Type::Primitive(PrimitiveType::Binary),
+    )
+    .unwrap();
+
+    assert_eq!(
+        result,
+        Some(Literal::Primitive(PrimitiveLiteral::Binary(vec![
+            0, 1, 15, 255
+        ])))
+    );
+}
+
+#[test]
+fn test_should_reject_json_binary_if_hex_is_invalid() {
+    assert!(
+        Literal::try_from_json(
+            serde_json::json!("f"),
+            &Type::Primitive(PrimitiveType::Binary),
+        )
+        .is_err()
+    );
+    assert!(
+        Literal::try_from_json(
+            serde_json::json!("fg"),
+            &Type::Primitive(PrimitiveType::Binary),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn test_should_reject_json_fixed_if_length_does_not_match() {
+    assert!(
+        Literal::try_from_json(
+            serde_json::json!("ff"),
+            &Type::Primitive(PrimitiveType::Fixed(2)),
+        )
+        .is_err()
+    );
+    assert!(
+        Literal::Primitive(PrimitiveLiteral::Binary(vec![255]))
+            .try_into_json(&Type::Primitive(PrimitiveType::Fixed(2)))
+            .is_err()
+    );
+}
+
+#[test]
 fn json_struct() {
     let record = r#"{"1": 1, "2": "bar", "3": null}"#;
 
