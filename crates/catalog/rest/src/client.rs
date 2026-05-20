@@ -222,9 +222,21 @@ impl HttpClient {
     /// If credential is invalid, or the request fails, this method will return an error and leave
     /// the current token unchanged.
     pub(crate) async fn regenerate_token(&self) -> Result<()> {
-        let new_token = self.exchange_credential_for_token().await?;
+        let new_token = self.exchange_token().await?;
         *self.token.lock().await = Some(new_token.clone());
         Ok(())
+    }
+
+    async fn exchange_token(&self) -> Result<String> {
+        if self.gcp_credential.is_some() {
+            self.exchange_gcp_credential_for_token().await
+        } else {
+            self.exchange_credential_for_token().await
+        }
+    }
+
+    fn can_refresh_token(&self) -> bool {
+        self.credential.is_some() || self.gcp_credential.is_some()
     }
 
     /// Authenticates the request by adding a bearer token to the authorization header.
@@ -238,8 +250,6 @@ impl HttpClient {
     ///
     /// When both `credential` and `token` are present, `token` takes precedence.
     /// When GCP service account is present, it takes precedence over credential-based auth.
-    ///
-    /// # TODO: Support automatic token refreshing.
     async fn authenticate(&self, req: &mut Request) -> Result<()> {
         // Clone the token from lock without holding the lock for entire function.
         let token = self.token.lock().await.clone();
@@ -252,11 +262,7 @@ impl HttpClient {
         let token = match token {
             Some(token) => token,
             None => {
-                let token = if self.gcp_credential.is_some() {
-                    self.exchange_gcp_credential_for_token().await?
-                } else {
-                    self.exchange_credential_for_token().await?
-                };
+                let token = self.exchange_token().await?;
                 // Update token so that we use it for next request instead of
                 // exchanging credential for token from the server again
                 *self.token.lock().await = Some(token.clone());
@@ -295,8 +301,21 @@ impl HttpClient {
     // Queries the Iceberg REST catalog after authentication with the given `Request` and
     // returns a `Response`.
     pub async fn query_catalog(&self, mut request: Request) -> Result<Response> {
+        let retry_request = request.try_clone();
         self.authenticate(&mut request).await?;
-        self.execute(request).await
+        let response = self.execute(request).await?;
+
+        if response.status() != StatusCode::UNAUTHORIZED || !self.can_refresh_token() {
+            return Ok(response);
+        }
+
+        let Some(mut retry_request) = retry_request else {
+            return Ok(response);
+        };
+
+        self.invalidate_token().await?;
+        self.authenticate(&mut retry_request).await?;
+        self.execute(retry_request).await
     }
 
     /// Returns whether header redaction is disabled for this client.

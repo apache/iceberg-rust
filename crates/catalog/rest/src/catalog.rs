@@ -1179,6 +1179,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_oauth_refreshes_token_after_unauthorized_response() {
+        let mut server = Server::new_async().await;
+        let oauth_mock =
+            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "expired-token", 200)
+                .await;
+        let config_mock = create_config_mock(&mut server).await;
+        let expired_token_mock = server
+            .mock("GET", "/v1/namespaces")
+            .match_header("authorization", "Bearer expired-token")
+            .with_status(401)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "error": {
+                        "message": "The access token expired",
+                        "type": "UnauthorizedException",
+                        "code": 401
+                    }
+                }"#,
+            )
+            .expect(1)
+            .create_async()
+            .await;
+        let refresh_oauth_mock =
+            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "refreshed-token", 200)
+                .await;
+        let refreshed_token_mock = server
+            .mock("GET", "/v1/namespaces")
+            .match_header("authorization", "Bearer refreshed-token")
+            .with_status(200)
+            .with_body(r#"{"namespaces": [["default"]]}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+        );
+
+        let namespaces = catalog.list_namespaces(None).await.unwrap();
+
+        oauth_mock.assert_async().await;
+        config_mock.assert_async().await;
+        expired_token_mock.assert_async().await;
+        refresh_oauth_mock.assert_async().await;
+        refreshed_token_mock.assert_async().await;
+        assert_eq!(namespaces, vec![NamespaceIdent::new("default".to_string())]);
+        assert_eq!(
+            catalog.context().await.unwrap().client.token().await,
+            Some("refreshed-token".to_string())
+        );
+    }
+
+    #[tokio::test]
     async fn test_oauth_with_optional_param() {
         let mut props = HashMap::new();
         props.insert("credential".to_string(), "client1:secret1".to_string());
