@@ -559,12 +559,6 @@ impl FileWriter for ParquetWriter {
 
 /// Cast columns in `batch` to match `target_schema`, but only when the mismatch is a
 /// UTC-equivalent timezone alias (`"UTC"` vs `"+00:00"`).
-///
-/// Columns that already match the target type are passed through unchanged. Columns with
-/// a UTC alias mismatch are cast using `arrow_cast::cast` (which is a no-op on the values,
-/// it just relabels the timezone). Any other type mismatch is left alone — it will surface
-/// as the original `Incompatible type` error from the underlying parquet writer, which is
-/// the correct behavior for genuinely incompatible schemas.
 fn coerce_timestamp_columns(
     batch: &RecordBatch,
     target_schema: &ArrowSchemaRef,
@@ -709,6 +703,10 @@ mod tests {
         DefaultFileNameGenerator, DefaultLocationGenerator, FileNameGenerator, LocationGenerator,
     };
     use crate::writer::tests::check_parquet_data_file;
+    use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+    use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+    use crate::writer::{IcebergWriter, IcebergWriterBuilder};
+
 
     fn schema_for_all_type() -> Schema {
         Schema::builder()
@@ -2322,15 +2320,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_writer_casts_utc_alias_timezone() -> Result<()> {
-        // Iceberg's `Timestamptz` maps to Arrow `Timestamp(µs, "+00:00")`. External
-        // producers (e.g. DataFusion) commonly tag timestamps with `"UTC"` which is
-        // semantically identical. The writer should cast transparently.
-        use crate::arrow::schema_to_arrow_schema;
-        use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
-        use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
-        use crate::writer::{IcebergWriter, IcebergWriterBuilder};
-
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new()?;
         let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
@@ -2366,16 +2356,16 @@ mod tests {
             .build(None)
             .await?;
 
-        // Build batch with tz="UTC" (the alias that triggers the original error).
+        // Build batch with tz="UTC"
         let target_arrow_schema = Arc::new(schema_to_arrow_schema(&schema).unwrap());
-        let utc_fields: Vec<arrow_schema::Field> = target_arrow_schema
+        let utc_fields: Vec<Field> = target_arrow_schema
             .fields()
             .iter()
             .map(|f| match f.data_type() {
-                arrow_schema::DataType::Timestamp(unit, Some(_)) => f
+                DataType::Timestamp(unit, Some(_)) => f
                     .as_ref()
                     .clone()
-                    .with_data_type(arrow_schema::DataType::Timestamp(*unit, Some("UTC".into()))),
+                    .with_data_type(DataType::Timestamp(*unit, Some("UTC".into()))),
                 _ => f.as_ref().clone(),
             })
             .collect();
@@ -2403,14 +2393,14 @@ mod tests {
     #[test]
     fn test_cast_batch_to_schema_noop_when_matching() {
         // When types match, cast_batch_to_schema is a no-op clone.
-        let schema = Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+        let schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
             "x",
-            arrow_schema::DataType::Int32,
+            DataType::Int32,
             false,
         )]));
         let batch =
             RecordBatch::try_new(schema.clone(), vec![
-                Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
             ])
             .unwrap();
         let result = coerce_timestamp_columns(&batch, &schema).unwrap();
@@ -2421,18 +2411,18 @@ mod tests {
     fn test_cast_batch_to_schema_passes_through_non_utc_mismatches() {
         // Non-UTC mismatches are NOT cast — the batch is returned unchanged so the
         // downstream parquet writer produces its normal "Incompatible type" error.
-        let source_schema = Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+        let source_schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
             "x",
-            arrow_schema::DataType::Int32,
+            DataType::Int32,
             false,
         )]));
-        let target_schema = Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+        let target_schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
             "x",
-            arrow_schema::DataType::Utf8,
+            DataType::Utf8,
             false,
         )]));
         let batch = RecordBatch::try_new(source_schema.clone(), vec![Arc::new(
-            arrow_array::Int32Array::from(vec![1]),
+            Int32Array::from(vec![1]),
         ) as ArrayRef])
         .unwrap();
         let result = coerce_timestamp_columns(&batch, &target_schema).unwrap();
