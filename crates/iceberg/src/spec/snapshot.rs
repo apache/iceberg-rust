@@ -539,11 +539,79 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use bytes::Bytes;
     use chrono::{TimeZone, Utc};
 
+    use crate::encryption::kms::{KeyManagementClient, MemoryKeyManagementClient};
+    use crate::encryption::{EncryptionManager, StandardKeyMetadata};
+    use crate::io::FileIO;
     use crate::spec::TableMetadata;
+    use crate::spec::manifest_list::{ManifestList, ManifestListWriter};
     use crate::spec::snapshot::_serde::SnapshotV1;
     use crate::spec::snapshot::{Operation, Snapshot, Summary};
+
+    const ENCRYPTION_TEST_V3_METADATA: &str = r#"{
+        "format-version": 3,
+        "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+        "location": "memory:///table",
+        "last-sequence-number": 0,
+        "last-updated-ms": 1602638573590,
+        "last-column-id": 1,
+        "current-schema-id": 0,
+        "schemas": [{"type": "struct", "schema-id": 0, "fields": [
+            {"id": 1, "name": "x", "required": true, "type": "long"}
+        ]}],
+        "default-spec-id": 0,
+        "partition-specs": [{"spec-id": 0, "fields": []}],
+        "last-partition-id": 1000,
+        "default-sort-order-id": 0,
+        "sort-orders": [{"order-id": 0, "fields": []}],
+        "properties": {},
+        "snapshots": [],
+        "snapshot-log": [],
+        "metadata-log": [],
+        "refs": {},
+        "next-row-id": 0
+    }"#;
+
+    fn encryption_test_metadata() -> TableMetadata {
+        serde_json::from_str(ENCRYPTION_TEST_V3_METADATA).unwrap()
+    }
+
+    fn encryption_test_kms() -> Arc<dyn KeyManagementClient> {
+        let kms = MemoryKeyManagementClient::new();
+        kms.add_master_key("master-1").unwrap();
+        Arc::new(kms)
+    }
+
+    fn encryption_test_manager() -> EncryptionManager {
+        EncryptionManager::builder()
+            .kms_client(encryption_test_kms())
+            .table_key_id("master-1")
+            .build()
+    }
+
+    async fn write_v3_manifest_list_bytes(io: &FileIO, path: &str) -> Bytes {
+        let output = io.new_output(path).unwrap();
+        let mut writer = ManifestListWriter::v3(output, 1, None, 0, Some(0));
+        writer.add_manifests(std::iter::empty()).unwrap();
+        writer.close().await.unwrap();
+        io.new_input(path).unwrap().read().await.unwrap()
+    }
+
+    fn snapshot_pointing_at(manifest_list_path: &str, key_id: Option<String>) -> Snapshot {
+        Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_sequence_number(0)
+            .with_timestamp_ms(0)
+            .with_manifest_list(manifest_list_path.to_string())
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .with_encryption_key_id(key_id)
+            .build()
+    }
 
     #[test]
     fn schema() {
@@ -747,76 +815,6 @@ mod tests {
         assert_eq!(v2_snapshot.schema_id(), None);
     }
 
-    use bytes::Bytes;
-
-    use crate::encryption::kms::{KeyManagementClient, MemoryKeyManagementClient};
-    use crate::encryption::{EncryptionManager, StandardKeyMetadata};
-    use crate::io::FileIO;
-    use crate::spec::manifest_list::{ManifestList, ManifestListWriter};
-
-    const ENCRYPTION_TEST_V3_METADATA: &str = r#"{
-        "format-version": 3,
-        "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
-        "location": "memory:///table",
-        "last-sequence-number": 0,
-        "last-updated-ms": 1602638573590,
-        "last-column-id": 1,
-        "current-schema-id": 0,
-        "schemas": [{"type": "struct", "schema-id": 0, "fields": [
-            {"id": 1, "name": "x", "required": true, "type": "long"}
-        ]}],
-        "default-spec-id": 0,
-        "partition-specs": [{"spec-id": 0, "fields": []}],
-        "last-partition-id": 1000,
-        "default-sort-order-id": 0,
-        "sort-orders": [{"order-id": 0, "fields": []}],
-        "properties": {},
-        "snapshots": [],
-        "snapshot-log": [],
-        "metadata-log": [],
-        "refs": {},
-        "next-row-id": 0
-    }"#;
-
-    fn encryption_test_metadata() -> TableMetadata {
-        serde_json::from_str(ENCRYPTION_TEST_V3_METADATA).unwrap()
-    }
-
-    fn encryption_test_kms() -> Arc<dyn KeyManagementClient> {
-        let kms = MemoryKeyManagementClient::new();
-        kms.add_master_key("master-1").unwrap();
-        Arc::new(kms)
-    }
-
-    fn encryption_test_manager() -> EncryptionManager {
-        EncryptionManager::builder()
-            .kms_client(encryption_test_kms())
-            .table_key_id("master-1")
-            .build()
-    }
-
-    async fn write_v3_manifest_list_bytes(io: &FileIO, path: &str) -> Bytes {
-        let output = io.new_output(path).unwrap();
-        let mut writer = ManifestListWriter::v3(output, 1, None, 0, Some(0));
-        writer.add_manifests(std::iter::empty()).unwrap();
-        writer.close().await.unwrap();
-        io.new_input(path).unwrap().read().await.unwrap()
-    }
-
-    fn snapshot_pointing_at(manifest_list_path: &str, key_id: Option<String>) -> Snapshot {
-        Snapshot::builder()
-            .with_snapshot_id(1)
-            .with_sequence_number(0)
-            .with_timestamp_ms(0)
-            .with_manifest_list(manifest_list_path.to_string())
-            .with_summary(Summary {
-                operation: Operation::Append,
-                additional_properties: HashMap::new(),
-            })
-            .with_encryption_key_id(key_id)
-            .build()
-    }
-
     #[tokio::test]
     async fn load_manifest_list_errors_when_encrypted_but_no_manager_configured() {
         let io = FileIO::new_with_memory();
@@ -830,7 +828,7 @@ mod tests {
             .load_manifest_list(&io, &metadata, None)
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), crate::ErrorKind::FeatureUnsupported);
+        assert_eq!(err.kind(), crate::ErrorKind::PreconditionFailed);
     }
 
     #[tokio::test]
