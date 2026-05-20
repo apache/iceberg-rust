@@ -288,12 +288,13 @@ impl SchemaVisitor for SchemaToAvroSchema {
             None => VARIANT_LOGICAL_TYPE.to_string(),
         };
         let mut schema = avro_record_schema(&record_name, fields)?;
-        if let AvroSchema::Record(record) = &mut schema {
-            record.attributes.insert(
-                LOGICAL_TYPE.to_string(),
-                Value::String(VARIANT_LOGICAL_TYPE.to_string()),
-            );
-        }
+        let AvroSchema::Record(record) = &mut schema else {
+            unreachable!("avro_record_schema must return AvroSchema::Record");
+        };
+        record.attributes.insert(
+            LOGICAL_TYPE.to_string(),
+            Value::String(VARIANT_LOGICAL_TYPE.to_string()),
+        );
         Ok(Either::Left(schema))
     }
 
