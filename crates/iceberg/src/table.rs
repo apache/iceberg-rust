@@ -669,7 +669,7 @@ mod tests {
             .runtime(Runtime::try_current().unwrap())
             .build()
             .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
     }
 
     #[tokio::test]
