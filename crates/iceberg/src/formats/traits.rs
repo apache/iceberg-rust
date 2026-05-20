@@ -64,7 +64,7 @@ pub trait DataBatch: Send + 'static {
     /// Compute column-level metrics for the given field.
     ///
     /// Returns `None` if the field is not present in this batch.
-    fn column_metrics(&self, field_id: i32) -> Result<Option<ColumnMetrics>>;
+    fn column_metrics(&self, field_id: i32) -> Option<ColumnMetrics>;
 
     /// Inject constant values for metadata columns (`_file`, `_pos`, `_partition`).
     fn inject_constants(&self, constants: &[(i32, Datum)]) -> Result<Self>

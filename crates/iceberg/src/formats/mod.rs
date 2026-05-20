@@ -22,6 +22,7 @@
 
 mod traits;
 mod registry;
+mod arrow;
 
 pub use traits::*;
 pub use registry::*;
