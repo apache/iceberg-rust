@@ -206,7 +206,7 @@ impl Snapshot {
         let manifest_list_content = match (&self.encryption_key_id, encryption_manager) {
             (Some(_), None) => {
                 return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
+                    ErrorKind::PreconditionFailed,
                     "Snapshot has encryption_key_id but no EncryptionManager configured on Table",
                 ));
             }

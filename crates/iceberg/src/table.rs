@@ -415,7 +415,7 @@ fn maybe_configure_encryption(
     // snapshot `key-id` field are introduced in format version 3.
     if metadata.format_version() < FormatVersion::V3 {
         return Err(Error::new(
-            ErrorKind::FeatureUnsupported,
+            ErrorKind::PreconditionFailed,
             format!(
                 "Table encryption requires format version 3, found {}",
                 metadata.format_version()
@@ -425,7 +425,7 @@ fn maybe_configure_encryption(
 
     let kms_client = kms_client.ok_or_else(|| {
         Error::new(
-            ErrorKind::FeatureUnsupported,
+            ErrorKind::PreconditionFailed,
             "Table has encryption.key-id set but no KeyManagementClient was provided to TableBuilder",
         )
     })?;
