@@ -752,7 +752,7 @@ impl Literal {
 }
 
 fn decode_hex_bytes(value: &str) -> Result<Vec<u8>> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return Err(Error::new(
             ErrorKind::DataInvalid,
             format!("Hex string must have an even number of characters: {value:?}"),

@@ -252,7 +252,7 @@ fn json_decimal() {
 }
 
 #[test]
-fn test_should_serde_json_binary_if_value_is_hex_encoded() {
+fn json_binary() {
     let record = r#""00010fff""#;
 
     check_json_serde(
@@ -263,7 +263,7 @@ fn test_should_serde_json_binary_if_value_is_hex_encoded() {
 }
 
 #[test]
-fn test_should_serde_json_fixed_if_value_is_hex_encoded() {
+fn json_fixed() {
     let record = r#""00010fff""#;
 
     check_json_serde(
