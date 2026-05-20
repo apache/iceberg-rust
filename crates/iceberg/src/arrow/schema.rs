@@ -244,7 +244,7 @@ pub fn arrow_type_to_type(ty: &DataType) -> Result<Type> {
 
 const ARROW_FIELD_DOC_KEY: &str = "doc";
 
-pub(super) fn get_field_id_from_metadata(field: &Field) -> Result<i32> {
+pub(super) fn get_field_id_from_metadata(field: &FieldRef) -> Result<i32> {
     if let Some(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
         return value.parse::<i32>().map_err(|e| {
             Error::new(
@@ -261,7 +261,7 @@ pub(super) fn get_field_id_from_metadata(field: &Field) -> Result<i32> {
     ))
 }
 
-fn get_field_doc(field: &Field) -> Option<String> {
+fn get_field_doc(field: &FieldRef) -> Option<String> {
     if let Some(value) = field.metadata().get(ARROW_FIELD_DOC_KEY) {
         return Some(value.clone());
     }
@@ -293,7 +293,7 @@ impl ArrowSchemaConverter {
         }
     }
 
-    fn get_field_id(&mut self, field: &Field) -> Result<i32> {
+    fn get_field_id(&mut self, field: &FieldRef) -> Result<i32> {
         if self.reassign_field_ids_from.is_some() {
             // Field IDs will be reassigned by the schema builder.
             // We need unique temporary IDs because ReassignFieldIds builds an

@@ -74,7 +74,7 @@ impl<'a> Int96CoercionVisitor<'a> {
     /// Determine the target TimeUnit for a Timestamp(Nanosecond) field based on the
     /// Iceberg schema. Falls back to microsecond when field IDs are unavailable,
     /// matching Iceberg Java behavior.
-    fn target_unit(&self, field: &Field) -> Option<TimeUnit> {
+    fn target_unit(&self, field: &FieldRef) -> Option<TimeUnit> {
         if !matches!(
             field.data_type(),
             DataType::Timestamp(TimeUnit::Nanosecond, _)
