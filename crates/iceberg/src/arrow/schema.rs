@@ -26,7 +26,7 @@ use arrow_array::{
     FixedSizeBinaryArray, Float32Array, Float64Array, Int32Array, Int64Array, Scalar, StringArray,
     TimestampMicrosecondArray, TimestampNanosecondArray,
 };
-use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
+use arrow_schema::{DataType, Field, FieldRef, Fields, Schema as ArrowSchema, TimeUnit};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::statistics::Statistics;
 use uuid::Uuid;
@@ -55,42 +55,42 @@ pub trait ArrowSchemaVisitor {
     type U;
 
     /// Called before struct/list/map field.
-    fn before_field(&mut self, _field: &Field) -> Result<()> {
+    fn before_field(&mut self, _field: &FieldRef) -> Result<()> {
         Ok(())
     }
 
     /// Called after struct/list/map field.
-    fn after_field(&mut self, _field: &Field) -> Result<()> {
+    fn after_field(&mut self, _field: &FieldRef) -> Result<()> {
         Ok(())
     }
 
     /// Called before list element.
-    fn before_list_element(&mut self, _field: &Field) -> Result<()> {
+    fn before_list_element(&mut self, _field: &FieldRef) -> Result<()> {
         Ok(())
     }
 
     /// Called after list element.
-    fn after_list_element(&mut self, _field: &Field) -> Result<()> {
+    fn after_list_element(&mut self, _field: &FieldRef) -> Result<()> {
         Ok(())
     }
 
     /// Called before map key.
-    fn before_map_key(&mut self, _field: &Field) -> Result<()> {
+    fn before_map_key(&mut self, _field: &FieldRef) -> Result<()> {
         Ok(())
     }
 
     /// Called after map key.
-    fn after_map_key(&mut self, _field: &Field) -> Result<()> {
+    fn after_map_key(&mut self, _field: &FieldRef) -> Result<()> {
         Ok(())
     }
 
     /// Called before map value.
-    fn before_map_value(&mut self, _field: &Field) -> Result<()> {
+    fn before_map_value(&mut self, _field: &FieldRef) -> Result<()> {
         Ok(())
     }
 
     /// Called after map value.
-    fn after_map_value(&mut self, _field: &Field) -> Result<()> {
+    fn after_map_value(&mut self, _field: &FieldRef) -> Result<()> {
         Ok(())
     }
 
@@ -176,7 +176,7 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
 /// Visit list types in post order.
 fn visit_list<V: ArrowSchemaVisitor>(
     data_type: &DataType,
-    element_field: &Field,
+    element_field: &FieldRef,
     visitor: &mut V,
 ) -> Result<V::T> {
     visitor.before_list_element(element_field)?;
@@ -1159,7 +1159,7 @@ impl ArrowSchemaVisitor for MetadataStripVisitor {
     type T = Field;
     type U = ArrowSchema;
 
-    fn before_field(&mut self, field: &Field) -> Result<()> {
+    fn before_field(&mut self, field: &FieldRef) -> Result<()> {
         // Store field name and nullability for later reconstruction
         self.field_stack.push(Field::new(
             field.name(),
@@ -1169,7 +1169,7 @@ impl ArrowSchemaVisitor for MetadataStripVisitor {
         Ok(())
     }
 
-    fn after_field(&mut self, _field: &Field) -> Result<()> {
+    fn after_field(&mut self, _field: &FieldRef) -> Result<()> {
         Ok(())
     }
 
