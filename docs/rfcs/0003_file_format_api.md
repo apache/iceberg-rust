@@ -19,25 +19,18 @@
 
 # RFC: File Format API for Apache Iceberg Rust
 
+**Authors:** Kurtis C. Wright
+**Last updated:** 2026-05-20
+
 ## Background
 
 ### Current state
 
-The `iceberg` crate (version 0.9.0, Rust 1.92 as of this writing) is the core library of the Apache Iceberg Rust project. Its module layout in `crates/iceberg/src/lib.rs` exposes public modules for `spec`, `arrow`, `writer`, `scan`, `io`, `expr`, `transaction`, and others. The crate depends directly on the `parquet` crate (with the `async` feature) and on the `arrow-*` crates. It has no feature flags today.
+The `iceberg` crate (version 0.9.1, Rust 1.92) is the core library of the Apache Iceberg Rust project. The crate depends directly on the `parquet` crate (with the `async` feature) and on the `arrow-*` crates. It has no feature flags today.
 
-For data file writing, the crate provides a three-layer architecture described in `crates/iceberg/src/writer/mod.rs`:
+For data file writing, the crate provides `FileWriter` / `FileWriterBuilder` traits that are format-agnostic at the type level, but `ParquetWriterBuilder` and `ParquetWriter` are the only implementation. Higher-level writers (`DataFileWriterBuilder`, `EqualityDeleteFileWriterBuilder`) are generic over any `FileWriterBuilder`, but every instantiation uses Parquet.
 
-1. **`FileWriter` / `FileWriterBuilder`** in `writer/file_writer/mod.rs`: traits for physical file writers, generic over an output type (defaulting to `Vec<DataFileBuilder>`). `FileWriterBuilder::build` takes an `OutputFile` and returns a `FileWriter`. `FileWriter::write` takes a `&RecordBatch`.
-
-2. **`IcebergWriter` / `IcebergWriterBuilder`** in `writer/mod.rs`: traits for logical Iceberg writers (data files, equality deletes, position deletes, partitioning), defaulting to `RecordBatch` input and `Vec<DataFile>` output.
-
-3. **Concrete implementations**: `ParquetWriterBuilder` and `ParquetWriter` in `writer/file_writer/parquet_writer.rs` are the only `FileWriter` implementation. Higher-level writers such as `DataFileWriterBuilder` (`writer/base_writer/data_file_writer.rs`) and `EqualityDeleteFileWriterBuilder` (`writer/base_writer/equality_delete_writer.rs`) are generic over any `FileWriterBuilder`, but every example, test, and integration instantiates them with `ParquetWriterBuilder`.
-
-The trait layer is format-agnostic. Every concrete instantiation uses Parquet.
-
-For data file reading, the crate provides `ArrowReaderBuilder` and `ArrowReader` in `arrow/reader.rs`. Both are Parquet-specific despite the generic name. `ArrowReader::process_file_scan_task` calls `open_parquet_file` directly, constructs a `ParquetRecordBatchReaderBuilder`, and uses Parquet-specific row group filtering and page index logic. `TableScan::to_arrow` in `scan/mod.rs` wires `ArrowReaderBuilder` in as the only reader path. `FileScanTask` carries a `data_file_format: DataFileFormat` field, but `process_file_scan_task` ignores it. `DataFileFormat` appears throughout `src/`. Almost every non-test reference is `DataFileFormat::Parquet`. The only non-Parquet references are two uses of `DataFileFormat::Avro` in `transaction/snapshot.rs` for manifest files.
-
-The `DataFileFormat` enum in `spec/manifest/data_file.rs` has four variants: `Avro`, `Orc`, `Parquet`, and `Puffin`. Puffin files hold statistics and deletion vectors rather than row data. They are handled in `crates/iceberg/src/puffin/` and are out of scope for this RFC (see Non-Goals). Data file support today:
+For data file reading, `ArrowReaderBuilder` and `ArrowReader` are Parquet-specific despite the generic name. `TableScan::to_arrow` wires `ArrowReaderBuilder` as the only reader path. `FileScanTask` carries a `data_file_format` field, but the reader ignores it.
 
 | Format  | Data file read | Data file write | Manifests |
 |---------|----------------|-----------------|-----------|
@@ -45,476 +38,473 @@ The `DataFileFormat` enum in `spec/manifest/data_file.rs` has four variants: `Av
 | Avro    | No             | No              | Yes       |
 | ORC     | No             | No              | No        |
 
-A table containing ORC or Avro data files cannot be read from Rust today, even though both are valid per the Iceberg spec.
-
-Arrow `RecordBatch` is the only in-memory data representation in the crate. It is the input type for every writer trait and the output type for every reader. The `arrow/` module provides schema conversion (`schema_to_arrow_schema`, `arrow_schema_to_schema`), `RecordBatchTransformer` for schema evolution and constant column injection, and the Parquet-to-Arrow read path. Every integration crate, including `iceberg-datafusion`, consumes Arrow. The crate does not define a generic `Record` type and does not integrate with engine-specific row types such as Java's `InternalRow` or `RowData`.
+A table containing ORC or Avro data files cannot be read by the `iceberg` crate today, even though both are valid per the Iceberg spec.
 
 ### Pain points
 
-1. **No extension point for new formats.** Adding ORC means editing `ArrowReader` to branch on `DataFileFormat` and threading ORC-specific logic through every layer that touches it. The write path has the same shape.
+1. **No extension point for new formats.** Adding ORC means editing `ArrowReader` and threading format-specific logic through every layer.
 
-2. **Parquet assumptions leak into generic code.** `ArrowReaderBuilder` exposes Parquet-specific options (`with_metadata_size_hint`, `with_row_group_filtering_enabled`, `with_row_selection_enabled`) that are meaningless for ORC or Avro. The name "ArrowReader" conflates the in-memory representation (Arrow) with the on-disk format (Parquet).
+2. **Parquet assumptions leak into generic code.** `ArrowReaderBuilder` exposes Parquet-specific options meaningless for other formats. The name conflates the in-memory representation with the on-disk format.
 
-3. **No format-agnostic statistics.** `ParquetWriter` computes column sizes, value counts, and min/max bounds through `MinMaxColAggregator` and `NanValueCountVisitor`, both tightly coupled to Parquet's `Statistics` type. Another format cannot produce comparable manifest metadata without a shared statistics interface.
+3. **No format-agnostic statistics.** Statistics computation is tightly coupled to Parquet's `Statistics` type.
 
-4. **V3 types will need per-format serialization.** The V3 spec adds Variant and Geometry types. Each format encodes them differently: Parquet uses variant shredding, ORC uses binary, Avro uses union types. Implementing either type without a format abstraction means new `match` arms in every reader and writer code path.
+4. **V3 types will need per-format serialization.** Variant uses shredding in Parquet, binary in ORC, unions in Avro. Without a format abstraction, each new type means new `match` arms everywhere.
+
+5. **Arrow version coupling.** The core crate depends on specific `arrow-*` versions. Upgrading Arrow in `datafusion` or other integrations forces lockstep upgrades across the dependency graph.
 
 ### Prior work
 
-The Java project shipped `FormatModel<D, S>` in February 2026 (PR [#12774](https://github.com/apache/iceberg/pull/12774)) after a 10-month review. Implementations for Parquet, Avro, ORC, and Arrow followed in PRs [#15253](https://github.com/apache/iceberg/pull/15253) through [#15258](https://github.com/apache/iceberg/pull/15258). Engine migrations for Spark ([#15328](https://github.com/apache/iceberg/pull/15328)) and Flink ([#15329](https://github.com/apache/iceberg/pull/15329)) landed shortly after.
+The Java project shipped `FormatModel<D, S>` in February 2026 (PR [#12774](https://github.com/apache/iceberg/pull/12774)). Java's design uses two generic parameters (data type `D` and engine schema `S`) with a registry keyed by `(FileFormat, Class<?>)`. PyIceberg has an open proposal ([#3100](https://github.com/apache/iceberg-python/issues/3100)) that drops generics entirely, keying on file format alone.
 
-Java's `FormatModel` carries two generic parameters: a data type `D` (Java uses `Record`, Spark `InternalRow`, Flink `RowData`, and Arrow `ColumnarBatch`) and an engine schema type `S` (Spark `StructType`, Flink `RowType`, and others). A static `FormatModelRegistry` stores implementations keyed by `Pair<FileFormat, Class<?>>` and populates itself through Java reflection at startup. The old `Parquet.WriteBuilder`, `Avro.WriteBuilder`, and `ORC.WriteBuilder` are not deprecated. The new `FormatModel` implementations wrap them rather than replace them.
-
-PyIceberg has an open proposal for the equivalent capability in issue [apache/iceberg-python#3100](https://github.com/apache/iceberg-python/issues/3100), with an in-progress PR at [apache/iceberg-python#3119](https://github.com/apache/iceberg-python/pull/3119). Because PyIceberg uses PyArrow as its only in-memory representation, the proposal drops Java's generic type parameters and keys the registry on file format alone. Two prior PyIceberg ORC PRs ([#790](https://github.com/apache/iceberg-python/pull/790), [#2236](https://github.com/apache/iceberg-python/pull/2236)) were closed as stale without merging, which reinforces the case for landing an abstraction layer before adding new formats.
-
-Design decisions in this RFC that differ from Java (no generics, single-dimension registry key, hard cutover from the old Parquet types) are justified inline where they appear. Specific Java design points that shaped those decisions are called out in Alternatives Considered.
+This RFC proposes a composable three-layer architecture that separates the in-memory processing representation from the file format layer, using Rust's trait system for static dispatch within a layer and dynamic dispatch at layer boundaries. It aligns with the kernel architecture proposed in [#1817](https://github.com/apache/iceberg-rust/issues/1817) and the modularization tracked in [#1819](https://github.com/apache/iceberg-rust/issues/1819).
 
 ## Goals
 
-The user-facing outcome of this proposal is that every Iceberg data file and delete file flows through the same stable and extensible API. Parquet is the first format to land. ORC, Avro, and others follow on the same interface. Every goal below serves that outcome.
+1. Define a composable three-layer architecture where the file format, in-memory processing representation, and engine are independent axes of variation. A `DataBatch` trait defines the processing contract. `FormatReader` and `FormatWriter` traits bridge file formats to batch types. No layer imposes a conversion on another.
 
-1. Define a `FormatModel` trait that encapsulates format-specific read and write behavior independent of the on-disk format.
+2. Remove hard-coded Parquet assumptions from scan and write orchestration.
 
-2. Remove hard-coded Parquet assumptions from scan and write orchestration. After this work, `TableScan::to_arrow` and `DataFileWriterBuilder` dispatch through the format abstraction instead of constructing Parquet types directly.
+3. Establish the crate architecture that allows the core `iceberg` kernel to be representation-agnostic, decoupling Arrow version pinning from the core library.
 
-3. Provide a registry that maps `DataFileFormat` values to `FormatModel` implementations, so callers obtain readers and writers without naming the concrete format type.
-
-4. Define a conformance test suite (TCK) that any `FormatModel` implementation must pass before it merges.
-
-5. Match the Java and PyIceberg designs where they align, and diverge where Rust's single-data-type ecosystem and pre-1.0 status justify it. Divergences are called out inline.
+4. Provide interoperability with Java and Python Iceberg implementations at the conceptual level (same registry key semantics, same TCK coverage) while using Rust's trait system for zero-cost abstraction within a layer.
 
 ## Non-Goals
 
-The items below are deliberately out of scope to keep this proposal focused on the abstraction and its Parquet implementation. Most are follow-up work that the API enables but does not itself deliver.
+1. **Ship new format implementations.** This RFC lands the abstraction and a Parquet-with-Arrow implementation. ORC, Avro, Vortex, and Lance are follow-up work.
 
-1. **Ship new format implementations.** This RFC lands the abstraction and a Parquet implementation. ORC, Avro data-file, Vortex, and Lance are follow-up RFCs.
+2. **Runtime library loading.** Rust has no stable ABI. No format under discussion requires this.
 
-2. **Introduce a plugin protocol or runtime library loading.** Rust does not offer a clean mechanism for loading compiled plugins at runtime. A runtime-linking approach using `libloading` or similar would expand scope beyond what the formats currently under discussion (Parquet, ORC, Avro, Vortex, Lance) require.
+3. **Puffin support.** Puffin files have a different lifecycle and are handled separately.
 
-3. **Add Puffin support to the FormatModel.** Puffin files hold statistics and deletion vectors rather than row data. They have a different lifecycle from data files and are already handled separately in `crates/iceberg/src/puffin/`.
+4. **Redesign the writer trait hierarchy.** The existing `IcebergWriter` and `FileWriter` layering is sound. This RFC adds beneath it, not a replacement.
 
-4. **Redesign the writer trait hierarchy.** The existing `IcebergWriter` and `FileWriter` layering is sound. This RFC adds a format abstraction beneath `FileWriter`, not a replacement for it.
+5. **Implement variant shredding.** The hooks are provided. Implementation depends on [#2188](https://github.com/apache/iceberg-rust/pull/2188).
 
-5. **Implement variant shredding or encryption.** Java exposes `engineProjection` and `engineSchema` as extension points for variant shredding and similar format-specific type mapping, and `withFileEncryptionKey` and `withAADPrefix` for Parquet encryption. Equivalent hooks are noted as future extensions in the Rust design. Implementing either requires a dedicated RFC.
+6. **Complete crate separation.** This RFC establishes trait boundaries. Extraction is follow-up work per [#1817](https://github.com/apache/iceberg-rust/issues/1817) and [#1819](https://github.com/apache/iceberg-rust/issues/1819).
 
-6. **Change the Iceberg table spec.** This proposal is a Rust-only API change. It does not modify the Iceberg spec, the manifest format, the manifest list format, or the on-disk layout of any file.
+7. **Change the Iceberg table spec.** Rust-only API change.
 
-7. **Modify manifest read or write paths.** Manifests and manifest lists remain in Avro and are handled by the existing `ManifestReader` and `ManifestWriter` paths. The File Format API is about data files and delete files only.
-
+8. **Modify manifest paths.** Manifests remain in Avro via existing code.
 
 ## Design
 
-The Rust API is three traits and a registry. `FormatModel` is the trait that each format implementation provides. `FormatReadBuilder` and `FormatWriteBuilder` are the per-operation configurators that `FormatModel` returns. `FormatRegistry` maps `DataFileFormat` values to `FormatModel` instances. None of the traits carry generic parameters. The subsections below introduce each type, and a final "Design rationale" subsection explains the choices.
+### Architecture
 
-### The FormatModel trait
+Three independent axes determine how data flows through the system:
+
+| Axis | Controlled by | Determined when | Can change mid-session? |
+|------|---------------|-----------------|-------------------------|
+| **In-memory representation** | The engine embedding Iceberg (DataFusion, Spark, Comet) or the direct library user | Session start | No |
+| **Processing operations** | The Iceberg kernel | N/A (always available) | N/A |
+| **File format** | The table creator, stored in table metadata | Table creation | No (one format per table) |
+
+An Iceberg session has one in-memory representation. A table has one data file format. A session may scan multiple tables with different formats, and a proposed multi-table transaction could span Parquet and ORC tables. In all cases, batches of data flow through three layers with no intermediate conversions:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                       Engine Layer                                │
+│  The engine's native data representation.                        │
+│  Examples: Arrow RecordBatch, Vortex compressed arrays           │
+│  The engine provides a type that implements DataBatch.            │
+│  This choice is fixed for the session.                           │
+└─────────────────────────────────────┬───────────────────────────┘
+                                      │ (same concrete type throughout)
+┌─────────────────────────────────────┼───────────────────────────┐
+│                    Processing Layer                               │
+│  Iceberg operations on in-memory data: expression evaluation,    │
+│  partition transforms, schema evolution, metrics collection,     │
+│  constant injection, delete application.                         │
+│  Works with the concrete batch type chosen by the engine.        │
+└─────────────────────────────────────┬───────────────────────────┘
+                                      │ (same concrete type throughout)
+┌─────────────────────────────────────┼───────────────────────────┐
+│                    File Format Layer                              │
+│  FormatReader/FormatWriter implementations read/write physical   │
+│  files, producing/consuming the engine's batch type directly.    │
+│  One implementation per (format, batch type) pair.               │
+└─────────────────────────────────────┬───────────────────────────┘
+                                      │
+                           Physical Files
+                      (Parquet, ORC, Avro, ...)
+```
+
+### Separation of responsibilities
+
+Each implementor has a clearly defined contract. The kernel provides processing operations that format and engine developers do not need to reimplement.
+
+**Format implementor** (for example, adding ORC):
+
+| MUST implement | Handled by the kernel (unless the format opts in) |
+|---|---|
+| Decode requested columns from disk (projection is an I/O decision) | Residual row-level filtering |
+| Encode batches to disk | Schema evolution (add columns, widen types, reorder) |
+| Collect file-level metrics during write | Constant injection (metadata columns like `_file`, `_pos`) |
+| Handle format-specific optimizations (variant shredding, statistics-based chunk skipping) | Delete application (merge-on-read) |
+| Report what operations the reader already handled | Partition routing, file rolling, location generation |
+
+A format reader MAY handle operations from the right column during I/O if it can do so more efficiently (for example, Parquet reading an `int32` column directly into `int64` for schema evolution). When it does, it reports what it handled via `ReadResult` so the kernel skips the redundant pass. The kernel handles anything the format does not.
+
+**DataBatch implementor** (for example, adding GPU-native buffers):
+
+| MUST implement | Gets for free |
+|---|---|
+| `filter` — evaluate a predicate against the data | All kernel orchestration |
+| `project` — subset columns by field ID | All format readers that produce the type |
+| `evolve_schema` — widen types, add columns with defaults | TCK to validate correctness |
+| `inject_constants` — add metadata column values | |
+| `column_metrics` — compute min/max/null/NaN stats | |
+
+**Engine implementor** (for example, adding Comet):
+
+| What you want | What you implement |
+|---|---|
+| Arrow works for your engine | Nothing. Use the shipped `RecordBatch` default and existing format readers. |
+| Custom in-memory type | `impl DataBatch for YourType`. Pass TCK Layer 1. Register format readers that produce your type. |
+| Full control over execution | Bypass the kernel's default scan loop. Use format readers as a stream source and drive your own processing. |
+
+### Core traits
+
+**`DataBatch`** defines the contract for an in-memory data representation that the Iceberg kernel can process. The engine chooses a concrete batch type at session start and that choice does not change. `DataBatch` methods (`filter`, `project`, `evolve_schema`, `inject_constants`) return `Self` — they operate on the concrete type. Implementations have full freedom to fuse operations internally for performance. The kernel does not decompose operations into steps or dictate intermediate materializations.
+
+The shipped default is `impl DataBatch for RecordBatch`. Supporting a new representation requires implementing `DataBatch` and passing the TCK Layer 1 suite.
+
+**`FormatReader`** reads a file and produces a stream of batches. Its contract:
+
+- The reader MUST decode only the columns in `ReadOptions::schema` (projection is an I/O concern).
+- The reader MAY skip chunks that cannot match `ReadOptions::predicate` using format-level statistics.
+- The reader MAY support byte-range splits via `ReadOptions::split_start` / `split_length`.
+- The reader MAY handle schema evolution or other kernel operations during decode if the format can do so more efficiently (e.g., Parquet type promotion during decompression).
+- The reader MUST NOT handle partitioning, transaction management, or name mapping (field ID resolution for files not written by Iceberg). Those are always kernel responsibilities.
+
+The reader returns a `ReadResult` containing the batch stream and reporting what operations the reader handled. The kernel applies any remaining operations (residual filtering, schema evolution, constant injection, delete application) that the format did not.
+
+**`FormatWriter`** writes batches to a file. Its contract:
+
+- The writer MUST encode batches into the file format.
+- The writer MUST collect file-level metrics per `WriteOptions::metrics_config`.
+- The writer MUST handle format-specific encoding concerns (like variant shredding layout for Parquet).
+- The writer MUST NOT handle partitioning, sorting, or transaction management. The caller sends pre-partitioned, pre-sorted batches. The kernel handles commit.
+
+Both traits are dyn-compatible: no associated types, no generic parameters. The registry stores them as `Arc<dyn FormatReader>` and `Arc<dyn FormatWriter>`. This is the same pattern as `Storage` and `StorageFactory` in the IO layer.
+
+**`ReadOptions`** configures a read: Iceberg projection schema, filter predicate for pushdown, byte-range splits, case sensitivity, batch size, format-specific properties, and constant values for metadata columns.
+
+**`WriteOptions`** configures a write: Iceberg schema, format-specific properties, file-level metadata, content type, metrics collection configuration, overwrite flag, and encryption parameters.
+
+Both structs are `#[non_exhaustive]`. Fields are added without a breaking change.
+
+**`ReadResult`** contains the batch stream and communicates what the reader handled. Additional fields for reporting other handled operations (schema evolution, constant injection) will be added as formats opt in to handling them. The struct is `#[non_exhaustive]` so fields are added without a breaking change.
 
 ```rust
-pub trait FormatModel: Send + Sync + 'static {
-    fn format(&self) -> DataFileFormat;
-    fn read_builder(&self, input: InputFile) -> Box<dyn FormatReadBuilder>;
-    fn write_builder(&self, output: OutputFile) -> Box<dyn FormatWriteBuilder>;
+#[non_exhaustive]
+pub struct ReadResult {
+    /// The stream of batches with requested columns decoded.
+    pub stream: DataStream,
+    /// The portion of the predicate the reader could NOT evaluate.
+    /// None means the reader fully handled the predicate.
+    /// Some(predicate) means the kernel must apply residual filtering.
+    pub residual_predicate: Option<BoundPredicate>,
+    /// Whether the reader applied schema evolution during decode.
+    /// If true, the kernel skips the post-read schema evolution pass.
+    pub schema_evolved: bool,
 }
 ```
 
-Each implementation registers one instance per `DataFileFormat` variant it supports. The `format` method returns that variant. `read_builder` and `write_builder` are the entry points for reading and writing a file. Both return trait objects so that the registry can hand them back from a `DataFileFormat`-keyed lookup.
+**`FormatFileWriter`** accepts batches via `write_batch(&dyn DataBatch)` and returns a `WriterResult` on `close()`. `WriterResult` contains `Vec<DataFileBuilder>` — builders rather than completed `DataFile` values because the format layer fills format-specific fields (file size, column sizes, metrics from its own metadata) while the kernel fills Iceberg-level fields (partition values, sequence number, snapshot ID).
 
-The data type is fixed to Arrow `RecordBatch`, the Iceberg schema type to `iceberg::spec::Schema`, and the physical schema type to `arrow::datatypes::SchemaRef`. These are the only types in iceberg-rust today that would fill the roles Java uses generic parameters for. Arguments for keeping them fixed, including comparisons with Java's `FormatModel<D, S>`, are in "Design rationale" below.
+**`FormatRegistry`** maps `(DataFileFormat, TypeId)` pairs to reader and writer implementations. The first dimension is the file format (determined at runtime from table metadata). The second dimension is the batch type (fixed at session start by the engine). This matches Java's `FormatModelRegistry` key of `(FileFormat, Class<?>)`.
 
-### The read and write builders
+The registry exposes `reader::<B>(format)` and `writer::<B>(format)`, where `B` is the batch type the engine chose. Errors are eager: if `(format, B)` is not registered, the call fails immediately at scan planning time rather than mid-stream during I/O. This is a runtime contract — the `TypeId` tells the registry what batch type the caller expects, but the type system does not enforce that the reader actually produces that type. A reader that returns the wrong type fails at the first downcast with a clear error. Java makes the same tradeoff with `Class<?>`.
 
-`FormatReadBuilder` and `FormatWriteBuilder` configure a single read or write. `FormatModel` produces them, and the caller consumes them with `build`.
+A process-wide default registry is available via `OnceLock`. Custom registries can be provided to `TableScanBuilder` for tests or restricted configurations.
 
-```rust
-pub trait FormatReadBuilder: Send {
-    fn project(&mut self, schema: Schema) -> &mut Self;
-    fn filter(&mut self, predicate: BoundPredicate) -> &mut Self;
-    fn split(&mut self, start: u64, length: u64) -> &mut Self;
-    fn case_sensitive(&mut self, case_sensitive: bool) -> &mut Self;
-    fn batch_size(&mut self, batch_size: usize) -> &mut Self;
-    fn build(self: Box<Self>) -> BoxFuture<'static, Result<ArrowRecordBatchStream>>;
-}
+**Default scan loop (hybrid execution model).** The kernel provides a default scan loop that pulls batches from the format reader, checks `ReadResult` to see what the format already handled, and applies any remaining operations (residual filtering, schema evolution, constant injection, delete application). Engines that want full control (DataFusion, Comet) bypass this loop and drive execution themselves — they use the format reader as a stream source and apply their own processing. The `DataBatch` methods are available as a toolbox, not mandated as a pipeline.
 
-pub trait FormatWriteBuilder: Send {
-    fn schema(&mut self, schema: Schema) -> &mut Self;
-    fn set(&mut self, key: String, value: String) -> &mut Self;
-    fn build(self: Box<Self>) -> BoxFuture<'static, Result<Box<dyn FormatFileWriter>>>;
-}
-```
-
-Both builders take Iceberg `Schema` values. Format implementations convert to physical schemas internally using `schema_to_arrow_schema` from `arrow/schema.rs`. This deliberately departs from Java's `ReadBuilder<D, S>`, which has a separate `engineProjection(S)` method for variant shredding and similar per-engine type mapping. Rust's builders expose one projection surface, and the hook for a variant-shredding "engine projection" is a future-extension point described in "Design rationale."
-
-`FormatWriteBuilder::build` produces a `FormatFileWriter`:
-
-```rust
-pub trait FormatFileWriter: Send {
-    fn write(&mut self, batch: &RecordBatch) -> BoxFuture<'_, Result<()>>;
-    fn close(self: Box<Self>) -> BoxFuture<'static, Result<Vec<DataFileBuilder>>>;
-}
-```
-
-The async methods return `BoxFuture` rather than using `async fn` in traits. The `self: Box<Self>` signature on `build` and `close` lets those methods consume the value while keeping the traits object-safe. Both patterns are forced by the trait-object boundary at the registry. The "BoxFuture instead of async fn in traits" and "Dynamic dispatch at the registry, static inside the format" subsections under "Design rationale" explain why.
-
-### The FormatRegistry
-
-`FormatRegistry` maps `DataFileFormat` values to `FormatModel` instances.
-
-```rust
-pub struct FormatRegistry {
-    models: HashMap<DataFileFormat, Box<dyn FormatModel>>,
-}
-
-impl FormatRegistry {
-    pub fn new() -> Self { ... }
-    pub fn register(&mut self, model: Box<dyn FormatModel>) { ... }
-    pub fn read_builder(
-        &self,
-        format: DataFileFormat,
-        input: InputFile,
-    ) -> Result<Box<dyn FormatReadBuilder>> { ... }
-    pub fn write_builder(
-        &self,
-        format: DataFileFormat,
-        output: OutputFile,
-    ) -> Result<Box<dyn FormatWriteBuilder>> { ... }
-}
-```
-
-Using `DataFileFormat` as a `HashMap` key requires adding `#[derive(Hash)]` to the enum. That is a non-breaking addition.
-
-The registry is an owned value, not a global static. Tests construct their own. Applications construct one at startup and pass it to scan planners and write orchestrators. For the common case of a single registry for the lifetime of a process, `default_format_registry()` returns a `&'static FormatRegistry` initialized through `OnceLock` on first call.
-
-`read_builder` and `write_builder` return `Err(Error { kind: ErrorKind::FeatureUnsupported, .. })` for unregistered formats. The error message distinguishes two cases: the format is implemented but its feature flag is disabled in this build, or the format has no implementation in this crate.
+**Supporting types:** `ColumnMetrics` stores bounds as typed `Datum` values, matching how `DataFile` already stores bounds. `MetricsConfig` and `MetricsMode` control collection granularity. `FileContent` distinguishes data from equality and position deletes. All config structs and enums are `#[non_exhaustive]`.
 
 ### Feature flags
 
-Format implementations live in `iceberg::formats::{format}` and are gated behind a feature flag per format: `format-parquet` on by default, `format-orc` when an ORC implementation lands, and so on. The default feature set includes every format the crate implements. Users who build from source and want a smaller binary disable what they do not need.
-
-`FormatRegistry::default()` registers every format enabled by the current feature set at compile time:
-
-```rust
-impl Default for FormatRegistry {
-    fn default() -> Self {
-        let mut registry = Self::new();
-        #[cfg(feature = "format-parquet")]
-        registry.register(Box::new(ParquetFormatModel::new()));
-        #[cfg(feature = "format-orc")]
-        registry.register(Box::new(OrcFormatModel::new()));
-        registry
-    }
-}
-```
-
-Format implementations live inside the `iceberg` crate rather than as separate dependencies. This matches how the Java project keeps its `Parquet`, `Avro`, and `ORC` modules inside the `apache/iceberg` repository. In-tree implementations let the community control each format's quality and release cadence and keep the build graph narrow for downstream consumers. Nothing in the trait design prevents a downstream crate from defining its own `FormatModel` and registering it with a custom `FormatRegistry`, but in-tree is the recommended path for formats intended to ship in iceberg-rust itself.
-
-The `parquet` crate remains an unconditional dependency of `iceberg` for now, because non-format code (page index evaluators, row group metric evaluators, delete file loaders) still uses `parquet` types directly. A later pass gates the `parquet` dependency on the `format-parquet` feature once those callers move to format-agnostic abstractions.
+Format implementations are gated behind feature flags (`format-parquet` on by default, `format-orc` when ORC lands). The default feature set includes every implemented format. No configuration is needed for downstream crates using default features. Feature flags exist for crates that want to minimize binary size or compile time. This matches `datafusion`, `opendal`, and `reqwest`.
 
 ### Module layout
 
 ```
 crates/iceberg/src/formats/
-├── mod.rs        # FormatModel, FormatReadBuilder, FormatWriteBuilder, FormatFileWriter
-├── registry.rs   # FormatRegistry, default_format_registry
-└── parquet.rs    # ParquetFormatModel, wrapping existing ParquetWriter and ArrowReader
+├── mod.rs              # Module declarations and public re-exports
+├── traits.rs           # DataBatch, FormatReader, FormatWriter,
+│                       #   FormatFileWriter, ReadOptions, WriteOptions,
+│                       #   ColumnMetrics, MetricsConfig, MetricsMode,
+│                       #   FileContent, WriterResult,
+│                       #   VariantShredding (future extension, not yet wired)
+├── registry.rs         # FormatRegistry, default_format_registry()
+└── parquet/
+    ├── mod.rs          # Submodule declarations and re-exports
+    ├── model.rs        # ParquetArrowModel (implements FormatReader + FormatWriter)
+    ├── reader.rs       # Parquet reader internals
+    └── writer.rs       # Parquet writer (implements FormatFileWriter)
 ```
 
-Additional formats land as `formats/orc/`, `formats/avro_data/`, and so on, with directory-per-format for anything larger than a few hundred lines.
+Additional formats land as `formats/orc/`, `formats/avro_data/`, each following the same structure.
 
-In the initial implementation, `ParquetWriter`, `ParquetWriterBuilder`, `ArrowReader`, and `ArrowReaderBuilder` stay at their current module paths. `ParquetFormatModel` wraps them. Phase 3 of the Migration Plan moves them into `formats/parquet/` and retires the old paths.
+### Target crate architecture
 
-### Design rationale
+The end-state after crate separation (follow-up work, not part of Phase 1). All crates live in the same repository and workspace. Phase 1 ships everything in the existing `iceberg` crate.
 
-#### No generic over the data type
-
-Java's `FormatModel<D, S>` uses `D` for Spark `InternalRow`, Flink `RowData`, Arrow `ColumnarBatch`, and other engine-native row types. iceberg-rust has one row type: Arrow `RecordBatch`. Every writer accepts it, and every reader returns it. No format on the near-term queue (ORC, Avro data-file, Vortex, Lance) produces anything other than `RecordBatch` at the Iceberg-facing boundary. No engine integration in iceberg-rust today brings an engine-native row type the way Spark and Flink do in Java.
-
-Adding a `D` parameter today means writing `<RecordBatch>` everywhere the trait is used, for no present caller benefit. If a future format cannot bridge to Arrow, the trait can gain an associated type with a default, which is a semver-compatible addition.
-
-#### No generic over the engine schema
-
-Java's `S` parameter serves Spark's `StructType`, Flink's `RowType`, and the other engine-native schema types. iceberg-rust has `iceberg::spec::Schema` for the logical schema and `arrow::datatypes::SchemaRef` for the physical schema, with conversion in `arrow/schema.rs`. There is no third schema type a generic parameter would serve.
-
-Variant shredding is the concrete use case that Java's `engineProjection(S)` method addresses. `FormatReadBuilder` can later gain an `engine_projection(&mut self, schema: ArrowSchemaRef) -> &mut Self` method with a default no-op implementation. Format implementations that support shredding override it. The parameter is `ArrowSchemaRef`, not a generic `S`, because Arrow is the only engine schema in iceberg-rust.
-
-#### Dynamic dispatch at the registry, static inside the format
-
-Registry lookup is inherently dynamic: the caller has a `DataFileFormat` value at runtime. The read or write hot loop should use static dispatch and inline normally. Splitting the two puts `Box<dyn FormatModel>` at the registry boundary and concrete types everywhere inside the format implementation. Dispatch through the trait object happens once per `read_builder` or `write_builder` call, which is once per file. The hot loop sees concrete types.
-
-`object_store` uses the same split (`dyn ObjectStore` at the boundary, concrete `AsyncRead` and `AsyncWrite` streams returned). `datafusion` uses the same split (`dyn TableProvider` at the boundary, concrete `RecordBatchStream` returned).
-
-#### BoxFuture instead of async fn in traits
-
-`async fn` in traits (stable since Rust 1.75) works for static dispatch. It does not work through `dyn Trait`, because the returned future has an opaque type that trait-object dispatch cannot carry. The `async-trait` crate desugars `async fn` to the same `BoxFuture` a manual implementation produces. Using `BoxFuture` explicitly keeps the future's lifetime visible in the signature and avoids one proc-macro expansion per trait.
-
-#### Feature flags instead of inventory or libloading
-
-Two other registration mechanisms were considered.
-
-The `inventory` crate collects static items at link time through platform-specific linker sections. Each format would register itself with a `submit!` macro. `inventory` drops items silently across static-library boundaries, interacts poorly with analysis tools that do not run a real linker, and registers formats that the caller did not explicitly depend on.
-
-Runtime library loading through `libloading` or similar would allow formats to ship as separate shared libraries. Rust has no stable ABI, so implementations would need to match the host's compiler version and feature flags exactly. Every use would need `unsafe`. PyIceberg has flagged runtime loading as an open question without landing a mechanism.
-
-Feature flags work across `cargo check`, `cargo miri`, cross-compilation, and static linking. `datafusion`, `opendal`, and `reqwest` use the same pattern.
-
-#### RecordBatch as the canonical data type
-
-Arrow `RecordBatch` is the interchange format for every Rust data ecosystem iceberg-rust plausibly integrates with. DataFusion consumes it directly. Polars bridges to Arrow with zero-copy conversion for primitive columns. Lance uses its own columnar layout internally and exposes Arrow at read and write boundaries. Every integration and near-term format proposal either produces Arrow or bridges to it.
-
-#### Name: FormatModel
-
-The Java community settled on `FormatModel` after considering `ObjectModel` and `FileAccessFactory` during the 10-month review of PR [#12774](https://github.com/apache/iceberg/pull/12774). This RFC reuses the settled Java name to keep the concept addressable in cross-project discussion.
-
-## Conformance tests (TCK)
-
-A new `FormatModel` implementation should pass a shared conformance test suite before it merges. Java has one (`BaseFormatModelTests<T>`) but it is intentionally minimal: a single struct-of-primitives data generator, no V3 types, no schema evolution, no metadata columns. Issue [#15415](https://github.com/apache/iceberg/issues/15415) tracks the gaps.
-
-The Rust TCK can cover more scenarios because the testing ecosystem (`#[test]`, `proptest`, `rstest`) parameterizes cleanly over any `FormatModel` implementation.
-
-### Phase 1 TCK (lands with the initial FormatModel PR)
-
-1. Round-trip every `PrimitiveType`: boolean, int, long, float, double, decimal, date, time, timestamp, timestamptz, timestamp_ns, timestamptz_ns, string, uuid, fixed, binary. Null and non-null values for each.
-2. Projection: write a wide schema, read back a subset of columns.
-3. Null handling: all-null columns, mixed null and non-null, required versus optional fields.
-
-### Follow-up TCK (separate PRs)
-
-4. Nested types (struct, list, map, and combinations).
-5. Filtering with predicate pushdown. Formats that cannot pushdown (Avro) opt out. Opt-outs are documented.
-6. Schema evolution: added columns, renamed columns, widened types.
-7. Delete files (equality and position).
-8. Metadata columns (`_file`, `_pos`, `_partition`).
-9. Split reading: write a large file, read a byte-range split, verify results.
-10. Statistics validation on the `DataFileBuilder` returned by `close`: column sizes, value counts, null counts, min/max bounds.
-
-TCK scenarios for V3 types (Variant, Geometry) land with those types in follow-up RFCs.
-
-### Parameterization
-
-The TCK tests use `rstest`:
-
-```rust
-#[rstest]
-#[case::parquet(ParquetFormatModel::new())]
-// #[case::orc(OrcFormatModel::new())]  // added when ORC lands
-fn test_round_trip_primitives(#[case] model: impl FormatModel) {
-    // ...
-}
+```
+iceberg (core kernel)         - traits only, no arrow/parquet dependency
+iceberg-arrow                 - impl DataBatch for RecordBatch
+iceberg-format-parquet        - ParquetArrowModel
+iceberg-format-orc            - OrcArrowModel
+iceberg-datafusion            - TableProvider, depends on above
 ```
 
-Each new format adds one `#[case]` line to enter the entire TCK matrix.
+This separation enables engines to pin their own Arrow version independently. For example, a Comet integration could depend on `iceberg` (the kernel) and provide its own `DataBatch` implementation and format readers using a newer Arrow version, without conflicting with `iceberg-arrow` or `iceberg-format-parquet`.
 
-### Merge gate
+## Design Rationale
 
-A `FormatModel` implementation must pass every TCK scenario that applies to its capabilities before it merges into the `iceberg` crate. Format-specific exceptions (Avro does not support predicate pushdown) are documented on the implementation.
+### Three layers, Arrow as default
 
+Java's File Format API has two layers: format and engine. Each format-engine combination requires a direct conversion path, producing an N-by-M matrix. The Java community's performance analysis ([benchmark branch](https://github.com/pvary/iceberg/tree/perf_bench)) measured 20% overhead for double conversion (ORC to Spark ColumnarBatch versus direct VectorizedRowBatch access) and recommended a hybrid: provide an Arrow-based intermediate for interoperability, allow engines to replace it for performance-sensitive paths.
+
+This RFC adopts the hybrid. Arrow is the shipped default. The `DataBatch` trait is the extension point for representations that cannot or should not convert to Arrow. If both format and engine happen to use Arrow (the common case today), there is zero intermediate conversion.
+
+### Why DataBatch is a trait
+
+The kernel ambition ([#1817](https://github.com/apache/iceberg-rust/issues/1817)) requires support for multiple in-memory representations. Arrow version coupling forces lockstep upgrades across the dependency graph — an engine that wants Arrow 60 cannot coexist with a kernel pinned to Arrow 58 unless the kernel is representation-agnostic. `DataBatch` as a trait solves both while preserving Arrow as the shipped default.
+
+The original version of this RFC fixed the data type to `RecordBatch`. Community feedback raised two concerns: that Arrow's dominance in the Rust ecosystem may reflect selection pressure rather than a permanent constraint, and that a kernel-level API should remain open to other ecosystems. This rewrite makes the in-memory type a trait boundary rather than a fixed type.
+
+The name `DataBatch` was chosen over alternatives like `ProcessableBatch` or `ExecutionBatch` because it names what flows through the system (batches of data) rather than what the trait demands (processability). The trait's contract is documented in the method signatures and the TCK; the name stays short and general since it will appear in every engine integration, error message, and type signature.
+
+### Concrete types for processing, trait objects for dispatch
+
+The processing layer works with the concrete batch type the engine chose (like `RecordBatch`). The registry uses trait objects (`Arc<dyn FormatReader>`) because it must hand back a reader for any format at runtime — Parquet for one table, ORC for another — without the caller naming the concrete reader type.
+
+The cost of trait objects is one type check per batch when pulling from the reader stream. The benefit is that the processing layer can fuse operations, inline method calls, and avoid heap allocations for intermediate results. This is the same split `object_store` uses (`dyn ObjectStore` at the boundary, concrete streams returned) and `datafusion` uses (`dyn TableProvider` at the boundary, concrete `RecordBatchStream` returned).
+
+`async fn` in traits does not work through `dyn Trait`. Since the registry returns trait objects, async methods return `BoxFuture`. The allocation happens once per file operation, not per batch.
+
+### Coarse trait methods, rich TCK
+
+`DataBatch::filter` accepts the full `BoundPredicate` tree. `DataBatch::evolve_schema` takes source and target schemas. The trait does not decompose operations into evaluate-per-leaf-then-compose-masks or compute-diff-then-apply-ops. Decomposition forces intermediate materializations. The existing Arrow implementation evaluates predicates as fused closures during I/O, avoiding materialized boolean masks. A decomposed interface would force Arrow to abandon this optimization or work around the trait.
+
+The cost of coarse interfaces is implementor burden. A new `DataBatch` implementation must correctly evaluate recursive predicates and handle schema evolution semantics. The mitigation is the TCK Layer 1 suite, which covers every operator, every primitive type, compound predicates, null handling, and schema evolution scenarios. A new implementation iterates against the TCK until all scenarios pass. Correctness is validated by testing, not constrained by interface shape.
+
+### No engine_schema parameter
+
+Java's `ReadBuilder.engineProjection(S)` and `ModelWriteBuilder.engineSchema(S)` serve two purposes: engine type widening and variant shredding configuration.
+
+Variant shredding is a format-layer concern. The physical shredding layout is defined by the Parquet spec ([VariantShredding.md](https://github.com/apache/parquet-format/blob/master/VariantShredding.md)). The decision of what to shred comes from table properties, data statistics, or engine-provided configuration — but in all cases it is expressed as typed Iceberg-level fields (which paths to extract, as what types), not as an opaque engine-specific schema. Java's Spark implements its own shredding inference internally (PR [#49234](https://github.com/apache/spark/pull/49234), [#52406](https://github.com/apache/spark/pull/52406)); Iceberg later built a shared analyzer (PR [#14297](https://github.com/apache/iceberg/pull/14297)). Neither passes a shredding schema through `engineSchema`. The format handles the physical encoding.
+
+Engine type widening (read an `int` column as `long`) is expressible as a typed `HashMap<i32, PrimitiveType>` on `ReadOptions` when needed.
+
+A type-erased `Box<dyn Any>` was rejected because it allows hidden coupling: a caller going through the registry could pass an object only one format understands. The failure mode is code that works in tests (Parquet-only) and breaks in production (table has ORC files), with a runtime error that surfaces in the reader, not where the wrong object was passed. Both `ReadOptions` and `WriteOptions` are `#[non_exhaustive]`; typed fields are added without a breaking change.
+
+### Options structs, not builder traits
+
+An earlier iteration used `FormatReadBuilder` and `FormatWriteBuilder` traits with fluent `&mut self` methods. Options structs were chosen instead: fewer traits, matches `object_store` precedent (`GetOptions`, `PutOptions`), composable without `Box<dyn>` allocations at each handoff point.
+
+### Divergence from Java
+
+| Aspect | Java | This RFC | Rationale |
+|--------|------|----------|-----------|
+| Type parameters | `FormatModel<D, S>` | Dyn-compatible traits, no type params | Registry requires trait objects |
+| Processing layer | Implicit (engine-specific) | Explicit `DataBatch` trait | Separates concerns, avoids N*M |
+| Registry key | `(FileFormat, Class<?>)` | `(DataFileFormat, TypeId)` | Same concept; batch type is the second dimension |
+| Format traits | Single `FormatModel` | Separate `FormatReader` + `FormatWriter` | A format may support one without the other |
+| Engine schema | Generic parameter `S` | Deferred; typed Iceberg-level fields when needed | Shredding is a format-layer concern, not engine |
+| Residual predicate | Not reported | `ReadResult::residual_predicate` | Kernel needs to know what format handled |
+| Old API coexistence | Kept indefinitely | Hard cutover (pre-1.0) | Clean end state while cost is low |
+
+## Conformance Tests (TCK)
+
+### Layered test architecture
+
+```
+Layer 3: Integration    (format x batch x scenario)
+Layer 2: Format         (one format, known-good batch type)
+Layer 1: DataBatch      (one batch type, no format involvement)
+```
+
+When a Layer 3 test fails, Layer 1 and Layer 2 results identify whether the bug is in the batch implementation, the format implementation, or their interaction.
+
+### Layer 1: DataBatch conformance
+
+Layer 1 validates that a `DataBatch` implementation correctly handles Iceberg semantics without any file format involvement. A new batch type must pass every Layer 1 test before it can participate in the format API.
+
+**Filter correctness:**
+- Every binary operator (Eq, NotEq, Lt, LtEq, Gt, GtEq, StartsWith, NotStartsWith) against every primitive type.
+- Every unary operator (IsNull, NotNull, IsNan, NotNan).
+- Set operators (In, NotIn) with varying set sizes.
+- Compound predicates: AND, OR, NOT at multiple nesting depths.
+- Edge cases: all-null columns, all-matching, none-matching, NaN handling, empty batches.
+- Property-based: for random data and random predicates, verify `filter(p).num_rows()` matches naive row-by-row evaluation.
+
+**Schema evolution correctness:**
+- Type promotion: int to long, float to double, decimal widening.
+- Add column with default value (every primitive type).
+- Add column with null (optional field).
+- Column reordering (same fields, different order).
+- Drop column (project narrows).
+- Combined: promote + add + reorder in one operation.
+
+**Inject constants correctness:**
+- Every primitive Datum type as constant.
+- Multiple constants at once.
+- Zero-row batch.
+
+**Project correctness:**
+- Single column, multiple columns, all columns.
+- Non-existent field ID produces an error.
+- Idempotency: project(ids).project(ids) == project(ids).
+
+**Metrics correctness:**
+- Every primitive type: verify min/max match hand-computed values.
+- Null handling: null_count matches actual nulls.
+- NaN handling: nan_count for float/double.
+- All-null column: bounds are None.
+- Single-value column: lower == upper.
+
+### Layer 2: Format conformance
+
+Layer 2 validates that a format reader/writer correctly round-trips data and produces correct metadata. Uses Arrow RecordBatch (a known-good Layer 1 implementation) as the batch type.
+
+**Phase 1 scenarios (land with initial PR):**
+
+1. Round-trip every `PrimitiveType` with null and non-null values.
+2. Nested types: struct, list, map, combinations.
+3. Projection: write wide, read narrow.
+4. Null handling: all-null, mixed, required versus optional.
+5. Filter pushdown with row group elimination.
+6. Split reading across multiple splits.
+7. Statistics: column sizes, value counts, null counts, NaN counts, min/max bounds.
+8. Metrics modes: None, Counts, Full, Truncate.
+
+**Follow-up scenarios (before 1.0):**
+
+9. Schema evolution with defaults.
+10. Delete files (equality and position).
+11. Metadata columns.
+12. Case sensitivity.
+13. Encryption round-trip.
+14. Name mapping (reading files without embedded field IDs).
+15. Variant ([#2188](https://github.com/apache/iceberg-rust/pull/2188)).
+
+### Merge gates
+
+- New `DataBatch` implementation: must pass all Layer 1 tests.
+- New `FormatReader`/`FormatWriter` implementation: must pass all Layer 2 tests.
+- New format-batch combination: must pass all Layer 3 tests.
 
 ## Migration / Rollout Plan
 
-iceberg-rust is pre-1.0 (currently 0.9.0), and the project has made breaking changes in past 0.x releases. This RFC commits to breaking changes across a sequence of 0.x releases starting with the first release that includes Phase 2. Every break is enumerated in the Breaking Changes table with per-item migration guidance.
+### Phase 1: Land the abstraction (additive)
 
-The migration has four phases. Phase 1 is additive. Phases 2, 3, and 4 are breaking. The phases are sequential, but new format implementations can begin as soon as Phase 1 merges.
-
-### Phase 1: Land the abstraction (additive only)
-
-**Scope.** Add the `formats/` module with `FormatModel`, `FormatReadBuilder`, `FormatWriteBuilder`, `FormatFileWriter`, `FormatRegistry`, and `ParquetFormatModel`. Add the `format-parquet` feature flag (on by default). Add initial TCK tests for round-trip primitives, projection, and null handling.
-
-**Breaking changes.** None. No existing code is modified.
-
-**PR structure.** One PR for the traits and registry. One PR for `ParquetFormatModel`. One PR for initial TCK tests.
-
-**Validation.** `ParquetFormatModel` must produce identical results to the existing `ParquetWriter` and `ArrowReader` for the same inputs. The TCK tests verify this.
+Add `formats/` module with all traits, registry, and Phase 1 TCK. No existing code changes. The `ParquetArrowModel` implementation wraps the existing `ParquetWriter` and `ArrowReader` internally.
 
 ### Phase 2: Migrate internal callers (breaking)
 
-**Scope.** Modify `TableScan::to_arrow` to dispatch through `FormatRegistry` instead of wiring `ArrowReaderBuilder` in directly. Add a `with_format_registry` method to `TableScan` or `TableScanBuilder`. (Open Question 4 tracks which type is the right place.) The default behavior uses `default_format_registry()`. Callers get back an `ArrowRecordBatchStream` from `to_arrow` as before. The signature is unchanged.
+Modify `TableScan` to dispatch through `FormatRegistry`. Modify `DataFileWriterBuilder` and `EqualityDeleteFileWriterBuilder` to use the registry. Update the DataFusion integration.
 
-Modify `DataFileWriterBuilder` and `EqualityDeleteFileWriterBuilder` to dispatch through the registry. Today both are generic over `B: FileWriterBuilder`, `L: LocationGenerator`, and `F: FileNameGenerator`. After this phase, they accept a `FormatRegistry` (or use the default) and resolve the writer internally. Open Question 5 tracks the exact signature.
+### Phase 3: Relocate and separate (breaking)
 
-The DataFusion integration (`crates/integrations/datafusion/src/physical_plan/write.rs`) constructs `ParquetWriterBuilder` directly and passes it to `DataFileWriterBuilder`. It migrates to the registry-based constructor in the same PR.
-
-**Breaking changes.**
-
-- `DataFileWriterBuilder<B, L, F>` signature changes. Generic parameters are removed or replaced.
-- `EqualityDeleteFileWriterBuilder<B, L, F>` signature changes. Same treatment.
-- `TableScan::to_arrow` behavior changes to dispatch through the registry. Unsupported formats return `ErrorKind::FeatureUnsupported` instead of a Parquet deserialization error.
-
-**PR structure.** One PR for the scan path. One PR for the write path. Each modifies existing code and includes migration of internal callers.
-
-**Validation.** Existing tests pass. New tests verify that the registry-based path produces identical results to the direct path.
-
-### Phase 3: Relocate format-specific types (breaking)
-
-**Scope.** Move format-specific types to their canonical locations under `formats/`.
-
-- `ParquetWriterBuilder` and `ParquetWriter` move from `iceberg::writer::file_writer` to `iceberg::formats::parquet`. A `#[deprecated]` re-export from the old path may be kept for one release or removed outright.
-- `ArrowReaderBuilder` and `ArrowReader` move from `iceberg::arrow` to `iceberg::formats::parquet`, since they are Parquet-specific despite the generic name. A `#[deprecated]` re-export may be kept for one release.
-
-With Phase 3 complete, new format implementations can land as their own PRs. Each new format is a separate PR that adds a feature flag, implements `FormatModel` inside the `formats/{format}/` module, registers with `FormatRegistry::default()`, and passes the TCK.
-
-**Breaking changes.**
-
-- `iceberg::writer::file_writer::ParquetWriterBuilder` path changes to `iceberg::formats::parquet::ParquetWriterBuilder`.
-- `iceberg::arrow::ArrowReaderBuilder` path changes to `iceberg::formats::parquet::ArrowReaderBuilder`, possibly renamed to `ParquetReaderBuilder`.
-- Direct construction of `ParquetWriterBuilder` for use with `DataFileWriterBuilder` is no longer the intended pattern. Callers use the registry instead.
-
-**Validation.** The TCK is the gatekeeper. A new format must pass every applicable scenario or document its opt-outs.
-
-### Phase 4: Clean up and harden
-
-**Scope.** Audit remaining `DataFileFormat::Parquet` match arms in non-format code. Dispatch on the format enum outside the `formats/` module is eliminated or replaced with registry lookups. Add `#[non_exhaustive]` to `DataFileFormat` so future format variants can be added without a semver break each time. The attribute is added in Phase 4 rather than Phase 1 so that downstream consumers see all the API changes from Phases 2 and 3 before picking up the `#[non_exhaustive]` requirement. Remove any remaining `#[deprecated]` re-exports from Phases 2 and 3.
-
-**Breaking changes.**
-
-- `DataFileFormat` gains `#[non_exhaustive]`. Downstream `match` statements need a wildcard arm.
-- Deprecated re-exports are removed.
-
-**Validation.** CI enforces that no non-format code uses deprecated paths or dispatches on `DataFileFormat` directly.
-
-### Phase summary
-
-| Phase | Breaking? | Summary |
-|-------|-----------|---------|
-| Phase 1: Land the abstraction | No | Additive only |
-| Phase 2: Migrate internal callers | Yes | `DataFileWriterBuilder` and `EqualityDeleteFileWriterBuilder` signatures change. Scan path dispatches through the registry. |
-| Phase 3: Relocate format-specific types | Yes | Parquet types move to `iceberg::formats::parquet` |
-| Phase 4: Clean up and harden | Yes (minor) | `DataFileFormat` gains `#[non_exhaustive]`. Deprecated re-exports removed. |
-
-See the [Breaking Changes](#breaking-changes) section for per-item migration guidance.
+Move Parquet types into `formats/parquet/`. Establish crate boundaries per [#1817](https://github.com/apache/iceberg-rust/issues/1817) and [#1819](https://github.com/apache/iceberg-rust/issues/1819). Add `#[non_exhaustive]` to `DataFileFormat`.
 
 ## Breaking Changes
 
-This section lists every breaking change introduced by this RFC, keyed to the phase that introduces it.
-
-| # | What breaks | Phase | Why | Migration |
-|---|-------------|-------|-----|-----------|
-| 1 | `DataFileWriterBuilder<B: FileWriterBuilder, L, F>`. Generic parameters are removed or replaced. The `new(RollingFileWriterBuilder<B, L, F>)` constructor signature changes. | Phase 2 | The builder must resolve the file writer through the `FormatRegistry` rather than accepting a concrete `FileWriterBuilder` generic. This enables format-agnostic write orchestration. | Replace `DataFileWriterBuilder::new(rolling_writer_builder)` with the new registry-based constructor, for example `DataFileWriterBuilder::new_with_registry(registry, file_io, location_gen, file_name_gen)`. |
-| 2 | `EqualityDeleteFileWriterBuilder<B: FileWriterBuilder, L, F>`. Same treatment as `DataFileWriterBuilder`. | Phase 2 | Same rationale. Format-agnostic delete file writing. | Same migration pattern as `DataFileWriterBuilder`. |
-| 3 | `ParquetWriterBuilder` and `ParquetWriter`. Module path changes from `iceberg::writer::file_writer::ParquetWriterBuilder` to `iceberg::formats::parquet::ParquetWriterBuilder`. | Phase 3 | Co-locating all Parquet-specific types under `formats/parquet/` matches the module layout to the abstraction. | Update `use` statements. A `#[deprecated]` re-export from the old path may exist for one release. |
-| 4 | `ArrowReaderBuilder` and `ArrowReader`. Module path changes from `iceberg::arrow::ArrowReaderBuilder` to `iceberg::formats::parquet::ArrowReaderBuilder`, possibly renamed to `ParquetReaderBuilder`. | Phase 3 | These types are Parquet-specific despite the generic name. Moving them clarifies the scope and leaves room for format-agnostic reader types at `iceberg::arrow` later. | Update `use` statements. A `#[deprecated]` re-export from the old path may exist for one release. |
-| 5 | `DataFileFormat` enum gains `#[non_exhaustive]`. | Phase 4 | Allows adding new format variants (for example `Vortex`, `Lance`) in minor releases without a semver break each time. The enum has four variants (`Avro`, `Orc`, `Parquet`, `Puffin`) and is not `#[non_exhaustive]` today. | Add a wildcard arm (`_ => { ... }`) to any `match DataFileFormat` blocks. |
-| 6 | `TableScan::to_arrow` behavior changes to dispatch through `FormatRegistry`. Signature unchanged. | Phase 2 | Enables reading non-Parquet data files. Unsupported formats return `ErrorKind::FeatureUnsupported` instead of a Parquet deserialization error. | No code change needed for callers using the default registry. Code that branches on the specific error type for non-Parquet files should update its error handling. |
-
-Notes:
-
-- Breaks 1 and 2 have the widest impact. They touch the DataFusion integration (`physical_plan/write.rs`, `task_writer.rs`) and any downstream code that constructs these builders directly.
-- Breaks 3 and 4 are module path changes only. The types themselves are unchanged.
-- Break 6 changes behavior, not signatures. Code using the default registry sees no compile-time impact.
-- `IcebergWriter` and `IcebergWriterBuilder` in `writer/mod.rs` are format-agnostic today and do not change.
-
-Open Question 7 discusses whether `FileWriterBuilder` and `FileWriter` gain an associated `Format` type or a `format()` method returning `DataFileFormat`. If that question resolves toward a trait-level change, a new row will be added to this table in a follow-up revision.
+| # | What breaks | Phase | Migration |
+|---|-------------|-------|-----------|
+| 1 | `DataFileWriterBuilder` generic parameters removed | 2 | Use registry-based constructor |
+| 2 | `EqualityDeleteFileWriterBuilder` generic parameters removed | 2 | Use registry-based constructor |
+| 3 | `ParquetWriterBuilder` module path changes | 3 | Update `use` statements |
+| 4 | `ArrowReaderBuilder` path changes, renamed to `ParquetReaderBuilder` | 3 | Update `use` statements |
+| 5 | `DataFileFormat` gains `#[non_exhaustive]` | 3 | Add wildcard arm to `match` blocks |
+| 6 | `TableScan::to_arrow` dispatches through registry (behavior change) | 2 | No change for default registry users |
 
 ## Open Questions
 
-These questions are intentionally unresolved and will be decided by the `apache/iceberg-rust` community during RFC review. Where the proposal has a preferred answer, that preference is noted as "Current lean" so reviewers can see what the RFC commits to if the question is not debated further.
+### 1. Delete application
 
-### 1. Async trait methods: `BoxFuture` versus native `async fn`
+**Current lean:** Delete application is a kernel responsibility, not part of `DataBatch` or the format reader. The kernel's default scan loop loads delete files, builds equality delete predicates and positional delete row selections, and applies them after the format reader produces batches. The format reader never sees delete files.
 
-This proposal uses `BoxFuture` for async methods on `dyn`-compatible traits. An alternative is to use native `async fn` in traits (stable since Rust 1.75) with the `async-trait` crate's `#[async_trait]` macro for `dyn` compatibility. The `async-trait` crate is already a dependency of the `iceberg` crate, used by `IcebergWriter` and `IcebergWriterBuilder`.
+**Tradeoff:** Handling deletes in the kernel means every `DataBatch` implementation gets merge-on-read for free — delete files are resolved before the engine sees batches. The downside is that a format reader cannot fuse delete application with I/O (for example, applying positional deletes during Parquet decompression to skip rows before materializing them). If a format implementation demonstrates that fusing delete application with I/O provides meaningful benefit, a future `ReadOptions` field could pass delete information to the format reader as an optimization hint.
 
-The tradeoff. `BoxFuture` is explicit and avoids a proc-macro expansion step for new code. It also makes the future's lifetime visible in the trait signature, which matters when the trait is used behind a `dyn` pointer where lifetime reasoning is less obvious. `#[async_trait]` is more ergonomic for implementors but hides the same information behind the macro. Both produce the same runtime behavior: heap-allocated futures.
+**Question:** Is kernel-owned delete application the right starting point, or should format readers have the option to handle deletes during I/O from the start?
 
-**Current lean:** `BoxFuture` for the new traits.
+### 2. Registry scope
 
-**Question for the community:** Is the explicit choice worth the slight inconsistency with existing `async-trait`-using traits?
+**Current lean:** Process-wide default via `OnceLock`, with `TableScanBuilder::with_format_registry` as override.
 
-### 2. Generic versus fixed data type on `FormatModel`
+**Tradeoff:** A process-wide default is convenient for single-configuration applications but makes testing harder (tests cannot isolate registry state without global mutation). Explicit construction is more testable and embeddable but adds a parameter to every scan and write call.
 
-This proposal fixes the data type to `RecordBatch` (see "No generic over the data type" under Design rationale for the full justification). An alternative is to make `FormatModel` generic over a data type `D: Send + 'static`. If a future format or engine integration brought a row type that cannot round-trip through Arrow, the generic approach would avoid a later breaking change.
+**Question:** Is the process-wide default acceptable, or should the registry always be provided explicitly?
 
-**Current lean:** Fix the data type to `RecordBatch`.
+### 3. Crate separation timing
 
-**Question for the community:** Is `RecordBatch` the right call, or should the trait be generic from the start?
+**Current lean:** Phase 1 ships in the existing `iceberg` crate. Separation is follow-up per [#1817](https://github.com/apache/iceberg-rust/issues/1817).
 
-### 3. Registry bootstrapping: global default versus explicit construction
-
-This proposal provides both a `OnceLock`-based global default (`default_format_registry()`) and an explicit constructor (`FormatRegistry::new()` plus `register()`). The question is which should be the primary API for scan and write orchestration to consume.
-
-The tradeoff. `OnceLock` initializes exactly once and cannot be mutated afterward, which avoids the mutable-global issues of `lazy_static`. Explicit construction is more testable because each test builds its own registry, and it supports multiple registries in the same process.
-
-**Current lean:** Offer both, with the global default as the default path for scan and write orchestration. Tests and embedded use cases construct their own registries.
-
-**Question for the community:** Should `TableScan` use the global default, or should it require an explicit registry parameter?
-
-### 4. Public API surface for the registry
-
-The registry can be exposed in several shapes:
-
-- **Free function:** `iceberg::formats::default_format_registry()` returns a `&'static FormatRegistry`. Simple and discoverable.
-- **Method on a context type:** A new `IcebergContext` struct holds the registry, `FileIO`, and similar handles. More structured, but it adds a new concept to the public surface.
-- **Builder pattern:** `FormatRegistryBuilder::new().with_parquet().build()`. Explicit, but verbose for the common case where defaults suffice.
-
-**Current lean:** Free function, with explicit construction available for custom cases.
-
-**Question for the community:** Which API shape is preferred?
-
-### 5. Shape of the `DataFileWriterBuilder` break
-
-The migration plan commits to changing `DataFileWriterBuilder`'s public signature in Phase 2. The open question is how to change it. Three candidate shapes:
-
-- **Remove generic parameters entirely.** The builder uses the registry internally and is no longer generic over `FileWriterBuilder`. Cleanest API, but it removes the ability to use a custom `FileWriterBuilder` without going through the registry.
-- **Replace the `B: FileWriterBuilder` generic with a `FormatModel` bound.** The builder is still generic, but over the format abstraction rather than the low-level writer. Preserves static dispatch for callers who know their format at compile time.
-- **Keep the existing generic constructor as `pub(crate)` and add a new public constructor.** Internal code, tests, and the DataFusion integration can still use the generic path. External callers use the registry path.
-
-**Current lean:** Remove generic parameters entirely. The registry covers every current use case for constructing a data file writer. If a future use case needs a custom `FileWriterBuilder` that bypasses the registry, a narrower advanced-users API can be added without reintroducing generics on the primary builder.
-
-**Question for the community:** Which approach best balances API cleanliness with flexibility?
-
-### 6. Acceptable divergence from the Java API
-
-Java's `FormatModel<D, S>` uses two generic parameters. This proposal uses zero. Java's registry key is `(FileFormat, Class<?>)`. This proposal's key is `DataFileFormat` alone. These are deliberate simplifications based on iceberg-rust's single-data-type ecosystem (see "RecordBatch as the canonical data type" under Design rationale). The Rust API is not a one-to-one port of the Java API.
-
-**Current lean:** Accept the divergence. Java's generics exist to serve engine-native row types that do not exist in the Rust ecosystem.
-
-**Question for the community:** Is the divergence acceptable, or should the Rust API mirror Java more closely for cross-project consistency?
-
-### 7. Associated `Format` type on `FileWriterBuilder` and `FileWriter`
-
-The write orchestration needs to know which format a `FileWriter` produces, so that `DataFileBuilder` metadata is set correctly. Two approaches:
-
-- **Option A: Add an associated type.** `type Format: Into<DataFileFormat>` on `FileWriterBuilder`, making each writer explicitly format-aware.
-- **Option B: Keep the traits format-agnostic.** Let the `FormatRegistry` glue handle format identification externally, so that `FileWriter` implementations remain decoupled from the format enum.
-
-**Current lean:** Option B. The registry already knows which format it dispatched to, so it can set the metadata field without the writer needing to declare its format. This preserves compatibility with existing implementors of `FileWriterBuilder` and `FileWriter`, and avoids a trait-level breaking change.
-
-**Question for the community:** Is Option B correct, or does a future use case (for example per-writer configuration that varies by format) require Option A?
+**Question:** Should crate boundaries be established in Phase 1 or deferred?
 
 ## Alternatives Considered
 
-### Runtime library loading
+### Fix data type to RecordBatch
 
-Format implementations as separate shared libraries loaded via `libloading` or similar. Rejected because Rust has no stable ABI. Implementations must be compiled with the exact same compiler version, target, and feature flags as the host. Every use needs `unsafe`. No other crate in the iceberg-rust ecosystem uses this pattern, and PyIceberg has flagged runtime loading as an open question without landing a mechanism.
+Rejected. The kernel ambition requires representation-agnosticism. Arrow version coupling forces lockstep upgrades. See "Why DataBatch is a trait" in Design Rationale.
 
-### Auto-registration via `inventory`
+### Associated types on format traits
 
-The `inventory` crate collects items at link time through platform-specific linker sections. Each format implementation would register itself with an `inventory::submit!` macro invocation. Rejected because items can be stripped silently at library boundaries, the pattern is hostile to analysis tools that do not run a real linker, and it registers formats that the caller did not explicitly depend on. Feature flags are explicit and work across `cargo check`, `cargo miri`, and cross-compilation. `datafusion`, `opendal`, and `reqwest` use the same feature-flag pattern.
+Rejected. Associated types prevent `dyn` usage. The registry requires trait objects. See "Concrete types for processing, trait objects for dispatch" in Design Rationale.
+
+### Builder traits for read/write configuration
+
+Rejected. Options structs are simpler and match `object_store` precedent. See "Options structs, not builder traits" in Design Rationale.
+
+### Type-erased engine_schema parameter
+
+Rejected. Allows hidden coupling between callers and specific format implementations. See "No engine_schema parameter" in Design Rationale.
+
+### Decomposed DataBatch interface
+
+Rejected. Forces intermediate materializations. See "Coarse trait methods, rich TCK" in Design Rationale.
+
+### Auto-registration via `inventory` crate
+
+Rejected. Items stripped silently at library boundaries, hostile to analysis tools, registers formats the caller did not depend on.
 
 ### Non-breaking additive-only rollout
 
-Add the `FormatModel` traits and registry alongside the existing API. Do not change `DataFileWriterBuilder` or `ArrowReaderBuilder`. Leave both paths available indefinitely. Rejected because this leaves two paths to do the same thing, retains the `ArrowReader` name on a Parquet-specific type, and keeps the `B: FileWriterBuilder` generic parameter on `DataFileWriterBuilder` that the rest of this RFC treats as format-agnostic orchestration. iceberg-rust is pre-1.0. The cost of a clean break is lowest now.
+Rejected. Leaves two paths indefinitely, retains misleading names, keeps format-specific generics on orchestration types. Pre-1.0 is the right time to remove the old API.
 
 ## References
 
 ### Apache Iceberg (Java)
 
 - [PR #12774](https://github.com/apache/iceberg/pull/12774): Core File Format API interfaces
+- [PR #14297](https://github.com/apache/iceberg/pull/14297): Spark variant shredding writer (demonstrates shredding without engineSchema parameter)
 - [PR #15253](https://github.com/apache/iceberg/pull/15253): ParquetFormatModel
 - [PR #15254](https://github.com/apache/iceberg/pull/15254): AvroFormatModel
 - [PR #15255](https://github.com/apache/iceberg/pull/15255): ORCFormatModel
 - [PR #15258](https://github.com/apache/iceberg/pull/15258): ArrowFormatModel
-- [PR #15328](https://github.com/apache/iceberg/pull/15328): Spark migration
-- [PR #15329](https://github.com/apache/iceberg/pull/15329): Flink migration
 - [PR #15441](https://github.com/apache/iceberg/pull/15441): TCK
 - [Issue #15415](https://github.com/apache/iceberg/issues/15415): TCK tracking (open)
 - [Issue #15416](https://github.com/apache/iceberg/issues/15416): Vortex format (open)
-- [PR #15751](https://github.com/apache/iceberg/pull/15751): Lance format (draft)
-- [File Format API announcement, Feb 2026](https://iceberg.apache.org/blog/apache-iceberg-file-format-api/)
+
+### Apache Spark
+
+- [PR #49234](https://github.com/apache/spark/pull/49234): Variant shredding support for Parquet (Spark-internal implementation)
+- [PR #52406](https://github.com/apache/spark/pull/52406): Infer variant shredding schema at write time
+
+### Apache Parquet
+
+- [VariantShredding.md](https://github.com/apache/parquet-format/blob/master/VariantShredding.md): Parquet spec for physical shredding layout
 
 ### Apache Iceberg (Python)
 
 - [Issue #3100](https://github.com/apache/iceberg-python/issues/3100): File Format API proposal
-- [PR #3119](https://github.com/apache/iceberg-python/pull/3119): File Format API implementation
-- [PR #790](https://github.com/apache/iceberg-python/pull/790): ORC read/write (closed, stale)
-- [PR #2236](https://github.com/apache/iceberg-python/pull/2236): ORC read/write (closed, stale)
 
-## Conclusion
+### Apache Iceberg Rust
 
-This RFC adds a `FormatModel` trait, read and write builders, and a `FormatRegistry` to the `iceberg` crate, with a Parquet implementation landing on the same API. The migration is phased across four PR series: Phase 1 is additive, Phases 2 through 4 are breaking, and every break is enumerated in the Breaking Changes table with per-item migration guidance. The abstraction removes hard-coded Parquet from the scan and write orchestration and makes ORC, Avro data-file, and other formats follow-up RFCs on the same API.
+- [Issue #1817](https://github.com/apache/iceberg-rust/issues/1817): Build Iceberg Kernel
+- [Issue #1819](https://github.com/apache/iceberg-rust/issues/1819): Modularize iceberg Implementations
+- [Issue #1314](https://github.com/apache/iceberg-rust/issues/1314): Make FileIO a Trait
+- [PR #2188](https://github.com/apache/iceberg-rust/pull/2188): Variant type support
