@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -23,21 +24,23 @@ use crate::error::Result;
 use crate::spec::{NestedFieldRef, Schema};
 use crate::table::Table;
 use crate::transaction::{ActionCommit, TransactionAction};
-use crate::{TableRequirement, TableUpdate};
+use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 /// Transaction action for updating table schema.
 ///
-/// This action allows adding new fields to a table's schema during a transaction.
-/// It supports adding single or multiple fields at once.
+/// This action allows adding and dropping top-level fields from a table's schema during a
+/// transaction.
 pub struct UpdateSchemaAction {
     fields_to_add: Vec<NestedFieldRef>,
+    fields_to_drop: Vec<String>,
 }
 
 impl UpdateSchemaAction {
-    /// Creates a new [`UpdateSchemaAction`] with no fields to add.
+    /// Creates a new [`UpdateSchemaAction`] with no schema changes.
     pub fn new() -> Self {
         UpdateSchemaAction {
             fields_to_add: vec![],
+            fields_to_drop: vec![],
         }
     }
 
@@ -68,6 +71,19 @@ impl UpdateSchemaAction {
         self.fields_to_add.extend(fields);
         self
     }
+
+    /// Drops a single top-level field from the schema by name.
+    pub fn drop_field(mut self, field_name: impl Into<String>) -> Self {
+        self.fields_to_drop.push(field_name.into());
+        self
+    }
+
+    /// Drops multiple top-level fields from the schema by name.
+    pub fn drop_fields(mut self, field_names: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.fields_to_drop
+            .extend(field_names.into_iter().map(Into::into));
+        self
+    }
 }
 
 impl Default for UpdateSchemaAction {
@@ -82,12 +98,35 @@ impl TransactionAction for UpdateSchemaAction {
         let current_schema = table.metadata().current_schema();
         let metadata = table.metadata();
 
-        // Build new schema with existing fields + new fields
         let mut all_fields = current_schema.as_struct().fields().to_vec();
+        if !self.fields_to_drop.is_empty() {
+            for field_name in &self.fields_to_drop {
+                if current_schema
+                    .as_struct()
+                    .fields()
+                    .iter()
+                    .all(|field| field.name != *field_name)
+                {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Cannot drop field '{field_name}': only existing top-level fields can be dropped"
+                        ),
+                    ));
+                }
+            }
+
+            all_fields.retain(|field| !self.fields_to_drop.iter().any(|name| name == &field.name));
+        }
+
         all_fields.extend(self.fields_to_add.iter().cloned());
 
-        // Create new schema with incremented schema ID
-        // Find the max schema ID and increment it
+        let target_schema = Schema::builder().with_fields(all_fields.clone()).build()?;
+        let filtered_identifier_field_ids = current_schema
+            .identifier_field_ids()
+            .filter(|field_id| target_schema.field_by_id(*field_id).is_some())
+            .collect::<HashSet<_>>();
+
         let new_schema_id = metadata
             .schemas_iter()
             .map(|s| s.schema_id())
@@ -97,7 +136,7 @@ impl TransactionAction for UpdateSchemaAction {
         let new_schema = Schema::builder()
             .with_schema_id(new_schema_id)
             .with_fields(all_fields)
-            .with_identifier_field_ids(current_schema.identifier_field_ids())
+            .with_identifier_field_ids(filtered_identifier_field_ids)
             .build()?;
 
         let updates = vec![
@@ -190,6 +229,42 @@ mod tests {
     }
 
     #[test]
+    fn test_drop_single_field() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let tx = tx.update_schema().drop_field("z").apply(tx).unwrap();
+
+        assert_eq!(tx.actions.len(), 1);
+
+        let action = (*tx.actions[0])
+            .downcast_ref::<UpdateSchemaAction>()
+            .unwrap();
+
+        assert_eq!(action.fields_to_drop, vec!["z"]);
+    }
+
+    #[test]
+    fn test_drop_multiple_fields() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let tx = tx
+            .update_schema()
+            .drop_fields(vec!["y", "z"])
+            .apply(tx)
+            .unwrap();
+
+        assert_eq!(tx.actions.len(), 1);
+
+        let action = (*tx.actions[0])
+            .downcast_ref::<UpdateSchemaAction>()
+            .unwrap();
+
+        assert_eq!(action.fields_to_drop, vec!["y", "z"]);
+    }
+
+    #[test]
     fn test_chained_add_field() {
         let table = make_v2_table();
         let tx = Transaction::new(&table);
@@ -221,6 +296,27 @@ mod tests {
         assert_eq!(action.fields_to_add.len(), 2);
         assert_eq!(action.fields_to_add[0].name, "field1");
         assert_eq!(action.fields_to_add[1].name, "field2");
+    }
+
+    #[test]
+    fn test_chained_drop_field() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let tx = tx
+            .update_schema()
+            .drop_field("y")
+            .drop_field("z")
+            .apply(tx)
+            .unwrap();
+
+        assert_eq!(tx.actions.len(), 1);
+
+        let action = (*tx.actions[0])
+            .downcast_ref::<UpdateSchemaAction>()
+            .unwrap();
+
+        assert_eq!(action.fields_to_drop, vec!["y", "z"]);
     }
 
     #[tokio::test]
@@ -292,6 +388,56 @@ mod tests {
         )));
 
         // Should have CurrentSchemaIdMatch requirement
+        assert!(requirements.iter().any(
+            |r| matches!(r, TableRequirement::CurrentSchemaIdMatch { current_schema_id } if current_schema_id == &original_schema_id)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_commit_drop_field_action() {
+        use crate::transaction::TransactionAction;
+        use crate::{TableRequirement, TableUpdate};
+
+        let table = make_v2_table();
+        let original_schema = table.metadata().current_schema();
+        let original_schema_id = original_schema.schema_id();
+        let last_column_id = table.metadata().last_column_id();
+
+        let action = Arc::new(UpdateSchemaAction::new().drop_field("y"));
+
+        let action_commit = action.commit(&table).await.unwrap();
+        let mut action_commit = action_commit;
+
+        let updates = action_commit.take_updates();
+        let requirements = action_commit.take_requirements();
+
+        assert_eq!(updates.len(), 2);
+
+        match &updates[0] {
+            TableUpdate::AddSchema { schema } => {
+                assert_eq!(schema.schema_id(), original_schema_id + 1);
+                assert!(schema.field_by_name("x").is_some());
+                assert!(schema.field_by_name("z").is_some());
+                assert!(schema.field_by_name("y").is_none());
+                assert_eq!(schema.identifier_field_ids().collect::<Vec<_>>(), vec![1]);
+            }
+            _ => panic!("Expected AddSchema update"),
+        }
+
+        match &updates[1] {
+            TableUpdate::SetCurrentSchema { schema_id } => {
+                assert_eq!(schema_id, &-1);
+            }
+            _ => panic!("Expected SetCurrentSchema update"),
+        }
+
+        assert_eq!(requirements.len(), 2);
+        assert!(requirements.iter().any(|r| matches!(
+            r,
+            TableRequirement::LastAssignedFieldIdMatch {
+                last_assigned_field_id
+            } if last_assigned_field_id == &last_column_id
+        )));
         assert!(requirements.iter().any(
             |r| matches!(r, TableRequirement::CurrentSchemaIdMatch { current_schema_id } if current_schema_id == &original_schema_id)
         ));
