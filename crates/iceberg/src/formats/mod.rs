@@ -22,6 +22,7 @@
 
 mod traits;
 mod registry;
+pub mod tck;
 
 pub use traits::*;
 pub use registry::*;
