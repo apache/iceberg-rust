@@ -22,6 +22,7 @@
 
 mod traits;
 mod registry;
+mod parquet;
 
 pub use traits::*;
 pub use registry::*;
