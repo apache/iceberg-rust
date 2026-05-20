@@ -20,6 +20,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_array::RecordBatch;
+use arrow_cast::cast;
 use arrow_schema::SchemaRef as ArrowSchemaRef;
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -79,8 +81,10 @@ impl FileWriterBuilder for ParquetWriterBuilder {
     type R = ParquetWriter;
 
     async fn build(&self, output_file: OutputFile) -> Result<Self::R> {
+        let arrow_schema: ArrowSchemaRef = Arc::new(self.schema.as_ref().try_into()?);
         Ok(ParquetWriter {
             schema: self.schema.clone(),
+            arrow_schema,
             inner_writer: None,
             writer_properties: self.props.clone(),
             current_row_num: 0,
@@ -211,6 +215,7 @@ impl SchemaVisitor for IndexByParquetPathName {
 /// `ParquetWriter`` is used to write arrow data into parquet file on storage.
 pub struct ParquetWriter {
     schema: SchemaRef,
+    arrow_schema: ArrowSchemaRef,
     output_file: OutputFile,
     inner_writer: Option<AsyncArrowWriter<AsyncFileWriter>>,
     writer_properties: WriterProperties,
@@ -473,7 +478,7 @@ impl ParquetWriter {
 }
 
 impl FileWriter for ParquetWriter {
-    async fn write(&mut self, batch: &arrow_array::RecordBatch) -> Result<()> {
+    async fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         // Skip empty batch
         if batch.num_rows() == 0 {
             return Ok(());
@@ -489,12 +494,11 @@ impl FileWriter for ParquetWriter {
         let writer = if let Some(writer) = &mut self.inner_writer {
             writer
         } else {
-            let arrow_schema: ArrowSchemaRef = Arc::new(self.schema.as_ref().try_into()?);
             let inner_writer = self.output_file.writer().await?;
             let async_writer = AsyncFileWriter::new(inner_writer);
             let writer = AsyncArrowWriter::try_new(
                 async_writer,
-                arrow_schema.clone(),
+                self.arrow_schema.clone(),
                 Some(self.writer_properties.clone()),
             )
             .map_err(|err| {
@@ -505,7 +509,9 @@ impl FileWriter for ParquetWriter {
             self.inner_writer.as_mut().unwrap()
         };
 
-        writer.write(batch).await.map_err(|err| {
+        let batch = coerce_timestamp_columns(batch, &self.arrow_schema)?;
+
+        writer.write(&batch).await.map_err(|err| {
             Error::new(
                 ErrorKind::Unexpected,
                 "Failed to write using parquet writer.",
@@ -548,6 +554,75 @@ impl FileWriter for ParquetWriter {
                 self.nan_value_count_visitor.nan_value_counts,
             )?])
         }
+    }
+}
+
+/// Cast columns in `batch` to match `target_schema`, but only when the mismatch is a
+/// UTC-equivalent timezone alias (`"UTC"` vs `"+00:00"`).
+///
+/// Columns that already match the target type are passed through unchanged. Columns with
+/// a UTC alias mismatch are cast using `arrow_cast::cast` (which is a no-op on the values,
+/// it just relabels the timezone). Any other type mismatch is left alone — it will surface
+/// as the original `Incompatible type` error from the underlying parquet writer, which is
+/// the correct behavior for genuinely incompatible schemas.
+fn coerce_timestamp_columns(
+    batch: &RecordBatch,
+    target_schema: &ArrowSchemaRef,
+) -> Result<RecordBatch> {
+    // short circuit if schemas are identical.
+    if batch.schema() == *target_schema {
+        return Ok(batch.clone());
+    }
+
+    let mut cols = batch.columns().to_vec();
+    let mut changed = false;
+
+    for (idx, (col, target_field)) in batch
+        .columns()
+        .iter()
+        .zip(target_schema.fields())
+        .enumerate()
+    {
+        if col.data_type() != target_field.data_type()
+            && is_utc_timezone_mismatch(col.data_type(), target_field.data_type())
+        {
+            cols[idx] = cast(col, target_field.data_type())?;
+            changed = true;
+        }
+    }
+
+    if !changed {
+        return Ok(batch.clone());
+    }
+
+    RecordBatch::try_new(target_schema.clone(), cols).map_err(|err| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            "Failed to rebuild record batch after casting to target schema.",
+        )
+        .with_source(err)
+    })
+}
+
+/// Returns true if `source` and `target` differ only by a UTC-equivalent timezone alias.
+///
+/// Specifically, both must be `Timestamp` with the same `TimeUnit`, and their timezone
+/// strings must be a `("UTC", "+00:00")` or `("+00:00", "UTC")` pair.
+fn is_utc_timezone_mismatch(
+    source: &arrow_schema::DataType,
+    target: &arrow_schema::DataType,
+) -> bool {
+    use arrow_schema::DataType;
+    match (source, target) {
+        (DataType::Timestamp(s_unit, Some(s_tz)), DataType::Timestamp(t_unit, Some(t_tz)))
+            if s_unit == t_unit =>
+        {
+            matches!(
+                (s_tz.as_ref(), t_tz.as_ref()),
+                ("UTC", "+00:00") | ("+00:00", "UTC")
+            )
+        }
+        _ => false,
     }
 }
 
@@ -2243,6 +2318,126 @@ mod tests {
 
         // Check that file should have been deleted.
         assert_eq!(std::fs::read_dir(temp_dir.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_writer_casts_utc_alias_timezone() -> Result<()> {
+        // Iceberg's `Timestamptz` maps to Arrow `Timestamp(µs, "+00:00")`. External
+        // producers (e.g. DataFusion) commonly tag timestamps with `"UTC"` which is
+        // semantically identical. The writer should cast transparently.
+        use crate::arrow::schema_to_arrow_schema;
+        use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+        use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+        use crate::writer::{IcebergWriter, IcebergWriterBuilder};
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("utc-alias".to_string(), None, DataFileFormat::Parquet);
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamptz))
+                        .into(),
+                    NestedField::optional(
+                        2,
+                        "ts_ns",
+                        Type::Primitive(PrimitiveType::TimestamptzNs),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let pw = ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone());
+        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            pw,
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        );
+        let mut data_file_writer = DataFileWriterBuilder::new(rolling_writer_builder)
+            .build(None)
+            .await?;
+
+        // Build batch with tz="UTC" (the alias that triggers the original error).
+        let target_arrow_schema = Arc::new(schema_to_arrow_schema(&schema).unwrap());
+        let utc_fields: Vec<arrow_schema::Field> = target_arrow_schema
+            .fields()
+            .iter()
+            .map(|f| match f.data_type() {
+                arrow_schema::DataType::Timestamp(unit, Some(_)) => f
+                    .as_ref()
+                    .clone()
+                    .with_data_type(arrow_schema::DataType::Timestamp(*unit, Some("UTC".into()))),
+                _ => f.as_ref().clone(),
+            })
+            .collect();
+        let batch_schema = Arc::new(arrow_schema::Schema::new_with_metadata(
+            utc_fields,
+            target_arrow_schema.metadata().clone(),
+        ));
+        let micros = Arc::new(
+            arrow_array::TimestampMicrosecondArray::from(vec![Some(0_i64), Some(1_000_000)])
+                .with_timezone("UTC"),
+        ) as ArrayRef;
+        let nanos = Arc::new(
+            arrow_array::TimestampNanosecondArray::from(vec![Some(0_i64), Some(1_000_000_000)])
+                .with_timezone("UTC"),
+        ) as ArrayRef;
+        let batch = RecordBatch::try_new(batch_schema, vec![micros, nanos])?;
+
+        data_file_writer.write(batch).await?;
+        let data_files = data_file_writer.close().await?;
+        assert_eq!(data_files.len(), 1);
+        assert_eq!(data_files[0].record_count, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_batch_to_schema_noop_when_matching() {
+        // When types match, cast_batch_to_schema is a no-op clone.
+        let schema = Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            "x",
+            arrow_schema::DataType::Int32,
+            false,
+        )]));
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![
+                Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+            ])
+            .unwrap();
+        let result = coerce_timestamp_columns(&batch, &schema).unwrap();
+        assert_eq!(result.schema(), batch.schema());
+    }
+
+    #[test]
+    fn test_cast_batch_to_schema_passes_through_non_utc_mismatches() {
+        // Non-UTC mismatches are NOT cast — the batch is returned unchanged so the
+        // downstream parquet writer produces its normal "Incompatible type" error.
+        let source_schema = Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            "x",
+            arrow_schema::DataType::Int32,
+            false,
+        )]));
+        let target_schema = Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            "x",
+            arrow_schema::DataType::Utf8,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(source_schema.clone(), vec![Arc::new(
+            arrow_array::Int32Array::from(vec![1]),
+        ) as ArrayRef])
+        .unwrap();
+        let result = coerce_timestamp_columns(&batch, &target_schema).unwrap();
+        // The batch is passed through unchanged (Int32, not cast to Utf8).
+        assert_eq!(result.schema(), source_schema);
     }
 
     #[test]
