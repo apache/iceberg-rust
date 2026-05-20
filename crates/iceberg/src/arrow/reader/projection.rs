@@ -554,7 +554,6 @@ mod tests {
     use parquet::schema::types::SchemaDescriptor;
     use tempfile::TempDir;
 
-    use crate::ErrorKind;
     use crate::arrow::{ArrowReader, ArrowReaderBuilder};
     use crate::expr::{Bind, Reference};
     use crate::io::FileIO;
@@ -562,6 +561,7 @@ mod tests {
     use crate::spec::{
         DataFileFormat, Datum, NestedField, PrimitiveType, Schema, Type, VariantType,
     };
+    use crate::{ErrorKind, Runtime};
 
     #[test]
     fn test_arrow_projection_mask() {
@@ -914,7 +914,7 @@ message schema {
         writer.close().unwrap();
 
         // Read the old Parquet file using the NEW schema (with column 'b')
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
                 file_size_in_bytes: std::fs::metadata(format!("{table_location}/old_file.parquet"))
@@ -1016,7 +1016,7 @@ message schema {
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
 
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
@@ -1118,7 +1118,7 @@ message schema {
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
 
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
@@ -1209,7 +1209,7 @@ message schema {
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
 
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
@@ -1314,7 +1314,7 @@ message schema {
         }
         writer.close().unwrap();
 
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
@@ -1448,7 +1448,7 @@ message schema {
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
 
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
@@ -1549,7 +1549,7 @@ message schema {
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
 
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
@@ -1660,7 +1660,7 @@ message schema {
         let predicate = Reference::new("id").less_than(Datum::int(5));
 
         // Enable both row_group_filtering and row_selection - triggered the panic
-        let reader = ArrowReaderBuilder::new(file_io)
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
             .with_row_group_filtering_enabled(true)
             .with_row_selection_enabled(true)
             .build();
@@ -1808,7 +1808,7 @@ message schema {
         writer.close().unwrap();
 
         // Read the Parquet file with partition spec and data
-        let reader = ArrowReaderBuilder::new(file_io).build();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
                 file_size_in_bytes: std::fs::metadata(format!("{table_location}/data.parquet"))
@@ -2018,7 +2018,7 @@ message schema {
 
         let predicate = Reference::new("id").greater_than(Datum::int(1));
 
-        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs())
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
             .with_row_group_filtering_enabled(true)
             .with_row_selection_enabled(true)
             .build();
