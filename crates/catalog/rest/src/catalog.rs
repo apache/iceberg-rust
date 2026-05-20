@@ -26,8 +26,8 @@ use async_trait::async_trait;
 use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
 use iceberg::table::Table;
 use iceberg::{
-    Catalog, CatalogBuilder, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit,
-    TableCreation, TableIdent,
+    Catalog, CatalogBuilder, Error, ErrorKind, Namespace, NamespaceIdent, Result, Runtime,
+    TableCommit, TableCreation, TableIdent,
 };
 use itertools::Itertools;
 use reqwest::header::{
@@ -62,6 +62,7 @@ const PATH_V1: &str = "v1";
 pub struct RestCatalogBuilder {
     config: RestCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    runtime: Option<Runtime>,
 }
 
 impl Default for RestCatalogBuilder {
@@ -75,6 +76,7 @@ impl Default for RestCatalogBuilder {
                 client: None,
             },
             storage_factory: None,
+            runtime: None,
         }
     }
 }
@@ -84,6 +86,11 @@ impl CatalogBuilder for RestCatalogBuilder {
 
     fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
         self.storage_factory = Some(storage_factory);
+        self
+    }
+
+    fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = Some(runtime);
         self
     }
 
@@ -123,7 +130,8 @@ impl CatalogBuilder for RestCatalogBuilder {
                     "Catalog uri is required",
                 ))
             } else {
-                Ok(RestCatalog::new(self.config, self.storage_factory))
+                let runtime = self.runtime.unwrap_or_else(Runtime::current);
+                Ok(RestCatalog::new(self.config, self.storage_factory, runtime))
             }
         };
 
@@ -351,15 +359,21 @@ pub struct RestCatalog {
     ctx: OnceCell<RestContext>,
     /// Storage factory for creating FileIO instances.
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    runtime: Runtime,
 }
 
 impl RestCatalog {
     /// Creates a `RestCatalog` from a [`RestCatalogConfig`].
-    fn new(config: RestCatalogConfig, storage_factory: Option<Arc<dyn StorageFactory>>) -> Self {
+    fn new(
+        config: RestCatalogConfig,
+        storage_factory: Option<Arc<dyn StorageFactory>>,
+        runtime: Runtime,
+    ) -> Self {
         Self {
             user_config: config,
             ctx: OnceCell::new(),
             storage_factory,
+            runtime,
         }
     }
 
@@ -790,7 +804,8 @@ impl Catalog for RestCatalog {
         let table_builder = Table::builder()
             .identifier(table_ident.clone())
             .file_io(file_io)
-            .metadata(response.metadata);
+            .metadata(response.metadata)
+            .runtime(self.runtime.clone());
 
         if let Some(metadata_location) = response.metadata_location {
             table_builder.metadata_location(metadata_location).build()
@@ -846,7 +861,8 @@ impl Catalog for RestCatalog {
         let table_builder = Table::builder()
             .identifier(table_ident.clone())
             .file_io(file_io)
-            .metadata(response.metadata);
+            .metadata(response.metadata)
+            .runtime(self.runtime.clone());
 
         if let Some(metadata_location) = response.metadata_location {
             table_builder.metadata_location(metadata_location).build()
@@ -982,6 +998,7 @@ impl Catalog for RestCatalog {
             .file_io(file_io)
             .metadata(response.metadata)
             .metadata_location(metadata_location.clone())
+            .runtime(self.runtime.clone())
             .build()
     }
 
@@ -1054,6 +1071,7 @@ impl Catalog for RestCatalog {
             .file_io(file_io)
             .metadata(response.metadata)
             .metadata_location(response.metadata_location)
+            .runtime(self.runtime.clone())
             .build()
     }
 }
@@ -1071,6 +1089,7 @@ mod tests {
         SnapshotLog, SortDirection, SortField, SortOrder, Summary, Transform, Type,
         UnboundPartitionField, UnboundPartitionSpec,
     };
+    use iceberg::test_utils::test_runtime;
     use iceberg::transaction::{ApplyTransactionAction, Transaction};
     use mockito::{Mock, Server, ServerGuard};
     use serde_json::json;
@@ -1099,6 +1118,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         assert_eq!(
@@ -1173,6 +1193,7 @@ mod tests {
                 .props(props)
                 .build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let token = catalog.context().await.unwrap().client.token().await;
@@ -1220,6 +1241,7 @@ mod tests {
                 .props(props)
                 .build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let token = catalog.context().await.unwrap().client.token().await;
@@ -1244,6 +1266,7 @@ mod tests {
                 .props(props)
                 .build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let token = catalog.context().await.unwrap().client.token().await;
@@ -1275,6 +1298,7 @@ mod tests {
                 .props(props)
                 .build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let token = catalog.context().await.unwrap().client.token().await;
@@ -1306,6 +1330,7 @@ mod tests {
                 .props(props)
                 .build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let token = catalog.context().await.unwrap().client.token().await;
@@ -1337,6 +1362,7 @@ mod tests {
                 .props(props)
                 .build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let token = catalog.context().await.unwrap().client.token().await;
@@ -1450,6 +1476,7 @@ mod tests {
                 .props(props)
                 .build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let token = catalog.context().await.unwrap().client.token().await;
@@ -1497,6 +1524,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let _namespaces = catalog.list_namespaces(None).await.unwrap();
@@ -1527,6 +1555,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let namespaces = catalog.list_namespaces(None).await.unwrap();
@@ -1578,6 +1607,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let namespaces = catalog.list_namespaces(None).await.unwrap();
@@ -1677,6 +1707,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let namespaces = catalog.list_namespaces(None).await.unwrap();
@@ -1730,6 +1761,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let namespaces = catalog
@@ -1773,6 +1805,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let namespaces = catalog
@@ -1806,6 +1839,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         assert!(
@@ -1834,6 +1868,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         catalog
@@ -1874,6 +1909,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let tables = catalog
@@ -1942,6 +1978,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let tables = catalog
@@ -2073,6 +2110,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let tables = catalog
@@ -2117,6 +2155,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         catalog
@@ -2146,6 +2185,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         assert!(
@@ -2177,6 +2217,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         catalog
@@ -2211,6 +2252,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let table = catalog
@@ -2328,6 +2370,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let table = catalog
@@ -2364,6 +2407,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let table_creation = TableCreation::builder()
@@ -2513,6 +2557,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let table_creation = TableCreation::builder()
@@ -2582,6 +2627,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let table1 = {
@@ -2599,6 +2645,7 @@ mod tests {
                 .metadata_location(resp.metadata_location.unwrap())
                 .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
                 .file_io(FileIO::new_with_fs())
+                .runtime(test_runtime())
                 .build()
                 .unwrap()
         };
@@ -2725,6 +2772,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let table1 = {
@@ -2742,6 +2790,7 @@ mod tests {
                 .metadata_location(resp.metadata_location.unwrap())
                 .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
                 .file_io(FileIO::new_with_fs())
+                .runtime(test_runtime())
                 .build()
                 .unwrap()
         };
@@ -2789,6 +2838,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
         let table_ident =
             TableIdent::new(NamespaceIdent::new("ns1".to_string()), "test1".to_string());
@@ -2840,6 +2890,7 @@ mod tests {
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
         );
 
         let table_ident =
