@@ -45,7 +45,7 @@ use iceberg::writer::file_writer::location_generator::{
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::{Error, ErrorKind};
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{CdcOptions, WriterPropertiesBuilder};
 use uuid::Uuid;
 
 use crate::physical_plan::DATA_FILES_COL_NAME;
@@ -226,8 +226,17 @@ impl ExecutionPlan for IcebergWriteExec {
         }
 
         // Create data file writer builder
+        let cdc_options = table_props.cdc_enabled.then_some(CdcOptions {
+            min_chunk_size: table_props.cdc_min_chunk_size,
+            max_chunk_size: table_props.cdc_max_chunk_size,
+            norm_level: table_props.cdc_norm_level,
+        });
+        let writer_properties = WriterPropertiesBuilder::default()
+            .set_content_defined_chunking(cdc_options)
+            .build();
+
         let parquet_file_writer_builder = ParquetWriterBuilder::new_with_match_mode(
-            WriterProperties::default(),
+            writer_properties,
             self.table.metadata().current_schema().clone(),
             FieldMatchMode::Name,
         );
