@@ -18,6 +18,10 @@
 [package]
 name = "iceberg-cache-moka"
 
+categories = ["caching"]
+description = "Apache Iceberg Moka cache implementation"
+keywords = ["iceberg", "cache", "moka"]
+
 edition = { workspace = true }
 homepage = { workspace = true }
 license = { workspace = true }

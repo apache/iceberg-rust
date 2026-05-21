@@ -40,12 +40,14 @@ jobs:
         package:
           - "crates/iceberg"
           - "crates/storage/opendal"
-          - "crates/catalog/glue"
-          - "crates/catalog/hms"
           - "crates/catalog/rest"
-          - "crates/catalog/s3tables"
           - "crates/catalog/sql"
+          - "crates/integrations/cache-moka"
           - "crates/integrations/datafusion"
+          - "crates/catalog/hms"
+          - "crates/catalog/glue"
+          - "crates/catalog/s3tables"
+          - "crates/catalog/loader"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
