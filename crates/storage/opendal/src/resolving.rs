@@ -51,6 +51,7 @@ pub const SCHEME_ABFS: &str = "abfs";
 pub const SCHEME_WASBS: &str = "wasbs";
 pub const SCHEME_WASB: &str = "wasb";
 pub const SCHEME_HF: &str = "hf";
+pub const SCHEME_HDFS: &str = "hdfs";
 
 /// Parse a URL scheme string.
 fn parse_scheme(scheme: &str) -> Result<&'static str> {
@@ -62,6 +63,7 @@ fn parse_scheme(scheme: &str) -> Result<&'static str> {
         SCHEME_OSS => Ok("oss"),
         SCHEME_ABFSS | SCHEME_ABFS | SCHEME_WASBS | SCHEME_WASB => Ok("azdls"),
         SCHEME_HF => Ok("hf"),
+        SCHEME_HDFS => Ok("hdfs"),
         s => Err(Error::new(
             ErrorKind::FeatureUnsupported,
             format!("Unsupported storage scheme: {s}"),
@@ -116,6 +118,10 @@ fn build_storage_for_scheme(
                 config: Arc::new(config),
             })
         }
+        #[cfg(feature = "opendal-hdfs-native")]
+        "hdfs" => Ok(OpenDalStorage::Hdfs {
+            operators: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+        }),
         #[cfg(feature = "opendal-fs")]
         "file" => Ok(OpenDalStorage::LocalFs),
         #[cfg(feature = "opendal-memory")]
@@ -351,6 +357,33 @@ mod tests {
 
         assert!(Arc::ptr_eq(&a, &b), "s3 and s3a should share one instance");
         assert!(Arc::ptr_eq(&a, &c), "s3 and s3n should share one instance");
+    }
+
+    #[cfg(feature = "opendal-hdfs-native")]
+    #[test]
+    fn test_resolve_hdfs_returns_hdfs_variant() {
+        let storage = empty_resolving_storage();
+
+        let resolved = storage.resolve("hdfs://nameservice1/a/b").unwrap();
+
+        assert!(
+            matches!(&*resolved, crate::OpenDalStorage::Hdfs { .. }),
+            "expected Hdfs variant, got {resolved:?}"
+        );
+    }
+
+    #[cfg(feature = "opendal-hdfs-native")]
+    #[test]
+    fn test_resolve_hdfs_distinct_authorities_share_instance() {
+        let storage = empty_resolving_storage();
+
+        let a = storage.resolve("hdfs://ns1/a").unwrap();
+        let b = storage.resolve("hdfs://ns2/b").unwrap();
+
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "different authorities should share the OpenDalStorage::Hdfs instance (operator cache is internal)"
+        );
     }
 
     #[cfg(feature = "opendal-azdls")]
