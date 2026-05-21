@@ -32,6 +32,7 @@
 
 mod azdls;
 mod gcs;
+mod hf;
 mod oss;
 mod s3;
 
@@ -39,6 +40,7 @@ use std::collections::HashMap;
 
 pub use azdls::*;
 pub use gcs::*;
+pub use hf::*;
 pub use oss::*;
 pub use s3::*;
 use serde::{Deserialize, Serialize};

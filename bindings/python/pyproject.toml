@@ -54,6 +54,8 @@ ignore = ["F403", "F405"]
 [tool.pytest.ini_options]
 filterwarnings = [
   "error",
+  # huggingface_hub uses hf_xet.upload_files() internally which is deprecated in hf_xet
+  "ignore::DeprecationWarning:huggingface_hub",
 ]
 
 [dependency-groups]
@@ -68,4 +70,5 @@ dev = [
     "pyiceberg[sql-sqlite]>=0.11",
     "pyarrow>=17",
     "fastavro>=1.11.1",
+    "huggingface_hub>=0.20",
 ]

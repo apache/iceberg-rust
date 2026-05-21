@@ -50,6 +50,7 @@ pub const SCHEME_ABFSS: &str = "abfss";
 pub const SCHEME_ABFS: &str = "abfs";
 pub const SCHEME_WASBS: &str = "wasbs";
 pub const SCHEME_WASB: &str = "wasb";
+pub const SCHEME_HF: &str = "hf";
 
 /// Parse a URL scheme string.
 fn parse_scheme(scheme: &str) -> Result<&'static str> {
@@ -60,6 +61,7 @@ fn parse_scheme(scheme: &str) -> Result<&'static str> {
         SCHEME_GS | SCHEME_GCS => Ok("gcs"),
         SCHEME_OSS => Ok("oss"),
         SCHEME_ABFSS | SCHEME_ABFS | SCHEME_WASBS | SCHEME_WASB => Ok("azdls"),
+        SCHEME_HF => Ok("hf"),
         s => Err(Error::new(
             ErrorKind::FeatureUnsupported,
             format!("Unsupported storage scheme: {s}"),
@@ -118,6 +120,13 @@ fn build_storage_for_scheme(
         "file" => Ok(OpenDalStorage::LocalFs),
         #[cfg(feature = "opendal-memory")]
         "memory" => Ok(OpenDalStorage::Memory(crate::memory::memory_config_build()?)),
+        #[cfg(feature = "opendal-hf")]
+        "hf" => {
+            let config = crate::hf::hf_config_parse(props.clone())?;
+            Ok(OpenDalStorage::Hf {
+                config: Arc::new(config),
+            })
+        }
         unsupported => Err(Error::new(
             ErrorKind::FeatureUnsupported,
             format!("Unsupported storage scheme: {unsupported}"),
@@ -196,7 +205,7 @@ impl StorageFactory for OpenDalResolvingStorageFactory {
 pub struct OpenDalResolvingStorage {
     /// Configuration properties shared across all backends.
     props: HashMap<String, String>,
-    /// Cache of scheme to storage mappings.
+    /// Cache of canonical scheme to storage mappings.
     #[serde(skip, default)]
     storages: RwLock<HashMap<&'static str, Arc<OpenDalStorage>>>,
     /// Custom AWS credential loader for S3 storage.
@@ -206,7 +215,7 @@ pub struct OpenDalResolvingStorage {
 }
 
 impl OpenDalResolvingStorage {
-    /// Resolve the storage for the given path by extracting the scheme and
+    /// Resolve the storage for the given path by extracting the canonical scheme and
     /// returning the cached or newly-created [`OpenDalStorage`].
     fn resolve(&self, path: &str) -> Result<Arc<OpenDalStorage>> {
         let scheme = extract_scheme(path)?;
@@ -281,7 +290,7 @@ impl Storage for OpenDalResolvingStorage {
     }
 
     async fn delete_stream(&self, mut paths: BoxStream<'static, String>) -> Result<()> {
-        // Group paths by scheme so each resolved storage receives a batch,
+        // Group paths by canonical scheme so each resolved storage receives a batch,
         // avoiding repeated operator creation per path.
         let mut grouped: HashMap<&'static str, Vec<String>> = HashMap::new();
         while let Some(path) = paths.next().await {
