@@ -22,8 +22,6 @@ use std::str::FromStr;
 use crate::compression::CompressionCodec;
 use crate::error::{Error, ErrorKind, Result};
 
-// Helper function to parse a property from a HashMap
-// If the property is not found, use the default value
 fn parse_property<T: FromStr>(
     properties: &HashMap<String, String>,
     key: &str,
@@ -121,6 +119,15 @@ pub struct TableProperties {
     /// Whether garbage collection is enabled on drop.
     /// When `false`, data files will not be deleted when a table is dropped.
     pub gc_enabled: bool,
+    /// Whether content-defined chunking is enabled.
+    /// `true` only when `write.parquet.content-defined-chunking.enabled = "true"`.
+    pub cdc_enabled: bool,
+    /// Content-defined chunking minimum chunk size in bytes.
+    pub cdc_min_chunk_size: usize,
+    /// Content-defined chunking maximum chunk size in bytes.
+    pub cdc_max_chunk_size: usize,
+    /// Content-defined chunking normalization level (gearhash bit adjustment).
+    pub cdc_norm_level: i32,
 }
 
 impl TableProperties {
@@ -226,6 +233,26 @@ impl TableProperties {
     pub const PROPERTY_GC_ENABLED: &str = "gc.enabled";
     /// Default value for gc.enabled
     pub const PROPERTY_GC_ENABLED_DEFAULT: bool = true;
+
+    /// Enable content-defined chunking with parquet defaults (or per-property overrides).
+    pub const PROPERTY_PARQUET_CDC_ENABLED: &str = "write.parquet.content-defined-chunking.enabled";
+    /// Default value for content-defined chunking enabled.
+    pub const PROPERTY_PARQUET_CDC_ENABLED_DEFAULT: bool = false;
+    /// Minimum chunk size in bytes for content-defined chunking.
+    pub const PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE: &str =
+        "write.parquet.content-defined-chunking.min-chunk-size";
+    /// Default matches `parquet::file::properties::DEFAULT_CDC_MIN_CHUNK_SIZE`.
+    pub const PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE_DEFAULT: usize = 256 * 1024;
+    /// Maximum chunk size in bytes for content-defined chunking.
+    pub const PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE: &str =
+        "write.parquet.content-defined-chunking.max-chunk-size";
+    /// Default matches `parquet::file::properties::DEFAULT_CDC_MAX_CHUNK_SIZE`.
+    pub const PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE_DEFAULT: usize = 1024 * 1024;
+    /// Normalization level (gearhash bit adjustment) for content-defined chunking.
+    pub const PROPERTY_PARQUET_CDC_NORM_LEVEL: &str =
+        "write.parquet.content-defined-chunking.norm-level";
+    /// Default matches `parquet::file::properties::DEFAULT_CDC_NORM_LEVEL`.
+    pub const PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT: i32 = 0;
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
@@ -274,6 +301,26 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 props,
                 TableProperties::PROPERTY_GC_ENABLED,
                 TableProperties::PROPERTY_GC_ENABLED_DEFAULT,
+            )?,
+            cdc_enabled: parse_property(
+                props,
+                TableProperties::PROPERTY_PARQUET_CDC_ENABLED,
+                TableProperties::PROPERTY_PARQUET_CDC_ENABLED_DEFAULT,
+            )?,
+            cdc_min_chunk_size: parse_property(
+                props,
+                TableProperties::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE,
+                TableProperties::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE_DEFAULT,
+            )?,
+            cdc_max_chunk_size: parse_property(
+                props,
+                TableProperties::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE,
+                TableProperties::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE_DEFAULT,
+            )?,
+            cdc_norm_level: parse_property(
+                props,
+                TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL,
+                TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT,
             )?,
         })
     }
@@ -582,5 +629,143 @@ mod tests {
                 "Expected error message to contain supported codecs, got: {err_msg}"
             );
         }
+    }
+
+    #[test]
+    fn test_cdc_disabled_by_default() {
+        let props = HashMap::new();
+        let tp = TableProperties::try_from(&props).unwrap();
+        assert!(!tp.cdc_enabled);
+    }
+
+    #[test]
+    fn test_cdc_enabled_via_flag() {
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_PARQUET_CDC_ENABLED.to_string(),
+            "true".to_string(),
+        )]);
+        let tp = TableProperties::try_from(&props).unwrap();
+        assert!(tp.cdc_enabled);
+        assert_eq!(tp.cdc_min_chunk_size, 256 * 1024);
+        assert_eq!(tp.cdc_max_chunk_size, 1024 * 1024);
+        assert_eq!(tp.cdc_norm_level, 0);
+    }
+
+    #[test]
+    fn test_cdc_size_props_alone_do_not_enable() {
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE.to_string(),
+            "262144".to_string(),
+        )]);
+        let tp = TableProperties::try_from(&props).unwrap();
+        assert!(!tp.cdc_enabled);
+    }
+
+    #[test]
+    fn test_cdc_custom_values() {
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_ENABLED.to_string(),
+                "true".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE.to_string(),
+                "200000".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE.to_string(),
+                "900000".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL.to_string(),
+                "1".to_string(),
+            ),
+        ]);
+        let tp = TableProperties::try_from(&props).unwrap();
+        assert!(tp.cdc_enabled);
+        assert_eq!(tp.cdc_min_chunk_size, 200000);
+        assert_eq!(tp.cdc_max_chunk_size, 900000);
+        assert_eq!(tp.cdc_norm_level, 1);
+    }
+
+    #[test]
+    fn test_cdc_partial_override() {
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_ENABLED.to_string(),
+                "true".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL.to_string(),
+                "2".to_string(),
+            ),
+        ]);
+        let tp = TableProperties::try_from(&props).unwrap();
+        assert!(tp.cdc_enabled);
+        assert_eq!(tp.cdc_min_chunk_size, 256 * 1024);
+        assert_eq!(tp.cdc_max_chunk_size, 1024 * 1024);
+        assert_eq!(tp.cdc_norm_level, 2);
+    }
+
+    #[test]
+    fn test_cdc_negative_norm_level() {
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_ENABLED.to_string(),
+                "true".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL.to_string(),
+                "-2".to_string(),
+            ),
+        ]);
+        let tp = TableProperties::try_from(&props).unwrap();
+        assert_eq!(tp.cdc_norm_level, -2);
+    }
+
+    #[test]
+    fn test_cdc_invalid_min_chunk_size() {
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_ENABLED.to_string(),
+                "true".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE.to_string(),
+                "not_a_number".to_string(),
+            ),
+        ]);
+        let err = TableProperties::try_from(&props).unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "Invalid value for write.parquet.content-defined-chunking.min-chunk-size"
+            )
+        );
+    }
+
+    #[test]
+    fn test_cdc_invalid_norm_level() {
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_ENABLED.to_string(),
+                "true".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL.to_string(),
+                "not_a_number".to_string(),
+            ),
+        ]);
+        let err = TableProperties::try_from(&props).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid value for write.parquet.content-defined-chunking.norm-level")
+        );
+    }
+
+    #[test]
+    fn test_cdc_no_properties() {
+        let props = HashMap::from([("some.other.property".to_string(), "value".to_string())]);
+        let tp = TableProperties::try_from(&props).unwrap();
+        assert!(!tp.cdc_enabled);
     }
 }
