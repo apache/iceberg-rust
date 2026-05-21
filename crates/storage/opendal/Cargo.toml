@@ -28,11 +28,12 @@ keywords = ["iceberg", "opendal", "storage"]
 
 [features]
 default = ["opendal-memory", "opendal-fs", "opendal-s3"]
-opendal-all = ["opendal-memory", "opendal-fs", "opendal-s3", "opendal-gcs", "opendal-oss", "opendal-azdls"]
+opendal-all = ["opendal-memory", "opendal-fs", "opendal-s3", "opendal-gcs", "opendal-oss", "opendal-azdls", "opendal-hf"]
 
 opendal-azdls = ["opendal/services-azdls"]
 opendal-fs = ["opendal/services-fs"]
 opendal-gcs = ["opendal/services-gcs"]
+opendal-hf = ["opendal/services-hf"]
 opendal-memory = ["opendal/services-memory"]
 opendal-oss = ["opendal/services-oss"]
 opendal-s3 = ["opendal/services-s3", "reqsign-aws-v4", "reqsign-core"]
