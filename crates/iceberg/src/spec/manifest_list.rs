@@ -29,6 +29,7 @@ use serde_derive::{Deserialize, Serialize};
 use self::_const_schema::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2};
 use self::_serde::{ManifestFileV1, ManifestFileV2};
 use super::{FormatVersion, Manifest, Snapshot, TableMetadata};
+use crate::encryption::{EncryptedInputFile, EncryptionManager};
 use crate::error::Result;
 use crate::io::{FileIO, OutputFile};
 use crate::spec::manifest_list::_const_schema::MANIFEST_LIST_AVRO_SCHEMA_V3;
@@ -96,6 +97,7 @@ pub struct ManifestListReader<'a> {
     snapshot: &'a Snapshot,
     file_io: &'a FileIO,
     table_metadata: &'a TableMetadata,
+    encryption_manager: Option<&'a EncryptionManager>,
 }
 
 impl<'a> ManifestListReader<'a> {
@@ -103,21 +105,38 @@ impl<'a> ManifestListReader<'a> {
         snapshot: &'a Snapshot,
         file_io: &'a FileIO,
         table_metadata: &'a TableMetadata,
+        encryption_manager: Option<&'a EncryptionManager>,
     ) -> Self {
         Self {
             snapshot,
             file_io,
             table_metadata,
+            encryption_manager,
         }
     }
 
     /// Loads and returns the [`ManifestList`] for this snapshot.
     pub async fn load(&self) -> Result<ManifestList> {
-        let manifest_list_content = self
-            .file_io
-            .new_input(self.snapshot.manifest_list())?
-            .read()
-            .await?;
+        let manifest_list_content =
+            match (self.snapshot.encryption_key_id(), self.encryption_manager) {
+                (Some(_), None) => {
+                    return Err(Error::new(
+                        ErrorKind::PreconditionFailed,
+                        "Snapshot has encryption_key_id but no EncryptionManager configured on Table",
+                    ));
+                }
+                (Some(key_id), Some(em)) => {
+                    let key_metadata = em.decrypt_manifest_list_key_metadata(key_id).await?;
+                    let input = self.file_io.new_input(self.snapshot.manifest_list())?;
+                    EncryptedInputFile::new(input, key_metadata).read().await?
+                }
+                (None, _) => {
+                    self.file_io
+                        .new_input(self.snapshot.manifest_list())?
+                        .read()
+                        .await?
+                }
+            };
         ManifestList::parse_with_version(
             &manifest_list_content,
             self.table_metadata.format_version(),

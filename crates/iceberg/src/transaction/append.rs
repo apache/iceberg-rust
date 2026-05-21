@@ -303,14 +303,9 @@ mod tests {
         } else {
             unreachable!()
         };
-<<<<<<< HEAD
         let manifest_list = table
             .manifest_list_reader(new_snapshot)
             .load()
-=======
-        let manifest_list = new_snapshot
-            .load_manifest_list(table.file_io(), table.metadata(), None)
->>>>>>> d0cfbb7d (Read encrypted manifest lists)
             .await
             .unwrap();
         assert_eq!(1, manifest_list.entries().len());

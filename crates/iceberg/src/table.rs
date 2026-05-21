@@ -27,7 +27,9 @@ use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
 use crate::runtime::Runtime;
 use crate::scan::TableScanBuilder;
-use crate::spec::{ManifestListReader, SchemaRef, Snapshot, TableMetadata, TableMetadataRef};
+use crate::spec::{
+    FormatVersion, ManifestListReader, SchemaRef, Snapshot, TableMetadata, TableMetadataRef,
+};
 use crate::{Error, ErrorKind, Result, TableIdent};
 
 /// Builder to create table scan.
@@ -302,7 +304,12 @@ impl Table {
 
     /// Creates a [`ManifestListReader`] for the given snapshot.
     pub fn manifest_list_reader<'a>(&'a self, snapshot: &'a Snapshot) -> ManifestListReader<'a> {
-        ManifestListReader::new(snapshot, &self.file_io, &self.metadata)
+        ManifestListReader::new(
+            snapshot,
+            &self.file_io,
+            &self.metadata,
+            self.encryption_manager.as_deref(),
+        )
     }
 
     /// Create a reader for the table.
@@ -310,6 +317,7 @@ impl Table {
         ArrowReaderBuilder::new(self.file_io.clone(), self.runtime().clone())
     }
 }
+
 
 /// `StaticTable` is a read-only table struct that can be created from a metadata file or from `TableMetaData` without a catalog.
 /// It can only be used to read metadata and for table scan.

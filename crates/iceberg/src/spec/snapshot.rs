@@ -26,10 +26,9 @@ use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use super::table_metadata::SnapshotLog;
-use crate::encryption::{EncryptedInputFile, EncryptionManager};
 use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
-use crate::spec::{ManifestList, SchemaId, SchemaRef, TableMetadata};
+use crate::spec::{ManifestList, ManifestListReader, SchemaId, SchemaRef, TableMetadata};
 use crate::{Error, ErrorKind};
 
 /// The ref name of the main branch of the table.
@@ -201,28 +200,10 @@ impl Snapshot {
         &self,
         file_io: &FileIO,
         table_metadata: &TableMetadata,
-        encryption_manager: Option<&EncryptionManager>,
     ) -> Result<ManifestList> {
-        let manifest_list_content = match (&self.encryption_key_id, encryption_manager) {
-            (Some(_), None) => {
-                return Err(Error::new(
-                    ErrorKind::PreconditionFailed,
-                    "Snapshot has encryption_key_id but no EncryptionManager configured on Table",
-                ));
-            }
-            (Some(key_id), Some(em)) => {
-                let key_metadata = em.decrypt_manifest_list_key_metadata(key_id).await?;
-                let input = file_io.new_input(&self.manifest_list)?;
-                EncryptedInputFile::new(input, key_metadata).read().await?
-            }
-            (None, _) => file_io.new_input(&self.manifest_list)?.read().await?,
-        };
-        ManifestList::parse_with_version(
-            &manifest_list_content,
-            // TODO: You don't really need the version since you could just project any Avro in
-            // the version that you'd like to get (probably always the latest)
-            table_metadata.format_version(),
-        )
+        ManifestListReader::new(self, file_io, table_metadata, None)
+            .load()
+            .await
     }
 
     #[allow(dead_code)]
@@ -545,7 +526,7 @@ mod tests {
     use crate::encryption::kms::{KeyManagementClient, MemoryKeyManagementClient};
     use crate::encryption::{EncryptionManager, StandardKeyMetadata};
     use crate::io::FileIO;
-    use crate::spec::TableMetadata;
+    use crate::spec::{ManifestListReader, TableMetadata};
     use crate::spec::manifest_list::{ManifestList, ManifestListWriter};
     use crate::spec::snapshot::_serde::SnapshotV1;
     use crate::spec::snapshot::{Operation, Snapshot, Summary};
@@ -824,10 +805,9 @@ mod tests {
         );
         let metadata = encryption_test_metadata();
 
-        let err = snapshot
-            .load_manifest_list(&io, &metadata, None)
-            .await
-            .unwrap_err();
+        let err = ManifestListReader::new(&snapshot, &io, &metadata, None)
+            .load()
+            .await.unwrap_err();
         assert_eq!(err.kind(), crate::ErrorKind::PreconditionFailed);
     }
 
@@ -856,10 +836,9 @@ mod tests {
         let snapshot = snapshot_pointing_at(encrypted_path, Some(key_id));
         let metadata = encryption_test_metadata();
 
-        let manifest_list: ManifestList = snapshot
-            .load_manifest_list(&io, &metadata, Some(&mgr))
-            .await
-            .unwrap();
+        let manifest_list: ManifestList = ManifestListReader::new(&snapshot, &io, &metadata, Some(&mgr))
+            .load()
+            .await.unwrap();
         assert_eq!(manifest_list.entries().len(), 0);
     }
 }

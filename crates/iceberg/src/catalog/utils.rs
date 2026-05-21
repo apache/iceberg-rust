@@ -49,7 +49,7 @@ pub async fn drop_table_data(
     // Load all manifest lists concurrently
     let results: Vec<_> =
         futures::future::try_join_all(metadata.snapshots().map(|snapshot| async {
-            let manifest_list = ManifestListReader::new(snapshot, io, metadata)
+            let manifest_list = ManifestListReader::new(snapshot, io, metadata, encryption_manager)
                 .load()
                 .await?;
             Ok::<_, crate::Error>((snapshot.manifest_list().to_string(), manifest_list))
