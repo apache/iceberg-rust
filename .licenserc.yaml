@@ -29,6 +29,8 @@ header:
     - "website/book"
     # Generated content by scripts
     - "**/DEPENDENCIES.*.tsv"
+    # Generated content by cargo-public-api
+    - "public-api/**"
     # Release distributions
     - "dist/*"
     - "target"

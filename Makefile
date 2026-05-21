@@ -53,6 +53,37 @@ MSRV_VERSION    := $(shell awk -F'"' '/^rust-version/ {print $$2}' Cargo.toml)
 check-msrv:
 	cargo +$(MSRV_VERSION) check --workspace
 
+PUBLIC_API_CRATES := iceberg \
+	iceberg-cache-moka \
+	iceberg-catalog-glue \
+	iceberg-catalog-hms \
+	iceberg-catalog-loader \
+	iceberg-catalog-rest \
+	iceberg-catalog-s3tables \
+	iceberg-catalog-sql \
+	iceberg-datafusion \
+	iceberg-storage-opendal
+
+install-cargo-public-api:
+	cargo install cargo-public-api@0.51.0
+
+generate-public-api: install-cargo-public-api
+	@for crate in $(PUBLIC_API_CRATES); do \
+		echo "Generating public API for $$crate..."; \
+		cargo public-api -p "$$crate" --all-features > "public-api/$$crate.txt"; \
+	done
+
+check-public-api: install-cargo-public-api
+	@fail=0; \
+	for crate in $(PUBLIC_API_CRATES); do \
+		echo "Checking public API for $$crate..."; \
+		cargo public-api -p "$$crate" --all-features | diff - "public-api/$$crate.txt" || { \
+			echo "ERROR: Public API for $$crate has changed. Run 'make generate-public-api' to update."; \
+			fail=1; \
+		}; \
+	done; \
+	if [ $$fail -ne 0 ]; then exit 1; fi
+
 check: check-fmt check-clippy check-toml cargo-machete
 
 doc-test:

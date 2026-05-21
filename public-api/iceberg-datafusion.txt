@@ -1,0 +1,688 @@
+pub mod iceberg_datafusion
+pub mod iceberg_datafusion::metadata_table
+pub struct iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+pub async fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::scan(self) -> datafusion_common::error::Result<futures_core::stream::BoxStream<'static, datafusion_common::error::Result<arrow_array::record_batch::RecordBatch>>>
+impl core::clone::Clone for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::clone(&self) -> iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl core::fmt::Debug for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl datafusion_catalog::table::TableProvider for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::as_any(&self) -> &dyn core::any::Any
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, _projection: core::option::Option<&'life2 alloc::vec::Vec<usize>>, _filters: &'life3 [datafusion_expr::expr::Expr], _limit: core::option::Option<usize>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::schema(&self) -> arrow_schema::schema::SchemaRef
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::table_type(&self) -> datafusion_expr::table_source::TableType
+impl core::marker::Freeze for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl core::marker::Send for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl core::marker::Sync for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl core::marker::Unpin for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl<T, U> core::convert::Into<U> for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where U: core::convert::From<T>
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where U: core::convert::Into<T>
+pub type iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::Error = core::convert::Infallible
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where U: core::convert::TryFrom<T>
+pub type iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where T: core::clone::Clone
+pub type iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::Owned = T
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::clone_into(&self, target: &mut T)
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::to_owned(&self) -> T
+impl<T> as_any::AsAny for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where T: core::any::Any
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where T: 'static + ?core::marker::Sized
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where T: core::clone::Clone
+pub unsafe fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+pub type iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::Init = T
+pub const iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::ALIGN: usize
+pub unsafe fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::drop(ptr: usize)
+pub unsafe fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl<T> tracing::instrument::WithSubscriber for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl<T> typenum::type_operators::Same for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+pub type iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::Output = T
+impl<U> bnum::cast::As for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::vzip(self) -> V
+pub mod iceberg_datafusion::physical_plan
+pub struct iceberg_datafusion::physical_plan::IcebergTableScan
+impl iceberg_datafusion::physical_plan::IcebergTableScan
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::limit(&self) -> core::option::Option<usize>
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::predicates(&self) -> core::option::Option<&iceberg::expr::predicate::Predicate>
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::projection(&self) -> core::option::Option<&[alloc::string::String]>
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::snapshot_id(&self) -> core::option::Option<i64>
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::table(&self) -> &iceberg::table::Table
+impl core::fmt::Debug for iceberg_datafusion::physical_plan::IcebergTableScan
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl datafusion_physical_plan::display::DisplayAs for iceberg_datafusion::physical_plan::IcebergTableScan
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::fmt_as(&self, _t: datafusion_physical_plan::display::DisplayFormatType, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl datafusion_physical_plan::execution_plan::ExecutionPlan for iceberg_datafusion::physical_plan::IcebergTableScan
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::as_any(&self) -> &dyn core::any::Any
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::children(&self) -> alloc::vec::Vec<&alloc::sync::Arc<(dyn datafusion_physical_plan::execution_plan::ExecutionPlan + 'static)>>
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::execute(&self, _partition: usize, _context: alloc::sync::Arc<datafusion_execution::task::TaskContext>) -> datafusion_common::error::Result<datafusion_execution::stream::SendableRecordBatchStream>
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::name(&self) -> &str
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::properties(&self) -> &alloc::sync::Arc<datafusion_physical_plan::execution_plan::PlanProperties>
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::with_new_children(self: alloc::sync::Arc<Self>, _children: alloc::vec::Vec<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>) -> datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>
+impl core::marker::Freeze for iceberg_datafusion::physical_plan::IcebergTableScan
+impl core::marker::Send for iceberg_datafusion::physical_plan::IcebergTableScan
+impl core::marker::Sync for iceberg_datafusion::physical_plan::IcebergTableScan
+impl core::marker::Unpin for iceberg_datafusion::physical_plan::IcebergTableScan
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_datafusion::physical_plan::IcebergTableScan
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_datafusion::physical_plan::IcebergTableScan
+impl<T, U> core::convert::Into<U> for iceberg_datafusion::physical_plan::IcebergTableScan where U: core::convert::From<T>
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_datafusion::physical_plan::IcebergTableScan where U: core::convert::Into<T>
+pub type iceberg_datafusion::physical_plan::IcebergTableScan::Error = core::convert::Infallible
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_datafusion::physical_plan::IcebergTableScan where U: core::convert::TryFrom<T>
+pub type iceberg_datafusion::physical_plan::IcebergTableScan::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> as_any::AsAny for iceberg_datafusion::physical_plan::IcebergTableScan where T: core::any::Any
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_datafusion::physical_plan::IcebergTableScan where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_datafusion::physical_plan::IcebergTableScan where T: 'static + ?core::marker::Sized
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_datafusion::physical_plan::IcebergTableScan where T: ?core::marker::Sized
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_datafusion::physical_plan::IcebergTableScan where T: ?core::marker::Sized
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for iceberg_datafusion::physical_plan::IcebergTableScan
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_datafusion::physical_plan::IcebergTableScan
+pub type iceberg_datafusion::physical_plan::IcebergTableScan::Init = T
+pub const iceberg_datafusion::physical_plan::IcebergTableScan::ALIGN: usize
+pub unsafe fn iceberg_datafusion::physical_plan::IcebergTableScan::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_datafusion::physical_plan::IcebergTableScan::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_datafusion::physical_plan::IcebergTableScan::drop(ptr: usize)
+pub unsafe fn iceberg_datafusion::physical_plan::IcebergTableScan::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_datafusion::physical_plan::IcebergTableScan
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_datafusion::physical_plan::IcebergTableScan where T: ?core::marker::Sized
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_datafusion::physical_plan::IcebergTableScan
+impl<T> tracing::instrument::WithSubscriber for iceberg_datafusion::physical_plan::IcebergTableScan
+impl<T> typenum::type_operators::Same for iceberg_datafusion::physical_plan::IcebergTableScan
+pub type iceberg_datafusion::physical_plan::IcebergTableScan::Output = T
+impl<U> bnum::cast::As for iceberg_datafusion::physical_plan::IcebergTableScan
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_datafusion::physical_plan::IcebergTableScan where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_datafusion::physical_plan::IcebergTableScan::vzip(self) -> V
+pub fn iceberg_datafusion::physical_plan::convert_filters_to_predicate(filters: &[datafusion_expr::expr::Expr]) -> core::option::Option<iceberg::expr::predicate::Predicate>
+pub fn iceberg_datafusion::physical_plan::project_with_partition(input: alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>, table: &iceberg::table::Table) -> datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>
+pub mod iceberg_datafusion::table
+pub mod iceberg_datafusion::table::metadata_table
+pub struct iceberg_datafusion::table::metadata_table::IcebergMetadataTableProvider
+impl iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+pub async fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::scan(self) -> datafusion_common::error::Result<futures_core::stream::BoxStream<'static, datafusion_common::error::Result<arrow_array::record_batch::RecordBatch>>>
+impl core::clone::Clone for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::clone(&self) -> iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl core::fmt::Debug for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl datafusion_catalog::table::TableProvider for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::as_any(&self) -> &dyn core::any::Any
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, _projection: core::option::Option<&'life2 alloc::vec::Vec<usize>>, _filters: &'life3 [datafusion_expr::expr::Expr], _limit: core::option::Option<usize>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::schema(&self) -> arrow_schema::schema::SchemaRef
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::table_type(&self) -> datafusion_expr::table_source::TableType
+impl core::marker::Freeze for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl core::marker::Send for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl core::marker::Sync for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl core::marker::Unpin for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl<T, U> core::convert::Into<U> for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where U: core::convert::From<T>
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where U: core::convert::Into<T>
+pub type iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::Error = core::convert::Infallible
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where U: core::convert::TryFrom<T>
+pub type iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where T: core::clone::Clone
+pub type iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::Owned = T
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::clone_into(&self, target: &mut T)
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::to_owned(&self) -> T
+impl<T> as_any::AsAny for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where T: core::any::Any
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where T: 'static + ?core::marker::Sized
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where T: core::clone::Clone
+pub unsafe fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+pub type iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::Init = T
+pub const iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::ALIGN: usize
+pub unsafe fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::drop(ptr: usize)
+pub unsafe fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl<T> tracing::instrument::WithSubscriber for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+impl<T> typenum::type_operators::Same for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+pub type iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::Output = T
+impl<U> bnum::cast::As for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_datafusion::metadata_table::IcebergMetadataTableProvider where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_datafusion::metadata_table::IcebergMetadataTableProvider::vzip(self) -> V
+pub mod iceberg_datafusion::table::table_provider_factory
+pub struct iceberg_datafusion::table::table_provider_factory::IcebergTableProviderFactory
+impl iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::new() -> Self
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::new_with_storage_factory(storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> Self
+impl core::default::Default for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::default() -> iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl core::fmt::Debug for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl datafusion_catalog::table::TableProviderFactory for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::create<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, cmd: &'life2 datafusion_expr::logical_plan::ddl::CreateExternalTable) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_catalog::table::TableProvider>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl core::marker::Freeze for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl core::marker::Send for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl core::marker::Sync for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl core::marker::Unpin for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl<T, U> core::convert::Into<U> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where U: core::convert::From<T>
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where U: core::convert::Into<T>
+pub type iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::Error = core::convert::Infallible
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where U: core::convert::TryFrom<T>
+pub type iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> as_any::AsAny for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: core::any::Any
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: 'static + ?core::marker::Sized
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: ?core::marker::Sized
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: ?core::marker::Sized
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub type iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::Init = T
+pub const iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::ALIGN: usize
+pub unsafe fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::drop(ptr: usize)
+pub unsafe fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: ?core::marker::Sized
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl<T> tracing::instrument::WithSubscriber for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl<T> typenum::type_operators::Same for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub type iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::Output = T
+impl<U> bnum::cast::As for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::vzip(self) -> V
+pub struct iceberg_datafusion::table::IcebergStaticTableProvider
+impl iceberg_datafusion::IcebergStaticTableProvider
+pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_from_table(table: iceberg::table::Table) -> iceberg::error::Result<Self>
+pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_from_table_snapshot(table: iceberg::table::Table, snapshot_id: i64) -> iceberg::error::Result<Self>
+impl core::clone::Clone for iceberg_datafusion::IcebergStaticTableProvider
+pub fn iceberg_datafusion::IcebergStaticTableProvider::clone(&self) -> iceberg_datafusion::IcebergStaticTableProvider
+impl core::fmt::Debug for iceberg_datafusion::IcebergStaticTableProvider
+pub fn iceberg_datafusion::IcebergStaticTableProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl datafusion_catalog::table::TableProvider for iceberg_datafusion::IcebergStaticTableProvider
+pub fn iceberg_datafusion::IcebergStaticTableProvider::as_any(&self) -> &dyn core::any::Any
+pub fn iceberg_datafusion::IcebergStaticTableProvider::insert_into<'life0, 'life1, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, _input: alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>, _insert_op: datafusion_expr::logical_plan::dml::InsertOp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_datafusion::IcebergStaticTableProvider::scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, projection: core::option::Option<&'life2 alloc::vec::Vec<usize>>, filters: &'life3 [datafusion_expr::expr::Expr], limit: core::option::Option<usize>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn iceberg_datafusion::IcebergStaticTableProvider::schema(&self) -> arrow_schema::schema::SchemaRef
+pub fn iceberg_datafusion::IcebergStaticTableProvider::supports_filters_pushdown(&self, filters: &[&datafusion_expr::expr::Expr]) -> datafusion_common::error::Result<alloc::vec::Vec<datafusion_expr::table_source::TableProviderFilterPushDown>>
+pub fn iceberg_datafusion::IcebergStaticTableProvider::table_type(&self) -> datafusion_expr::table_source::TableType
+impl core::marker::Freeze for iceberg_datafusion::IcebergStaticTableProvider
+impl core::marker::Send for iceberg_datafusion::IcebergStaticTableProvider
+impl core::marker::Sync for iceberg_datafusion::IcebergStaticTableProvider
+impl core::marker::Unpin for iceberg_datafusion::IcebergStaticTableProvider
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_datafusion::IcebergStaticTableProvider
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_datafusion::IcebergStaticTableProvider
+impl<T, U> core::convert::Into<U> for iceberg_datafusion::IcebergStaticTableProvider where U: core::convert::From<T>
+pub fn iceberg_datafusion::IcebergStaticTableProvider::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_datafusion::IcebergStaticTableProvider where U: core::convert::Into<T>
+pub type iceberg_datafusion::IcebergStaticTableProvider::Error = core::convert::Infallible
+pub fn iceberg_datafusion::IcebergStaticTableProvider::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_datafusion::IcebergStaticTableProvider where U: core::convert::TryFrom<T>
+pub type iceberg_datafusion::IcebergStaticTableProvider::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_datafusion::IcebergStaticTableProvider::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_datafusion::IcebergStaticTableProvider where T: core::clone::Clone
+pub type iceberg_datafusion::IcebergStaticTableProvider::Owned = T
+pub fn iceberg_datafusion::IcebergStaticTableProvider::clone_into(&self, target: &mut T)
+pub fn iceberg_datafusion::IcebergStaticTableProvider::to_owned(&self) -> T
+impl<T> as_any::AsAny for iceberg_datafusion::IcebergStaticTableProvider where T: core::any::Any
+pub fn iceberg_datafusion::IcebergStaticTableProvider::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::IcebergStaticTableProvider::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::IcebergStaticTableProvider::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_datafusion::IcebergStaticTableProvider where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_datafusion::IcebergStaticTableProvider where T: 'static + ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergStaticTableProvider::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_datafusion::IcebergStaticTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergStaticTableProvider::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_datafusion::IcebergStaticTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergStaticTableProvider::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_datafusion::IcebergStaticTableProvider where T: core::clone::Clone
+pub unsafe fn iceberg_datafusion::IcebergStaticTableProvider::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_datafusion::IcebergStaticTableProvider
+pub fn iceberg_datafusion::IcebergStaticTableProvider::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_datafusion::IcebergStaticTableProvider
+pub type iceberg_datafusion::IcebergStaticTableProvider::Init = T
+pub const iceberg_datafusion::IcebergStaticTableProvider::ALIGN: usize
+pub unsafe fn iceberg_datafusion::IcebergStaticTableProvider::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_datafusion::IcebergStaticTableProvider::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_datafusion::IcebergStaticTableProvider::drop(ptr: usize)
+pub unsafe fn iceberg_datafusion::IcebergStaticTableProvider::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_datafusion::IcebergStaticTableProvider
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_datafusion::IcebergStaticTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergStaticTableProvider::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_datafusion::IcebergStaticTableProvider::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_datafusion::IcebergStaticTableProvider
+impl<T> tracing::instrument::WithSubscriber for iceberg_datafusion::IcebergStaticTableProvider
+impl<T> typenum::type_operators::Same for iceberg_datafusion::IcebergStaticTableProvider
+pub type iceberg_datafusion::IcebergStaticTableProvider::Output = T
+impl<U> bnum::cast::As for iceberg_datafusion::IcebergStaticTableProvider
+pub fn iceberg_datafusion::IcebergStaticTableProvider::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_datafusion::IcebergStaticTableProvider where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_datafusion::IcebergStaticTableProvider::vzip(self) -> V
+pub struct iceberg_datafusion::table::IcebergTableProvider
+impl core::clone::Clone for iceberg_datafusion::IcebergTableProvider
+pub fn iceberg_datafusion::IcebergTableProvider::clone(&self) -> iceberg_datafusion::IcebergTableProvider
+impl core::fmt::Debug for iceberg_datafusion::IcebergTableProvider
+pub fn iceberg_datafusion::IcebergTableProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl datafusion_catalog::table::TableProvider for iceberg_datafusion::IcebergTableProvider
+pub fn iceberg_datafusion::IcebergTableProvider::as_any(&self) -> &dyn core::any::Any
+pub fn iceberg_datafusion::IcebergTableProvider::insert_into<'life0, 'life1, 'async_trait>(&'life0 self, state: &'life1 dyn datafusion_session::session::Session, input: alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>, _insert_op: datafusion_expr::logical_plan::dml::InsertOp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_datafusion::IcebergTableProvider::scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, projection: core::option::Option<&'life2 alloc::vec::Vec<usize>>, filters: &'life3 [datafusion_expr::expr::Expr], limit: core::option::Option<usize>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn iceberg_datafusion::IcebergTableProvider::schema(&self) -> arrow_schema::schema::SchemaRef
+pub fn iceberg_datafusion::IcebergTableProvider::supports_filters_pushdown(&self, filters: &[&datafusion_expr::expr::Expr]) -> datafusion_common::error::Result<alloc::vec::Vec<datafusion_expr::table_source::TableProviderFilterPushDown>>
+pub fn iceberg_datafusion::IcebergTableProvider::table_type(&self) -> datafusion_expr::table_source::TableType
+impl core::marker::Freeze for iceberg_datafusion::IcebergTableProvider
+impl core::marker::Send for iceberg_datafusion::IcebergTableProvider
+impl core::marker::Sync for iceberg_datafusion::IcebergTableProvider
+impl core::marker::Unpin for iceberg_datafusion::IcebergTableProvider
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_datafusion::IcebergTableProvider
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_datafusion::IcebergTableProvider
+impl<T, U> core::convert::Into<U> for iceberg_datafusion::IcebergTableProvider where U: core::convert::From<T>
+pub fn iceberg_datafusion::IcebergTableProvider::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_datafusion::IcebergTableProvider where U: core::convert::Into<T>
+pub type iceberg_datafusion::IcebergTableProvider::Error = core::convert::Infallible
+pub fn iceberg_datafusion::IcebergTableProvider::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_datafusion::IcebergTableProvider where U: core::convert::TryFrom<T>
+pub type iceberg_datafusion::IcebergTableProvider::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_datafusion::IcebergTableProvider::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_datafusion::IcebergTableProvider where T: core::clone::Clone
+pub type iceberg_datafusion::IcebergTableProvider::Owned = T
+pub fn iceberg_datafusion::IcebergTableProvider::clone_into(&self, target: &mut T)
+pub fn iceberg_datafusion::IcebergTableProvider::to_owned(&self) -> T
+impl<T> as_any::AsAny for iceberg_datafusion::IcebergTableProvider where T: core::any::Any
+pub fn iceberg_datafusion::IcebergTableProvider::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::IcebergTableProvider::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::IcebergTableProvider::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_datafusion::IcebergTableProvider where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_datafusion::IcebergTableProvider where T: 'static + ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergTableProvider::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_datafusion::IcebergTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergTableProvider::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_datafusion::IcebergTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergTableProvider::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_datafusion::IcebergTableProvider where T: core::clone::Clone
+pub unsafe fn iceberg_datafusion::IcebergTableProvider::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_datafusion::IcebergTableProvider
+pub fn iceberg_datafusion::IcebergTableProvider::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_datafusion::IcebergTableProvider
+pub type iceberg_datafusion::IcebergTableProvider::Init = T
+pub const iceberg_datafusion::IcebergTableProvider::ALIGN: usize
+pub unsafe fn iceberg_datafusion::IcebergTableProvider::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_datafusion::IcebergTableProvider::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_datafusion::IcebergTableProvider::drop(ptr: usize)
+pub unsafe fn iceberg_datafusion::IcebergTableProvider::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_datafusion::IcebergTableProvider
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_datafusion::IcebergTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergTableProvider::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_datafusion::IcebergTableProvider::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_datafusion::IcebergTableProvider
+impl<T> tracing::instrument::WithSubscriber for iceberg_datafusion::IcebergTableProvider
+impl<T> typenum::type_operators::Same for iceberg_datafusion::IcebergTableProvider
+pub type iceberg_datafusion::IcebergTableProvider::Output = T
+impl<U> bnum::cast::As for iceberg_datafusion::IcebergTableProvider
+pub fn iceberg_datafusion::IcebergTableProvider::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_datafusion::IcebergTableProvider where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_datafusion::IcebergTableProvider::vzip(self) -> V
+pub mod iceberg_datafusion::table_provider_factory
+pub struct iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::new() -> Self
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::new_with_storage_factory(storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> Self
+impl core::default::Default for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::default() -> iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl core::fmt::Debug for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl datafusion_catalog::table::TableProviderFactory for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::create<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, cmd: &'life2 datafusion_expr::logical_plan::ddl::CreateExternalTable) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_catalog::table::TableProvider>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl core::marker::Freeze for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl core::marker::Send for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl core::marker::Sync for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl core::marker::Unpin for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl<T, U> core::convert::Into<U> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where U: core::convert::From<T>
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where U: core::convert::Into<T>
+pub type iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::Error = core::convert::Infallible
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where U: core::convert::TryFrom<T>
+pub type iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> as_any::AsAny for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: core::any::Any
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: 'static + ?core::marker::Sized
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: ?core::marker::Sized
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: ?core::marker::Sized
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub type iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::Init = T
+pub const iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::ALIGN: usize
+pub unsafe fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::drop(ptr: usize)
+pub unsafe fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: ?core::marker::Sized
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl<T> tracing::instrument::WithSubscriber for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl<T> typenum::type_operators::Same for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub type iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::Output = T
+impl<U> bnum::cast::As for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::vzip(self) -> V
+pub struct iceberg_datafusion::IcebergCatalogProvider
+impl iceberg_datafusion::IcebergCatalogProvider
+pub async fn iceberg_datafusion::IcebergCatalogProvider::try_new(client: alloc::sync::Arc<dyn iceberg::catalog::Catalog>) -> iceberg::error::Result<Self>
+impl core::fmt::Debug for iceberg_datafusion::IcebergCatalogProvider
+pub fn iceberg_datafusion::IcebergCatalogProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl datafusion_catalog::catalog::CatalogProvider for iceberg_datafusion::IcebergCatalogProvider
+pub fn iceberg_datafusion::IcebergCatalogProvider::as_any(&self) -> &dyn core::any::Any
+pub fn iceberg_datafusion::IcebergCatalogProvider::schema(&self, name: &str) -> core::option::Option<alloc::sync::Arc<dyn datafusion_catalog::schema::SchemaProvider>>
+pub fn iceberg_datafusion::IcebergCatalogProvider::schema_names(&self) -> alloc::vec::Vec<alloc::string::String>
+impl core::marker::Freeze for iceberg_datafusion::IcebergCatalogProvider
+impl core::marker::Send for iceberg_datafusion::IcebergCatalogProvider
+impl core::marker::Sync for iceberg_datafusion::IcebergCatalogProvider
+impl core::marker::Unpin for iceberg_datafusion::IcebergCatalogProvider
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_datafusion::IcebergCatalogProvider
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_datafusion::IcebergCatalogProvider
+impl<T, U> core::convert::Into<U> for iceberg_datafusion::IcebergCatalogProvider where U: core::convert::From<T>
+pub fn iceberg_datafusion::IcebergCatalogProvider::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_datafusion::IcebergCatalogProvider where U: core::convert::Into<T>
+pub type iceberg_datafusion::IcebergCatalogProvider::Error = core::convert::Infallible
+pub fn iceberg_datafusion::IcebergCatalogProvider::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_datafusion::IcebergCatalogProvider where U: core::convert::TryFrom<T>
+pub type iceberg_datafusion::IcebergCatalogProvider::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_datafusion::IcebergCatalogProvider::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> as_any::AsAny for iceberg_datafusion::IcebergCatalogProvider where T: core::any::Any
+pub fn iceberg_datafusion::IcebergCatalogProvider::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::IcebergCatalogProvider::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::IcebergCatalogProvider::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_datafusion::IcebergCatalogProvider where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_datafusion::IcebergCatalogProvider where T: 'static + ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergCatalogProvider::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_datafusion::IcebergCatalogProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergCatalogProvider::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_datafusion::IcebergCatalogProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergCatalogProvider::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for iceberg_datafusion::IcebergCatalogProvider
+pub fn iceberg_datafusion::IcebergCatalogProvider::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_datafusion::IcebergCatalogProvider
+pub type iceberg_datafusion::IcebergCatalogProvider::Init = T
+pub const iceberg_datafusion::IcebergCatalogProvider::ALIGN: usize
+pub unsafe fn iceberg_datafusion::IcebergCatalogProvider::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_datafusion::IcebergCatalogProvider::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_datafusion::IcebergCatalogProvider::drop(ptr: usize)
+pub unsafe fn iceberg_datafusion::IcebergCatalogProvider::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_datafusion::IcebergCatalogProvider
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_datafusion::IcebergCatalogProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergCatalogProvider::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_datafusion::IcebergCatalogProvider::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_datafusion::IcebergCatalogProvider
+impl<T> tracing::instrument::WithSubscriber for iceberg_datafusion::IcebergCatalogProvider
+impl<T> typenum::type_operators::Same for iceberg_datafusion::IcebergCatalogProvider
+pub type iceberg_datafusion::IcebergCatalogProvider::Output = T
+impl<U> bnum::cast::As for iceberg_datafusion::IcebergCatalogProvider
+pub fn iceberg_datafusion::IcebergCatalogProvider::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_datafusion::IcebergCatalogProvider where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_datafusion::IcebergCatalogProvider::vzip(self) -> V
+pub struct iceberg_datafusion::IcebergStaticTableProvider
+impl iceberg_datafusion::IcebergStaticTableProvider
+pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_from_table(table: iceberg::table::Table) -> iceberg::error::Result<Self>
+pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_from_table_snapshot(table: iceberg::table::Table, snapshot_id: i64) -> iceberg::error::Result<Self>
+impl core::clone::Clone for iceberg_datafusion::IcebergStaticTableProvider
+pub fn iceberg_datafusion::IcebergStaticTableProvider::clone(&self) -> iceberg_datafusion::IcebergStaticTableProvider
+impl core::fmt::Debug for iceberg_datafusion::IcebergStaticTableProvider
+pub fn iceberg_datafusion::IcebergStaticTableProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl datafusion_catalog::table::TableProvider for iceberg_datafusion::IcebergStaticTableProvider
+pub fn iceberg_datafusion::IcebergStaticTableProvider::as_any(&self) -> &dyn core::any::Any
+pub fn iceberg_datafusion::IcebergStaticTableProvider::insert_into<'life0, 'life1, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, _input: alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>, _insert_op: datafusion_expr::logical_plan::dml::InsertOp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_datafusion::IcebergStaticTableProvider::scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, projection: core::option::Option<&'life2 alloc::vec::Vec<usize>>, filters: &'life3 [datafusion_expr::expr::Expr], limit: core::option::Option<usize>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn iceberg_datafusion::IcebergStaticTableProvider::schema(&self) -> arrow_schema::schema::SchemaRef
+pub fn iceberg_datafusion::IcebergStaticTableProvider::supports_filters_pushdown(&self, filters: &[&datafusion_expr::expr::Expr]) -> datafusion_common::error::Result<alloc::vec::Vec<datafusion_expr::table_source::TableProviderFilterPushDown>>
+pub fn iceberg_datafusion::IcebergStaticTableProvider::table_type(&self) -> datafusion_expr::table_source::TableType
+impl core::marker::Freeze for iceberg_datafusion::IcebergStaticTableProvider
+impl core::marker::Send for iceberg_datafusion::IcebergStaticTableProvider
+impl core::marker::Sync for iceberg_datafusion::IcebergStaticTableProvider
+impl core::marker::Unpin for iceberg_datafusion::IcebergStaticTableProvider
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_datafusion::IcebergStaticTableProvider
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_datafusion::IcebergStaticTableProvider
+impl<T, U> core::convert::Into<U> for iceberg_datafusion::IcebergStaticTableProvider where U: core::convert::From<T>
+pub fn iceberg_datafusion::IcebergStaticTableProvider::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_datafusion::IcebergStaticTableProvider where U: core::convert::Into<T>
+pub type iceberg_datafusion::IcebergStaticTableProvider::Error = core::convert::Infallible
+pub fn iceberg_datafusion::IcebergStaticTableProvider::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_datafusion::IcebergStaticTableProvider where U: core::convert::TryFrom<T>
+pub type iceberg_datafusion::IcebergStaticTableProvider::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_datafusion::IcebergStaticTableProvider::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_datafusion::IcebergStaticTableProvider where T: core::clone::Clone
+pub type iceberg_datafusion::IcebergStaticTableProvider::Owned = T
+pub fn iceberg_datafusion::IcebergStaticTableProvider::clone_into(&self, target: &mut T)
+pub fn iceberg_datafusion::IcebergStaticTableProvider::to_owned(&self) -> T
+impl<T> as_any::AsAny for iceberg_datafusion::IcebergStaticTableProvider where T: core::any::Any
+pub fn iceberg_datafusion::IcebergStaticTableProvider::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::IcebergStaticTableProvider::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::IcebergStaticTableProvider::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_datafusion::IcebergStaticTableProvider where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_datafusion::IcebergStaticTableProvider where T: 'static + ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergStaticTableProvider::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_datafusion::IcebergStaticTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergStaticTableProvider::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_datafusion::IcebergStaticTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergStaticTableProvider::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_datafusion::IcebergStaticTableProvider where T: core::clone::Clone
+pub unsafe fn iceberg_datafusion::IcebergStaticTableProvider::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_datafusion::IcebergStaticTableProvider
+pub fn iceberg_datafusion::IcebergStaticTableProvider::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_datafusion::IcebergStaticTableProvider
+pub type iceberg_datafusion::IcebergStaticTableProvider::Init = T
+pub const iceberg_datafusion::IcebergStaticTableProvider::ALIGN: usize
+pub unsafe fn iceberg_datafusion::IcebergStaticTableProvider::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_datafusion::IcebergStaticTableProvider::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_datafusion::IcebergStaticTableProvider::drop(ptr: usize)
+pub unsafe fn iceberg_datafusion::IcebergStaticTableProvider::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_datafusion::IcebergStaticTableProvider
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_datafusion::IcebergStaticTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergStaticTableProvider::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_datafusion::IcebergStaticTableProvider::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_datafusion::IcebergStaticTableProvider
+impl<T> tracing::instrument::WithSubscriber for iceberg_datafusion::IcebergStaticTableProvider
+impl<T> typenum::type_operators::Same for iceberg_datafusion::IcebergStaticTableProvider
+pub type iceberg_datafusion::IcebergStaticTableProvider::Output = T
+impl<U> bnum::cast::As for iceberg_datafusion::IcebergStaticTableProvider
+pub fn iceberg_datafusion::IcebergStaticTableProvider::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_datafusion::IcebergStaticTableProvider where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_datafusion::IcebergStaticTableProvider::vzip(self) -> V
+pub struct iceberg_datafusion::IcebergTableProvider
+impl core::clone::Clone for iceberg_datafusion::IcebergTableProvider
+pub fn iceberg_datafusion::IcebergTableProvider::clone(&self) -> iceberg_datafusion::IcebergTableProvider
+impl core::fmt::Debug for iceberg_datafusion::IcebergTableProvider
+pub fn iceberg_datafusion::IcebergTableProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl datafusion_catalog::table::TableProvider for iceberg_datafusion::IcebergTableProvider
+pub fn iceberg_datafusion::IcebergTableProvider::as_any(&self) -> &dyn core::any::Any
+pub fn iceberg_datafusion::IcebergTableProvider::insert_into<'life0, 'life1, 'async_trait>(&'life0 self, state: &'life1 dyn datafusion_session::session::Session, input: alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>, _insert_op: datafusion_expr::logical_plan::dml::InsertOp) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_datafusion::IcebergTableProvider::scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, projection: core::option::Option<&'life2 alloc::vec::Vec<usize>>, filters: &'life3 [datafusion_expr::expr::Expr], limit: core::option::Option<usize>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
+pub fn iceberg_datafusion::IcebergTableProvider::schema(&self) -> arrow_schema::schema::SchemaRef
+pub fn iceberg_datafusion::IcebergTableProvider::supports_filters_pushdown(&self, filters: &[&datafusion_expr::expr::Expr]) -> datafusion_common::error::Result<alloc::vec::Vec<datafusion_expr::table_source::TableProviderFilterPushDown>>
+pub fn iceberg_datafusion::IcebergTableProvider::table_type(&self) -> datafusion_expr::table_source::TableType
+impl core::marker::Freeze for iceberg_datafusion::IcebergTableProvider
+impl core::marker::Send for iceberg_datafusion::IcebergTableProvider
+impl core::marker::Sync for iceberg_datafusion::IcebergTableProvider
+impl core::marker::Unpin for iceberg_datafusion::IcebergTableProvider
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_datafusion::IcebergTableProvider
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_datafusion::IcebergTableProvider
+impl<T, U> core::convert::Into<U> for iceberg_datafusion::IcebergTableProvider where U: core::convert::From<T>
+pub fn iceberg_datafusion::IcebergTableProvider::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_datafusion::IcebergTableProvider where U: core::convert::Into<T>
+pub type iceberg_datafusion::IcebergTableProvider::Error = core::convert::Infallible
+pub fn iceberg_datafusion::IcebergTableProvider::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_datafusion::IcebergTableProvider where U: core::convert::TryFrom<T>
+pub type iceberg_datafusion::IcebergTableProvider::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_datafusion::IcebergTableProvider::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_datafusion::IcebergTableProvider where T: core::clone::Clone
+pub type iceberg_datafusion::IcebergTableProvider::Owned = T
+pub fn iceberg_datafusion::IcebergTableProvider::clone_into(&self, target: &mut T)
+pub fn iceberg_datafusion::IcebergTableProvider::to_owned(&self) -> T
+impl<T> as_any::AsAny for iceberg_datafusion::IcebergTableProvider where T: core::any::Any
+pub fn iceberg_datafusion::IcebergTableProvider::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::IcebergTableProvider::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::IcebergTableProvider::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_datafusion::IcebergTableProvider where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_datafusion::IcebergTableProvider where T: 'static + ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergTableProvider::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_datafusion::IcebergTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergTableProvider::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_datafusion::IcebergTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergTableProvider::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_datafusion::IcebergTableProvider where T: core::clone::Clone
+pub unsafe fn iceberg_datafusion::IcebergTableProvider::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_datafusion::IcebergTableProvider
+pub fn iceberg_datafusion::IcebergTableProvider::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_datafusion::IcebergTableProvider
+pub type iceberg_datafusion::IcebergTableProvider::Init = T
+pub const iceberg_datafusion::IcebergTableProvider::ALIGN: usize
+pub unsafe fn iceberg_datafusion::IcebergTableProvider::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_datafusion::IcebergTableProvider::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_datafusion::IcebergTableProvider::drop(ptr: usize)
+pub unsafe fn iceberg_datafusion::IcebergTableProvider::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_datafusion::IcebergTableProvider
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_datafusion::IcebergTableProvider where T: ?core::marker::Sized
+pub fn iceberg_datafusion::IcebergTableProvider::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_datafusion::IcebergTableProvider::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_datafusion::IcebergTableProvider
+impl<T> tracing::instrument::WithSubscriber for iceberg_datafusion::IcebergTableProvider
+impl<T> typenum::type_operators::Same for iceberg_datafusion::IcebergTableProvider
+pub type iceberg_datafusion::IcebergTableProvider::Output = T
+impl<U> bnum::cast::As for iceberg_datafusion::IcebergTableProvider
+pub fn iceberg_datafusion::IcebergTableProvider::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_datafusion::IcebergTableProvider where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_datafusion::IcebergTableProvider::vzip(self) -> V
+pub struct iceberg_datafusion::IcebergTableProviderFactory
+impl iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::new() -> Self
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::new_with_storage_factory(storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> Self
+impl core::default::Default for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::default() -> iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl core::fmt::Debug for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl datafusion_catalog::table::TableProviderFactory for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::create<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, cmd: &'life2 datafusion_expr::logical_plan::ddl::CreateExternalTable) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_catalog::table::TableProvider>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl core::marker::Freeze for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl core::marker::Send for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl core::marker::Sync for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl core::marker::Unpin for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl<T, U> core::convert::Into<U> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where U: core::convert::From<T>
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where U: core::convert::Into<T>
+pub type iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::Error = core::convert::Infallible
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where U: core::convert::TryFrom<T>
+pub type iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> as_any::AsAny for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: core::any::Any
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: 'static + ?core::marker::Sized
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: ?core::marker::Sized
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: ?core::marker::Sized
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub type iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::Init = T
+pub const iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::ALIGN: usize
+pub unsafe fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::drop(ptr: usize)
+pub unsafe fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where T: ?core::marker::Sized
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl<T> tracing::instrument::WithSubscriber for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+impl<T> typenum::type_operators::Same for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub type iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::Output = T
+impl<U> bnum::cast::As for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::vzip(self) -> V
+pub fn iceberg_datafusion::from_datafusion_error(error: datafusion_common::error::DataFusionError) -> iceberg::error::Error
+pub fn iceberg_datafusion::to_datafusion_error(error: iceberg::error::Error) -> datafusion_common::error::DataFusionError

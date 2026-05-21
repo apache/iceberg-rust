@@ -1,0 +1,1275 @@
+pub mod iceberg_catalog_rest
+pub struct iceberg_catalog_rest::CommitTableRequest
+pub iceberg_catalog_rest::CommitTableRequest::identifier: core::option::Option<iceberg::catalog::TableIdent>
+pub iceberg_catalog_rest::CommitTableRequest::requirements: alloc::vec::Vec<iceberg::catalog::TableRequirement>
+pub iceberg_catalog_rest::CommitTableRequest::updates: alloc::vec::Vec<iceberg::catalog::TableUpdate>
+impl core::clone::Clone for iceberg_catalog_rest::CommitTableRequest
+pub fn iceberg_catalog_rest::CommitTableRequest::clone(&self) -> iceberg_catalog_rest::CommitTableRequest
+impl core::cmp::PartialEq for iceberg_catalog_rest::CommitTableRequest
+pub fn iceberg_catalog_rest::CommitTableRequest::eq(&self, other: &iceberg_catalog_rest::CommitTableRequest) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::CommitTableRequest
+pub fn iceberg_catalog_rest::CommitTableRequest::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::CommitTableRequest
+impl serde_core::ser::Serialize for iceberg_catalog_rest::CommitTableRequest
+pub fn iceberg_catalog_rest::CommitTableRequest::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::CommitTableRequest
+pub fn iceberg_catalog_rest::CommitTableRequest::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for iceberg_catalog_rest::CommitTableRequest
+impl core::marker::Send for iceberg_catalog_rest::CommitTableRequest
+impl core::marker::Sync for iceberg_catalog_rest::CommitTableRequest
+impl core::marker::Unpin for iceberg_catalog_rest::CommitTableRequest
+impl core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_rest::CommitTableRequest
+impl core::panic::unwind_safe::UnwindSafe for iceberg_catalog_rest::CommitTableRequest
+impl<T, U> core::convert::Into<U> for iceberg_catalog_rest::CommitTableRequest where U: core::convert::From<T>
+pub fn iceberg_catalog_rest::CommitTableRequest::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_rest::CommitTableRequest where U: core::convert::Into<T>
+pub type iceberg_catalog_rest::CommitTableRequest::Error = core::convert::Infallible
+pub fn iceberg_catalog_rest::CommitTableRequest::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_rest::CommitTableRequest where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_rest::CommitTableRequest::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_rest::CommitTableRequest::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_catalog_rest::CommitTableRequest where T: core::clone::Clone
+pub type iceberg_catalog_rest::CommitTableRequest::Owned = T
+pub fn iceberg_catalog_rest::CommitTableRequest::clone_into(&self, target: &mut T)
+pub fn iceberg_catalog_rest::CommitTableRequest::to_owned(&self) -> T
+impl<T> arrow_buffer::alloc::Allocation for iceberg_catalog_rest::CommitTableRequest where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> as_any::AsAny for iceberg_catalog_rest::CommitTableRequest where T: core::any::Any
+pub fn iceberg_catalog_rest::CommitTableRequest::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::CommitTableRequest::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::CommitTableRequest::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_rest::CommitTableRequest where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_rest::CommitTableRequest where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_rest::CommitTableRequest::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_rest::CommitTableRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::CommitTableRequest::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_rest::CommitTableRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::CommitTableRequest::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_catalog_rest::CommitTableRequest where T: core::clone::Clone
+pub unsafe fn iceberg_catalog_rest::CommitTableRequest::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_catalog_rest::CommitTableRequest
+pub fn iceberg_catalog_rest::CommitTableRequest::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_rest::CommitTableRequest
+pub type iceberg_catalog_rest::CommitTableRequest::Init = T
+pub const iceberg_catalog_rest::CommitTableRequest::ALIGN: usize
+pub unsafe fn iceberg_catalog_rest::CommitTableRequest::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_rest::CommitTableRequest::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_rest::CommitTableRequest::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_rest::CommitTableRequest::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_rest::CommitTableRequest
+impl<T> erased_serde::ser::Serialize for iceberg_catalog_rest::CommitTableRequest where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_catalog_rest::CommitTableRequest::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_catalog_rest::CommitTableRequest::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> serde_core::de::DeserializeOwned for iceberg_catalog_rest::CommitTableRequest where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_rest::CommitTableRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::CommitTableRequest::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_rest::CommitTableRequest::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_rest::CommitTableRequest
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_rest::CommitTableRequest
+impl<T> typenum::type_operators::Same for iceberg_catalog_rest::CommitTableRequest
+pub type iceberg_catalog_rest::CommitTableRequest::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_rest::CommitTableRequest
+pub fn iceberg_catalog_rest::CommitTableRequest::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_rest::CommitTableRequest where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_rest::CommitTableRequest::vzip(self) -> V
+pub struct iceberg_catalog_rest::CommitTableResponse
+pub iceberg_catalog_rest::CommitTableResponse::metadata: iceberg::spec::table_metadata::TableMetadata
+pub iceberg_catalog_rest::CommitTableResponse::metadata_location: alloc::string::String
+impl core::clone::Clone for iceberg_catalog_rest::CommitTableResponse
+pub fn iceberg_catalog_rest::CommitTableResponse::clone(&self) -> iceberg_catalog_rest::CommitTableResponse
+impl core::cmp::Eq for iceberg_catalog_rest::CommitTableResponse
+impl core::cmp::PartialEq for iceberg_catalog_rest::CommitTableResponse
+pub fn iceberg_catalog_rest::CommitTableResponse::eq(&self, other: &iceberg_catalog_rest::CommitTableResponse) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::CommitTableResponse
+pub fn iceberg_catalog_rest::CommitTableResponse::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::CommitTableResponse
+impl serde_core::ser::Serialize for iceberg_catalog_rest::CommitTableResponse
+pub fn iceberg_catalog_rest::CommitTableResponse::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::CommitTableResponse
+pub fn iceberg_catalog_rest::CommitTableResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl !core::marker::Freeze for iceberg_catalog_rest::CommitTableResponse
+impl core::marker::Send for iceberg_catalog_rest::CommitTableResponse
+impl core::marker::Sync for iceberg_catalog_rest::CommitTableResponse
+impl core::marker::Unpin for iceberg_catalog_rest::CommitTableResponse
+impl core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_rest::CommitTableResponse
+impl core::panic::unwind_safe::UnwindSafe for iceberg_catalog_rest::CommitTableResponse
+impl<Q, K> equivalent::Equivalent<K> for iceberg_catalog_rest::CommitTableResponse where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::CommitTableResponse::equivalent(&self, key: &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::CommitTableResponse where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::CommitTableResponse where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::CommitTableResponse::equivalent(&self, key: &K) -> bool
+pub fn iceberg_catalog_rest::CommitTableResponse::equivalent(&self, key: &K) -> bool
+impl<T, U> core::convert::Into<U> for iceberg_catalog_rest::CommitTableResponse where U: core::convert::From<T>
+pub fn iceberg_catalog_rest::CommitTableResponse::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_rest::CommitTableResponse where U: core::convert::Into<T>
+pub type iceberg_catalog_rest::CommitTableResponse::Error = core::convert::Infallible
+pub fn iceberg_catalog_rest::CommitTableResponse::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_rest::CommitTableResponse where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_rest::CommitTableResponse::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_rest::CommitTableResponse::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_catalog_rest::CommitTableResponse where T: core::clone::Clone
+pub type iceberg_catalog_rest::CommitTableResponse::Owned = T
+pub fn iceberg_catalog_rest::CommitTableResponse::clone_into(&self, target: &mut T)
+pub fn iceberg_catalog_rest::CommitTableResponse::to_owned(&self) -> T
+impl<T> arrow_buffer::alloc::Allocation for iceberg_catalog_rest::CommitTableResponse where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> as_any::AsAny for iceberg_catalog_rest::CommitTableResponse where T: core::any::Any
+pub fn iceberg_catalog_rest::CommitTableResponse::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::CommitTableResponse::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::CommitTableResponse::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_rest::CommitTableResponse where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_rest::CommitTableResponse where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_rest::CommitTableResponse::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_rest::CommitTableResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::CommitTableResponse::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_rest::CommitTableResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::CommitTableResponse::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_catalog_rest::CommitTableResponse where T: core::clone::Clone
+pub unsafe fn iceberg_catalog_rest::CommitTableResponse::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_catalog_rest::CommitTableResponse
+pub fn iceberg_catalog_rest::CommitTableResponse::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_rest::CommitTableResponse
+pub type iceberg_catalog_rest::CommitTableResponse::Init = T
+pub const iceberg_catalog_rest::CommitTableResponse::ALIGN: usize
+pub unsafe fn iceberg_catalog_rest::CommitTableResponse::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_rest::CommitTableResponse::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_rest::CommitTableResponse::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_rest::CommitTableResponse::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_rest::CommitTableResponse
+impl<T> erased_serde::ser::Serialize for iceberg_catalog_rest::CommitTableResponse where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_catalog_rest::CommitTableResponse::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_catalog_rest::CommitTableResponse::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> serde_core::de::DeserializeOwned for iceberg_catalog_rest::CommitTableResponse where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_rest::CommitTableResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::CommitTableResponse::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_rest::CommitTableResponse::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_rest::CommitTableResponse
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_rest::CommitTableResponse
+impl<T> typenum::type_operators::Same for iceberg_catalog_rest::CommitTableResponse
+pub type iceberg_catalog_rest::CommitTableResponse::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_rest::CommitTableResponse
+pub fn iceberg_catalog_rest::CommitTableResponse::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_rest::CommitTableResponse where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_rest::CommitTableResponse::vzip(self) -> V
+pub struct iceberg_catalog_rest::CreateNamespaceRequest
+pub iceberg_catalog_rest::CreateNamespaceRequest::namespace: iceberg::catalog::NamespaceIdent
+pub iceberg_catalog_rest::CreateNamespaceRequest::properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+impl core::clone::Clone for iceberg_catalog_rest::CreateNamespaceRequest
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::clone(&self) -> iceberg_catalog_rest::CreateNamespaceRequest
+impl core::cmp::Eq for iceberg_catalog_rest::CreateNamespaceRequest
+impl core::cmp::PartialEq for iceberg_catalog_rest::CreateNamespaceRequest
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::eq(&self, other: &iceberg_catalog_rest::CreateNamespaceRequest) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::CreateNamespaceRequest
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::CreateNamespaceRequest
+impl serde_core::ser::Serialize for iceberg_catalog_rest::CreateNamespaceRequest
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::CreateNamespaceRequest
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for iceberg_catalog_rest::CreateNamespaceRequest
+impl core::marker::Send for iceberg_catalog_rest::CreateNamespaceRequest
+impl core::marker::Sync for iceberg_catalog_rest::CreateNamespaceRequest
+impl core::marker::Unpin for iceberg_catalog_rest::CreateNamespaceRequest
+impl core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_rest::CreateNamespaceRequest
+impl core::panic::unwind_safe::UnwindSafe for iceberg_catalog_rest::CreateNamespaceRequest
+impl<Q, K> equivalent::Equivalent<K> for iceberg_catalog_rest::CreateNamespaceRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::equivalent(&self, key: &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::CreateNamespaceRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::CreateNamespaceRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::equivalent(&self, key: &K) -> bool
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::equivalent(&self, key: &K) -> bool
+impl<T, U> core::convert::Into<U> for iceberg_catalog_rest::CreateNamespaceRequest where U: core::convert::From<T>
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_rest::CreateNamespaceRequest where U: core::convert::Into<T>
+pub type iceberg_catalog_rest::CreateNamespaceRequest::Error = core::convert::Infallible
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_rest::CreateNamespaceRequest where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_rest::CreateNamespaceRequest::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_catalog_rest::CreateNamespaceRequest where T: core::clone::Clone
+pub type iceberg_catalog_rest::CreateNamespaceRequest::Owned = T
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::clone_into(&self, target: &mut T)
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::to_owned(&self) -> T
+impl<T> arrow_buffer::alloc::Allocation for iceberg_catalog_rest::CreateNamespaceRequest where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> as_any::AsAny for iceberg_catalog_rest::CreateNamespaceRequest where T: core::any::Any
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_rest::CreateNamespaceRequest where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_rest::CreateNamespaceRequest where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_rest::CreateNamespaceRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_rest::CreateNamespaceRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_catalog_rest::CreateNamespaceRequest where T: core::clone::Clone
+pub unsafe fn iceberg_catalog_rest::CreateNamespaceRequest::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_catalog_rest::CreateNamespaceRequest
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_rest::CreateNamespaceRequest
+pub type iceberg_catalog_rest::CreateNamespaceRequest::Init = T
+pub const iceberg_catalog_rest::CreateNamespaceRequest::ALIGN: usize
+pub unsafe fn iceberg_catalog_rest::CreateNamespaceRequest::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_rest::CreateNamespaceRequest::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_rest::CreateNamespaceRequest::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_rest::CreateNamespaceRequest::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_rest::CreateNamespaceRequest
+impl<T> erased_serde::ser::Serialize for iceberg_catalog_rest::CreateNamespaceRequest where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> serde_core::de::DeserializeOwned for iceberg_catalog_rest::CreateNamespaceRequest where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_rest::CreateNamespaceRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_rest::CreateNamespaceRequest
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_rest::CreateNamespaceRequest
+impl<T> typenum::type_operators::Same for iceberg_catalog_rest::CreateNamespaceRequest
+pub type iceberg_catalog_rest::CreateNamespaceRequest::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_rest::CreateNamespaceRequest
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_rest::CreateNamespaceRequest where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::vzip(self) -> V
+pub struct iceberg_catalog_rest::CreateTableRequest
+pub iceberg_catalog_rest::CreateTableRequest::location: core::option::Option<alloc::string::String>
+pub iceberg_catalog_rest::CreateTableRequest::name: alloc::string::String
+pub iceberg_catalog_rest::CreateTableRequest::partition_spec: core::option::Option<iceberg::spec::partition::UnboundPartitionSpec>
+pub iceberg_catalog_rest::CreateTableRequest::properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub iceberg_catalog_rest::CreateTableRequest::schema: iceberg::spec::schema::Schema
+pub iceberg_catalog_rest::CreateTableRequest::stage_create: core::option::Option<bool>
+pub iceberg_catalog_rest::CreateTableRequest::write_order: core::option::Option<iceberg::spec::sort::SortOrder>
+impl core::clone::Clone for iceberg_catalog_rest::CreateTableRequest
+pub fn iceberg_catalog_rest::CreateTableRequest::clone(&self) -> iceberg_catalog_rest::CreateTableRequest
+impl core::cmp::Eq for iceberg_catalog_rest::CreateTableRequest
+impl core::cmp::PartialEq for iceberg_catalog_rest::CreateTableRequest
+pub fn iceberg_catalog_rest::CreateTableRequest::eq(&self, other: &iceberg_catalog_rest::CreateTableRequest) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::CreateTableRequest
+pub fn iceberg_catalog_rest::CreateTableRequest::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::CreateTableRequest
+impl serde_core::ser::Serialize for iceberg_catalog_rest::CreateTableRequest
+pub fn iceberg_catalog_rest::CreateTableRequest::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::CreateTableRequest
+pub fn iceberg_catalog_rest::CreateTableRequest::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl !core::marker::Freeze for iceberg_catalog_rest::CreateTableRequest
+impl core::marker::Send for iceberg_catalog_rest::CreateTableRequest
+impl core::marker::Sync for iceberg_catalog_rest::CreateTableRequest
+impl core::marker::Unpin for iceberg_catalog_rest::CreateTableRequest
+impl core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_rest::CreateTableRequest
+impl core::panic::unwind_safe::UnwindSafe for iceberg_catalog_rest::CreateTableRequest
+impl<Q, K> equivalent::Equivalent<K> for iceberg_catalog_rest::CreateTableRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::CreateTableRequest::equivalent(&self, key: &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::CreateTableRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::CreateTableRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::CreateTableRequest::equivalent(&self, key: &K) -> bool
+pub fn iceberg_catalog_rest::CreateTableRequest::equivalent(&self, key: &K) -> bool
+impl<T, U> core::convert::Into<U> for iceberg_catalog_rest::CreateTableRequest where U: core::convert::From<T>
+pub fn iceberg_catalog_rest::CreateTableRequest::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_rest::CreateTableRequest where U: core::convert::Into<T>
+pub type iceberg_catalog_rest::CreateTableRequest::Error = core::convert::Infallible
+pub fn iceberg_catalog_rest::CreateTableRequest::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_rest::CreateTableRequest where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_rest::CreateTableRequest::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_rest::CreateTableRequest::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_catalog_rest::CreateTableRequest where T: core::clone::Clone
+pub type iceberg_catalog_rest::CreateTableRequest::Owned = T
+pub fn iceberg_catalog_rest::CreateTableRequest::clone_into(&self, target: &mut T)
+pub fn iceberg_catalog_rest::CreateTableRequest::to_owned(&self) -> T
+impl<T> arrow_buffer::alloc::Allocation for iceberg_catalog_rest::CreateTableRequest where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> as_any::AsAny for iceberg_catalog_rest::CreateTableRequest where T: core::any::Any
+pub fn iceberg_catalog_rest::CreateTableRequest::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::CreateTableRequest::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::CreateTableRequest::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_rest::CreateTableRequest where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_rest::CreateTableRequest where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_rest::CreateTableRequest::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_rest::CreateTableRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::CreateTableRequest::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_rest::CreateTableRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::CreateTableRequest::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_catalog_rest::CreateTableRequest where T: core::clone::Clone
+pub unsafe fn iceberg_catalog_rest::CreateTableRequest::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_catalog_rest::CreateTableRequest
+pub fn iceberg_catalog_rest::CreateTableRequest::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_rest::CreateTableRequest
+pub type iceberg_catalog_rest::CreateTableRequest::Init = T
+pub const iceberg_catalog_rest::CreateTableRequest::ALIGN: usize
+pub unsafe fn iceberg_catalog_rest::CreateTableRequest::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_rest::CreateTableRequest::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_rest::CreateTableRequest::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_rest::CreateTableRequest::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_rest::CreateTableRequest
+impl<T> erased_serde::ser::Serialize for iceberg_catalog_rest::CreateTableRequest where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_catalog_rest::CreateTableRequest::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_catalog_rest::CreateTableRequest::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> serde_core::de::DeserializeOwned for iceberg_catalog_rest::CreateTableRequest where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_rest::CreateTableRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::CreateTableRequest::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_rest::CreateTableRequest::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_rest::CreateTableRequest
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_rest::CreateTableRequest
+impl<T> typenum::type_operators::Same for iceberg_catalog_rest::CreateTableRequest
+pub type iceberg_catalog_rest::CreateTableRequest::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_rest::CreateTableRequest
+pub fn iceberg_catalog_rest::CreateTableRequest::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_rest::CreateTableRequest where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_rest::CreateTableRequest::vzip(self) -> V
+pub struct iceberg_catalog_rest::ErrorModel
+pub iceberg_catalog_rest::ErrorModel::code: u16
+pub iceberg_catalog_rest::ErrorModel::message: alloc::string::String
+pub iceberg_catalog_rest::ErrorModel::stack: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub iceberg_catalog_rest::ErrorModel::type: alloc::string::String
+impl core::convert::From<iceberg_catalog_rest::ErrorModel> for iceberg::error::Error
+pub fn iceberg::error::Error::from(value: iceberg_catalog_rest::ErrorModel) -> Self
+impl core::fmt::Debug for iceberg_catalog_rest::ErrorModel
+pub fn iceberg_catalog_rest::ErrorModel::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for iceberg_catalog_rest::ErrorModel
+pub fn iceberg_catalog_rest::ErrorModel::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::ErrorModel
+pub fn iceberg_catalog_rest::ErrorModel::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for iceberg_catalog_rest::ErrorModel
+impl core::marker::Send for iceberg_catalog_rest::ErrorModel
+impl core::marker::Sync for iceberg_catalog_rest::ErrorModel
+impl core::marker::Unpin for iceberg_catalog_rest::ErrorModel
+impl core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_rest::ErrorModel
+impl core::panic::unwind_safe::UnwindSafe for iceberg_catalog_rest::ErrorModel
+impl<T, U> core::convert::Into<U> for iceberg_catalog_rest::ErrorModel where U: core::convert::From<T>
+pub fn iceberg_catalog_rest::ErrorModel::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_rest::ErrorModel where U: core::convert::Into<T>
+pub type iceberg_catalog_rest::ErrorModel::Error = core::convert::Infallible
+pub fn iceberg_catalog_rest::ErrorModel::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_rest::ErrorModel where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_rest::ErrorModel::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_rest::ErrorModel::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> arrow_buffer::alloc::Allocation for iceberg_catalog_rest::ErrorModel where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> as_any::AsAny for iceberg_catalog_rest::ErrorModel where T: core::any::Any
+pub fn iceberg_catalog_rest::ErrorModel::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::ErrorModel::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::ErrorModel::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_rest::ErrorModel where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_rest::ErrorModel where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_rest::ErrorModel::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_rest::ErrorModel where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::ErrorModel::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_rest::ErrorModel where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::ErrorModel::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for iceberg_catalog_rest::ErrorModel
+pub fn iceberg_catalog_rest::ErrorModel::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_rest::ErrorModel
+pub type iceberg_catalog_rest::ErrorModel::Init = T
+pub const iceberg_catalog_rest::ErrorModel::ALIGN: usize
+pub unsafe fn iceberg_catalog_rest::ErrorModel::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_rest::ErrorModel::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_rest::ErrorModel::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_rest::ErrorModel::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_rest::ErrorModel
+impl<T> erased_serde::ser::Serialize for iceberg_catalog_rest::ErrorModel where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_catalog_rest::ErrorModel::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_catalog_rest::ErrorModel::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> serde_core::de::DeserializeOwned for iceberg_catalog_rest::ErrorModel where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_rest::ErrorModel where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::ErrorModel::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_rest::ErrorModel::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_rest::ErrorModel
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_rest::ErrorModel
+impl<T> typenum::type_operators::Same for iceberg_catalog_rest::ErrorModel
+pub type iceberg_catalog_rest::ErrorModel::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_rest::ErrorModel
+pub fn iceberg_catalog_rest::ErrorModel::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_rest::ErrorModel where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_rest::ErrorModel::vzip(self) -> V
+pub struct iceberg_catalog_rest::ErrorResponse
+impl core::convert::From<iceberg_catalog_rest::ErrorResponse> for iceberg::error::Error
+pub fn iceberg::error::Error::from(resp: iceberg_catalog_rest::ErrorResponse) -> iceberg::error::Error
+impl core::fmt::Debug for iceberg_catalog_rest::ErrorResponse
+pub fn iceberg_catalog_rest::ErrorResponse::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for iceberg_catalog_rest::ErrorResponse
+pub fn iceberg_catalog_rest::ErrorResponse::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::ErrorResponse
+pub fn iceberg_catalog_rest::ErrorResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for iceberg_catalog_rest::ErrorResponse
+impl core::marker::Send for iceberg_catalog_rest::ErrorResponse
+impl core::marker::Sync for iceberg_catalog_rest::ErrorResponse
+impl core::marker::Unpin for iceberg_catalog_rest::ErrorResponse
+impl core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_rest::ErrorResponse
+impl core::panic::unwind_safe::UnwindSafe for iceberg_catalog_rest::ErrorResponse
+impl<T, U> core::convert::Into<U> for iceberg_catalog_rest::ErrorResponse where U: core::convert::From<T>
+pub fn iceberg_catalog_rest::ErrorResponse::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_rest::ErrorResponse where U: core::convert::Into<T>
+pub type iceberg_catalog_rest::ErrorResponse::Error = core::convert::Infallible
+pub fn iceberg_catalog_rest::ErrorResponse::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_rest::ErrorResponse where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_rest::ErrorResponse::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_rest::ErrorResponse::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> arrow_buffer::alloc::Allocation for iceberg_catalog_rest::ErrorResponse where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> as_any::AsAny for iceberg_catalog_rest::ErrorResponse where T: core::any::Any
+pub fn iceberg_catalog_rest::ErrorResponse::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::ErrorResponse::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::ErrorResponse::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_rest::ErrorResponse where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_rest::ErrorResponse where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_rest::ErrorResponse::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_rest::ErrorResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::ErrorResponse::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_rest::ErrorResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::ErrorResponse::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for iceberg_catalog_rest::ErrorResponse
+pub fn iceberg_catalog_rest::ErrorResponse::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_rest::ErrorResponse
+pub type iceberg_catalog_rest::ErrorResponse::Init = T
+pub const iceberg_catalog_rest::ErrorResponse::ALIGN: usize
+pub unsafe fn iceberg_catalog_rest::ErrorResponse::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_rest::ErrorResponse::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_rest::ErrorResponse::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_rest::ErrorResponse::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_rest::ErrorResponse
+impl<T> erased_serde::ser::Serialize for iceberg_catalog_rest::ErrorResponse where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_catalog_rest::ErrorResponse::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_catalog_rest::ErrorResponse::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> serde_core::de::DeserializeOwned for iceberg_catalog_rest::ErrorResponse where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_rest::ErrorResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::ErrorResponse::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_rest::ErrorResponse::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_rest::ErrorResponse
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_rest::ErrorResponse
+impl<T> typenum::type_operators::Same for iceberg_catalog_rest::ErrorResponse
+pub type iceberg_catalog_rest::ErrorResponse::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_rest::ErrorResponse
+pub fn iceberg_catalog_rest::ErrorResponse::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_rest::ErrorResponse where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_rest::ErrorResponse::vzip(self) -> V
+pub struct iceberg_catalog_rest::ListNamespaceResponse
+pub iceberg_catalog_rest::ListNamespaceResponse::namespaces: alloc::vec::Vec<iceberg::catalog::NamespaceIdent>
+pub iceberg_catalog_rest::ListNamespaceResponse::next_page_token: core::option::Option<alloc::string::String>
+impl core::clone::Clone for iceberg_catalog_rest::ListNamespaceResponse
+pub fn iceberg_catalog_rest::ListNamespaceResponse::clone(&self) -> iceberg_catalog_rest::ListNamespaceResponse
+impl core::cmp::Eq for iceberg_catalog_rest::ListNamespaceResponse
+impl core::cmp::PartialEq for iceberg_catalog_rest::ListNamespaceResponse
+pub fn iceberg_catalog_rest::ListNamespaceResponse::eq(&self, other: &iceberg_catalog_rest::ListNamespaceResponse) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::ListNamespaceResponse
+pub fn iceberg_catalog_rest::ListNamespaceResponse::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::ListNamespaceResponse
+impl serde_core::ser::Serialize for iceberg_catalog_rest::ListNamespaceResponse
+pub fn iceberg_catalog_rest::ListNamespaceResponse::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::ListNamespaceResponse
+pub fn iceberg_catalog_rest::ListNamespaceResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for iceberg_catalog_rest::ListNamespaceResponse
+impl core::marker::Send for iceberg_catalog_rest::ListNamespaceResponse
+impl core::marker::Sync for iceberg_catalog_rest::ListNamespaceResponse
+impl core::marker::Unpin for iceberg_catalog_rest::ListNamespaceResponse
+impl core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_rest::ListNamespaceResponse
+impl core::panic::unwind_safe::UnwindSafe for iceberg_catalog_rest::ListNamespaceResponse
+impl<Q, K> equivalent::Equivalent<K> for iceberg_catalog_rest::ListNamespaceResponse where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::ListNamespaceResponse::equivalent(&self, key: &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::ListNamespaceResponse where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::ListNamespaceResponse where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::ListNamespaceResponse::equivalent(&self, key: &K) -> bool
+pub fn iceberg_catalog_rest::ListNamespaceResponse::equivalent(&self, key: &K) -> bool
+impl<T, U> core::convert::Into<U> for iceberg_catalog_rest::ListNamespaceResponse where U: core::convert::From<T>
+pub fn iceberg_catalog_rest::ListNamespaceResponse::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_rest::ListNamespaceResponse where U: core::convert::Into<T>
+pub type iceberg_catalog_rest::ListNamespaceResponse::Error = core::convert::Infallible
+pub fn iceberg_catalog_rest::ListNamespaceResponse::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_rest::ListNamespaceResponse where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_rest::ListNamespaceResponse::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_rest::ListNamespaceResponse::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_catalog_rest::ListNamespaceResponse where T: core::clone::Clone
+pub type iceberg_catalog_rest::ListNamespaceResponse::Owned = T
+pub fn iceberg_catalog_rest::ListNamespaceResponse::clone_into(&self, target: &mut T)
+pub fn iceberg_catalog_rest::ListNamespaceResponse::to_owned(&self) -> T
+impl<T> arrow_buffer::alloc::Allocation for iceberg_catalog_rest::ListNamespaceResponse where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> as_any::AsAny for iceberg_catalog_rest::ListNamespaceResponse where T: core::any::Any
+pub fn iceberg_catalog_rest::ListNamespaceResponse::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::ListNamespaceResponse::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::ListNamespaceResponse::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_rest::ListNamespaceResponse where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_rest::ListNamespaceResponse where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_rest::ListNamespaceResponse::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_rest::ListNamespaceResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::ListNamespaceResponse::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_rest::ListNamespaceResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::ListNamespaceResponse::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_catalog_rest::ListNamespaceResponse where T: core::clone::Clone
+pub unsafe fn iceberg_catalog_rest::ListNamespaceResponse::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_catalog_rest::ListNamespaceResponse
+pub fn iceberg_catalog_rest::ListNamespaceResponse::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_rest::ListNamespaceResponse
+pub type iceberg_catalog_rest::ListNamespaceResponse::Init = T
+pub const iceberg_catalog_rest::ListNamespaceResponse::ALIGN: usize
+pub unsafe fn iceberg_catalog_rest::ListNamespaceResponse::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_rest::ListNamespaceResponse::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_rest::ListNamespaceResponse::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_rest::ListNamespaceResponse::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_rest::ListNamespaceResponse
+impl<T> erased_serde::ser::Serialize for iceberg_catalog_rest::ListNamespaceResponse where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_catalog_rest::ListNamespaceResponse::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_catalog_rest::ListNamespaceResponse::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> serde_core::de::DeserializeOwned for iceberg_catalog_rest::ListNamespaceResponse where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_rest::ListNamespaceResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::ListNamespaceResponse::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_rest::ListNamespaceResponse::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_rest::ListNamespaceResponse
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_rest::ListNamespaceResponse
+impl<T> typenum::type_operators::Same for iceberg_catalog_rest::ListNamespaceResponse
+pub type iceberg_catalog_rest::ListNamespaceResponse::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_rest::ListNamespaceResponse
+pub fn iceberg_catalog_rest::ListNamespaceResponse::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_rest::ListNamespaceResponse where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_rest::ListNamespaceResponse::vzip(self) -> V
+pub struct iceberg_catalog_rest::ListTablesResponse
+pub iceberg_catalog_rest::ListTablesResponse::identifiers: alloc::vec::Vec<iceberg::catalog::TableIdent>
+pub iceberg_catalog_rest::ListTablesResponse::next_page_token: core::option::Option<alloc::string::String>
+impl core::clone::Clone for iceberg_catalog_rest::ListTablesResponse
+pub fn iceberg_catalog_rest::ListTablesResponse::clone(&self) -> iceberg_catalog_rest::ListTablesResponse
+impl core::cmp::Eq for iceberg_catalog_rest::ListTablesResponse
+impl core::cmp::PartialEq for iceberg_catalog_rest::ListTablesResponse
+pub fn iceberg_catalog_rest::ListTablesResponse::eq(&self, other: &iceberg_catalog_rest::ListTablesResponse) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::ListTablesResponse
+pub fn iceberg_catalog_rest::ListTablesResponse::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::ListTablesResponse
+impl serde_core::ser::Serialize for iceberg_catalog_rest::ListTablesResponse
+pub fn iceberg_catalog_rest::ListTablesResponse::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::ListTablesResponse
+pub fn iceberg_catalog_rest::ListTablesResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for iceberg_catalog_rest::ListTablesResponse
+impl core::marker::Send for iceberg_catalog_rest::ListTablesResponse
+impl core::marker::Sync for iceberg_catalog_rest::ListTablesResponse
+impl core::marker::Unpin for iceberg_catalog_rest::ListTablesResponse
+impl core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_rest::ListTablesResponse
+impl core::panic::unwind_safe::UnwindSafe for iceberg_catalog_rest::ListTablesResponse
+impl<Q, K> equivalent::Equivalent<K> for iceberg_catalog_rest::ListTablesResponse where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::ListTablesResponse::equivalent(&self, key: &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::ListTablesResponse where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::ListTablesResponse where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::ListTablesResponse::equivalent(&self, key: &K) -> bool
+pub fn iceberg_catalog_rest::ListTablesResponse::equivalent(&self, key: &K) -> bool
+impl<T, U> core::convert::Into<U> for iceberg_catalog_rest::ListTablesResponse where U: core::convert::From<T>
+pub fn iceberg_catalog_rest::ListTablesResponse::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_rest::ListTablesResponse where U: core::convert::Into<T>
+pub type iceberg_catalog_rest::ListTablesResponse::Error = core::convert::Infallible
+pub fn iceberg_catalog_rest::ListTablesResponse::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_rest::ListTablesResponse where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_rest::ListTablesResponse::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_rest::ListTablesResponse::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_catalog_rest::ListTablesResponse where T: core::clone::Clone
+pub type iceberg_catalog_rest::ListTablesResponse::Owned = T
+pub fn iceberg_catalog_rest::ListTablesResponse::clone_into(&self, target: &mut T)
+pub fn iceberg_catalog_rest::ListTablesResponse::to_owned(&self) -> T
+impl<T> arrow_buffer::alloc::Allocation for iceberg_catalog_rest::ListTablesResponse where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> as_any::AsAny for iceberg_catalog_rest::ListTablesResponse where T: core::any::Any
+pub fn iceberg_catalog_rest::ListTablesResponse::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::ListTablesResponse::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::ListTablesResponse::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_rest::ListTablesResponse where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_rest::ListTablesResponse where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_rest::ListTablesResponse::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_rest::ListTablesResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::ListTablesResponse::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_rest::ListTablesResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::ListTablesResponse::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_catalog_rest::ListTablesResponse where T: core::clone::Clone
+pub unsafe fn iceberg_catalog_rest::ListTablesResponse::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_catalog_rest::ListTablesResponse
+pub fn iceberg_catalog_rest::ListTablesResponse::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_rest::ListTablesResponse
+pub type iceberg_catalog_rest::ListTablesResponse::Init = T
+pub const iceberg_catalog_rest::ListTablesResponse::ALIGN: usize
+pub unsafe fn iceberg_catalog_rest::ListTablesResponse::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_rest::ListTablesResponse::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_rest::ListTablesResponse::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_rest::ListTablesResponse::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_rest::ListTablesResponse
+impl<T> erased_serde::ser::Serialize for iceberg_catalog_rest::ListTablesResponse where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_catalog_rest::ListTablesResponse::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_catalog_rest::ListTablesResponse::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> serde_core::de::DeserializeOwned for iceberg_catalog_rest::ListTablesResponse where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_rest::ListTablesResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::ListTablesResponse::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_rest::ListTablesResponse::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_rest::ListTablesResponse
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_rest::ListTablesResponse
+impl<T> typenum::type_operators::Same for iceberg_catalog_rest::ListTablesResponse
+pub type iceberg_catalog_rest::ListTablesResponse::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_rest::ListTablesResponse
+pub fn iceberg_catalog_rest::ListTablesResponse::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_rest::ListTablesResponse where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_rest::ListTablesResponse::vzip(self) -> V
+pub struct iceberg_catalog_rest::LoadTableResult
+pub iceberg_catalog_rest::LoadTableResult::config: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub iceberg_catalog_rest::LoadTableResult::metadata: iceberg::spec::table_metadata::TableMetadata
+pub iceberg_catalog_rest::LoadTableResult::metadata_location: core::option::Option<alloc::string::String>
+pub iceberg_catalog_rest::LoadTableResult::storage_credentials: core::option::Option<alloc::vec::Vec<iceberg_catalog_rest::StorageCredential>>
+impl core::clone::Clone for iceberg_catalog_rest::LoadTableResult
+pub fn iceberg_catalog_rest::LoadTableResult::clone(&self) -> iceberg_catalog_rest::LoadTableResult
+impl core::cmp::Eq for iceberg_catalog_rest::LoadTableResult
+impl core::cmp::PartialEq for iceberg_catalog_rest::LoadTableResult
+pub fn iceberg_catalog_rest::LoadTableResult::eq(&self, other: &iceberg_catalog_rest::LoadTableResult) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::LoadTableResult
+pub fn iceberg_catalog_rest::LoadTableResult::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::LoadTableResult
+impl serde_core::ser::Serialize for iceberg_catalog_rest::LoadTableResult
+pub fn iceberg_catalog_rest::LoadTableResult::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::LoadTableResult
+pub fn iceberg_catalog_rest::LoadTableResult::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl !core::marker::Freeze for iceberg_catalog_rest::LoadTableResult
+impl core::marker::Send for iceberg_catalog_rest::LoadTableResult
+impl core::marker::Sync for iceberg_catalog_rest::LoadTableResult
+impl core::marker::Unpin for iceberg_catalog_rest::LoadTableResult
+impl core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_rest::LoadTableResult
+impl core::panic::unwind_safe::UnwindSafe for iceberg_catalog_rest::LoadTableResult
+impl<Q, K> equivalent::Equivalent<K> for iceberg_catalog_rest::LoadTableResult where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::LoadTableResult::equivalent(&self, key: &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::LoadTableResult where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::LoadTableResult where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::LoadTableResult::equivalent(&self, key: &K) -> bool
+pub fn iceberg_catalog_rest::LoadTableResult::equivalent(&self, key: &K) -> bool
+impl<T, U> core::convert::Into<U> for iceberg_catalog_rest::LoadTableResult where U: core::convert::From<T>
+pub fn iceberg_catalog_rest::LoadTableResult::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_rest::LoadTableResult where U: core::convert::Into<T>
+pub type iceberg_catalog_rest::LoadTableResult::Error = core::convert::Infallible
+pub fn iceberg_catalog_rest::LoadTableResult::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_rest::LoadTableResult where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_rest::LoadTableResult::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_rest::LoadTableResult::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_catalog_rest::LoadTableResult where T: core::clone::Clone
+pub type iceberg_catalog_rest::LoadTableResult::Owned = T
+pub fn iceberg_catalog_rest::LoadTableResult::clone_into(&self, target: &mut T)
+pub fn iceberg_catalog_rest::LoadTableResult::to_owned(&self) -> T
+impl<T> arrow_buffer::alloc::Allocation for iceberg_catalog_rest::LoadTableResult where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> as_any::AsAny for iceberg_catalog_rest::LoadTableResult where T: core::any::Any
+pub fn iceberg_catalog_rest::LoadTableResult::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::LoadTableResult::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::LoadTableResult::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_rest::LoadTableResult where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_rest::LoadTableResult where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_rest::LoadTableResult::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_rest::LoadTableResult where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::LoadTableResult::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_rest::LoadTableResult where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::LoadTableResult::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_catalog_rest::LoadTableResult where T: core::clone::Clone
+pub unsafe fn iceberg_catalog_rest::LoadTableResult::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_catalog_rest::LoadTableResult
+pub fn iceberg_catalog_rest::LoadTableResult::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_rest::LoadTableResult
+pub type iceberg_catalog_rest::LoadTableResult::Init = T
+pub const iceberg_catalog_rest::LoadTableResult::ALIGN: usize
+pub unsafe fn iceberg_catalog_rest::LoadTableResult::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_rest::LoadTableResult::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_rest::LoadTableResult::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_rest::LoadTableResult::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_rest::LoadTableResult
+impl<T> erased_serde::ser::Serialize for iceberg_catalog_rest::LoadTableResult where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_catalog_rest::LoadTableResult::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_catalog_rest::LoadTableResult::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> serde_core::de::DeserializeOwned for iceberg_catalog_rest::LoadTableResult where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_rest::LoadTableResult where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::LoadTableResult::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_rest::LoadTableResult::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_rest::LoadTableResult
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_rest::LoadTableResult
+impl<T> typenum::type_operators::Same for iceberg_catalog_rest::LoadTableResult
+pub type iceberg_catalog_rest::LoadTableResult::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_rest::LoadTableResult
+pub fn iceberg_catalog_rest::LoadTableResult::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_rest::LoadTableResult where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_rest::LoadTableResult::vzip(self) -> V
+pub struct iceberg_catalog_rest::NamespaceResponse
+pub iceberg_catalog_rest::NamespaceResponse::namespace: iceberg::catalog::NamespaceIdent
+pub iceberg_catalog_rest::NamespaceResponse::properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+impl core::clone::Clone for iceberg_catalog_rest::NamespaceResponse
+pub fn iceberg_catalog_rest::NamespaceResponse::clone(&self) -> iceberg_catalog_rest::NamespaceResponse
+impl core::cmp::Eq for iceberg_catalog_rest::NamespaceResponse
+impl core::cmp::PartialEq for iceberg_catalog_rest::NamespaceResponse
+pub fn iceberg_catalog_rest::NamespaceResponse::eq(&self, other: &iceberg_catalog_rest::NamespaceResponse) -> bool
+impl core::convert::From<&iceberg::catalog::Namespace> for iceberg_catalog_rest::NamespaceResponse
+pub fn iceberg_catalog_rest::NamespaceResponse::from(value: &iceberg::catalog::Namespace) -> Self
+impl core::convert::From<iceberg_catalog_rest::NamespaceResponse> for iceberg::catalog::Namespace
+pub fn iceberg::catalog::Namespace::from(value: iceberg_catalog_rest::NamespaceResponse) -> Self
+impl core::fmt::Debug for iceberg_catalog_rest::NamespaceResponse
+pub fn iceberg_catalog_rest::NamespaceResponse::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::NamespaceResponse
+impl serde_core::ser::Serialize for iceberg_catalog_rest::NamespaceResponse
+pub fn iceberg_catalog_rest::NamespaceResponse::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::NamespaceResponse
+pub fn iceberg_catalog_rest::NamespaceResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for iceberg_catalog_rest::NamespaceResponse
+impl core::marker::Send for iceberg_catalog_rest::NamespaceResponse
+impl core::marker::Sync for iceberg_catalog_rest::NamespaceResponse
+impl core::marker::Unpin for iceberg_catalog_rest::NamespaceResponse
+impl core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_rest::NamespaceResponse
+impl core::panic::unwind_safe::UnwindSafe for iceberg_catalog_rest::NamespaceResponse
+impl<Q, K> equivalent::Equivalent<K> for iceberg_catalog_rest::NamespaceResponse where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::NamespaceResponse::equivalent(&self, key: &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::NamespaceResponse where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::NamespaceResponse where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::NamespaceResponse::equivalent(&self, key: &K) -> bool
+pub fn iceberg_catalog_rest::NamespaceResponse::equivalent(&self, key: &K) -> bool
+impl<T, U> core::convert::Into<U> for iceberg_catalog_rest::NamespaceResponse where U: core::convert::From<T>
+pub fn iceberg_catalog_rest::NamespaceResponse::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_rest::NamespaceResponse where U: core::convert::Into<T>
+pub type iceberg_catalog_rest::NamespaceResponse::Error = core::convert::Infallible
+pub fn iceberg_catalog_rest::NamespaceResponse::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_rest::NamespaceResponse where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_rest::NamespaceResponse::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_rest::NamespaceResponse::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_catalog_rest::NamespaceResponse where T: core::clone::Clone
+pub type iceberg_catalog_rest::NamespaceResponse::Owned = T
+pub fn iceberg_catalog_rest::NamespaceResponse::clone_into(&self, target: &mut T)
+pub fn iceberg_catalog_rest::NamespaceResponse::to_owned(&self) -> T
+impl<T> arrow_buffer::alloc::Allocation for iceberg_catalog_rest::NamespaceResponse where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> as_any::AsAny for iceberg_catalog_rest::NamespaceResponse where T: core::any::Any
+pub fn iceberg_catalog_rest::NamespaceResponse::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::NamespaceResponse::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::NamespaceResponse::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_rest::NamespaceResponse where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_rest::NamespaceResponse where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_rest::NamespaceResponse::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_rest::NamespaceResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::NamespaceResponse::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_rest::NamespaceResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::NamespaceResponse::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_catalog_rest::NamespaceResponse where T: core::clone::Clone
+pub unsafe fn iceberg_catalog_rest::NamespaceResponse::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_catalog_rest::NamespaceResponse
+pub fn iceberg_catalog_rest::NamespaceResponse::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_rest::NamespaceResponse
+pub type iceberg_catalog_rest::NamespaceResponse::Init = T
+pub const iceberg_catalog_rest::NamespaceResponse::ALIGN: usize
+pub unsafe fn iceberg_catalog_rest::NamespaceResponse::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_rest::NamespaceResponse::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_rest::NamespaceResponse::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_rest::NamespaceResponse::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_rest::NamespaceResponse
+impl<T> erased_serde::ser::Serialize for iceberg_catalog_rest::NamespaceResponse where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_catalog_rest::NamespaceResponse::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_catalog_rest::NamespaceResponse::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> serde_core::de::DeserializeOwned for iceberg_catalog_rest::NamespaceResponse where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_rest::NamespaceResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::NamespaceResponse::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_rest::NamespaceResponse::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_rest::NamespaceResponse
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_rest::NamespaceResponse
+impl<T> typenum::type_operators::Same for iceberg_catalog_rest::NamespaceResponse
+pub type iceberg_catalog_rest::NamespaceResponse::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_rest::NamespaceResponse
+pub fn iceberg_catalog_rest::NamespaceResponse::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_rest::NamespaceResponse where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_rest::NamespaceResponse::vzip(self) -> V
+pub struct iceberg_catalog_rest::RegisterTableRequest
+pub iceberg_catalog_rest::RegisterTableRequest::metadata_location: alloc::string::String
+pub iceberg_catalog_rest::RegisterTableRequest::name: alloc::string::String
+pub iceberg_catalog_rest::RegisterTableRequest::overwrite: core::option::Option<bool>
+impl core::clone::Clone for iceberg_catalog_rest::RegisterTableRequest
+pub fn iceberg_catalog_rest::RegisterTableRequest::clone(&self) -> iceberg_catalog_rest::RegisterTableRequest
+impl core::cmp::Eq for iceberg_catalog_rest::RegisterTableRequest
+impl core::cmp::PartialEq for iceberg_catalog_rest::RegisterTableRequest
+pub fn iceberg_catalog_rest::RegisterTableRequest::eq(&self, other: &iceberg_catalog_rest::RegisterTableRequest) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::RegisterTableRequest
+pub fn iceberg_catalog_rest::RegisterTableRequest::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::RegisterTableRequest
+impl serde_core::ser::Serialize for iceberg_catalog_rest::RegisterTableRequest
+pub fn iceberg_catalog_rest::RegisterTableRequest::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::RegisterTableRequest
+pub fn iceberg_catalog_rest::RegisterTableRequest::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for iceberg_catalog_rest::RegisterTableRequest
+impl core::marker::Send for iceberg_catalog_rest::RegisterTableRequest
+impl core::marker::Sync for iceberg_catalog_rest::RegisterTableRequest
+impl core::marker::Unpin for iceberg_catalog_rest::RegisterTableRequest
+impl core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_rest::RegisterTableRequest
+impl core::panic::unwind_safe::UnwindSafe for iceberg_catalog_rest::RegisterTableRequest
+impl<Q, K> equivalent::Equivalent<K> for iceberg_catalog_rest::RegisterTableRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::RegisterTableRequest::equivalent(&self, key: &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::RegisterTableRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::RegisterTableRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::RegisterTableRequest::equivalent(&self, key: &K) -> bool
+pub fn iceberg_catalog_rest::RegisterTableRequest::equivalent(&self, key: &K) -> bool
+impl<T, U> core::convert::Into<U> for iceberg_catalog_rest::RegisterTableRequest where U: core::convert::From<T>
+pub fn iceberg_catalog_rest::RegisterTableRequest::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_rest::RegisterTableRequest where U: core::convert::Into<T>
+pub type iceberg_catalog_rest::RegisterTableRequest::Error = core::convert::Infallible
+pub fn iceberg_catalog_rest::RegisterTableRequest::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_rest::RegisterTableRequest where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_rest::RegisterTableRequest::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_rest::RegisterTableRequest::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_catalog_rest::RegisterTableRequest where T: core::clone::Clone
+pub type iceberg_catalog_rest::RegisterTableRequest::Owned = T
+pub fn iceberg_catalog_rest::RegisterTableRequest::clone_into(&self, target: &mut T)
+pub fn iceberg_catalog_rest::RegisterTableRequest::to_owned(&self) -> T
+impl<T> arrow_buffer::alloc::Allocation for iceberg_catalog_rest::RegisterTableRequest where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> as_any::AsAny for iceberg_catalog_rest::RegisterTableRequest where T: core::any::Any
+pub fn iceberg_catalog_rest::RegisterTableRequest::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::RegisterTableRequest::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::RegisterTableRequest::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_rest::RegisterTableRequest where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_rest::RegisterTableRequest where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_rest::RegisterTableRequest::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_rest::RegisterTableRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::RegisterTableRequest::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_rest::RegisterTableRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::RegisterTableRequest::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_catalog_rest::RegisterTableRequest where T: core::clone::Clone
+pub unsafe fn iceberg_catalog_rest::RegisterTableRequest::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_catalog_rest::RegisterTableRequest
+pub fn iceberg_catalog_rest::RegisterTableRequest::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_rest::RegisterTableRequest
+pub type iceberg_catalog_rest::RegisterTableRequest::Init = T
+pub const iceberg_catalog_rest::RegisterTableRequest::ALIGN: usize
+pub unsafe fn iceberg_catalog_rest::RegisterTableRequest::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_rest::RegisterTableRequest::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_rest::RegisterTableRequest::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_rest::RegisterTableRequest::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_rest::RegisterTableRequest
+impl<T> erased_serde::ser::Serialize for iceberg_catalog_rest::RegisterTableRequest where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_catalog_rest::RegisterTableRequest::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_catalog_rest::RegisterTableRequest::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> serde_core::de::DeserializeOwned for iceberg_catalog_rest::RegisterTableRequest where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_rest::RegisterTableRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::RegisterTableRequest::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_rest::RegisterTableRequest::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_rest::RegisterTableRequest
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_rest::RegisterTableRequest
+impl<T> typenum::type_operators::Same for iceberg_catalog_rest::RegisterTableRequest
+pub type iceberg_catalog_rest::RegisterTableRequest::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_rest::RegisterTableRequest
+pub fn iceberg_catalog_rest::RegisterTableRequest::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_rest::RegisterTableRequest where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_rest::RegisterTableRequest::vzip(self) -> V
+pub struct iceberg_catalog_rest::RenameTableRequest
+pub iceberg_catalog_rest::RenameTableRequest::destination: iceberg::catalog::TableIdent
+pub iceberg_catalog_rest::RenameTableRequest::source: iceberg::catalog::TableIdent
+impl core::clone::Clone for iceberg_catalog_rest::RenameTableRequest
+pub fn iceberg_catalog_rest::RenameTableRequest::clone(&self) -> iceberg_catalog_rest::RenameTableRequest
+impl core::cmp::Eq for iceberg_catalog_rest::RenameTableRequest
+impl core::cmp::PartialEq for iceberg_catalog_rest::RenameTableRequest
+pub fn iceberg_catalog_rest::RenameTableRequest::eq(&self, other: &iceberg_catalog_rest::RenameTableRequest) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::RenameTableRequest
+pub fn iceberg_catalog_rest::RenameTableRequest::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::RenameTableRequest
+impl serde_core::ser::Serialize for iceberg_catalog_rest::RenameTableRequest
+pub fn iceberg_catalog_rest::RenameTableRequest::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::RenameTableRequest
+pub fn iceberg_catalog_rest::RenameTableRequest::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for iceberg_catalog_rest::RenameTableRequest
+impl core::marker::Send for iceberg_catalog_rest::RenameTableRequest
+impl core::marker::Sync for iceberg_catalog_rest::RenameTableRequest
+impl core::marker::Unpin for iceberg_catalog_rest::RenameTableRequest
+impl core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_rest::RenameTableRequest
+impl core::panic::unwind_safe::UnwindSafe for iceberg_catalog_rest::RenameTableRequest
+impl<Q, K> equivalent::Equivalent<K> for iceberg_catalog_rest::RenameTableRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::RenameTableRequest::equivalent(&self, key: &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::RenameTableRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::RenameTableRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::RenameTableRequest::equivalent(&self, key: &K) -> bool
+pub fn iceberg_catalog_rest::RenameTableRequest::equivalent(&self, key: &K) -> bool
+impl<T, U> core::convert::Into<U> for iceberg_catalog_rest::RenameTableRequest where U: core::convert::From<T>
+pub fn iceberg_catalog_rest::RenameTableRequest::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_rest::RenameTableRequest where U: core::convert::Into<T>
+pub type iceberg_catalog_rest::RenameTableRequest::Error = core::convert::Infallible
+pub fn iceberg_catalog_rest::RenameTableRequest::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_rest::RenameTableRequest where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_rest::RenameTableRequest::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_rest::RenameTableRequest::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_catalog_rest::RenameTableRequest where T: core::clone::Clone
+pub type iceberg_catalog_rest::RenameTableRequest::Owned = T
+pub fn iceberg_catalog_rest::RenameTableRequest::clone_into(&self, target: &mut T)
+pub fn iceberg_catalog_rest::RenameTableRequest::to_owned(&self) -> T
+impl<T> arrow_buffer::alloc::Allocation for iceberg_catalog_rest::RenameTableRequest where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> as_any::AsAny for iceberg_catalog_rest::RenameTableRequest where T: core::any::Any
+pub fn iceberg_catalog_rest::RenameTableRequest::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::RenameTableRequest::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::RenameTableRequest::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_rest::RenameTableRequest where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_rest::RenameTableRequest where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_rest::RenameTableRequest::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_rest::RenameTableRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::RenameTableRequest::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_rest::RenameTableRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::RenameTableRequest::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_catalog_rest::RenameTableRequest where T: core::clone::Clone
+pub unsafe fn iceberg_catalog_rest::RenameTableRequest::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_catalog_rest::RenameTableRequest
+pub fn iceberg_catalog_rest::RenameTableRequest::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_rest::RenameTableRequest
+pub type iceberg_catalog_rest::RenameTableRequest::Init = T
+pub const iceberg_catalog_rest::RenameTableRequest::ALIGN: usize
+pub unsafe fn iceberg_catalog_rest::RenameTableRequest::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_rest::RenameTableRequest::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_rest::RenameTableRequest::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_rest::RenameTableRequest::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_rest::RenameTableRequest
+impl<T> erased_serde::ser::Serialize for iceberg_catalog_rest::RenameTableRequest where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_catalog_rest::RenameTableRequest::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_catalog_rest::RenameTableRequest::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> serde_core::de::DeserializeOwned for iceberg_catalog_rest::RenameTableRequest where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_rest::RenameTableRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::RenameTableRequest::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_rest::RenameTableRequest::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_rest::RenameTableRequest
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_rest::RenameTableRequest
+impl<T> typenum::type_operators::Same for iceberg_catalog_rest::RenameTableRequest
+pub type iceberg_catalog_rest::RenameTableRequest::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_rest::RenameTableRequest
+pub fn iceberg_catalog_rest::RenameTableRequest::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_rest::RenameTableRequest where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_rest::RenameTableRequest::vzip(self) -> V
+pub struct iceberg_catalog_rest::RestCatalog
+impl iceberg_catalog_rest::RestCatalog
+pub async fn iceberg_catalog_rest::RestCatalog::invalidate_token(&self) -> iceberg::error::Result<()>
+pub async fn iceberg_catalog_rest::RestCatalog::regenerate_token(&self) -> iceberg::error::Result<()>
+impl core::fmt::Debug for iceberg_catalog_rest::RestCatalog
+pub fn iceberg_catalog_rest::RestCatalog::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::catalog::Catalog for iceberg_catalog_rest::RestCatalog
+pub fn iceberg_catalog_rest::RestCatalog::create_namespace<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::catalog::Namespace>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::RestCatalog::create_table<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent, creation: iceberg::catalog::TableCreation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::RestCatalog::drop_namespace<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::RestCatalog::drop_table<'life0, 'life1, 'async_trait>(&'life0 self, table: &'life1 iceberg::catalog::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::RestCatalog::get_namespace<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::catalog::Namespace>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::RestCatalog::list_namespaces<'life0, 'life1, 'async_trait>(&'life0 self, parent: core::option::Option<&'life1 iceberg::catalog::NamespaceIdent>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::vec::Vec<iceberg::catalog::NamespaceIdent>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::RestCatalog::list_tables<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::vec::Vec<iceberg::catalog::TableIdent>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::RestCatalog::load_table<'life0, 'life1, 'async_trait>(&'life0 self, table_ident: &'life1 iceberg::catalog::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::RestCatalog::namespace_exists<'life0, 'life1, 'async_trait>(&'life0 self, ns: &'life1 iceberg::catalog::NamespaceIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::RestCatalog::purge_table<'life0, 'life1, 'async_trait>(&'life0 self, table: &'life1 iceberg::catalog::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::RestCatalog::register_table<'life0, 'life1, 'async_trait>(&'life0 self, table_ident: &'life1 iceberg::catalog::TableIdent, metadata_location: alloc::string::String) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::RestCatalog::rename_table<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, src: &'life1 iceberg::catalog::TableIdent, dest: &'life2 iceberg::catalog::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn iceberg_catalog_rest::RestCatalog::table_exists<'life0, 'life1, 'async_trait>(&'life0 self, table: &'life1 iceberg::catalog::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::RestCatalog::update_namespace<'life0, 'life1, 'async_trait>(&'life0 self, _namespace: &'life1 iceberg::catalog::NamespaceIdent, _properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::RestCatalog::update_table<'life0, 'async_trait>(&'life0 self, commit: iceberg::catalog::TableCommit) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl !core::marker::Freeze for iceberg_catalog_rest::RestCatalog
+impl core::marker::Send for iceberg_catalog_rest::RestCatalog
+impl core::marker::Sync for iceberg_catalog_rest::RestCatalog
+impl core::marker::Unpin for iceberg_catalog_rest::RestCatalog
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_rest::RestCatalog
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_catalog_rest::RestCatalog
+impl<T, U> core::convert::Into<U> for iceberg_catalog_rest::RestCatalog where U: core::convert::From<T>
+pub fn iceberg_catalog_rest::RestCatalog::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_rest::RestCatalog where U: core::convert::Into<T>
+pub type iceberg_catalog_rest::RestCatalog::Error = core::convert::Infallible
+pub fn iceberg_catalog_rest::RestCatalog::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_rest::RestCatalog where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_rest::RestCatalog::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_rest::RestCatalog::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> as_any::AsAny for iceberg_catalog_rest::RestCatalog where T: core::any::Any
+pub fn iceberg_catalog_rest::RestCatalog::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::RestCatalog::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::RestCatalog::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_rest::RestCatalog where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_rest::RestCatalog where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_rest::RestCatalog::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_rest::RestCatalog where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::RestCatalog::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_rest::RestCatalog where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::RestCatalog::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for iceberg_catalog_rest::RestCatalog
+pub fn iceberg_catalog_rest::RestCatalog::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_rest::RestCatalog
+pub type iceberg_catalog_rest::RestCatalog::Init = T
+pub const iceberg_catalog_rest::RestCatalog::ALIGN: usize
+pub unsafe fn iceberg_catalog_rest::RestCatalog::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_rest::RestCatalog::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_rest::RestCatalog::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_rest::RestCatalog::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_rest::RestCatalog
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_rest::RestCatalog where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::RestCatalog::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_rest::RestCatalog::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_rest::RestCatalog
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_rest::RestCatalog
+impl<T> typenum::type_operators::Same for iceberg_catalog_rest::RestCatalog
+pub type iceberg_catalog_rest::RestCatalog::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_rest::RestCatalog
+pub fn iceberg_catalog_rest::RestCatalog::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_rest::RestCatalog where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_rest::RestCatalog::vzip(self) -> V
+pub struct iceberg_catalog_rest::RestCatalogBuilder
+impl iceberg_catalog_rest::RestCatalogBuilder
+pub fn iceberg_catalog_rest::RestCatalogBuilder::with_client(self, client: reqwest::async_impl::client::Client) -> Self
+impl core::default::Default for iceberg_catalog_rest::RestCatalogBuilder
+pub fn iceberg_catalog_rest::RestCatalogBuilder::default() -> Self
+impl core::fmt::Debug for iceberg_catalog_rest::RestCatalogBuilder
+pub fn iceberg_catalog_rest::RestCatalogBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::catalog::CatalogBuilder for iceberg_catalog_rest::RestCatalogBuilder
+pub type iceberg_catalog_rest::RestCatalogBuilder::C = iceberg_catalog_rest::RestCatalog
+pub fn iceberg_catalog_rest::RestCatalogBuilder::load(self, name: impl core::convert::Into<alloc::string::String>, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> impl core::future::future::Future<Output = iceberg::error::Result<Self::C>> + core::marker::Send
+pub fn iceberg_catalog_rest::RestCatalogBuilder::with_runtime(self, runtime: iceberg::runtime::Runtime) -> Self
+pub fn iceberg_catalog_rest::RestCatalogBuilder::with_storage_factory(self, storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> Self
+impl core::marker::Freeze for iceberg_catalog_rest::RestCatalogBuilder
+impl core::marker::Send for iceberg_catalog_rest::RestCatalogBuilder
+impl core::marker::Sync for iceberg_catalog_rest::RestCatalogBuilder
+impl core::marker::Unpin for iceberg_catalog_rest::RestCatalogBuilder
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_rest::RestCatalogBuilder
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_catalog_rest::RestCatalogBuilder
+impl<T, U> core::convert::Into<U> for iceberg_catalog_rest::RestCatalogBuilder where U: core::convert::From<T>
+pub fn iceberg_catalog_rest::RestCatalogBuilder::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_rest::RestCatalogBuilder where U: core::convert::Into<T>
+pub type iceberg_catalog_rest::RestCatalogBuilder::Error = core::convert::Infallible
+pub fn iceberg_catalog_rest::RestCatalogBuilder::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_rest::RestCatalogBuilder where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_rest::RestCatalogBuilder::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_rest::RestCatalogBuilder::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> as_any::AsAny for iceberg_catalog_rest::RestCatalogBuilder where T: core::any::Any
+pub fn iceberg_catalog_rest::RestCatalogBuilder::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::RestCatalogBuilder::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::RestCatalogBuilder::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_rest::RestCatalogBuilder where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_rest::RestCatalogBuilder where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_rest::RestCatalogBuilder::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_rest::RestCatalogBuilder where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::RestCatalogBuilder::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_rest::RestCatalogBuilder where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::RestCatalogBuilder::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for iceberg_catalog_rest::RestCatalogBuilder
+pub fn iceberg_catalog_rest::RestCatalogBuilder::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_rest::RestCatalogBuilder
+pub type iceberg_catalog_rest::RestCatalogBuilder::Init = T
+pub const iceberg_catalog_rest::RestCatalogBuilder::ALIGN: usize
+pub unsafe fn iceberg_catalog_rest::RestCatalogBuilder::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_rest::RestCatalogBuilder::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_rest::RestCatalogBuilder::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_rest::RestCatalogBuilder::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_rest::RestCatalogBuilder
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_rest::RestCatalogBuilder where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::RestCatalogBuilder::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_rest::RestCatalogBuilder::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_rest::RestCatalogBuilder
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_rest::RestCatalogBuilder
+impl<T> typenum::type_operators::Same for iceberg_catalog_rest::RestCatalogBuilder
+pub type iceberg_catalog_rest::RestCatalogBuilder::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_rest::RestCatalogBuilder
+pub fn iceberg_catalog_rest::RestCatalogBuilder::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_rest::RestCatalogBuilder where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_rest::RestCatalogBuilder::vzip(self) -> V
+pub struct iceberg_catalog_rest::StorageCredential
+pub iceberg_catalog_rest::StorageCredential::config: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub iceberg_catalog_rest::StorageCredential::prefix: alloc::string::String
+impl core::clone::Clone for iceberg_catalog_rest::StorageCredential
+pub fn iceberg_catalog_rest::StorageCredential::clone(&self) -> iceberg_catalog_rest::StorageCredential
+impl core::cmp::Eq for iceberg_catalog_rest::StorageCredential
+impl core::cmp::PartialEq for iceberg_catalog_rest::StorageCredential
+pub fn iceberg_catalog_rest::StorageCredential::eq(&self, other: &iceberg_catalog_rest::StorageCredential) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::StorageCredential
+pub fn iceberg_catalog_rest::StorageCredential::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::StorageCredential
+impl serde_core::ser::Serialize for iceberg_catalog_rest::StorageCredential
+pub fn iceberg_catalog_rest::StorageCredential::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::StorageCredential
+pub fn iceberg_catalog_rest::StorageCredential::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for iceberg_catalog_rest::StorageCredential
+impl core::marker::Send for iceberg_catalog_rest::StorageCredential
+impl core::marker::Sync for iceberg_catalog_rest::StorageCredential
+impl core::marker::Unpin for iceberg_catalog_rest::StorageCredential
+impl core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_rest::StorageCredential
+impl core::panic::unwind_safe::UnwindSafe for iceberg_catalog_rest::StorageCredential
+impl<Q, K> equivalent::Equivalent<K> for iceberg_catalog_rest::StorageCredential where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::StorageCredential::equivalent(&self, key: &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::StorageCredential where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::StorageCredential where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::StorageCredential::equivalent(&self, key: &K) -> bool
+pub fn iceberg_catalog_rest::StorageCredential::equivalent(&self, key: &K) -> bool
+impl<T, U> core::convert::Into<U> for iceberg_catalog_rest::StorageCredential where U: core::convert::From<T>
+pub fn iceberg_catalog_rest::StorageCredential::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_rest::StorageCredential where U: core::convert::Into<T>
+pub type iceberg_catalog_rest::StorageCredential::Error = core::convert::Infallible
+pub fn iceberg_catalog_rest::StorageCredential::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_rest::StorageCredential where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_rest::StorageCredential::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_rest::StorageCredential::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_catalog_rest::StorageCredential where T: core::clone::Clone
+pub type iceberg_catalog_rest::StorageCredential::Owned = T
+pub fn iceberg_catalog_rest::StorageCredential::clone_into(&self, target: &mut T)
+pub fn iceberg_catalog_rest::StorageCredential::to_owned(&self) -> T
+impl<T> arrow_buffer::alloc::Allocation for iceberg_catalog_rest::StorageCredential where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> as_any::AsAny for iceberg_catalog_rest::StorageCredential where T: core::any::Any
+pub fn iceberg_catalog_rest::StorageCredential::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::StorageCredential::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::StorageCredential::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_rest::StorageCredential where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_rest::StorageCredential where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_rest::StorageCredential::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_rest::StorageCredential where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::StorageCredential::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_rest::StorageCredential where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::StorageCredential::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_catalog_rest::StorageCredential where T: core::clone::Clone
+pub unsafe fn iceberg_catalog_rest::StorageCredential::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_catalog_rest::StorageCredential
+pub fn iceberg_catalog_rest::StorageCredential::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_rest::StorageCredential
+pub type iceberg_catalog_rest::StorageCredential::Init = T
+pub const iceberg_catalog_rest::StorageCredential::ALIGN: usize
+pub unsafe fn iceberg_catalog_rest::StorageCredential::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_rest::StorageCredential::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_rest::StorageCredential::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_rest::StorageCredential::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_rest::StorageCredential
+impl<T> erased_serde::ser::Serialize for iceberg_catalog_rest::StorageCredential where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_catalog_rest::StorageCredential::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_catalog_rest::StorageCredential::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> serde_core::de::DeserializeOwned for iceberg_catalog_rest::StorageCredential where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_rest::StorageCredential where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::StorageCredential::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_rest::StorageCredential::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_rest::StorageCredential
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_rest::StorageCredential
+impl<T> typenum::type_operators::Same for iceberg_catalog_rest::StorageCredential
+pub type iceberg_catalog_rest::StorageCredential::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_rest::StorageCredential
+pub fn iceberg_catalog_rest::StorageCredential::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_rest::StorageCredential where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_rest::StorageCredential::vzip(self) -> V
+pub struct iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+pub iceberg_catalog_rest::UpdateNamespacePropertiesRequest::removals: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub iceberg_catalog_rest::UpdateNamespacePropertiesRequest::updates: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+impl core::clone::Clone for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::clone(&self) -> iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+impl core::cmp::Eq for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+impl core::cmp::PartialEq for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::eq(&self, other: &iceberg_catalog_rest::UpdateNamespacePropertiesRequest) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+impl serde_core::ser::Serialize for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+impl core::marker::Send for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+impl core::marker::Sync for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+impl core::marker::Unpin for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+impl core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+impl core::panic::unwind_safe::UnwindSafe for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+impl<Q, K> equivalent::Equivalent<K> for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::equivalent(&self, key: &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::equivalent(&self, key: &K) -> bool
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::equivalent(&self, key: &K) -> bool
+impl<T, U> core::convert::Into<U> for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where U: core::convert::From<T>
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where U: core::convert::Into<T>
+pub type iceberg_catalog_rest::UpdateNamespacePropertiesRequest::Error = core::convert::Infallible
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_rest::UpdateNamespacePropertiesRequest::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where T: core::clone::Clone
+pub type iceberg_catalog_rest::UpdateNamespacePropertiesRequest::Owned = T
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::clone_into(&self, target: &mut T)
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::to_owned(&self) -> T
+impl<T> arrow_buffer::alloc::Allocation for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> as_any::AsAny for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where T: core::any::Any
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where T: core::clone::Clone
+pub unsafe fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+pub type iceberg_catalog_rest::UpdateNamespacePropertiesRequest::Init = T
+pub const iceberg_catalog_rest::UpdateNamespacePropertiesRequest::ALIGN: usize
+pub unsafe fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+impl<T> erased_serde::ser::Serialize for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> serde_core::de::DeserializeOwned for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+impl<T> typenum::type_operators::Same for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+pub type iceberg_catalog_rest::UpdateNamespacePropertiesRequest::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_rest::UpdateNamespacePropertiesRequest where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::vzip(self) -> V
+pub struct iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+pub iceberg_catalog_rest::UpdateNamespacePropertiesResponse::missing: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub iceberg_catalog_rest::UpdateNamespacePropertiesResponse::removed: alloc::vec::Vec<alloc::string::String>
+pub iceberg_catalog_rest::UpdateNamespacePropertiesResponse::updated: alloc::vec::Vec<alloc::string::String>
+impl core::clone::Clone for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::clone(&self) -> iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+impl core::cmp::Eq for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+impl core::cmp::PartialEq for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::eq(&self, other: &iceberg_catalog_rest::UpdateNamespacePropertiesResponse) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+impl serde_core::ser::Serialize for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+impl core::marker::Send for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+impl core::marker::Sync for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+impl core::marker::Unpin for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+impl core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+impl core::panic::unwind_safe::UnwindSafe for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+impl<Q, K> equivalent::Equivalent<K> for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::equivalent(&self, key: &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> hashbrown::Equivalent<K> for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::equivalent(&self, key: &K) -> bool
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::equivalent(&self, key: &K) -> bool
+impl<T, U> core::convert::Into<U> for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where U: core::convert::From<T>
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where U: core::convert::Into<T>
+pub type iceberg_catalog_rest::UpdateNamespacePropertiesResponse::Error = core::convert::Infallible
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_rest::UpdateNamespacePropertiesResponse::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where T: core::clone::Clone
+pub type iceberg_catalog_rest::UpdateNamespacePropertiesResponse::Owned = T
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::clone_into(&self, target: &mut T)
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::to_owned(&self) -> T
+impl<T> arrow_buffer::alloc::Allocation for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> as_any::AsAny for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where T: core::any::Any
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where T: core::clone::Clone
+pub unsafe fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+pub type iceberg_catalog_rest::UpdateNamespacePropertiesResponse::Init = T
+pub const iceberg_catalog_rest::UpdateNamespacePropertiesResponse::ALIGN: usize
+pub unsafe fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+impl<T> erased_serde::ser::Serialize for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> serde_core::de::DeserializeOwned for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where T: ?core::marker::Sized
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+impl<T> typenum::type_operators::Same for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+pub type iceberg_catalog_rest::UpdateNamespacePropertiesResponse::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_rest::UpdateNamespacePropertiesResponse where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::vzip(self) -> V
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_URI: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_WAREHOUSE: &str
