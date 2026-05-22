@@ -21,6 +21,8 @@ extend-ignore-identifiers-re = ["^bimap$"]
 [default.extend-words]
 ags = "ags"
 AGS = "AGS"
+# For HashiCorp (otherwise flagged as a typo of "Hash")
+hashi = "hashi"
 
 [files]
 extend-exclude = ["**/testdata", "CHANGELOG.md"]
