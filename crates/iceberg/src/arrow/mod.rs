@@ -29,11 +29,11 @@ pub(crate) mod delete_filter;
 
 mod int96;
 mod reader;
-pub(crate) mod timestamp_tz;
 /// RecordBatch projection utilities
 pub mod record_batch_projector;
 pub(crate) mod record_batch_transformer;
 mod scan_metrics;
+pub(crate) mod timestamp_tz;
 mod value;
 
 pub use reader::*;
