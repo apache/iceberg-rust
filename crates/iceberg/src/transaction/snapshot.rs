@@ -19,8 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::ops::RangeFrom;
 
-use futures::future::OptionFuture;
-use futures::{StreamExt, TryFutureExt, TryStreamExt};
+use futures::future::try_join_all;
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -166,49 +165,42 @@ impl<'a> SnapshotProducer<'a> {
     }
 
     pub(crate) async fn validate_duplicate_files(&self) -> Result<()> {
+        let Some(current_snapshot) = self.table.metadata().current_snapshot() else {
+            return Ok(());
+        };
+
         let new_files: HashSet<&str> = self
             .added_data_files
             .iter()
             .map(|df| df.file_path.as_str())
             .collect();
 
-        let runtime = self.table.runtime().clone();
+        let runtime = self.table.runtime();
         let file_io = self.table.file_io();
-        let metadata_ref = self.table.metadata_ref();
+        let manifest_list = current_snapshot
+            .load_manifest_list(file_io, &self.table.metadata_ref())
+            .await?;
 
-        let referenced_files: Vec<String> =
-            OptionFuture::from(self.table.metadata().current_snapshot().map(|snapshot| {
-                snapshot
-                    .load_manifest_list(file_io, &metadata_ref)
-                    .and_then(|manifest_list| {
-                        futures::stream::iter(
-                            manifest_list
-                                .consume_entries()
-                                .into_iter()
-                                .map(|entry| {
-                                    let file_io = file_io.clone();
-                                    runtime
-                                        .io()
-                                        .spawn(async move { entry.load_manifest(&file_io).await })
-                                })
-                                .collect::<Vec<_>>(),
-                        )
-                        .then(|handle| async move { handle.await? })
-                        .try_fold(Vec::new(), |mut acc, manifest| {
-                            acc.extend(
-                                manifest
-                                    .entries()
-                                    .iter()
-                                    .filter(|e| new_files.contains(e.file_path()) && e.is_alive())
-                                    .map(|e| e.file_path().to_string()),
-                            );
-                            std::future::ready(Ok(acc))
-                        })
-                    })
-            }))
-            .await
-            .transpose()?
-            .unwrap_or_default();
+        let manifests = try_join_all(manifest_list.consume_entries().into_iter().map(|entry| {
+            let file_io = file_io.clone();
+            async move {
+                runtime
+                    .io()
+                    .spawn(async move { entry.load_manifest(&file_io).await })
+                    .await?
+            }
+        }))
+        .await?;
+
+        let mut referenced_files = Vec::new();
+        for manifest in &manifests {
+            for entry in manifest.entries() {
+                let file_path = entry.file_path();
+                if new_files.contains(file_path) && entry.is_alive() {
+                    referenced_files.push(file_path.to_string());
+                }
+            }
+        }
 
         if !referenced_files.is_empty() {
             return Err(Error::new(
