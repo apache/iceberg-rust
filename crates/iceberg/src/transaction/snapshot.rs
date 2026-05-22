@@ -181,26 +181,29 @@ impl<'a> SnapshotProducer<'a> {
             .load_manifest_list(file_io, &self.table.metadata_ref())
             .await?;
 
-        let manifests = try_join_all(manifest_list.consume_entries().into_iter().map(|entry| {
-            let file_io = file_io.clone();
-            async move {
-                runtime
-                    .io()
-                    .spawn(async move { entry.load_manifest(&file_io).await })
-                    .await?
-            }
-        }))
-        .await?;
-
-        let mut referenced_files = Vec::new();
-        for manifest in &manifests {
-            for entry in manifest.entries() {
-                let file_path = entry.file_path();
-                if new_files.contains(file_path) && entry.is_alive() {
-                    referenced_files.push(file_path.to_string());
+        let new_files_ref = &new_files;
+        let referenced_files: Vec<String> =
+            try_join_all(manifest_list.consume_entries().into_iter().map(|entry| {
+                let file_io = file_io.clone();
+                async move {
+                    let manifest = runtime
+                        .io()
+                        .spawn(async move { entry.load_manifest(&file_io).await })
+                        .await??;
+                    Ok::<_, Error>(
+                        manifest
+                            .entries()
+                            .iter()
+                            .filter(|e| new_files_ref.contains(e.file_path()) && e.is_alive())
+                            .map(|e| e.file_path().to_string())
+                            .collect::<Vec<_>>(),
+                    )
                 }
-            }
-        }
+            }))
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
 
         if !referenced_files.is_empty() {
             return Err(Error::new(
