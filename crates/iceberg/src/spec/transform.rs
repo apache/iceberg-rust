@@ -1039,6 +1039,10 @@ fn parse_parameterized_transform(value: &str, transform: &str) -> Result<u32> {
         .and_then(|v| v.strip_suffix(']'))
         .ok_or_else(|| invalid_parameterized_transform(value, transform))?;
 
+    if parameter.is_empty() || !parameter.chars().all(|c| c.is_ascii_digit()) {
+        return Err(invalid_parameterized_transform(value, transform));
+    }
+
     let parsed = parameter
         .parse::<u32>()
         .map_err(|err| invalid_parameterized_transform(value, transform).with_source(err))?;
@@ -1115,12 +1119,14 @@ mod tests {
         for transform in [
             "bucket10",
             "bucket[]",
+            "bucket[+1]",
             "bucket[10",
             "bucket10]",
             "bucket[[10]]",
             "bucket[10]extra",
             "truncate10",
             "truncate[]",
+            "truncate[+1]",
             "truncate[10",
             "truncate10]",
             "truncate[[10]]",
