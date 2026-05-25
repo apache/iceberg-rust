@@ -156,9 +156,10 @@ zeroize = "1.7"
 zstd = "0.13.3"
 
 [profile.py-release]
+inherits = "release"
+
 codegen-units = 1
 debug = false
-inherits = "release"
 lto = "thin"
 opt-level = "z"
 strip = true
