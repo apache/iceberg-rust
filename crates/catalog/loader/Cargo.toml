@@ -29,18 +29,18 @@ license = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
+async-trait = { workspace = true }
 iceberg = { workspace = true }
-iceberg-catalog-rest = { workspace = true }
 iceberg-catalog-glue = { workspace = true }
-iceberg-catalog-s3tables = { workspace = true }
 iceberg-catalog-hms = { workspace = true }
+iceberg-catalog-rest = { workspace = true }
+iceberg-catalog-s3tables = { workspace = true }
 iceberg-catalog-sql = { workspace = true }
 tokio = { workspace = true }
-async-trait = { workspace = true }
 
 [dev-dependencies]
-iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 iceberg-storage-opendal = { workspace = true }
+iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 reqwest = { workspace = true }
 rstest = { workspace = true }
 sqlx = { workspace = true, features = ["runtime-tokio", "sqlite", "migrate"] }

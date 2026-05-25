@@ -20,11 +20,12 @@
 build:
 	cargo build --all-targets --all-features --workspace
 
-check-fmt:
-	cargo  fmt --all -- --check
+check-fmt: install-taplo-cli
+	cargo fmt --all -- --check
+	taplo fmt --check
 
 check-clippy:
-	cargo  clippy --all-targets --all-features --workspace -- -D warnings
+	cargo clippy --all-targets --all-features --workspace -- -D warnings
 
 install-cargo-machete:
 	cargo install cargo-machete@0.7.0
