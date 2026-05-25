@@ -33,8 +33,8 @@ runs:
       env:
         TIMESTAMP: ${{ inputs.timestamp }}
       run: |
-        # Read the current version via cargo metadata (resolves workspace inheritance)
-        CURRENT_VERSION=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[] | select(.name == "pyiceberg_core_rust") | .version')
+        # Read the workspace version
+        CURRENT_VERSION=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[0].version')
         NEW_VERSION="${CURRENT_VERSION}.dev${TIMESTAMP}"
         echo "Current version: ${CURRENT_VERSION}"
         echo "New dev version: ${NEW_VERSION}"
