@@ -261,6 +261,7 @@ Checklist for reference:
 [ ] No unexpected binary files are included
 [ ] All source files have ASF headers
 [ ] The project builds successfully from source
+[ ] pyiceberg-core builds and tests successfully
 
 For more details, please refer to:
 https://rust.iceberg.apache.org/release.html#how-to-verify-a-release
@@ -345,6 +346,15 @@ After downloading them, here are the instructions on how to verify them.
   
   ```bash
   make build && make test
+  ```
+* Verify pyiceberg-core build and tests:
+
+  ```bash
+  (
+    cd bindings/python
+    make install
+    make test
+  )
   ```
 * Verify license headers: 
   
