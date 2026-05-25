@@ -17,7 +17,7 @@
 
 [build-system]
 build-backend = "maturin"
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.9.4,<2.0"]
 
 [project]
 classifiers = [
@@ -41,7 +41,6 @@ requires-python = ">=3.10,<4"
 
 [tool.maturin]
 config = ["profile.release.lto=\"thin\""]
-features = ["pyo3/extension-module"]
 include = [
   { path = "LICENSE", format = [
     "sdist",
@@ -67,7 +66,7 @@ filterwarnings = [
 
 [dependency-groups]
 dev = [
-  "maturin>=1.0,<2.0",
+  "maturin>=1.9.4,<2.0",
   "pytest>=8.3.2",
   "datafusion==52.*",
   # Set a PyIceberg lower bound; otherwise the resolver may select the

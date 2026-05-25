@@ -893,7 +893,7 @@ dev = [
     { name = "datafusion", specifier = "==52.*" },
     { name = "fastavro", specifier = ">=1.11.1" },
     { name = "huggingface-hub", specifier = ">=0.20" },
-    { name = "maturin", specifier = ">=1.0,<2.0" },
+    { name = "maturin", specifier = ">=1.9.4,<2.0" },
     { name = "pyarrow", specifier = ">=17" },
     { name = "pyiceberg", extras = ["sql-sqlite"], specifier = ">=0.11" },
     { name = "pytest", specifier = ">=8.3.2" },
