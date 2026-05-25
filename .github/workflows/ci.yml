@@ -103,10 +103,6 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: '3.12'
-
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
@@ -129,10 +125,6 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: '3.12'
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -190,10 +182,6 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: '3.12'
 
       - name: Install protoc
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
