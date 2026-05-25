@@ -397,6 +397,7 @@ Checklist for reference:
 [ ] No unexpected binary files are included
 [ ] All source files have ASF headers
 [ ] The project builds successfully from source
+[ ] pyiceberg-core builds and tests successfully
 
 For more details, please refer to:
 https://rust.iceberg.apache.org/release.html#how-to-verify-a-release
@@ -466,6 +467,15 @@ gpg --import KEYS
 cd apache-iceberg-rust-*/
 </code></pre>
 <pre><code class="language-bash">make build &amp;&amp; make test
+</code></pre>
+</li>
+<li>
+<p>Verify pyiceberg-core build and tests:</p>
+<pre><code class="language-bash">(
+  cd bindings/python
+  make install
+  make test
+)
 </code></pre>
 </li>
 <li>
