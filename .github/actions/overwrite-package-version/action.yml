@@ -16,10 +16,10 @@
 # under the License.
 
 name: 'Update Package Version'
-description: 'Updates pyproject.toml version with a dev timestamp for nightly builds'
+description: 'Sets a PEP 440 version in pyproject.toml for Python builds'
 inputs:
-  timestamp:
-    description: 'Timestamp to override to the package version'
+  version:
+    description: 'PEP 440 version to set in pyproject.toml'
     required: true
 runs:
   using: "composite"
@@ -28,19 +28,12 @@ runs:
       run: cargo install toml-cli
       shell: bash
 
-    - name: Get and update version
+    - name: Set pyproject version
       shell: bash
       env:
-        TIMESTAMP: ${{ inputs.timestamp }}
+        VERSION: ${{ inputs.version }}
       run: |
-        # Read the workspace version (valid semver, e.g. "0.9.0")
-        CURRENT_VERSION=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[0].version')
-        NEW_VERSION="${CURRENT_VERSION}.dev${TIMESTAMP}"
-        echo "Current version: ${CURRENT_VERSION}"
-        echo "New dev version: ${NEW_VERSION}"
-
-        # Set version in pyproject.toml and remove "version" from dynamic
-        # so maturin uses the PEP 440 dev version instead of Cargo.toml
+        echo "Setting pyproject version to: ${VERSION}"
         PYPROJECT="bindings/python/pyproject.toml"
-        toml set "$PYPROJECT" project.version "${NEW_VERSION}" > tmp.toml && mv tmp.toml "$PYPROJECT"
+        toml set "$PYPROJECT" project.version "${VERSION}" > tmp.toml && mv tmp.toml "$PYPROJECT"
         sed 's/dynamic = \["version"\]/dynamic = []/' "$PYPROJECT" > tmp.toml && mv tmp.toml "$PYPROJECT"

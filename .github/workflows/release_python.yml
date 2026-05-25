@@ -107,22 +107,20 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install toml-cli
+      - name: Compute RC version
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
-        run: cargo install toml-cli
-
-      - name: Set pyproject version for RC
-        if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
+        id: version
         shell: bash
         env:
           CARGO_VERSION: ${{ needs.validate-release-tag.outputs.cargo-version }}
         run: |
           # Convert semver RC (0.9.0-rc.1) to PEP 440 (0.9.0rc1)
-          PEP440_VERSION=$(echo "$CARGO_VERSION" | sed 's/-rc\.\([0-9]*\)/rc\1/')
-          echo "Setting pyproject version to: $PEP440_VERSION"
-          PYPROJECT="bindings/python/pyproject.toml"
-          toml set "$PYPROJECT" project.version "$PEP440_VERSION" > tmp.toml && mv tmp.toml "$PYPROJECT"
-          sed 's/dynamic = \["version"\]/dynamic = []/' "$PYPROJECT" > tmp.toml && mv tmp.toml "$PYPROJECT"
+          echo "pep440=$(echo "$CARGO_VERSION" | sed 's/-rc\.\([0-9]*\)/rc\1/')" >> $GITHUB_OUTPUT
+
+      - uses: ./.github/actions/overwrite-package-version
+        if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
+        with:
+          version: ${{ steps.version.outputs.pep440 }}
 
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -156,22 +154,20 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install toml-cli
+      - name: Compute RC version
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
-        run: cargo install toml-cli
-
-      - name: Set pyproject version for RC
-        if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
+        id: version
         shell: bash
         env:
           CARGO_VERSION: ${{ needs.validate-release-tag.outputs.cargo-version }}
         run: |
           # Convert semver RC (0.9.0-rc.1) to PEP 440 (0.9.0rc1)
-          PEP440_VERSION=$(echo "$CARGO_VERSION" | sed 's/-rc\.\([0-9]*\)/rc\1/')
-          echo "Setting pyproject version to: $PEP440_VERSION"
-          PYPROJECT="bindings/python/pyproject.toml"
-          toml set "$PYPROJECT" project.version "$PEP440_VERSION" > tmp.toml && mv tmp.toml "$PYPROJECT"
-          sed 's/dynamic = \["version"\]/dynamic = []/' "$PYPROJECT" > tmp.toml && mv tmp.toml "$PYPROJECT"
+          echo "pep440=$(echo "$CARGO_VERSION" | sed 's/-rc\.\([0-9]*\)/rc\1/')" >> $GITHUB_OUTPUT
+
+      - uses: ./.github/actions/overwrite-package-version
+        if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
+        with:
+          version: ${{ steps.version.outputs.pep440 }}
 
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
