@@ -16,7 +16,7 @@
 # under the License.
 
 name: 'Update Package Version'
-description: 'Updates workspace version with a dev timestamp for nightly builds'
+description: 'Updates pyproject.toml version with a dev timestamp for nightly builds'
 inputs:
   timestamp:
     description: 'Timestamp to override to the package version'
@@ -33,13 +33,14 @@ runs:
       env:
         TIMESTAMP: ${{ inputs.timestamp }}
       run: |
-        # Read the workspace version
+        # Read the workspace version (valid semver, e.g. "0.9.0")
         CURRENT_VERSION=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[0].version')
         NEW_VERSION="${CURRENT_VERSION}.dev${TIMESTAMP}"
         echo "Current version: ${CURRENT_VERSION}"
         echo "New dev version: ${NEW_VERSION}"
 
-        # Update workspace version — maturin reads this via dynamic = ["version"]
-        toml set Cargo.toml workspace.package.version "${NEW_VERSION}" > Cargo.toml.tmp
-        rm Cargo.toml
-        mv Cargo.toml.tmp Cargo.toml
+        # Set version in pyproject.toml and remove "version" from dynamic
+        # so maturin uses the PEP 440 dev version instead of Cargo.toml
+        PYPROJECT="bindings/python/pyproject.toml"
+        toml set "$PYPROJECT" project.version "${NEW_VERSION}" > tmp.toml && mv tmp.toml "$PYPROJECT"
+        sed 's/dynamic = \["version"\]/dynamic = []/' "$PYPROJECT" > tmp.toml && mv tmp.toml "$PYPROJECT"
