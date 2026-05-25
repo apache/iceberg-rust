@@ -108,3 +108,6 @@ minijinja = { workspace = true }
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version
 ignored = ["tap"]
+
+[lints]
+workspace = true

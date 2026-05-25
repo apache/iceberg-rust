@@ -26,7 +26,9 @@ use async_trait::async_trait;
 #[cfg(feature = "storage-azdls")]
 use azdls::AzureStorageScheme;
 use bytes::Bytes;
-use opendal::layers::{RetryLayer, TimeoutLayer};
+use opendal::layers::RetryLayer;
+#[cfg(not(madsim))]
+use opendal::layers::TimeoutLayer;
 #[cfg(feature = "storage-azblob")]
 use opendal::services::AzblobConfig;
 #[cfg(feature = "storage-azdls")]
@@ -406,6 +408,11 @@ impl OpenDalStorage {
         };
 
         // Configure timeout layer for IO operations.
+        //
+        // Skipped under madsim: opendal's TimeoutLayer relies on real
+        // `tokio::time::timeout`, which is not provided by the madsim runtime
+        // and triggers "no reactor running" panics during simulated tests.
+        #[cfg(not(madsim))]
         let operator = if let Some(timeout_secs) = parse_config::<u64>(config, IO_TIMEOUT_SECONDS)?
         {
             operator.layer(TimeoutLayer::new().with_io_timeout(Duration::from_secs(timeout_secs)))
