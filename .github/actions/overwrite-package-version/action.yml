@@ -16,7 +16,7 @@
 # under the License.
 
 name: 'Update Package Version'
-description: 'Updates pyproject.toml version with a provided timestamp'
+description: 'Updates workspace version with a dev timestamp for nightly builds'
 inputs:
   timestamp:
     description: 'Timestamp to override to the package version'
@@ -24,13 +24,8 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Setup Python
-      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-      with:
-        python-version: '3.12'
-
-    - name: Install toml
-      run: pip install toml
+    - name: Install toml-cli
+      run: cargo install toml-cli
       shell: bash
 
     - name: Get and update version
@@ -40,22 +35,11 @@ runs:
       run: |
         # Read the current version via cargo metadata (resolves workspace inheritance)
         CURRENT_VERSION=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[] | select(.name == "pyiceberg_core_rust") | .version')
-        export NEW_VERSION="${CURRENT_VERSION}.dev${TIMESTAMP}"
+        NEW_VERSION="${CURRENT_VERSION}.dev${TIMESTAMP}"
         echo "Current version: ${CURRENT_VERSION}"
         echo "New dev version: ${NEW_VERSION}"
 
-        # Update bindings/python/pyproject.toml:
-        # - Set project.version = NEW_VERSION
-        # - Ensure 'version' is not listed in project.dynamic
-        python -c "
-        import toml
-        import os
-        config = toml.load('bindings/python/pyproject.toml')
-        new_version = os.environ['NEW_VERSION']
-        config['project']['version'] = new_version
-        if 'dynamic' in config['project']:
-          config['project']['dynamic'] = [v for v in config['project']['dynamic'] if v != 'version']
-        with open('bindings/python/pyproject.toml', 'w') as f:
-            toml.dump(config, f)
-        print(f'Updated version to: {new_version}')
-        "
+        # Update workspace version — maturin reads this via dynamic = ["version"]
+        toml set Cargo.toml workspace.package.version "${NEW_VERSION}" > Cargo.toml.tmp
+        rm Cargo.toml
+        mv Cargo.toml.tmp Cargo.toml
