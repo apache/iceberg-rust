@@ -19,6 +19,7 @@
 edition = { workspace = true }
 homepage = { workspace = true }
 name = "iceberg"
+publish = true
 rust-version = { workspace = true }
 version = { workspace = true }
 

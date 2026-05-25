@@ -19,6 +19,7 @@
 edition = { workspace = true }
 homepage = { workspace = true }
 name = "iceberg-catalog-s3tables"
+publish = true
 readme = "README.md"
 rust-version = { workspace = true }
 version = { workspace = true }

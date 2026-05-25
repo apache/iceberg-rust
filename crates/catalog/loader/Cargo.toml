@@ -19,12 +19,13 @@
 edition = { workspace = true }
 homepage = { workspace = true }
 name = "iceberg-catalog-loader"
+publish = true
 rust-version = { workspace = true }
 version = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg Catalog Loader API"
-keywords = ["iceberg", "catalog"]
+keywords = ["iceberg", "catalog", "loader"]
 license = { workspace = true }
 repository = { workspace = true }
 
