@@ -20,9 +20,8 @@
 build:
 	cargo build --all-targets --all-features --workspace
 
-check-fmt: install-taplo-cli
+check-fmt:
 	cargo fmt --all -- --check
-	taplo fmt --check
 
 check-clippy:
 	cargo clippy --all-targets --all-features --workspace -- -D warnings
@@ -46,7 +45,7 @@ fix-toml: install-taplo-cli
 	taplo fmt
 
 check-toml: install-taplo-cli
-	taplo check
+	taplo fmt --check
 
 NIGHTLY_VERSION := $(shell awk -F'"' '/^channel/ {print $$2}' rust-toolchain.toml)
 MSRV_VERSION    := $(shell awk -F'"' '/^rust-version/ {print $$2}' Cargo.toml)
