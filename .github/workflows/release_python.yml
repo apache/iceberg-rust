@@ -72,9 +72,9 @@ jobs:
             BASE_VERSION="${CARGO_VERSION%-rc.*}"
             echo "Base version (for Cargo.toml comparison): $BASE_VERSION"
             
-            # Read version from workspace Cargo.toml and validate it matches
-            CARGO_TOML_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-            echo "Version in Cargo.toml (workspace): $CARGO_TOML_VERSION"
+            # Read version via cargo metadata (resolves workspace inheritance)
+            CARGO_TOML_VERSION=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[] | select(.name == "pyiceberg_core_rust") | .version')
+            echo "Version in workspace: $CARGO_TOML_VERSION"
             
             if [ "$BASE_VERSION" != "$CARGO_TOML_VERSION" ]; then
               echo "❌ Version mismatch!"

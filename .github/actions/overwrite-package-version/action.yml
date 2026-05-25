@@ -38,8 +38,8 @@ runs:
       env:
         TIMESTAMP: ${{ inputs.timestamp }}
       run: |
-        # Read the current version from cargo metadata (resolves workspace inheritance)
-        CURRENT_VERSION=$(cargo metadata --format-version 1 --no-deps | python -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; print(next(p['version'] for p in pkgs if p['name']=='pyiceberg_core_rust'))")
+        # Read the current version via cargo metadata (resolves workspace inheritance)
+        CURRENT_VERSION=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[] | select(.name == "pyiceberg_core_rust") | .version')
         export NEW_VERSION="${CURRENT_VERSION}.dev${TIMESTAMP}"
         echo "Current version: ${CURRENT_VERSION}"
         echo "New dev version: ${NEW_VERSION}"
