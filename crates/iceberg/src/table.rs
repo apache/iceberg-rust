@@ -303,11 +303,22 @@ impl StaticTable {
         table_ident: TableIdent,
         file_io: FileIO,
     ) -> Result<Self> {
+        Self::from_metadata_with_runtime(metadata, table_ident, file_io, Runtime::try_current()?)
+            .await
+    }
+
+    /// Creates a static table from a given `TableMetadata`, `FileIO`, and `Runtime`.
+    pub async fn from_metadata_with_runtime(
+        metadata: TableMetadata,
+        table_ident: TableIdent,
+        file_io: FileIO,
+        runtime: Runtime,
+    ) -> Result<Self> {
         let table = Table::builder()
             .metadata(metadata)
             .identifier(table_ident)
             .file_io(file_io.clone())
-            .runtime(Runtime::try_current()?)
+            .runtime(runtime)
             .readonly(true)
             .build();
 
@@ -319,6 +330,22 @@ impl StaticTable {
         table_ident: TableIdent,
         file_io: FileIO,
     ) -> Result<Self> {
+        Self::from_metadata_file_with_runtime(
+            metadata_location,
+            table_ident,
+            file_io,
+            Runtime::try_current()?,
+        )
+        .await
+    }
+
+    /// Creates a static table directly from metadata file, `FileIO`, and `Runtime`.
+    pub async fn from_metadata_file_with_runtime(
+        metadata_location: &str,
+        table_ident: TableIdent,
+        file_io: FileIO,
+        runtime: Runtime,
+    ) -> Result<Self> {
         let metadata = TableMetadata::read_from(&file_io, metadata_location).await?;
 
         let table = Table::builder()
@@ -326,7 +353,7 @@ impl StaticTable {
             .metadata_location(metadata_location)
             .identifier(table_ident)
             .file_io(file_io.clone())
-            .runtime(Runtime::try_current()?)
+            .runtime(runtime)
             .readonly(true)
             .build();
 
@@ -383,6 +410,65 @@ mod tests {
             snapshot_id, 3055729675574597004,
             "snapshot id from metadata don't match"
         );
+    }
+
+    #[tokio::test]
+    async fn test_static_table_from_file_with_runtime() {
+        let metadata_file_name = "TableMetadataV2Valid.json";
+        let metadata_file_path = format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            metadata_file_name
+        );
+        let file_io = FileIO::new_with_fs();
+        let static_identifier = TableIdent::from_strs(["static_ns", "static_table"]).unwrap();
+        let static_table = StaticTable::from_metadata_file_with_runtime(
+            &metadata_file_path,
+            static_identifier,
+            file_io,
+            crate::test_utils::test_runtime(),
+        )
+        .await
+        .unwrap();
+        let snapshot_id = static_table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .snapshot_id();
+        assert_eq!(
+            snapshot_id, 3055729675574597004,
+            "snapshot id from metadata don't match"
+        );
+    }
+
+    #[test]
+    fn test_static_table_from_metadata_with_runtime_outside_tokio() {
+        let metadata_file_name = "TableMetadataV2Valid.json";
+        let metadata_file_path = format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            metadata_file_name
+        );
+        let file_io = FileIO::new_with_fs();
+        let metadata_file_content = std::fs::read(metadata_file_path).unwrap();
+        let table_metadata =
+            serde_json::from_slice::<TableMetadata>(&metadata_file_content).unwrap();
+        let static_identifier = TableIdent::from_strs(["static_ns", "static_table"]).unwrap();
+        let tokio_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let runtime = Runtime::new(&tokio_runtime);
+
+        let static_table = futures::executor::block_on(StaticTable::from_metadata_with_runtime(
+            table_metadata,
+            static_identifier,
+            file_io,
+            runtime,
+        ))
+        .unwrap();
+
+        assert!(static_table.into_table().readonly());
     }
 
     #[tokio::test]
