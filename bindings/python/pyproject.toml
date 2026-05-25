@@ -40,6 +40,7 @@ readme = "project-description.md"
 requires-python = ">=3.10,<4"
 
 [tool.maturin]
+config = ["profile.release.lto=\"thin\""]
 features = ["pyo3/extension-module"]
 include = [
   { path = "LICENSE", format = [

@@ -107,8 +107,7 @@ For details of each step, please refer to: https://rust.iceberg.apache.org/relea
 Bump all components' version in the project to the new iceberg version.
 Please note that this version is the exact version of the release, not the release candidate version.
 
-- rust core: bump version in `Cargo.toml`
-- python binding: bump version in `bindings/python/Cargo.toml`
+- rust core and python binding: bump version in root `Cargo.toml` under `[workspace.package]`
 
 ### Update docs
 
