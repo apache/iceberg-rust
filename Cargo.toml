@@ -155,8 +155,10 @@ volo-thrift = "0.10.8"
 zeroize = "1.7"
 zstd = "0.13.3"
 
-[profile.release.package.pyiceberg_core_rust]
+[profile.py-release]
+inherits = "release"
 codegen-units = 1
 debug = false
+lto = "thin"
 opt-level = "z"
 strip = true
