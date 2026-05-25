@@ -40,7 +40,6 @@ readme = "project-description.md"
 requires-python = ">=3.10,<4"
 
 [tool.maturin]
-profile = "py-release"
 include = [
   { path = "LICENSE", format = [
     "sdist",
@@ -52,6 +51,7 @@ include = [
   ] },
 ]
 module-name = "pyiceberg_core.pyiceberg_core_rust"
+profile = "py-release"
 python-source = "python"
 
 [tool.ruff.lint]
