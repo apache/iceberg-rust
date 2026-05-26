@@ -36,7 +36,7 @@ pub const MAIN_BRANCH: &str = "main";
 
 /// Reference to [`Snapshot`].
 pub type SnapshotRef = Arc<Snapshot>;
-#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq, Clone, Hash)]
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "lowercase")]
 /// The operation field is used by some operations, like snapshot expiration, to skip processing certain snapshots.
 pub enum Operation {
