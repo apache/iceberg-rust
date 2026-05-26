@@ -49,6 +49,14 @@ pub struct FileScanTask {
     /// The data file path corresponding to the task.
     pub data_file_path: String,
 
+    /// The data file referenced by a deletion vector.
+    ///
+    /// This is only set for Puffin position delete tasks. The Puffin manifest
+    /// entry stores the deletion vector blob location separately from the data
+    /// file the vector applies to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referenced_data_file: Option<String>,
+
     /// The content type of the file to scan.
     pub data_file_content: DataContentType,
 
@@ -163,6 +171,7 @@ impl From<&DeleteFileContext> for FileScanTask {
             record_count: Some(ctx.manifest_entry.record_count()),
 
             data_file_path: ctx.manifest_entry.file_path().to_string(),
+            referenced_data_file: ctx.manifest_entry.data_file().referenced_data_file(),
             data_file_content: ctx.manifest_entry.content_type(),
             data_file_format: ctx.manifest_entry.file_format(),
 

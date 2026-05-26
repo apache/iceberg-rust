@@ -133,6 +133,7 @@ impl ManifestEntryContext {
             record_count: Some(self.manifest_entry.record_count()),
 
             data_file_path: self.manifest_entry.file_path().to_string(),
+            referenced_data_file: None,
             data_file_content: self.manifest_entry.data_file().content_type(),
             data_file_format: self.manifest_entry.file_format(),
 

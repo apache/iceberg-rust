@@ -1826,6 +1826,7 @@ pub mod tests {
         );
         let task = FileScanTask {
             data_file_path: "data_file_path".to_string(),
+            referenced_data_file: None,
             file_size_in_bytes: 0,
             start: 0,
             length: 100,
@@ -1848,6 +1849,7 @@ pub mod tests {
         // with predicate
         let task = FileScanTask {
             data_file_path: "data_file_path".to_string(),
+            referenced_data_file: None,
             file_size_in_bytes: 0,
             start: 0,
             length: 100,

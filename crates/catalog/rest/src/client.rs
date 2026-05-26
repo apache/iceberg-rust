@@ -412,6 +412,31 @@ pub(crate) async fn deserialize_unexpected_catalog_error(
     err.with_context("json", String::from_utf8_lossy(&bytes))
 }
 
+/// Deserializes a catalog error response while preserving the caller-provided message.
+pub(crate) async fn deserialize_catalog_error_with_message(
+    response: Response,
+    disable_header_redaction: bool,
+    kind: ErrorKind,
+    message: impl Into<String>,
+) -> Error {
+    let err = Error::new(kind, message)
+        .with_context("status", response.status().to_string())
+        .with_context(
+            "headers",
+            format_headers_redacted(response.headers(), disable_header_redaction),
+        );
+
+    let bytes = match response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(err) => return err.into(),
+    };
+
+    if bytes.is_empty() {
+        return err;
+    }
+    err.with_context("body", String::from_utf8_lossy(&bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
