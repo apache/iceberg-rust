@@ -151,6 +151,15 @@ fn parse_io_timeout_ms(value: &str) -> Result<NonZeroU64> {
     })
 }
 
+/// Returns `true` when the property map contains S3-style configuration,
+/// indicating that `oss://` paths should be routed through the S3 backend
+/// (e.g. REST catalog vended credentials).
+#[cfg(all(feature = "opendal-oss", feature = "opendal-s3"))]
+fn has_s3_config(props: &HashMap<String, String>) -> bool {
+    props.contains_key(iceberg::io::S3_ENDPOINT)
+        || props.contains_key(iceberg::io::S3_ACCESS_KEY_ID)
+}
+
 /// OpenDAL-based storage factory.
 ///
 /// Maps scheme to the corresponding OpenDalStorage storage variant.
@@ -236,13 +245,22 @@ impl StorageFactory for OpenDalStorageFactory {
                 config: gcs_config_parse(config.props().clone())?.into(),
                 client_config,
             })),
-            // OSS is S3-API-compatible; route through S3 so `s3.*` props
-            // work for OSS-backed tables (mirrors pyiceberg/Java S3FileIO).
+            // OSS: if `s3.*` props are present (REST catalog vended credentials),
+            // route through S3 backend (OSS is S3-API-compatible).
+            // Otherwise fall back to native OSS backend (RAM/OIDC auth).
             #[cfg(all(feature = "opendal-oss", feature = "opendal-s3"))]
-            OpenDalStorageFactory::Oss => Ok(Arc::new(OpenDalStorage::S3 {
-                config: s3_config_parse(config.props().clone())?.into(),
-                customized_credential_load: None,
-            })),
+            OpenDalStorageFactory::Oss => {
+                if has_s3_config(config.props()) {
+                    Ok(Arc::new(OpenDalStorage::S3 {
+                        config: s3_config_parse(config.props().clone())?.into(),
+                        customized_credential_load: None,
+                    }))
+                } else {
+                    Ok(Arc::new(OpenDalStorage::Oss {
+                        config: oss_config_parse(config.props().clone())?.into(),
+                    }))
+                }
+            }
             #[cfg(all(feature = "opendal-oss", not(feature = "opendal-s3")))]
             OpenDalStorageFactory::Oss => Ok(Arc::new(OpenDalStorage::Oss {
                 config: oss_config_parse(config.props().clone())?.into(),
@@ -327,7 +345,10 @@ pub enum OpenDalStorage {
         #[serde(default)]
         client_config: OpenDalClientConfig,
     },
-    /// OSS storage variant.
+    /// OSS storage variant (native OpenDAL OSS backend).
+    ///
+    /// Used when no `s3.*` configuration is present, allowing native
+    /// Aliyun authentication (RAM/OIDC/assume-role).
     #[cfg(feature = "opendal-oss")]
     Oss {
         /// OSS configuration.
@@ -1094,7 +1115,9 @@ mod tests {
         // All S3-family schemes are accepted by the same storage instance.
         // Custom schemes for S3-compatible stores (e.g., `minio://`) are also
         // accepted because the path's scheme is used as-is for prefix matching.
-        for scheme in ["s3", "s3a", "s3n", "minio"] {
+        // `oss://` is included because OSS is routed through this backend when
+        // `s3.*` config is present (see `has_s3_config`).
+        for scheme in ["s3", "s3a", "s3n", "minio", "oss"] {
             assert_eq!(
                 storage
                     .relativize_path(&format!("{scheme}://my-bucket/path/to/file.parquet"))
