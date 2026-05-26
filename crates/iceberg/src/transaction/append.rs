@@ -26,6 +26,7 @@ use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
 use crate::table::Table;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
+    check_no_duplicate_paths_in_batch,
 };
 use crate::transaction::{ActionCommit, TransactionAction};
 
@@ -84,6 +85,10 @@ impl FastAppendAction {
 #[async_trait]
 impl TransactionAction for FastAppendAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+        if self.check_duplicate {
+            check_no_duplicate_paths_in_batch(&self.added_data_files)?;
+        }
+
         let snapshot_producer = SnapshotProducer::new(
             table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
@@ -257,6 +262,66 @@ mod tests {
         let action = action.add_data_files(vec![data_file.clone()]);
 
         assert!(Arc::new(action).commit(&table).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_fast_append_rejects_intra_batch_duplicate_paths() {
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+
+        let make_file = |size: u64, records: u64| {
+            DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_path("test/dup.parquet".to_string())
+                .file_format(DataFileFormat::Parquet)
+                .file_size_in_bytes(size)
+                .record_count(records)
+                .partition_spec_id(table.metadata().default_partition_spec_id())
+                .partition(Struct::from_iter([Some(Literal::long(1))]))
+                .build()
+                .unwrap()
+        };
+
+        let action = tx.fast_append().add_data_files(vec![
+            make_file(100, 10),
+            make_file(200, 20),
+            make_file(300, 30),
+        ]);
+        let err = match Arc::new(action).commit(&table).await {
+            Ok(_) => panic!("expected duplicate paths to be rejected"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), crate::ErrorKind::DataInvalid);
+        let msg = err.message();
+        assert!(
+            msg.contains("duplicate file path") && msg.contains("test/dup.parquet"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fast_append_intra_batch_duplicate_check_can_be_disabled() {
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+
+        let make_file = || {
+            DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_path("test/dup.parquet".to_string())
+                .file_format(DataFileFormat::Parquet)
+                .file_size_in_bytes(100)
+                .record_count(10)
+                .partition_spec_id(table.metadata().default_partition_spec_id())
+                .partition(Struct::from_iter([Some(Literal::long(1))]))
+                .build()
+                .unwrap()
+        };
+
+        let action = tx
+            .fast_append()
+            .with_check_duplicate(false)
+            .add_data_files(vec![make_file(), make_file()]);
+        assert!(Arc::new(action).commit(&table).await.is_ok());
     }
 
     #[tokio::test]

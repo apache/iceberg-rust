@@ -508,3 +508,19 @@ impl<'a> SnapshotProducer<'a> {
         Ok(ActionCommit::new(updates, requirements))
     }
 }
+
+pub(super) fn check_no_duplicate_paths_in_batch(files: &[DataFile]) -> Result<()> {
+    let mut seen: HashSet<&str> = HashSet::with_capacity(files.len());
+    for f in files {
+        if !seen.insert(f.file_path.as_str()) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot add duplicate file path within the same commit: {}",
+                    f.file_path
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
