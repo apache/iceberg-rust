@@ -16,13 +16,13 @@
 # under the License.
 
 [package]
-name = "iceberg-storage-common"
 edition = { workspace = true }
-version = { workspace = true }
+homepage = { workspace = true }
 license = { workspace = true }
+name = "iceberg-storage-common"
 repository = { workspace = true }
 rust-version = { workspace = true }
-homepage = { workspace = true }
+version = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg Storage Common Test Suite"
@@ -33,14 +33,14 @@ iceberg = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
 iceberg = { workspace = true }
 iceberg-storage-opendal = { workspace = true, features = ["opendal-all"] }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
-rstest = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-bytes = { workspace = true }
-futures = { workspace = true }
+proptest = { version = "1" }
 reqsign-core = { version = "3.0.0" }
 reqwest = { workspace = true }
+rstest = { workspace = true }
 tempfile = { workspace = true }
-proptest = { version = "1" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
