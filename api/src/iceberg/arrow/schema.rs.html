@@ -26,7 +26,7 @@
 <a href=#26 id=26 data-nosnippet>26</a>    FixedSizeBinaryArray, Float32Array, Float64Array, Int32Array, Int64Array, Scalar, StringArray,
 <a href=#27 id=27 data-nosnippet>27</a>    TimestampMicrosecondArray, TimestampNanosecondArray,
 <a href=#28 id=28 data-nosnippet>28</a>};
-<a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>arrow_schema::{DataType, Field, Fields, Schema <span class="kw">as </span>ArrowSchema, TimeUnit};
+<a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>arrow_schema::{DataType, Field, FieldRef, Fields, Schema <span class="kw">as </span>ArrowSchema, TimeUnit};
 <a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span>parquet::file::statistics::Statistics;
 <a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>uuid::Uuid;
@@ -55,42 +55,42 @@
 <a href=#55 id=55 data-nosnippet>55</a>    </span><span class="kw">type </span>U;
 <a href=#56 id=56 data-nosnippet>56</a>
 <a href=#57 id=57 data-nosnippet>57</a>    <span class="doccomment">/// Called before struct/list/map field.
-<a href=#58 id=58 data-nosnippet>58</a>    </span><span class="kw">fn </span>before_field(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>Field) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#58 id=58 data-nosnippet>58</a>    </span><span class="kw">fn </span>before_field(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>FieldRef) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#59 id=59 data-nosnippet>59</a>        <span class="prelude-val">Ok</span>(())
 <a href=#60 id=60 data-nosnippet>60</a>    }
 <a href=#61 id=61 data-nosnippet>61</a>
 <a href=#62 id=62 data-nosnippet>62</a>    <span class="doccomment">/// Called after struct/list/map field.
-<a href=#63 id=63 data-nosnippet>63</a>    </span><span class="kw">fn </span>after_field(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>Field) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#63 id=63 data-nosnippet>63</a>    </span><span class="kw">fn </span>after_field(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>FieldRef) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#64 id=64 data-nosnippet>64</a>        <span class="prelude-val">Ok</span>(())
 <a href=#65 id=65 data-nosnippet>65</a>    }
 <a href=#66 id=66 data-nosnippet>66</a>
 <a href=#67 id=67 data-nosnippet>67</a>    <span class="doccomment">/// Called before list element.
-<a href=#68 id=68 data-nosnippet>68</a>    </span><span class="kw">fn </span>before_list_element(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>Field) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#68 id=68 data-nosnippet>68</a>    </span><span class="kw">fn </span>before_list_element(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>FieldRef) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#69 id=69 data-nosnippet>69</a>        <span class="prelude-val">Ok</span>(())
 <a href=#70 id=70 data-nosnippet>70</a>    }
 <a href=#71 id=71 data-nosnippet>71</a>
 <a href=#72 id=72 data-nosnippet>72</a>    <span class="doccomment">/// Called after list element.
-<a href=#73 id=73 data-nosnippet>73</a>    </span><span class="kw">fn </span>after_list_element(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>Field) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#73 id=73 data-nosnippet>73</a>    </span><span class="kw">fn </span>after_list_element(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>FieldRef) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#74 id=74 data-nosnippet>74</a>        <span class="prelude-val">Ok</span>(())
 <a href=#75 id=75 data-nosnippet>75</a>    }
 <a href=#76 id=76 data-nosnippet>76</a>
 <a href=#77 id=77 data-nosnippet>77</a>    <span class="doccomment">/// Called before map key.
-<a href=#78 id=78 data-nosnippet>78</a>    </span><span class="kw">fn </span>before_map_key(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>Field) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#78 id=78 data-nosnippet>78</a>    </span><span class="kw">fn </span>before_map_key(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>FieldRef) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#79 id=79 data-nosnippet>79</a>        <span class="prelude-val">Ok</span>(())
 <a href=#80 id=80 data-nosnippet>80</a>    }
 <a href=#81 id=81 data-nosnippet>81</a>
 <a href=#82 id=82 data-nosnippet>82</a>    <span class="doccomment">/// Called after map key.
-<a href=#83 id=83 data-nosnippet>83</a>    </span><span class="kw">fn </span>after_map_key(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>Field) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#83 id=83 data-nosnippet>83</a>    </span><span class="kw">fn </span>after_map_key(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>FieldRef) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#84 id=84 data-nosnippet>84</a>        <span class="prelude-val">Ok</span>(())
 <a href=#85 id=85 data-nosnippet>85</a>    }
 <a href=#86 id=86 data-nosnippet>86</a>
 <a href=#87 id=87 data-nosnippet>87</a>    <span class="doccomment">/// Called before map value.
-<a href=#88 id=88 data-nosnippet>88</a>    </span><span class="kw">fn </span>before_map_value(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>Field) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#88 id=88 data-nosnippet>88</a>    </span><span class="kw">fn </span>before_map_value(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>FieldRef) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#89 id=89 data-nosnippet>89</a>        <span class="prelude-val">Ok</span>(())
 <a href=#90 id=90 data-nosnippet>90</a>    }
 <a href=#91 id=91 data-nosnippet>91</a>
 <a href=#92 id=92 data-nosnippet>92</a>    <span class="doccomment">/// Called after map value.
-<a href=#93 id=93 data-nosnippet>93</a>    </span><span class="kw">fn </span>after_map_value(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>Field) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#93 id=93 data-nosnippet>93</a>    </span><span class="kw">fn </span>after_map_value(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>FieldRef) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#94 id=94 data-nosnippet>94</a>        <span class="prelude-val">Ok</span>(())
 <a href=#95 id=95 data-nosnippet>95</a>    }
 <a href=#96 id=96 data-nosnippet>96</a>
@@ -176,7 +176,7 @@
 <a href=#176 id=176 data-nosnippet>176</a><span class="doccomment">/// Visit list types in post order.
 <a href=#177 id=177 data-nosnippet>177</a></span><span class="kw">fn </span>visit_list&lt;V: ArrowSchemaVisitor&gt;(
 <a href=#178 id=178 data-nosnippet>178</a>    data_type: <span class="kw-2">&amp;</span>DataType,
-<a href=#179 id=179 data-nosnippet>179</a>    element_field: <span class="kw-2">&amp;</span>Field,
+<a href=#179 id=179 data-nosnippet>179</a>    element_field: <span class="kw-2">&amp;</span>FieldRef,
 <a href=#180 id=180 data-nosnippet>180</a>    visitor: <span class="kw-2">&amp;mut </span>V,
 <a href=#181 id=181 data-nosnippet>181</a>) -&gt; <span class="prelude-ty">Result</span>&lt;V::T&gt; {
 <a href=#182 id=182 data-nosnippet>182</a>    visitor.before_list_element(element_field)<span class="question-mark">?</span>;
@@ -244,7 +244,7 @@
 <a href=#244 id=244 data-nosnippet>244</a>
 <a href=#245 id=245 data-nosnippet>245</a><span class="kw">const </span>ARROW_FIELD_DOC_KEY: <span class="kw-2">&amp;</span>str = <span class="string">"doc"</span>;
 <a href=#246 id=246 data-nosnippet>246</a>
-<a href=#247 id=247 data-nosnippet>247</a><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>get_field_id_from_metadata(field: <span class="kw-2">&amp;</span>Field) -&gt; <span class="prelude-ty">Result</span>&lt;i32&gt; {
+<a href=#247 id=247 data-nosnippet>247</a><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>get_field_id_from_metadata(field: <span class="kw-2">&amp;</span>FieldRef) -&gt; <span class="prelude-ty">Result</span>&lt;i32&gt; {
 <a href=#248 id=248 data-nosnippet>248</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
 <a href=#249 id=249 data-nosnippet>249</a>        <span class="kw">return </span>value.parse::&lt;i32&gt;().map_err(|e| {
 <a href=#250 id=250 data-nosnippet>250</a>            Error::new(
@@ -261,7 +261,7 @@
 <a href=#261 id=261 data-nosnippet>261</a>    ))
 <a href=#262 id=262 data-nosnippet>262</a>}
 <a href=#263 id=263 data-nosnippet>263</a>
-<a href=#264 id=264 data-nosnippet>264</a><span class="kw">fn </span>get_field_doc(field: <span class="kw-2">&amp;</span>Field) -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
+<a href=#264 id=264 data-nosnippet>264</a><span class="kw">fn </span>get_field_doc(field: <span class="kw-2">&amp;</span>FieldRef) -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
 <a href=#265 id=265 data-nosnippet>265</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(value) = field.metadata().get(ARROW_FIELD_DOC_KEY) {
 <a href=#266 id=266 data-nosnippet>266</a>        <span class="kw">return </span><span class="prelude-val">Some</span>(value.clone());
 <a href=#267 id=267 data-nosnippet>267</a>    }
@@ -293,7 +293,7 @@
 <a href=#293 id=293 data-nosnippet>293</a>        }
 <a href=#294 id=294 data-nosnippet>294</a>    }
 <a href=#295 id=295 data-nosnippet>295</a>
-<a href=#296 id=296 data-nosnippet>296</a>    <span class="kw">fn </span>get_field_id(<span class="kw-2">&amp;mut </span><span class="self">self</span>, field: <span class="kw-2">&amp;</span>Field) -&gt; <span class="prelude-ty">Result</span>&lt;i32&gt; {
+<a href=#296 id=296 data-nosnippet>296</a>    <span class="kw">fn </span>get_field_id(<span class="kw-2">&amp;mut </span><span class="self">self</span>, field: <span class="kw-2">&amp;</span>FieldRef) -&gt; <span class="prelude-ty">Result</span>&lt;i32&gt; {
 <a href=#297 id=297 data-nosnippet>297</a>        <span class="kw">if </span><span class="self">self</span>.reassign_field_ids_from.is_some() {
 <a href=#298 id=298 data-nosnippet>298</a>            <span class="comment">// Field IDs will be reassigned by the schema builder.
 <a href=#299 id=299 data-nosnippet>299</a>            // We need unique temporary IDs because ReassignFieldIds builds an
@@ -1159,7 +1159,7 @@
 <a href=#1159 id=1159 data-nosnippet>1159</a>    <span class="kw">type </span>T = Field;
 <a href=#1160 id=1160 data-nosnippet>1160</a>    <span class="kw">type </span>U = ArrowSchema;
 <a href=#1161 id=1161 data-nosnippet>1161</a>
-<a href=#1162 id=1162 data-nosnippet>1162</a>    <span class="kw">fn </span>before_field(<span class="kw-2">&amp;mut </span><span class="self">self</span>, field: <span class="kw-2">&amp;</span>Field) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#1162 id=1162 data-nosnippet>1162</a>    <span class="kw">fn </span>before_field(<span class="kw-2">&amp;mut </span><span class="self">self</span>, field: <span class="kw-2">&amp;</span>FieldRef) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#1163 id=1163 data-nosnippet>1163</a>        <span class="comment">// Store field name and nullability for later reconstruction
 <a href=#1164 id=1164 data-nosnippet>1164</a>        </span><span class="self">self</span>.field_stack.push(Field::new(
 <a href=#1165 id=1165 data-nosnippet>1165</a>            field.name(),
@@ -1169,7 +1169,7 @@
 <a href=#1169 id=1169 data-nosnippet>1169</a>        <span class="prelude-val">Ok</span>(())
 <a href=#1170 id=1170 data-nosnippet>1170</a>    }
 <a href=#1171 id=1171 data-nosnippet>1171</a>
-<a href=#1172 id=1172 data-nosnippet>1172</a>    <span class="kw">fn </span>after_field(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>Field) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#1172 id=1172 data-nosnippet>1172</a>    <span class="kw">fn </span>after_field(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _field: <span class="kw-2">&amp;</span>FieldRef) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#1173 id=1173 data-nosnippet>1173</a>        <span class="prelude-val">Ok</span>(())
 <a href=#1174 id=1174 data-nosnippet>1174</a>    }
 <a href=#1175 id=1175 data-nosnippet>1175</a>
