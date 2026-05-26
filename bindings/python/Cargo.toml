@@ -34,12 +34,12 @@ repository = { workspace = true }
 crate-type = ["cdylib"]
 
 [dependencies]
-arrow = { workspace = true }
+arrow = { workspace = true, features = ["pyarrow"] }
 datafusion-ffi = { workspace = true }
 iceberg = { workspace = true }
 iceberg-datafusion = { workspace = true }
 iceberg-storage-opendal = { workspace = true, features = ["opendal-all"] }
-pyo3 = { workspace = true }
+pyo3 = { workspace = true, features = ["abi3-py310"] }
 tokio = { workspace = true }
 
 [package.metadata.cargo-machete]
