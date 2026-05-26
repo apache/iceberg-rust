@@ -23,8 +23,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use iceberg::io::{
-    FileIO, FileIOBuilder, GCS_NO_AUTH, GCS_SERVICE_PATH, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION,
-    S3_SECRET_ACCESS_KEY,
+    FileIO, FileIOBuilder, GCS_NO_AUTH, GCS_SERVICE_PATH, HF_TOKEN, S3_ACCESS_KEY_ID, S3_ENDPOINT,
+    S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_ACCESS_KEY,
 };
 use iceberg_storage_opendal::{OpenDalResolvingStorageFactory, OpenDalStorageFactory};
 use iceberg_test_utils::{get_gcs_endpoint, get_minio_endpoint, set_up};
@@ -33,11 +33,20 @@ use tokio::time::sleep;
 
 static FAKE_GCS_BUCKET: &str = "test-bucket";
 
+/// Environment variable holding the HuggingFace API token.
+pub const ENV_HF_TOKEN: &str = "HF_TOKEN";
+/// Environment variable holding `owner/repo` for an HF bucket-type repo.
+pub const ENV_HF_BUCKET: &str = "HF_BUCKET";
+/// Environment variable holding `owner/repo` for an HF dataset-type repo.
+pub const ENV_HF_DATASET: &str = "HF_DATASET";
+
 #[derive(Debug, Clone, Copy)]
 pub enum StorageKind {
     OpenDalS3,
     OpenDalGcs,
     OpenDalResolving,
+    /// HuggingFace Hub. Skipped when `HF_TOKEN` and `HF_BUCKET` are not set.
+    OpenDalHf,
 }
 
 pub struct StorageHarness {
@@ -55,6 +64,7 @@ pub async fn load_storage(kind: StorageKind) -> Option<StorageHarness> {
         StorageKind::OpenDalS3 => load_opendal_s3().await,
         StorageKind::OpenDalGcs => load_opendal_gcs().await,
         StorageKind::OpenDalResolving => load_opendal_resolving().await,
+        StorageKind::OpenDalHf => load_opendal_hf().await,
     }
 }
 
@@ -62,7 +72,6 @@ async fn load_opendal_s3() -> Option<StorageHarness> {
     let minio_endpoint = get_minio_endpoint();
 
     let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
-        configured_scheme: "s3".to_string(),
         customized_credential_load: None,
     }))
     .with_props(vec![
@@ -70,6 +79,7 @@ async fn load_opendal_s3() -> Option<StorageHarness> {
         (S3_ACCESS_KEY_ID, "admin".to_string()),
         (S3_SECRET_ACCESS_KEY, "password".to_string()),
         (S3_REGION, "us-east-1".to_string()),
+        (S3_PATH_STYLE_ACCESS, "true".to_string()),
     ])
     .build();
 
@@ -145,6 +155,7 @@ async fn load_opendal_resolving() -> Option<StorageHarness> {
             (S3_ACCESS_KEY_ID, "admin".to_string()),
             (S3_SECRET_ACCESS_KEY, "password".to_string()),
             (S3_REGION, "us-east-1".to_string()),
+            (S3_PATH_STYLE_ACCESS, "true".to_string()),
         ])
         .build();
 
@@ -174,4 +185,41 @@ pub fn unique_path(harness: &StorageHarness, test_name: &str) -> String {
         harness.base_path,
         iceberg_test_utils::normalize_test_name(test_name)
     )
+}
+
+async fn load_opendal_hf() -> Option<StorageHarness> {
+    // HF requires a real token and at least a bucket-type repo. Without
+    // them we skip — there's no public emulator for the HF Hub.
+    let token = std::env::var(ENV_HF_TOKEN).ok()?;
+    let bucket = std::env::var(ENV_HF_BUCKET).ok()?;
+
+    let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::Hf))
+        .with_props(vec![(HF_TOKEN, token)])
+        .build();
+
+    Some(StorageHarness {
+        file_io,
+        label: "opendal_hf",
+        base_path: format!("hf://buckets/{bucket}/"),
+        _tempdirs: Vec::new(),
+    })
+}
+
+/// Builds an HF resolving-storage harness. Returns `None` when `HF_TOKEN` /
+/// `HF_BUCKET` are not set.
+pub async fn load_opendal_hf_resolving() -> Option<StorageHarness> {
+    set_up();
+    let token = std::env::var(ENV_HF_TOKEN).ok()?;
+    let bucket = std::env::var(ENV_HF_BUCKET).ok()?;
+
+    let file_io = FileIOBuilder::new(Arc::new(OpenDalResolvingStorageFactory::new()))
+        .with_props(vec![(HF_TOKEN, token)])
+        .build();
+
+    Some(StorageHarness {
+        file_io,
+        label: "opendal_hf_resolving",
+        base_path: format!("hf://buckets/{bucket}/"),
+        _tempdirs: Vec::new(),
+    })
 }

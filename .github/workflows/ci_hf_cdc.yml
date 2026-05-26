@@ -65,10 +65,13 @@ jobs:
           HF_BUCKET: ${{ secrets.HF_BUCKET }}
           HF_DATASET: ${{ secrets.HF_DATASET }}
         run: |
-          cargo test -p iceberg-storage-opendal \
-            --features opendal-hf \
-            --test file_io_hf_test \
-            -- --test-threads=1
+          # All HF tests in the iceberg-storage-common suite are marked
+          # `#[ignore]` so the main CI run skips them. We opt back in here
+          # with `--ignored`, which runs ONLY ignored tests.
+          cargo test -p iceberg-storage-common \
+            --test file_io_suite \
+            --test resolving_suite \
+            -- --ignored --test-threads=1
 
   cdc-python:
     name: CDC and HuggingFace Python tests

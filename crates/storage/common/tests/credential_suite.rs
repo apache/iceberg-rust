@@ -21,16 +21,17 @@ mod common;
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use common::{StorageKind, load_storage};
-use iceberg::io::{FileIOBuilder, S3_ENDPOINT, S3_REGION};
-use iceberg_storage_opendal::{CustomAwsCredentialLoader, OpenDalStorageFactory};
+use iceberg::io::{FileIOBuilder, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION};
+use iceberg_storage_opendal::{
+    AwsCredential, CustomAwsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
+};
 use iceberg_test_utils::get_minio_endpoint;
-use reqsign::{AwsCredential, AwsCredentialLoad};
-use reqwest::Client;
+use reqsign_core::Context;
 use rstest::rstest;
 
 /// Mock credential loader for testing custom AWS credential injection.
+#[derive(Debug)]
 struct MockCredentialLoader {
     credential: Option<AwsCredential>,
 }
@@ -50,9 +51,13 @@ impl MockCredentialLoader {
     }
 }
 
-#[async_trait]
-impl AwsCredentialLoad for MockCredentialLoader {
-    async fn load_credential(&self, _client: Client) -> anyhow::Result<Option<AwsCredential>> {
+impl ProvideCredential for MockCredentialLoader {
+    type Credential = AwsCredential;
+
+    async fn provide_credential(
+        &self,
+        _ctx: &Context,
+    ) -> reqsign_core::Result<Option<AwsCredential>> {
         Ok(self.credential.clone())
     }
 }
@@ -60,16 +65,16 @@ impl AwsCredentialLoad for MockCredentialLoader {
 #[test]
 fn test_custom_aws_credential_loader_instantiation() {
     let mock_loader = MockCredentialLoader::new_minio();
-    let custom_loader = CustomAwsCredentialLoader::new(Arc::new(mock_loader));
+    let custom_loader = CustomAwsCredentialLoader::new(mock_loader);
 
     let _builder = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
-        configured_scheme: "s3".to_string(),
         customized_credential_load: Some(custom_loader),
     }))
     .with_props(vec![
         (S3_ENDPOINT, "http://localhost:9000".to_string()),
         ("bucket", "test-bucket".to_string()),
         (S3_REGION, "us-east-1".to_string()),
+        (S3_PATH_STYLE_ACCESS, "true".to_string()),
     ]);
 }
 
@@ -84,16 +89,16 @@ async fn test_s3_with_custom_credential_loader_success(
     };
 
     let mock_loader = MockCredentialLoader::new_minio();
-    let custom_loader = CustomAwsCredentialLoader::new(Arc::new(mock_loader));
+    let custom_loader = CustomAwsCredentialLoader::new(mock_loader);
     let minio_endpoint = get_minio_endpoint();
 
     let file_io_with_custom_creds = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
-        configured_scheme: "s3".to_string(),
         customized_credential_load: Some(custom_loader),
     }))
     .with_props(vec![
         (S3_ENDPOINT, minio_endpoint),
         (S3_REGION, "us-east-1".to_string()),
+        (S3_PATH_STYLE_ACCESS, "true".to_string()),
     ])
     .build();
 
@@ -116,16 +121,16 @@ async fn test_s3_with_custom_credential_loader_failure(
     };
 
     let mock_loader = MockCredentialLoader::new(None);
-    let custom_loader = CustomAwsCredentialLoader::new(Arc::new(mock_loader));
+    let custom_loader = CustomAwsCredentialLoader::new(mock_loader);
     let minio_endpoint = get_minio_endpoint();
 
     let file_io_with_custom_creds = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
-        configured_scheme: "s3".to_string(),
         customized_credential_load: Some(custom_loader),
     }))
     .with_props(vec![
         (S3_ENDPOINT, minio_endpoint),
         (S3_REGION, "us-east-1".to_string()),
+        (S3_PATH_STYLE_ACCESS, "true".to_string()),
     ])
     .build();
 
@@ -133,8 +138,8 @@ async fn test_s3_with_custom_credential_loader_failure(
         Ok(_) => panic!("Expected error, but got Ok"),
         Err(e) => {
             assert!(
-                e.to_string()
-                    .contains("no valid credential found and anonymous access is not allowed")
+                e.to_string().contains("failed to load signing credential"),
+                "unexpected error: {e}"
             );
         }
     }

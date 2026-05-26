@@ -21,13 +21,15 @@ mod common;
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use common::{StorageKind, load_storage, unique_path};
-use iceberg::io::{FileIOBuilder, S3_ENDPOINT, S3_REGION};
-use iceberg_storage_opendal::{CustomAwsCredentialLoader, OpenDalResolvingStorageFactory};
-use iceberg_test_utils::{get_minio_endpoint, set_up};
-use reqsign::{AwsCredential, AwsCredentialLoad};
-use reqwest::Client;
+use bytes::Bytes;
+use common::{StorageKind, load_opendal_hf_resolving, load_storage, unique_path};
+use futures::StreamExt;
+use iceberg::io::{FileIOBuilder, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION};
+use iceberg_storage_opendal::{
+    AwsCredential, CustomAwsCredentialLoader, OpenDalResolvingStorageFactory, ProvideCredential,
+};
+use iceberg_test_utils::{get_minio_endpoint, normalize_test_name, set_up};
+use reqsign_core::Context;
 use rstest::rstest;
 
 fn temp_fs_path(name: &str) -> String {
@@ -331,11 +333,16 @@ async fn test_resolving_with_custom_credential_loader(
         return Ok(());
     };
 
+    #[derive(Debug)]
     struct MinioCredentialLoader;
 
-    #[async_trait]
-    impl AwsCredentialLoad for MinioCredentialLoader {
-        async fn load_credential(&self, _client: Client) -> anyhow::Result<Option<AwsCredential>> {
+    impl ProvideCredential for MinioCredentialLoader {
+        type Credential = AwsCredential;
+
+        async fn provide_credential(
+            &self,
+            _ctx: &Context,
+        ) -> reqsign_core::Result<Option<AwsCredential>> {
             Ok(Some(AwsCredential {
                 access_key_id: "admin".to_string(),
                 secret_access_key: "password".to_string(),
@@ -348,19 +355,92 @@ async fn test_resolving_with_custom_credential_loader(
     set_up();
     let minio_endpoint = get_minio_endpoint();
 
-    let factory = OpenDalResolvingStorageFactory::new().with_s3_credential_loader(
-        CustomAwsCredentialLoader::new(Arc::new(MinioCredentialLoader)),
-    );
+    let factory = OpenDalResolvingStorageFactory::new()
+        .with_s3_credential_loader(CustomAwsCredentialLoader::new(MinioCredentialLoader));
 
     let file_io = FileIOBuilder::new(Arc::new(factory))
         .with_props(vec![
             (S3_ENDPOINT, minio_endpoint),
             (S3_REGION, "us-east-1".to_string()),
+            (S3_PATH_STYLE_ACCESS, "true".to_string()),
         ])
         .build();
 
     // Should be able to access S3 using the custom credential loader
     assert!(file_io.exists("s3://bucket1/").await.unwrap());
 
+    Ok(())
+}
+
+// --- HuggingFace Hub via resolving storage ---
+//
+// These are marked `#[ignore]` so non-HF CI runs ignore them; the HF
+// workflow opts in via `--run-ignored=only`.
+
+#[tokio::test]
+#[ignore = "HF integration; run via `--run-ignored=only` with HF_TOKEN/HF_BUCKET set"]
+async fn test_hf_resolving_storage() -> iceberg::Result<()> {
+    let harness = load_opendal_hf_resolving()
+        .await
+        .expect("HF_TOKEN and HF_BUCKET must be set for HF tests");
+
+    let path = unique_path(&harness, "test_hf_resolving_storage");
+
+    let _ = harness.file_io.delete(&path).await;
+
+    harness
+        .file_io
+        .new_output(&path)
+        .unwrap()
+        .write(Bytes::from_static(b"resolving"))
+        .await
+        .unwrap();
+
+    let data = harness
+        .file_io
+        .new_input(&path)
+        .unwrap()
+        .read()
+        .await
+        .unwrap();
+    assert_eq!(data, Bytes::from_static(b"resolving"));
+
+    harness.file_io.delete(&path).await.unwrap();
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "HF integration; run via `--run-ignored=only` with HF_TOKEN/HF_BUCKET/HF_DATASET set"]
+async fn test_hf_resolving_delete_stream_across_repo_types() -> iceberg::Result<()> {
+    let harness = load_opendal_hf_resolving()
+        .await
+        .expect("HF_TOKEN and HF_BUCKET must be set for HF tests");
+    let dataset =
+        std::env::var(common::ENV_HF_DATASET).expect("HF_DATASET must be set for HF tests");
+
+    let bucket_path = unique_path(&harness, "test_hf_resolving_delete_stream_across");
+    let dataset_path = format!(
+        "hf://datasets/{}/{}",
+        dataset,
+        normalize_test_name("test_hf_resolving_delete_stream_across")
+    );
+
+    for path in [&bucket_path, &dataset_path] {
+        let _ = harness.file_io.delete(path).await;
+        harness
+            .file_io
+            .new_output(path)
+            .unwrap()
+            .write(Bytes::from_static(b"x"))
+            .await
+            .unwrap();
+        assert!(harness.file_io.exists(path).await.unwrap());
+    }
+
+    let stream = futures::stream::iter(vec![bucket_path.clone(), dataset_path.clone()]).boxed();
+    harness.file_io.delete_stream(stream).await.unwrap();
+
+    assert!(!harness.file_io.exists(&bucket_path).await.unwrap());
+    assert!(!harness.file_io.exists(&dataset_path).await.unwrap());
     Ok(())
 }

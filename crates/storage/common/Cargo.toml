@@ -40,8 +40,7 @@ rstest = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 bytes = { workspace = true }
 futures = { workspace = true }
-async-trait = { workspace = true }
-reqsign = { version = "0.16.3", default-features = false }
+reqsign-core = { version = "3.0.0" }
 reqwest = { workspace = true }
 tempfile = { workspace = true }
 proptest = { version = "1" }
