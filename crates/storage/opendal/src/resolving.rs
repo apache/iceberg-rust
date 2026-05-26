@@ -102,18 +102,24 @@ fn build_storage_for_scheme(
                 config: Arc::new(config),
             })
         }
-        // OSS is S3-API-compatible; route through S3 so `s3.*` props
-        // work for OSS-backed tables (mirrors pyiceberg/Java S3FileIO).
+        // OSS: if `s3.*` props are present (REST catalog vended credentials),
+        // route through S3 backend (OSS is S3-API-compatible).
+        // Otherwise fall back to native OSS backend (RAM/OIDC auth).
         #[cfg(all(feature = "opendal-oss", feature = "opendal-s3"))]
         "oss" => {
-            let config = crate::s3::s3_config_parse(props.clone())?;
-            Ok(OpenDalStorage::S3 {
-                config: Arc::new(config),
-                customized_credential_load: customized_credential_load.clone(),
-            })
+            if crate::has_s3_config(props) {
+                let config = crate::s3::s3_config_parse(props.clone())?;
+                Ok(OpenDalStorage::S3 {
+                    config: Arc::new(config),
+                    customized_credential_load: customized_credential_load.clone(),
+                })
+            } else {
+                let config = crate::oss::oss_config_parse(props.clone())?;
+                Ok(OpenDalStorage::Oss {
+                    config: Arc::new(config),
+                })
+            }
         }
-        // Fallback: builds without `opendal-s3` but with `opendal-oss`
-        // still use the native OSS service (which consumes `oss.*` keys).
         #[cfg(all(feature = "opendal-oss", not(feature = "opendal-s3")))]
         "oss" => {
             let config = crate::oss::oss_config_parse(props.clone())?;
@@ -386,7 +392,7 @@ mod tests {
 
     #[cfg(all(feature = "opendal-oss", feature = "opendal-s3"))]
     #[test]
-    fn oss_scheme_routes_through_s3_backend_when_available() {
+    fn oss_routes_through_s3_when_s3_config_present() {
         use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT};
 
         let mut props = HashMap::new();
@@ -399,7 +405,19 @@ mod tests {
         let storage = build_storage_for_scheme("oss", &props, &None).unwrap();
         assert!(
             matches!(storage, OpenDalStorage::S3 { .. }),
-            "OSS should route through S3 backend when opendal-s3 is enabled"
+            "OSS with s3.* config should route through S3 backend"
+        );
+    }
+
+    #[cfg(all(feature = "opendal-oss", feature = "opendal-s3"))]
+    #[test]
+    fn oss_falls_back_to_native_without_s3_config() {
+        let props = HashMap::new();
+
+        let storage = build_storage_for_scheme("oss", &props, &None).unwrap();
+        assert!(
+            matches!(storage, OpenDalStorage::Oss { .. }),
+            "OSS without s3.* config should use native OSS backend"
         );
     }
 
@@ -428,16 +446,5 @@ mod tests {
         // Second call should hit the cache.
         let cached = resolving.resolve("oss://my-bucket/other").unwrap();
         assert!(Arc::ptr_eq(&storage, &cached));
-    }
-
-    #[cfg(all(feature = "opendal-oss", not(feature = "opendal-s3")))]
-    #[test]
-    fn oss_scheme_falls_back_to_native_oss_backend() {
-        let props = HashMap::new();
-        let storage = build_storage_for_scheme("oss", &props).unwrap();
-        assert!(
-            matches!(storage, OpenDalStorage::Oss { .. }),
-            "Without opendal-s3, OSS should use the native OSS backend"
-        );
     }
 }
