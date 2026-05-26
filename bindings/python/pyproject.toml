@@ -51,9 +51,15 @@ include = [
   ] },
 ]
 module-name = "pyiceberg_core.pyiceberg_core_rust"
-# Use the Python-specific Cargo profile from the workspace manifest.
-profile = "py-release"
+profile = "release"
 python-source = "python"
+# Optimize for small binary size (https://github.com/apache/iceberg-rust/pull/1841)
+config = [
+  "profile.release.lto=\"thin\"",
+  "profile.release.codegen-units=1",
+  "profile.release.opt-level=\"z\"",
+  "profile.release.strip=true",
+]
 
 [tool.ruff.lint]
 ignore = ["F403", "F405"]
