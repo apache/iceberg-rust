@@ -23,11 +23,6 @@ use url::Url;
 use crate::utils::from_opendal_error;
 
 /// Parse iceberg props to oss config.
-///
-/// Only reachable when the native OSS service is used (i.e. `opendal-s3`
-/// is disabled); when `opendal-s3` is enabled, OSS is routed through the
-/// S3 code path and this function is dead code.
-#[cfg(not(feature = "opendal-s3"))]
 pub(crate) fn oss_config_parse(
     mut m: std::collections::HashMap<String, String>,
 ) -> Result<OssConfig> {
