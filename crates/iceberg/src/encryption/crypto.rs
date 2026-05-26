@@ -177,6 +177,15 @@ impl SecureKey {
     }
 }
 
+impl TryFrom<SensitiveBytes> for SecureKey {
+    type Error = Error;
+
+    fn try_from(key: SensitiveBytes) -> Result<Self> {
+        let key_size = AesKeySize::from_key_length(key.len())?;
+        Ok(Self { key, key_size })
+    }
+}
+
 /// AES-GCM cipher for encrypting and decrypting data.
 pub struct AesGcmCipher {
     key: SensitiveBytes,

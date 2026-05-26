@@ -19,9 +19,31 @@
 //! This module is pub just for internal testing.
 //! It is subject to change and is not intended to be used by external users.
 
+use std::sync::OnceLock;
+
 use arrow_array::RecordBatch;
 use expect_test::Expect;
 use itertools::Itertools;
+
+use crate::runtime::Runtime;
+
+/// Returns a process-wide [`Runtime`] suitable for tests that need to construct
+/// a [`Table`](crate::table::Table) outside a tokio context.
+///
+/// The returned [`Runtime`] wraps a single shared multi-thread tokio runtime
+/// that is lazily built on first call and lives until process exit. Cloning is
+/// cheap, so test code can call this every time it needs a runtime to feed
+/// into [`TableBuilder::runtime`](crate::table::TableBuilder::runtime).
+pub fn test_runtime() -> Runtime {
+    static TOKIO_RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    let tokio_rt = TOKIO_RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build test tokio runtime")
+    });
+    Runtime::new(tokio_rt)
+}
 
 /// Snapshot testing to check the resulting record batch.
 ///

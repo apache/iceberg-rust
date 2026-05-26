@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use arrow_schema::{
-    DataType, Field, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef, TimeUnit,
+    DataType, Field, FieldRef, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef, TimeUnit,
 };
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
@@ -58,8 +58,7 @@ pub(crate) fn coerce_int96_timestamps(
 /// indicated by the Iceberg schema.
 struct Int96CoercionVisitor<'a> {
     iceberg_schema: &'a Schema,
-    // TODO(#2310): use FieldRef (Arc<Field>) once ArrowSchemaVisitor passes FieldRef.
-    field_stack: Vec<Field>,
+    field_stack: Vec<FieldRef>,
     changed: bool,
 }
 
@@ -75,7 +74,7 @@ impl<'a> Int96CoercionVisitor<'a> {
     /// Determine the target TimeUnit for a Timestamp(Nanosecond) field based on the
     /// Iceberg schema. Falls back to microsecond when field IDs are unavailable,
     /// matching Iceberg Java behavior.
-    fn target_unit(&self, field: &Field) -> Option<TimeUnit> {
+    fn target_unit(&self, field: &FieldRef) -> Option<TimeUnit> {
         if !matches!(
             field.data_type(),
             DataType::Timestamp(TimeUnit::Nanosecond, _)
@@ -112,42 +111,42 @@ impl ArrowSchemaVisitor for Int96CoercionVisitor<'_> {
     type T = Field;
     type U = ArrowSchema;
 
-    fn before_field(&mut self, field: &Field) -> Result<()> {
-        self.field_stack.push(field.as_ref().clone());
+    fn before_field(&mut self, field: &FieldRef) -> Result<()> {
+        self.field_stack.push(field.clone());
         Ok(())
     }
 
-    fn after_field(&mut self, _field: &Field) -> Result<()> {
+    fn after_field(&mut self, _field: &FieldRef) -> Result<()> {
         self.field_stack.pop();
         Ok(())
     }
 
-    fn before_list_element(&mut self, field: &Field) -> Result<()> {
-        self.field_stack.push(field.as_ref().clone());
+    fn before_list_element(&mut self, field: &FieldRef) -> Result<()> {
+        self.field_stack.push(field.clone());
         Ok(())
     }
 
-    fn after_list_element(&mut self, _field: &Field) -> Result<()> {
+    fn after_list_element(&mut self, _field: &FieldRef) -> Result<()> {
         self.field_stack.pop();
         Ok(())
     }
 
-    fn before_map_key(&mut self, field: &Field) -> Result<()> {
-        self.field_stack.push(field.as_ref().clone());
+    fn before_map_key(&mut self, field: &FieldRef) -> Result<()> {
+        self.field_stack.push(field.clone());
         Ok(())
     }
 
-    fn after_map_key(&mut self, _field: &Field) -> Result<()> {
+    fn after_map_key(&mut self, _field: &FieldRef) -> Result<()> {
         self.field_stack.pop();
         Ok(())
     }
 
-    fn before_map_value(&mut self, field: &Field) -> Result<()> {
-        self.field_stack.push(field.as_ref().clone());
+    fn before_map_value(&mut self, field: &FieldRef) -> Result<()> {
+        self.field_stack.push(field.clone());
         Ok(())
     }
 
-    fn after_map_value(&mut self, _field: &Field) -> Result<()> {
+    fn after_map_value(&mut self, _field: &FieldRef) -> Result<()> {
         self.field_stack.pop();
         Ok(())
     }
