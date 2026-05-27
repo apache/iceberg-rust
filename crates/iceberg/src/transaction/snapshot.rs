@@ -457,11 +457,50 @@ impl<'a> SnapshotProducer<'a> {
 
         summary_collector.set_partition_summary_limit(partition_summary_limit);
 
+        // Helper: look up the partition spec for a file. Returns DataInvalid
+        // if the file references a spec that doesn't exist in the table.
+        let spec_for = |data_file: &DataFile| {
+            table_metadata
+                .partition_spec_by_id(data_file.partition_spec_id)
+                .cloned()
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Cannot find partition spec {} for file: {}",
+                            data_file.partition_spec_id,
+                            data_file.file_path()
+                        ),
+                    )
+                })
+        };
+
         for data_file in &self.added_data_files {
             summary_collector.add_file(
                 data_file,
                 table_metadata.current_schema().clone(),
-                table_metadata.default_partition_spec().clone(),
+                spec_for(data_file)?,
+            );
+        }
+        for delete_file in &self.added_delete_files {
+            summary_collector.add_file(
+                delete_file,
+                table_metadata.current_schema().clone(),
+                spec_for(delete_file)?,
+            );
+        }
+        for data_file in &self.removed_data_files {
+            summary_collector.remove_file(
+                data_file,
+                table_metadata.current_schema().clone(),
+                spec_for(data_file)?,
+            );
+        }
+        for delete_file in &self.removed_delete_files {
+            summary_collector.remove_file(
+                delete_file,
+                table_metadata.current_schema().clone(),
+                spec_for(delete_file)?,
             );
         }
 
