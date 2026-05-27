@@ -644,10 +644,11 @@ pub mod tests {
     use crate::io::{FileIO, OutputFile};
     use crate::metadata_columns::RESERVED_COL_NAME_FILE;
     use crate::scan::FileScanTask;
+    use crate::ErrorKind;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestEntry,
-        ManifestListWriter, ManifestStatus, ManifestWriterBuilder, NestedField, PartitionSpec,
-        PrimitiveType, Schema, Struct, StructType, TableMetadata, Type,
+        DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, DataFileBuilder, DataFileFormat, Datum,
+        Literal, ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder,
+        NestedField, PartitionSpec, PrimitiveType, Schema, Struct, StructType, TableMetadata, Type,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
@@ -1338,6 +1339,69 @@ pub mod tests {
             table_scan.snapshot().unwrap().snapshot_id(),
             3051729675574597004
         );
+    }
+
+    fn table_with_property(key: &str, value: &str) -> Table {
+        let fixture = TableTestFixture::new();
+        let mut metadata = fixture.table.metadata().clone();
+        metadata
+            .properties
+            .insert(key.to_string(), value.to_string());
+        Table::builder()
+            .metadata(metadata)
+            .identifier(fixture.table.identifier().clone())
+            .file_io(fixture.table.file_io().clone())
+            .metadata_location(fixture.table.metadata_location().unwrap().to_string())
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_table_scan_without_name_mapping_property() {
+        let table = TableTestFixture::new().table;
+
+        let table_scan = table.scan().build().unwrap();
+        assert!(
+            table_scan
+                .plan_context
+                .as_ref()
+                .unwrap()
+                .name_mapping
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_table_scan_with_name_mapping_property() {
+        let mapping_json = r#"[{"field-id":1,"names":["id","record_id"]}]"#;
+        let table = table_with_property(DEFAULT_SCHEMA_NAME_MAPPING, mapping_json);
+
+        let table_scan = table.scan().build().unwrap();
+        let mapping = table_scan
+            .plan_context
+            .as_ref()
+            .unwrap()
+            .name_mapping
+            .as_ref()
+            .expect("name_mapping should be parsed from the table property");
+        let fields = mapping.fields();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].field_id(), Some(1));
+        assert_eq!(fields[0].names(), &[
+            "id".to_string(),
+            "record_id".to_string()
+        ]);
+    }
+
+    #[test]
+    fn test_table_scan_with_malformed_name_mapping_property() {
+        let table = table_with_property(DEFAULT_SCHEMA_NAME_MAPPING, "{ not valid json");
+
+        let err = table
+            .scan()
+            .build()
+            .expect_err("malformed name mapping should fail to parse");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
     #[tokio::test]
