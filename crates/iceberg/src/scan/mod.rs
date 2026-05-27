@@ -39,7 +39,7 @@ use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::metadata_columns::{get_metadata_field_id, is_metadata_column_name};
 use crate::runtime::Runtime;
-use crate::spec::{DataContentType, SnapshotRef};
+use crate::spec::{DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, SnapshotRef};
 use crate::table::Table;
 use crate::util::available_parallelism;
 use crate::{Error, ErrorKind, Result};
@@ -281,6 +281,25 @@ impl<'a> TableScanBuilder<'a> {
             None
         };
 
+        let name_mapping = self
+            .table
+            .metadata()
+            .properties()
+            .get(DEFAULT_SCHEMA_NAME_MAPPING)
+            .map(|raw| {
+                serde_json::from_str::<NameMapping>(raw).map_err(|e| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Failed to parse table property {DEFAULT_SCHEMA_NAME_MAPPING} as a NameMapping"
+                        ),
+                    )
+                    .with_source(e)
+                })
+            })
+            .transpose()?
+            .map(Arc::new);
+
         let plan_context = PlanContext {
             snapshot,
             table_metadata: self.table.metadata_ref(),
@@ -290,6 +309,7 @@ impl<'a> TableScanBuilder<'a> {
             snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
             object_cache: self.table.object_cache(),
             field_ids: Arc::new(field_ids),
+            name_mapping,
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
