@@ -1352,6 +1352,7 @@ pub mod tests {
             .identifier(fixture.table.identifier().clone())
             .file_io(fixture.table.file_io().clone())
             .metadata_location(fixture.table.metadata_location().unwrap().to_string())
+            .runtime(test_runtime())
             .build()
             .unwrap()
     }
