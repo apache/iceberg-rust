@@ -638,13 +638,11 @@ pub mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    use crate::TableIdent;
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::{FileIO, OutputFile};
     use crate::metadata_columns::RESERVED_COL_NAME_FILE;
     use crate::scan::FileScanTask;
-    use crate::ErrorKind;
     use crate::spec::{
         DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, DataFileBuilder, DataFileFormat, Datum,
         Literal, ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder,
@@ -652,6 +650,7 @@ pub mod tests {
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
+    use crate::{ErrorKind, TableIdent};
 
     fn render_template(template: &str, ctx: Value) -> String {
         let mut env = Environment::new();
