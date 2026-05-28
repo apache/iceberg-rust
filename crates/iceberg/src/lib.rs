@@ -90,6 +90,7 @@ pub mod transaction;
 pub mod transform;
 
 mod runtime;
+pub use runtime::{Runtime, RuntimeHandle};
 
 pub mod arrow;
 pub(crate) mod delete_file_index;

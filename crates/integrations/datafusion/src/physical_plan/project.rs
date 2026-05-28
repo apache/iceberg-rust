@@ -194,6 +194,7 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Fields};
     use datafusion::physical_plan::empty::EmptyExec;
     use iceberg::spec::{NestedField, PrimitiveType, Schema, StructType, Transform, Type};
+    use iceberg::test_utils::test_runtime;
 
     use super::*;
 
@@ -447,7 +448,8 @@ mod tests {
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/metadata.json".to_string())
+            .metadata_location("/test/metadata.json")
+            .runtime(test_runtime())
             .build()
             .unwrap();
 
@@ -505,7 +507,8 @@ mod tests {
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/metadata.json".to_string())
+            .metadata_location("/test/metadata.json")
+            .runtime(test_runtime())
             .build()
             .unwrap();
 
@@ -577,7 +580,8 @@ mod tests {
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/metadata.json".to_string())
+            .metadata_location("/test/metadata.json")
+            .runtime(test_runtime())
             .build()
             .unwrap();
 

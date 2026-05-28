@@ -19,6 +19,7 @@
 edition = { workspace = true }
 homepage = { workspace = true }
 name = "iceberg-catalog-rest"
+publish = true
 rust-version = { workspace = true }
 version = { workspace = true }
 
@@ -38,7 +39,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true }
 typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 

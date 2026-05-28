@@ -21,10 +21,10 @@ build:
 	cargo build --all-targets --all-features --workspace
 
 check-fmt:
-	cargo  fmt --all -- --check
+	cargo fmt --all -- --check
 
 check-clippy:
-	cargo  clippy --all-targets --all-features --workspace -- -D warnings
+	cargo clippy --all-targets --all-features --workspace -- -D warnings
 
 install-cargo-machete:
 	cargo install cargo-machete@0.7.0
@@ -45,7 +45,7 @@ fix-toml: install-taplo-cli
 	taplo fmt
 
 check-toml: install-taplo-cli
-	taplo check
+	taplo fmt --check
 
 NIGHTLY_VERSION := $(shell awk -F'"' '/^channel/ {print $$2}' rust-toolchain.toml)
 MSRV_VERSION    := $(shell awk -F'"' '/^rust-version/ {print $$2}' Cargo.toml)

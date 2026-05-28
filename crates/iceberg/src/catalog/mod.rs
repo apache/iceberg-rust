@@ -40,6 +40,7 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 use crate::io::StorageFactory;
+use crate::runtime::Runtime;
 use crate::spec::{
     EncryptedKey, FormatVersion, PartitionStatisticsFile, Schema, SchemaId, Snapshot,
     SnapshotReference, SortOrder, StatisticsFile, TableMetadata, TableMetadataBuilder,
@@ -150,6 +151,13 @@ pub trait CatalogBuilder: Default + Debug + Send + Sync {
     ///     .await?;
     /// ```
     fn with_storage_factory(self, storage_factory: Arc<dyn StorageFactory>) -> Self;
+
+    /// Set a custom tokio Runtime to use for spawning async tasks.
+    ///
+    /// When a Runtime is provided, the catalog will propagate it to all tables
+    /// it creates. Tasks such as scan planning and delete file processing
+    /// will be spawned on this runtime.
+    fn with_runtime(self, runtime: Runtime) -> Self;
 
     /// Create a new catalog instance.
     fn load(
@@ -1076,6 +1084,7 @@ mod tests {
         ViewVersion,
     };
     use crate::table::Table;
+    use crate::test_utils::test_runtime;
     use crate::{
         NamespaceIdent, TableCommit, TableCreation, TableIdent, TableRequirement, TableUpdate,
     };
@@ -2390,9 +2399,10 @@ mod tests {
 
             Table::builder()
                 .metadata(resp)
-                .metadata_location("s3://bucket/test/location/metadata/00000-8a62c37d-4573-4021-952a-c0baef7d21d0.metadata.json".to_string())
+                .metadata_location("s3://bucket/test/location/metadata/00000-8a62c37d-4573-4021-952a-c0baef7d21d0.metadata.json")
                 .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
                 .file_io(FileIO::new_with_memory())
+                .runtime(test_runtime())
                 .build()
                 .unwrap()
         };

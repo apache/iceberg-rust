@@ -107,8 +107,7 @@ For details of each step, please refer to: https://rust.iceberg.apache.org/relea
 Bump all components' version in the project to the new iceberg version.
 Please note that this version is the exact version of the release, not the release candidate version.
 
-- rust core: bump version in `Cargo.toml`
-- python binding: bump version in `bindings/python/Cargo.toml`
+- rust core and python binding: bump version in root `Cargo.toml` under `[workspace.package]`
 
 ### Update docs
 
@@ -261,6 +260,7 @@ Checklist for reference:
 [ ] No unexpected binary files are included
 [ ] All source files have ASF headers
 [ ] The project builds successfully from source
+[ ] pyiceberg-core builds and tests successfully
 
 For more details, please refer to:
 https://rust.iceberg.apache.org/release.html#how-to-verify-a-release
@@ -345,6 +345,15 @@ After downloading them, here are the instructions on how to verify them.
   
   ```bash
   make build && make test
+  ```
+* Verify pyiceberg-core build and tests:
+
+  ```bash
+  (
+    cd bindings/python
+    make install
+    make test
+  )
   ```
 * Verify license headers: 
   
