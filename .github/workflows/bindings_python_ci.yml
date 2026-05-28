@@ -25,7 +25,7 @@ on:
     paths:
       - '**'                                       # Include all files and directories in the repository by default.
       - '!.github/ISSUE_TEMPLATE/**'               # Exclude files and directories that don't impact tests or code like templates, metadata, and documentation.
-      - '!scripts/**'
+      - '!dev/release/**'
       - '!website/**'
       - '!.asf.yml'
       - '!.gitattributes'
