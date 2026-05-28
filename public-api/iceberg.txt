@@ -695,14 +695,14 @@ pub const iceberg::arrow::UTC_TIME_ZONE: &str
 pub trait iceberg::arrow::ArrowSchemaVisitor
 pub type iceberg::arrow::ArrowSchemaVisitor::T
 pub type iceberg::arrow::ArrowSchemaVisitor::U
-pub fn iceberg::arrow::ArrowSchemaVisitor::after_field(&mut self, _field: &arrow_schema::field::Field) -> iceberg::Result<()>
-pub fn iceberg::arrow::ArrowSchemaVisitor::after_list_element(&mut self, _field: &arrow_schema::field::Field) -> iceberg::Result<()>
-pub fn iceberg::arrow::ArrowSchemaVisitor::after_map_key(&mut self, _field: &arrow_schema::field::Field) -> iceberg::Result<()>
-pub fn iceberg::arrow::ArrowSchemaVisitor::after_map_value(&mut self, _field: &arrow_schema::field::Field) -> iceberg::Result<()>
-pub fn iceberg::arrow::ArrowSchemaVisitor::before_field(&mut self, _field: &arrow_schema::field::Field) -> iceberg::Result<()>
-pub fn iceberg::arrow::ArrowSchemaVisitor::before_list_element(&mut self, _field: &arrow_schema::field::Field) -> iceberg::Result<()>
-pub fn iceberg::arrow::ArrowSchemaVisitor::before_map_key(&mut self, _field: &arrow_schema::field::Field) -> iceberg::Result<()>
-pub fn iceberg::arrow::ArrowSchemaVisitor::before_map_value(&mut self, _field: &arrow_schema::field::Field) -> iceberg::Result<()>
+pub fn iceberg::arrow::ArrowSchemaVisitor::after_field(&mut self, _field: &arrow_schema::field::FieldRef) -> iceberg::Result<()>
+pub fn iceberg::arrow::ArrowSchemaVisitor::after_list_element(&mut self, _field: &arrow_schema::field::FieldRef) -> iceberg::Result<()>
+pub fn iceberg::arrow::ArrowSchemaVisitor::after_map_key(&mut self, _field: &arrow_schema::field::FieldRef) -> iceberg::Result<()>
+pub fn iceberg::arrow::ArrowSchemaVisitor::after_map_value(&mut self, _field: &arrow_schema::field::FieldRef) -> iceberg::Result<()>
+pub fn iceberg::arrow::ArrowSchemaVisitor::before_field(&mut self, _field: &arrow_schema::field::FieldRef) -> iceberg::Result<()>
+pub fn iceberg::arrow::ArrowSchemaVisitor::before_list_element(&mut self, _field: &arrow_schema::field::FieldRef) -> iceberg::Result<()>
+pub fn iceberg::arrow::ArrowSchemaVisitor::before_map_key(&mut self, _field: &arrow_schema::field::FieldRef) -> iceberg::Result<()>
+pub fn iceberg::arrow::ArrowSchemaVisitor::before_map_value(&mut self, _field: &arrow_schema::field::FieldRef) -> iceberg::Result<()>
 pub fn iceberg::arrow::ArrowSchemaVisitor::list(&mut self, list: &arrow_schema::datatype::DataType, value: Self::T) -> iceberg::Result<Self::T>
 pub fn iceberg::arrow::ArrowSchemaVisitor::map(&mut self, map: &arrow_schema::datatype::DataType, key_value: Self::T, value: Self::T) -> iceberg::Result<Self::T>
 pub fn iceberg::arrow::ArrowSchemaVisitor::primitive(&mut self, p: &arrow_schema::datatype::DataType) -> iceberg::Result<Self::T>
