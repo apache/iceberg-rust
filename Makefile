@@ -57,7 +57,7 @@ PUBLIC_API_CRATES := $(shell cargo metadata --no-deps --format-version 1 | \
 	jq -r '.packages[] | select(.publish == null) | .name')
 
 install-cargo-public-api:
-	cargo install cargo-public-api@0.51.0
+	cargo install --locked cargo-public-api@0.51.0
 
 generate-public-api: install-cargo-public-api
 	@for crate in $(PUBLIC_API_CRATES); do \
