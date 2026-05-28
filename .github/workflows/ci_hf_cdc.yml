@@ -78,10 +78,14 @@ jobs:
           HF_BUCKET: ${{ secrets.HF_BUCKET }}
           HF_DATASET: ${{ secrets.HF_DATASET }}
         run: |
+          # All HF tests are named with `_hf` (rstest matrix cases) or `hf_`
+          # (standalone HF-only tests) and are marked `#[ignore]` so they're
+          # skipped by default. Match those name patterns explicitly so adding
+          # other ignored tests later won't accidentally pull them in here.
           cargo test -p iceberg-storage-common \
             --test file_io_suite \
             --test resolving_suite \
-            -- --ignored --test-threads=1
+            -- --ignored --test-threads=1 _hf hf_
 
   cdc-python:
     name: CDC and HuggingFace Python tests
