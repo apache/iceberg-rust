@@ -355,7 +355,13 @@ impl<'a> SnapshotProducer<'a> {
         // TODO: Allowing snapshot property setup with no added data files is a workaround.
         // We should clean it up after all necessary actions are supported.
         // For details, please refer to https://github.com/apache/iceberg-rust/issues/1548
-        if self.added_data_files.is_empty() && self.snapshot_properties.is_empty() {
+        //
+        // A delete-only overwrite (no added files, no properties, but with deleted files) is
+        // valid per the Iceberg spec — the existing manifests are rewritten with deleted entries.
+        if self.added_data_files.is_empty()
+            && self.snapshot_properties.is_empty()
+            && self.deleted_data_files.is_empty()
+        {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
                 "No added data files or added snapshot properties found when write a manifest file",
