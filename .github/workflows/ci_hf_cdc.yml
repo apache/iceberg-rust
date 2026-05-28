@@ -24,6 +24,7 @@ on:
   pull_request:
     paths:
       - 'crates/storage/opendal/**'
+      - 'crates/storage/common/**'
       - 'crates/iceberg/src/io/**'
       - 'crates/iceberg/src/spec/table_properties.rs'
       - 'crates/integrations/datafusion/**'
@@ -38,11 +39,23 @@ permissions:
   contents: read
 
 jobs:
+  # Sentinel that always runs so the workflow never reports "No jobs were run".
+  guard:
+    name: Check HF secrets
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: echo "run=${{ env.HF_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+
   hf-integration:
     name: HuggingFace Hub integration tests
+    needs: guard
+    if: needs.guard.outputs.run == 'true'
     runs-on: ubuntu-latest
-    # Skip the job entirely when HF secrets are not available (e.g. PRs from forks).
-    if: ${{ secrets.HF_TOKEN != '' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -65,9 +78,6 @@ jobs:
           HF_BUCKET: ${{ secrets.HF_BUCKET }}
           HF_DATASET: ${{ secrets.HF_DATASET }}
         run: |
-          # All HF tests in the iceberg-storage-common suite are marked
-          # `#[ignore]` so the main CI run skips them. We opt back in here
-          # with `--ignored`, which runs ONLY ignored tests.
           cargo test -p iceberg-storage-common \
             --test file_io_suite \
             --test resolving_suite \
@@ -75,9 +85,9 @@ jobs:
 
   cdc-python:
     name: CDC and HuggingFace Python tests
+    needs: guard
+    if: needs.guard.outputs.run == 'true'
     runs-on: ubuntu-latest
-    # Skip when HF secrets are not available (e.g. PRs from forks).
-    if: ${{ secrets.HF_TOKEN != '' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
