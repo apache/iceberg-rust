@@ -329,693 +329,689 @@
 <a href=#329 id=329 data-nosnippet>329</a>    }
 <a href=#330 id=330 data-nosnippet>330</a>}
 <a href=#331 id=331 data-nosnippet>331</a>
-<a href=#332 id=332 data-nosnippet>332</a><span class="attr">#[allow(dead_code)]
-<a href=#333 id=333 data-nosnippet>333</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>update_snapshot_summaries(
-<a href=#334 id=334 data-nosnippet>334</a>    summary: Summary,
-<a href=#335 id=335 data-nosnippet>335</a>    previous_summary: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Summary&gt;,
-<a href=#336 id=336 data-nosnippet>336</a>    truncate_full_table: bool,
-<a href=#337 id=337 data-nosnippet>337</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Summary&gt; {
-<a href=#338 id=338 data-nosnippet>338</a>    <span class="comment">// Validate that the operation is supported
-<a href=#339 id=339 data-nosnippet>339</a>    </span><span class="kw">if </span>summary.<span class="macro">operation !</span>= Operation::Append
-<a href=#340 id=340 data-nosnippet>340</a>        &amp;&amp; summary.<span class="macro">operation !</span>= Operation::Overwrite
-<a href=#341 id=341 data-nosnippet>341</a>        &amp;&amp; summary.<span class="macro">operation !</span>= Operation::Delete
-<a href=#342 id=342 data-nosnippet>342</a>    {
-<a href=#343 id=343 data-nosnippet>343</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-<a href=#344 id=344 data-nosnippet>344</a>            ErrorKind::DataInvalid,
-<a href=#345 id=345 data-nosnippet>345</a>            <span class="string">"Operation is not supported."</span>,
-<a href=#346 id=346 data-nosnippet>346</a>        ));
-<a href=#347 id=347 data-nosnippet>347</a>    }
-<a href=#348 id=348 data-nosnippet>348</a>
-<a href=#349 id=349 data-nosnippet>349</a>    <span class="kw">let </span><span class="kw-2">mut </span>summary = <span class="kw">match </span>previous_summary {
-<a href=#350 id=350 data-nosnippet>350</a>        <span class="prelude-val">Some</span>(prev_summary) <span class="kw">if </span>truncate_full_table &amp;&amp; summary.operation == Operation::Overwrite =&gt; {
-<a href=#351 id=351 data-nosnippet>351</a>            truncate_table_summary(summary, prev_summary)
-<a href=#352 id=352 data-nosnippet>352</a>                .map_err(|err| {
-<a href=#353 id=353 data-nosnippet>353</a>                    Error::new(ErrorKind::Unexpected, <span class="string">"Failed to truncate table summary."</span>)
-<a href=#354 id=354 data-nosnippet>354</a>                        .with_source(err)
-<a href=#355 id=355 data-nosnippet>355</a>                })
-<a href=#356 id=356 data-nosnippet>356</a>                .unwrap()
-<a href=#357 id=357 data-nosnippet>357</a>        }
-<a href=#358 id=358 data-nosnippet>358</a>        <span class="kw">_ </span>=&gt; summary,
-<a href=#359 id=359 data-nosnippet>359</a>    };
-<a href=#360 id=360 data-nosnippet>360</a>
-<a href=#361 id=361 data-nosnippet>361</a>    update_totals(
-<a href=#362 id=362 data-nosnippet>362</a>        <span class="kw-2">&amp;mut </span>summary,
-<a href=#363 id=363 data-nosnippet>363</a>        previous_summary,
-<a href=#364 id=364 data-nosnippet>364</a>        TOTAL_DATA_FILES,
-<a href=#365 id=365 data-nosnippet>365</a>        ADDED_DATA_FILES,
-<a href=#366 id=366 data-nosnippet>366</a>        DELETED_DATA_FILES,
-<a href=#367 id=367 data-nosnippet>367</a>    );
-<a href=#368 id=368 data-nosnippet>368</a>
-<a href=#369 id=369 data-nosnippet>369</a>    update_totals(
-<a href=#370 id=370 data-nosnippet>370</a>        <span class="kw-2">&amp;mut </span>summary,
-<a href=#371 id=371 data-nosnippet>371</a>        previous_summary,
-<a href=#372 id=372 data-nosnippet>372</a>        TOTAL_DELETE_FILES,
-<a href=#373 id=373 data-nosnippet>373</a>        ADDED_DELETE_FILES,
-<a href=#374 id=374 data-nosnippet>374</a>        REMOVED_DELETE_FILES,
-<a href=#375 id=375 data-nosnippet>375</a>    );
-<a href=#376 id=376 data-nosnippet>376</a>
-<a href=#377 id=377 data-nosnippet>377</a>    update_totals(
-<a href=#378 id=378 data-nosnippet>378</a>        <span class="kw-2">&amp;mut </span>summary,
-<a href=#379 id=379 data-nosnippet>379</a>        previous_summary,
-<a href=#380 id=380 data-nosnippet>380</a>        TOTAL_RECORDS,
-<a href=#381 id=381 data-nosnippet>381</a>        ADDED_RECORDS,
-<a href=#382 id=382 data-nosnippet>382</a>        DELETED_RECORDS,
-<a href=#383 id=383 data-nosnippet>383</a>    );
-<a href=#384 id=384 data-nosnippet>384</a>
-<a href=#385 id=385 data-nosnippet>385</a>    update_totals(
-<a href=#386 id=386 data-nosnippet>386</a>        <span class="kw-2">&amp;mut </span>summary,
-<a href=#387 id=387 data-nosnippet>387</a>        previous_summary,
-<a href=#388 id=388 data-nosnippet>388</a>        TOTAL_FILE_SIZE,
-<a href=#389 id=389 data-nosnippet>389</a>        ADDED_FILE_SIZE,
-<a href=#390 id=390 data-nosnippet>390</a>        REMOVED_FILE_SIZE,
-<a href=#391 id=391 data-nosnippet>391</a>    );
-<a href=#392 id=392 data-nosnippet>392</a>
-<a href=#393 id=393 data-nosnippet>393</a>    update_totals(
-<a href=#394 id=394 data-nosnippet>394</a>        <span class="kw-2">&amp;mut </span>summary,
-<a href=#395 id=395 data-nosnippet>395</a>        previous_summary,
-<a href=#396 id=396 data-nosnippet>396</a>        TOTAL_POSITION_DELETES,
-<a href=#397 id=397 data-nosnippet>397</a>        ADDED_POSITION_DELETES,
-<a href=#398 id=398 data-nosnippet>398</a>        REMOVED_POSITION_DELETES,
-<a href=#399 id=399 data-nosnippet>399</a>    );
-<a href=#400 id=400 data-nosnippet>400</a>
-<a href=#401 id=401 data-nosnippet>401</a>    update_totals(
-<a href=#402 id=402 data-nosnippet>402</a>        <span class="kw-2">&amp;mut </span>summary,
-<a href=#403 id=403 data-nosnippet>403</a>        previous_summary,
-<a href=#404 id=404 data-nosnippet>404</a>        TOTAL_EQUALITY_DELETES,
-<a href=#405 id=405 data-nosnippet>405</a>        ADDED_EQUALITY_DELETES,
-<a href=#406 id=406 data-nosnippet>406</a>        REMOVED_EQUALITY_DELETES,
-<a href=#407 id=407 data-nosnippet>407</a>    );
-<a href=#408 id=408 data-nosnippet>408</a>    <span class="prelude-val">Ok</span>(summary)
-<a href=#409 id=409 data-nosnippet>409</a>}
-<a href=#410 id=410 data-nosnippet>410</a>
-<a href=#411 id=411 data-nosnippet>411</a><span class="attr">#[allow(dead_code)]
-<a href=#412 id=412 data-nosnippet>412</a></span><span class="kw">fn </span>get_prop(previous_summary: <span class="kw-2">&amp;</span>Summary, prop: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;i32&gt; {
-<a href=#413 id=413 data-nosnippet>413</a>    <span class="kw">let </span>value_str = previous_summary
-<a href=#414 id=414 data-nosnippet>414</a>        .additional_properties
-<a href=#415 id=415 data-nosnippet>415</a>        .get(prop)
-<a href=#416 id=416 data-nosnippet>416</a>        .map(String::as_str)
-<a href=#417 id=417 data-nosnippet>417</a>        .unwrap_or(<span class="string">"0"</span>);
-<a href=#418 id=418 data-nosnippet>418</a>    value_str.parse::&lt;i32&gt;().map_err(|err| {
-<a href=#419 id=419 data-nosnippet>419</a>        Error::new(
-<a href=#420 id=420 data-nosnippet>420</a>            ErrorKind::Unexpected,
-<a href=#421 id=421 data-nosnippet>421</a>            <span class="string">"Failed to parse value from previous summary property."</span>,
-<a href=#422 id=422 data-nosnippet>422</a>        )
-<a href=#423 id=423 data-nosnippet>423</a>        .with_source(err)
-<a href=#424 id=424 data-nosnippet>424</a>    })
-<a href=#425 id=425 data-nosnippet>425</a>}
-<a href=#426 id=426 data-nosnippet>426</a>
-<a href=#427 id=427 data-nosnippet>427</a><span class="attr">#[allow(dead_code)]
-<a href=#428 id=428 data-nosnippet>428</a></span><span class="kw">fn </span>truncate_table_summary(<span class="kw-2">mut </span>summary: Summary, previous_summary: <span class="kw-2">&amp;</span>Summary) -&gt; <span class="prelude-ty">Result</span>&lt;Summary&gt; {
-<a href=#429 id=429 data-nosnippet>429</a>    <span class="kw">for </span>prop <span class="kw">in </span>[
-<a href=#430 id=430 data-nosnippet>430</a>        TOTAL_DATA_FILES,
-<a href=#431 id=431 data-nosnippet>431</a>        TOTAL_DELETE_FILES,
-<a href=#432 id=432 data-nosnippet>432</a>        TOTAL_RECORDS,
-<a href=#433 id=433 data-nosnippet>433</a>        TOTAL_FILE_SIZE,
-<a href=#434 id=434 data-nosnippet>434</a>        TOTAL_POSITION_DELETES,
-<a href=#435 id=435 data-nosnippet>435</a>        TOTAL_EQUALITY_DELETES,
-<a href=#436 id=436 data-nosnippet>436</a>    ] {
-<a href=#437 id=437 data-nosnippet>437</a>        summary
-<a href=#438 id=438 data-nosnippet>438</a>            .additional_properties
-<a href=#439 id=439 data-nosnippet>439</a>            .insert(prop.to_string(), <span class="string">"0"</span>.to_string());
-<a href=#440 id=440 data-nosnippet>440</a>    }
-<a href=#441 id=441 data-nosnippet>441</a>
-<a href=#442 id=442 data-nosnippet>442</a>    <span class="kw">let </span>value = get_prop(previous_summary, TOTAL_DATA_FILES)<span class="question-mark">?</span>;
-<a href=#443 id=443 data-nosnippet>443</a>    <span class="kw">if </span><span class="macro">value !</span>= <span class="number">0 </span>{
-<a href=#444 id=444 data-nosnippet>444</a>        summary
-<a href=#445 id=445 data-nosnippet>445</a>            .additional_properties
-<a href=#446 id=446 data-nosnippet>446</a>            .insert(DELETED_DATA_FILES.to_string(), value.to_string());
-<a href=#447 id=447 data-nosnippet>447</a>    }
-<a href=#448 id=448 data-nosnippet>448</a>    <span class="kw">let </span>value = get_prop(previous_summary, TOTAL_DELETE_FILES)<span class="question-mark">?</span>;
-<a href=#449 id=449 data-nosnippet>449</a>    <span class="kw">if </span><span class="macro">value !</span>= <span class="number">0 </span>{
-<a href=#450 id=450 data-nosnippet>450</a>        summary
-<a href=#451 id=451 data-nosnippet>451</a>            .additional_properties
-<a href=#452 id=452 data-nosnippet>452</a>            .insert(REMOVED_DELETE_FILES.to_string(), value.to_string());
-<a href=#453 id=453 data-nosnippet>453</a>    }
-<a href=#454 id=454 data-nosnippet>454</a>    <span class="kw">let </span>value = get_prop(previous_summary, TOTAL_RECORDS)<span class="question-mark">?</span>;
-<a href=#455 id=455 data-nosnippet>455</a>    <span class="kw">if </span><span class="macro">value !</span>= <span class="number">0 </span>{
-<a href=#456 id=456 data-nosnippet>456</a>        summary
-<a href=#457 id=457 data-nosnippet>457</a>            .additional_properties
-<a href=#458 id=458 data-nosnippet>458</a>            .insert(DELETED_RECORDS.to_string(), value.to_string());
-<a href=#459 id=459 data-nosnippet>459</a>    }
-<a href=#460 id=460 data-nosnippet>460</a>    <span class="kw">let </span>value = get_prop(previous_summary, TOTAL_FILE_SIZE)<span class="question-mark">?</span>;
-<a href=#461 id=461 data-nosnippet>461</a>    <span class="kw">if </span><span class="macro">value !</span>= <span class="number">0 </span>{
-<a href=#462 id=462 data-nosnippet>462</a>        summary
-<a href=#463 id=463 data-nosnippet>463</a>            .additional_properties
-<a href=#464 id=464 data-nosnippet>464</a>            .insert(REMOVED_FILE_SIZE.to_string(), value.to_string());
-<a href=#465 id=465 data-nosnippet>465</a>    }
-<a href=#466 id=466 data-nosnippet>466</a>
-<a href=#467 id=467 data-nosnippet>467</a>    <span class="kw">let </span>value = get_prop(previous_summary, TOTAL_POSITION_DELETES)<span class="question-mark">?</span>;
-<a href=#468 id=468 data-nosnippet>468</a>    <span class="kw">if </span><span class="macro">value !</span>= <span class="number">0 </span>{
-<a href=#469 id=469 data-nosnippet>469</a>        summary
-<a href=#470 id=470 data-nosnippet>470</a>            .additional_properties
-<a href=#471 id=471 data-nosnippet>471</a>            .insert(REMOVED_POSITION_DELETES.to_string(), value.to_string());
-<a href=#472 id=472 data-nosnippet>472</a>    }
-<a href=#473 id=473 data-nosnippet>473</a>
-<a href=#474 id=474 data-nosnippet>474</a>    <span class="kw">let </span>value = get_prop(previous_summary, TOTAL_EQUALITY_DELETES)<span class="question-mark">?</span>;
-<a href=#475 id=475 data-nosnippet>475</a>    <span class="kw">if </span><span class="macro">value !</span>= <span class="number">0 </span>{
-<a href=#476 id=476 data-nosnippet>476</a>        summary
-<a href=#477 id=477 data-nosnippet>477</a>            .additional_properties
-<a href=#478 id=478 data-nosnippet>478</a>            .insert(REMOVED_EQUALITY_DELETES.to_string(), value.to_string());
-<a href=#479 id=479 data-nosnippet>479</a>    }
+<a href=#332 id=332 data-nosnippet>332</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>update_snapshot_summaries(
+<a href=#333 id=333 data-nosnippet>333</a>    summary: Summary,
+<a href=#334 id=334 data-nosnippet>334</a>    previous_summary: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Summary&gt;,
+<a href=#335 id=335 data-nosnippet>335</a>    truncate_full_table: bool,
+<a href=#336 id=336 data-nosnippet>336</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Summary&gt; {
+<a href=#337 id=337 data-nosnippet>337</a>    <span class="comment">// Validate that the operation is supported
+<a href=#338 id=338 data-nosnippet>338</a>    </span><span class="kw">if </span>summary.<span class="macro">operation !</span>= Operation::Append
+<a href=#339 id=339 data-nosnippet>339</a>        &amp;&amp; summary.<span class="macro">operation !</span>= Operation::Overwrite
+<a href=#340 id=340 data-nosnippet>340</a>        &amp;&amp; summary.<span class="macro">operation !</span>= Operation::Delete
+<a href=#341 id=341 data-nosnippet>341</a>    {
+<a href=#342 id=342 data-nosnippet>342</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+<a href=#343 id=343 data-nosnippet>343</a>            ErrorKind::DataInvalid,
+<a href=#344 id=344 data-nosnippet>344</a>            <span class="string">"Operation is not supported."</span>,
+<a href=#345 id=345 data-nosnippet>345</a>        ));
+<a href=#346 id=346 data-nosnippet>346</a>    }
+<a href=#347 id=347 data-nosnippet>347</a>
+<a href=#348 id=348 data-nosnippet>348</a>    <span class="kw">let </span><span class="kw-2">mut </span>summary = <span class="kw">match </span>previous_summary {
+<a href=#349 id=349 data-nosnippet>349</a>        <span class="prelude-val">Some</span>(prev_summary) <span class="kw">if </span>truncate_full_table &amp;&amp; summary.operation == Operation::Overwrite =&gt; {
+<a href=#350 id=350 data-nosnippet>350</a>            truncate_table_summary(summary, prev_summary)
+<a href=#351 id=351 data-nosnippet>351</a>                .map_err(|err| {
+<a href=#352 id=352 data-nosnippet>352</a>                    Error::new(ErrorKind::Unexpected, <span class="string">"Failed to truncate table summary."</span>)
+<a href=#353 id=353 data-nosnippet>353</a>                        .with_source(err)
+<a href=#354 id=354 data-nosnippet>354</a>                })
+<a href=#355 id=355 data-nosnippet>355</a>                .unwrap()
+<a href=#356 id=356 data-nosnippet>356</a>        }
+<a href=#357 id=357 data-nosnippet>357</a>        <span class="kw">_ </span>=&gt; summary,
+<a href=#358 id=358 data-nosnippet>358</a>    };
+<a href=#359 id=359 data-nosnippet>359</a>
+<a href=#360 id=360 data-nosnippet>360</a>    update_totals(
+<a href=#361 id=361 data-nosnippet>361</a>        <span class="kw-2">&amp;mut </span>summary,
+<a href=#362 id=362 data-nosnippet>362</a>        previous_summary,
+<a href=#363 id=363 data-nosnippet>363</a>        TOTAL_DATA_FILES,
+<a href=#364 id=364 data-nosnippet>364</a>        ADDED_DATA_FILES,
+<a href=#365 id=365 data-nosnippet>365</a>        DELETED_DATA_FILES,
+<a href=#366 id=366 data-nosnippet>366</a>    );
+<a href=#367 id=367 data-nosnippet>367</a>
+<a href=#368 id=368 data-nosnippet>368</a>    update_totals(
+<a href=#369 id=369 data-nosnippet>369</a>        <span class="kw-2">&amp;mut </span>summary,
+<a href=#370 id=370 data-nosnippet>370</a>        previous_summary,
+<a href=#371 id=371 data-nosnippet>371</a>        TOTAL_DELETE_FILES,
+<a href=#372 id=372 data-nosnippet>372</a>        ADDED_DELETE_FILES,
+<a href=#373 id=373 data-nosnippet>373</a>        REMOVED_DELETE_FILES,
+<a href=#374 id=374 data-nosnippet>374</a>    );
+<a href=#375 id=375 data-nosnippet>375</a>
+<a href=#376 id=376 data-nosnippet>376</a>    update_totals(
+<a href=#377 id=377 data-nosnippet>377</a>        <span class="kw-2">&amp;mut </span>summary,
+<a href=#378 id=378 data-nosnippet>378</a>        previous_summary,
+<a href=#379 id=379 data-nosnippet>379</a>        TOTAL_RECORDS,
+<a href=#380 id=380 data-nosnippet>380</a>        ADDED_RECORDS,
+<a href=#381 id=381 data-nosnippet>381</a>        DELETED_RECORDS,
+<a href=#382 id=382 data-nosnippet>382</a>    );
+<a href=#383 id=383 data-nosnippet>383</a>
+<a href=#384 id=384 data-nosnippet>384</a>    update_totals(
+<a href=#385 id=385 data-nosnippet>385</a>        <span class="kw-2">&amp;mut </span>summary,
+<a href=#386 id=386 data-nosnippet>386</a>        previous_summary,
+<a href=#387 id=387 data-nosnippet>387</a>        TOTAL_FILE_SIZE,
+<a href=#388 id=388 data-nosnippet>388</a>        ADDED_FILE_SIZE,
+<a href=#389 id=389 data-nosnippet>389</a>        REMOVED_FILE_SIZE,
+<a href=#390 id=390 data-nosnippet>390</a>    );
+<a href=#391 id=391 data-nosnippet>391</a>
+<a href=#392 id=392 data-nosnippet>392</a>    update_totals(
+<a href=#393 id=393 data-nosnippet>393</a>        <span class="kw-2">&amp;mut </span>summary,
+<a href=#394 id=394 data-nosnippet>394</a>        previous_summary,
+<a href=#395 id=395 data-nosnippet>395</a>        TOTAL_POSITION_DELETES,
+<a href=#396 id=396 data-nosnippet>396</a>        ADDED_POSITION_DELETES,
+<a href=#397 id=397 data-nosnippet>397</a>        REMOVED_POSITION_DELETES,
+<a href=#398 id=398 data-nosnippet>398</a>    );
+<a href=#399 id=399 data-nosnippet>399</a>
+<a href=#400 id=400 data-nosnippet>400</a>    update_totals(
+<a href=#401 id=401 data-nosnippet>401</a>        <span class="kw-2">&amp;mut </span>summary,
+<a href=#402 id=402 data-nosnippet>402</a>        previous_summary,
+<a href=#403 id=403 data-nosnippet>403</a>        TOTAL_EQUALITY_DELETES,
+<a href=#404 id=404 data-nosnippet>404</a>        ADDED_EQUALITY_DELETES,
+<a href=#405 id=405 data-nosnippet>405</a>        REMOVED_EQUALITY_DELETES,
+<a href=#406 id=406 data-nosnippet>406</a>    );
+<a href=#407 id=407 data-nosnippet>407</a>    <span class="prelude-val">Ok</span>(summary)
+<a href=#408 id=408 data-nosnippet>408</a>}
+<a href=#409 id=409 data-nosnippet>409</a>
+<a href=#410 id=410 data-nosnippet>410</a><span class="kw">fn </span>get_prop(previous_summary: <span class="kw-2">&amp;</span>Summary, prop: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;i32&gt; {
+<a href=#411 id=411 data-nosnippet>411</a>    <span class="kw">let </span>value_str = previous_summary
+<a href=#412 id=412 data-nosnippet>412</a>        .additional_properties
+<a href=#413 id=413 data-nosnippet>413</a>        .get(prop)
+<a href=#414 id=414 data-nosnippet>414</a>        .map(String::as_str)
+<a href=#415 id=415 data-nosnippet>415</a>        .unwrap_or(<span class="string">"0"</span>);
+<a href=#416 id=416 data-nosnippet>416</a>    value_str.parse::&lt;i32&gt;().map_err(|err| {
+<a href=#417 id=417 data-nosnippet>417</a>        Error::new(
+<a href=#418 id=418 data-nosnippet>418</a>            ErrorKind::Unexpected,
+<a href=#419 id=419 data-nosnippet>419</a>            <span class="string">"Failed to parse value from previous summary property."</span>,
+<a href=#420 id=420 data-nosnippet>420</a>        )
+<a href=#421 id=421 data-nosnippet>421</a>        .with_source(err)
+<a href=#422 id=422 data-nosnippet>422</a>    })
+<a href=#423 id=423 data-nosnippet>423</a>}
+<a href=#424 id=424 data-nosnippet>424</a>
+<a href=#425 id=425 data-nosnippet>425</a><span class="kw">fn </span>truncate_table_summary(<span class="kw-2">mut </span>summary: Summary, previous_summary: <span class="kw-2">&amp;</span>Summary) -&gt; <span class="prelude-ty">Result</span>&lt;Summary&gt; {
+<a href=#426 id=426 data-nosnippet>426</a>    <span class="kw">for </span>prop <span class="kw">in </span>[
+<a href=#427 id=427 data-nosnippet>427</a>        TOTAL_DATA_FILES,
+<a href=#428 id=428 data-nosnippet>428</a>        TOTAL_DELETE_FILES,
+<a href=#429 id=429 data-nosnippet>429</a>        TOTAL_RECORDS,
+<a href=#430 id=430 data-nosnippet>430</a>        TOTAL_FILE_SIZE,
+<a href=#431 id=431 data-nosnippet>431</a>        TOTAL_POSITION_DELETES,
+<a href=#432 id=432 data-nosnippet>432</a>        TOTAL_EQUALITY_DELETES,
+<a href=#433 id=433 data-nosnippet>433</a>    ] {
+<a href=#434 id=434 data-nosnippet>434</a>        summary
+<a href=#435 id=435 data-nosnippet>435</a>            .additional_properties
+<a href=#436 id=436 data-nosnippet>436</a>            .insert(prop.to_string(), <span class="string">"0"</span>.to_string());
+<a href=#437 id=437 data-nosnippet>437</a>    }
+<a href=#438 id=438 data-nosnippet>438</a>
+<a href=#439 id=439 data-nosnippet>439</a>    <span class="kw">let </span>value = get_prop(previous_summary, TOTAL_DATA_FILES)<span class="question-mark">?</span>;
+<a href=#440 id=440 data-nosnippet>440</a>    <span class="kw">if </span><span class="macro">value !</span>= <span class="number">0 </span>{
+<a href=#441 id=441 data-nosnippet>441</a>        summary
+<a href=#442 id=442 data-nosnippet>442</a>            .additional_properties
+<a href=#443 id=443 data-nosnippet>443</a>            .insert(DELETED_DATA_FILES.to_string(), value.to_string());
+<a href=#444 id=444 data-nosnippet>444</a>    }
+<a href=#445 id=445 data-nosnippet>445</a>    <span class="kw">let </span>value = get_prop(previous_summary, TOTAL_DELETE_FILES)<span class="question-mark">?</span>;
+<a href=#446 id=446 data-nosnippet>446</a>    <span class="kw">if </span><span class="macro">value !</span>= <span class="number">0 </span>{
+<a href=#447 id=447 data-nosnippet>447</a>        summary
+<a href=#448 id=448 data-nosnippet>448</a>            .additional_properties
+<a href=#449 id=449 data-nosnippet>449</a>            .insert(REMOVED_DELETE_FILES.to_string(), value.to_string());
+<a href=#450 id=450 data-nosnippet>450</a>    }
+<a href=#451 id=451 data-nosnippet>451</a>    <span class="kw">let </span>value = get_prop(previous_summary, TOTAL_RECORDS)<span class="question-mark">?</span>;
+<a href=#452 id=452 data-nosnippet>452</a>    <span class="kw">if </span><span class="macro">value !</span>= <span class="number">0 </span>{
+<a href=#453 id=453 data-nosnippet>453</a>        summary
+<a href=#454 id=454 data-nosnippet>454</a>            .additional_properties
+<a href=#455 id=455 data-nosnippet>455</a>            .insert(DELETED_RECORDS.to_string(), value.to_string());
+<a href=#456 id=456 data-nosnippet>456</a>    }
+<a href=#457 id=457 data-nosnippet>457</a>    <span class="kw">let </span>value = get_prop(previous_summary, TOTAL_FILE_SIZE)<span class="question-mark">?</span>;
+<a href=#458 id=458 data-nosnippet>458</a>    <span class="kw">if </span><span class="macro">value !</span>= <span class="number">0 </span>{
+<a href=#459 id=459 data-nosnippet>459</a>        summary
+<a href=#460 id=460 data-nosnippet>460</a>            .additional_properties
+<a href=#461 id=461 data-nosnippet>461</a>            .insert(REMOVED_FILE_SIZE.to_string(), value.to_string());
+<a href=#462 id=462 data-nosnippet>462</a>    }
+<a href=#463 id=463 data-nosnippet>463</a>
+<a href=#464 id=464 data-nosnippet>464</a>    <span class="kw">let </span>value = get_prop(previous_summary, TOTAL_POSITION_DELETES)<span class="question-mark">?</span>;
+<a href=#465 id=465 data-nosnippet>465</a>    <span class="kw">if </span><span class="macro">value !</span>= <span class="number">0 </span>{
+<a href=#466 id=466 data-nosnippet>466</a>        summary
+<a href=#467 id=467 data-nosnippet>467</a>            .additional_properties
+<a href=#468 id=468 data-nosnippet>468</a>            .insert(REMOVED_POSITION_DELETES.to_string(), value.to_string());
+<a href=#469 id=469 data-nosnippet>469</a>    }
+<a href=#470 id=470 data-nosnippet>470</a>
+<a href=#471 id=471 data-nosnippet>471</a>    <span class="kw">let </span>value = get_prop(previous_summary, TOTAL_EQUALITY_DELETES)<span class="question-mark">?</span>;
+<a href=#472 id=472 data-nosnippet>472</a>    <span class="kw">if </span><span class="macro">value !</span>= <span class="number">0 </span>{
+<a href=#473 id=473 data-nosnippet>473</a>        summary
+<a href=#474 id=474 data-nosnippet>474</a>            .additional_properties
+<a href=#475 id=475 data-nosnippet>475</a>            .insert(REMOVED_EQUALITY_DELETES.to_string(), value.to_string());
+<a href=#476 id=476 data-nosnippet>476</a>    }
+<a href=#477 id=477 data-nosnippet>477</a>
+<a href=#478 id=478 data-nosnippet>478</a>    <span class="prelude-val">Ok</span>(summary)
+<a href=#479 id=479 data-nosnippet>479</a>}
 <a href=#480 id=480 data-nosnippet>480</a>
-<a href=#481 id=481 data-nosnippet>481</a>    <span class="prelude-val">Ok</span>(summary)
-<a href=#482 id=482 data-nosnippet>482</a>}
-<a href=#483 id=483 data-nosnippet>483</a>
-<a href=#484 id=484 data-nosnippet>484</a><span class="attr">#[allow(dead_code)]
-<a href=#485 id=485 data-nosnippet>485</a></span><span class="kw">fn </span>update_totals(
-<a href=#486 id=486 data-nosnippet>486</a>    summary: <span class="kw-2">&amp;mut </span>Summary,
-<a href=#487 id=487 data-nosnippet>487</a>    previous_summary: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Summary&gt;,
-<a href=#488 id=488 data-nosnippet>488</a>    total_property: <span class="kw-2">&amp;</span>str,
-<a href=#489 id=489 data-nosnippet>489</a>    added_property: <span class="kw-2">&amp;</span>str,
-<a href=#490 id=490 data-nosnippet>490</a>    removed_property: <span class="kw-2">&amp;</span>str,
-<a href=#491 id=491 data-nosnippet>491</a>) {
-<a href=#492 id=492 data-nosnippet>492</a>    <span class="kw">let </span>previous_total = previous_summary.map_or(<span class="number">0</span>, |previous_summary| {
-<a href=#493 id=493 data-nosnippet>493</a>        previous_summary
-<a href=#494 id=494 data-nosnippet>494</a>            .additional_properties
-<a href=#495 id=495 data-nosnippet>495</a>            .get(total_property)
-<a href=#496 id=496 data-nosnippet>496</a>            .map_or(<span class="number">0</span>, |value| value.parse::&lt;u64&gt;().unwrap())
-<a href=#497 id=497 data-nosnippet>497</a>    });
-<a href=#498 id=498 data-nosnippet>498</a>
-<a href=#499 id=499 data-nosnippet>499</a>    <span class="kw">let </span><span class="kw-2">mut </span>new_total = previous_total;
-<a href=#500 id=500 data-nosnippet>500</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(value) = summary
-<a href=#501 id=501 data-nosnippet>501</a>        .additional_properties
-<a href=#502 id=502 data-nosnippet>502</a>        .get(added_property)
-<a href=#503 id=503 data-nosnippet>503</a>        .map(|value| value.parse::&lt;u64&gt;().unwrap())
-<a href=#504 id=504 data-nosnippet>504</a>    {
-<a href=#505 id=505 data-nosnippet>505</a>        new_total += value;
-<a href=#506 id=506 data-nosnippet>506</a>    }
-<a href=#507 id=507 data-nosnippet>507</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(value) = summary
-<a href=#508 id=508 data-nosnippet>508</a>        .additional_properties
-<a href=#509 id=509 data-nosnippet>509</a>        .get(removed_property)
-<a href=#510 id=510 data-nosnippet>510</a>        .map(|value| value.parse::&lt;u64&gt;().unwrap())
-<a href=#511 id=511 data-nosnippet>511</a>    {
-<a href=#512 id=512 data-nosnippet>512</a>        new_total -= value;
-<a href=#513 id=513 data-nosnippet>513</a>    }
-<a href=#514 id=514 data-nosnippet>514</a>    summary
-<a href=#515 id=515 data-nosnippet>515</a>        .additional_properties
-<a href=#516 id=516 data-nosnippet>516</a>        .insert(total_property.to_string(), new_total.to_string());
-<a href=#517 id=517 data-nosnippet>517</a>}
-<a href=#518 id=518 data-nosnippet>518</a>
-<a href=#519 id=519 data-nosnippet>519</a><span class="attr">#[cfg(test)]
-<a href=#520 id=520 data-nosnippet>520</a></span><span class="kw">mod </span>tests {
-<a href=#521 id=521 data-nosnippet>521</a>    <span class="kw">use </span>std::collections::HashMap;
-<a href=#522 id=522 data-nosnippet>522</a>    <span class="kw">use </span>std::sync::Arc;
-<a href=#523 id=523 data-nosnippet>523</a>
-<a href=#524 id=524 data-nosnippet>524</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#525 id=525 data-nosnippet>525</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{
-<a href=#526 id=526 data-nosnippet>526</a>        DataFileFormat, Datum, Literal, NestedField, PartitionSpec, PrimitiveType, Schema, Struct,
-<a href=#527 id=527 data-nosnippet>527</a>        Transform, Type, UnboundPartitionField,
-<a href=#528 id=528 data-nosnippet>528</a>    };
-<a href=#529 id=529 data-nosnippet>529</a>
-<a href=#530 id=530 data-nosnippet>530</a>    <span class="attr">#[test]
-<a href=#531 id=531 data-nosnippet>531</a>    </span><span class="kw">fn </span>test_update_snapshot_summaries_append() {
-<a href=#532 id=532 data-nosnippet>532</a>        <span class="kw">let </span>prev_props: HashMap&lt;String, String&gt; = [
-<a href=#533 id=533 data-nosnippet>533</a>            (TOTAL_DATA_FILES.to_string(), <span class="string">"10"</span>.to_string()),
-<a href=#534 id=534 data-nosnippet>534</a>            (TOTAL_DELETE_FILES.to_string(), <span class="string">"5"</span>.to_string()),
-<a href=#535 id=535 data-nosnippet>535</a>            (TOTAL_RECORDS.to_string(), <span class="string">"100"</span>.to_string()),
-<a href=#536 id=536 data-nosnippet>536</a>            (TOTAL_FILE_SIZE.to_string(), <span class="string">"1000"</span>.to_string()),
-<a href=#537 id=537 data-nosnippet>537</a>            (TOTAL_POSITION_DELETES.to_string(), <span class="string">"3"</span>.to_string()),
-<a href=#538 id=538 data-nosnippet>538</a>            (TOTAL_EQUALITY_DELETES.to_string(), <span class="string">"2"</span>.to_string()),
-<a href=#539 id=539 data-nosnippet>539</a>        ]
-<a href=#540 id=540 data-nosnippet>540</a>        .into_iter()
-<a href=#541 id=541 data-nosnippet>541</a>        .collect();
-<a href=#542 id=542 data-nosnippet>542</a>
-<a href=#543 id=543 data-nosnippet>543</a>        <span class="kw">let </span>previous_summary = Summary {
-<a href=#544 id=544 data-nosnippet>544</a>            operation: Operation::Append,
-<a href=#545 id=545 data-nosnippet>545</a>            additional_properties: prev_props,
-<a href=#546 id=546 data-nosnippet>546</a>        };
-<a href=#547 id=547 data-nosnippet>547</a>
-<a href=#548 id=548 data-nosnippet>548</a>        <span class="kw">let </span>new_props: HashMap&lt;String, String&gt; = [
-<a href=#549 id=549 data-nosnippet>549</a>            (ADDED_DATA_FILES.to_string(), <span class="string">"4"</span>.to_string()),
-<a href=#550 id=550 data-nosnippet>550</a>            (DELETED_DATA_FILES.to_string(), <span class="string">"1"</span>.to_string()),
-<a href=#551 id=551 data-nosnippet>551</a>            (ADDED_DELETE_FILES.to_string(), <span class="string">"2"</span>.to_string()),
-<a href=#552 id=552 data-nosnippet>552</a>            (REMOVED_DELETE_FILES.to_string(), <span class="string">"1"</span>.to_string()),
-<a href=#553 id=553 data-nosnippet>553</a>            (ADDED_RECORDS.to_string(), <span class="string">"40"</span>.to_string()),
-<a href=#554 id=554 data-nosnippet>554</a>            (DELETED_RECORDS.to_string(), <span class="string">"10"</span>.to_string()),
-<a href=#555 id=555 data-nosnippet>555</a>            (ADDED_FILE_SIZE.to_string(), <span class="string">"400"</span>.to_string()),
-<a href=#556 id=556 data-nosnippet>556</a>            (REMOVED_FILE_SIZE.to_string(), <span class="string">"100"</span>.to_string()),
-<a href=#557 id=557 data-nosnippet>557</a>            (ADDED_POSITION_DELETES.to_string(), <span class="string">"5"</span>.to_string()),
-<a href=#558 id=558 data-nosnippet>558</a>            (REMOVED_POSITION_DELETES.to_string(), <span class="string">"2"</span>.to_string()),
-<a href=#559 id=559 data-nosnippet>559</a>            (ADDED_EQUALITY_DELETES.to_string(), <span class="string">"3"</span>.to_string()),
-<a href=#560 id=560 data-nosnippet>560</a>            (REMOVED_EQUALITY_DELETES.to_string(), <span class="string">"1"</span>.to_string()),
-<a href=#561 id=561 data-nosnippet>561</a>        ]
-<a href=#562 id=562 data-nosnippet>562</a>        .into_iter()
-<a href=#563 id=563 data-nosnippet>563</a>        .collect();
-<a href=#564 id=564 data-nosnippet>564</a>
-<a href=#565 id=565 data-nosnippet>565</a>        <span class="kw">let </span>summary = Summary {
-<a href=#566 id=566 data-nosnippet>566</a>            operation: Operation::Append,
-<a href=#567 id=567 data-nosnippet>567</a>            additional_properties: new_props,
-<a href=#568 id=568 data-nosnippet>568</a>        };
-<a href=#569 id=569 data-nosnippet>569</a>
-<a href=#570 id=570 data-nosnippet>570</a>        <span class="kw">let </span>updated = update_snapshot_summaries(summary, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>previous_summary), <span class="bool-val">false</span>).unwrap();
-<a href=#571 id=571 data-nosnippet>571</a>
+<a href=#481 id=481 data-nosnippet>481</a><span class="kw">fn </span>update_totals(
+<a href=#482 id=482 data-nosnippet>482</a>    summary: <span class="kw-2">&amp;mut </span>Summary,
+<a href=#483 id=483 data-nosnippet>483</a>    previous_summary: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Summary&gt;,
+<a href=#484 id=484 data-nosnippet>484</a>    total_property: <span class="kw-2">&amp;</span>str,
+<a href=#485 id=485 data-nosnippet>485</a>    added_property: <span class="kw-2">&amp;</span>str,
+<a href=#486 id=486 data-nosnippet>486</a>    removed_property: <span class="kw-2">&amp;</span>str,
+<a href=#487 id=487 data-nosnippet>487</a>) {
+<a href=#488 id=488 data-nosnippet>488</a>    <span class="kw">let </span>previous_total = previous_summary.map_or(<span class="number">0</span>, |previous_summary| {
+<a href=#489 id=489 data-nosnippet>489</a>        previous_summary
+<a href=#490 id=490 data-nosnippet>490</a>            .additional_properties
+<a href=#491 id=491 data-nosnippet>491</a>            .get(total_property)
+<a href=#492 id=492 data-nosnippet>492</a>            .map_or(<span class="number">0</span>, |value| value.parse::&lt;u64&gt;().unwrap())
+<a href=#493 id=493 data-nosnippet>493</a>    });
+<a href=#494 id=494 data-nosnippet>494</a>
+<a href=#495 id=495 data-nosnippet>495</a>    <span class="kw">let </span><span class="kw-2">mut </span>new_total = previous_total;
+<a href=#496 id=496 data-nosnippet>496</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(value) = summary
+<a href=#497 id=497 data-nosnippet>497</a>        .additional_properties
+<a href=#498 id=498 data-nosnippet>498</a>        .get(added_property)
+<a href=#499 id=499 data-nosnippet>499</a>        .map(|value| value.parse::&lt;u64&gt;().unwrap())
+<a href=#500 id=500 data-nosnippet>500</a>    {
+<a href=#501 id=501 data-nosnippet>501</a>        new_total += value;
+<a href=#502 id=502 data-nosnippet>502</a>    }
+<a href=#503 id=503 data-nosnippet>503</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(value) = summary
+<a href=#504 id=504 data-nosnippet>504</a>        .additional_properties
+<a href=#505 id=505 data-nosnippet>505</a>        .get(removed_property)
+<a href=#506 id=506 data-nosnippet>506</a>        .map(|value| value.parse::&lt;u64&gt;().unwrap())
+<a href=#507 id=507 data-nosnippet>507</a>    {
+<a href=#508 id=508 data-nosnippet>508</a>        new_total -= value;
+<a href=#509 id=509 data-nosnippet>509</a>    }
+<a href=#510 id=510 data-nosnippet>510</a>    summary
+<a href=#511 id=511 data-nosnippet>511</a>        .additional_properties
+<a href=#512 id=512 data-nosnippet>512</a>        .insert(total_property.to_string(), new_total.to_string());
+<a href=#513 id=513 data-nosnippet>513</a>}
+<a href=#514 id=514 data-nosnippet>514</a>
+<a href=#515 id=515 data-nosnippet>515</a><span class="attr">#[cfg(test)]
+<a href=#516 id=516 data-nosnippet>516</a></span><span class="kw">mod </span>tests {
+<a href=#517 id=517 data-nosnippet>517</a>    <span class="kw">use </span>std::collections::HashMap;
+<a href=#518 id=518 data-nosnippet>518</a>    <span class="kw">use </span>std::sync::Arc;
+<a href=#519 id=519 data-nosnippet>519</a>
+<a href=#520 id=520 data-nosnippet>520</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#521 id=521 data-nosnippet>521</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{
+<a href=#522 id=522 data-nosnippet>522</a>        DataFileFormat, Datum, Literal, NestedField, PartitionSpec, PrimitiveType, Schema, Struct,
+<a href=#523 id=523 data-nosnippet>523</a>        Transform, Type, UnboundPartitionField,
+<a href=#524 id=524 data-nosnippet>524</a>    };
+<a href=#525 id=525 data-nosnippet>525</a>
+<a href=#526 id=526 data-nosnippet>526</a>    <span class="attr">#[test]
+<a href=#527 id=527 data-nosnippet>527</a>    </span><span class="kw">fn </span>test_update_snapshot_summaries_append() {
+<a href=#528 id=528 data-nosnippet>528</a>        <span class="kw">let </span>prev_props: HashMap&lt;String, String&gt; = [
+<a href=#529 id=529 data-nosnippet>529</a>            (TOTAL_DATA_FILES.to_string(), <span class="string">"10"</span>.to_string()),
+<a href=#530 id=530 data-nosnippet>530</a>            (TOTAL_DELETE_FILES.to_string(), <span class="string">"5"</span>.to_string()),
+<a href=#531 id=531 data-nosnippet>531</a>            (TOTAL_RECORDS.to_string(), <span class="string">"100"</span>.to_string()),
+<a href=#532 id=532 data-nosnippet>532</a>            (TOTAL_FILE_SIZE.to_string(), <span class="string">"1000"</span>.to_string()),
+<a href=#533 id=533 data-nosnippet>533</a>            (TOTAL_POSITION_DELETES.to_string(), <span class="string">"3"</span>.to_string()),
+<a href=#534 id=534 data-nosnippet>534</a>            (TOTAL_EQUALITY_DELETES.to_string(), <span class="string">"2"</span>.to_string()),
+<a href=#535 id=535 data-nosnippet>535</a>        ]
+<a href=#536 id=536 data-nosnippet>536</a>        .into_iter()
+<a href=#537 id=537 data-nosnippet>537</a>        .collect();
+<a href=#538 id=538 data-nosnippet>538</a>
+<a href=#539 id=539 data-nosnippet>539</a>        <span class="kw">let </span>previous_summary = Summary {
+<a href=#540 id=540 data-nosnippet>540</a>            operation: Operation::Append,
+<a href=#541 id=541 data-nosnippet>541</a>            additional_properties: prev_props,
+<a href=#542 id=542 data-nosnippet>542</a>        };
+<a href=#543 id=543 data-nosnippet>543</a>
+<a href=#544 id=544 data-nosnippet>544</a>        <span class="kw">let </span>new_props: HashMap&lt;String, String&gt; = [
+<a href=#545 id=545 data-nosnippet>545</a>            (ADDED_DATA_FILES.to_string(), <span class="string">"4"</span>.to_string()),
+<a href=#546 id=546 data-nosnippet>546</a>            (DELETED_DATA_FILES.to_string(), <span class="string">"1"</span>.to_string()),
+<a href=#547 id=547 data-nosnippet>547</a>            (ADDED_DELETE_FILES.to_string(), <span class="string">"2"</span>.to_string()),
+<a href=#548 id=548 data-nosnippet>548</a>            (REMOVED_DELETE_FILES.to_string(), <span class="string">"1"</span>.to_string()),
+<a href=#549 id=549 data-nosnippet>549</a>            (ADDED_RECORDS.to_string(), <span class="string">"40"</span>.to_string()),
+<a href=#550 id=550 data-nosnippet>550</a>            (DELETED_RECORDS.to_string(), <span class="string">"10"</span>.to_string()),
+<a href=#551 id=551 data-nosnippet>551</a>            (ADDED_FILE_SIZE.to_string(), <span class="string">"400"</span>.to_string()),
+<a href=#552 id=552 data-nosnippet>552</a>            (REMOVED_FILE_SIZE.to_string(), <span class="string">"100"</span>.to_string()),
+<a href=#553 id=553 data-nosnippet>553</a>            (ADDED_POSITION_DELETES.to_string(), <span class="string">"5"</span>.to_string()),
+<a href=#554 id=554 data-nosnippet>554</a>            (REMOVED_POSITION_DELETES.to_string(), <span class="string">"2"</span>.to_string()),
+<a href=#555 id=555 data-nosnippet>555</a>            (ADDED_EQUALITY_DELETES.to_string(), <span class="string">"3"</span>.to_string()),
+<a href=#556 id=556 data-nosnippet>556</a>            (REMOVED_EQUALITY_DELETES.to_string(), <span class="string">"1"</span>.to_string()),
+<a href=#557 id=557 data-nosnippet>557</a>        ]
+<a href=#558 id=558 data-nosnippet>558</a>        .into_iter()
+<a href=#559 id=559 data-nosnippet>559</a>        .collect();
+<a href=#560 id=560 data-nosnippet>560</a>
+<a href=#561 id=561 data-nosnippet>561</a>        <span class="kw">let </span>summary = Summary {
+<a href=#562 id=562 data-nosnippet>562</a>            operation: Operation::Append,
+<a href=#563 id=563 data-nosnippet>563</a>            additional_properties: new_props,
+<a href=#564 id=564 data-nosnippet>564</a>        };
+<a href=#565 id=565 data-nosnippet>565</a>
+<a href=#566 id=566 data-nosnippet>566</a>        <span class="kw">let </span>updated = update_snapshot_summaries(summary, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>previous_summary), <span class="bool-val">false</span>).unwrap();
+<a href=#567 id=567 data-nosnippet>567</a>
+<a href=#568 id=568 data-nosnippet>568</a>        <span class="macro">assert_eq!</span>(
+<a href=#569 id=569 data-nosnippet>569</a>            updated.additional_properties.get(TOTAL_DATA_FILES).unwrap(),
+<a href=#570 id=570 data-nosnippet>570</a>            <span class="string">"13"
+<a href=#571 id=571 data-nosnippet>571</a>        </span>);
 <a href=#572 id=572 data-nosnippet>572</a>        <span class="macro">assert_eq!</span>(
-<a href=#573 id=573 data-nosnippet>573</a>            updated.additional_properties.get(TOTAL_DATA_FILES).unwrap(),
-<a href=#574 id=574 data-nosnippet>574</a>            <span class="string">"13"
-<a href=#575 id=575 data-nosnippet>575</a>        </span>);
-<a href=#576 id=576 data-nosnippet>576</a>        <span class="macro">assert_eq!</span>(
-<a href=#577 id=577 data-nosnippet>577</a>            updated
-<a href=#578 id=578 data-nosnippet>578</a>                .additional_properties
-<a href=#579 id=579 data-nosnippet>579</a>                .get(TOTAL_DELETE_FILES)
-<a href=#580 id=580 data-nosnippet>580</a>                .unwrap(),
-<a href=#581 id=581 data-nosnippet>581</a>            <span class="string">"6"
+<a href=#573 id=573 data-nosnippet>573</a>            updated
+<a href=#574 id=574 data-nosnippet>574</a>                .additional_properties
+<a href=#575 id=575 data-nosnippet>575</a>                .get(TOTAL_DELETE_FILES)
+<a href=#576 id=576 data-nosnippet>576</a>                .unwrap(),
+<a href=#577 id=577 data-nosnippet>577</a>            <span class="string">"6"
+<a href=#578 id=578 data-nosnippet>578</a>        </span>);
+<a href=#579 id=579 data-nosnippet>579</a>        <span class="macro">assert_eq!</span>(
+<a href=#580 id=580 data-nosnippet>580</a>            updated.additional_properties.get(TOTAL_RECORDS).unwrap(),
+<a href=#581 id=581 data-nosnippet>581</a>            <span class="string">"130"
 <a href=#582 id=582 data-nosnippet>582</a>        </span>);
 <a href=#583 id=583 data-nosnippet>583</a>        <span class="macro">assert_eq!</span>(
-<a href=#584 id=584 data-nosnippet>584</a>            updated.additional_properties.get(TOTAL_RECORDS).unwrap(),
-<a href=#585 id=585 data-nosnippet>585</a>            <span class="string">"130"
+<a href=#584 id=584 data-nosnippet>584</a>            updated.additional_properties.get(TOTAL_FILE_SIZE).unwrap(),
+<a href=#585 id=585 data-nosnippet>585</a>            <span class="string">"1300"
 <a href=#586 id=586 data-nosnippet>586</a>        </span>);
 <a href=#587 id=587 data-nosnippet>587</a>        <span class="macro">assert_eq!</span>(
-<a href=#588 id=588 data-nosnippet>588</a>            updated.additional_properties.get(TOTAL_FILE_SIZE).unwrap(),
-<a href=#589 id=589 data-nosnippet>589</a>            <span class="string">"1300"
-<a href=#590 id=590 data-nosnippet>590</a>        </span>);
-<a href=#591 id=591 data-nosnippet>591</a>        <span class="macro">assert_eq!</span>(
-<a href=#592 id=592 data-nosnippet>592</a>            updated
-<a href=#593 id=593 data-nosnippet>593</a>                .additional_properties
-<a href=#594 id=594 data-nosnippet>594</a>                .get(TOTAL_POSITION_DELETES)
-<a href=#595 id=595 data-nosnippet>595</a>                .unwrap(),
-<a href=#596 id=596 data-nosnippet>596</a>            <span class="string">"6"
-<a href=#597 id=597 data-nosnippet>597</a>        </span>);
-<a href=#598 id=598 data-nosnippet>598</a>        <span class="macro">assert_eq!</span>(
-<a href=#599 id=599 data-nosnippet>599</a>            updated
-<a href=#600 id=600 data-nosnippet>600</a>                .additional_properties
-<a href=#601 id=601 data-nosnippet>601</a>                .get(TOTAL_EQUALITY_DELETES)
-<a href=#602 id=602 data-nosnippet>602</a>                .unwrap(),
-<a href=#603 id=603 data-nosnippet>603</a>            <span class="string">"4"
-<a href=#604 id=604 data-nosnippet>604</a>        </span>);
-<a href=#605 id=605 data-nosnippet>605</a>    }
-<a href=#606 id=606 data-nosnippet>606</a>
-<a href=#607 id=607 data-nosnippet>607</a>    <span class="attr">#[test]
-<a href=#608 id=608 data-nosnippet>608</a>    </span><span class="kw">fn </span>test_truncate_table_summary() {
-<a href=#609 id=609 data-nosnippet>609</a>        <span class="kw">let </span>prev_props: HashMap&lt;String, String&gt; = [
-<a href=#610 id=610 data-nosnippet>610</a>            (TOTAL_DATA_FILES.to_string(), <span class="string">"10"</span>.to_string()),
-<a href=#611 id=611 data-nosnippet>611</a>            (TOTAL_DELETE_FILES.to_string(), <span class="string">"5"</span>.to_string()),
-<a href=#612 id=612 data-nosnippet>612</a>            (TOTAL_RECORDS.to_string(), <span class="string">"100"</span>.to_string()),
-<a href=#613 id=613 data-nosnippet>613</a>            (TOTAL_FILE_SIZE.to_string(), <span class="string">"1000"</span>.to_string()),
-<a href=#614 id=614 data-nosnippet>614</a>            (TOTAL_POSITION_DELETES.to_string(), <span class="string">"3"</span>.to_string()),
-<a href=#615 id=615 data-nosnippet>615</a>            (TOTAL_EQUALITY_DELETES.to_string(), <span class="string">"2"</span>.to_string()),
-<a href=#616 id=616 data-nosnippet>616</a>        ]
-<a href=#617 id=617 data-nosnippet>617</a>        .into_iter()
-<a href=#618 id=618 data-nosnippet>618</a>        .collect();
-<a href=#619 id=619 data-nosnippet>619</a>
-<a href=#620 id=620 data-nosnippet>620</a>        <span class="kw">let </span>previous_summary = Summary {
-<a href=#621 id=621 data-nosnippet>621</a>            operation: Operation::Overwrite,
-<a href=#622 id=622 data-nosnippet>622</a>            additional_properties: prev_props,
-<a href=#623 id=623 data-nosnippet>623</a>        };
-<a href=#624 id=624 data-nosnippet>624</a>
-<a href=#625 id=625 data-nosnippet>625</a>        <span class="kw">let </span><span class="kw-2">mut </span>new_props = HashMap::new();
-<a href=#626 id=626 data-nosnippet>626</a>        new_props.insert(<span class="string">"dummy"</span>.to_string(), <span class="string">"value"</span>.to_string());
-<a href=#627 id=627 data-nosnippet>627</a>        <span class="kw">let </span>summary = Summary {
-<a href=#628 id=628 data-nosnippet>628</a>            operation: Operation::Overwrite,
-<a href=#629 id=629 data-nosnippet>629</a>            additional_properties: new_props,
-<a href=#630 id=630 data-nosnippet>630</a>        };
-<a href=#631 id=631 data-nosnippet>631</a>
-<a href=#632 id=632 data-nosnippet>632</a>        <span class="kw">let </span>truncated = truncate_table_summary(summary, <span class="kw-2">&amp;</span>previous_summary).unwrap();
-<a href=#633 id=633 data-nosnippet>633</a>
-<a href=#634 id=634 data-nosnippet>634</a>        <span class="macro">assert_eq!</span>(
-<a href=#635 id=635 data-nosnippet>635</a>            truncated
-<a href=#636 id=636 data-nosnippet>636</a>                .additional_properties
-<a href=#637 id=637 data-nosnippet>637</a>                .get(TOTAL_DATA_FILES)
-<a href=#638 id=638 data-nosnippet>638</a>                .unwrap(),
-<a href=#639 id=639 data-nosnippet>639</a>            <span class="string">"0"
-<a href=#640 id=640 data-nosnippet>640</a>        </span>);
-<a href=#641 id=641 data-nosnippet>641</a>        <span class="macro">assert_eq!</span>(
-<a href=#642 id=642 data-nosnippet>642</a>            truncated
-<a href=#643 id=643 data-nosnippet>643</a>                .additional_properties
-<a href=#644 id=644 data-nosnippet>644</a>                .get(TOTAL_DELETE_FILES)
-<a href=#645 id=645 data-nosnippet>645</a>                .unwrap(),
+<a href=#588 id=588 data-nosnippet>588</a>            updated
+<a href=#589 id=589 data-nosnippet>589</a>                .additional_properties
+<a href=#590 id=590 data-nosnippet>590</a>                .get(TOTAL_POSITION_DELETES)
+<a href=#591 id=591 data-nosnippet>591</a>                .unwrap(),
+<a href=#592 id=592 data-nosnippet>592</a>            <span class="string">"6"
+<a href=#593 id=593 data-nosnippet>593</a>        </span>);
+<a href=#594 id=594 data-nosnippet>594</a>        <span class="macro">assert_eq!</span>(
+<a href=#595 id=595 data-nosnippet>595</a>            updated
+<a href=#596 id=596 data-nosnippet>596</a>                .additional_properties
+<a href=#597 id=597 data-nosnippet>597</a>                .get(TOTAL_EQUALITY_DELETES)
+<a href=#598 id=598 data-nosnippet>598</a>                .unwrap(),
+<a href=#599 id=599 data-nosnippet>599</a>            <span class="string">"4"
+<a href=#600 id=600 data-nosnippet>600</a>        </span>);
+<a href=#601 id=601 data-nosnippet>601</a>    }
+<a href=#602 id=602 data-nosnippet>602</a>
+<a href=#603 id=603 data-nosnippet>603</a>    <span class="attr">#[test]
+<a href=#604 id=604 data-nosnippet>604</a>    </span><span class="kw">fn </span>test_truncate_table_summary() {
+<a href=#605 id=605 data-nosnippet>605</a>        <span class="kw">let </span>prev_props: HashMap&lt;String, String&gt; = [
+<a href=#606 id=606 data-nosnippet>606</a>            (TOTAL_DATA_FILES.to_string(), <span class="string">"10"</span>.to_string()),
+<a href=#607 id=607 data-nosnippet>607</a>            (TOTAL_DELETE_FILES.to_string(), <span class="string">"5"</span>.to_string()),
+<a href=#608 id=608 data-nosnippet>608</a>            (TOTAL_RECORDS.to_string(), <span class="string">"100"</span>.to_string()),
+<a href=#609 id=609 data-nosnippet>609</a>            (TOTAL_FILE_SIZE.to_string(), <span class="string">"1000"</span>.to_string()),
+<a href=#610 id=610 data-nosnippet>610</a>            (TOTAL_POSITION_DELETES.to_string(), <span class="string">"3"</span>.to_string()),
+<a href=#611 id=611 data-nosnippet>611</a>            (TOTAL_EQUALITY_DELETES.to_string(), <span class="string">"2"</span>.to_string()),
+<a href=#612 id=612 data-nosnippet>612</a>        ]
+<a href=#613 id=613 data-nosnippet>613</a>        .into_iter()
+<a href=#614 id=614 data-nosnippet>614</a>        .collect();
+<a href=#615 id=615 data-nosnippet>615</a>
+<a href=#616 id=616 data-nosnippet>616</a>        <span class="kw">let </span>previous_summary = Summary {
+<a href=#617 id=617 data-nosnippet>617</a>            operation: Operation::Overwrite,
+<a href=#618 id=618 data-nosnippet>618</a>            additional_properties: prev_props,
+<a href=#619 id=619 data-nosnippet>619</a>        };
+<a href=#620 id=620 data-nosnippet>620</a>
+<a href=#621 id=621 data-nosnippet>621</a>        <span class="kw">let </span><span class="kw-2">mut </span>new_props = HashMap::new();
+<a href=#622 id=622 data-nosnippet>622</a>        new_props.insert(<span class="string">"dummy"</span>.to_string(), <span class="string">"value"</span>.to_string());
+<a href=#623 id=623 data-nosnippet>623</a>        <span class="kw">let </span>summary = Summary {
+<a href=#624 id=624 data-nosnippet>624</a>            operation: Operation::Overwrite,
+<a href=#625 id=625 data-nosnippet>625</a>            additional_properties: new_props,
+<a href=#626 id=626 data-nosnippet>626</a>        };
+<a href=#627 id=627 data-nosnippet>627</a>
+<a href=#628 id=628 data-nosnippet>628</a>        <span class="kw">let </span>truncated = truncate_table_summary(summary, <span class="kw-2">&amp;</span>previous_summary).unwrap();
+<a href=#629 id=629 data-nosnippet>629</a>
+<a href=#630 id=630 data-nosnippet>630</a>        <span class="macro">assert_eq!</span>(
+<a href=#631 id=631 data-nosnippet>631</a>            truncated
+<a href=#632 id=632 data-nosnippet>632</a>                .additional_properties
+<a href=#633 id=633 data-nosnippet>633</a>                .get(TOTAL_DATA_FILES)
+<a href=#634 id=634 data-nosnippet>634</a>                .unwrap(),
+<a href=#635 id=635 data-nosnippet>635</a>            <span class="string">"0"
+<a href=#636 id=636 data-nosnippet>636</a>        </span>);
+<a href=#637 id=637 data-nosnippet>637</a>        <span class="macro">assert_eq!</span>(
+<a href=#638 id=638 data-nosnippet>638</a>            truncated
+<a href=#639 id=639 data-nosnippet>639</a>                .additional_properties
+<a href=#640 id=640 data-nosnippet>640</a>                .get(TOTAL_DELETE_FILES)
+<a href=#641 id=641 data-nosnippet>641</a>                .unwrap(),
+<a href=#642 id=642 data-nosnippet>642</a>            <span class="string">"0"
+<a href=#643 id=643 data-nosnippet>643</a>        </span>);
+<a href=#644 id=644 data-nosnippet>644</a>        <span class="macro">assert_eq!</span>(
+<a href=#645 id=645 data-nosnippet>645</a>            truncated.additional_properties.get(TOTAL_RECORDS).unwrap(),
 <a href=#646 id=646 data-nosnippet>646</a>            <span class="string">"0"
 <a href=#647 id=647 data-nosnippet>647</a>        </span>);
 <a href=#648 id=648 data-nosnippet>648</a>        <span class="macro">assert_eq!</span>(
-<a href=#649 id=649 data-nosnippet>649</a>            truncated.additional_properties.get(TOTAL_RECORDS).unwrap(),
-<a href=#650 id=650 data-nosnippet>650</a>            <span class="string">"0"
-<a href=#651 id=651 data-nosnippet>651</a>        </span>);
-<a href=#652 id=652 data-nosnippet>652</a>        <span class="macro">assert_eq!</span>(
-<a href=#653 id=653 data-nosnippet>653</a>            truncated
-<a href=#654 id=654 data-nosnippet>654</a>                .additional_properties
-<a href=#655 id=655 data-nosnippet>655</a>                .get(TOTAL_FILE_SIZE)
-<a href=#656 id=656 data-nosnippet>656</a>                .unwrap(),
-<a href=#657 id=657 data-nosnippet>657</a>            <span class="string">"0"
-<a href=#658 id=658 data-nosnippet>658</a>        </span>);
-<a href=#659 id=659 data-nosnippet>659</a>        <span class="macro">assert_eq!</span>(
-<a href=#660 id=660 data-nosnippet>660</a>            truncated
-<a href=#661 id=661 data-nosnippet>661</a>                .additional_properties
-<a href=#662 id=662 data-nosnippet>662</a>                .get(TOTAL_POSITION_DELETES)
-<a href=#663 id=663 data-nosnippet>663</a>                .unwrap(),
-<a href=#664 id=664 data-nosnippet>664</a>            <span class="string">"0"
-<a href=#665 id=665 data-nosnippet>665</a>        </span>);
-<a href=#666 id=666 data-nosnippet>666</a>        <span class="macro">assert_eq!</span>(
-<a href=#667 id=667 data-nosnippet>667</a>            truncated
-<a href=#668 id=668 data-nosnippet>668</a>                .additional_properties
-<a href=#669 id=669 data-nosnippet>669</a>                .get(TOTAL_EQUALITY_DELETES)
-<a href=#670 id=670 data-nosnippet>670</a>                .unwrap(),
-<a href=#671 id=671 data-nosnippet>671</a>            <span class="string">"0"
-<a href=#672 id=672 data-nosnippet>672</a>        </span>);
-<a href=#673 id=673 data-nosnippet>673</a>
-<a href=#674 id=674 data-nosnippet>674</a>        <span class="macro">assert_eq!</span>(
-<a href=#675 id=675 data-nosnippet>675</a>            truncated
-<a href=#676 id=676 data-nosnippet>676</a>                .additional_properties
-<a href=#677 id=677 data-nosnippet>677</a>                .get(DELETED_DATA_FILES)
-<a href=#678 id=678 data-nosnippet>678</a>                .unwrap(),
-<a href=#679 id=679 data-nosnippet>679</a>            <span class="string">"10"
-<a href=#680 id=680 data-nosnippet>680</a>        </span>);
-<a href=#681 id=681 data-nosnippet>681</a>        <span class="macro">assert_eq!</span>(
-<a href=#682 id=682 data-nosnippet>682</a>            truncated
-<a href=#683 id=683 data-nosnippet>683</a>                .additional_properties
-<a href=#684 id=684 data-nosnippet>684</a>                .get(REMOVED_DELETE_FILES)
-<a href=#685 id=685 data-nosnippet>685</a>                .unwrap(),
-<a href=#686 id=686 data-nosnippet>686</a>            <span class="string">"5"
-<a href=#687 id=687 data-nosnippet>687</a>        </span>);
-<a href=#688 id=688 data-nosnippet>688</a>        <span class="macro">assert_eq!</span>(
-<a href=#689 id=689 data-nosnippet>689</a>            truncated
-<a href=#690 id=690 data-nosnippet>690</a>                .additional_properties
-<a href=#691 id=691 data-nosnippet>691</a>                .get(DELETED_RECORDS)
-<a href=#692 id=692 data-nosnippet>692</a>                .unwrap(),
-<a href=#693 id=693 data-nosnippet>693</a>            <span class="string">"100"
-<a href=#694 id=694 data-nosnippet>694</a>        </span>);
-<a href=#695 id=695 data-nosnippet>695</a>        <span class="macro">assert_eq!</span>(
-<a href=#696 id=696 data-nosnippet>696</a>            truncated
-<a href=#697 id=697 data-nosnippet>697</a>                .additional_properties
-<a href=#698 id=698 data-nosnippet>698</a>                .get(REMOVED_FILE_SIZE)
-<a href=#699 id=699 data-nosnippet>699</a>                .unwrap(),
-<a href=#700 id=700 data-nosnippet>700</a>            <span class="string">"1000"
-<a href=#701 id=701 data-nosnippet>701</a>        </span>);
-<a href=#702 id=702 data-nosnippet>702</a>        <span class="macro">assert_eq!</span>(
-<a href=#703 id=703 data-nosnippet>703</a>            truncated
-<a href=#704 id=704 data-nosnippet>704</a>                .additional_properties
-<a href=#705 id=705 data-nosnippet>705</a>                .get(REMOVED_POSITION_DELETES)
-<a href=#706 id=706 data-nosnippet>706</a>                .unwrap(),
-<a href=#707 id=707 data-nosnippet>707</a>            <span class="string">"3"
-<a href=#708 id=708 data-nosnippet>708</a>        </span>);
-<a href=#709 id=709 data-nosnippet>709</a>        <span class="macro">assert_eq!</span>(
-<a href=#710 id=710 data-nosnippet>710</a>            truncated
-<a href=#711 id=711 data-nosnippet>711</a>                .additional_properties
-<a href=#712 id=712 data-nosnippet>712</a>                .get(REMOVED_EQUALITY_DELETES)
-<a href=#713 id=713 data-nosnippet>713</a>                .unwrap(),
-<a href=#714 id=714 data-nosnippet>714</a>            <span class="string">"2"
-<a href=#715 id=715 data-nosnippet>715</a>        </span>);
-<a href=#716 id=716 data-nosnippet>716</a>    }
-<a href=#717 id=717 data-nosnippet>717</a>
-<a href=#718 id=718 data-nosnippet>718</a>    <span class="attr">#[test]
-<a href=#719 id=719 data-nosnippet>719</a>    </span><span class="kw">fn </span>test_snapshot_summary_collector_build() {
-<a href=#720 id=720 data-nosnippet>720</a>        <span class="kw">let </span>schema = Arc::new(
-<a href=#721 id=721 data-nosnippet>721</a>            Schema::builder()
-<a href=#722 id=722 data-nosnippet>722</a>                .with_fields(<span class="macro">vec!</span>[
-<a href=#723 id=723 data-nosnippet>723</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
-<a href=#724 id=724 data-nosnippet>724</a>                    NestedField::required(<span class="number">2</span>, <span class="string">"name"</span>, Type::Primitive(PrimitiveType::String)).into(),
-<a href=#725 id=725 data-nosnippet>725</a>                ])
-<a href=#726 id=726 data-nosnippet>726</a>                .build()
-<a href=#727 id=727 data-nosnippet>727</a>                .unwrap(),
-<a href=#728 id=728 data-nosnippet>728</a>        );
-<a href=#729 id=729 data-nosnippet>729</a>
-<a href=#730 id=730 data-nosnippet>730</a>        <span class="kw">let </span>partition_spec = Arc::new(
-<a href=#731 id=731 data-nosnippet>731</a>            PartitionSpec::builder(schema.clone())
-<a href=#732 id=732 data-nosnippet>732</a>                .add_unbound_fields(<span class="macro">vec!</span>[
-<a href=#733 id=733 data-nosnippet>733</a>                    UnboundPartitionField::builder()
-<a href=#734 id=734 data-nosnippet>734</a>                        .source_id(<span class="number">2</span>)
-<a href=#735 id=735 data-nosnippet>735</a>                        .name(<span class="string">"year"</span>.to_string())
-<a href=#736 id=736 data-nosnippet>736</a>                        .transform(Transform::Identity)
-<a href=#737 id=737 data-nosnippet>737</a>                        .build(),
-<a href=#738 id=738 data-nosnippet>738</a>                ])
-<a href=#739 id=739 data-nosnippet>739</a>                .unwrap()
-<a href=#740 id=740 data-nosnippet>740</a>                .with_spec_id(<span class="number">1</span>)
-<a href=#741 id=741 data-nosnippet>741</a>                .build()
-<a href=#742 id=742 data-nosnippet>742</a>                .unwrap(),
-<a href=#743 id=743 data-nosnippet>743</a>        );
-<a href=#744 id=744 data-nosnippet>744</a>
-<a href=#745 id=745 data-nosnippet>745</a>        <span class="kw">let </span><span class="kw-2">mut </span>collector = SnapshotSummaryCollector::default();
-<a href=#746 id=746 data-nosnippet>746</a>        collector.set_partition_summary_limit(<span class="number">10</span>);
-<a href=#747 id=747 data-nosnippet>747</a>
-<a href=#748 id=748 data-nosnippet>748</a>        <span class="kw">let </span>file1 = DataFile {
-<a href=#749 id=749 data-nosnippet>749</a>            content: DataContentType::Data,
-<a href=#750 id=750 data-nosnippet>750</a>            file_path: <span class="string">"s3://testbucket/path/to/file1.parquet"</span>.to_string(),
-<a href=#751 id=751 data-nosnippet>751</a>            file_format: DataFileFormat::Parquet,
-<a href=#752 id=752 data-nosnippet>752</a>            partition: Struct::from_iter(<span class="macro">vec!</span>[]),
-<a href=#753 id=753 data-nosnippet>753</a>            record_count: <span class="number">10</span>,
-<a href=#754 id=754 data-nosnippet>754</a>            file_size_in_bytes: <span class="number">100</span>,
-<a href=#755 id=755 data-nosnippet>755</a>            column_sizes: HashMap::from([(<span class="number">1</span>, <span class="number">46</span>), (<span class="number">2</span>, <span class="number">48</span>), (<span class="number">3</span>, <span class="number">48</span>)]),
-<a href=#756 id=756 data-nosnippet>756</a>            value_counts: HashMap::from([(<span class="number">1</span>, <span class="number">10</span>), (<span class="number">2</span>, <span class="number">10</span>), (<span class="number">3</span>, <span class="number">10</span>)]),
-<a href=#757 id=757 data-nosnippet>757</a>            null_value_counts: HashMap::from([(<span class="number">1</span>, <span class="number">0</span>), (<span class="number">2</span>, <span class="number">0</span>), (<span class="number">3</span>, <span class="number">0</span>)]),
-<a href=#758 id=758 data-nosnippet>758</a>            nan_value_counts: HashMap::new(),
-<a href=#759 id=759 data-nosnippet>759</a>            lower_bounds: HashMap::from([
-<a href=#760 id=760 data-nosnippet>760</a>                (<span class="number">1</span>, Datum::long(<span class="number">1</span>)),
-<a href=#761 id=761 data-nosnippet>761</a>                (<span class="number">2</span>, Datum::string(<span class="string">"a"</span>)),
-<a href=#762 id=762 data-nosnippet>762</a>                (<span class="number">3</span>, Datum::string(<span class="string">"x"</span>)),
-<a href=#763 id=763 data-nosnippet>763</a>            ]),
-<a href=#764 id=764 data-nosnippet>764</a>            upper_bounds: HashMap::from([
-<a href=#765 id=765 data-nosnippet>765</a>                (<span class="number">1</span>, Datum::long(<span class="number">1</span>)),
-<a href=#766 id=766 data-nosnippet>766</a>                (<span class="number">2</span>, Datum::string(<span class="string">"a"</span>)),
-<a href=#767 id=767 data-nosnippet>767</a>                (<span class="number">3</span>, Datum::string(<span class="string">"x"</span>)),
-<a href=#768 id=768 data-nosnippet>768</a>            ]),
-<a href=#769 id=769 data-nosnippet>769</a>            key_metadata: <span class="prelude-val">None</span>,
-<a href=#770 id=770 data-nosnippet>770</a>            split_offsets: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="number">4</span>]),
-<a href=#771 id=771 data-nosnippet>771</a>            equality_ids: <span class="prelude-val">None</span>,
-<a href=#772 id=772 data-nosnippet>772</a>            sort_order_id: <span class="prelude-val">Some</span>(<span class="number">0</span>),
-<a href=#773 id=773 data-nosnippet>773</a>            partition_spec_id: <span class="number">0</span>,
-<a href=#774 id=774 data-nosnippet>774</a>            first_row_id: <span class="prelude-val">None</span>,
-<a href=#775 id=775 data-nosnippet>775</a>            referenced_data_file: <span class="prelude-val">None</span>,
-<a href=#776 id=776 data-nosnippet>776</a>            content_offset: <span class="prelude-val">None</span>,
-<a href=#777 id=777 data-nosnippet>777</a>            content_size_in_bytes: <span class="prelude-val">None</span>,
-<a href=#778 id=778 data-nosnippet>778</a>        };
-<a href=#779 id=779 data-nosnippet>779</a>
-<a href=#780 id=780 data-nosnippet>780</a>        <span class="kw">let </span>file2 = DataFile {
-<a href=#781 id=781 data-nosnippet>781</a>            content: DataContentType::Data,
-<a href=#782 id=782 data-nosnippet>782</a>            file_path: <span class="string">"s3://testbucket/path/to/file2.parquet"</span>.to_string(),
-<a href=#783 id=783 data-nosnippet>783</a>            file_format: DataFileFormat::Parquet,
-<a href=#784 id=784 data-nosnippet>784</a>            partition: Struct::from_iter(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(Literal::string(<span class="string">"2025"</span>))]),
-<a href=#785 id=785 data-nosnippet>785</a>            record_count: <span class="number">20</span>,
-<a href=#786 id=786 data-nosnippet>786</a>            file_size_in_bytes: <span class="number">200</span>,
-<a href=#787 id=787 data-nosnippet>787</a>            column_sizes: HashMap::from([(<span class="number">1</span>, <span class="number">46</span>), (<span class="number">2</span>, <span class="number">48</span>), (<span class="number">3</span>, <span class="number">48</span>)]),
-<a href=#788 id=788 data-nosnippet>788</a>            value_counts: HashMap::from([(<span class="number">1</span>, <span class="number">20</span>), (<span class="number">2</span>, <span class="number">20</span>), (<span class="number">3</span>, <span class="number">20</span>)]),
-<a href=#789 id=789 data-nosnippet>789</a>            null_value_counts: HashMap::from([(<span class="number">1</span>, <span class="number">0</span>), (<span class="number">2</span>, <span class="number">0</span>), (<span class="number">3</span>, <span class="number">0</span>)]),
-<a href=#790 id=790 data-nosnippet>790</a>            nan_value_counts: HashMap::new(),
-<a href=#791 id=791 data-nosnippet>791</a>            lower_bounds: HashMap::from([
-<a href=#792 id=792 data-nosnippet>792</a>                (<span class="number">1</span>, Datum::long(<span class="number">1</span>)),
-<a href=#793 id=793 data-nosnippet>793</a>                (<span class="number">2</span>, Datum::string(<span class="string">"a"</span>)),
-<a href=#794 id=794 data-nosnippet>794</a>                (<span class="number">3</span>, Datum::string(<span class="string">"x"</span>)),
-<a href=#795 id=795 data-nosnippet>795</a>            ]),
-<a href=#796 id=796 data-nosnippet>796</a>            upper_bounds: HashMap::from([
-<a href=#797 id=797 data-nosnippet>797</a>                (<span class="number">1</span>, Datum::long(<span class="number">1</span>)),
-<a href=#798 id=798 data-nosnippet>798</a>                (<span class="number">2</span>, Datum::string(<span class="string">"a"</span>)),
-<a href=#799 id=799 data-nosnippet>799</a>                (<span class="number">3</span>, Datum::string(<span class="string">"x"</span>)),
-<a href=#800 id=800 data-nosnippet>800</a>            ]),
-<a href=#801 id=801 data-nosnippet>801</a>            key_metadata: <span class="prelude-val">None</span>,
-<a href=#802 id=802 data-nosnippet>802</a>            split_offsets: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="number">4</span>]),
-<a href=#803 id=803 data-nosnippet>803</a>            equality_ids: <span class="prelude-val">None</span>,
-<a href=#804 id=804 data-nosnippet>804</a>            sort_order_id: <span class="prelude-val">Some</span>(<span class="number">0</span>),
-<a href=#805 id=805 data-nosnippet>805</a>            partition_spec_id: <span class="number">0</span>,
-<a href=#806 id=806 data-nosnippet>806</a>            first_row_id: <span class="prelude-val">None</span>,
-<a href=#807 id=807 data-nosnippet>807</a>            referenced_data_file: <span class="prelude-val">None</span>,
-<a href=#808 id=808 data-nosnippet>808</a>            content_offset: <span class="prelude-val">None</span>,
-<a href=#809 id=809 data-nosnippet>809</a>            content_size_in_bytes: <span class="prelude-val">None</span>,
-<a href=#810 id=810 data-nosnippet>810</a>        };
-<a href=#811 id=811 data-nosnippet>811</a>
-<a href=#812 id=812 data-nosnippet>812</a>        collector.add_file(<span class="kw-2">&amp;</span>file1, schema.clone(), partition_spec.clone());
-<a href=#813 id=813 data-nosnippet>813</a>        collector.add_file(<span class="kw-2">&amp;</span>file2, schema.clone(), partition_spec.clone());
+<a href=#649 id=649 data-nosnippet>649</a>            truncated
+<a href=#650 id=650 data-nosnippet>650</a>                .additional_properties
+<a href=#651 id=651 data-nosnippet>651</a>                .get(TOTAL_FILE_SIZE)
+<a href=#652 id=652 data-nosnippet>652</a>                .unwrap(),
+<a href=#653 id=653 data-nosnippet>653</a>            <span class="string">"0"
+<a href=#654 id=654 data-nosnippet>654</a>        </span>);
+<a href=#655 id=655 data-nosnippet>655</a>        <span class="macro">assert_eq!</span>(
+<a href=#656 id=656 data-nosnippet>656</a>            truncated
+<a href=#657 id=657 data-nosnippet>657</a>                .additional_properties
+<a href=#658 id=658 data-nosnippet>658</a>                .get(TOTAL_POSITION_DELETES)
+<a href=#659 id=659 data-nosnippet>659</a>                .unwrap(),
+<a href=#660 id=660 data-nosnippet>660</a>            <span class="string">"0"
+<a href=#661 id=661 data-nosnippet>661</a>        </span>);
+<a href=#662 id=662 data-nosnippet>662</a>        <span class="macro">assert_eq!</span>(
+<a href=#663 id=663 data-nosnippet>663</a>            truncated
+<a href=#664 id=664 data-nosnippet>664</a>                .additional_properties
+<a href=#665 id=665 data-nosnippet>665</a>                .get(TOTAL_EQUALITY_DELETES)
+<a href=#666 id=666 data-nosnippet>666</a>                .unwrap(),
+<a href=#667 id=667 data-nosnippet>667</a>            <span class="string">"0"
+<a href=#668 id=668 data-nosnippet>668</a>        </span>);
+<a href=#669 id=669 data-nosnippet>669</a>
+<a href=#670 id=670 data-nosnippet>670</a>        <span class="macro">assert_eq!</span>(
+<a href=#671 id=671 data-nosnippet>671</a>            truncated
+<a href=#672 id=672 data-nosnippet>672</a>                .additional_properties
+<a href=#673 id=673 data-nosnippet>673</a>                .get(DELETED_DATA_FILES)
+<a href=#674 id=674 data-nosnippet>674</a>                .unwrap(),
+<a href=#675 id=675 data-nosnippet>675</a>            <span class="string">"10"
+<a href=#676 id=676 data-nosnippet>676</a>        </span>);
+<a href=#677 id=677 data-nosnippet>677</a>        <span class="macro">assert_eq!</span>(
+<a href=#678 id=678 data-nosnippet>678</a>            truncated
+<a href=#679 id=679 data-nosnippet>679</a>                .additional_properties
+<a href=#680 id=680 data-nosnippet>680</a>                .get(REMOVED_DELETE_FILES)
+<a href=#681 id=681 data-nosnippet>681</a>                .unwrap(),
+<a href=#682 id=682 data-nosnippet>682</a>            <span class="string">"5"
+<a href=#683 id=683 data-nosnippet>683</a>        </span>);
+<a href=#684 id=684 data-nosnippet>684</a>        <span class="macro">assert_eq!</span>(
+<a href=#685 id=685 data-nosnippet>685</a>            truncated
+<a href=#686 id=686 data-nosnippet>686</a>                .additional_properties
+<a href=#687 id=687 data-nosnippet>687</a>                .get(DELETED_RECORDS)
+<a href=#688 id=688 data-nosnippet>688</a>                .unwrap(),
+<a href=#689 id=689 data-nosnippet>689</a>            <span class="string">"100"
+<a href=#690 id=690 data-nosnippet>690</a>        </span>);
+<a href=#691 id=691 data-nosnippet>691</a>        <span class="macro">assert_eq!</span>(
+<a href=#692 id=692 data-nosnippet>692</a>            truncated
+<a href=#693 id=693 data-nosnippet>693</a>                .additional_properties
+<a href=#694 id=694 data-nosnippet>694</a>                .get(REMOVED_FILE_SIZE)
+<a href=#695 id=695 data-nosnippet>695</a>                .unwrap(),
+<a href=#696 id=696 data-nosnippet>696</a>            <span class="string">"1000"
+<a href=#697 id=697 data-nosnippet>697</a>        </span>);
+<a href=#698 id=698 data-nosnippet>698</a>        <span class="macro">assert_eq!</span>(
+<a href=#699 id=699 data-nosnippet>699</a>            truncated
+<a href=#700 id=700 data-nosnippet>700</a>                .additional_properties
+<a href=#701 id=701 data-nosnippet>701</a>                .get(REMOVED_POSITION_DELETES)
+<a href=#702 id=702 data-nosnippet>702</a>                .unwrap(),
+<a href=#703 id=703 data-nosnippet>703</a>            <span class="string">"3"
+<a href=#704 id=704 data-nosnippet>704</a>        </span>);
+<a href=#705 id=705 data-nosnippet>705</a>        <span class="macro">assert_eq!</span>(
+<a href=#706 id=706 data-nosnippet>706</a>            truncated
+<a href=#707 id=707 data-nosnippet>707</a>                .additional_properties
+<a href=#708 id=708 data-nosnippet>708</a>                .get(REMOVED_EQUALITY_DELETES)
+<a href=#709 id=709 data-nosnippet>709</a>                .unwrap(),
+<a href=#710 id=710 data-nosnippet>710</a>            <span class="string">"2"
+<a href=#711 id=711 data-nosnippet>711</a>        </span>);
+<a href=#712 id=712 data-nosnippet>712</a>    }
+<a href=#713 id=713 data-nosnippet>713</a>
+<a href=#714 id=714 data-nosnippet>714</a>    <span class="attr">#[test]
+<a href=#715 id=715 data-nosnippet>715</a>    </span><span class="kw">fn </span>test_snapshot_summary_collector_build() {
+<a href=#716 id=716 data-nosnippet>716</a>        <span class="kw">let </span>schema = Arc::new(
+<a href=#717 id=717 data-nosnippet>717</a>            Schema::builder()
+<a href=#718 id=718 data-nosnippet>718</a>                .with_fields(<span class="macro">vec!</span>[
+<a href=#719 id=719 data-nosnippet>719</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#720 id=720 data-nosnippet>720</a>                    NestedField::required(<span class="number">2</span>, <span class="string">"name"</span>, Type::Primitive(PrimitiveType::String)).into(),
+<a href=#721 id=721 data-nosnippet>721</a>                ])
+<a href=#722 id=722 data-nosnippet>722</a>                .build()
+<a href=#723 id=723 data-nosnippet>723</a>                .unwrap(),
+<a href=#724 id=724 data-nosnippet>724</a>        );
+<a href=#725 id=725 data-nosnippet>725</a>
+<a href=#726 id=726 data-nosnippet>726</a>        <span class="kw">let </span>partition_spec = Arc::new(
+<a href=#727 id=727 data-nosnippet>727</a>            PartitionSpec::builder(schema.clone())
+<a href=#728 id=728 data-nosnippet>728</a>                .add_unbound_fields(<span class="macro">vec!</span>[
+<a href=#729 id=729 data-nosnippet>729</a>                    UnboundPartitionField::builder()
+<a href=#730 id=730 data-nosnippet>730</a>                        .source_id(<span class="number">2</span>)
+<a href=#731 id=731 data-nosnippet>731</a>                        .name(<span class="string">"year"</span>.to_string())
+<a href=#732 id=732 data-nosnippet>732</a>                        .transform(Transform::Identity)
+<a href=#733 id=733 data-nosnippet>733</a>                        .build(),
+<a href=#734 id=734 data-nosnippet>734</a>                ])
+<a href=#735 id=735 data-nosnippet>735</a>                .unwrap()
+<a href=#736 id=736 data-nosnippet>736</a>                .with_spec_id(<span class="number">1</span>)
+<a href=#737 id=737 data-nosnippet>737</a>                .build()
+<a href=#738 id=738 data-nosnippet>738</a>                .unwrap(),
+<a href=#739 id=739 data-nosnippet>739</a>        );
+<a href=#740 id=740 data-nosnippet>740</a>
+<a href=#741 id=741 data-nosnippet>741</a>        <span class="kw">let </span><span class="kw-2">mut </span>collector = SnapshotSummaryCollector::default();
+<a href=#742 id=742 data-nosnippet>742</a>        collector.set_partition_summary_limit(<span class="number">10</span>);
+<a href=#743 id=743 data-nosnippet>743</a>
+<a href=#744 id=744 data-nosnippet>744</a>        <span class="kw">let </span>file1 = DataFile {
+<a href=#745 id=745 data-nosnippet>745</a>            content: DataContentType::Data,
+<a href=#746 id=746 data-nosnippet>746</a>            file_path: <span class="string">"s3://testbucket/path/to/file1.parquet"</span>.to_string(),
+<a href=#747 id=747 data-nosnippet>747</a>            file_format: DataFileFormat::Parquet,
+<a href=#748 id=748 data-nosnippet>748</a>            partition: Struct::from_iter(<span class="macro">vec!</span>[]),
+<a href=#749 id=749 data-nosnippet>749</a>            record_count: <span class="number">10</span>,
+<a href=#750 id=750 data-nosnippet>750</a>            file_size_in_bytes: <span class="number">100</span>,
+<a href=#751 id=751 data-nosnippet>751</a>            column_sizes: HashMap::from([(<span class="number">1</span>, <span class="number">46</span>), (<span class="number">2</span>, <span class="number">48</span>), (<span class="number">3</span>, <span class="number">48</span>)]),
+<a href=#752 id=752 data-nosnippet>752</a>            value_counts: HashMap::from([(<span class="number">1</span>, <span class="number">10</span>), (<span class="number">2</span>, <span class="number">10</span>), (<span class="number">3</span>, <span class="number">10</span>)]),
+<a href=#753 id=753 data-nosnippet>753</a>            null_value_counts: HashMap::from([(<span class="number">1</span>, <span class="number">0</span>), (<span class="number">2</span>, <span class="number">0</span>), (<span class="number">3</span>, <span class="number">0</span>)]),
+<a href=#754 id=754 data-nosnippet>754</a>            nan_value_counts: HashMap::new(),
+<a href=#755 id=755 data-nosnippet>755</a>            lower_bounds: HashMap::from([
+<a href=#756 id=756 data-nosnippet>756</a>                (<span class="number">1</span>, Datum::long(<span class="number">1</span>)),
+<a href=#757 id=757 data-nosnippet>757</a>                (<span class="number">2</span>, Datum::string(<span class="string">"a"</span>)),
+<a href=#758 id=758 data-nosnippet>758</a>                (<span class="number">3</span>, Datum::string(<span class="string">"x"</span>)),
+<a href=#759 id=759 data-nosnippet>759</a>            ]),
+<a href=#760 id=760 data-nosnippet>760</a>            upper_bounds: HashMap::from([
+<a href=#761 id=761 data-nosnippet>761</a>                (<span class="number">1</span>, Datum::long(<span class="number">1</span>)),
+<a href=#762 id=762 data-nosnippet>762</a>                (<span class="number">2</span>, Datum::string(<span class="string">"a"</span>)),
+<a href=#763 id=763 data-nosnippet>763</a>                (<span class="number">3</span>, Datum::string(<span class="string">"x"</span>)),
+<a href=#764 id=764 data-nosnippet>764</a>            ]),
+<a href=#765 id=765 data-nosnippet>765</a>            key_metadata: <span class="prelude-val">None</span>,
+<a href=#766 id=766 data-nosnippet>766</a>            split_offsets: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="number">4</span>]),
+<a href=#767 id=767 data-nosnippet>767</a>            equality_ids: <span class="prelude-val">None</span>,
+<a href=#768 id=768 data-nosnippet>768</a>            sort_order_id: <span class="prelude-val">Some</span>(<span class="number">0</span>),
+<a href=#769 id=769 data-nosnippet>769</a>            partition_spec_id: <span class="number">0</span>,
+<a href=#770 id=770 data-nosnippet>770</a>            first_row_id: <span class="prelude-val">None</span>,
+<a href=#771 id=771 data-nosnippet>771</a>            referenced_data_file: <span class="prelude-val">None</span>,
+<a href=#772 id=772 data-nosnippet>772</a>            content_offset: <span class="prelude-val">None</span>,
+<a href=#773 id=773 data-nosnippet>773</a>            content_size_in_bytes: <span class="prelude-val">None</span>,
+<a href=#774 id=774 data-nosnippet>774</a>        };
+<a href=#775 id=775 data-nosnippet>775</a>
+<a href=#776 id=776 data-nosnippet>776</a>        <span class="kw">let </span>file2 = DataFile {
+<a href=#777 id=777 data-nosnippet>777</a>            content: DataContentType::Data,
+<a href=#778 id=778 data-nosnippet>778</a>            file_path: <span class="string">"s3://testbucket/path/to/file2.parquet"</span>.to_string(),
+<a href=#779 id=779 data-nosnippet>779</a>            file_format: DataFileFormat::Parquet,
+<a href=#780 id=780 data-nosnippet>780</a>            partition: Struct::from_iter(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(Literal::string(<span class="string">"2025"</span>))]),
+<a href=#781 id=781 data-nosnippet>781</a>            record_count: <span class="number">20</span>,
+<a href=#782 id=782 data-nosnippet>782</a>            file_size_in_bytes: <span class="number">200</span>,
+<a href=#783 id=783 data-nosnippet>783</a>            column_sizes: HashMap::from([(<span class="number">1</span>, <span class="number">46</span>), (<span class="number">2</span>, <span class="number">48</span>), (<span class="number">3</span>, <span class="number">48</span>)]),
+<a href=#784 id=784 data-nosnippet>784</a>            value_counts: HashMap::from([(<span class="number">1</span>, <span class="number">20</span>), (<span class="number">2</span>, <span class="number">20</span>), (<span class="number">3</span>, <span class="number">20</span>)]),
+<a href=#785 id=785 data-nosnippet>785</a>            null_value_counts: HashMap::from([(<span class="number">1</span>, <span class="number">0</span>), (<span class="number">2</span>, <span class="number">0</span>), (<span class="number">3</span>, <span class="number">0</span>)]),
+<a href=#786 id=786 data-nosnippet>786</a>            nan_value_counts: HashMap::new(),
+<a href=#787 id=787 data-nosnippet>787</a>            lower_bounds: HashMap::from([
+<a href=#788 id=788 data-nosnippet>788</a>                (<span class="number">1</span>, Datum::long(<span class="number">1</span>)),
+<a href=#789 id=789 data-nosnippet>789</a>                (<span class="number">2</span>, Datum::string(<span class="string">"a"</span>)),
+<a href=#790 id=790 data-nosnippet>790</a>                (<span class="number">3</span>, Datum::string(<span class="string">"x"</span>)),
+<a href=#791 id=791 data-nosnippet>791</a>            ]),
+<a href=#792 id=792 data-nosnippet>792</a>            upper_bounds: HashMap::from([
+<a href=#793 id=793 data-nosnippet>793</a>                (<span class="number">1</span>, Datum::long(<span class="number">1</span>)),
+<a href=#794 id=794 data-nosnippet>794</a>                (<span class="number">2</span>, Datum::string(<span class="string">"a"</span>)),
+<a href=#795 id=795 data-nosnippet>795</a>                (<span class="number">3</span>, Datum::string(<span class="string">"x"</span>)),
+<a href=#796 id=796 data-nosnippet>796</a>            ]),
+<a href=#797 id=797 data-nosnippet>797</a>            key_metadata: <span class="prelude-val">None</span>,
+<a href=#798 id=798 data-nosnippet>798</a>            split_offsets: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="number">4</span>]),
+<a href=#799 id=799 data-nosnippet>799</a>            equality_ids: <span class="prelude-val">None</span>,
+<a href=#800 id=800 data-nosnippet>800</a>            sort_order_id: <span class="prelude-val">Some</span>(<span class="number">0</span>),
+<a href=#801 id=801 data-nosnippet>801</a>            partition_spec_id: <span class="number">0</span>,
+<a href=#802 id=802 data-nosnippet>802</a>            first_row_id: <span class="prelude-val">None</span>,
+<a href=#803 id=803 data-nosnippet>803</a>            referenced_data_file: <span class="prelude-val">None</span>,
+<a href=#804 id=804 data-nosnippet>804</a>            content_offset: <span class="prelude-val">None</span>,
+<a href=#805 id=805 data-nosnippet>805</a>            content_size_in_bytes: <span class="prelude-val">None</span>,
+<a href=#806 id=806 data-nosnippet>806</a>        };
+<a href=#807 id=807 data-nosnippet>807</a>
+<a href=#808 id=808 data-nosnippet>808</a>        collector.add_file(<span class="kw-2">&amp;</span>file1, schema.clone(), partition_spec.clone());
+<a href=#809 id=809 data-nosnippet>809</a>        collector.add_file(<span class="kw-2">&amp;</span>file2, schema.clone(), partition_spec.clone());
+<a href=#810 id=810 data-nosnippet>810</a>
+<a href=#811 id=811 data-nosnippet>811</a>        collector.remove_file(<span class="kw-2">&amp;</span>file1, schema.clone(), partition_spec.clone());
+<a href=#812 id=812 data-nosnippet>812</a>
+<a href=#813 id=813 data-nosnippet>813</a>        <span class="kw">let </span>props = collector.build();
 <a href=#814 id=814 data-nosnippet>814</a>
-<a href=#815 id=815 data-nosnippet>815</a>        collector.remove_file(<span class="kw-2">&amp;</span>file1, schema.clone(), partition_spec.clone());
-<a href=#816 id=816 data-nosnippet>816</a>
-<a href=#817 id=817 data-nosnippet>817</a>        <span class="kw">let </span>props = collector.build();
-<a href=#818 id=818 data-nosnippet>818</a>
-<a href=#819 id=819 data-nosnippet>819</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_FILE_SIZE).unwrap(), <span class="string">"300"</span>);
-<a href=#820 id=820 data-nosnippet>820</a>        <span class="macro">assert_eq!</span>(props.get(REMOVED_FILE_SIZE).unwrap(), <span class="string">"100"</span>);
+<a href=#815 id=815 data-nosnippet>815</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_FILE_SIZE).unwrap(), <span class="string">"300"</span>);
+<a href=#816 id=816 data-nosnippet>816</a>        <span class="macro">assert_eq!</span>(props.get(REMOVED_FILE_SIZE).unwrap(), <span class="string">"100"</span>);
+<a href=#817 id=817 data-nosnippet>817</a>
+<a href=#818 id=818 data-nosnippet>818</a>        <span class="kw">let </span>partition_key = <span class="macro">format!</span>(<span class="string">"{}{}"</span>, CHANGED_PARTITION_PREFIX, <span class="string">"year=2025"</span>);
+<a href=#819 id=819 data-nosnippet>819</a>
+<a href=#820 id=820 data-nosnippet>820</a>        <span class="macro">assert!</span>(props.contains_key(<span class="kw-2">&amp;</span>partition_key));
 <a href=#821 id=821 data-nosnippet>821</a>
-<a href=#822 id=822 data-nosnippet>822</a>        <span class="kw">let </span>partition_key = <span class="macro">format!</span>(<span class="string">"{}{}"</span>, CHANGED_PARTITION_PREFIX, <span class="string">"year=2025"</span>);
-<a href=#823 id=823 data-nosnippet>823</a>
-<a href=#824 id=824 data-nosnippet>824</a>        <span class="macro">assert!</span>(props.contains_key(<span class="kw-2">&amp;</span>partition_key));
-<a href=#825 id=825 data-nosnippet>825</a>
-<a href=#826 id=826 data-nosnippet>826</a>        <span class="kw">let </span>partition_summary = props.get(<span class="kw-2">&amp;</span>partition_key).unwrap();
-<a href=#827 id=827 data-nosnippet>827</a>        <span class="macro">assert!</span>(partition_summary.contains(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{ADDED_FILE_SIZE}=200"</span>)));
-<a href=#828 id=828 data-nosnippet>828</a>        <span class="macro">assert!</span>(partition_summary.contains(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{ADDED_DATA_FILES}=1"</span>)));
-<a href=#829 id=829 data-nosnippet>829</a>        <span class="macro">assert!</span>(partition_summary.contains(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{ADDED_RECORDS}=20"</span>)));
-<a href=#830 id=830 data-nosnippet>830</a>    }
-<a href=#831 id=831 data-nosnippet>831</a>
-<a href=#832 id=832 data-nosnippet>832</a>    <span class="attr">#[test]
-<a href=#833 id=833 data-nosnippet>833</a>    </span><span class="kw">fn </span>test_snapshot_summary_collector_add_manifest() {
-<a href=#834 id=834 data-nosnippet>834</a>        <span class="kw">let </span><span class="kw-2">mut </span>collector = SnapshotSummaryCollector::default();
-<a href=#835 id=835 data-nosnippet>835</a>        collector.set_partition_summary_limit(<span class="number">10</span>);
-<a href=#836 id=836 data-nosnippet>836</a>
-<a href=#837 id=837 data-nosnippet>837</a>        <span class="kw">let </span>manifest = ManifestFile {
-<a href=#838 id=838 data-nosnippet>838</a>            manifest_path: <span class="string">"file://dummy.manifest"</span>.to_string(),
-<a href=#839 id=839 data-nosnippet>839</a>            manifest_length: <span class="number">0</span>,
-<a href=#840 id=840 data-nosnippet>840</a>            partition_spec_id: <span class="number">0</span>,
-<a href=#841 id=841 data-nosnippet>841</a>            content: ManifestContentType::Data,
-<a href=#842 id=842 data-nosnippet>842</a>            sequence_number: <span class="number">0</span>,
-<a href=#843 id=843 data-nosnippet>843</a>            min_sequence_number: <span class="number">0</span>,
-<a href=#844 id=844 data-nosnippet>844</a>            added_snapshot_id: <span class="number">0</span>,
-<a href=#845 id=845 data-nosnippet>845</a>            added_files_count: <span class="prelude-val">Some</span>(<span class="number">3</span>),
-<a href=#846 id=846 data-nosnippet>846</a>            existing_files_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
-<a href=#847 id=847 data-nosnippet>847</a>            deleted_files_count: <span class="prelude-val">Some</span>(<span class="number">1</span>),
-<a href=#848 id=848 data-nosnippet>848</a>            added_rows_count: <span class="prelude-val">Some</span>(<span class="number">100</span>),
-<a href=#849 id=849 data-nosnippet>849</a>            existing_rows_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
-<a href=#850 id=850 data-nosnippet>850</a>            deleted_rows_count: <span class="prelude-val">Some</span>(<span class="number">50</span>),
-<a href=#851 id=851 data-nosnippet>851</a>            partitions: <span class="prelude-val">Some</span>(Vec::new()),
-<a href=#852 id=852 data-nosnippet>852</a>            key_metadata: <span class="prelude-val">None</span>,
-<a href=#853 id=853 data-nosnippet>853</a>            first_row_id: <span class="prelude-val">None</span>,
-<a href=#854 id=854 data-nosnippet>854</a>        };
-<a href=#855 id=855 data-nosnippet>855</a>
-<a href=#856 id=856 data-nosnippet>856</a>        collector
-<a href=#857 id=857 data-nosnippet>857</a>            .partition_metrics
-<a href=#858 id=858 data-nosnippet>858</a>            .insert(<span class="string">"dummy"</span>.to_string(), UpdateMetrics::default());
-<a href=#859 id=859 data-nosnippet>859</a>        collector.add_manifest(<span class="kw-2">&amp;</span>manifest);
-<a href=#860 id=860 data-nosnippet>860</a>
-<a href=#861 id=861 data-nosnippet>861</a>        <span class="kw">let </span>props = collector.build();
-<a href=#862 id=862 data-nosnippet>862</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_DATA_FILES).unwrap(), <span class="string">"3"</span>);
-<a href=#863 id=863 data-nosnippet>863</a>        <span class="macro">assert_eq!</span>(props.get(DELETED_DATA_FILES).unwrap(), <span class="string">"1"</span>);
-<a href=#864 id=864 data-nosnippet>864</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_RECORDS).unwrap(), <span class="string">"100"</span>);
-<a href=#865 id=865 data-nosnippet>865</a>        <span class="macro">assert_eq!</span>(props.get(DELETED_RECORDS).unwrap(), <span class="string">"50"</span>);
-<a href=#866 id=866 data-nosnippet>866</a>    }
-<a href=#867 id=867 data-nosnippet>867</a>
-<a href=#868 id=868 data-nosnippet>868</a>    <span class="attr">#[test]
-<a href=#869 id=869 data-nosnippet>869</a>    </span><span class="kw">fn </span>test_snapshot_summary_collector_merge() {
-<a href=#870 id=870 data-nosnippet>870</a>        <span class="kw">let </span>schema = Arc::new(
-<a href=#871 id=871 data-nosnippet>871</a>            Schema::builder()
-<a href=#872 id=872 data-nosnippet>872</a>                .with_fields(<span class="macro">vec!</span>[
-<a href=#873 id=873 data-nosnippet>873</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
-<a href=#874 id=874 data-nosnippet>874</a>                    NestedField::required(<span class="number">2</span>, <span class="string">"name"</span>, Type::Primitive(PrimitiveType::String)).into(),
-<a href=#875 id=875 data-nosnippet>875</a>                ])
-<a href=#876 id=876 data-nosnippet>876</a>                .build()
-<a href=#877 id=877 data-nosnippet>877</a>                .unwrap(),
-<a href=#878 id=878 data-nosnippet>878</a>        );
-<a href=#879 id=879 data-nosnippet>879</a>
-<a href=#880 id=880 data-nosnippet>880</a>        <span class="kw">let </span>partition_spec = Arc::new(
-<a href=#881 id=881 data-nosnippet>881</a>            PartitionSpec::builder(schema.clone())
-<a href=#882 id=882 data-nosnippet>882</a>                .add_unbound_fields(<span class="macro">vec!</span>[
-<a href=#883 id=883 data-nosnippet>883</a>                    UnboundPartitionField::builder()
-<a href=#884 id=884 data-nosnippet>884</a>                        .source_id(<span class="number">2</span>)
-<a href=#885 id=885 data-nosnippet>885</a>                        .name(<span class="string">"year"</span>.to_string())
-<a href=#886 id=886 data-nosnippet>886</a>                        .transform(Transform::Identity)
-<a href=#887 id=887 data-nosnippet>887</a>                        .build(),
-<a href=#888 id=888 data-nosnippet>888</a>                ])
-<a href=#889 id=889 data-nosnippet>889</a>                .unwrap()
-<a href=#890 id=890 data-nosnippet>890</a>                .with_spec_id(<span class="number">1</span>)
-<a href=#891 id=891 data-nosnippet>891</a>                .build()
-<a href=#892 id=892 data-nosnippet>892</a>                .unwrap(),
-<a href=#893 id=893 data-nosnippet>893</a>        );
-<a href=#894 id=894 data-nosnippet>894</a>
-<a href=#895 id=895 data-nosnippet>895</a>        <span class="kw">let </span><span class="kw-2">mut </span>summary_one = SnapshotSummaryCollector::default();
-<a href=#896 id=896 data-nosnippet>896</a>        <span class="kw">let </span><span class="kw-2">mut </span>summary_two = SnapshotSummaryCollector::default();
-<a href=#897 id=897 data-nosnippet>897</a>
-<a href=#898 id=898 data-nosnippet>898</a>        summary_one.add_file(
-<a href=#899 id=899 data-nosnippet>899</a>            <span class="kw-2">&amp;</span>DataFile {
-<a href=#900 id=900 data-nosnippet>900</a>                content: DataContentType::Data,
-<a href=#901 id=901 data-nosnippet>901</a>                file_path: <span class="string">"test.parquet"</span>.into(),
-<a href=#902 id=902 data-nosnippet>902</a>                file_format: DataFileFormat::Parquet,
-<a href=#903 id=903 data-nosnippet>903</a>                partition: Struct::from_iter(<span class="macro">vec!</span>[]),
-<a href=#904 id=904 data-nosnippet>904</a>                record_count: <span class="number">10</span>,
-<a href=#905 id=905 data-nosnippet>905</a>                file_size_in_bytes: <span class="number">100</span>,
-<a href=#906 id=906 data-nosnippet>906</a>                column_sizes: HashMap::new(),
-<a href=#907 id=907 data-nosnippet>907</a>                value_counts: HashMap::new(),
-<a href=#908 id=908 data-nosnippet>908</a>                null_value_counts: HashMap::new(),
-<a href=#909 id=909 data-nosnippet>909</a>                nan_value_counts: HashMap::new(),
-<a href=#910 id=910 data-nosnippet>910</a>                lower_bounds: HashMap::new(),
-<a href=#911 id=911 data-nosnippet>911</a>                upper_bounds: HashMap::new(),
-<a href=#912 id=912 data-nosnippet>912</a>                key_metadata: <span class="prelude-val">None</span>,
-<a href=#913 id=913 data-nosnippet>913</a>                split_offsets: <span class="prelude-val">None</span>,
-<a href=#914 id=914 data-nosnippet>914</a>                equality_ids: <span class="prelude-val">None</span>,
-<a href=#915 id=915 data-nosnippet>915</a>                sort_order_id: <span class="prelude-val">None</span>,
-<a href=#916 id=916 data-nosnippet>916</a>                partition_spec_id: <span class="number">0</span>,
-<a href=#917 id=917 data-nosnippet>917</a>                first_row_id: <span class="prelude-val">None</span>,
-<a href=#918 id=918 data-nosnippet>918</a>                referenced_data_file: <span class="prelude-val">None</span>,
-<a href=#919 id=919 data-nosnippet>919</a>                content_offset: <span class="prelude-val">None</span>,
-<a href=#920 id=920 data-nosnippet>920</a>                content_size_in_bytes: <span class="prelude-val">None</span>,
-<a href=#921 id=921 data-nosnippet>921</a>            },
-<a href=#922 id=922 data-nosnippet>922</a>            schema.clone(),
-<a href=#923 id=923 data-nosnippet>923</a>            partition_spec.clone(),
-<a href=#924 id=924 data-nosnippet>924</a>        );
-<a href=#925 id=925 data-nosnippet>925</a>
-<a href=#926 id=926 data-nosnippet>926</a>        summary_two.add_file(
-<a href=#927 id=927 data-nosnippet>927</a>            <span class="kw-2">&amp;</span>DataFile {
-<a href=#928 id=928 data-nosnippet>928</a>                content: DataContentType::Data,
-<a href=#929 id=929 data-nosnippet>929</a>                file_path: <span class="string">"test.parquet"</span>.into(),
-<a href=#930 id=930 data-nosnippet>930</a>                file_format: DataFileFormat::Parquet,
-<a href=#931 id=931 data-nosnippet>931</a>                partition: Struct::from_iter(<span class="macro">vec!</span>[]),
-<a href=#932 id=932 data-nosnippet>932</a>                record_count: <span class="number">20</span>,
-<a href=#933 id=933 data-nosnippet>933</a>                file_size_in_bytes: <span class="number">200</span>,
-<a href=#934 id=934 data-nosnippet>934</a>                column_sizes: HashMap::new(),
-<a href=#935 id=935 data-nosnippet>935</a>                value_counts: HashMap::new(),
-<a href=#936 id=936 data-nosnippet>936</a>                null_value_counts: HashMap::new(),
-<a href=#937 id=937 data-nosnippet>937</a>                nan_value_counts: HashMap::new(),
-<a href=#938 id=938 data-nosnippet>938</a>                lower_bounds: HashMap::new(),
-<a href=#939 id=939 data-nosnippet>939</a>                upper_bounds: HashMap::new(),
-<a href=#940 id=940 data-nosnippet>940</a>                key_metadata: <span class="prelude-val">None</span>,
-<a href=#941 id=941 data-nosnippet>941</a>                split_offsets: <span class="prelude-val">None</span>,
-<a href=#942 id=942 data-nosnippet>942</a>                equality_ids: <span class="prelude-val">None</span>,
-<a href=#943 id=943 data-nosnippet>943</a>                sort_order_id: <span class="prelude-val">None</span>,
-<a href=#944 id=944 data-nosnippet>944</a>                partition_spec_id: <span class="number">0</span>,
-<a href=#945 id=945 data-nosnippet>945</a>                first_row_id: <span class="prelude-val">None</span>,
-<a href=#946 id=946 data-nosnippet>946</a>                referenced_data_file: <span class="prelude-val">None</span>,
-<a href=#947 id=947 data-nosnippet>947</a>                content_offset: <span class="prelude-val">None</span>,
-<a href=#948 id=948 data-nosnippet>948</a>                content_size_in_bytes: <span class="prelude-val">None</span>,
-<a href=#949 id=949 data-nosnippet>949</a>            },
-<a href=#950 id=950 data-nosnippet>950</a>            schema.clone(),
-<a href=#951 id=951 data-nosnippet>951</a>            partition_spec.clone(),
-<a href=#952 id=952 data-nosnippet>952</a>        );
-<a href=#953 id=953 data-nosnippet>953</a>
-<a href=#954 id=954 data-nosnippet>954</a>        summary_one.merge(summary_two);
-<a href=#955 id=955 data-nosnippet>955</a>        <span class="kw">let </span>props = summary_one.build();
-<a href=#956 id=956 data-nosnippet>956</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_DATA_FILES).unwrap(), <span class="string">"2"</span>);
-<a href=#957 id=957 data-nosnippet>957</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_RECORDS).unwrap(), <span class="string">"30"</span>);
-<a href=#958 id=958 data-nosnippet>958</a>
-<a href=#959 id=959 data-nosnippet>959</a>        <span class="kw">let </span><span class="kw-2">mut </span>summary_three = SnapshotSummaryCollector::default();
-<a href=#960 id=960 data-nosnippet>960</a>        <span class="kw">let </span><span class="kw-2">mut </span>summary_four = SnapshotSummaryCollector::default();
-<a href=#961 id=961 data-nosnippet>961</a>
-<a href=#962 id=962 data-nosnippet>962</a>        summary_three.add_manifest(<span class="kw-2">&amp;</span>ManifestFile {
-<a href=#963 id=963 data-nosnippet>963</a>            manifest_path: <span class="string">"test.manifest"</span>.to_string(),
-<a href=#964 id=964 data-nosnippet>964</a>            manifest_length: <span class="number">0</span>,
-<a href=#965 id=965 data-nosnippet>965</a>            partition_spec_id: <span class="number">0</span>,
-<a href=#966 id=966 data-nosnippet>966</a>            content: ManifestContentType::Data,
-<a href=#967 id=967 data-nosnippet>967</a>            sequence_number: <span class="number">0</span>,
-<a href=#968 id=968 data-nosnippet>968</a>            min_sequence_number: <span class="number">0</span>,
-<a href=#969 id=969 data-nosnippet>969</a>            added_snapshot_id: <span class="number">0</span>,
-<a href=#970 id=970 data-nosnippet>970</a>            added_files_count: <span class="prelude-val">Some</span>(<span class="number">1</span>),
-<a href=#971 id=971 data-nosnippet>971</a>            existing_files_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
-<a href=#972 id=972 data-nosnippet>972</a>            deleted_files_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
-<a href=#973 id=973 data-nosnippet>973</a>            added_rows_count: <span class="prelude-val">Some</span>(<span class="number">5</span>),
-<a href=#974 id=974 data-nosnippet>974</a>            existing_rows_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
-<a href=#975 id=975 data-nosnippet>975</a>            deleted_rows_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
-<a href=#976 id=976 data-nosnippet>976</a>            partitions: <span class="prelude-val">Some</span>(Vec::new()),
-<a href=#977 id=977 data-nosnippet>977</a>            key_metadata: <span class="prelude-val">None</span>,
-<a href=#978 id=978 data-nosnippet>978</a>            first_row_id: <span class="prelude-val">None</span>,
-<a href=#979 id=979 data-nosnippet>979</a>        });
-<a href=#980 id=980 data-nosnippet>980</a>
-<a href=#981 id=981 data-nosnippet>981</a>        summary_four.add_file(
-<a href=#982 id=982 data-nosnippet>982</a>            <span class="kw-2">&amp;</span>DataFile {
-<a href=#983 id=983 data-nosnippet>983</a>                content: DataContentType::Data,
-<a href=#984 id=984 data-nosnippet>984</a>                file_path: <span class="string">"test.parquet"</span>.into(),
-<a href=#985 id=985 data-nosnippet>985</a>                file_format: DataFileFormat::Parquet,
-<a href=#986 id=986 data-nosnippet>986</a>                partition: Struct::from_iter(<span class="macro">vec!</span>[]),
-<a href=#987 id=987 data-nosnippet>987</a>                record_count: <span class="number">1</span>,
-<a href=#988 id=988 data-nosnippet>988</a>                file_size_in_bytes: <span class="number">10</span>,
-<a href=#989 id=989 data-nosnippet>989</a>                column_sizes: HashMap::new(),
-<a href=#990 id=990 data-nosnippet>990</a>                value_counts: HashMap::new(),
-<a href=#991 id=991 data-nosnippet>991</a>                null_value_counts: HashMap::new(),
-<a href=#992 id=992 data-nosnippet>992</a>                nan_value_counts: HashMap::new(),
-<a href=#993 id=993 data-nosnippet>993</a>                lower_bounds: HashMap::new(),
-<a href=#994 id=994 data-nosnippet>994</a>                upper_bounds: HashMap::new(),
-<a href=#995 id=995 data-nosnippet>995</a>                key_metadata: <span class="prelude-val">None</span>,
-<a href=#996 id=996 data-nosnippet>996</a>                split_offsets: <span class="prelude-val">None</span>,
-<a href=#997 id=997 data-nosnippet>997</a>                equality_ids: <span class="prelude-val">None</span>,
-<a href=#998 id=998 data-nosnippet>998</a>                sort_order_id: <span class="prelude-val">None</span>,
-<a href=#999 id=999 data-nosnippet>999</a>                partition_spec_id: <span class="number">0</span>,
-<a href=#1000 id=1000 data-nosnippet>1000</a>                first_row_id: <span class="prelude-val">None</span>,
-<a href=#1001 id=1001 data-nosnippet>1001</a>                referenced_data_file: <span class="prelude-val">None</span>,
-<a href=#1002 id=1002 data-nosnippet>1002</a>                content_offset: <span class="prelude-val">None</span>,
-<a href=#1003 id=1003 data-nosnippet>1003</a>                content_size_in_bytes: <span class="prelude-val">None</span>,
-<a href=#1004 id=1004 data-nosnippet>1004</a>            },
-<a href=#1005 id=1005 data-nosnippet>1005</a>            schema.clone(),
-<a href=#1006 id=1006 data-nosnippet>1006</a>            partition_spec.clone(),
-<a href=#1007 id=1007 data-nosnippet>1007</a>        );
-<a href=#1008 id=1008 data-nosnippet>1008</a>
-<a href=#1009 id=1009 data-nosnippet>1009</a>        summary_three.merge(summary_four);
-<a href=#1010 id=1010 data-nosnippet>1010</a>        <span class="kw">let </span>props = summary_three.build();
-<a href=#1011 id=1011 data-nosnippet>1011</a>
-<a href=#1012 id=1012 data-nosnippet>1012</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_DATA_FILES).unwrap(), <span class="string">"2"</span>);
-<a href=#1013 id=1013 data-nosnippet>1013</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_RECORDS).unwrap(), <span class="string">"6"</span>);
-<a href=#1014 id=1014 data-nosnippet>1014</a>        <span class="macro">assert!</span>(
-<a href=#1015 id=1015 data-nosnippet>1015</a>            props
-<a href=#1016 id=1016 data-nosnippet>1016</a>                .iter()
-<a href=#1017 id=1017 data-nosnippet>1017</a>                .all(|(k, <span class="kw">_</span>)| !k.starts_with(CHANGED_PARTITION_PREFIX))
-<a href=#1018 id=1018 data-nosnippet>1018</a>        );
-<a href=#1019 id=1019 data-nosnippet>1019</a>    }
-<a href=#1020 id=1020 data-nosnippet>1020</a>}
+<a href=#822 id=822 data-nosnippet>822</a>        <span class="kw">let </span>partition_summary = props.get(<span class="kw-2">&amp;</span>partition_key).unwrap();
+<a href=#823 id=823 data-nosnippet>823</a>        <span class="macro">assert!</span>(partition_summary.contains(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{ADDED_FILE_SIZE}=200"</span>)));
+<a href=#824 id=824 data-nosnippet>824</a>        <span class="macro">assert!</span>(partition_summary.contains(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{ADDED_DATA_FILES}=1"</span>)));
+<a href=#825 id=825 data-nosnippet>825</a>        <span class="macro">assert!</span>(partition_summary.contains(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{ADDED_RECORDS}=20"</span>)));
+<a href=#826 id=826 data-nosnippet>826</a>    }
+<a href=#827 id=827 data-nosnippet>827</a>
+<a href=#828 id=828 data-nosnippet>828</a>    <span class="attr">#[test]
+<a href=#829 id=829 data-nosnippet>829</a>    </span><span class="kw">fn </span>test_snapshot_summary_collector_add_manifest() {
+<a href=#830 id=830 data-nosnippet>830</a>        <span class="kw">let </span><span class="kw-2">mut </span>collector = SnapshotSummaryCollector::default();
+<a href=#831 id=831 data-nosnippet>831</a>        collector.set_partition_summary_limit(<span class="number">10</span>);
+<a href=#832 id=832 data-nosnippet>832</a>
+<a href=#833 id=833 data-nosnippet>833</a>        <span class="kw">let </span>manifest = ManifestFile {
+<a href=#834 id=834 data-nosnippet>834</a>            manifest_path: <span class="string">"file://dummy.manifest"</span>.to_string(),
+<a href=#835 id=835 data-nosnippet>835</a>            manifest_length: <span class="number">0</span>,
+<a href=#836 id=836 data-nosnippet>836</a>            partition_spec_id: <span class="number">0</span>,
+<a href=#837 id=837 data-nosnippet>837</a>            content: ManifestContentType::Data,
+<a href=#838 id=838 data-nosnippet>838</a>            sequence_number: <span class="number">0</span>,
+<a href=#839 id=839 data-nosnippet>839</a>            min_sequence_number: <span class="number">0</span>,
+<a href=#840 id=840 data-nosnippet>840</a>            added_snapshot_id: <span class="number">0</span>,
+<a href=#841 id=841 data-nosnippet>841</a>            added_files_count: <span class="prelude-val">Some</span>(<span class="number">3</span>),
+<a href=#842 id=842 data-nosnippet>842</a>            existing_files_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
+<a href=#843 id=843 data-nosnippet>843</a>            deleted_files_count: <span class="prelude-val">Some</span>(<span class="number">1</span>),
+<a href=#844 id=844 data-nosnippet>844</a>            added_rows_count: <span class="prelude-val">Some</span>(<span class="number">100</span>),
+<a href=#845 id=845 data-nosnippet>845</a>            existing_rows_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
+<a href=#846 id=846 data-nosnippet>846</a>            deleted_rows_count: <span class="prelude-val">Some</span>(<span class="number">50</span>),
+<a href=#847 id=847 data-nosnippet>847</a>            partitions: <span class="prelude-val">Some</span>(Vec::new()),
+<a href=#848 id=848 data-nosnippet>848</a>            key_metadata: <span class="prelude-val">None</span>,
+<a href=#849 id=849 data-nosnippet>849</a>            first_row_id: <span class="prelude-val">None</span>,
+<a href=#850 id=850 data-nosnippet>850</a>        };
+<a href=#851 id=851 data-nosnippet>851</a>
+<a href=#852 id=852 data-nosnippet>852</a>        collector
+<a href=#853 id=853 data-nosnippet>853</a>            .partition_metrics
+<a href=#854 id=854 data-nosnippet>854</a>            .insert(<span class="string">"dummy"</span>.to_string(), UpdateMetrics::default());
+<a href=#855 id=855 data-nosnippet>855</a>        collector.add_manifest(<span class="kw-2">&amp;</span>manifest);
+<a href=#856 id=856 data-nosnippet>856</a>
+<a href=#857 id=857 data-nosnippet>857</a>        <span class="kw">let </span>props = collector.build();
+<a href=#858 id=858 data-nosnippet>858</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_DATA_FILES).unwrap(), <span class="string">"3"</span>);
+<a href=#859 id=859 data-nosnippet>859</a>        <span class="macro">assert_eq!</span>(props.get(DELETED_DATA_FILES).unwrap(), <span class="string">"1"</span>);
+<a href=#860 id=860 data-nosnippet>860</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_RECORDS).unwrap(), <span class="string">"100"</span>);
+<a href=#861 id=861 data-nosnippet>861</a>        <span class="macro">assert_eq!</span>(props.get(DELETED_RECORDS).unwrap(), <span class="string">"50"</span>);
+<a href=#862 id=862 data-nosnippet>862</a>    }
+<a href=#863 id=863 data-nosnippet>863</a>
+<a href=#864 id=864 data-nosnippet>864</a>    <span class="attr">#[test]
+<a href=#865 id=865 data-nosnippet>865</a>    </span><span class="kw">fn </span>test_snapshot_summary_collector_merge() {
+<a href=#866 id=866 data-nosnippet>866</a>        <span class="kw">let </span>schema = Arc::new(
+<a href=#867 id=867 data-nosnippet>867</a>            Schema::builder()
+<a href=#868 id=868 data-nosnippet>868</a>                .with_fields(<span class="macro">vec!</span>[
+<a href=#869 id=869 data-nosnippet>869</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#870 id=870 data-nosnippet>870</a>                    NestedField::required(<span class="number">2</span>, <span class="string">"name"</span>, Type::Primitive(PrimitiveType::String)).into(),
+<a href=#871 id=871 data-nosnippet>871</a>                ])
+<a href=#872 id=872 data-nosnippet>872</a>                .build()
+<a href=#873 id=873 data-nosnippet>873</a>                .unwrap(),
+<a href=#874 id=874 data-nosnippet>874</a>        );
+<a href=#875 id=875 data-nosnippet>875</a>
+<a href=#876 id=876 data-nosnippet>876</a>        <span class="kw">let </span>partition_spec = Arc::new(
+<a href=#877 id=877 data-nosnippet>877</a>            PartitionSpec::builder(schema.clone())
+<a href=#878 id=878 data-nosnippet>878</a>                .add_unbound_fields(<span class="macro">vec!</span>[
+<a href=#879 id=879 data-nosnippet>879</a>                    UnboundPartitionField::builder()
+<a href=#880 id=880 data-nosnippet>880</a>                        .source_id(<span class="number">2</span>)
+<a href=#881 id=881 data-nosnippet>881</a>                        .name(<span class="string">"year"</span>.to_string())
+<a href=#882 id=882 data-nosnippet>882</a>                        .transform(Transform::Identity)
+<a href=#883 id=883 data-nosnippet>883</a>                        .build(),
+<a href=#884 id=884 data-nosnippet>884</a>                ])
+<a href=#885 id=885 data-nosnippet>885</a>                .unwrap()
+<a href=#886 id=886 data-nosnippet>886</a>                .with_spec_id(<span class="number">1</span>)
+<a href=#887 id=887 data-nosnippet>887</a>                .build()
+<a href=#888 id=888 data-nosnippet>888</a>                .unwrap(),
+<a href=#889 id=889 data-nosnippet>889</a>        );
+<a href=#890 id=890 data-nosnippet>890</a>
+<a href=#891 id=891 data-nosnippet>891</a>        <span class="kw">let </span><span class="kw-2">mut </span>summary_one = SnapshotSummaryCollector::default();
+<a href=#892 id=892 data-nosnippet>892</a>        <span class="kw">let </span><span class="kw-2">mut </span>summary_two = SnapshotSummaryCollector::default();
+<a href=#893 id=893 data-nosnippet>893</a>
+<a href=#894 id=894 data-nosnippet>894</a>        summary_one.add_file(
+<a href=#895 id=895 data-nosnippet>895</a>            <span class="kw-2">&amp;</span>DataFile {
+<a href=#896 id=896 data-nosnippet>896</a>                content: DataContentType::Data,
+<a href=#897 id=897 data-nosnippet>897</a>                file_path: <span class="string">"test.parquet"</span>.into(),
+<a href=#898 id=898 data-nosnippet>898</a>                file_format: DataFileFormat::Parquet,
+<a href=#899 id=899 data-nosnippet>899</a>                partition: Struct::from_iter(<span class="macro">vec!</span>[]),
+<a href=#900 id=900 data-nosnippet>900</a>                record_count: <span class="number">10</span>,
+<a href=#901 id=901 data-nosnippet>901</a>                file_size_in_bytes: <span class="number">100</span>,
+<a href=#902 id=902 data-nosnippet>902</a>                column_sizes: HashMap::new(),
+<a href=#903 id=903 data-nosnippet>903</a>                value_counts: HashMap::new(),
+<a href=#904 id=904 data-nosnippet>904</a>                null_value_counts: HashMap::new(),
+<a href=#905 id=905 data-nosnippet>905</a>                nan_value_counts: HashMap::new(),
+<a href=#906 id=906 data-nosnippet>906</a>                lower_bounds: HashMap::new(),
+<a href=#907 id=907 data-nosnippet>907</a>                upper_bounds: HashMap::new(),
+<a href=#908 id=908 data-nosnippet>908</a>                key_metadata: <span class="prelude-val">None</span>,
+<a href=#909 id=909 data-nosnippet>909</a>                split_offsets: <span class="prelude-val">None</span>,
+<a href=#910 id=910 data-nosnippet>910</a>                equality_ids: <span class="prelude-val">None</span>,
+<a href=#911 id=911 data-nosnippet>911</a>                sort_order_id: <span class="prelude-val">None</span>,
+<a href=#912 id=912 data-nosnippet>912</a>                partition_spec_id: <span class="number">0</span>,
+<a href=#913 id=913 data-nosnippet>913</a>                first_row_id: <span class="prelude-val">None</span>,
+<a href=#914 id=914 data-nosnippet>914</a>                referenced_data_file: <span class="prelude-val">None</span>,
+<a href=#915 id=915 data-nosnippet>915</a>                content_offset: <span class="prelude-val">None</span>,
+<a href=#916 id=916 data-nosnippet>916</a>                content_size_in_bytes: <span class="prelude-val">None</span>,
+<a href=#917 id=917 data-nosnippet>917</a>            },
+<a href=#918 id=918 data-nosnippet>918</a>            schema.clone(),
+<a href=#919 id=919 data-nosnippet>919</a>            partition_spec.clone(),
+<a href=#920 id=920 data-nosnippet>920</a>        );
+<a href=#921 id=921 data-nosnippet>921</a>
+<a href=#922 id=922 data-nosnippet>922</a>        summary_two.add_file(
+<a href=#923 id=923 data-nosnippet>923</a>            <span class="kw-2">&amp;</span>DataFile {
+<a href=#924 id=924 data-nosnippet>924</a>                content: DataContentType::Data,
+<a href=#925 id=925 data-nosnippet>925</a>                file_path: <span class="string">"test.parquet"</span>.into(),
+<a href=#926 id=926 data-nosnippet>926</a>                file_format: DataFileFormat::Parquet,
+<a href=#927 id=927 data-nosnippet>927</a>                partition: Struct::from_iter(<span class="macro">vec!</span>[]),
+<a href=#928 id=928 data-nosnippet>928</a>                record_count: <span class="number">20</span>,
+<a href=#929 id=929 data-nosnippet>929</a>                file_size_in_bytes: <span class="number">200</span>,
+<a href=#930 id=930 data-nosnippet>930</a>                column_sizes: HashMap::new(),
+<a href=#931 id=931 data-nosnippet>931</a>                value_counts: HashMap::new(),
+<a href=#932 id=932 data-nosnippet>932</a>                null_value_counts: HashMap::new(),
+<a href=#933 id=933 data-nosnippet>933</a>                nan_value_counts: HashMap::new(),
+<a href=#934 id=934 data-nosnippet>934</a>                lower_bounds: HashMap::new(),
+<a href=#935 id=935 data-nosnippet>935</a>                upper_bounds: HashMap::new(),
+<a href=#936 id=936 data-nosnippet>936</a>                key_metadata: <span class="prelude-val">None</span>,
+<a href=#937 id=937 data-nosnippet>937</a>                split_offsets: <span class="prelude-val">None</span>,
+<a href=#938 id=938 data-nosnippet>938</a>                equality_ids: <span class="prelude-val">None</span>,
+<a href=#939 id=939 data-nosnippet>939</a>                sort_order_id: <span class="prelude-val">None</span>,
+<a href=#940 id=940 data-nosnippet>940</a>                partition_spec_id: <span class="number">0</span>,
+<a href=#941 id=941 data-nosnippet>941</a>                first_row_id: <span class="prelude-val">None</span>,
+<a href=#942 id=942 data-nosnippet>942</a>                referenced_data_file: <span class="prelude-val">None</span>,
+<a href=#943 id=943 data-nosnippet>943</a>                content_offset: <span class="prelude-val">None</span>,
+<a href=#944 id=944 data-nosnippet>944</a>                content_size_in_bytes: <span class="prelude-val">None</span>,
+<a href=#945 id=945 data-nosnippet>945</a>            },
+<a href=#946 id=946 data-nosnippet>946</a>            schema.clone(),
+<a href=#947 id=947 data-nosnippet>947</a>            partition_spec.clone(),
+<a href=#948 id=948 data-nosnippet>948</a>        );
+<a href=#949 id=949 data-nosnippet>949</a>
+<a href=#950 id=950 data-nosnippet>950</a>        summary_one.merge(summary_two);
+<a href=#951 id=951 data-nosnippet>951</a>        <span class="kw">let </span>props = summary_one.build();
+<a href=#952 id=952 data-nosnippet>952</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_DATA_FILES).unwrap(), <span class="string">"2"</span>);
+<a href=#953 id=953 data-nosnippet>953</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_RECORDS).unwrap(), <span class="string">"30"</span>);
+<a href=#954 id=954 data-nosnippet>954</a>
+<a href=#955 id=955 data-nosnippet>955</a>        <span class="kw">let </span><span class="kw-2">mut </span>summary_three = SnapshotSummaryCollector::default();
+<a href=#956 id=956 data-nosnippet>956</a>        <span class="kw">let </span><span class="kw-2">mut </span>summary_four = SnapshotSummaryCollector::default();
+<a href=#957 id=957 data-nosnippet>957</a>
+<a href=#958 id=958 data-nosnippet>958</a>        summary_three.add_manifest(<span class="kw-2">&amp;</span>ManifestFile {
+<a href=#959 id=959 data-nosnippet>959</a>            manifest_path: <span class="string">"test.manifest"</span>.to_string(),
+<a href=#960 id=960 data-nosnippet>960</a>            manifest_length: <span class="number">0</span>,
+<a href=#961 id=961 data-nosnippet>961</a>            partition_spec_id: <span class="number">0</span>,
+<a href=#962 id=962 data-nosnippet>962</a>            content: ManifestContentType::Data,
+<a href=#963 id=963 data-nosnippet>963</a>            sequence_number: <span class="number">0</span>,
+<a href=#964 id=964 data-nosnippet>964</a>            min_sequence_number: <span class="number">0</span>,
+<a href=#965 id=965 data-nosnippet>965</a>            added_snapshot_id: <span class="number">0</span>,
+<a href=#966 id=966 data-nosnippet>966</a>            added_files_count: <span class="prelude-val">Some</span>(<span class="number">1</span>),
+<a href=#967 id=967 data-nosnippet>967</a>            existing_files_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
+<a href=#968 id=968 data-nosnippet>968</a>            deleted_files_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
+<a href=#969 id=969 data-nosnippet>969</a>            added_rows_count: <span class="prelude-val">Some</span>(<span class="number">5</span>),
+<a href=#970 id=970 data-nosnippet>970</a>            existing_rows_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
+<a href=#971 id=971 data-nosnippet>971</a>            deleted_rows_count: <span class="prelude-val">Some</span>(<span class="number">0</span>),
+<a href=#972 id=972 data-nosnippet>972</a>            partitions: <span class="prelude-val">Some</span>(Vec::new()),
+<a href=#973 id=973 data-nosnippet>973</a>            key_metadata: <span class="prelude-val">None</span>,
+<a href=#974 id=974 data-nosnippet>974</a>            first_row_id: <span class="prelude-val">None</span>,
+<a href=#975 id=975 data-nosnippet>975</a>        });
+<a href=#976 id=976 data-nosnippet>976</a>
+<a href=#977 id=977 data-nosnippet>977</a>        summary_four.add_file(
+<a href=#978 id=978 data-nosnippet>978</a>            <span class="kw-2">&amp;</span>DataFile {
+<a href=#979 id=979 data-nosnippet>979</a>                content: DataContentType::Data,
+<a href=#980 id=980 data-nosnippet>980</a>                file_path: <span class="string">"test.parquet"</span>.into(),
+<a href=#981 id=981 data-nosnippet>981</a>                file_format: DataFileFormat::Parquet,
+<a href=#982 id=982 data-nosnippet>982</a>                partition: Struct::from_iter(<span class="macro">vec!</span>[]),
+<a href=#983 id=983 data-nosnippet>983</a>                record_count: <span class="number">1</span>,
+<a href=#984 id=984 data-nosnippet>984</a>                file_size_in_bytes: <span class="number">10</span>,
+<a href=#985 id=985 data-nosnippet>985</a>                column_sizes: HashMap::new(),
+<a href=#986 id=986 data-nosnippet>986</a>                value_counts: HashMap::new(),
+<a href=#987 id=987 data-nosnippet>987</a>                null_value_counts: HashMap::new(),
+<a href=#988 id=988 data-nosnippet>988</a>                nan_value_counts: HashMap::new(),
+<a href=#989 id=989 data-nosnippet>989</a>                lower_bounds: HashMap::new(),
+<a href=#990 id=990 data-nosnippet>990</a>                upper_bounds: HashMap::new(),
+<a href=#991 id=991 data-nosnippet>991</a>                key_metadata: <span class="prelude-val">None</span>,
+<a href=#992 id=992 data-nosnippet>992</a>                split_offsets: <span class="prelude-val">None</span>,
+<a href=#993 id=993 data-nosnippet>993</a>                equality_ids: <span class="prelude-val">None</span>,
+<a href=#994 id=994 data-nosnippet>994</a>                sort_order_id: <span class="prelude-val">None</span>,
+<a href=#995 id=995 data-nosnippet>995</a>                partition_spec_id: <span class="number">0</span>,
+<a href=#996 id=996 data-nosnippet>996</a>                first_row_id: <span class="prelude-val">None</span>,
+<a href=#997 id=997 data-nosnippet>997</a>                referenced_data_file: <span class="prelude-val">None</span>,
+<a href=#998 id=998 data-nosnippet>998</a>                content_offset: <span class="prelude-val">None</span>,
+<a href=#999 id=999 data-nosnippet>999</a>                content_size_in_bytes: <span class="prelude-val">None</span>,
+<a href=#1000 id=1000 data-nosnippet>1000</a>            },
+<a href=#1001 id=1001 data-nosnippet>1001</a>            schema.clone(),
+<a href=#1002 id=1002 data-nosnippet>1002</a>            partition_spec.clone(),
+<a href=#1003 id=1003 data-nosnippet>1003</a>        );
+<a href=#1004 id=1004 data-nosnippet>1004</a>
+<a href=#1005 id=1005 data-nosnippet>1005</a>        summary_three.merge(summary_four);
+<a href=#1006 id=1006 data-nosnippet>1006</a>        <span class="kw">let </span>props = summary_three.build();
+<a href=#1007 id=1007 data-nosnippet>1007</a>
+<a href=#1008 id=1008 data-nosnippet>1008</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_DATA_FILES).unwrap(), <span class="string">"2"</span>);
+<a href=#1009 id=1009 data-nosnippet>1009</a>        <span class="macro">assert_eq!</span>(props.get(ADDED_RECORDS).unwrap(), <span class="string">"6"</span>);
+<a href=#1010 id=1010 data-nosnippet>1010</a>        <span class="macro">assert!</span>(
+<a href=#1011 id=1011 data-nosnippet>1011</a>            props
+<a href=#1012 id=1012 data-nosnippet>1012</a>                .iter()
+<a href=#1013 id=1013 data-nosnippet>1013</a>                .all(|(k, <span class="kw">_</span>)| !k.starts_with(CHANGED_PARTITION_PREFIX))
+<a href=#1014 id=1014 data-nosnippet>1014</a>        );
+<a href=#1015 id=1015 data-nosnippet>1015</a>    }
+<a href=#1016 id=1016 data-nosnippet>1016</a>}
 </code></pre></div></section></main></body></html>
