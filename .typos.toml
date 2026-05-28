@@ -23,4 +23,4 @@ AGS = "AGS"
 ags = "ags"
 
 [files]
-extend-exclude = ["**/testdata", "CHANGELOG.md"]
+extend-exclude = ["**/testdata", "CHANGELOG.md", "public-api/**"]
