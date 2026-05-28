@@ -329,7 +329,6 @@ where T: PartialOrd + Default + ToString {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn update_snapshot_summaries(
     summary: Summary,
     previous_summary: Option<&Summary>,
@@ -408,7 +407,6 @@ pub(crate) fn update_snapshot_summaries(
     Ok(summary)
 }
 
-#[allow(dead_code)]
 fn get_prop(previous_summary: &Summary, prop: &str) -> Result<i32> {
     let value_str = previous_summary
         .additional_properties
@@ -424,7 +422,6 @@ fn get_prop(previous_summary: &Summary, prop: &str) -> Result<i32> {
     })
 }
 
-#[allow(dead_code)]
 fn truncate_table_summary(mut summary: Summary, previous_summary: &Summary) -> Result<Summary> {
     for prop in [
         TOTAL_DATA_FILES,
@@ -481,7 +478,6 @@ fn truncate_table_summary(mut summary: Summary, previous_summary: &Summary) -> R
     Ok(summary)
 }
 
-#[allow(dead_code)]
 fn update_totals(
     summary: &mut Summary,
     previous_summary: Option<&Summary>,
