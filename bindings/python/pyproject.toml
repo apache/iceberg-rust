@@ -17,7 +17,7 @@
 
 [build-system]
 build-backend = "maturin"
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.9.4,<2.0"]
 
 [project]
 classifiers = [
@@ -40,7 +40,6 @@ readme = "project-description.md"
 requires-python = ">=3.10,<4"
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
 include = [
   { path = "LICENSE", format = [
     "sdist",
@@ -52,7 +51,15 @@ include = [
   ] },
 ]
 module-name = "pyiceberg_core.pyiceberg_core_rust"
+profile = "release"
 python-source = "python"
+# Optimize for small binary size (https://github.com/apache/iceberg-rust/pull/1841)
+config = [
+  "profile.release.lto=\"thin\"",
+  "profile.release.codegen-units=1",
+  "profile.release.opt-level=\"z\"",
+  "profile.release.strip=true",
+]
 
 [tool.ruff.lint]
 ignore = ["F403", "F405"]
@@ -66,7 +73,7 @@ filterwarnings = [
 
 [dependency-groups]
 dev = [
-  "maturin>=1.0,<2.0",
+  "maturin>=1.9.4,<2.0",
   "pytest>=8.3.2",
   "datafusion==52.*",
   # Set a PyIceberg lower bound; otherwise the resolver may select the
