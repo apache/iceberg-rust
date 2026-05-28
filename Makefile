@@ -53,16 +53,8 @@ MSRV_VERSION    := $(shell awk -F'"' '/^rust-version/ {print $$2}' Cargo.toml)
 check-msrv:
 	cargo +$(MSRV_VERSION) check --workspace
 
-PUBLIC_API_CRATES := iceberg \
-	iceberg-cache-moka \
-	iceberg-catalog-glue \
-	iceberg-catalog-hms \
-	iceberg-catalog-loader \
-	iceberg-catalog-rest \
-	iceberg-catalog-s3tables \
-	iceberg-catalog-sql \
-	iceberg-datafusion \
-	iceberg-storage-opendal
+PUBLIC_API_CRATES := $(shell cargo metadata --no-deps --format-version 1 | \
+	jq -r '.packages[] | select(.publish == null) | .name')
 
 install-cargo-public-api:
 	cargo install cargo-public-api@0.51.0
