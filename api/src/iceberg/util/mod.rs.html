@@ -35,12 +35,12 @@
 <a href=#35 id=35 data-nosnippet>35</a>/// parallelism can change during the lifetime of an executing
 <a href=#36 id=36 data-nosnippet>36</a>/// process, but this should not be called in a hot loop.
 <a href=#37 id=37 data-nosnippet>37</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>available_parallelism() -&gt; NonZeroUsize {
-<a href=#38 id=38 data-nosnippet>38</a>    std::thread::available_parallelism().unwrap_or_else(|_err| {
-<a href=#39 id=39 data-nosnippet>39</a>        <span class="comment">// Failed to get the level of parallelism.
-<a href=#40 id=40 data-nosnippet>40</a>        // TODO: log/trace when this fallback occurs.
-<a href=#41 id=41 data-nosnippet>41</a>
-<a href=#42 id=42 data-nosnippet>42</a>        // Using a default value.
-<a href=#43 id=43 data-nosnippet>43</a>        </span>NonZeroUsize::new(DEFAULT_PARALLELISM).unwrap()
+<a href=#38 id=38 data-nosnippet>38</a>    std::thread::available_parallelism().unwrap_or_else(|err| {
+<a href=#39 id=39 data-nosnippet>39</a>        <span class="macro">tracing::warn!</span>(
+<a href=#40 id=40 data-nosnippet>40</a>            error = %err,
+<a href=#41 id=41 data-nosnippet>41</a>            <span class="string">"Failed to determine available parallelism; falling back to {DEFAULT_PARALLELISM}"</span>,
+<a href=#42 id=42 data-nosnippet>42</a>        );
+<a href=#43 id=43 data-nosnippet>43</a>        NonZeroUsize::new(DEFAULT_PARALLELISM).unwrap()
 <a href=#44 id=44 data-nosnippet>44</a>    })
 <a href=#45 id=45 data-nosnippet>45</a>}
 </code></pre></div></section></main></body></html>
