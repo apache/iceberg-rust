@@ -33,20 +33,26 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Rust",
 ]
+dynamic = ["version"]
+license = { file = "LICENSE" }
 name = "pyiceberg-core"
 readme = "project-description.md"
 requires-python = ">=3.10,<4"
-dynamic = ["version"]
-license = { file = "LICENSE" }
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
+include = [
+  { path = "LICENSE", format = [
+    "sdist",
+    "wheel",
+  ] },
+  { path = "NOTICE", format = [
+    "sdist",
+    "wheel",
+  ] },
+]
 module-name = "pyiceberg_core.pyiceberg_core_rust"
 python-source = "python"
-include = [
-    { path = "LICENSE", format = ["sdist", "wheel"] },
-    { path = "NOTICE", format = ["sdist", "wheel"] }
-]
 
 [tool.ruff.lint]
 ignore = ["F403", "F405"]
@@ -54,18 +60,21 @@ ignore = ["F403", "F405"]
 [tool.pytest.ini_options]
 filterwarnings = [
   "error",
+  # huggingface_hub uses hf_xet.upload_files() internally which is deprecated in hf_xet
+  "ignore::DeprecationWarning:huggingface_hub",
 ]
 
 [dependency-groups]
 dev = [
-    "maturin>=1.0,<2.0",
-    "pytest>=8.3.2",
-    "datafusion==52.*",
-    # Set a PyIceberg lower bound; otherwise the resolver may select the
-    # unrelated 0.0.2 stub.
-    # Keep pyarrow direct because current pyiceberg[pyarrow] releases depend on
-    # pyiceberg-core, which conflicts with this local pyiceberg-core project.
-    "pyiceberg[sql-sqlite]>=0.11",
-    "pyarrow>=17",
-    "fastavro>=1.11.1",
+  "maturin>=1.0,<2.0",
+  "pytest>=8.3.2",
+  "datafusion==52.*",
+  # Set a PyIceberg lower bound; otherwise the resolver may select the
+  # unrelated 0.0.2 stub.
+  # Keep pyarrow direct because current pyiceberg[pyarrow] releases depend on
+  # pyiceberg-core, which conflicts with this local pyiceberg-core project.
+  "pyiceberg[sql-sqlite]>=0.11",
+  "pyarrow>=17",
+  "fastavro>=1.11.1",
+  "huggingface_hub>=0.20",
 ]
