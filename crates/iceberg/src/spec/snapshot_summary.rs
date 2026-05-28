@@ -329,7 +329,6 @@ where T: PartialOrd + Default + ToString {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn update_snapshot_summaries(
     summary: Summary,
     previous_summary: Option<&Summary>,
@@ -348,12 +347,10 @@ pub(crate) fn update_snapshot_summaries(
 
     let mut summary = match previous_summary {
         Some(prev_summary) if truncate_full_table && summary.operation == Operation::Overwrite => {
-            truncate_table_summary(summary, prev_summary)
-                .map_err(|err| {
-                    Error::new(ErrorKind::Unexpected, "Failed to truncate table summary.")
-                        .with_source(err)
-                })
-                .unwrap()
+            truncate_table_summary(summary, prev_summary).map_err(|err| {
+                Error::new(ErrorKind::Unexpected, "Failed to truncate table summary.")
+                    .with_source(err)
+            })?
         }
         _ => summary,
     };
@@ -408,23 +405,21 @@ pub(crate) fn update_snapshot_summaries(
     Ok(summary)
 }
 
-#[allow(dead_code)]
-fn get_prop(previous_summary: &Summary, prop: &str) -> Result<i32> {
+fn get_prop(previous_summary: &Summary, prop: &str) -> Result<u64> {
     let value_str = previous_summary
         .additional_properties
         .get(prop)
         .map(String::as_str)
         .unwrap_or("0");
-    value_str.parse::<i32>().map_err(|err| {
+    value_str.parse::<u64>().map_err(|err| {
         Error::new(
             ErrorKind::Unexpected,
-            "Failed to parse value from previous summary property.",
+            format!("Failed to parse summary property '{prop}' value '{value_str}' as u64."),
         )
         .with_source(err)
     })
 }
 
-#[allow(dead_code)]
 fn truncate_table_summary(mut summary: Summary, previous_summary: &Summary) -> Result<Summary> {
     for prop in [
         TOTAL_DATA_FILES,
@@ -481,7 +476,6 @@ fn truncate_table_summary(mut summary: Summary, previous_summary: &Summary) -> R
     Ok(summary)
 }
 
-#[allow(dead_code)]
 fn update_totals(
     summary: &mut Summary,
     previous_summary: Option<&Summary>,
@@ -712,6 +706,83 @@ mod tests {
                 .get(REMOVED_EQUALITY_DELETES)
                 .unwrap(),
             "2"
+        );
+    }
+
+    #[test]
+    fn test_update_snapshot_summaries_overwrite_truncate_handles_totals_above_i32_max() {
+        // A table can legitimately accumulate more than i32::MAX rows or files
+        // over its lifetime. Truncating such a table on overwrite must succeed
+        // and surface the previous totals into the deleted-* counters.
+        let big = (i32::MAX as u64 + 1).to_string(); // 2_147_483_648
+        let prev_props: HashMap<String, String> = [
+            (TOTAL_DATA_FILES.to_string(), big.clone()),
+            (TOTAL_DELETE_FILES.to_string(), "0".to_string()),
+            (TOTAL_RECORDS.to_string(), big.clone()),
+            (TOTAL_FILE_SIZE.to_string(), "0".to_string()),
+            (TOTAL_POSITION_DELETES.to_string(), "0".to_string()),
+            (TOTAL_EQUALITY_DELETES.to_string(), "0".to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        let previous_summary = Summary {
+            operation: Operation::Overwrite,
+            additional_properties: prev_props,
+        };
+
+        let summary = Summary {
+            operation: Operation::Overwrite,
+            additional_properties: HashMap::new(),
+        };
+
+        let updated = update_snapshot_summaries(summary, Some(&previous_summary), true)
+            .expect("overwrite truncation should accept totals above i32::MAX");
+        assert_eq!(
+            updated
+                .additional_properties
+                .get(DELETED_DATA_FILES)
+                .unwrap(),
+            &big
+        );
+        assert_eq!(
+            updated.additional_properties.get(DELETED_RECORDS).unwrap(),
+            &big
+        );
+    }
+
+    #[test]
+    fn test_update_snapshot_summaries_overwrite_truncate_returns_err_on_malformed_total() {
+        // Non-numeric values in the previous summary (corruption, manual edits,
+        // a foreign implementation) must surface as a recoverable Err - not
+        // crash the process.
+        let prev_props: HashMap<String, String> = [
+            (TOTAL_DATA_FILES.to_string(), "not_a_number".to_string()),
+            (TOTAL_DELETE_FILES.to_string(), "0".to_string()),
+            (TOTAL_RECORDS.to_string(), "0".to_string()),
+            (TOTAL_FILE_SIZE.to_string(), "0".to_string()),
+            (TOTAL_POSITION_DELETES.to_string(), "0".to_string()),
+            (TOTAL_EQUALITY_DELETES.to_string(), "0".to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        let previous_summary = Summary {
+            operation: Operation::Overwrite,
+            additional_properties: prev_props,
+        };
+
+        let summary = Summary {
+            operation: Operation::Overwrite,
+            additional_properties: HashMap::new(),
+        };
+
+        let err = update_snapshot_summaries(summary, Some(&previous_summary), true)
+            .expect_err("malformed previous summary must produce an Err, not a panic");
+        assert!(
+            err.message().contains("truncate table summary"),
+            "expected wrapped 'Failed to truncate table summary' context, got: {}",
+            err.message()
         );
     }
 
