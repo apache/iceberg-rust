@@ -53,6 +53,35 @@ MSRV_VERSION    := $(shell awk -F'"' '/^rust-version/ {print $$2}' Cargo.toml)
 check-msrv:
 	cargo +$(MSRV_VERSION) check --workspace
 
+PUBLIC_API_CRATES := $(shell cargo metadata --no-deps --format-version 1 | \
+	jq -r '.packages[] | select(.publish == null) | "\(.name):\(.manifest_path)"')
+
+install-cargo-public-api:
+	cargo install --locked cargo-public-api@0.51.0
+
+generate-public-api: install-cargo-public-api
+	@for entry in $(PUBLIC_API_CRATES); do \
+		crate=$${entry%%:*}; \
+		manifest=$${entry##*:}; \
+		crate_dir=$$(dirname "$$manifest"); \
+		echo "Generating public API for $$crate..."; \
+		cargo public-api -p "$$crate" --all-features > "$$crate_dir/public-api.txt"; \
+	done
+
+check-public-api: install-cargo-public-api
+	@fail=0; \
+	for entry in $(PUBLIC_API_CRATES); do \
+		crate=$${entry%%:*}; \
+		manifest=$${entry##*:}; \
+		crate_dir=$$(dirname "$$manifest"); \
+		echo "Checking public API for $$crate..."; \
+		cargo public-api -p "$$crate" --all-features | diff - "$$crate_dir/public-api.txt" || { \
+			echo "ERROR: Public API for $$crate has changed. Run 'make generate-public-api' to update."; \
+			fail=1; \
+		}; \
+	done; \
+	if [ $$fail -ne 0 ]; then exit 1; fi
+
 check: check-fmt check-clippy check-toml cargo-machete
 
 doc-test:

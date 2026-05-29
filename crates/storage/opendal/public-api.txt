@@ -1,0 +1,422 @@
+pub mod iceberg_storage_opendal
+pub use iceberg_storage_opendal::AwsCredential
+pub use iceberg_storage_opendal::ProvideCredential
+pub enum iceberg_storage_opendal::OpenDalStorage
+pub iceberg_storage_opendal::OpenDalStorage::Azdls
+pub iceberg_storage_opendal::OpenDalStorage::Azdls::config: alloc::sync::Arc<opendal_service_azdls::config::AzdlsConfig>
+pub iceberg_storage_opendal::OpenDalStorage::Gcs
+pub iceberg_storage_opendal::OpenDalStorage::Gcs::config: alloc::sync::Arc<opendal_service_gcs::config::GcsConfig>
+pub iceberg_storage_opendal::OpenDalStorage::Hf
+pub iceberg_storage_opendal::OpenDalStorage::Hf::config: alloc::sync::Arc<opendal_service_hf::config::HfConfig>
+pub iceberg_storage_opendal::OpenDalStorage::LocalFs
+pub iceberg_storage_opendal::OpenDalStorage::Memory(opendal_core::types::operator::operator::Operator)
+pub iceberg_storage_opendal::OpenDalStorage::Oss
+pub iceberg_storage_opendal::OpenDalStorage::Oss::config: alloc::sync::Arc<opendal_service_oss::config::OssConfig>
+pub iceberg_storage_opendal::OpenDalStorage::S3
+pub iceberg_storage_opendal::OpenDalStorage::S3::config: alloc::sync::Arc<opendal_service_s3::config::S3Config>
+pub iceberg_storage_opendal::OpenDalStorage::S3::customized_credential_load: core::option::Option<iceberg_storage_opendal::CustomAwsCredentialLoader>
+impl core::clone::Clone for iceberg_storage_opendal::OpenDalStorage
+pub fn iceberg_storage_opendal::OpenDalStorage::clone(&self) -> iceberg_storage_opendal::OpenDalStorage
+impl core::fmt::Debug for iceberg_storage_opendal::OpenDalStorage
+pub fn iceberg_storage_opendal::OpenDalStorage::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::io::storage::Storage for iceberg_storage_opendal::OpenDalStorage
+pub fn iceberg_storage_opendal::OpenDalStorage::delete<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_opendal::OpenDalStorage::delete_prefix<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_opendal::OpenDalStorage::delete_stream<'life0, 'async_trait>(&'life0 self, paths: futures_core::stream::BoxStream<'static, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn iceberg_storage_opendal::OpenDalStorage::exists<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_opendal::OpenDalStorage::metadata<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::io::file_io::FileMetadata>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_opendal::OpenDalStorage::new_input(&self, path: &str) -> iceberg::error::Result<iceberg::io::file_io::InputFile>
+pub fn iceberg_storage_opendal::OpenDalStorage::new_output(&self, path: &str) -> iceberg::error::Result<iceberg::io::file_io::OutputFile>
+pub fn iceberg_storage_opendal::OpenDalStorage::read<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<bytes::bytes::Bytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_opendal::OpenDalStorage::reader<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::boxed::Box<dyn iceberg::io::file_io::FileRead>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_opendal::OpenDalStorage::write<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str, bs: bytes::bytes::Bytes) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_opendal::OpenDalStorage::writer<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::boxed::Box<dyn iceberg::io::file_io::FileWrite>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl serde_core::ser::Serialize for iceberg_storage_opendal::OpenDalStorage
+pub fn iceberg_storage_opendal::OpenDalStorage::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_storage_opendal::OpenDalStorage
+pub fn iceberg_storage_opendal::OpenDalStorage::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for iceberg_storage_opendal::OpenDalStorage
+impl core::marker::Send for iceberg_storage_opendal::OpenDalStorage
+impl core::marker::Sync for iceberg_storage_opendal::OpenDalStorage
+impl core::marker::Unpin for iceberg_storage_opendal::OpenDalStorage
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_storage_opendal::OpenDalStorage
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_storage_opendal::OpenDalStorage
+impl<E> xet_runtime::utils::singleflight::ResultError for iceberg_storage_opendal::OpenDalStorage where E: core::marker::Send + core::fmt::Debug + core::marker::Sync
+impl<T, U> core::convert::Into<U> for iceberg_storage_opendal::OpenDalStorage where U: core::convert::From<T>
+pub fn iceberg_storage_opendal::OpenDalStorage::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_storage_opendal::OpenDalStorage where U: core::convert::Into<T>
+pub type iceberg_storage_opendal::OpenDalStorage::Error = core::convert::Infallible
+pub fn iceberg_storage_opendal::OpenDalStorage::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_storage_opendal::OpenDalStorage where U: core::convert::TryFrom<T>
+pub type iceberg_storage_opendal::OpenDalStorage::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_storage_opendal::OpenDalStorage::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T, W> typewit::type_witness_traits::HasTypeWitness<W> for iceberg_storage_opendal::OpenDalStorage where W: typewit::type_witness_traits::MakeTypeWitness<Arg = T>, T: ?core::marker::Sized
+pub const iceberg_storage_opendal::OpenDalStorage::WITNESS: W
+impl<T> alloc::borrow::ToOwned for iceberg_storage_opendal::OpenDalStorage where T: core::clone::Clone
+pub type iceberg_storage_opendal::OpenDalStorage::Owned = T
+pub fn iceberg_storage_opendal::OpenDalStorage::clone_into(&self, target: &mut T)
+pub fn iceberg_storage_opendal::OpenDalStorage::to_owned(&self) -> T
+impl<T> as_any::AsAny for iceberg_storage_opendal::OpenDalStorage where T: core::any::Any
+pub fn iceberg_storage_opendal::OpenDalStorage::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_storage_opendal::OpenDalStorage::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_storage_opendal::OpenDalStorage::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_storage_opendal::OpenDalStorage where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_storage_opendal::OpenDalStorage where T: 'static + ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalStorage::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_storage_opendal::OpenDalStorage where T: ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalStorage::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_storage_opendal::OpenDalStorage where T: ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalStorage::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_storage_opendal::OpenDalStorage where T: core::clone::Clone
+pub unsafe fn iceberg_storage_opendal::OpenDalStorage::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_storage_opendal::OpenDalStorage
+pub fn iceberg_storage_opendal::OpenDalStorage::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_storage_opendal::OpenDalStorage
+pub type iceberg_storage_opendal::OpenDalStorage::Init = T
+pub const iceberg_storage_opendal::OpenDalStorage::ALIGN: usize
+pub unsafe fn iceberg_storage_opendal::OpenDalStorage::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_storage_opendal::OpenDalStorage::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_storage_opendal::OpenDalStorage::drop(ptr: usize)
+pub unsafe fn iceberg_storage_opendal::OpenDalStorage::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_storage_opendal::OpenDalStorage
+impl<T> erased_serde::ser::Serialize for iceberg_storage_opendal::OpenDalStorage where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalStorage::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_storage_opendal::OpenDalStorage::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> konst::drop_flavor::DropFlavorWrapper<T> for iceberg_storage_opendal::OpenDalStorage
+pub type iceberg_storage_opendal::OpenDalStorage::Flavor = konst::drop_flavor::MayDrop
+impl<T> opendal_core::raw::futures_util::MaybeSend for iceberg_storage_opendal::OpenDalStorage where T: core::marker::Send
+impl<T> reqsign_core::futures_util::MaybeSend for iceberg_storage_opendal::OpenDalStorage where T: core::marker::Send
+impl<T> serde_core::de::DeserializeOwned for iceberg_storage_opendal::OpenDalStorage where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_storage_opendal::OpenDalStorage where T: ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalStorage::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_storage_opendal::OpenDalStorage::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_storage_opendal::OpenDalStorage
+impl<T> tracing::instrument::WithSubscriber for iceberg_storage_opendal::OpenDalStorage
+impl<T> typenum::type_operators::Same for iceberg_storage_opendal::OpenDalStorage
+pub type iceberg_storage_opendal::OpenDalStorage::Output = T
+impl<T> typewit::type_identity::Identity for iceberg_storage_opendal::OpenDalStorage where T: ?core::marker::Sized
+pub type iceberg_storage_opendal::OpenDalStorage::Type = T
+pub const iceberg_storage_opendal::OpenDalStorage::TYPE_EQ: typewit::type_eq::type_eq_::TypeEq<T, <T as typewit::type_identity::Identity>::Type>
+impl<T> xet_runtime::utils::singleflight::ResultType for iceberg_storage_opendal::OpenDalStorage where T: core::marker::Send + core::clone::Clone + core::marker::Sync + core::fmt::Debug
+impl<U> bnum::cast::As for iceberg_storage_opendal::OpenDalStorage
+pub fn iceberg_storage_opendal::OpenDalStorage::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_storage_opendal::OpenDalStorage where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_storage_opendal::OpenDalStorage::vzip(self) -> V
+pub enum iceberg_storage_opendal::OpenDalStorageFactory
+pub iceberg_storage_opendal::OpenDalStorageFactory::Azdls
+pub iceberg_storage_opendal::OpenDalStorageFactory::Fs
+pub iceberg_storage_opendal::OpenDalStorageFactory::Gcs
+pub iceberg_storage_opendal::OpenDalStorageFactory::Hf
+pub iceberg_storage_opendal::OpenDalStorageFactory::Memory
+pub iceberg_storage_opendal::OpenDalStorageFactory::Oss
+pub iceberg_storage_opendal::OpenDalStorageFactory::S3
+pub iceberg_storage_opendal::OpenDalStorageFactory::S3::customized_credential_load: core::option::Option<iceberg_storage_opendal::CustomAwsCredentialLoader>
+impl core::clone::Clone for iceberg_storage_opendal::OpenDalStorageFactory
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::clone(&self) -> iceberg_storage_opendal::OpenDalStorageFactory
+impl core::fmt::Debug for iceberg_storage_opendal::OpenDalStorageFactory
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::io::storage::StorageFactory for iceberg_storage_opendal::OpenDalStorageFactory
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::build(&self, config: &iceberg::io::storage::config::StorageConfig) -> iceberg::error::Result<alloc::sync::Arc<dyn iceberg::io::storage::Storage>>
+impl serde_core::ser::Serialize for iceberg_storage_opendal::OpenDalStorageFactory
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_storage_opendal::OpenDalStorageFactory
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for iceberg_storage_opendal::OpenDalStorageFactory
+impl core::marker::Send for iceberg_storage_opendal::OpenDalStorageFactory
+impl core::marker::Sync for iceberg_storage_opendal::OpenDalStorageFactory
+impl core::marker::Unpin for iceberg_storage_opendal::OpenDalStorageFactory
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_storage_opendal::OpenDalStorageFactory
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_storage_opendal::OpenDalStorageFactory
+impl<E> xet_runtime::utils::singleflight::ResultError for iceberg_storage_opendal::OpenDalStorageFactory where E: core::marker::Send + core::fmt::Debug + core::marker::Sync
+impl<T, U> core::convert::Into<U> for iceberg_storage_opendal::OpenDalStorageFactory where U: core::convert::From<T>
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_storage_opendal::OpenDalStorageFactory where U: core::convert::Into<T>
+pub type iceberg_storage_opendal::OpenDalStorageFactory::Error = core::convert::Infallible
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_storage_opendal::OpenDalStorageFactory where U: core::convert::TryFrom<T>
+pub type iceberg_storage_opendal::OpenDalStorageFactory::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T, W> typewit::type_witness_traits::HasTypeWitness<W> for iceberg_storage_opendal::OpenDalStorageFactory where W: typewit::type_witness_traits::MakeTypeWitness<Arg = T>, T: ?core::marker::Sized
+pub const iceberg_storage_opendal::OpenDalStorageFactory::WITNESS: W
+impl<T> alloc::borrow::ToOwned for iceberg_storage_opendal::OpenDalStorageFactory where T: core::clone::Clone
+pub type iceberg_storage_opendal::OpenDalStorageFactory::Owned = T
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::clone_into(&self, target: &mut T)
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::to_owned(&self) -> T
+impl<T> as_any::AsAny for iceberg_storage_opendal::OpenDalStorageFactory where T: core::any::Any
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_storage_opendal::OpenDalStorageFactory where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_storage_opendal::OpenDalStorageFactory where T: 'static + ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_storage_opendal::OpenDalStorageFactory where T: ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_storage_opendal::OpenDalStorageFactory where T: ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_storage_opendal::OpenDalStorageFactory where T: core::clone::Clone
+pub unsafe fn iceberg_storage_opendal::OpenDalStorageFactory::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_storage_opendal::OpenDalStorageFactory
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_storage_opendal::OpenDalStorageFactory
+pub type iceberg_storage_opendal::OpenDalStorageFactory::Init = T
+pub const iceberg_storage_opendal::OpenDalStorageFactory::ALIGN: usize
+pub unsafe fn iceberg_storage_opendal::OpenDalStorageFactory::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_storage_opendal::OpenDalStorageFactory::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_storage_opendal::OpenDalStorageFactory::drop(ptr: usize)
+pub unsafe fn iceberg_storage_opendal::OpenDalStorageFactory::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_storage_opendal::OpenDalStorageFactory
+impl<T> erased_serde::ser::Serialize for iceberg_storage_opendal::OpenDalStorageFactory where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> konst::drop_flavor::DropFlavorWrapper<T> for iceberg_storage_opendal::OpenDalStorageFactory
+pub type iceberg_storage_opendal::OpenDalStorageFactory::Flavor = konst::drop_flavor::MayDrop
+impl<T> opendal_core::raw::futures_util::MaybeSend for iceberg_storage_opendal::OpenDalStorageFactory where T: core::marker::Send
+impl<T> reqsign_core::futures_util::MaybeSend for iceberg_storage_opendal::OpenDalStorageFactory where T: core::marker::Send
+impl<T> serde_core::de::DeserializeOwned for iceberg_storage_opendal::OpenDalStorageFactory where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_storage_opendal::OpenDalStorageFactory where T: ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_storage_opendal::OpenDalStorageFactory
+impl<T> tracing::instrument::WithSubscriber for iceberg_storage_opendal::OpenDalStorageFactory
+impl<T> typenum::type_operators::Same for iceberg_storage_opendal::OpenDalStorageFactory
+pub type iceberg_storage_opendal::OpenDalStorageFactory::Output = T
+impl<T> typewit::type_identity::Identity for iceberg_storage_opendal::OpenDalStorageFactory where T: ?core::marker::Sized
+pub type iceberg_storage_opendal::OpenDalStorageFactory::Type = T
+pub const iceberg_storage_opendal::OpenDalStorageFactory::TYPE_EQ: typewit::type_eq::type_eq_::TypeEq<T, <T as typewit::type_identity::Identity>::Type>
+impl<T> xet_runtime::utils::singleflight::ResultType for iceberg_storage_opendal::OpenDalStorageFactory where T: core::marker::Send + core::clone::Clone + core::marker::Sync + core::fmt::Debug
+impl<U> bnum::cast::As for iceberg_storage_opendal::OpenDalStorageFactory
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_storage_opendal::OpenDalStorageFactory where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_storage_opendal::OpenDalStorageFactory::vzip(self) -> V
+pub struct iceberg_storage_opendal::CustomAwsCredentialLoader(_)
+impl iceberg_storage_opendal::CustomAwsCredentialLoader
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::new(provider: impl reqsign_core::api::ProvideCredential<Credential = reqsign_aws_v4::credential::Credential> + 'static) -> Self
+impl core::clone::Clone for iceberg_storage_opendal::CustomAwsCredentialLoader
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::clone(&self) -> Self
+impl core::fmt::Debug for iceberg_storage_opendal::CustomAwsCredentialLoader
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for iceberg_storage_opendal::CustomAwsCredentialLoader
+impl core::marker::Send for iceberg_storage_opendal::CustomAwsCredentialLoader
+impl core::marker::Sync for iceberg_storage_opendal::CustomAwsCredentialLoader
+impl core::marker::Unpin for iceberg_storage_opendal::CustomAwsCredentialLoader
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_storage_opendal::CustomAwsCredentialLoader
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_storage_opendal::CustomAwsCredentialLoader
+impl<E> xet_runtime::utils::singleflight::ResultError for iceberg_storage_opendal::CustomAwsCredentialLoader where E: core::marker::Send + core::fmt::Debug + core::marker::Sync
+impl<T, U> core::convert::Into<U> for iceberg_storage_opendal::CustomAwsCredentialLoader where U: core::convert::From<T>
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_storage_opendal::CustomAwsCredentialLoader where U: core::convert::Into<T>
+pub type iceberg_storage_opendal::CustomAwsCredentialLoader::Error = core::convert::Infallible
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_storage_opendal::CustomAwsCredentialLoader where U: core::convert::TryFrom<T>
+pub type iceberg_storage_opendal::CustomAwsCredentialLoader::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T, W> typewit::type_witness_traits::HasTypeWitness<W> for iceberg_storage_opendal::CustomAwsCredentialLoader where W: typewit::type_witness_traits::MakeTypeWitness<Arg = T>, T: ?core::marker::Sized
+pub const iceberg_storage_opendal::CustomAwsCredentialLoader::WITNESS: W
+impl<T> alloc::borrow::ToOwned for iceberg_storage_opendal::CustomAwsCredentialLoader where T: core::clone::Clone
+pub type iceberg_storage_opendal::CustomAwsCredentialLoader::Owned = T
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::clone_into(&self, target: &mut T)
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::to_owned(&self) -> T
+impl<T> as_any::AsAny for iceberg_storage_opendal::CustomAwsCredentialLoader where T: core::any::Any
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_storage_opendal::CustomAwsCredentialLoader where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_storage_opendal::CustomAwsCredentialLoader where T: 'static + ?core::marker::Sized
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_storage_opendal::CustomAwsCredentialLoader where T: ?core::marker::Sized
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_storage_opendal::CustomAwsCredentialLoader where T: ?core::marker::Sized
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_storage_opendal::CustomAwsCredentialLoader where T: core::clone::Clone
+pub unsafe fn iceberg_storage_opendal::CustomAwsCredentialLoader::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_storage_opendal::CustomAwsCredentialLoader
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_storage_opendal::CustomAwsCredentialLoader
+pub type iceberg_storage_opendal::CustomAwsCredentialLoader::Init = T
+pub const iceberg_storage_opendal::CustomAwsCredentialLoader::ALIGN: usize
+pub unsafe fn iceberg_storage_opendal::CustomAwsCredentialLoader::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_storage_opendal::CustomAwsCredentialLoader::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_storage_opendal::CustomAwsCredentialLoader::drop(ptr: usize)
+pub unsafe fn iceberg_storage_opendal::CustomAwsCredentialLoader::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_storage_opendal::CustomAwsCredentialLoader
+impl<T> konst::drop_flavor::DropFlavorWrapper<T> for iceberg_storage_opendal::CustomAwsCredentialLoader
+pub type iceberg_storage_opendal::CustomAwsCredentialLoader::Flavor = konst::drop_flavor::MayDrop
+impl<T> opendal_core::raw::futures_util::MaybeSend for iceberg_storage_opendal::CustomAwsCredentialLoader where T: core::marker::Send
+impl<T> reqsign_core::futures_util::MaybeSend for iceberg_storage_opendal::CustomAwsCredentialLoader where T: core::marker::Send
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_storage_opendal::CustomAwsCredentialLoader where T: ?core::marker::Sized
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_storage_opendal::CustomAwsCredentialLoader
+impl<T> tracing::instrument::WithSubscriber for iceberg_storage_opendal::CustomAwsCredentialLoader
+impl<T> typenum::type_operators::Same for iceberg_storage_opendal::CustomAwsCredentialLoader
+pub type iceberg_storage_opendal::CustomAwsCredentialLoader::Output = T
+impl<T> typewit::type_identity::Identity for iceberg_storage_opendal::CustomAwsCredentialLoader where T: ?core::marker::Sized
+pub type iceberg_storage_opendal::CustomAwsCredentialLoader::Type = T
+pub const iceberg_storage_opendal::CustomAwsCredentialLoader::TYPE_EQ: typewit::type_eq::type_eq_::TypeEq<T, <T as typewit::type_identity::Identity>::Type>
+impl<T> xet_runtime::utils::singleflight::ResultType for iceberg_storage_opendal::CustomAwsCredentialLoader where T: core::marker::Send + core::clone::Clone + core::marker::Sync + core::fmt::Debug
+impl<U> bnum::cast::As for iceberg_storage_opendal::CustomAwsCredentialLoader
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_storage_opendal::CustomAwsCredentialLoader where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_storage_opendal::CustomAwsCredentialLoader::vzip(self) -> V
+pub struct iceberg_storage_opendal::OpenDalResolvingStorage
+impl core::fmt::Debug for iceberg_storage_opendal::OpenDalResolvingStorage
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::io::storage::Storage for iceberg_storage_opendal::OpenDalResolvingStorage
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::delete<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::delete_prefix<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::delete_stream<'life0, 'async_trait>(&'life0 self, paths: futures_core::stream::BoxStream<'static, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::exists<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::metadata<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::io::file_io::FileMetadata>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::new_input(&self, path: &str) -> iceberg::error::Result<iceberg::io::file_io::InputFile>
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::new_output(&self, path: &str) -> iceberg::error::Result<iceberg::io::file_io::OutputFile>
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::read<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<bytes::bytes::Bytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::reader<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::boxed::Box<dyn iceberg::io::file_io::FileRead>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::write<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str, bs: bytes::bytes::Bytes) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::writer<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::boxed::Box<dyn iceberg::io::file_io::FileWrite>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl serde_core::ser::Serialize for iceberg_storage_opendal::OpenDalResolvingStorage
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_storage_opendal::OpenDalResolvingStorage
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl !core::marker::Freeze for iceberg_storage_opendal::OpenDalResolvingStorage
+impl core::marker::Send for iceberg_storage_opendal::OpenDalResolvingStorage
+impl core::marker::Sync for iceberg_storage_opendal::OpenDalResolvingStorage
+impl core::marker::Unpin for iceberg_storage_opendal::OpenDalResolvingStorage
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_storage_opendal::OpenDalResolvingStorage
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_storage_opendal::OpenDalResolvingStorage
+impl<E> xet_runtime::utils::singleflight::ResultError for iceberg_storage_opendal::OpenDalResolvingStorage where E: core::marker::Send + core::fmt::Debug + core::marker::Sync
+impl<T, U> core::convert::Into<U> for iceberg_storage_opendal::OpenDalResolvingStorage where U: core::convert::From<T>
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_storage_opendal::OpenDalResolvingStorage where U: core::convert::Into<T>
+pub type iceberg_storage_opendal::OpenDalResolvingStorage::Error = core::convert::Infallible
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_storage_opendal::OpenDalResolvingStorage where U: core::convert::TryFrom<T>
+pub type iceberg_storage_opendal::OpenDalResolvingStorage::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T, W> typewit::type_witness_traits::HasTypeWitness<W> for iceberg_storage_opendal::OpenDalResolvingStorage where W: typewit::type_witness_traits::MakeTypeWitness<Arg = T>, T: ?core::marker::Sized
+pub const iceberg_storage_opendal::OpenDalResolvingStorage::WITNESS: W
+impl<T> as_any::AsAny for iceberg_storage_opendal::OpenDalResolvingStorage where T: core::any::Any
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_storage_opendal::OpenDalResolvingStorage where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_storage_opendal::OpenDalResolvingStorage where T: 'static + ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_storage_opendal::OpenDalResolvingStorage where T: ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_storage_opendal::OpenDalResolvingStorage where T: ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for iceberg_storage_opendal::OpenDalResolvingStorage
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_storage_opendal::OpenDalResolvingStorage
+pub type iceberg_storage_opendal::OpenDalResolvingStorage::Init = T
+pub const iceberg_storage_opendal::OpenDalResolvingStorage::ALIGN: usize
+pub unsafe fn iceberg_storage_opendal::OpenDalResolvingStorage::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_storage_opendal::OpenDalResolvingStorage::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_storage_opendal::OpenDalResolvingStorage::drop(ptr: usize)
+pub unsafe fn iceberg_storage_opendal::OpenDalResolvingStorage::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_storage_opendal::OpenDalResolvingStorage
+impl<T> erased_serde::ser::Serialize for iceberg_storage_opendal::OpenDalResolvingStorage where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> konst::drop_flavor::DropFlavorWrapper<T> for iceberg_storage_opendal::OpenDalResolvingStorage
+pub type iceberg_storage_opendal::OpenDalResolvingStorage::Flavor = konst::drop_flavor::MayDrop
+impl<T> opendal_core::raw::futures_util::MaybeSend for iceberg_storage_opendal::OpenDalResolvingStorage where T: core::marker::Send
+impl<T> reqsign_core::futures_util::MaybeSend for iceberg_storage_opendal::OpenDalResolvingStorage where T: core::marker::Send
+impl<T> serde_core::de::DeserializeOwned for iceberg_storage_opendal::OpenDalResolvingStorage where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_storage_opendal::OpenDalResolvingStorage where T: ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_storage_opendal::OpenDalResolvingStorage
+impl<T> tracing::instrument::WithSubscriber for iceberg_storage_opendal::OpenDalResolvingStorage
+impl<T> typenum::type_operators::Same for iceberg_storage_opendal::OpenDalResolvingStorage
+pub type iceberg_storage_opendal::OpenDalResolvingStorage::Output = T
+impl<T> typewit::type_identity::Identity for iceberg_storage_opendal::OpenDalResolvingStorage where T: ?core::marker::Sized
+pub type iceberg_storage_opendal::OpenDalResolvingStorage::Type = T
+pub const iceberg_storage_opendal::OpenDalResolvingStorage::TYPE_EQ: typewit::type_eq::type_eq_::TypeEq<T, <T as typewit::type_identity::Identity>::Type>
+impl<U> bnum::cast::As for iceberg_storage_opendal::OpenDalResolvingStorage
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_storage_opendal::OpenDalResolvingStorage where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_storage_opendal::OpenDalResolvingStorage::vzip(self) -> V
+pub struct iceberg_storage_opendal::OpenDalResolvingStorageFactory
+impl iceberg_storage_opendal::OpenDalResolvingStorageFactory
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::new() -> Self
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::with_s3_credential_loader(self, loader: iceberg_storage_opendal::CustomAwsCredentialLoader) -> Self
+impl core::clone::Clone for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::clone(&self) -> iceberg_storage_opendal::OpenDalResolvingStorageFactory
+impl core::default::Default for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::default() -> Self
+impl core::fmt::Debug for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::io::storage::StorageFactory for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::build(&self, config: &iceberg::io::storage::config::StorageConfig) -> iceberg::error::Result<alloc::sync::Arc<dyn iceberg::io::storage::Storage>>
+impl serde_core::ser::Serialize for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+impl core::marker::Send for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+impl core::marker::Sync for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+impl core::marker::Unpin for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+impl !core::panic::unwind_safe::UnwindSafe for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+impl<E> xet_runtime::utils::singleflight::ResultError for iceberg_storage_opendal::OpenDalResolvingStorageFactory where E: core::marker::Send + core::fmt::Debug + core::marker::Sync
+impl<T, U> core::convert::Into<U> for iceberg_storage_opendal::OpenDalResolvingStorageFactory where U: core::convert::From<T>
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_storage_opendal::OpenDalResolvingStorageFactory where U: core::convert::Into<T>
+pub type iceberg_storage_opendal::OpenDalResolvingStorageFactory::Error = core::convert::Infallible
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_storage_opendal::OpenDalResolvingStorageFactory where U: core::convert::TryFrom<T>
+pub type iceberg_storage_opendal::OpenDalResolvingStorageFactory::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T, W> typewit::type_witness_traits::HasTypeWitness<W> for iceberg_storage_opendal::OpenDalResolvingStorageFactory where W: typewit::type_witness_traits::MakeTypeWitness<Arg = T>, T: ?core::marker::Sized
+pub const iceberg_storage_opendal::OpenDalResolvingStorageFactory::WITNESS: W
+impl<T> alloc::borrow::ToOwned for iceberg_storage_opendal::OpenDalResolvingStorageFactory where T: core::clone::Clone
+pub type iceberg_storage_opendal::OpenDalResolvingStorageFactory::Owned = T
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::clone_into(&self, target: &mut T)
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::to_owned(&self) -> T
+impl<T> as_any::AsAny for iceberg_storage_opendal::OpenDalResolvingStorageFactory where T: core::any::Any
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_storage_opendal::OpenDalResolvingStorageFactory where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_storage_opendal::OpenDalResolvingStorageFactory where T: 'static + ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_storage_opendal::OpenDalResolvingStorageFactory where T: ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_storage_opendal::OpenDalResolvingStorageFactory where T: ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg_storage_opendal::OpenDalResolvingStorageFactory where T: core::clone::Clone
+pub unsafe fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+pub type iceberg_storage_opendal::OpenDalResolvingStorageFactory::Init = T
+pub const iceberg_storage_opendal::OpenDalResolvingStorageFactory::ALIGN: usize
+pub unsafe fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::drop(ptr: usize)
+pub unsafe fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+impl<T> erased_serde::ser::Serialize for iceberg_storage_opendal::OpenDalResolvingStorageFactory where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> konst::drop_flavor::DropFlavorWrapper<T> for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+pub type iceberg_storage_opendal::OpenDalResolvingStorageFactory::Flavor = konst::drop_flavor::MayDrop
+impl<T> opendal_core::raw::futures_util::MaybeSend for iceberg_storage_opendal::OpenDalResolvingStorageFactory where T: core::marker::Send
+impl<T> reqsign_core::futures_util::MaybeSend for iceberg_storage_opendal::OpenDalResolvingStorageFactory where T: core::marker::Send
+impl<T> serde_core::de::DeserializeOwned for iceberg_storage_opendal::OpenDalResolvingStorageFactory where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_storage_opendal::OpenDalResolvingStorageFactory where T: ?core::marker::Sized
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+impl<T> tracing::instrument::WithSubscriber for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+impl<T> typenum::type_operators::Same for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+pub type iceberg_storage_opendal::OpenDalResolvingStorageFactory::Output = T
+impl<T> typewit::type_identity::Identity for iceberg_storage_opendal::OpenDalResolvingStorageFactory where T: ?core::marker::Sized
+pub type iceberg_storage_opendal::OpenDalResolvingStorageFactory::Type = T
+pub const iceberg_storage_opendal::OpenDalResolvingStorageFactory::TYPE_EQ: typewit::type_eq::type_eq_::TypeEq<T, <T as typewit::type_identity::Identity>::Type>
+impl<T> xet_runtime::utils::singleflight::ResultType for iceberg_storage_opendal::OpenDalResolvingStorageFactory where T: core::marker::Send + core::clone::Clone + core::marker::Sync + core::fmt::Debug
+impl<U> bnum::cast::As for iceberg_storage_opendal::OpenDalResolvingStorageFactory
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_storage_opendal::OpenDalResolvingStorageFactory where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::vzip(self) -> V
