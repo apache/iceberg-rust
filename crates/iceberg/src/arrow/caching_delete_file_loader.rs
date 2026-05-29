@@ -31,11 +31,12 @@ use crate::delete_vector::DeleteVector;
 use crate::expr::Predicate::AlwaysTrue;
 use crate::expr::{Predicate, Reference};
 use crate::io::FileIO;
+use crate::metadata_columns::resolve_position_delete_columns;
 use crate::runtime::Runtime;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
 use crate::spec::{
-    DataContentType, Datum, ListType, MapType, NestedField, NestedFieldRef, PartnerAccessor,
-    PrimitiveType, Schema, SchemaRef, SchemaWithPartnerVisitor, StructType, Type,
+    DataContentType, DataFileFormat, Datum, ListType, MapType, NestedField, NestedFieldRef,
+    PartnerAccessor, PrimitiveType, Schema, SchemaRef, SchemaWithPartnerVisitor, StructType, Type,
     visit_schema_with_partner,
 };
 use crate::{Error, ErrorKind, Result};
@@ -238,6 +239,16 @@ impl CachingDeleteFileLoader {
         del_filter: DeleteFilter,
         schema: SchemaRef,
     ) -> Result<DeleteFileContext> {
+        if task.file_format != DataFileFormat::Parquet {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!(
+                    "Unsupported delete file format {}. Only Parquet delete files are supported",
+                    task.file_format
+                ),
+            ));
+        }
+
         match task.file_type {
             DataContentType::PositionDeletes => {
                 match del_filter.try_start_pos_del_load(&task.file_path) {
@@ -337,16 +348,21 @@ impl CachingDeleteFileLoader {
 
         while let Some(batch) = stream.next().await {
             let batch = batch?;
-            let schema = batch.schema();
-            let columns = batch.columns();
+            let (file_path_idx, pos_idx) =
+                resolve_position_delete_columns(batch.schema().as_ref())?;
 
-            let Some(file_paths) = columns[0].as_any().downcast_ref::<StringArray>() else {
+            let Some(file_paths) = batch
+                .column(file_path_idx)
+                .as_any()
+                .downcast_ref::<StringArray>()
+            else {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Could not downcast file paths array to StringArray",
                 ));
             };
-            let Some(positions) = columns[1].as_any().downcast_ref::<Int64Array>() else {
+            let Some(positions) = batch.column(pos_idx).as_any().downcast_ref::<Int64Array>()
+            else {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Could not downcast positions array to Int64Array",
@@ -360,6 +376,13 @@ impl CachingDeleteFileLoader {
                         "null values in delete file",
                     ));
                 };
+
+                if pos < 0 {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Negative position {pos} in positional delete file"),
+                    ));
+                }
 
                 result
                     .entry(file_path.to_string())
@@ -618,6 +641,9 @@ mod tests {
 
     use super::*;
     use crate::arrow::delete_filter::tests::setup;
+    use crate::metadata_columns::{
+        RESERVED_FIELD_ID_DELETE_FILE_PATH, RESERVED_FIELD_ID_DELETE_FILE_POS,
+    };
     use crate::scan::FileScanTaskDeleteFile;
     use crate::spec::{DataContentType, Schema};
 
@@ -652,6 +678,198 @@ mod tests {
         let expected = "(((((y != 1) OR (z != 100)) OR (a != \"HELP\")) OR (sa != 4)) OR (b != 62696E6172795F64617461)) AND (((((y != 2) OR (z IS NOT NULL)) OR (a IS NOT NULL)) OR (sa != 5)) OR (b IS NOT NULL))".to_string();
 
         assert_eq!(parsed_eq_delete.to_string(), expected);
+    }
+
+    #[tokio::test]
+    async fn test_parse_positional_deletes_reordered_columns_by_field_id() {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().as_os_str().to_str().unwrap();
+
+        let data_file_path = format!("{table_location}/target-data.parquet");
+        let delete_file_path = format!("{table_location}/pos-del-reordered.parquet");
+
+        let delete_schema = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("pos", DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                RESERVED_FIELD_ID_DELETE_FILE_POS.to_string(),
+            )])),
+            Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                RESERVED_FIELD_ID_DELETE_FILE_PATH.to_string(),
+            )])),
+        ]));
+
+        let delete_batch = RecordBatch::try_new(delete_schema.clone(), vec![
+            Arc::new(Int64Array::from_iter_values(vec![0i64, 5i64])) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(vec![
+                data_file_path.clone(),
+                data_file_path.clone(),
+            ])) as ArrayRef,
+        ])
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let file = File::create(&delete_file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, delete_schema, Some(props)).unwrap();
+        writer.write(&delete_batch).unwrap();
+        writer.close().unwrap();
+
+        let file_io = FileIO::new_with_fs();
+        let stream = BasicDeleteFileLoader::new(file_io, ScanMetrics::new())
+            .parquet_to_batch_stream(
+                &delete_file_path,
+                std::fs::metadata(&delete_file_path).unwrap().len(),
+            )
+            .await
+            .unwrap();
+
+        let parsed = CachingDeleteFileLoader::parse_positional_deletes_record_batch_stream(stream)
+            .await
+            .unwrap();
+        let parsed_positions: Vec<u64> = parsed.get(&data_file_path).unwrap().iter().collect();
+
+        assert_eq!(parsed_positions, vec![0, 5]);
+    }
+
+    #[tokio::test]
+    async fn test_parse_positional_deletes_ignores_extra_columns() {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().as_os_str().to_str().unwrap();
+
+        let data_file_path = format!("{table_location}/target-data.parquet");
+        let delete_file_path = format!("{table_location}/pos-del-extra-col.parquet");
+
+        let delete_schema = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                RESERVED_FIELD_ID_DELETE_FILE_PATH.to_string(),
+            )])),
+            Field::new("extra", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "99999".to_string(),
+            )])),
+            Field::new("pos", DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                RESERVED_FIELD_ID_DELETE_FILE_POS.to_string(),
+            )])),
+        ]));
+
+        let delete_batch = RecordBatch::try_new(delete_schema.clone(), vec![
+            Arc::new(StringArray::from_iter_values(vec![data_file_path.clone()])) as ArrayRef,
+            Arc::new(Int32Array::from_iter_values(vec![7])) as ArrayRef,
+            Arc::new(Int64Array::from_iter_values(vec![12i64])) as ArrayRef,
+        ])
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let file = File::create(&delete_file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, delete_schema, Some(props)).unwrap();
+        writer.write(&delete_batch).unwrap();
+        writer.close().unwrap();
+
+        let file_io = FileIO::new_with_fs();
+        let stream = BasicDeleteFileLoader::new(file_io, ScanMetrics::new())
+            .parquet_to_batch_stream(
+                &delete_file_path,
+                std::fs::metadata(&delete_file_path).unwrap().len(),
+            )
+            .await
+            .unwrap();
+
+        let parsed = CachingDeleteFileLoader::parse_positional_deletes_record_batch_stream(stream)
+            .await
+            .unwrap();
+        let parsed_positions: Vec<u64> = parsed.get(&data_file_path).unwrap().iter().collect();
+
+        assert_eq!(parsed_positions, vec![12]);
+    }
+
+    #[tokio::test]
+    async fn test_parse_positional_deletes_rejects_negative_position() {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().as_os_str().to_str().unwrap();
+
+        let data_file_path = format!("{table_location}/target-data.parquet");
+        let delete_file_path = format!("{table_location}/pos-del-negative.parquet");
+
+        let delete_schema = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                RESERVED_FIELD_ID_DELETE_FILE_PATH.to_string(),
+            )])),
+            Field::new("pos", DataType::Int64, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                RESERVED_FIELD_ID_DELETE_FILE_POS.to_string(),
+            )])),
+        ]));
+
+        let delete_batch = RecordBatch::try_new(delete_schema.clone(), vec![
+            Arc::new(StringArray::from_iter_values(vec![data_file_path])) as ArrayRef,
+            Arc::new(Int64Array::from_iter_values(vec![-1i64])) as ArrayRef,
+        ])
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let file = File::create(&delete_file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, delete_schema, Some(props)).unwrap();
+        writer.write(&delete_batch).unwrap();
+        writer.close().unwrap();
+
+        let file_io = FileIO::new_with_fs();
+        let stream = BasicDeleteFileLoader::new(file_io, ScanMetrics::new())
+            .parquet_to_batch_stream(
+                &delete_file_path,
+                std::fs::metadata(&delete_file_path).unwrap().len(),
+            )
+            .await
+            .unwrap();
+
+        let err = CachingDeleteFileLoader::parse_positional_deletes_record_batch_stream(stream)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Negative position"));
+    }
+
+    #[tokio::test]
+    async fn test_load_deletes_rejects_non_parquet_delete_file() {
+        // Only Parquet delete files are supported. The format guard runs before any IO,
+        // so the referenced file does not need to exist on disk.
+        let avro_delete = FileScanTaskDeleteFile {
+            file_path: "/nonexistent/deletes.avro".to_string(),
+            file_size_in_bytes: 0,
+            file_type: DataContentType::PositionDeletes,
+            file_format: DataFileFormat::Avro,
+            partition_spec_id: 0,
+            equality_ids: None,
+            referenced_data_file: None,
+        };
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let result = CachingDeleteFileLoader::new(FileIO::new_with_fs(), 10, Runtime::current())
+            .load_deletes(&[avro_delete], schema)
+            .await
+            .unwrap();
+
+        let err = result.expect_err("non-Parquet delete file must be rejected");
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(
+            err.to_string()
+                .contains("Only Parquet delete files are supported")
+        );
     }
 
     /// Create a simple field with metadata.
@@ -936,16 +1154,20 @@ mod tests {
             file_path: pos_del_path.clone(),
             file_size_in_bytes: std::fs::metadata(&pos_del_path).unwrap().len(),
             file_type: DataContentType::PositionDeletes,
+            file_format: DataFileFormat::Parquet,
             partition_spec_id: 0,
             equality_ids: None,
+            referenced_data_file: None,
         };
 
         let eq_del = FileScanTaskDeleteFile {
             file_path: eq_delete_path.clone(),
             file_size_in_bytes: std::fs::metadata(&eq_delete_path).unwrap().len(),
             file_type: DataContentType::EqualityDeletes,
+            file_format: DataFileFormat::Parquet,
             partition_spec_id: 0,
             equality_ids: Some(vec![2, 3]), // Only use field IDs that exist in both schemas
+            referenced_data_file: None,
         };
 
         let file_scan_task = FileScanTask {
