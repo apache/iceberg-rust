@@ -191,10 +191,6 @@ impl PopulatedDeleteFileIndex {
                 .for_each(|delete| results.push(delete.as_ref().into()));
         }
 
-        // TODO: the spec states that:
-        //     "The data file's file_path is equal to the delete file's referenced_data_file if it is non-null".
-        //     we're not yet doing that here. The referenced data file's name will also be present in the positional
-        //     delete file's file path column.
         if let Some(deletes) = self.pos_deletes_by_partition.get(data_file.partition()) {
             deletes
                 .iter()
@@ -204,6 +200,15 @@ impl PopulatedDeleteFileIndex {
                         .map(|seq_num| delete.manifest_entry.sequence_number() >= Some(seq_num))
                         .unwrap_or_else(|| true)
                         && data_file.partition_spec_id == delete.partition_spec_id
+                        && delete
+                            .manifest_entry
+                            .data_file
+                            .referenced_data_file
+                            .as_ref()
+                            .map(|referenced_data_file| {
+                                referenced_data_file == data_file.file_path()
+                            })
+                            .unwrap_or(true)
                 })
                 .for_each(|delete| results.push(delete.as_ref().into()));
         }
@@ -412,6 +417,72 @@ mod tests {
         assert!(actual_paths_to_apply_for_different_spec.is_empty());
     }
 
+    #[test]
+    fn test_referenced_data_file_gate() {
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let spec_id = 1;
+
+        let data_file_a = build_partitioned_data_file_with_path("a.parquet", &partition, spec_id);
+        let data_file_b = build_partitioned_data_file_with_path("b.parquet", &partition, spec_id);
+
+        let file_scoped_delete = build_file_scoped_pos_delete(&partition, spec_id, "a.parquet");
+        let partition_scoped_delete = build_partitioned_pos_delete(&partition, spec_id);
+
+        let file_scoped_delete_path = file_scoped_delete.file_path().to_string();
+        let partition_scoped_delete_path = partition_scoped_delete.file_path().to_string();
+
+        let delete_contexts = vec![
+            DeleteFileContext {
+                manifest_entry: build_added_manifest_entry(1, &file_scoped_delete).into(),
+                partition_spec_id: spec_id,
+            },
+            DeleteFileContext {
+                manifest_entry: build_added_manifest_entry(1, &partition_scoped_delete).into(),
+                partition_spec_id: spec_id,
+            },
+        ];
+
+        let delete_file_index = PopulatedDeleteFileIndex::new(delete_contexts);
+
+        let deletes_for_a = delete_file_index.get_deletes_for_data_file(&data_file_a, Some(0));
+        let deletes_for_b = delete_file_index.get_deletes_for_data_file(&data_file_b, Some(0));
+
+        let paths_for_a: Vec<String> = deletes_for_a.into_iter().map(|f| f.file_path).collect();
+        assert_eq!(paths_for_a, vec![
+            file_scoped_delete_path,
+            partition_scoped_delete_path.clone()
+        ]);
+
+        let paths_for_b: Vec<String> = deletes_for_b.into_iter().map(|f| f.file_path).collect();
+        assert_eq!(paths_for_b, vec![partition_scoped_delete_path]);
+    }
+
+    #[test]
+    fn test_referenced_data_file_requires_exact_path_match() {
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let spec_id = 1;
+
+        let data_file =
+            build_partitioned_data_file_with_path("/tmp/data-file.parquet", &partition, spec_id);
+        let delete_file = build_partitioned_pos_delete_with_reference(
+            &partition,
+            spec_id,
+            Some("file:///tmp/data-file.parquet".to_string()),
+        );
+
+        let delete_file_index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
+            manifest_entry: build_added_manifest_entry(1, &delete_file).into(),
+            partition_spec_id: spec_id,
+        }]);
+
+        // `referenced_data_file` is matched by exact string equality (matching the Iceberg Java
+        // reference behaviour); paths are intentionally not normalized, so a scheme-qualified
+        // reference (`file://...`) does not match an otherwise-equivalent unqualified data file
+        // path. This is by design -- do not "fix" it by canonicalizing paths in the index.
+        let deletes = delete_file_index.get_deletes_for_data_file(&data_file, Some(0));
+        assert!(deletes.is_empty());
+    }
+
     fn build_unpartitioned_eq_delete() -> DataFile {
         build_partitioned_eq_delete(&Struct::empty(), 0)
     }
@@ -435,12 +506,24 @@ mod tests {
     }
 
     fn build_partitioned_pos_delete(partition: &Struct, spec_id: i32) -> DataFile {
+        build_partitioned_pos_delete_with_reference(partition, spec_id, None)
+    }
+
+    fn build_file_scoped_pos_delete(partition: &Struct, spec_id: i32, target: &str) -> DataFile {
+        build_partitioned_pos_delete_with_reference(partition, spec_id, Some(target.to_string()))
+    }
+
+    fn build_partitioned_pos_delete_with_reference(
+        partition: &Struct,
+        spec_id: i32,
+        referenced_data_file: Option<String>,
+    ) -> DataFile {
         DataFileBuilder::default()
             .file_path(format!("{}-pos-delete.parquet", Uuid::new_v4()))
             .file_format(DataFileFormat::Parquet)
             .content(DataContentType::PositionDeletes)
             .record_count(1)
-            .referenced_data_file(Some("/some-data-file.parquet".to_string()))
+            .referenced_data_file(referenced_data_file)
             .partition(partition.clone())
             .partition_spec_id(spec_id)
             .file_size_in_bytes(100)
@@ -462,8 +545,20 @@ mod tests {
     }
 
     fn build_partitioned_data_file(partition_value: &Struct, spec_id: i32) -> DataFile {
+        build_partitioned_data_file_with_path(
+            format!("{}-data.parquet", Uuid::new_v4()),
+            partition_value,
+            spec_id,
+        )
+    }
+
+    fn build_partitioned_data_file_with_path(
+        file_path: impl Into<String>,
+        partition_value: &Struct,
+        spec_id: i32,
+    ) -> DataFile {
         DataFileBuilder::default()
-            .file_path(format!("{}-data.parquet", Uuid::new_v4()))
+            .file_path(file_path.into())
             .file_format(DataFileFormat::Parquet)
             .content(DataContentType::Data)
             .record_count(100)
