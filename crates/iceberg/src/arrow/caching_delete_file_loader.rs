@@ -31,7 +31,7 @@ use crate::delete_vector::{DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE, Delete
 use crate::expr::Predicate::AlwaysTrue;
 use crate::expr::{Predicate, Reference};
 use crate::io::{FileIO, InputFile};
-use crate::puffin::{DELETION_VECTOR_V1, PuffinReader};
+use crate::puffin::{Blob, DELETION_VECTOR_V1, PuffinReader};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask};
 use crate::spec::{
     DataContentType, DataFileFormat, Datum, ListType, MapType, NestedField, NestedFieldRef,
@@ -61,6 +61,7 @@ enum DeleteFileContext {
     DelVec {
         file_path: String,
         input_file: InputFile,
+        referenced_data_file: Option<String>,
         blob_offset: u64,
         blob_length: u64,
     },
@@ -231,7 +232,8 @@ impl CachingDeleteFileLoader {
     ) -> Result<DeleteFileContext> {
         match task.data_file_content {
             DataContentType::PositionDeletes => {
-                match del_filter.try_start_pos_del_load(task.data_file_path()) {
+                let pos_del_load_key = Self::pos_delete_load_key(task);
+                match del_filter.try_start_pos_del_load(&pos_del_load_key) {
                     PosDelLoadAction::AlreadyLoaded => Ok(DeleteFileContext::ExistingPosDel),
                     PosDelLoadAction::WaitFor(notify) => {
                         // Positional deletes are accessed synchronously by ArrowReader.
@@ -249,15 +251,16 @@ impl CachingDeleteFileLoader {
                                 ));
                             }
                             Ok(DeleteFileContext::DelVec {
-                                file_path: task.data_file_path().to_string(),
+                                file_path: pos_del_load_key,
                                 input_file: basic_delete_file_loader
                                     .input_file(task.data_file_path())?,
+                                referenced_data_file: task.referenced_data_file.clone(),
                                 blob_offset: task.start,
                                 blob_length: task.length,
                             })
                         } else {
                             Ok(DeleteFileContext::PosDels {
-                                file_path: task.data_file_path().to_string(),
+                                file_path: pos_del_load_key,
                                 stream: basic_delete_file_loader
                                     .parquet_to_batch_stream(
                                         task.data_file_path(),
@@ -304,6 +307,14 @@ impl CachingDeleteFileLoader {
         }
     }
 
+    fn pos_delete_load_key(task: &FileScanTask) -> String {
+        if task.data_file_format == DataFileFormat::Puffin {
+            format!("{}#{}:{}", task.data_file_path(), task.start, task.length)
+        } else {
+            task.data_file_path().to_string()
+        }
+    }
+
     async fn parse_file_content_for_task(
         ctx: DeleteFileContext,
     ) -> Result<ParsedDeleteFileContext> {
@@ -320,11 +331,17 @@ impl CachingDeleteFileLoader {
             DeleteFileContext::DelVec {
                 file_path,
                 input_file,
+                referenced_data_file,
                 blob_offset,
                 blob_length,
             } => {
-                let del_vecs =
-                    Self::parse_delete_vector_puffin(input_file, blob_offset, blob_length).await?;
+                let del_vecs = Self::parse_delete_vector_puffin(
+                    input_file,
+                    referenced_data_file,
+                    blob_offset,
+                    blob_length,
+                )
+                .await?;
                 Ok(ParsedDeleteFileContext::DelVecs {
                     file_path,
                     results: del_vecs,
@@ -395,9 +412,35 @@ impl CachingDeleteFileLoader {
 
     async fn parse_delete_vector_puffin(
         input_file: InputFile,
+        referenced_data_file: Option<String>,
         blob_offset: u64,
         blob_length: u64,
     ) -> Result<HashMap<String, DeleteVector>> {
+        if let Some(referenced_data_file) = referenced_data_file {
+            let file_read = input_file.reader().await?;
+            let blob_end = blob_offset.checked_add(blob_length).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "deletion vector blob range overflows",
+                )
+            })?;
+            let bytes = file_read.read(blob_offset..blob_end).await?.to_vec();
+            let blob = Blob::builder()
+                .r#type(DELETION_VECTOR_V1.to_string())
+                .fields(vec![])
+                .snapshot_id(-1)
+                .sequence_number(-1)
+                .data(bytes)
+                .properties(std::collections::HashMap::from([(
+                    DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE.to_string(),
+                    referenced_data_file.clone(),
+                )]))
+                .build();
+            let delete_vector = DeleteVector::from_puffin_blob(blob)?;
+
+            return Ok(HashMap::from([(referenced_data_file, delete_vector)]));
+        }
+
         let puffin_reader = PuffinReader::new(input_file);
         let file_metadata = puffin_reader.file_metadata().await?;
         let blob_metadata = file_metadata
@@ -723,6 +766,57 @@ mod tests {
         )]))
     }
 
+    #[tokio::test]
+    async fn test_parse_delete_vector_puffin_reads_manifest_blob_range() {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().as_os_str().to_str().unwrap();
+        let file_io = FileIO::from_path(table_location).unwrap().build().unwrap();
+
+        let referenced_data_file = format!("{table_location}/data.parquet");
+        let puffin_path = format!("{table_location}/dv.puffin");
+        let output_file = file_io.new_output(&puffin_path).unwrap();
+
+        let mut delete_vector = DeleteVector::default();
+        delete_vector.insert(1);
+        delete_vector.insert(42);
+
+        let blob = delete_vector
+            .to_puffin_blob(HashMap::from([
+                (
+                    DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE.to_string(),
+                    referenced_data_file.clone(),
+                ),
+                (
+                    crate::delete_vector::DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(),
+                    delete_vector.len().to_string(),
+                ),
+            ]))
+            .unwrap();
+
+        let mut writer = crate::puffin::PuffinWriter::new(&output_file, HashMap::new(), false)
+            .await
+            .unwrap();
+        writer
+            .add(blob, crate::compression::CompressionCodec::None)
+            .await
+            .unwrap();
+        let write_result = writer.close_with_metadata().await.unwrap();
+        let blob_metadata = write_result.blobs_metadata.first().unwrap();
+
+        let result = CachingDeleteFileLoader::parse_delete_vector_puffin(
+            file_io.new_input(&puffin_path).unwrap(),
+            Some(referenced_data_file.clone()),
+            blob_metadata.offset(),
+            blob_metadata.length(),
+        )
+        .await
+        .unwrap();
+
+        let parsed_delete_vector = result.get(&referenced_data_file).unwrap();
+        assert_eq!(parsed_delete_vector.len(), 2);
+        assert_eq!(parsed_delete_vector.iter().collect::<Vec<_>>(), vec![1, 42]);
+    }
+
     fn setup_write_equality_delete_file_1(table_location: &str) -> String {
         let col_y_vals = vec![1, 2];
         let col_y = Arc::new(Int64Array::from(col_y_vals)) as ArrayRef;
@@ -1019,6 +1113,7 @@ mod tests {
             length: 0,
             record_count: None,
             data_file_path: pos_del.file_path,
+            referenced_data_file: None,
             data_file_content: DataContentType::PositionDeletes,
             data_file_format: DataFileFormat::Parquet,
             schema: data_file_schema.clone(),
@@ -1039,6 +1134,7 @@ mod tests {
             length: 0,
             record_count: None,
             data_file_path: eq_del.file_path.clone(),
+            referenced_data_file: None,
             data_file_content: DataContentType::EqualityDeletes,
             data_file_format: DataFileFormat::Parquet,
             schema: data_file_schema.clone(),
@@ -1059,6 +1155,7 @@ mod tests {
             length: 0,
             record_count: None,
             data_file_path: format!("{}/data-1.parquet", table_location.to_str().unwrap()),
+            referenced_data_file: None,
             data_file_format: DataFileFormat::Parquet,
             schema: data_file_schema.clone(),
             project_field_ids: vec![2, 3],
