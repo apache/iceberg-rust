@@ -30,7 +30,7 @@ header:
     # Generated content by scripts
     - "**/DEPENDENCIES.*.tsv"
     # Generated content by cargo-public-api
-    - "public-api/**"
+    - "**/public-api.txt"
     # Release distributions
     - "dist/*"
     - "target"

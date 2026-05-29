@@ -24,7 +24,6 @@ on:
   pull_request:
     paths:
       - 'crates/**'
-      - 'public-api/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
