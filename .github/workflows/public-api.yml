@@ -24,8 +24,6 @@ on:
   pull_request:
     paths:
       - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
       - 'public-api/**'
 
 concurrency:
