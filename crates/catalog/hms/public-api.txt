@@ -2,57 +2,6 @@ pub mod iceberg_catalog_hms
 pub enum iceberg_catalog_hms::HmsThriftTransport
 pub iceberg_catalog_hms::HmsThriftTransport::Buffered
 pub iceberg_catalog_hms::HmsThriftTransport::Framed
-impl core::default::Default for iceberg_catalog_hms::HmsThriftTransport
-pub fn iceberg_catalog_hms::HmsThriftTransport::default() -> iceberg_catalog_hms::HmsThriftTransport
-impl core::fmt::Debug for iceberg_catalog_hms::HmsThriftTransport
-pub fn iceberg_catalog_hms::HmsThriftTransport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for iceberg_catalog_hms::HmsThriftTransport
-impl core::marker::Send for iceberg_catalog_hms::HmsThriftTransport
-impl core::marker::Sync for iceberg_catalog_hms::HmsThriftTransport
-impl core::marker::Unpin for iceberg_catalog_hms::HmsThriftTransport
-impl core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_hms::HmsThriftTransport
-impl core::panic::unwind_safe::UnwindSafe for iceberg_catalog_hms::HmsThriftTransport
-impl<T, U> core::convert::Into<U> for iceberg_catalog_hms::HmsThriftTransport where U: core::convert::From<T>
-pub fn iceberg_catalog_hms::HmsThriftTransport::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_hms::HmsThriftTransport where U: core::convert::Into<T>
-pub type iceberg_catalog_hms::HmsThriftTransport::Error = core::convert::Infallible
-pub fn iceberg_catalog_hms::HmsThriftTransport::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for iceberg_catalog_hms::HmsThriftTransport where U: core::convert::TryFrom<T>
-pub type iceberg_catalog_hms::HmsThriftTransport::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn iceberg_catalog_hms::HmsThriftTransport::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> arrow_buffer::alloc::Allocation for iceberg_catalog_hms::HmsThriftTransport where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
-impl<T> as_any::AsAny for iceberg_catalog_hms::HmsThriftTransport where T: core::any::Any
-pub fn iceberg_catalog_hms::HmsThriftTransport::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn iceberg_catalog_hms::HmsThriftTransport::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn iceberg_catalog_hms::HmsThriftTransport::type_name(&self) -> &'static str
-impl<T> as_any::Downcast for iceberg_catalog_hms::HmsThriftTransport where T: as_any::AsAny + ?core::marker::Sized
-impl<T> core::any::Any for iceberg_catalog_hms::HmsThriftTransport where T: 'static + ?core::marker::Sized
-pub fn iceberg_catalog_hms::HmsThriftTransport::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for iceberg_catalog_hms::HmsThriftTransport where T: ?core::marker::Sized
-pub fn iceberg_catalog_hms::HmsThriftTransport::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_hms::HmsThriftTransport where T: ?core::marker::Sized
-pub fn iceberg_catalog_hms::HmsThriftTransport::borrow_mut(&mut self) -> &mut T
-impl<T> core::convert::From<T> for iceberg_catalog_hms::HmsThriftTransport
-pub fn iceberg_catalog_hms::HmsThriftTransport::from(t: T) -> T
-impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_hms::HmsThriftTransport
-pub type iceberg_catalog_hms::HmsThriftTransport::Init = T
-pub const iceberg_catalog_hms::HmsThriftTransport::ALIGN: usize
-pub unsafe fn iceberg_catalog_hms::HmsThriftTransport::deref<'a>(ptr: usize) -> &'a T
-pub unsafe fn iceberg_catalog_hms::HmsThriftTransport::deref_mut<'a>(ptr: usize) -> &'a mut T
-pub unsafe fn iceberg_catalog_hms::HmsThriftTransport::drop(ptr: usize)
-pub unsafe fn iceberg_catalog_hms::HmsThriftTransport::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
-impl<T> either::into_either::IntoEither for iceberg_catalog_hms::HmsThriftTransport
-impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_hms::HmsThriftTransport where T: ?core::marker::Sized
-pub fn iceberg_catalog_hms::HmsThriftTransport::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn iceberg_catalog_hms::HmsThriftTransport::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-impl<T> tracing::instrument::Instrument for iceberg_catalog_hms::HmsThriftTransport
-impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_hms::HmsThriftTransport
-impl<T> typenum::type_operators::Same for iceberg_catalog_hms::HmsThriftTransport
-pub type iceberg_catalog_hms::HmsThriftTransport::Output = T
-impl<U> bnum::cast::As for iceberg_catalog_hms::HmsThriftTransport
-pub fn iceberg_catalog_hms::HmsThriftTransport::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
-impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_hms::HmsThriftTransport where V: ppv_lite86::types::MultiLane<T>
-pub fn iceberg_catalog_hms::HmsThriftTransport::vzip(self) -> V
 pub struct iceberg_catalog_hms::HmsCatalog
 impl iceberg_catalog_hms::HmsCatalog
 pub fn iceberg_catalog_hms::HmsCatalog::file_io(&self) -> iceberg::io::file_io::FileIO
@@ -74,108 +23,14 @@ pub fn iceberg_catalog_hms::HmsCatalog::rename_table<'life0, 'life1, 'life2, 'as
 pub fn iceberg_catalog_hms::HmsCatalog::table_exists<'life0, 'life1, 'async_trait>(&'life0 self, table: &'life1 iceberg::catalog::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg_catalog_hms::HmsCatalog::update_namespace<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg_catalog_hms::HmsCatalog::update_table<'life0, 'async_trait>(&'life0 self, _commit: iceberg::catalog::TableCommit) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-impl core::marker::Freeze for iceberg_catalog_hms::HmsCatalog
-impl core::marker::Send for iceberg_catalog_hms::HmsCatalog
-impl core::marker::Sync for iceberg_catalog_hms::HmsCatalog
-impl core::marker::Unpin for iceberg_catalog_hms::HmsCatalog
-impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_hms::HmsCatalog
-impl !core::panic::unwind_safe::UnwindSafe for iceberg_catalog_hms::HmsCatalog
-impl<T, U> core::convert::Into<U> for iceberg_catalog_hms::HmsCatalog where U: core::convert::From<T>
-pub fn iceberg_catalog_hms::HmsCatalog::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_hms::HmsCatalog where U: core::convert::Into<T>
-pub type iceberg_catalog_hms::HmsCatalog::Error = core::convert::Infallible
-pub fn iceberg_catalog_hms::HmsCatalog::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for iceberg_catalog_hms::HmsCatalog where U: core::convert::TryFrom<T>
-pub type iceberg_catalog_hms::HmsCatalog::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn iceberg_catalog_hms::HmsCatalog::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> as_any::AsAny for iceberg_catalog_hms::HmsCatalog where T: core::any::Any
-pub fn iceberg_catalog_hms::HmsCatalog::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn iceberg_catalog_hms::HmsCatalog::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn iceberg_catalog_hms::HmsCatalog::type_name(&self) -> &'static str
-impl<T> as_any::Downcast for iceberg_catalog_hms::HmsCatalog where T: as_any::AsAny + ?core::marker::Sized
-impl<T> core::any::Any for iceberg_catalog_hms::HmsCatalog where T: 'static + ?core::marker::Sized
-pub fn iceberg_catalog_hms::HmsCatalog::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for iceberg_catalog_hms::HmsCatalog where T: ?core::marker::Sized
-pub fn iceberg_catalog_hms::HmsCatalog::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_hms::HmsCatalog where T: ?core::marker::Sized
-pub fn iceberg_catalog_hms::HmsCatalog::borrow_mut(&mut self) -> &mut T
-impl<T> core::convert::From<T> for iceberg_catalog_hms::HmsCatalog
-pub fn iceberg_catalog_hms::HmsCatalog::from(t: T) -> T
-impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_hms::HmsCatalog
-pub type iceberg_catalog_hms::HmsCatalog::Init = T
-pub const iceberg_catalog_hms::HmsCatalog::ALIGN: usize
-pub unsafe fn iceberg_catalog_hms::HmsCatalog::deref<'a>(ptr: usize) -> &'a T
-pub unsafe fn iceberg_catalog_hms::HmsCatalog::deref_mut<'a>(ptr: usize) -> &'a mut T
-pub unsafe fn iceberg_catalog_hms::HmsCatalog::drop(ptr: usize)
-pub unsafe fn iceberg_catalog_hms::HmsCatalog::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
-impl<T> either::into_either::IntoEither for iceberg_catalog_hms::HmsCatalog
-impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_hms::HmsCatalog where T: ?core::marker::Sized
-pub fn iceberg_catalog_hms::HmsCatalog::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn iceberg_catalog_hms::HmsCatalog::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-impl<T> tracing::instrument::Instrument for iceberg_catalog_hms::HmsCatalog
-impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_hms::HmsCatalog
-impl<T> typenum::type_operators::Same for iceberg_catalog_hms::HmsCatalog
-pub type iceberg_catalog_hms::HmsCatalog::Output = T
-impl<U> bnum::cast::As for iceberg_catalog_hms::HmsCatalog
-pub fn iceberg_catalog_hms::HmsCatalog::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
-impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_hms::HmsCatalog where V: ppv_lite86::types::MultiLane<T>
-pub fn iceberg_catalog_hms::HmsCatalog::vzip(self) -> V
 pub struct iceberg_catalog_hms::HmsCatalogBuilder
 impl core::default::Default for iceberg_catalog_hms::HmsCatalogBuilder
 pub fn iceberg_catalog_hms::HmsCatalogBuilder::default() -> Self
-impl core::fmt::Debug for iceberg_catalog_hms::HmsCatalogBuilder
-pub fn iceberg_catalog_hms::HmsCatalogBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::catalog::CatalogBuilder for iceberg_catalog_hms::HmsCatalogBuilder
 pub type iceberg_catalog_hms::HmsCatalogBuilder::C = iceberg_catalog_hms::HmsCatalog
 pub fn iceberg_catalog_hms::HmsCatalogBuilder::load(self, name: impl core::convert::Into<alloc::string::String>, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> impl core::future::future::Future<Output = iceberg::error::Result<Self::C>> + core::marker::Send
 pub fn iceberg_catalog_hms::HmsCatalogBuilder::with_runtime(self, runtime: iceberg::runtime::Runtime) -> Self
 pub fn iceberg_catalog_hms::HmsCatalogBuilder::with_storage_factory(self, storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> Self
-impl core::marker::Freeze for iceberg_catalog_hms::HmsCatalogBuilder
-impl core::marker::Send for iceberg_catalog_hms::HmsCatalogBuilder
-impl core::marker::Sync for iceberg_catalog_hms::HmsCatalogBuilder
-impl core::marker::Unpin for iceberg_catalog_hms::HmsCatalogBuilder
-impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_hms::HmsCatalogBuilder
-impl !core::panic::unwind_safe::UnwindSafe for iceberg_catalog_hms::HmsCatalogBuilder
-impl<T, U> core::convert::Into<U> for iceberg_catalog_hms::HmsCatalogBuilder where U: core::convert::From<T>
-pub fn iceberg_catalog_hms::HmsCatalogBuilder::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_hms::HmsCatalogBuilder where U: core::convert::Into<T>
-pub type iceberg_catalog_hms::HmsCatalogBuilder::Error = core::convert::Infallible
-pub fn iceberg_catalog_hms::HmsCatalogBuilder::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for iceberg_catalog_hms::HmsCatalogBuilder where U: core::convert::TryFrom<T>
-pub type iceberg_catalog_hms::HmsCatalogBuilder::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn iceberg_catalog_hms::HmsCatalogBuilder::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> as_any::AsAny for iceberg_catalog_hms::HmsCatalogBuilder where T: core::any::Any
-pub fn iceberg_catalog_hms::HmsCatalogBuilder::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn iceberg_catalog_hms::HmsCatalogBuilder::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn iceberg_catalog_hms::HmsCatalogBuilder::type_name(&self) -> &'static str
-impl<T> as_any::Downcast for iceberg_catalog_hms::HmsCatalogBuilder where T: as_any::AsAny + ?core::marker::Sized
-impl<T> core::any::Any for iceberg_catalog_hms::HmsCatalogBuilder where T: 'static + ?core::marker::Sized
-pub fn iceberg_catalog_hms::HmsCatalogBuilder::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for iceberg_catalog_hms::HmsCatalogBuilder where T: ?core::marker::Sized
-pub fn iceberg_catalog_hms::HmsCatalogBuilder::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_hms::HmsCatalogBuilder where T: ?core::marker::Sized
-pub fn iceberg_catalog_hms::HmsCatalogBuilder::borrow_mut(&mut self) -> &mut T
-impl<T> core::convert::From<T> for iceberg_catalog_hms::HmsCatalogBuilder
-pub fn iceberg_catalog_hms::HmsCatalogBuilder::from(t: T) -> T
-impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_hms::HmsCatalogBuilder
-pub type iceberg_catalog_hms::HmsCatalogBuilder::Init = T
-pub const iceberg_catalog_hms::HmsCatalogBuilder::ALIGN: usize
-pub unsafe fn iceberg_catalog_hms::HmsCatalogBuilder::deref<'a>(ptr: usize) -> &'a T
-pub unsafe fn iceberg_catalog_hms::HmsCatalogBuilder::deref_mut<'a>(ptr: usize) -> &'a mut T
-pub unsafe fn iceberg_catalog_hms::HmsCatalogBuilder::drop(ptr: usize)
-pub unsafe fn iceberg_catalog_hms::HmsCatalogBuilder::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
-impl<T> either::into_either::IntoEither for iceberg_catalog_hms::HmsCatalogBuilder
-impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_hms::HmsCatalogBuilder where T: ?core::marker::Sized
-pub fn iceberg_catalog_hms::HmsCatalogBuilder::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn iceberg_catalog_hms::HmsCatalogBuilder::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-impl<T> tracing::instrument::Instrument for iceberg_catalog_hms::HmsCatalogBuilder
-impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_hms::HmsCatalogBuilder
-impl<T> typenum::type_operators::Same for iceberg_catalog_hms::HmsCatalogBuilder
-pub type iceberg_catalog_hms::HmsCatalogBuilder::Output = T
-impl<U> bnum::cast::As for iceberg_catalog_hms::HmsCatalogBuilder
-pub fn iceberg_catalog_hms::HmsCatalogBuilder::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
-impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_hms::HmsCatalogBuilder where V: ppv_lite86::types::MultiLane<T>
-pub fn iceberg_catalog_hms::HmsCatalogBuilder::vzip(self) -> V
 pub const iceberg_catalog_hms::HMS_CATALOG_PROP_THRIFT_TRANSPORT: &str
 pub const iceberg_catalog_hms::HMS_CATALOG_PROP_URI: &str
 pub const iceberg_catalog_hms::HMS_CATALOG_PROP_WAREHOUSE: &str

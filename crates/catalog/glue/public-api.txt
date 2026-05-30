@@ -21,116 +21,14 @@ pub fn iceberg_catalog_glue::GlueCatalog::rename_table<'life0, 'life1, 'life2, '
 pub fn iceberg_catalog_glue::GlueCatalog::table_exists<'life0, 'life1, 'async_trait>(&'life0 self, table: &'life1 iceberg::catalog::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg_catalog_glue::GlueCatalog::update_namespace<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg_catalog_glue::GlueCatalog::update_table<'life0, 'async_trait>(&'life0 self, commit: iceberg::catalog::TableCommit) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-impl core::marker::Freeze for iceberg_catalog_glue::GlueCatalog
-impl core::marker::Send for iceberg_catalog_glue::GlueCatalog
-impl core::marker::Sync for iceberg_catalog_glue::GlueCatalog
-impl core::marker::Unpin for iceberg_catalog_glue::GlueCatalog
-impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_glue::GlueCatalog
-impl !core::panic::unwind_safe::UnwindSafe for iceberg_catalog_glue::GlueCatalog
-impl<T, U> core::convert::Into<U> for iceberg_catalog_glue::GlueCatalog where U: core::convert::From<T>
-pub fn iceberg_catalog_glue::GlueCatalog::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_glue::GlueCatalog where U: core::convert::Into<T>
-pub type iceberg_catalog_glue::GlueCatalog::Error = core::convert::Infallible
-pub fn iceberg_catalog_glue::GlueCatalog::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for iceberg_catalog_glue::GlueCatalog where U: core::convert::TryFrom<T>
-pub type iceberg_catalog_glue::GlueCatalog::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn iceberg_catalog_glue::GlueCatalog::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> as_any::AsAny for iceberg_catalog_glue::GlueCatalog where T: core::any::Any
-pub fn iceberg_catalog_glue::GlueCatalog::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn iceberg_catalog_glue::GlueCatalog::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn iceberg_catalog_glue::GlueCatalog::type_name(&self) -> &'static str
-impl<T> as_any::Downcast for iceberg_catalog_glue::GlueCatalog where T: as_any::AsAny + ?core::marker::Sized
-impl<T> core::any::Any for iceberg_catalog_glue::GlueCatalog where T: 'static + ?core::marker::Sized
-pub fn iceberg_catalog_glue::GlueCatalog::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for iceberg_catalog_glue::GlueCatalog where T: ?core::marker::Sized
-pub fn iceberg_catalog_glue::GlueCatalog::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_glue::GlueCatalog where T: ?core::marker::Sized
-pub fn iceberg_catalog_glue::GlueCatalog::borrow_mut(&mut self) -> &mut T
-impl<T> core::convert::From<T> for iceberg_catalog_glue::GlueCatalog
-pub fn iceberg_catalog_glue::GlueCatalog::from(t: T) -> T
-impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_glue::GlueCatalog
-pub type iceberg_catalog_glue::GlueCatalog::Init = T
-pub const iceberg_catalog_glue::GlueCatalog::ALIGN: usize
-pub unsafe fn iceberg_catalog_glue::GlueCatalog::deref<'a>(ptr: usize) -> &'a T
-pub unsafe fn iceberg_catalog_glue::GlueCatalog::deref_mut<'a>(ptr: usize) -> &'a mut T
-pub unsafe fn iceberg_catalog_glue::GlueCatalog::drop(ptr: usize)
-pub unsafe fn iceberg_catalog_glue::GlueCatalog::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
-impl<T> either::into_either::IntoEither for iceberg_catalog_glue::GlueCatalog
-impl<T> opendal_core::raw::futures_util::MaybeSend for iceberg_catalog_glue::GlueCatalog where T: core::marker::Send
-impl<T> reqsign_core::futures_util::MaybeSend for iceberg_catalog_glue::GlueCatalog where T: core::marker::Send
-impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_glue::GlueCatalog where T: ?core::marker::Sized
-pub fn iceberg_catalog_glue::GlueCatalog::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn iceberg_catalog_glue::GlueCatalog::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-impl<T> tracing::instrument::Instrument for iceberg_catalog_glue::GlueCatalog
-impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_glue::GlueCatalog
-impl<T> typenum::type_operators::Same for iceberg_catalog_glue::GlueCatalog
-pub type iceberg_catalog_glue::GlueCatalog::Output = T
-impl<U> bnum::cast::As for iceberg_catalog_glue::GlueCatalog
-pub fn iceberg_catalog_glue::GlueCatalog::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
-impl<Unshared, Shared> aws_smithy_runtime_api::shared::IntoShared<Shared> for iceberg_catalog_glue::GlueCatalog where Shared: aws_smithy_runtime_api::shared::FromUnshared<Unshared>
-pub fn iceberg_catalog_glue::GlueCatalog::into_shared(self) -> Shared
-impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_glue::GlueCatalog where V: ppv_lite86::types::MultiLane<T>
-pub fn iceberg_catalog_glue::GlueCatalog::vzip(self) -> V
 pub struct iceberg_catalog_glue::GlueCatalogBuilder
 impl core::default::Default for iceberg_catalog_glue::GlueCatalogBuilder
 pub fn iceberg_catalog_glue::GlueCatalogBuilder::default() -> Self
-impl core::fmt::Debug for iceberg_catalog_glue::GlueCatalogBuilder
-pub fn iceberg_catalog_glue::GlueCatalogBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::catalog::CatalogBuilder for iceberg_catalog_glue::GlueCatalogBuilder
 pub type iceberg_catalog_glue::GlueCatalogBuilder::C = iceberg_catalog_glue::GlueCatalog
 pub fn iceberg_catalog_glue::GlueCatalogBuilder::load(self, name: impl core::convert::Into<alloc::string::String>, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> impl core::future::future::Future<Output = iceberg::error::Result<Self::C>> + core::marker::Send
 pub fn iceberg_catalog_glue::GlueCatalogBuilder::with_runtime(self, runtime: iceberg::runtime::Runtime) -> Self
 pub fn iceberg_catalog_glue::GlueCatalogBuilder::with_storage_factory(self, storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> Self
-impl core::marker::Freeze for iceberg_catalog_glue::GlueCatalogBuilder
-impl core::marker::Send for iceberg_catalog_glue::GlueCatalogBuilder
-impl core::marker::Sync for iceberg_catalog_glue::GlueCatalogBuilder
-impl core::marker::Unpin for iceberg_catalog_glue::GlueCatalogBuilder
-impl !core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_glue::GlueCatalogBuilder
-impl !core::panic::unwind_safe::UnwindSafe for iceberg_catalog_glue::GlueCatalogBuilder
-impl<T, U> core::convert::Into<U> for iceberg_catalog_glue::GlueCatalogBuilder where U: core::convert::From<T>
-pub fn iceberg_catalog_glue::GlueCatalogBuilder::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_glue::GlueCatalogBuilder where U: core::convert::Into<T>
-pub type iceberg_catalog_glue::GlueCatalogBuilder::Error = core::convert::Infallible
-pub fn iceberg_catalog_glue::GlueCatalogBuilder::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for iceberg_catalog_glue::GlueCatalogBuilder where U: core::convert::TryFrom<T>
-pub type iceberg_catalog_glue::GlueCatalogBuilder::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn iceberg_catalog_glue::GlueCatalogBuilder::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> as_any::AsAny for iceberg_catalog_glue::GlueCatalogBuilder where T: core::any::Any
-pub fn iceberg_catalog_glue::GlueCatalogBuilder::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn iceberg_catalog_glue::GlueCatalogBuilder::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn iceberg_catalog_glue::GlueCatalogBuilder::type_name(&self) -> &'static str
-impl<T> as_any::Downcast for iceberg_catalog_glue::GlueCatalogBuilder where T: as_any::AsAny + ?core::marker::Sized
-impl<T> core::any::Any for iceberg_catalog_glue::GlueCatalogBuilder where T: 'static + ?core::marker::Sized
-pub fn iceberg_catalog_glue::GlueCatalogBuilder::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for iceberg_catalog_glue::GlueCatalogBuilder where T: ?core::marker::Sized
-pub fn iceberg_catalog_glue::GlueCatalogBuilder::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_glue::GlueCatalogBuilder where T: ?core::marker::Sized
-pub fn iceberg_catalog_glue::GlueCatalogBuilder::borrow_mut(&mut self) -> &mut T
-impl<T> core::convert::From<T> for iceberg_catalog_glue::GlueCatalogBuilder
-pub fn iceberg_catalog_glue::GlueCatalogBuilder::from(t: T) -> T
-impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_glue::GlueCatalogBuilder
-pub type iceberg_catalog_glue::GlueCatalogBuilder::Init = T
-pub const iceberg_catalog_glue::GlueCatalogBuilder::ALIGN: usize
-pub unsafe fn iceberg_catalog_glue::GlueCatalogBuilder::deref<'a>(ptr: usize) -> &'a T
-pub unsafe fn iceberg_catalog_glue::GlueCatalogBuilder::deref_mut<'a>(ptr: usize) -> &'a mut T
-pub unsafe fn iceberg_catalog_glue::GlueCatalogBuilder::drop(ptr: usize)
-pub unsafe fn iceberg_catalog_glue::GlueCatalogBuilder::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
-impl<T> either::into_either::IntoEither for iceberg_catalog_glue::GlueCatalogBuilder
-impl<T> opendal_core::raw::futures_util::MaybeSend for iceberg_catalog_glue::GlueCatalogBuilder where T: core::marker::Send
-impl<T> reqsign_core::futures_util::MaybeSend for iceberg_catalog_glue::GlueCatalogBuilder where T: core::marker::Send
-impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_glue::GlueCatalogBuilder where T: ?core::marker::Sized
-pub fn iceberg_catalog_glue::GlueCatalogBuilder::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-pub fn iceberg_catalog_glue::GlueCatalogBuilder::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
-impl<T> tracing::instrument::Instrument for iceberg_catalog_glue::GlueCatalogBuilder
-impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_glue::GlueCatalogBuilder
-impl<T> typenum::type_operators::Same for iceberg_catalog_glue::GlueCatalogBuilder
-pub type iceberg_catalog_glue::GlueCatalogBuilder::Output = T
-impl<U> bnum::cast::As for iceberg_catalog_glue::GlueCatalogBuilder
-pub fn iceberg_catalog_glue::GlueCatalogBuilder::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
-impl<Unshared, Shared> aws_smithy_runtime_api::shared::IntoShared<Shared> for iceberg_catalog_glue::GlueCatalogBuilder where Shared: aws_smithy_runtime_api::shared::FromUnshared<Unshared>
-pub fn iceberg_catalog_glue::GlueCatalogBuilder::into_shared(self) -> Shared
-impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_glue::GlueCatalogBuilder where V: ppv_lite86::types::MultiLane<T>
-pub fn iceberg_catalog_glue::GlueCatalogBuilder::vzip(self) -> V
 pub const iceberg_catalog_glue::AWS_ACCESS_KEY_ID: &str
 pub const iceberg_catalog_glue::AWS_PROFILE_NAME: &str
 pub const iceberg_catalog_glue::AWS_REGION_NAME: &str
