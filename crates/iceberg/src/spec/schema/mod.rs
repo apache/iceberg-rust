@@ -435,7 +435,7 @@ impl Schema {
     }
 
     /// Validates that all schema types are supported by the table format version.
-    pub fn validate_compatible_with_format_version(
+    pub(super) fn validate_compatible_with_format_version(
         &self,
         format_version: FormatVersion,
     ) -> Result<()> {
@@ -445,16 +445,15 @@ impl Schema {
             .filter_map(|field| {
                 let field_type = field.field_type.as_ref();
                 let primitive = field_type.as_primitive_type()?;
-                let min_format_version = primitive.min_format_version()?;
-                (format_version < min_format_version).then(|| {
-                    let column_name = self.name_by_field_id(field.id).unwrap_or(field.name.as_str());
-                    (
-                        field.id,
-                        format!(
-                            "Invalid type for {column_name}: {field_type} is not supported until {min_format_version}"
-                        ),
-                    )
-                })
+                let required_format_version =
+                    primitive.required_format_version_if_unsupported(format_version)?;
+                let column_name = self.name_by_field_id(field.id).unwrap_or(field.name.as_str());
+                Some((
+                    field.id,
+                    format!(
+                        "Invalid type for {column_name}: {field_type} is not supported until {required_format_version}"
+                    ),
+                ))
             })
             .collect::<BTreeMap<_, _>>();
 

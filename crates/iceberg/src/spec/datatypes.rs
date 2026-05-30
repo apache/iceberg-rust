@@ -254,7 +254,7 @@ impl PrimitiveType {
     /// Returns the minimum table format version required by this primitive type.
     ///
     /// Returns [`None`] if the type is supported in all format versions.
-    pub const fn min_format_version(&self) -> Option<FormatVersion> {
+    pub(super) const fn min_format_version(&self) -> Option<FormatVersion> {
         match self {
             Self::TimestampNs | Self::TimestamptzNs => Some(FormatVersion::V3),
             Self::Boolean
@@ -272,6 +272,16 @@ impl PrimitiveType {
             | Self::Fixed(_)
             | Self::Binary => None,
         }
+    }
+
+    /// Returns the required table format version when this primitive type is
+    /// not supported by `format_version`.
+    pub(super) fn required_format_version_if_unsupported(
+        &self,
+        format_version: FormatVersion,
+    ) -> Option<FormatVersion> {
+        self.min_format_version()
+            .filter(|min_format_version| format_version < *min_format_version)
     }
 
     /// Check whether literal is compatible with the type.

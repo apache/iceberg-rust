@@ -8646,6 +8646,7 @@ pub fn iceberg::spec::Schema::field_id_to_name_map(&self) -> &std::collections::
 pub fn iceberg::spec::Schema::highest_field_id(&self) -> i32
 pub fn iceberg::spec::Schema::identifier_field_ids(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = i32> + '_
 pub fn iceberg::spec::Schema::into_builder(self) -> iceberg::spec::SchemaBuilder
+pub fn iceberg::spec::Schema::min_format_version(&self) -> core::option::Option<iceberg::spec::FormatVersion>
 pub fn iceberg::spec::Schema::name_by_field_id(&self, field_id: i32) -> core::option::Option<&str>
 pub fn iceberg::spec::Schema::schema_id(&self) -> iceberg::spec::SchemaId
 impl core::clone::Clone for iceberg::spec::Schema
