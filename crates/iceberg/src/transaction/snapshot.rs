@@ -172,8 +172,10 @@ impl<'a> SnapshotProducer<'a> {
 
         let mut referenced_files = Vec::new();
         if let Some(current_snapshot) = self.table.metadata().current_snapshot() {
-            let manifest_list = current_snapshot
-                .load_manifest_list(self.table.file_io(), &self.table.metadata_ref())
+            let manifest_list = self
+                .table
+                .manifest_list_reader(current_snapshot)
+                .load()
                 .await?;
             for manifest_list_entry in manifest_list.entries() {
                 let manifest = manifest_list_entry
