@@ -34,6 +34,7 @@ use crate::{Error, ErrorKind, Result, ensure_data_valid};
 
 const ELEMENT_ID: &str = "element-id";
 const FIELD_ID_PROP: &str = "field-id";
+const ICEBERG_FIELD_NAME_PROP: &str = "iceberg-field-name";
 const KEY_ID: &str = "key-id";
 const VALUE_ID: &str = "value-id";
 const MAP_LOGICAL_TYPE: &str = "map";
@@ -442,8 +443,14 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
 
             let optional = is_avro_optional(&avro_field.schema);
 
+            let field_name = avro_field
+                .custom_attributes
+                .get(ICEBERG_FIELD_NAME_PROP)
+                .and_then(|v| v.as_str())
+                .unwrap_or(&avro_field.name);
+
             let mut field =
-                NestedField::new(field_id, &avro_field.name, field_type.unwrap(), !optional);
+                NestedField::new(field_id, field_name, field_type.unwrap(), !optional);
 
             if let Some(doc) = &avro_field.doc {
                 field = field.with_doc(doc);
@@ -1211,5 +1218,32 @@ mod tests {
             iceberg_type,
             converter.primitive(&avro_schema).unwrap().unwrap()
         );
+    }
+
+    #[test]
+    fn test_avro_to_iceberg_uses_iceberg_field_name_property() {
+        let avro_json = r#"{
+            "type": "record",
+            "name": "test_schema",
+            "fields": [
+                {
+                    "name": "_123column",
+                    "type": "string",
+                    "field-id": 1,
+                    "iceberg-field-name": "123column"
+                },
+                {
+                    "name": "normal_field",
+                    "type": "int",
+                    "field-id": 2
+                }
+            ]
+        }"#;
+        let avro_schema = AvroSchema::parse_str(avro_json).unwrap();
+        let iceberg_schema = avro_schema_to_schema(&avro_schema).unwrap();
+
+        let fields = iceberg_schema.as_struct().fields();
+        assert_eq!(fields[0].name, "123column");
+        assert_eq!(fields[1].name, "normal_field");
     }
 }
