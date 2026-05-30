@@ -7506,6 +7506,55 @@ impl<U> bnum::cast::As for iceberg::spec::ManifestList
 pub fn iceberg::spec::ManifestList::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
 impl<V, T> ppv_lite86::types::VZip<V> for iceberg::spec::ManifestList where V: ppv_lite86::types::MultiLane<T>
 pub fn iceberg::spec::ManifestList::vzip(self) -> V
+pub struct iceberg::spec::ManifestListReader<'a>
+impl<'a> iceberg::spec::ManifestListReader<'a>
+pub async fn iceberg::spec::ManifestListReader<'a>::load(&self) -> iceberg::Result<iceberg::spec::ManifestList>
+impl<'a> core::marker::Freeze for iceberg::spec::ManifestListReader<'a>
+impl<'a> core::marker::Send for iceberg::spec::ManifestListReader<'a>
+impl<'a> core::marker::Sync for iceberg::spec::ManifestListReader<'a>
+impl<'a> core::marker::Unpin for iceberg::spec::ManifestListReader<'a>
+impl<'a> !core::panic::unwind_safe::RefUnwindSafe for iceberg::spec::ManifestListReader<'a>
+impl<'a> !core::panic::unwind_safe::UnwindSafe for iceberg::spec::ManifestListReader<'a>
+impl<T, U> core::convert::Into<U> for iceberg::spec::ManifestListReader<'a> where U: core::convert::From<T>
+pub fn iceberg::spec::ManifestListReader<'a>::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg::spec::ManifestListReader<'a> where U: core::convert::Into<T>
+pub type iceberg::spec::ManifestListReader<'a>::Error = core::convert::Infallible
+pub fn iceberg::spec::ManifestListReader<'a>::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg::spec::ManifestListReader<'a> where U: core::convert::TryFrom<T>
+pub type iceberg::spec::ManifestListReader<'a>::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg::spec::ManifestListReader<'a>::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> as_any::AsAny for iceberg::spec::ManifestListReader<'a> where T: core::any::Any
+pub fn iceberg::spec::ManifestListReader<'a>::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg::spec::ManifestListReader<'a>::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg::spec::ManifestListReader<'a>::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg::spec::ManifestListReader<'a> where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg::spec::ManifestListReader<'a> where T: 'static + ?core::marker::Sized
+pub fn iceberg::spec::ManifestListReader<'a>::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg::spec::ManifestListReader<'a> where T: ?core::marker::Sized
+pub fn iceberg::spec::ManifestListReader<'a>::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg::spec::ManifestListReader<'a> where T: ?core::marker::Sized
+pub fn iceberg::spec::ManifestListReader<'a>::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for iceberg::spec::ManifestListReader<'a>
+pub fn iceberg::spec::ManifestListReader<'a>::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg::spec::ManifestListReader<'a>
+pub type iceberg::spec::ManifestListReader<'a>::Init = T
+pub const iceberg::spec::ManifestListReader<'a>::ALIGN: usize
+pub unsafe fn iceberg::spec::ManifestListReader<'a>::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg::spec::ManifestListReader<'a>::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg::spec::ManifestListReader<'a>::drop(ptr: usize)
+pub unsafe fn iceberg::spec::ManifestListReader<'a>::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg::spec::ManifestListReader<'a>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg::spec::ManifestListReader<'a> where T: ?core::marker::Sized
+pub fn iceberg::spec::ManifestListReader<'a>::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg::spec::ManifestListReader<'a>::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg::spec::ManifestListReader<'a>
+impl<T> tracing::instrument::WithSubscriber for iceberg::spec::ManifestListReader<'a>
+impl<T> typenum::type_operators::Same for iceberg::spec::ManifestListReader<'a>
+pub type iceberg::spec::ManifestListReader<'a>::Output = T
+impl<U> bnum::cast::As for iceberg::spec::ManifestListReader<'a>
+pub fn iceberg::spec::ManifestListReader<'a>::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg::spec::ManifestListReader<'a> where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg::spec::ManifestListReader<'a>::vzip(self) -> V
 pub struct iceberg::spec::ManifestListWriter
 impl iceberg::spec::ManifestListWriter
 pub fn iceberg::spec::ManifestListWriter::add_manifests(&mut self, manifests: impl core::iter::traits::iterator::Iterator<Item = iceberg::spec::ManifestFile>) -> iceberg::Result<()>
@@ -11004,6 +11053,7 @@ pub fn iceberg::table::Table::current_schema_ref(&self) -> iceberg::spec::Schema
 pub fn iceberg::table::Table::file_io(&self) -> &iceberg::io::FileIO
 pub fn iceberg::table::Table::identifier(&self) -> &iceberg::TableIdent
 pub fn iceberg::table::Table::inspect(&self) -> iceberg::inspect::MetadataTable<'_>
+pub fn iceberg::table::Table::manifest_list_reader<'a>(&'a self, snapshot: &'a iceberg::spec::Snapshot) -> iceberg::spec::ManifestListReader<'a>
 pub fn iceberg::table::Table::metadata(&self) -> &iceberg::spec::TableMetadata
 pub fn iceberg::table::Table::metadata_location(&self) -> core::option::Option<&str>
 pub fn iceberg::table::Table::metadata_location_result(&self) -> iceberg::Result<&str>
