@@ -195,6 +195,7 @@ impl Snapshot {
     }
 
     /// Load manifest list.
+    #[deprecated(since = "0.9.0", note = "Use `Table::manifest_list_reader()` instead")]
     pub async fn load_manifest_list(
         &self,
         file_io: &FileIO,

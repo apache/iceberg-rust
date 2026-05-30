@@ -128,11 +128,10 @@ impl SnapshotProduceOperation for FastAppendOperation {
             return Ok(vec![]);
         };
 
-        let manifest_list = snapshot
-            .load_manifest_list(
-                snapshot_produce.table.file_io(),
-                &snapshot_produce.table.metadata_ref(),
-            )
+        let manifest_list = snapshot_produce
+            .table
+            .manifest_list_reader(snapshot)
+            .load()
             .await?;
 
         Ok(manifest_list
@@ -507,8 +506,9 @@ mod tests {
         } else {
             unreachable!()
         };
-        let manifest_list = new_snapshot
-            .load_manifest_list(table.file_io(), table.metadata())
+        let manifest_list = table
+            .manifest_list_reader(new_snapshot)
+            .load()
             .await
             .unwrap();
         assert_eq!(1, manifest_list.entries().len());

@@ -178,8 +178,10 @@ impl<'a> SnapshotProducer<'a> {
 
         let runtime = self.table.runtime();
         let file_io = self.table.file_io();
-        let manifest_list = current_snapshot
-            .load_manifest_list(file_io, &self.table.metadata_ref())
+        let manifest_list = self
+            .table
+            .manifest_list_reader(current_snapshot)
+            .load()
             .await?;
 
         let new_files_ref = &new_files;
