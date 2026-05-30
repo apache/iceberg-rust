@@ -180,10 +180,9 @@ impl SchemaVisitor for SchemaToAvroSchema {
         );
 
         if let Some(name) = original_name {
-            avro_record_field.custom_attributes.insert(
-                ICEBERG_FIELD_NAME_PROP.to_string(),
-                Value::String(name),
-            );
+            avro_record_field
+                .custom_attributes
+                .insert(ICEBERG_FIELD_NAME_PROP.to_string(), Value::String(name));
         }
 
         Ok(Either::Right(avro_record_field))
@@ -534,8 +533,7 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
                 .and_then(|v| v.as_str())
                 .unwrap_or(&avro_field.name);
 
-            let mut field =
-                NestedField::new(field_id, field_name, field_type.unwrap(), !optional);
+            let mut field = NestedField::new(field_id, field_name, field_type.unwrap(), !optional);
 
             if let Some(doc) = &avro_field.doc {
                 field = field.with_doc(doc);
@@ -1327,6 +1325,23 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_avro_name_unicode() {
+        // Non-ASCII BMP character: U+00E9 = 0xE9 in UTF-16
+        assert_eq!(sanitize_avro_name("a\u{00E9}"), "a_xE9");
+        // CJK character: U+4E2D = 0x4E2D in UTF-16
+        assert_eq!(sanitize_avro_name("\u{4E2D}"), "_x4E2D");
+        // Supplementary character U+1F600 = surrogate pair D83D, DE00
+        assert_eq!(sanitize_avro_name("a\u{1F600}b"), "a_xD83D_xDE00b");
+        // Supplementary character at start
+        assert_eq!(sanitize_avro_name("\u{1F600}"), "_xD83D_xDE00");
+    }
+
+    #[test]
+    fn test_sanitize_avro_name_empty() {
+        assert_eq!(sanitize_avro_name(""), "");
+    }
+
+    #[test]
     fn test_sanitization_round_trip() {
         let iceberg_schema = Schema::builder()
             .with_fields(vec![
@@ -1351,11 +1366,43 @@ mod tests {
                 None
             );
             assert_eq!(record.fields[2].name, "field_x2Ewith_x2Edots");
+            assert_eq!(
+                record.fields[2].custom_attributes.get("iceberg-field-name"),
+                Some(&Value::String("field.with.dots".to_string()))
+            );
         } else {
             panic!("Expected record schema");
         }
 
         let converted_back = avro_schema_to_schema(&avro_schema).unwrap();
         assert_eq!(iceberg_schema, converted_back);
+    }
+
+    #[test]
+    fn test_avro_to_iceberg_uses_iceberg_field_name_property() {
+        // Simulate reading an Avro schema written by Java with sanitized names
+        let avro_json = r#"{
+            "type": "record",
+            "name": "test_schema",
+            "fields": [
+                {
+                    "name": "_123column",
+                    "type": "string",
+                    "field-id": 1,
+                    "iceberg-field-name": "123column"
+                },
+                {
+                    "name": "normal_field",
+                    "type": "int",
+                    "field-id": 2
+                }
+            ]
+        }"#;
+        let avro_schema = AvroSchema::parse_str(avro_json).unwrap();
+        let iceberg_schema = avro_schema_to_schema(&avro_schema).unwrap();
+
+        let fields = iceberg_schema.as_struct().fields();
+        assert_eq!(fields[0].name, "123column");
+        assert_eq!(fields[1].name, "normal_field");
     }
 }
