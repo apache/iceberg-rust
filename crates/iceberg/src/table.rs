@@ -318,7 +318,6 @@ impl Table {
     }
 }
 
-
 /// `StaticTable` is a read-only table struct that can be created from a metadata file or from `TableMetaData` without a catalog.
 /// It can only be used to read metadata and for table scan.
 /// # Examples
@@ -408,28 +407,26 @@ impl StaticTable {
 /// If the table metadata sets the `encryption.key-id` property, build an
 /// [`EncryptionManager`] for the table.
 ///
-/// Returns `Ok(None)` if the property is not set. Returns an error if the
-/// property is set but no [`KeyManagementClient`] was provided.
+/// Returns `Ok(None)` if the format version is below v3 or the property is
+/// not set. Returns an error if the property is set but no
+/// [`KeyManagementClient`] was provided.
 fn maybe_configure_encryption(
     kms_client: Option<&Arc<dyn KeyManagementClient>>,
     metadata: &TableMetadataRef,
 ) -> Result<Option<Arc<EncryptionManager>>> {
+    if metadata.format_version() < FormatVersion::V3 {
+        return Ok(None);
+    }
+
     let table_properties = metadata.table_properties()?;
     let Some(table_key_id) = table_properties.encryption_key_id else {
+        if kms_client.is_some() {
+            tracing::warn!(
+                "KeyManagementClient provided but table does not have encryption.key-id set"
+            );
+        }
         return Ok(None);
     };
-
-    // Encryption is a v3 feature: `encryption-keys` table metadata and the
-    // snapshot `key-id` field are introduced in format version 3.
-    if metadata.format_version() < FormatVersion::V3 {
-        return Err(Error::new(
-            ErrorKind::PreconditionFailed,
-            format!(
-                "Table encryption requires format version 3, found {}",
-                metadata.format_version()
-            ),
-        ));
-    }
 
     let kms_client = kms_client.ok_or_else(|| {
         Error::new(
@@ -681,24 +678,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn table_builder_errors_when_encryption_set_on_pre_v3_table() {
-        // Encryption is a v3 spec feature; setting encryption.key-id on a v2 table
-        // must be rejected even when a KMS client is available.
+    async fn table_builder_skips_encryption_on_pre_v3_table() {
+        // Encryption is a v3 spec feature; pre-v3 tables silently skip
+        // encryption even if encryption.key-id is set.
         let mut metadata: TableMetadata = serde_json::from_str(V2_METADATA).unwrap();
         metadata.properties.insert(
             TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
             "master-1".to_string(),
         );
 
-        let err = Table::builder()
+        let table = Table::builder()
             .file_io(FileIO::new_with_memory())
             .metadata(metadata)
             .identifier(TableIdent::from_strs(["ns", "enc"]).unwrap())
             .kms_client(make_kms())
             .runtime(Runtime::try_current().unwrap())
             .build()
-            .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
+            .unwrap();
+        assert!(table.encryption_manager().is_none());
     }
 
     #[tokio::test]

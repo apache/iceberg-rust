@@ -526,10 +526,10 @@ mod tests {
     use crate::encryption::kms::{KeyManagementClient, MemoryKeyManagementClient};
     use crate::encryption::{EncryptionManager, StandardKeyMetadata};
     use crate::io::FileIO;
-    use crate::spec::{ManifestListReader, TableMetadata};
     use crate::spec::manifest_list::{ManifestList, ManifestListWriter};
     use crate::spec::snapshot::_serde::SnapshotV1;
     use crate::spec::snapshot::{Operation, Snapshot, Summary};
+    use crate::spec::{ManifestListReader, TableMetadata};
 
     const ENCRYPTION_TEST_V3_METADATA: &str = r#"{
         "format-version": 3,
@@ -807,7 +807,8 @@ mod tests {
 
         let err = ManifestListReader::new(&snapshot, &io, &metadata, None)
             .load()
-            .await.unwrap_err();
+            .await
+            .unwrap_err();
         assert_eq!(err.kind(), crate::ErrorKind::PreconditionFailed);
     }
 
@@ -836,9 +837,11 @@ mod tests {
         let snapshot = snapshot_pointing_at(encrypted_path, Some(key_id));
         let metadata = encryption_test_metadata();
 
-        let manifest_list: ManifestList = ManifestListReader::new(&snapshot, &io, &metadata, Some(&mgr))
-            .load()
-            .await.unwrap();
+        let manifest_list: ManifestList =
+            ManifestListReader::new(&snapshot, &io, &metadata, Some(&mgr))
+                .load()
+                .await
+                .unwrap();
         assert_eq!(manifest_list.entries().len(), 0);
     }
 }

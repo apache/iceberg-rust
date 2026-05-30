@@ -138,10 +138,15 @@ impl ObjectCache {
         table_metadata: &TableMetadataRef,
     ) -> Result<Arc<ManifestList>> {
         if self.cache_disabled {
-            return ManifestListReader::new(snapshot, &self.file_io, table_metadata, self.encryption_manager.as_deref())
-                .load()
-                .await
-                .map(Arc::new);
+            return ManifestListReader::new(
+                snapshot,
+                &self.file_io,
+                table_metadata,
+                self.encryption_manager.as_deref(),
+            )
+            .load()
+            .await
+            .map(Arc::new);
         }
 
         let key = CachedObjectKey::ManifestList((
@@ -185,9 +190,14 @@ impl ObjectCache {
         snapshot: &SnapshotRef,
         table_metadata: &TableMetadataRef,
     ) -> Result<CachedItem> {
-        let manifest_list = ManifestListReader::new(snapshot, &self.file_io, table_metadata, self.encryption_manager.as_deref())
-            .load()
-            .await?;
+        let manifest_list = ManifestListReader::new(
+            snapshot,
+            &self.file_io,
+            table_metadata,
+            self.encryption_manager.as_deref(),
+        )
+        .load()
+        .await?;
 
         Ok(CachedItem::ManifestList(Arc::new(manifest_list)))
     }
