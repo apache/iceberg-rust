@@ -606,11 +606,7 @@ mod test_row_lineage {
 
         // Check written manifest for first_row_id
         let snapshot = table.metadata().current_snapshot().unwrap();
-        let manifest_list = table
-            .manifest_list_reader(snapshot)
-            .load()
-            .await
-            .unwrap();
+        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
 
         assert_eq!(manifest_list.entries().len(), 1);
         let manifest_file = &manifest_list.entries()[0];
@@ -632,11 +628,7 @@ mod test_row_lineage {
         assert_eq!(table.metadata().next_row_id(), 30 + 17 + 11);
 
         // Check written manifest for first_row_id
-        let manifest_list = table
-            .manifest_list_reader(snapshot)
-            .load()
-            .await
-            .unwrap();
+        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
         assert_eq!(manifest_list.entries().len(), 2);
         let manifest_file = &manifest_list.entries()[1];
         assert_eq!(manifest_file.first_row_id, Some(30));
