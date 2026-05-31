@@ -96,7 +96,7 @@ impl ArrowReader {
         iceberg_schema: &Schema,
         leaf_field_id_set: &HashSet<i32>,
         out: &mut HashMap<usize, i32>,
-    ) {
+    ) -> Result<()> {
         for field in fields {
             Self::collect_variant_leaves_in_field(
                 field,
@@ -105,8 +105,9 @@ impl ArrowReader {
                 iceberg_schema,
                 leaf_field_id_set,
                 out,
-            );
+            )?;
         }
+        Ok(())
     }
 
     fn collect_variant_leaves_in_field(
@@ -116,9 +117,10 @@ impl ArrowReader {
         iceberg_schema: &Schema,
         leaf_field_id_set: &HashSet<i32>,
         out: &mut HashMap<usize, i32>,
-    ) {
+    ) -> Result<()> {
         // Once we are inside a variant, stay inside; otherwise check
         // whether this Arrow field IS a variant column.
+        let entering_variant = variant_parent.is_none();
         let effective_variant = variant_parent.or_else(|| {
             let fid = field
                 .metadata()
@@ -131,6 +133,22 @@ impl ArrowReader {
             matches!(iceberg_field.field_type.as_ref(), Type::Variant(_)).then_some(fid)
         });
 
+        // Reject shredded variants: a `typed_value` sub-field means the payload is
+        // shredded, which we can't reconstruct yet. Projecting only metadata/value
+        // would silently drop it, so fail loudly instead.
+        if entering_variant
+            && effective_variant.is_some()
+            && let DataType::Struct(sub) = field.data_type()
+            && sub.iter().any(|f| f.name() == "typed_value")
+        {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Reading shredded variant columns is not supported yet: found a \
+                 `typed_value` sub-field. Only unshredded variants (metadata + value) \
+                 can be read.",
+            ));
+        }
+
         match field.data_type() {
             DataType::Struct(sub) => {
                 Self::collect_variant_leaves(
@@ -140,7 +158,7 @@ impl ArrowReader {
                     iceberg_schema,
                     leaf_field_id_set,
                     out,
-                );
+                )?;
             }
             DataType::List(inner)
             | DataType::LargeList(inner)
@@ -153,7 +171,7 @@ impl ArrowReader {
                     iceberg_schema,
                     leaf_field_id_set,
                     out,
-                );
+                )?;
             }
             _ => {
                 if let Some(vid) = effective_variant {
@@ -162,6 +180,7 @@ impl ArrowReader {
                 *leaf_idx += 1;
             }
         }
+        Ok(())
     }
 
     pub(super) fn get_arrow_projection_mask(
@@ -262,7 +281,7 @@ impl ArrowReader {
                 iceberg_schema_of_task,
                 &leaf_field_id_set,
                 &mut out,
-            );
+            )?;
             out
         };
 
@@ -746,6 +765,71 @@ message schema {
         assert_eq!(
             mask_primitive_only,
             ProjectionMask::leaves(&parquet_schema, vec![0]),
+        );
+    }
+
+    /// A shredded variant (with `typed_value`) must be rejected, not silently dropped.
+    #[test]
+    fn test_arrow_projection_mask_variant_shredded_is_rejected() {
+        // Iceberg schema: c1 (String, id=1) + v (Variant, id=2)
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "c1", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::required(2, "v", Type::Variant(VariantType)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Arrow schema: v is a SHREDDED variant — Struct(metadata, value, typed_value),
+        // field ID 2 on the struct, no field IDs on the sub-fields.
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("c1", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new(
+                "v",
+                DataType::Struct(arrow_schema::Fields::from(vec![
+                    Arc::new(Field::new("metadata", DataType::Binary, false)),
+                    Arc::new(Field::new("value", DataType::Binary, true)),
+                    Arc::new(Field::new("typed_value", DataType::Int64, true)),
+                ])),
+                false,
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+
+        let message_type = "
+message schema {
+  required binary c1 (STRING) = 1;
+  required group v = 2 {
+    required binary metadata;
+    optional binary value;
+    optional int64 typed_value;
+  }
+}
+";
+        let parquet_type = parse_message_type(message_type).expect("should parse schema");
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
+
+        let err = ArrowReader::get_arrow_projection_mask(
+            &[1, 2],
+            &schema,
+            &parquet_schema,
+            &arrow_schema,
+            false,
+        )
+        .expect_err("shredded variant must be rejected");
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(
+            err.message().contains("shredded variant"),
+            "unexpected error message: {err}"
         );
     }
 
