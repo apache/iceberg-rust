@@ -54,6 +54,9 @@ pub type SchemaRef = Arc<Schema>;
 pub const DEFAULT_SCHEMA_ID: SchemaId = 0;
 /// Delimiter for schema name, which denotes a nested struct.
 pub const SCHEMA_NAME_DELIMITER: &str = ".";
+/// Minimum format version that allows non-null field default values.
+/// Mirrors Java's `Schema.DEFAULT_VALUES_MIN_FORMAT_VERSION`.
+pub const MIN_FORMAT_VERSION_DEFAULT_VALUES: FormatVersion = FormatVersion::V3;
 
 /// Defines schema in iceberg.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -438,24 +441,34 @@ impl Schema {
     /// Check that all types in this schema are supported by the given format version.
     ///
     /// Mirrors Java's `Schema.checkCompatibility()`. Returns an error listing every
-    /// incompatible field if any are found.
+    /// incompatible field if any are found. Two checks per field, in one pass:
     ///
-    /// Types with a minimum format version:
-    /// - `TimestampNs` / `TimestamptzNs` → v3+
-    /// - `Variant` → v3+
+    /// - **Type**: types with a minimum format version must not appear below it
+    ///   (`TimestampNs` / `TimestamptzNs` → v3+, `Variant` → v3+).
+    /// - **Initial default**: a non-null `initial_default` is only allowed from
+    ///   [`MIN_FORMAT_VERSION_DEFAULT_VALUES`]. `write_default` is intentionally not
+    ///   checked, matching Java. An explicit null default is always allowed.
     pub fn check_format_compatibility(&self, format_version: FormatVersion) -> Result<()> {
         let mut problems: Vec<String> = Vec::new();
 
         for field in self.id_to_field.values() {
-            let min_version = field.field_type.min_format_version();
+            let name = self
+                .name_by_field_id(field.id)
+                .unwrap_or(field.name.as_str());
 
+            let min_version = field.field_type.min_format_version();
             if format_version < min_version {
-                let name = self
-                    .name_by_field_id(field.id)
-                    .unwrap_or(field.name.as_str());
                 problems.push(format!(
                     "Invalid type for {name}: {} is not supported until {min_version} but format version is {format_version}.",
                     field.field_type,
+                ));
+            }
+
+            if let Some(default) = &field.initial_default
+                && format_version < MIN_FORMAT_VERSION_DEFAULT_VALUES
+            {
+                problems.push(format!(
+                    "Invalid initial default for {name}: non-null default ({default:?}) is not supported until {MIN_FORMAT_VERSION_DEFAULT_VALUES} but format version is {format_version}."
                 ));
             }
         }
@@ -497,6 +510,77 @@ mod tests {
     use crate::spec::schema::Schema;
     use crate::spec::values::Map as MapValue;
     use crate::spec::{Datum, Literal};
+
+    #[test]
+    fn test_check_format_compatibility() {
+        use crate::spec::{FormatVersion, PrimitiveLiteral, VariantType};
+
+        fn schema_with(fields: Vec<NestedFieldRef>) -> Schema {
+            Schema::builder().with_fields(fields).build().unwrap()
+        }
+
+        // Variant type requires v3.
+        let variant = schema_with(vec![
+            NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+        ]);
+        assert!(
+            variant
+                .check_format_compatibility(FormatVersion::V2)
+                .is_err()
+        );
+        assert!(
+            variant
+                .check_format_compatibility(FormatVersion::V3)
+                .is_ok()
+        );
+
+        // A non-null initial default requires v3, even for a v1-compatible type.
+        let with_default = schema_with(vec![
+            NestedField::optional(1, "a", Type::Primitive(PrimitiveType::Int))
+                .with_initial_default(Literal::Primitive(PrimitiveLiteral::Int(1)))
+                .into(),
+        ]);
+        let err = with_default
+            .check_format_compatibility(FormatVersion::V2)
+            .unwrap_err();
+        assert!(
+            err.message().contains("Invalid initial default for a"),
+            "{err}"
+        );
+        assert!(
+            with_default
+                .check_format_compatibility(FormatVersion::V3)
+                .is_ok()
+        );
+
+        // No default is fine at any version (an absent/null default never trips).
+        let no_default = schema_with(vec![
+            NestedField::optional(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
+        ]);
+        assert!(
+            no_default
+                .check_format_compatibility(FormatVersion::V1)
+                .is_ok()
+        );
+
+        // Recursion: a default on a field nested inside a struct is caught.
+        let nested = schema_with(vec![
+            NestedField::required(
+                1,
+                "s",
+                Type::Struct(StructType::new(vec![
+                    NestedField::optional(2, "inner", Type::Primitive(PrimitiveType::Long))
+                        .with_initial_default(Literal::Primitive(PrimitiveLiteral::Long(7)))
+                        .into(),
+                ])),
+            )
+            .into(),
+        ]);
+        let err = nested
+            .check_format_compatibility(FormatVersion::V2)
+            .unwrap_err();
+        assert!(err.message().contains("inner"), "{err}");
+    }
 
     #[test]
     fn test_construct_schema() {
