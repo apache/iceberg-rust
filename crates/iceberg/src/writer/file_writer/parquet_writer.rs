@@ -2844,4 +2844,28 @@ mod tests {
         assert_eq!(lower.get(&0).unwrap().data_type(), &ty);
         assert_eq!(upper.get(&0).unwrap().data_type(), &ty);
     }
+
+    #[test]
+    fn test_truncated_fixed_datum_roundtrip() {
+        use std::cmp::Ordering;
+        // After truncation, a Fixed(N) Datum holds N-typed metadata but its
+        // literal carries fewer than N bytes. Verify the two paths that
+        // downstream consumers exercise — `to_bytes()` and `partial_cmp`
+        // (used by manifest serialization and the aggregator's update_state_*)
+        // — tolerate that mismatch and produce the truncated bytes verbatim.
+        let ty = PrimitiveType::Fixed(20);
+        let truncated = Datum::new(ty.clone(), PrimitiveLiteral::Binary((0..16).collect()));
+        let other_truncated = Datum::new(
+            ty.clone(),
+            PrimitiveLiteral::Binary((0..15).chain([16]).collect()),
+        );
+
+        // to_bytes serializes the literal bytes regardless of declared Fixed length.
+        let encoded = truncated.to_bytes().expect("to_bytes succeeds");
+        assert_eq!(encoded.as_slice(), &(0u8..16).collect::<Vec<u8>>()[..]);
+
+        // partial_cmp wildcards on Fixed length and compares lex on raw bytes.
+        assert!(truncated < other_truncated);
+        assert_eq!(truncated.partial_cmp(&truncated), Some(Ordering::Equal));
+    }
 }
