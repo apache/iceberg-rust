@@ -73,6 +73,7 @@ bytes = "1.11"
 cfg-if = "1"
 chrono = "0.4.41"
 clap = { version = "4.5.48", features = ["derive", "cargo"] }
+criterion = { version = "0.5", features = ["async_tokio"] }
 dashmap = "6"
 datafusion = "53.1.0"
 datafusion-cli = "53.0.0"
