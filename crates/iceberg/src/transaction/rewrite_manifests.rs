@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::ops::RangeFrom;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -25,29 +26,22 @@ use crate::error::Result;
 use crate::spec::{
     DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestFile,
     ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
-    SnapshotReference, SnapshotRetention, Struct, Summary,
+    SnapshotReference, SnapshotRetention, Struct, Summary, TableProperties,
 };
 use crate::table::Table;
+use crate::transaction::snapshot::generate_unique_snapshot_id;
 use crate::transaction::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
-const DEFAULT_TARGET_MANIFEST_SIZE_BYTES: u64 = 8 * 1024 * 1024;
 
-/// Rewrite the data manifests of a table's current snapshot.
-///
-/// Mirrors Java's `RewriteManifests`: groups live entries from existing data
-/// manifests bound to the current default partition spec by partition tuple
-/// and writes them into a smaller number of larger manifests, while
-/// preserving every entry's data file, snapshot id, and data/file sequence
-/// numbers (and, on v3, row lineage). Delete manifests and data manifests
-/// bound to non-default partition specs are kept unchanged. Produces a
-/// `Replace` snapshot.
+/// Rewrite the data manifests of a table's current snapshot, mirroring Java's
+/// `RewriteManifests`. Produces a `Replace` snapshot that preserves every live
+/// entry's data file, snapshot id, sequence numbers, and (on v3) row lineage.
 pub struct RewriteManifestsAction {
     target_size_bytes: Option<u64>,
     snapshot_properties: HashMap<String, String>,
     commit_uuid: Option<Uuid>,
-    key_metadata: Option<Vec<u8>>,
 }
 
 impl RewriteManifestsAction {
@@ -56,14 +50,12 @@ impl RewriteManifestsAction {
             target_size_bytes: None,
             snapshot_properties: HashMap::new(),
             commit_uuid: None,
-            key_metadata: None,
         }
     }
 
-    /// Override the target manifest file size in bytes used to roll a new
-    /// manifest. Defaults to 8 MiB to match the Java
-    /// `commit.manifest.target-size-bytes` default.
-    pub fn with_target_size_bytes(mut self, target_size_bytes: u64) -> Self {
+    /// Override the target manifest file size in bytes (default
+    /// `commit.manifest.target-size-bytes`, then 8 MiB).
+    pub fn set_target_size_bytes(mut self, target_size_bytes: u64) -> Self {
         self.target_size_bytes = Some(target_size_bytes);
         self
     }
@@ -79,12 +71,6 @@ impl RewriteManifestsAction {
         self.commit_uuid = Some(commit_uuid);
         self
     }
-
-    /// Set encryption key metadata for newly written manifest files.
-    pub fn set_key_metadata(mut self, key_metadata: Vec<u8>) -> Self {
-        self.key_metadata = Some(key_metadata);
-        self
-    }
 }
 
 #[async_trait]
@@ -98,9 +84,13 @@ impl TransactionAction for RewriteManifestsAction {
             ));
         };
 
-        let target_size_bytes = self
-            .target_size_bytes
-            .unwrap_or(DEFAULT_TARGET_MANIFEST_SIZE_BYTES);
+        let target_size_bytes = self.target_size_bytes.unwrap_or_else(|| {
+            metadata
+                .properties()
+                .get(TableProperties::PROPERTY_COMMIT_MANIFEST_TARGET_SIZE_BYTES)
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(TableProperties::PROPERTY_COMMIT_MANIFEST_TARGET_SIZE_BYTES_DEFAULT)
+        });
         let default_spec_id = metadata.default_partition_spec_id();
         let format_version = metadata.format_version();
 
@@ -108,8 +98,8 @@ impl TransactionAction for RewriteManifestsAction {
             .load_manifest_list(table.file_io(), &table.metadata_ref())
             .await?;
 
-        let mut kept: Vec<ManifestFile> = Vec::new();
-        let mut to_rewrite: Vec<ManifestFile> = Vec::new();
+        let mut kept: Vec<ManifestFile> = Vec::with_capacity(manifest_list.entries().len());
+        let mut to_rewrite: Vec<ManifestFile> = Vec::with_capacity(manifest_list.entries().len());
         for manifest in manifest_list.entries() {
             let is_data = manifest.content == ManifestContentType::Data;
             let on_default_spec = manifest.partition_spec_id == default_spec_id;
@@ -121,16 +111,15 @@ impl TransactionAction for RewriteManifestsAction {
             }
         }
 
-        let single_below_target =
-            to_rewrite.len() == 1 && (to_rewrite[0].manifest_length as u64) <= target_size_bytes;
-        if to_rewrite.is_empty() || single_below_target {
+        if to_rewrite.is_empty() {
             return Ok(ActionCommit::new(vec![], vec![]));
         }
 
-        let mut replaced_active_files: u64 = 0;
-        for m in &to_rewrite {
-            replaced_active_files += m.added_files_count.unwrap_or(0) as u64;
-            replaced_active_files += m.existing_files_count.unwrap_or(0) as u64;
+        // Mirrors Java RewriteManifestsSparkAction: skip when the input would already
+        // fit in a single target-sized manifest (target_num_manifests == 1 && len == 1).
+        let total_size: u64 = to_rewrite.iter().map(|m| m.manifest_length as u64).sum();
+        if to_rewrite.len() == 1 && total_size <= target_size_bytes {
+            return Ok(ActionCommit::new(vec![], vec![]));
         }
 
         let commit_uuid = self.commit_uuid.unwrap_or_else(Uuid::now_v7);
@@ -161,30 +150,12 @@ impl TransactionAction for RewriteManifestsAction {
             }
         }
 
-        if entries_processed != replaced_active_files {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Manifest list active file count ({replaced_active_files}) disagrees with manifest entry count ({entries_processed})"
-                ),
-            ));
-        }
-
-        for group in &mut grouped {
-            group.sort_by(|a, b| a.data_file().file_path.cmp(&b.data_file().file_path));
-        }
-
-        let mut counter: u64 = 0;
-        let mut new_manifests: Vec<ManifestFile> = Vec::new();
+        let mut counter: RangeFrom<u64> = 0..;
+        let mut new_manifests: Vec<ManifestFile> = Vec::with_capacity(grouped.len());
 
         for group in grouped {
-            let mut writer = new_manifest_writer(
-                table,
-                &commit_uuid,
-                &mut counter,
-                self.key_metadata.clone(),
-                snapshot_id,
-            )?;
+            let mut writer =
+                new_manifest_writer(table, &commit_uuid, counter.next().unwrap(), snapshot_id)?;
             let mut accumulated: u64 = 0;
             let mut min_first_row_id: Option<u64> = None;
 
@@ -201,8 +172,7 @@ impl TransactionAction for RewriteManifestsAction {
                     writer = new_manifest_writer(
                         table,
                         &commit_uuid,
-                        &mut counter,
-                        self.key_metadata.clone(),
+                        counter.next().unwrap(),
                         snapshot_id,
                     )?;
                     accumulated = 0;
@@ -238,22 +208,14 @@ impl TransactionAction for RewriteManifestsAction {
             new_manifests.push(written);
         }
 
-        let new_active_files: u64 = new_manifests
-            .iter()
-            .map(|m| {
-                m.added_files_count.unwrap_or(0) as u64 + m.existing_files_count.unwrap_or(0) as u64
-            })
-            .sum();
-        if new_active_files != replaced_active_files {
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                format!(
-                    "Rewrite produced {new_active_files} active files, expected {replaced_active_files}"
-                ),
-            ));
-        }
-
-        let manifest_list_path = generate_manifest_list_file_path(table, snapshot_id, commit_uuid);
+        let manifest_list_path = format!(
+            "{}/{}/snap-{}-0-{}.{}",
+            metadata.location(),
+            META_ROOT_PATH,
+            snapshot_id,
+            commit_uuid,
+            DataFileFormat::Avro,
+        );
         let next_seq_num = metadata.next_sequence_number();
         let next_row_id = metadata.next_row_id();
         let mut list_writer = match format_version {
@@ -279,10 +241,10 @@ impl TransactionAction for RewriteManifestsAction {
         let manifests_created = new_manifests.len();
         let manifests_replaced = to_rewrite.len();
         let manifests_kept = kept.len();
-        list_writer.add_manifests(new_manifests.into_iter().chain(kept.into_iter()))?;
+        list_writer.add_manifests(new_manifests.into_iter().chain(kept))?;
         list_writer.close().await?;
 
-        let mut additional_properties = HashMap::new();
+        let mut additional_properties: HashMap<String, String> = self.snapshot_properties.clone();
         for k in [
             "total-data-files",
             "total-delete-files",
@@ -295,22 +257,10 @@ impl TransactionAction for RewriteManifestsAction {
                 additional_properties.insert(k.to_string(), v.clone());
             }
         }
-        additional_properties.insert(
-            "manifests-created".to_string(),
-            manifests_created.to_string(),
-        );
-        additional_properties.insert(
-            "manifests-replaced".to_string(),
-            manifests_replaced.to_string(),
-        );
-        additional_properties.insert("manifests-kept".to_string(), manifests_kept.to_string());
-        additional_properties.insert(
-            "entries-processed".to_string(),
-            entries_processed.to_string(),
-        );
-        for (k, v) in &self.snapshot_properties {
-            additional_properties.insert(k.clone(), v.clone());
-        }
+        additional_properties.insert("manifests-created".into(), manifests_created.to_string());
+        additional_properties.insert("manifests-replaced".into(), manifests_replaced.to_string());
+        additional_properties.insert("manifests-kept".into(), manifests_kept.to_string());
+        additional_properties.insert("entries-processed".into(), entries_processed.to_string());
         let summary = Summary {
             operation: Operation::Replace,
             additional_properties,
@@ -358,58 +308,31 @@ impl TransactionAction for RewriteManifestsAction {
 fn new_manifest_writer(
     table: &Table,
     commit_uuid: &Uuid,
-    counter: &mut u64,
-    key_metadata: Option<Vec<u8>>,
+    n: u64,
     snapshot_id: i64,
 ) -> Result<ManifestWriter> {
-    let n = *counter;
-    *counter += 1;
+    let metadata = table.metadata();
     let path = format!(
         "{}/{}/{}-m{}.{}",
-        table.metadata().location(),
+        metadata.location(),
         META_ROOT_PATH,
         commit_uuid,
         n,
-        DataFileFormat::Avro
+        DataFileFormat::Avro,
     );
     let output = table.file_io().new_output(path)?;
     let builder = ManifestWriterBuilder::new(
         output,
         Some(snapshot_id),
-        key_metadata,
-        table.metadata().current_schema().clone(),
-        table.metadata().default_partition_spec().as_ref().clone(),
+        None,
+        metadata.current_schema().clone(),
+        metadata.default_partition_spec().as_ref().clone(),
     );
-    Ok(match table.metadata().format_version() {
+    Ok(match metadata.format_version() {
         FormatVersion::V1 => builder.build_v1(),
         FormatVersion::V2 => builder.build_v2_data(),
         FormatVersion::V3 => builder.build_v3_data(),
     })
-}
-
-fn generate_manifest_list_file_path(table: &Table, snapshot_id: i64, commit_uuid: Uuid) -> String {
-    format!(
-        "{}/{}/snap-{}-{}-{}.{}",
-        table.metadata().location(),
-        META_ROOT_PATH,
-        snapshot_id,
-        0,
-        commit_uuid,
-        DataFileFormat::Avro
-    )
-}
-
-fn generate_unique_snapshot_id(table: &Table) -> i64 {
-    let gen_id = || -> i64 {
-        let (lhs, rhs) = Uuid::new_v4().as_u64_pair();
-        let id = (lhs ^ rhs) as i64;
-        if id < 0 { -id } else { id }
-    };
-    let mut id = gen_id();
-    while table.metadata().snapshots().any(|s| s.snapshot_id() == id) {
-        id = gen_id();
-    }
-    id
 }
 
 #[cfg(test)]
@@ -579,7 +502,7 @@ mod tests {
         let tx = Transaction::new(&t);
         let t = tx
             .rewrite_manifests()
-            .with_target_size_bytes(15_000)
+            .set_target_size_bytes(15_000)
             .apply(tx)
             .unwrap()
             .commit(&catalog)
