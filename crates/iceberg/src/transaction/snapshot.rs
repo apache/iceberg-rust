@@ -147,7 +147,7 @@ impl<'a> SnapshotProducer<'a> {
     ) -> Self {
         Self {
             table,
-            snapshot_id: Self::generate_unique_snapshot_id(table),
+            snapshot_id: generate_unique_snapshot_id(table),
             commit_uuid,
             snapshot_properties,
             added_data_files,
@@ -232,10 +232,6 @@ impl<'a> SnapshotProducer<'a> {
         }
 
         Ok(())
-    }
-
-    fn generate_unique_snapshot_id(table: &Table) -> i64 {
-        generate_unique_snapshot_id(table)
     }
 
     fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {

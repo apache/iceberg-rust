@@ -16,15 +16,16 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::ops::RangeFrom;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures::TryStreamExt;
+use futures::stream::{self, StreamExt};
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{
-    DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestFile,
+    DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestFile,
     ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
     SnapshotReference, SnapshotRetention, Struct, Summary, TableProperties,
 };
@@ -35,13 +36,24 @@ use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
 
-/// Rewrite the data manifests of a table's current snapshot, mirroring Java's
-/// `RewriteManifests`. Produces a `Replace` snapshot that preserves every live
-/// entry's data file, snapshot id, sequence numbers, and (on v3) row lineage.
+/// Approximate serialized cost of a single manifest entry, in bytes. Mirrors the
+/// rough order of magnitude of Avro-encoded `manifest_entry` records (header +
+/// data file struct + bounds, summarized), used as the rolling proxy because
+/// `ManifestWriter` does not currently expose its in-flight byte count.
+const APPROX_BYTES_PER_ENTRY: u64 = 256;
+
+/// Bin-pack and rewrite the data manifests of the current snapshot into manifests of
+/// approximately `target_size_bytes`, mirroring Java's `RewriteManifests`. Live entries
+/// are preserved verbatim (status=Existing), so file paths, snapshot ids, sequence
+/// numbers, and v3 row lineage are unchanged. Produces a `Replace` snapshot.
+///
+/// Explicit-subset (Java parity ceiling): no `rewriteIf` predicate, no `clusterBy`,
+/// no caller-specified `specId`, no branch override (always commits to `main`). Only
+/// data manifests on the table's *default* partition spec are rewritten; manifests
+/// on older specs and delete manifests are kept untouched.
 pub struct RewriteManifestsAction {
     target_size_bytes: Option<u64>,
     snapshot_properties: HashMap<String, String>,
-    commit_uuid: Option<Uuid>,
 }
 
 impl RewriteManifestsAction {
@@ -49,26 +61,19 @@ impl RewriteManifestsAction {
         Self {
             target_size_bytes: None,
             snapshot_properties: HashMap::new(),
-            commit_uuid: None,
         }
     }
 
-    /// Override the target manifest file size in bytes (default
-    /// `commit.manifest.target-size-bytes`, then 8 MiB).
+    /// Override the target manifest file size in bytes. Defaults to the table
+    /// property `commit.manifest.target-size-bytes`, or 8 MiB if unset.
     pub fn set_target_size_bytes(mut self, target_size_bytes: u64) -> Self {
         self.target_size_bytes = Some(target_size_bytes);
         self
     }
 
-    /// Set the snapshot summary properties.
+    /// Set custom properties to attach to the snapshot summary.
     pub fn set_snapshot_properties(mut self, snapshot_properties: HashMap<String, String>) -> Self {
         self.snapshot_properties = snapshot_properties;
-        self
-    }
-
-    /// Set commit UUID for the snapshot.
-    pub fn set_commit_uuid(mut self, commit_uuid: Uuid) -> Self {
-        self.commit_uuid = Some(commit_uuid);
         self
     }
 }
@@ -98,8 +103,8 @@ impl TransactionAction for RewriteManifestsAction {
             .load_manifest_list(table.file_io(), &table.metadata_ref())
             .await?;
 
-        let mut kept: Vec<ManifestFile> = Vec::with_capacity(manifest_list.entries().len());
-        let mut to_rewrite: Vec<ManifestFile> = Vec::with_capacity(manifest_list.entries().len());
+        let mut kept: Vec<ManifestFile> = Vec::new();
+        let mut to_rewrite: Vec<ManifestFile> = Vec::new();
         for manifest in manifest_list.entries() {
             let is_data = manifest.content == ManifestContentType::Data;
             let on_default_spec = manifest.partition_spec_id == default_spec_id;
@@ -117,72 +122,41 @@ impl TransactionAction for RewriteManifestsAction {
 
         // Mirrors Java RewriteManifestsSparkAction: skip when the input would already
         // fit in a single target-sized manifest (target_num_manifests == 1 && len == 1).
-        let total_size: u64 = to_rewrite.iter().map(|m| m.manifest_length as u64).sum();
+        let total_size: u64 = to_rewrite
+            .iter()
+            .map(|m| u64::try_from(m.manifest_length).unwrap_or(0))
+            .sum();
         if to_rewrite.len() == 1 && total_size <= target_size_bytes {
             return Ok(ActionCommit::new(vec![], vec![]));
         }
 
-        let commit_uuid = self.commit_uuid.unwrap_or_else(Uuid::now_v7);
+        let commit_uuid = Uuid::now_v7();
         let snapshot_id = generate_unique_snapshot_id(table);
 
-        let mut grouped: Vec<Vec<crate::spec::ManifestEntry>> = Vec::new();
+        // Load manifests concurrently (bounded) — sequential I/O is a perf cliff on
+        // tables with many manifests; ordering doesn't matter because we re-group by
+        // partition tuple below.
+        let file_io = table.file_io().clone();
+        let loaded: Vec<_> = stream::iter(to_rewrite.clone())
+            .map(|m| {
+                let file_io = file_io.clone();
+                async move { m.load_manifest(&file_io).await }
+            })
+            .buffer_unordered(16)
+            .try_collect()
+            .await?;
+
+        // Group live entries by partition tuple. We store only the four fields we need
+        // (data file + identity numbers) to avoid cloning the full ManifestEntry.
+        type EntryRecord = (DataFile, i64, i64, Option<i64>);
+        let mut grouped: Vec<Vec<EntryRecord>> = Vec::new();
         let mut group_index: HashMap<Struct, usize> = HashMap::new();
         let mut entries_processed: u64 = 0;
 
-        for manifest_file in &to_rewrite {
-            let manifest = manifest_file.load_manifest(table.file_io()).await?;
+        for manifest in loaded {
             for entry in manifest.entries() {
                 if !entry.is_alive() {
                     continue;
-                }
-                let key = entry.data_file().partition.clone();
-                let idx = match group_index.get(&key) {
-                    Some(&i) => i,
-                    None => {
-                        let i = grouped.len();
-                        group_index.insert(key, i);
-                        grouped.push(Vec::new());
-                        i
-                    }
-                };
-                grouped[idx].push((**entry).clone());
-                entries_processed += 1;
-            }
-        }
-
-        let mut counter: RangeFrom<u64> = 0..;
-        let mut new_manifests: Vec<ManifestFile> = Vec::with_capacity(grouped.len());
-
-        for group in grouped {
-            let mut writer =
-                new_manifest_writer(table, &commit_uuid, counter.next().unwrap(), snapshot_id)?;
-            let mut accumulated: u64 = 0;
-            let mut min_first_row_id: Option<u64> = None;
-
-            for entry in group {
-                let entry_proxy_size = entry.data_file().file_size_in_bytes;
-                if accumulated > 0
-                    && accumulated.saturating_add(entry_proxy_size) > target_size_bytes
-                {
-                    let mut written = writer.write_manifest_file().await?;
-                    if format_version == FormatVersion::V3 {
-                        written.first_row_id = min_first_row_id;
-                    }
-                    new_manifests.push(written);
-                    writer = new_manifest_writer(
-                        table,
-                        &commit_uuid,
-                        counter.next().unwrap(),
-                        snapshot_id,
-                    )?;
-                    accumulated = 0;
-                    min_first_row_id = None;
-                }
-                if let Some(frid) = entry.data_file().first_row_id
-                    && frid >= 0
-                {
-                    let frid_u = frid as u64;
-                    min_first_row_id = Some(min_first_row_id.map_or(frid_u, |m| m.min(frid_u)));
                 }
                 let snap_id = entry.snapshot_id().ok_or_else(|| {
                     Error::new(
@@ -196,10 +170,52 @@ impl TransactionAction for RewriteManifestsAction {
                         "Live manifest entry is missing sequence_number",
                     )
                 })?;
-                let file_seq = entry.file_sequence_number;
                 let data_file = entry.data_file().clone();
+                let key = data_file.partition.clone();
+                let idx = *group_index.entry(key).or_insert_with(|| {
+                    let i = grouped.len();
+                    grouped.push(Vec::new());
+                    i
+                });
+                grouped[idx].push((data_file, snap_id, seq, entry.file_sequence_number));
+                entries_processed += 1;
+            }
+        }
+
+        let mut counter: u64 = 0;
+        let mut new_manifests: Vec<ManifestFile> = Vec::new();
+        let mut next_writer = || -> Result<ManifestWriter> {
+            let n = counter;
+            counter += 1;
+            new_manifest_writer(table, &commit_uuid, n, snapshot_id)
+        };
+
+        for group in grouped {
+            let mut writer = next_writer()?;
+            let mut accumulated: u64 = 0;
+            let mut min_first_row_id: Option<u64> = None;
+
+            for (data_file, snap_id, seq, file_seq) in group {
+                if accumulated > 0
+                    && accumulated.saturating_add(APPROX_BYTES_PER_ENTRY) > target_size_bytes
+                {
+                    let mut written = writer.write_manifest_file().await?;
+                    if format_version == FormatVersion::V3 {
+                        written.first_row_id = min_first_row_id;
+                    }
+                    new_manifests.push(written);
+                    writer = next_writer()?;
+                    accumulated = 0;
+                    min_first_row_id = None;
+                }
+                if let Some(frid) = data_file.first_row_id
+                    && frid >= 0
+                {
+                    let frid_u = frid as u64;
+                    min_first_row_id = Some(min_first_row_id.map_or(frid_u, |m| m.min(frid_u)));
+                }
                 writer.add_existing_file(data_file, snap_id, seq, file_seq)?;
-                accumulated = accumulated.saturating_add(entry_proxy_size);
+                accumulated = accumulated.saturating_add(APPROX_BYTES_PER_ENTRY);
             }
             let mut written = writer.write_manifest_file().await?;
             if format_version == FormatVersion::V3 {
@@ -257,10 +273,23 @@ impl TransactionAction for RewriteManifestsAction {
                 additional_properties.insert(k.to_string(), v.clone());
             }
         }
-        additional_properties.insert("manifests-created".into(), manifests_created.to_string());
-        additional_properties.insert("manifests-replaced".into(), manifests_replaced.to_string());
-        additional_properties.insert("manifests-kept".into(), manifests_kept.to_string());
-        additional_properties.insert("entries-processed".into(), entries_processed.to_string());
+        // For pure rewrites (status=Existing only, zero adds/deletes) the totals are
+        // by definition unchanged, so we copy them through verbatim. If the action is
+        // ever extended to add or remove data files, port Java's
+        // SnapshotProducer.updateTotal (previous + added - deleted) instead.
+        additional_properties.insert(
+            "manifests-created".to_string(),
+            manifests_created.to_string(),
+        );
+        additional_properties.insert(
+            "manifests-replaced".to_string(),
+            manifests_replaced.to_string(),
+        );
+        additional_properties.insert("manifests-kept".to_string(), manifests_kept.to_string());
+        additional_properties.insert(
+            "entries-processed".to_string(),
+            entries_processed.to_string(),
+        );
         let summary = Summary {
             operation: Operation::Replace,
             additional_properties,
@@ -500,9 +529,11 @@ mod tests {
         }
 
         let tx = Transaction::new(&t);
+        // Target just above one entry's proxy cost (APPROX_BYTES_PER_ENTRY = 256)
+        // so each new manifest holds at most one entry.
         let t = tx
             .rewrite_manifests()
-            .set_target_size_bytes(15_000)
+            .set_target_size_bytes(400)
             .apply(tx)
             .unwrap()
             .commit(&catalog)
@@ -625,5 +656,59 @@ mod tests {
         // Two distinct partitions → grouped into two new manifests.
         assert_eq!(s.get("manifests-created").unwrap(), "2");
         assert_eq!(s.get("total-records").unwrap(), "30");
+    }
+
+    #[tokio::test]
+    async fn test_partition_grouping_and_catalog_commit() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_one(&catalog, table, data_file("a", 1, 100, 1)).await;
+        let table = append_one(&catalog, table, data_file("b", 1, 100, 1)).await;
+        let table = append_one(&catalog, table, data_file("c", 2, 100, 1)).await;
+        let table = append_one(&catalog, table, data_file("d", 2, 100, 1)).await;
+
+        let pre_id = table.metadata().current_snapshot_id().unwrap();
+        let pre_seq = table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .sequence_number();
+
+        let tx = Transaction::new(&table);
+        let table = tx
+            .rewrite_manifests()
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        let snap = table.metadata().current_snapshot().unwrap();
+        assert_eq!(snap.parent_snapshot_id(), Some(pre_id));
+        assert_eq!(snap.sequence_number(), pre_seq + 1);
+
+        // Each output manifest's entries must all share the same partition tuple.
+        let post_list = snap
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        assert_eq!(
+            post_list.entries().len(),
+            2,
+            "two distinct partitions → two output manifests"
+        );
+        for m in post_list.entries() {
+            let manifest = m.load_manifest(table.file_io()).await.unwrap();
+            let partitions: std::collections::HashSet<Struct> = manifest
+                .entries()
+                .iter()
+                .map(|e| e.data_file().partition.clone())
+                .collect();
+            assert_eq!(
+                partitions.len(),
+                1,
+                "all entries within a manifest share one partition tuple"
+            );
+        }
     }
 }
