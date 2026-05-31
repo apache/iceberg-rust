@@ -216,6 +216,12 @@ impl TableProperties {
     /// Default value for total maximum retry time (ms).
     pub const PROPERTY_COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT: u64 = 30 * 60 * 1000; // 30 minutes
 
+    /// Target manifest file size in bytes used by manifest-rewrite/compaction actions.
+    pub const PROPERTY_COMMIT_MANIFEST_TARGET_SIZE_BYTES: &str =
+        "commit.manifest.target-size-bytes";
+    /// Default target manifest file size: 8 MiB (matches Java).
+    pub const PROPERTY_COMMIT_MANIFEST_TARGET_SIZE_BYTES_DEFAULT: u64 = 8 * 1024 * 1024;
+
     /// Default file format for data files
     pub const PROPERTY_DEFAULT_FILE_FORMAT: &str = "write.format.default";
     /// Default file format for delete files
