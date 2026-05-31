@@ -440,14 +440,15 @@ impl Schema {
 
     /// Check that all types in this schema are supported by the given format version.
     ///
-    /// Mirrors Java's `Schema.checkCompatibility()`. Returns an error listing every
-    /// incompatible field if any are found. Two checks per field, in one pass:
+    /// Mirrors Java's `Schema.checkCompatibility()`; returns an error listing every
+    /// incompatible field. Two checks per field:
     ///
-    /// - **Type**: types with a minimum format version must not appear below it
-    ///   (`TimestampNs` / `TimestamptzNs` → v3+, `Variant` → v3+).
-    /// - **Initial default**: a non-null `initial_default` is only allowed from
-    ///   [`MIN_FORMAT_VERSION_DEFAULT_VALUES`]. `write_default` is intentionally not
-    ///   checked, matching Java. An explicit null default is always allowed.
+    /// - **Type**: `TimestampNs` / `TimestamptzNs` / `Variant` require v3+.
+    /// - **Initial default**: a non-null `initial_default` requires
+    ///   [`MIN_FORMAT_VERSION_DEFAULT_VALUES`] — it backfills pre-existing rows,
+    ///   which older readers can't honor. `write_default` only affects newly
+    ///   written rows (physically materialized, read the same at any version), so
+    ///   it is not checked.
     pub fn check_format_compatibility(&self, format_version: FormatVersion) -> Result<()> {
         let mut problems: Vec<String> = Vec::new();
 
