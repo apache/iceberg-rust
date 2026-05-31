@@ -93,6 +93,7 @@ zeroize = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 expect-test = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 minijinja = { workspace = true }
@@ -108,6 +109,10 @@ tracing-subscriber = { workspace = true }
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version
 ignored = ["tap"]
+
+[[bench]]
+harness = false
+name = "arrow_reader"
 
 [lints]
 workspace = true
