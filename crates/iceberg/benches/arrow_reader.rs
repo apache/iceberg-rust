@@ -25,6 +25,14 @@
 //! in-repo, reproducible baseline against which I/O- and CPU-reuse
 //! optimizations can be measured.
 //!
+//! The `same_file_splits` group additionally reports `ScanMetrics::bytes_read`
+//! as its throughput basis. Because that is a deterministic count (not a
+//! wall-clock sample), it surfaces redundant I/O directly: reading one file as
+//! N byte-range splits fetches the Parquet metadata N times, so total bytes
+//! read grows with the split count even though the file contents are identical.
+//! This is the cost that same-file metadata caching (proposed in #2172,
+//! attempted in #2100) targets, and is measurable even on the local FS.
+//!
 //! Run with: `cargo bench -p iceberg --bench arrow_reader`
 
 use std::sync::Arc;
@@ -272,6 +280,30 @@ async fn read_all(tasks: Vec<FileScanTask>, concurrency: usize, filtering: bool)
     criterion::black_box(batches);
 }
 
+/// Read every task to completion and return the total number of bytes fetched
+/// from storage (`ScanMetrics::bytes_read`). Unlike wall-clock time this is a
+/// deterministic measurement, which makes it the right tool for surfacing
+/// redundant I/O — e.g. the per-split metadata re-fetch that same-file metadata
+/// caching (proposed in #2172, attempted in #2100) targets.
+async fn read_all_bytes(tasks: Vec<FileScanTask>, concurrency: usize) -> u64 {
+    let file_io = FileIO::new_with_fs();
+    let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
+        .with_data_file_concurrency_limit(concurrency)
+        .build();
+
+    let task_stream: FileScanTaskStream = Box::pin(stream::iter(tasks.into_iter().map(Ok)));
+
+    let result = reader.read(task_stream).expect("build read stream");
+    let metrics = result.metrics().clone();
+    let _: Vec<RecordBatch> = result
+        .stream()
+        .try_collect()
+        .await
+        .expect("read all batches");
+
+    metrics.bytes_read()
+}
+
 /// Scans of many small files at a fixed concurrency. Throughput is reported in
 /// files/sec so the per-file overhead is directly visible across file counts.
 fn bench_many_small_files(c: &mut Criterion) {
@@ -351,7 +383,8 @@ fn bench_migrated_table(c: &mut Criterion) {
 
 /// Same-file splits: one large multi-row-group file read as N byte-range
 /// tasks. Each task currently re-fetches the file's Parquet metadata
-/// independently — the scenario metadata caching (#2100 / item #5) targets.
+/// independently — the scenario same-file metadata caching (proposed in #2172,
+/// attempted in #2100) targets.
 fn bench_same_file_splits(c: &mut Criterion) {
     let tokio = TokioRuntime::new().unwrap();
     let (iceberg_schema, arrow_schema) = schemas();
@@ -360,10 +393,25 @@ fn bench_same_file_splits(c: &mut Criterion) {
     let rows_per_row_group = 2_000usize;
     let dir = TempDir::new().unwrap();
     let path = write_multi_row_group_file(&dir, total_rows, rows_per_row_group, &arrow_schema);
+    let file_size = std::fs::metadata(&path).expect("stat parquet file").len();
 
     let mut group = c.benchmark_group("same_file_splits");
     for num_splits in [1u64, 8, 32] {
-        group.throughput(Throughput::Elements(num_splits));
+        // Measure bytes_read once (deterministic) and report it as the
+        // benchmark's throughput basis, so criterions own output shows how
+        // total bytes fetched grows with the split count even though the file
+        // contents are identical — i.e. the redundant per-split metadata I/O.
+        let bytes_read = tokio.block_on(read_all_bytes(
+            same_file_split_tasks(&path, &iceberg_schema, num_splits),
+            num_cpus_limit(),
+        ));
+        eprintln!(
+            "same_file_splits/{num_splits}: bytes_read = {bytes_read} \
+             ({:.2}x file size of {file_size})",
+            bytes_read as f64 / file_size as f64
+        );
+
+        group.throughput(Throughput::Bytes(bytes_read));
         group.bench_with_input(
             BenchmarkId::from_parameter(num_splits),
             &num_splits,
