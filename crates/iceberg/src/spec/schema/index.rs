@@ -17,6 +17,7 @@
 
 use super::utils::try_insert_field;
 use super::*;
+use crate::spec::VariantType;
 
 /// Creates a field id to field map.
 pub fn index_by_id(r#struct: &StructType) -> Result<HashMap<i32, NestedFieldRef>> {
@@ -54,7 +55,7 @@ pub fn index_by_id(r#struct: &StructType) -> Result<HashMap<i32, NestedFieldRef>
             Ok(())
         }
 
-        fn variant(&mut self, _v: &crate::spec::VariantType) -> Result<Self::T> {
+        fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
             Ok(())
         }
     }
@@ -150,7 +151,7 @@ pub fn index_parents(r#struct: &StructType) -> Result<HashMap<i32, i32>> {
             Ok(())
         }
 
-        fn variant(&mut self, _v: &crate::spec::VariantType) -> Result<Self::T> {
+        fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
             Ok(())
         }
     }
@@ -302,7 +303,7 @@ impl SchemaVisitor for IndexByName {
         Ok(())
     }
 
-    fn variant(&mut self, _v: &crate::spec::VariantType) -> Result<Self::T> {
+    fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
         Ok(())
     }
 }

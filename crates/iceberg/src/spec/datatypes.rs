@@ -189,13 +189,27 @@ impl Type {
     }
 
     /// Returns the minimum format version required for the type.
-    #[inline(always)]
+    ///
+    /// Recurses into nested types, so a struct/list/map returns the highest
+    /// minimum version among its fields
     pub fn min_format_version(&self) -> FormatVersion {
         match self {
             Type::Primitive(PrimitiveType::TimestampNs)
             | Type::Primitive(PrimitiveType::TimestamptzNs)
             | Type::Variant(_) => FormatVersion::V3,
-            _ => FormatVersion::V1,
+            Type::Primitive(_) => FormatVersion::V1,
+            Type::Struct(s) => s
+                .fields()
+                .iter()
+                .map(|f| f.field_type.min_format_version())
+                .max()
+                .unwrap_or(FormatVersion::V1),
+            Type::List(l) => l.element_field.field_type.min_format_version(),
+            Type::Map(m) => m
+                .key_field
+                .field_type
+                .min_format_version()
+                .max(m.value_field.field_type.min_format_version()),
         }
     }
 }
@@ -1345,6 +1359,36 @@ mod tests {
         let serialized = serde_json::to_string(&field).unwrap();
         let roundtrip: NestedField = serde_json::from_str(&serialized).unwrap();
         assert_eq!(field, roundtrip);
+    }
+
+    #[test]
+    fn min_format_version_recurses_into_nested_types() {
+        // Plain primitives stay at V1.
+        assert_eq!(
+            Type::Primitive(PrimitiveType::String).min_format_version(),
+            FormatVersion::V1
+        );
+
+        // A struct containing a Variant reports V3 (recursion, not just the
+        // top-level kind).
+        let struct_with_variant = Type::Struct(StructType::new(vec![
+            NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
+        ]));
+        assert_eq!(struct_with_variant.min_format_version(), FormatVersion::V3);
+
+        // A list whose element is a v3-only type reports V3.
+        let list_of_ts_ns = Type::List(ListType::new(
+            NestedField::required(3, "element", Type::Primitive(PrimitiveType::TimestampNs)).into(),
+        ));
+        assert_eq!(list_of_ts_ns.min_format_version(), FormatVersion::V3);
+
+        // A map with all-V1 fields stays V1.
+        let v1_map = Type::Map(MapType::new(
+            NestedField::required(4, "key", Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::optional(5, "value", Type::Primitive(PrimitiveType::Long)).into(),
+        ));
+        assert_eq!(v1_map.min_format_version(), FormatVersion::V1);
     }
 
     #[test]

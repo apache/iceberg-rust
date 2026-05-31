@@ -25,7 +25,7 @@ pub(crate) const ICEBERG_FIELD_CURRENT: &str = "iceberg.field.current";
 use std::collections::HashMap;
 
 use aws_sdk_glue::types::Column;
-use iceberg::spec::{PrimitiveType, SchemaVisitor, TableMetadata, visit_schema};
+use iceberg::spec::{PrimitiveType, SchemaVisitor, TableMetadata, VariantType, visit_schema};
 use iceberg::{Error, ErrorKind, Result};
 
 use crate::error::from_aws_build_error;
@@ -183,7 +183,7 @@ impl SchemaVisitor for GlueSchemaBuilder {
         Ok(glue_type)
     }
 
-    fn variant(&mut self, _v: &iceberg::spec::VariantType) -> Result<Self::T> {
+    fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
         Ok("variant".to_string())
     }
 }

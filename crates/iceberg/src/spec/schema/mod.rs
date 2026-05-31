@@ -425,11 +425,11 @@ impl Schema {
 
     /// Returns the minimum [`FormatVersion`] required to represent all types in this schema.
     ///
-    /// Iterates over every field and returns the highest minimum version among them,
-    /// defaulting to `FormatVersion::V1` if all types are universally supported.
+    /// Defaults to `FormatVersion::V1` if all types are universally supported.
     pub fn min_format_version(&self) -> FormatVersion {
-        self.id_to_field
-            .values()
+        self.as_struct()
+            .fields()
+            .iter()
             .map(|f| f.field_type.min_format_version())
             .max()
             .unwrap_or(FormatVersion::V1)

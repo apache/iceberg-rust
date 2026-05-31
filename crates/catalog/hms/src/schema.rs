@@ -16,7 +16,7 @@
 // under the License.
 
 use hive_metastore::FieldSchema;
-use iceberg::spec::{PrimitiveType, Schema, SchemaVisitor, visit_schema};
+use iceberg::spec::{PrimitiveType, Schema, SchemaVisitor, VariantType, visit_schema};
 use iceberg::{Error, ErrorKind, Result};
 
 type HiveSchema = Vec<FieldSchema>;
@@ -140,8 +140,10 @@ impl SchemaVisitor for HiveSchemaBuilder {
         Ok(hive_type)
     }
 
-    fn variant(&mut self, _v: &iceberg::spec::VariantType) -> Result<Self::T> {
-        Ok("variant".to_string())
+    fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
+        // Match iceberg-java's HiveSchemaUtil, which maps VARIANT to "unknown"
+        // (apache/iceberg#15964).
+        Ok("unknown".to_string())
     }
 }
 

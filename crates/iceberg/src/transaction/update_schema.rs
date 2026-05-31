@@ -180,7 +180,10 @@ fn assign_fresh_ids(field: &NestedField, next_id: &mut i32) -> NestedFieldRef {
 /// Recursively assign fresh field IDs to all nested fields within a `Type`.
 fn assign_fresh_ids_to_type(field_type: &Type, next_id: &mut i32) -> Type {
     match field_type {
-        Type::Primitive(_) | Type::Variant(_) => field_type.clone(),
+        Type::Primitive(_) => field_type.clone(),
+        // Variant carries no nested fields, so there is nothing to reassign
+        // (matches id_reassigner.rs).
+        Type::Variant(v) => Type::Variant(*v),
         Type::Struct(struct_type) => {
             let new_fields: Vec<NestedFieldRef> = struct_type
                 .fields()

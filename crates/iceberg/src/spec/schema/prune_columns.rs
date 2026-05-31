@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use crate::spec::VariantType;
 
 struct PruneColumn {
     selected: HashSet<i32>,
@@ -239,7 +240,7 @@ impl SchemaVisitor for PruneColumn {
         Ok(None)
     }
 
-    fn variant(&mut self, _v: &crate::spec::VariantType) -> Result<Self::T> {
+    fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
         Ok(None)
     }
 }
