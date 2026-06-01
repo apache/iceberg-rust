@@ -18,6 +18,7 @@
 //! ManifestList for Iceberg.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use apache_avro::types::Value;
@@ -1355,12 +1356,13 @@ pub(super) mod _serde {
 #[cfg(test)]
 mod test {
     use std::fs;
+    use std::path::PathBuf;
 
     use apache_avro::{Reader, Schema};
     use tempfile::TempDir;
 
     use super::_serde::ManifestListV2;
-    use crate::io::FileIO;
+    use crate::io::{FileIO, FileWrite};
     use crate::spec::manifest_list::_serde::{ManifestListV1, ManifestListV3};
     use crate::spec::{
         Datum, FieldSummary, ManifestContentType, ManifestFile, ManifestList, ManifestListWriter,
@@ -1395,19 +1397,12 @@ mod test {
         let file_io = FileIO::new_with_fs();
 
         let tmp_dir = TempDir::new().unwrap();
-        let file_name = "simple_manifest_list_v1.avro";
-        let full_path = format!("{}/{}", tmp_dir.path().to_str().unwrap(), file_name);
+        let tmp_dir = TempDir::new().unwrap();
+        let full_path = tmp_dir.path().join("simple_manifest_list_v1.avro");
+        let file_writer = file_writer(&full_path, file_io).await;
 
-        let mut writer = ManifestListWriter::v1(
-            file_io
-                .new_output(full_path.clone())
-                .unwrap()
-                .writer()
-                .await
-                .unwrap(),
-            1646658105718557341,
-            Some(1646658105718557341),
-        );
+        let mut writer =
+            ManifestListWriter::v1(file_writer, 1646658105718557341, Some(1646658105718557341));
 
         writer
             .add_manifests(manifest_list.entries.clone().into_iter())
@@ -1472,16 +1467,11 @@ mod test {
         let file_io = FileIO::new_with_fs();
 
         let tmp_dir = TempDir::new().unwrap();
-        let file_name = "simple_manifest_list_v1.avro";
-        let full_path = format!("{}/{}", tmp_dir.path().to_str().unwrap(), file_name);
+        let full_path = tmp_dir.path().join("simple_manifest_list_v1.avro");
+        let file_writer = file_writer(&full_path, file_io).await;
 
         let mut writer = ManifestListWriter::v2(
-            file_io
-                .new_output(full_path.clone())
-                .unwrap()
-                .writer()
-                .await
-                .unwrap(),
+            file_writer,
             1646658105718557341,
             Some(1646658105718557341),
             1,
@@ -1698,15 +1688,10 @@ mod test {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("manifest_list_v1.avro");
         let io = FileIO::new_with_fs();
-        let writer = io
-            .new_output(path.to_str().unwrap())
-            .unwrap()
-            .writer()
-            .await
-            .unwrap();
+        let file_writer = file_writer(&path, io).await;
 
         let mut writer = ManifestListWriter::v1(writer, 1646658105718557341, Some(0));
-        writer
+        file_writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
         writer.close().await.unwrap();
@@ -1750,14 +1735,9 @@ mod test {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("manifest_list_v2.avro");
         let io = FileIO::new_with_fs();
-        let writer = io
-            .new_output(path.to_str().unwrap())
-            .unwrap()
-            .writer()
-            .await
-            .unwrap();
+        let file_writer = file_writer(&path, io).await;
 
-        let mut writer = ManifestListWriter::v2(writer, snapshot_id, Some(0), seq_num);
+        let mut writer = ManifestListWriter::v2(file_writer, snapshot_id, Some(0), seq_num);
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1803,14 +1783,10 @@ mod test {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("manifest_list_v2.avro");
         let io = FileIO::new_with_fs();
-        let writer = io
-            .new_output(path.to_str().unwrap())
-            .unwrap()
-            .writer()
-            .await
-            .unwrap();
+        let file_writer = file_writer(&path, io).await;
 
-        let mut writer = ManifestListWriter::v3(writer, snapshot_id, Some(0), seq_num, Some(10));
+        let mut writer =
+            ManifestListWriter::v3(file_writer, snapshot_id, Some(0), seq_num, Some(10));
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1855,14 +1831,9 @@ mod test {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("manifest_list_v1.avro");
         let io = FileIO::new_with_fs();
-        let writer = io
-            .new_output(path.to_str().unwrap())
-            .unwrap()
-            .writer()
-            .await
-            .unwrap();
+        let file_writer = file_writer(&path, io).await;
 
-        let mut writer = ManifestListWriter::v1(writer, 1646658105718557341, Some(0));
+        let mut writer = ManifestListWriter::v1(file_writer, 1646658105718557341, Some(0));
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1905,14 +1876,9 @@ mod test {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("manifest_list_v1.avro");
         let io = FileIO::new_with_fs();
-        let writer = io
-            .new_output(path.to_str().unwrap())
-            .unwrap()
-            .writer()
-            .await
-            .unwrap();
+        let file_writer = file_writer(&path, io).await;
 
-        let mut writer = ManifestListWriter::v1(writer, 1646658105718557341, Some(0));
+        let mut writer = ManifestListWriter::v1(file_writer, 1646658105718557341, Some(0));
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1957,14 +1923,9 @@ mod test {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("manifest_list_v2.avro");
         let io = FileIO::new_with_fs();
-        let writer = io
-            .new_output(path.to_str().unwrap())
-            .unwrap()
-            .writer()
-            .await
-            .unwrap();
+        let file_writer = file_writer(&path, io).await;
 
-        let mut writer = ManifestListWriter::v2(writer, snapshot_id, Some(0), seq_num);
+        let mut writer = ManifestListWriter::v2(file_writer, snapshot_id, Some(0), seq_num);
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -1979,6 +1940,14 @@ mod test {
         assert_eq!(manifest_list, expected_manifest_list);
 
         temp_dir.close().unwrap();
+    }
+
+    async fn file_writer(path: &PathBuf, io: FileIO) -> Box<dyn FileWrite> {
+        io.new_output(path.to_str().unwrap())
+            .unwrap()
+            .writer()
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
