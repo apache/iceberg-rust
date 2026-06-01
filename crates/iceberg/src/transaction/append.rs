@@ -159,7 +159,6 @@ mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    use super::FastAppendOperation;
     use crate::io::FileIO;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, ManifestEntry,
@@ -167,7 +166,6 @@ mod tests {
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
-    use crate::transaction::snapshot::{SnapshotProduceOperation, SnapshotProducer};
     use crate::transaction::tests::make_v2_minimal_table;
     use crate::transaction::{Transaction, TransactionAction};
     use crate::{TableIdent, TableRequirement, TableUpdate};
@@ -183,7 +181,7 @@ mod tests {
     /// so `deleted_files_count > 0` while `added_files_count == existing_files_count == 0`).
     ///
     /// Returns the table plus the `manifest_path` of the delete-only manifest so callers
-    /// can assert whether `existing_manifest()` carries it forward.
+    /// can assert whether a subsequent append carries it forward.
     async fn make_table_with_delete_only_manifest() -> (Table, TempDir, String) {
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().join("table1");
@@ -316,22 +314,44 @@ mod tests {
         (table, tmp_dir, delete_manifest_path)
     }
 
-    /// Regression test for #2148: `FastAppendOperation::existing_manifest()` must carry
-    /// delete-only manifests forward into the new snapshot. Dropping them lets the files
-    /// they mark as removed reappear as live data on the next append.
+    /// Regression test for #2148: a `fast_append` must carry delete-only manifests
+    /// forward into the new snapshot. Dropping them lets the files they mark as
+    /// removed reappear as live data on the next append.
     #[tokio::test]
-    async fn test_existing_manifest_preserves_delete_only_manifest() {
+    async fn test_fast_append_preserves_delete_only_manifest() {
         let (table, _tmp_dir, delete_manifest_path) = make_table_with_delete_only_manifest().await;
 
-        let producer = SnapshotProducer::new(&table, Uuid::now_v7(), None, HashMap::new(), vec![]);
+        // Append a new data file via the public transaction API.
+        let new_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(format!("{}/appended.parquet", table.metadata().location()))
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(100))]))
+            .build()
+            .unwrap();
 
-        let carried_forward = FastAppendOperation
-            .existing_manifest(&producer)
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![new_file]);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            snapshot
+        } else {
+            unreachable!("first update of a fast append should be AddSnapshot")
+        };
+
+        let manifest_list = new_snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
             .await
             .unwrap();
 
         assert!(
-            carried_forward
+            manifest_list
+                .entries()
                 .iter()
                 .any(|m| m.manifest_path == delete_manifest_path),
             "delete-only manifest {delete_manifest_path} was dropped from the new snapshot's \
