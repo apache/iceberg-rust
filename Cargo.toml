@@ -16,8 +16,8 @@
 # under the License.
 
 [workspace]
-exclude = ["bindings/python"]
 members = [
+  "bindings/python",
   "crates/catalog/*",
   "crates/examples",
   "crates/iceberg",
@@ -46,6 +46,7 @@ aes-gcm = "0.10"
 anyhow = "1.0.72"
 apache-avro = { version = "0.21", features = ["zstandard"] }
 array-init = "2"
+arrow = "58"
 arrow-arith = "58"
 arrow-array = "58"
 arrow-buffer = "58"
@@ -75,6 +76,7 @@ clap = { version = "4.5.48", features = ["derive", "cargo"] }
 dashmap = "6"
 datafusion = "53.1.0"
 datafusion-cli = "53.0.0"
+datafusion-ffi = "53.0.0"
 datafusion-sqllogictest = "53.0.0"
 derive_builder = "0.20"
 dirs = "6"
@@ -119,6 +121,7 @@ ordered-float = "4"
 parquet = "58"
 pilota = "0.11.10"
 pretty_assertions = "1.4"
+pyo3 = "0.28"
 rand = "0.9.3"
 regex = "1.11.3"
 reqwest = { version = "0.12.12", default-features = false, features = ["json"] }

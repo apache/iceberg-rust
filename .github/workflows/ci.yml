@@ -25,7 +25,7 @@ on:
     paths:
       - '**'                              # Include all files and directories in the repository by default.
       - '!.github/ISSUE_TEMPLATE/**'      # Exclude files and directories that don't impact tests or code like templates, metadata, and documentation.
-      - '!scripts/**'
+      - '!dev/release/**'
       - '!website/**'
       - '!.asf.yml'
       - '!.gitattributes'
@@ -195,7 +195,7 @@ jobs:
 
       - name: Install cargo-nextest
         if: matrix.test-suite.name == 'default'
-        uses: taiki-e/install-action@7be9fd86bd1707236395105d6e9329dd1511a7e1 # v2.79.0
+        uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
         with:
           tool: cargo-nextest
 

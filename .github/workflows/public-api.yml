@@ -15,36 +15,46 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Typos Check
+name: Public API
 
 on:
   push:
     branches:
       - main
   pull_request:
-    branches:
-      - main
+    paths:
+      - 'crates/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
-env:
-  RUST_BACKTRACE: 1
-
 permissions:
   contents: read
 
 jobs:
-  typos-check:
-    name: typos check
-    runs-on: ubuntu-slim
-    timeout-minutes: 10
-    env:
-      FORCE_COLOR: 1
+  check-public-api:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - name: Check typos
-        uses: crate-ci/typos@7b04f660f4ee4f048d18fd341887cf28dfbedfe2 # v1.46.3
+
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+
+      - name: Cache Rust artifacts
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cargo-public-api
+        uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
+        with:
+          tool: cargo-public-api
+
+      - name: Check public API
+        run: make check-public-api

@@ -1,0 +1,65 @@
+pub mod iceberg_catalog_loader
+pub struct iceberg_catalog_loader::CatalogLoader<'a>
+impl iceberg_catalog_loader::CatalogLoader<'_>
+pub async fn iceberg_catalog_loader::CatalogLoader<'_>::load(self, name: alloc::string::String, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::error::Result<alloc::sync::Arc<dyn iceberg::catalog::Catalog>>
+impl<'a> core::convert::From<&'a str> for iceberg_catalog_loader::CatalogLoader<'a>
+pub fn iceberg_catalog_loader::CatalogLoader<'a>::from(s: &'a str) -> Self
+impl<'a> core::marker::Freeze for iceberg_catalog_loader::CatalogLoader<'a>
+impl<'a> core::marker::Send for iceberg_catalog_loader::CatalogLoader<'a>
+impl<'a> core::marker::Sync for iceberg_catalog_loader::CatalogLoader<'a>
+impl<'a> core::marker::Unpin for iceberg_catalog_loader::CatalogLoader<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for iceberg_catalog_loader::CatalogLoader<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for iceberg_catalog_loader::CatalogLoader<'a>
+impl<T, U> core::convert::Into<U> for iceberg_catalog_loader::CatalogLoader<'a> where U: core::convert::From<T>
+pub fn iceberg_catalog_loader::CatalogLoader<'a>::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg_catalog_loader::CatalogLoader<'a> where U: core::convert::Into<T>
+pub type iceberg_catalog_loader::CatalogLoader<'a>::Error = core::convert::Infallible
+pub fn iceberg_catalog_loader::CatalogLoader<'a>::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg_catalog_loader::CatalogLoader<'a> where U: core::convert::TryFrom<T>
+pub type iceberg_catalog_loader::CatalogLoader<'a>::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg_catalog_loader::CatalogLoader<'a>::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> arrow_buffer::alloc::Allocation for iceberg_catalog_loader::CatalogLoader<'a> where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> as_any::AsAny for iceberg_catalog_loader::CatalogLoader<'a> where T: core::any::Any
+pub fn iceberg_catalog_loader::CatalogLoader<'a>::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg_catalog_loader::CatalogLoader<'a>::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg_catalog_loader::CatalogLoader<'a>::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg_catalog_loader::CatalogLoader<'a> where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg_catalog_loader::CatalogLoader<'a> where T: 'static + ?core::marker::Sized
+pub fn iceberg_catalog_loader::CatalogLoader<'a>::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg_catalog_loader::CatalogLoader<'a> where T: ?core::marker::Sized
+pub fn iceberg_catalog_loader::CatalogLoader<'a>::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg_catalog_loader::CatalogLoader<'a> where T: ?core::marker::Sized
+pub fn iceberg_catalog_loader::CatalogLoader<'a>::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for iceberg_catalog_loader::CatalogLoader<'a>
+pub fn iceberg_catalog_loader::CatalogLoader<'a>::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg_catalog_loader::CatalogLoader<'a>
+pub type iceberg_catalog_loader::CatalogLoader<'a>::Init = T
+pub const iceberg_catalog_loader::CatalogLoader<'a>::ALIGN: usize
+pub unsafe fn iceberg_catalog_loader::CatalogLoader<'a>::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg_catalog_loader::CatalogLoader<'a>::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg_catalog_loader::CatalogLoader<'a>::drop(ptr: usize)
+pub unsafe fn iceberg_catalog_loader::CatalogLoader<'a>::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg_catalog_loader::CatalogLoader<'a>
+impl<T> opendal_core::raw::futures_util::MaybeSend for iceberg_catalog_loader::CatalogLoader<'a> where T: core::marker::Send
+impl<T> reqsign_core::futures_util::MaybeSend for iceberg_catalog_loader::CatalogLoader<'a> where T: core::marker::Send
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg_catalog_loader::CatalogLoader<'a> where T: ?core::marker::Sized
+pub fn iceberg_catalog_loader::CatalogLoader<'a>::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg_catalog_loader::CatalogLoader<'a>::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg_catalog_loader::CatalogLoader<'a>
+impl<T> tracing::instrument::WithSubscriber for iceberg_catalog_loader::CatalogLoader<'a>
+impl<T> typenum::type_operators::Same for iceberg_catalog_loader::CatalogLoader<'a>
+pub type iceberg_catalog_loader::CatalogLoader<'a>::Output = T
+impl<U> bnum::cast::As for iceberg_catalog_loader::CatalogLoader<'a>
+pub fn iceberg_catalog_loader::CatalogLoader<'a>::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<Unshared, Shared> aws_smithy_runtime_api::shared::IntoShared<Shared> for iceberg_catalog_loader::CatalogLoader<'a> where Shared: aws_smithy_runtime_api::shared::FromUnshared<Unshared>
+pub fn iceberg_catalog_loader::CatalogLoader<'a>::into_shared(self) -> Shared
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_loader::CatalogLoader<'a> where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg_catalog_loader::CatalogLoader<'a>::vzip(self) -> V
+pub trait iceberg_catalog_loader::BoxedCatalogBuilder: core::marker::Send
+pub fn iceberg_catalog_loader::BoxedCatalogBuilder::load<'async_trait>(self: alloc::boxed::Box<Self>, name: alloc::string::String, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg::catalog::Catalog>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait
+pub fn iceberg_catalog_loader::BoxedCatalogBuilder::with_storage_factory(self: alloc::boxed::Box<Self>, storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> alloc::boxed::Box<dyn iceberg_catalog_loader::BoxedCatalogBuilder>
+impl<T: iceberg::catalog::CatalogBuilder + 'static> iceberg_catalog_loader::BoxedCatalogBuilder for T
+pub fn T::load<'async_trait>(self: alloc::boxed::Box<Self>, name: alloc::string::String, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg::catalog::Catalog>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait
+pub fn T::with_storage_factory(self: alloc::boxed::Box<Self>, storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> alloc::boxed::Box<dyn iceberg_catalog_loader::BoxedCatalogBuilder>
+pub fn iceberg_catalog_loader::load(type: &str) -> iceberg::error::Result<alloc::boxed::Box<dyn iceberg_catalog_loader::BoxedCatalogBuilder>>
+pub fn iceberg_catalog_loader::supported_types() -> alloc::vec::Vec<&'static str>
