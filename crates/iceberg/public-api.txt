@@ -6304,6 +6304,7 @@ pub iceberg::spec::Type::List(iceberg::spec::ListType)
 pub iceberg::spec::Type::Map(iceberg::spec::MapType)
 pub iceberg::spec::Type::Primitive(iceberg::spec::PrimitiveType)
 pub iceberg::spec::Type::Struct(iceberg::spec::StructType)
+pub iceberg::spec::Type::Variant(iceberg::spec::VariantType)
 impl iceberg::spec::Type
 pub fn iceberg::spec::Type::as_primitive_type(&self) -> core::option::Option<&iceberg::spec::PrimitiveType>
 pub fn iceberg::spec::Type::decimal(precision: u32, scale: u32) -> iceberg::Result<Self>
@@ -6313,6 +6314,8 @@ pub fn iceberg::spec::Type::is_floating_type(&self) -> bool
 pub fn iceberg::spec::Type::is_nested(&self) -> bool
 pub fn iceberg::spec::Type::is_primitive(&self) -> bool
 pub fn iceberg::spec::Type::is_struct(&self) -> bool
+pub fn iceberg::spec::Type::is_variant(&self) -> bool
+pub fn iceberg::spec::Type::min_format_version(&self) -> iceberg::spec::FormatVersion
 pub fn iceberg::spec::Type::to_struct_type(self) -> core::option::Option<iceberg::spec::StructType>
 impl core::clone::Clone for iceberg::spec::Type
 pub fn iceberg::spec::Type::clone(&self) -> iceberg::spec::Type
@@ -6327,6 +6330,8 @@ impl core::convert::From<iceberg::spec::PrimitiveType> for iceberg::spec::Type
 pub fn iceberg::spec::Type::from(value: iceberg::spec::PrimitiveType) -> Self
 impl core::convert::From<iceberg::spec::StructType> for iceberg::spec::Type
 pub fn iceberg::spec::Type::from(value: iceberg::spec::StructType) -> Self
+impl core::convert::From<iceberg::spec::VariantType> for iceberg::spec::Type
+pub fn iceberg::spec::Type::from(_: iceberg::spec::VariantType) -> Self
 impl core::fmt::Debug for iceberg::spec::Type
 pub fn iceberg::spec::Type::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for iceberg::spec::Type
@@ -8636,6 +8641,7 @@ impl iceberg::spec::Schema
 pub fn iceberg::spec::Schema::accessor_by_field_id(&self, field_id: i32) -> core::option::Option<alloc::sync::Arc<iceberg::expr::accessor::StructAccessor>>
 pub fn iceberg::spec::Schema::as_struct(&self) -> &iceberg::spec::StructType
 pub fn iceberg::spec::Schema::builder() -> iceberg::spec::SchemaBuilder
+pub fn iceberg::spec::Schema::check_format_compatibility(&self, format_version: iceberg::spec::FormatVersion) -> iceberg::Result<()>
 pub fn iceberg::spec::Schema::field_by_alias(&self, alias: &str) -> core::option::Option<&iceberg::spec::NestedFieldRef>
 pub fn iceberg::spec::Schema::field_by_id(&self, field_id: i32) -> core::option::Option<&iceberg::spec::NestedFieldRef>
 pub fn iceberg::spec::Schema::field_by_name(&self, field_name: &str) -> core::option::Option<&iceberg::spec::NestedFieldRef>
@@ -8646,6 +8652,7 @@ pub fn iceberg::spec::Schema::field_id_to_name_map(&self) -> &std::collections::
 pub fn iceberg::spec::Schema::highest_field_id(&self) -> i32
 pub fn iceberg::spec::Schema::identifier_field_ids(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = i32> + '_
 pub fn iceberg::spec::Schema::into_builder(self) -> iceberg::spec::SchemaBuilder
+pub fn iceberg::spec::Schema::min_format_version(&self) -> iceberg::spec::FormatVersion
 pub fn iceberg::spec::Schema::name_by_field_id(&self, field_id: i32) -> core::option::Option<&str>
 pub fn iceberg::spec::Schema::schema_id(&self) -> iceberg::spec::SchemaId
 impl core::clone::Clone for iceberg::spec::Schema
@@ -10435,6 +10442,93 @@ impl<U> bnum::cast::As for iceberg::spec::UnboundPartitionSpecBuilder
 pub fn iceberg::spec::UnboundPartitionSpecBuilder::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
 impl<V, T> ppv_lite86::types::VZip<V> for iceberg::spec::UnboundPartitionSpecBuilder where V: ppv_lite86::types::MultiLane<T>
 pub fn iceberg::spec::UnboundPartitionSpecBuilder::vzip(self) -> V
+pub struct iceberg::spec::VariantType
+impl core::clone::Clone for iceberg::spec::VariantType
+pub fn iceberg::spec::VariantType::clone(&self) -> iceberg::spec::VariantType
+impl core::cmp::Eq for iceberg::spec::VariantType
+impl core::cmp::PartialEq for iceberg::spec::VariantType
+pub fn iceberg::spec::VariantType::eq(&self, other: &iceberg::spec::VariantType) -> bool
+impl core::convert::From<iceberg::spec::VariantType> for iceberg::spec::Type
+pub fn iceberg::spec::Type::from(_: iceberg::spec::VariantType) -> Self
+impl core::fmt::Debug for iceberg::spec::VariantType
+pub fn iceberg::spec::VariantType::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for iceberg::spec::VariantType
+pub fn iceberg::spec::VariantType::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for iceberg::spec::VariantType
+pub fn iceberg::spec::VariantType::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for iceberg::spec::VariantType
+impl core::marker::StructuralPartialEq for iceberg::spec::VariantType
+impl serde_core::ser::Serialize for iceberg::spec::VariantType
+pub fn iceberg::spec::VariantType::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::VariantType
+pub fn iceberg::spec::VariantType::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for iceberg::spec::VariantType
+impl core::marker::Send for iceberg::spec::VariantType
+impl core::marker::Sync for iceberg::spec::VariantType
+impl core::marker::Unpin for iceberg::spec::VariantType
+impl core::panic::unwind_safe::RefUnwindSafe for iceberg::spec::VariantType
+impl core::panic::unwind_safe::UnwindSafe for iceberg::spec::VariantType
+impl<Q, K> equivalent::Equivalent<K> for iceberg::spec::VariantType where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg::spec::VariantType::equivalent(&self, key: &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for iceberg::spec::VariantType where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> hashbrown::Equivalent<K> for iceberg::spec::VariantType where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn iceberg::spec::VariantType::equivalent(&self, key: &K) -> bool
+pub fn iceberg::spec::VariantType::equivalent(&self, key: &K) -> bool
+impl<T, U> core::convert::Into<U> for iceberg::spec::VariantType where U: core::convert::From<T>
+pub fn iceberg::spec::VariantType::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for iceberg::spec::VariantType where U: core::convert::Into<T>
+pub type iceberg::spec::VariantType::Error = core::convert::Infallible
+pub fn iceberg::spec::VariantType::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for iceberg::spec::VariantType where U: core::convert::TryFrom<T>
+pub type iceberg::spec::VariantType::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn iceberg::spec::VariantType::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for iceberg::spec::VariantType where T: core::clone::Clone
+pub type iceberg::spec::VariantType::Owned = T
+pub fn iceberg::spec::VariantType::clone_into(&self, target: &mut T)
+pub fn iceberg::spec::VariantType::to_owned(&self) -> T
+impl<T> alloc::string::ToString for iceberg::spec::VariantType where T: core::fmt::Display + ?core::marker::Sized
+pub fn iceberg::spec::VariantType::to_string(&self) -> alloc::string::String
+impl<T> arrow_buffer::alloc::Allocation for iceberg::spec::VariantType where T: core::panic::unwind_safe::RefUnwindSafe + core::marker::Send + core::marker::Sync
+impl<T> as_any::AsAny for iceberg::spec::VariantType where T: core::any::Any
+pub fn iceberg::spec::VariantType::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn iceberg::spec::VariantType::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn iceberg::spec::VariantType::type_name(&self) -> &'static str
+impl<T> as_any::Downcast for iceberg::spec::VariantType where T: as_any::AsAny + ?core::marker::Sized
+impl<T> core::any::Any for iceberg::spec::VariantType where T: 'static + ?core::marker::Sized
+pub fn iceberg::spec::VariantType::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for iceberg::spec::VariantType where T: ?core::marker::Sized
+pub fn iceberg::spec::VariantType::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for iceberg::spec::VariantType where T: ?core::marker::Sized
+pub fn iceberg::spec::VariantType::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for iceberg::spec::VariantType where T: core::clone::Clone
+pub unsafe fn iceberg::spec::VariantType::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for iceberg::spec::VariantType
+pub fn iceberg::spec::VariantType::from(t: T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for iceberg::spec::VariantType
+pub type iceberg::spec::VariantType::Init = T
+pub const iceberg::spec::VariantType::ALIGN: usize
+pub unsafe fn iceberg::spec::VariantType::deref<'a>(ptr: usize) -> &'a T
+pub unsafe fn iceberg::spec::VariantType::deref_mut<'a>(ptr: usize) -> &'a mut T
+pub unsafe fn iceberg::spec::VariantType::drop(ptr: usize)
+pub unsafe fn iceberg::spec::VariantType::init(init: <T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for iceberg::spec::VariantType
+impl<T> erased_serde::ser::Serialize for iceberg::spec::VariantType where T: serde_core::ser::Serialize + ?core::marker::Sized
+pub fn iceberg::spec::VariantType::do_erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::ser::ErrorImpl>
+pub fn iceberg::spec::VariantType::erased_serialize(&self, serializer: &mut dyn erased_serde::ser::Serializer) -> core::result::Result<(), erased_serde::error::Error>
+impl<T> iri_string::format::ToStringFallible for iceberg::spec::VariantType where T: core::fmt::Display
+pub fn iceberg::spec::VariantType::try_to_string(&self) -> core::result::Result<alloc::string::String, alloc::collections::TryReserveError>
+impl<T> serde_core::de::DeserializeOwned for iceberg::spec::VariantType where T: for<'de> serde_core::de::Deserialize<'de>
+impl<T> tower_http::follow_redirect::policy::PolicyExt for iceberg::spec::VariantType where T: ?core::marker::Sized
+pub fn iceberg::spec::VariantType::and<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::and::And<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+pub fn iceberg::spec::VariantType::or<P, B, E>(self, other: P) -> tower_http::follow_redirect::policy::or::Or<T, P> where T: tower_http::follow_redirect::policy::Policy<B, E>, P: tower_http::follow_redirect::policy::Policy<B, E>
+impl<T> tracing::instrument::Instrument for iceberg::spec::VariantType
+impl<T> tracing::instrument::WithSubscriber for iceberg::spec::VariantType
+impl<T> typenum::type_operators::Same for iceberg::spec::VariantType
+pub type iceberg::spec::VariantType::Output = T
+impl<U> bnum::cast::As for iceberg::spec::VariantType
+pub fn iceberg::spec::VariantType::as_<T>(self) -> T where T: bnum::cast::CastFrom<U>
+impl<V, T> ppv_lite86::types::VZip<V> for iceberg::spec::VariantType where V: ppv_lite86::types::MultiLane<T>
+pub fn iceberg::spec::VariantType::vzip(self) -> V
 pub struct iceberg::spec::ViewMetadata
 impl iceberg::spec::ViewMetadata
 pub fn iceberg::spec::ViewMetadata::current_schema(&self) -> &iceberg::spec::SchemaRef
@@ -10859,6 +10953,7 @@ pub const iceberg::spec::LIST_FIELD_NAME: &str
 pub const iceberg::spec::MAIN_BRANCH: &str
 pub const iceberg::spec::MAP_KEY_FIELD_NAME: &str
 pub const iceberg::spec::MAP_VALUE_FIELD_NAME: &str
+pub const iceberg::spec::MIN_FORMAT_VERSION_DEFAULT_VALUES: iceberg::spec::FormatVersion
 pub const iceberg::spec::MIN_FORMAT_VERSION_ROW_LINEAGE: iceberg::spec::FormatVersion
 pub const iceberg::spec::SCHEMA_NAME_DELIMITER: &str
 pub const iceberg::spec::UNASSIGNED_SEQUENCE_NUMBER: i64
@@ -10894,6 +10989,7 @@ pub fn iceberg::spec::SchemaVisitor::map(&mut self, map: &iceberg::spec::MapType
 pub fn iceberg::spec::SchemaVisitor::primitive(&mut self, p: &iceberg::spec::PrimitiveType) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::SchemaVisitor::schema(&mut self, schema: &iceberg::spec::Schema, value: Self::T) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::SchemaVisitor::struct(&mut self, struct: &iceberg::spec::StructType, results: alloc::vec::Vec<Self::T>) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::SchemaVisitor::variant(&mut self, _v: &iceberg::spec::VariantType) -> iceberg::Result<Self::T>
 pub trait iceberg::spec::SchemaWithPartnerVisitor<P>
 pub type iceberg::spec::SchemaWithPartnerVisitor::T
 pub fn iceberg::spec::SchemaWithPartnerVisitor::after_list_element(&mut self, _field: &iceberg::spec::NestedFieldRef, _partner: &P) -> iceberg::Result<()>
@@ -10910,6 +11006,7 @@ pub fn iceberg::spec::SchemaWithPartnerVisitor::map(&mut self, map: &iceberg::sp
 pub fn iceberg::spec::SchemaWithPartnerVisitor::primitive(&mut self, p: &iceberg::spec::PrimitiveType, partner: &P) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::SchemaWithPartnerVisitor::schema(&mut self, schema: &iceberg::spec::Schema, partner: &P, value: Self::T) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::SchemaWithPartnerVisitor::struct(&mut self, struct: &iceberg::spec::StructType, partner: &P, results: alloc::vec::Vec<Self::T>) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::SchemaWithPartnerVisitor::variant(&mut self, _v: &iceberg::spec::VariantType, _partner: &P) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::deserialize_data_file_from_json(json: &str, partition_spec_id: i32, partition_type: &iceberg::spec::StructType, schema: &iceberg::spec::Schema) -> iceberg::Result<iceberg::spec::DataFile>
 pub fn iceberg::spec::prune_columns(schema: &iceberg::spec::Schema, selected: impl core::iter::traits::collect::IntoIterator<Item = i32>, select_full_types: bool) -> iceberg::Result<iceberg::spec::Type>
 pub fn iceberg::spec::read_data_files_from_avro<R: std::io::Read>(reader: &mut R, schema: &iceberg::spec::Schema, partition_spec_id: i32, partition_type: &iceberg::spec::StructType, version: iceberg::spec::FormatVersion) -> iceberg::Result<alloc::vec::Vec<iceberg::spec::DataFile>>
