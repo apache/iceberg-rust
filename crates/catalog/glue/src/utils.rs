@@ -17,35 +17,32 @@
 
 use std::collections::HashMap;
 
-use aws_config::sts::AssumeRoleProvider;
-use aws_config::{BehaviorVersion, Region, SdkConfig};
-use aws_sdk_glue::config::Credentials;
 use aws_sdk_glue::types::{Database, DatabaseInput, StorageDescriptor, TableInput};
 use iceberg::spec::TableMetadata;
 use iceberg::{Error, ErrorKind, Namespace, NamespaceIdent, Result};
+/// Property aws access key
+pub use iceberg_aws::AWS_ACCESS_KEY_ID;
+/// Property for the IAM role ARN to assume when accessing AWS services.
+/// When set, the catalog will use AWS STS to assume the specified role,
+/// replacing the default credential chain for both the Glue client and S3 file I/O.
+pub use iceberg_aws::AWS_ASSUME_ROLE_ARN;
+/// Optional external ID used when assuming an IAM role (for cross-account access).
+pub use iceberg_aws::AWS_ASSUME_ROLE_EXTERNAL_ID;
+/// Optional session name used when assuming an IAM role.
+/// Defaults to `"iceberg-glue-catalog"` if not specified.
+pub use iceberg_aws::AWS_ASSUME_ROLE_SESSION_NAME;
+/// Property aws profile name
+pub use iceberg_aws::AWS_PROFILE_NAME;
+/// Property aws region
+pub use iceberg_aws::AWS_REGION_NAME;
+/// Property aws secret access key
+pub use iceberg_aws::AWS_SECRET_ACCESS_KEY;
+/// Property aws session token
+pub use iceberg_aws::AWS_SESSION_TOKEN;
 
 use crate::error::from_aws_build_error;
 use crate::schema::GlueSchemaBuilder;
 
-/// Property aws profile name
-pub const AWS_PROFILE_NAME: &str = "profile_name";
-/// Property aws region
-pub const AWS_REGION_NAME: &str = "region_name";
-/// Property aws access key
-pub const AWS_ACCESS_KEY_ID: &str = "aws_access_key_id";
-/// Property aws secret access key
-pub const AWS_SECRET_ACCESS_KEY: &str = "aws_secret_access_key";
-/// Property aws session token
-pub const AWS_SESSION_TOKEN: &str = "aws_session_token";
-/// Property for the IAM role ARN to assume when accessing AWS services.
-/// When set, the catalog will use AWS STS to assume the specified role,
-/// replacing the default credential chain for both the Glue client and S3 file I/O.
-pub const AWS_ASSUME_ROLE_ARN: &str = "client.assume-role.arn";
-/// Optional external ID used when assuming an IAM role (for cross-account access).
-pub const AWS_ASSUME_ROLE_EXTERNAL_ID: &str = "client.assume-role.external-id";
-/// Optional session name used when assuming an IAM role.
-/// Defaults to `"iceberg-glue-catalog"` if not specified.
-pub const AWS_ASSUME_ROLE_SESSION_NAME: &str = "client.assume-role.session-name";
 /// Parameter namespace description
 const DESCRIPTION: &str = "description";
 /// Parameter namespace location uri
@@ -67,78 +64,6 @@ const ICEBERG: &str = "ICEBERG";
 /// When `client.assume-role.arn` is set, the function first builds a base
 /// configuration using any static credentials or profile provided, then uses
 /// AWS STS to assume the specified role. The resulting temporary credentials
-/// are used for all subsequent AWS API calls (both Glue and S3).
-pub(crate) async fn create_sdk_config(
-    properties: &HashMap<String, String>,
-    endpoint_uri: Option<&String>,
-) -> SdkConfig {
-    let mut config = aws_config::defaults(BehaviorVersion::latest());
-
-    if let Some(endpoint) = endpoint_uri {
-        config = config.endpoint_url(endpoint)
-    };
-
-    if properties.is_empty() {
-        return config.load().await;
-    }
-
-    if let (Some(access_key), Some(secret_key)) = (
-        properties.get(AWS_ACCESS_KEY_ID),
-        properties.get(AWS_SECRET_ACCESS_KEY),
-    ) {
-        let session_token = properties.get(AWS_SESSION_TOKEN).cloned();
-        let credentials_provider =
-            Credentials::new(access_key, secret_key, session_token, None, "properties");
-
-        config = config.credentials_provider(credentials_provider)
-    };
-
-    if let Some(profile_name) = properties.get(AWS_PROFILE_NAME) {
-        config = config.profile_name(profile_name);
-    }
-
-    if let Some(region_name) = properties.get(AWS_REGION_NAME) {
-        let region = Region::new(region_name.clone());
-        config = config.region(region);
-    }
-
-    // If a role ARN is provided, assume that role via STS and use the
-    // resulting temporary credentials for all AWS SDK calls.
-    if let Some(role_arn) = properties.get(AWS_ASSUME_ROLE_ARN) {
-        let base_config = config.load().await;
-
-        let session_name = properties
-            .get(AWS_ASSUME_ROLE_SESSION_NAME)
-            .cloned()
-            .unwrap_or_else(|| "iceberg-glue-catalog".to_string());
-
-        let mut assume_role_builder =
-            AssumeRoleProvider::builder(role_arn).session_name(session_name);
-
-        if let Some(external_id) = properties.get(AWS_ASSUME_ROLE_EXTERNAL_ID) {
-            assume_role_builder = assume_role_builder.external_id(external_id);
-        }
-
-        let assume_role_provider = assume_role_builder
-            .build_from_provider(
-                base_config
-                    .credentials_provider()
-                    .expect("base credentials provider must be set for STS assume role"),
-            )
-            .await;
-
-        return aws_config::defaults(BehaviorVersion::latest())
-            .credentials_provider(assume_role_provider)
-            .region(base_config.region().cloned())
-            .endpoint_url(endpoint_uri.map(|s| s.as_str()).unwrap_or_default())
-            .load()
-            .await;
-    }
-
-    config.load().await
-}
-
-/// Create `DatabaseInput` from `NamespaceIdent` and properties
 pub(crate) fn convert_to_database(
     namespace: &NamespaceIdent,
     properties: &HashMap<String, String>,
@@ -311,6 +236,7 @@ mod tests {
     use aws_sdk_glue::types::Column;
     use iceberg::spec::{NestedField, PrimitiveType, Schema, TableMetadataBuilder, Type};
     use iceberg::{MetadataLocation, Namespace, Result, TableCreation};
+    use iceberg_aws::create_sdk_config;
 
     use super::*;
     use crate::schema::{ICEBERG_FIELD_CURRENT, ICEBERG_FIELD_ID, ICEBERG_FIELD_OPTIONAL};
