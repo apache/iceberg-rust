@@ -2,7 +2,22 @@ pub mod iceberg_catalog_sql
 pub enum iceberg_catalog_sql::SqlBindStyle
 pub iceberg_catalog_sql::SqlBindStyle::DollarNumeric
 pub iceberg_catalog_sql::SqlBindStyle::QMark
+impl core::cmp::PartialEq for iceberg_catalog_sql::SqlBindStyle
+pub fn iceberg_catalog_sql::SqlBindStyle::eq(&self, other: &iceberg_catalog_sql::SqlBindStyle) -> bool
+impl core::convert::TryFrom<&str> for iceberg_catalog_sql::SqlBindStyle
+pub type iceberg_catalog_sql::SqlBindStyle::Error = strum::ParseError
+pub fn iceberg_catalog_sql::SqlBindStyle::try_from(s: &str) -> core::result::Result<iceberg_catalog_sql::SqlBindStyle, <Self as core::convert::TryFrom<&str>>::Error>
+impl core::fmt::Debug for iceberg_catalog_sql::SqlBindStyle
+pub fn iceberg_catalog_sql::SqlBindStyle::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for iceberg_catalog_sql::SqlBindStyle
+pub fn iceberg_catalog_sql::SqlBindStyle::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::result::Result<(), core::fmt::Error>
+impl core::marker::StructuralPartialEq for iceberg_catalog_sql::SqlBindStyle
+impl core::str::traits::FromStr for iceberg_catalog_sql::SqlBindStyle
+pub type iceberg_catalog_sql::SqlBindStyle::Err = strum::ParseError
+pub fn iceberg_catalog_sql::SqlBindStyle::from_str(s: &str) -> core::result::Result<iceberg_catalog_sql::SqlBindStyle, <Self as core::str::traits::FromStr>::Err>
 pub struct iceberg_catalog_sql::SqlCatalog
+impl core::fmt::Debug for iceberg_catalog_sql::SqlCatalog
+pub fn iceberg_catalog_sql::SqlCatalog::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::catalog::Catalog for iceberg_catalog_sql::SqlCatalog
 pub fn iceberg_catalog_sql::SqlCatalog::create_namespace<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::catalog::Namespace>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg_catalog_sql::SqlCatalog::create_table<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent, creation: iceberg::catalog::TableCreation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
@@ -28,6 +43,8 @@ pub fn iceberg_catalog_sql::SqlCatalogBuilder::uri(self, uri: impl core::convert
 pub fn iceberg_catalog_sql::SqlCatalogBuilder::warehouse_location(self, location: impl core::convert::Into<alloc::string::String>) -> Self
 impl core::default::Default for iceberg_catalog_sql::SqlCatalogBuilder
 pub fn iceberg_catalog_sql::SqlCatalogBuilder::default() -> Self
+impl core::fmt::Debug for iceberg_catalog_sql::SqlCatalogBuilder
+pub fn iceberg_catalog_sql::SqlCatalogBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::catalog::CatalogBuilder for iceberg_catalog_sql::SqlCatalogBuilder
 pub type iceberg_catalog_sql::SqlCatalogBuilder::C = iceberg_catalog_sql::SqlCatalog
 pub fn iceberg_catalog_sql::SqlCatalogBuilder::load(self, name: impl core::convert::Into<alloc::string::String>, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> impl core::future::future::Future<Output = iceberg::error::Result<Self::C>> + core::marker::Send

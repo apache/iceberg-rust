@@ -24,6 +24,8 @@ pub fn iceberg_catalog_glue::GlueCatalog::update_table<'life0, 'async_trait>(&'l
 pub struct iceberg_catalog_glue::GlueCatalogBuilder
 impl core::default::Default for iceberg_catalog_glue::GlueCatalogBuilder
 pub fn iceberg_catalog_glue::GlueCatalogBuilder::default() -> Self
+impl core::fmt::Debug for iceberg_catalog_glue::GlueCatalogBuilder
+pub fn iceberg_catalog_glue::GlueCatalogBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::catalog::CatalogBuilder for iceberg_catalog_glue::GlueCatalogBuilder
 pub type iceberg_catalog_glue::GlueCatalogBuilder::C = iceberg_catalog_glue::GlueCatalog
 pub fn iceberg_catalog_glue::GlueCatalogBuilder::load(self, name: impl core::convert::Into<alloc::string::String>, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> impl core::future::future::Future<Output = iceberg::error::Result<Self::C>> + core::marker::Send

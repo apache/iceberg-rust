@@ -3,12 +3,47 @@ pub struct iceberg_catalog_rest::CommitTableRequest
 pub iceberg_catalog_rest::CommitTableRequest::identifier: core::option::Option<iceberg::catalog::TableIdent>
 pub iceberg_catalog_rest::CommitTableRequest::requirements: alloc::vec::Vec<iceberg::catalog::TableRequirement>
 pub iceberg_catalog_rest::CommitTableRequest::updates: alloc::vec::Vec<iceberg::catalog::TableUpdate>
+impl core::clone::Clone for iceberg_catalog_rest::CommitTableRequest
+pub fn iceberg_catalog_rest::CommitTableRequest::clone(&self) -> iceberg_catalog_rest::CommitTableRequest
+impl core::cmp::PartialEq for iceberg_catalog_rest::CommitTableRequest
+pub fn iceberg_catalog_rest::CommitTableRequest::eq(&self, other: &iceberg_catalog_rest::CommitTableRequest) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::CommitTableRequest
+pub fn iceberg_catalog_rest::CommitTableRequest::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::CommitTableRequest
+impl serde_core::ser::Serialize for iceberg_catalog_rest::CommitTableRequest
+pub fn iceberg_catalog_rest::CommitTableRequest::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::CommitTableRequest
+pub fn iceberg_catalog_rest::CommitTableRequest::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::CommitTableResponse
 pub iceberg_catalog_rest::CommitTableResponse::metadata: iceberg::spec::table_metadata::TableMetadata
 pub iceberg_catalog_rest::CommitTableResponse::metadata_location: alloc::string::String
+impl core::clone::Clone for iceberg_catalog_rest::CommitTableResponse
+pub fn iceberg_catalog_rest::CommitTableResponse::clone(&self) -> iceberg_catalog_rest::CommitTableResponse
+impl core::cmp::Eq for iceberg_catalog_rest::CommitTableResponse
+impl core::cmp::PartialEq for iceberg_catalog_rest::CommitTableResponse
+pub fn iceberg_catalog_rest::CommitTableResponse::eq(&self, other: &iceberg_catalog_rest::CommitTableResponse) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::CommitTableResponse
+pub fn iceberg_catalog_rest::CommitTableResponse::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::CommitTableResponse
+impl serde_core::ser::Serialize for iceberg_catalog_rest::CommitTableResponse
+pub fn iceberg_catalog_rest::CommitTableResponse::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::CommitTableResponse
+pub fn iceberg_catalog_rest::CommitTableResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::CreateNamespaceRequest
 pub iceberg_catalog_rest::CreateNamespaceRequest::namespace: iceberg::catalog::NamespaceIdent
 pub iceberg_catalog_rest::CreateNamespaceRequest::properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+impl core::clone::Clone for iceberg_catalog_rest::CreateNamespaceRequest
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::clone(&self) -> iceberg_catalog_rest::CreateNamespaceRequest
+impl core::cmp::Eq for iceberg_catalog_rest::CreateNamespaceRequest
+impl core::cmp::PartialEq for iceberg_catalog_rest::CreateNamespaceRequest
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::eq(&self, other: &iceberg_catalog_rest::CreateNamespaceRequest) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::CreateNamespaceRequest
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::CreateNamespaceRequest
+impl serde_core::ser::Serialize for iceberg_catalog_rest::CreateNamespaceRequest
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::CreateNamespaceRequest
+pub fn iceberg_catalog_rest::CreateNamespaceRequest::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::CreateTableRequest
 pub iceberg_catalog_rest::CreateTableRequest::location: core::option::Option<alloc::string::String>
 pub iceberg_catalog_rest::CreateTableRequest::name: alloc::string::String
@@ -17,6 +52,18 @@ pub iceberg_catalog_rest::CreateTableRequest::properties: std::collections::hash
 pub iceberg_catalog_rest::CreateTableRequest::schema: iceberg::spec::schema::Schema
 pub iceberg_catalog_rest::CreateTableRequest::stage_create: core::option::Option<bool>
 pub iceberg_catalog_rest::CreateTableRequest::write_order: core::option::Option<iceberg::spec::sort::SortOrder>
+impl core::clone::Clone for iceberg_catalog_rest::CreateTableRequest
+pub fn iceberg_catalog_rest::CreateTableRequest::clone(&self) -> iceberg_catalog_rest::CreateTableRequest
+impl core::cmp::Eq for iceberg_catalog_rest::CreateTableRequest
+impl core::cmp::PartialEq for iceberg_catalog_rest::CreateTableRequest
+pub fn iceberg_catalog_rest::CreateTableRequest::eq(&self, other: &iceberg_catalog_rest::CreateTableRequest) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::CreateTableRequest
+pub fn iceberg_catalog_rest::CreateTableRequest::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::CreateTableRequest
+impl serde_core::ser::Serialize for iceberg_catalog_rest::CreateTableRequest
+pub fn iceberg_catalog_rest::CreateTableRequest::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::CreateTableRequest
+pub fn iceberg_catalog_rest::CreateTableRequest::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::ErrorModel
 pub iceberg_catalog_rest::ErrorModel::code: u16
 pub iceberg_catalog_rest::ErrorModel::message: alloc::string::String
@@ -24,38 +71,124 @@ pub iceberg_catalog_rest::ErrorModel::stack: core::option::Option<alloc::vec::Ve
 pub iceberg_catalog_rest::ErrorModel::type: alloc::string::String
 impl core::convert::From<iceberg_catalog_rest::ErrorModel> for iceberg::error::Error
 pub fn iceberg::error::Error::from(value: iceberg_catalog_rest::ErrorModel) -> Self
+impl core::fmt::Debug for iceberg_catalog_rest::ErrorModel
+pub fn iceberg_catalog_rest::ErrorModel::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for iceberg_catalog_rest::ErrorModel
+pub fn iceberg_catalog_rest::ErrorModel::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::ErrorModel
+pub fn iceberg_catalog_rest::ErrorModel::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::ErrorResponse
 impl core::convert::From<iceberg_catalog_rest::ErrorResponse> for iceberg::error::Error
 pub fn iceberg::error::Error::from(resp: iceberg_catalog_rest::ErrorResponse) -> iceberg::error::Error
+impl core::fmt::Debug for iceberg_catalog_rest::ErrorResponse
+pub fn iceberg_catalog_rest::ErrorResponse::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for iceberg_catalog_rest::ErrorResponse
+pub fn iceberg_catalog_rest::ErrorResponse::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::ErrorResponse
+pub fn iceberg_catalog_rest::ErrorResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::ListNamespaceResponse
 pub iceberg_catalog_rest::ListNamespaceResponse::namespaces: alloc::vec::Vec<iceberg::catalog::NamespaceIdent>
 pub iceberg_catalog_rest::ListNamespaceResponse::next_page_token: core::option::Option<alloc::string::String>
+impl core::clone::Clone for iceberg_catalog_rest::ListNamespaceResponse
+pub fn iceberg_catalog_rest::ListNamespaceResponse::clone(&self) -> iceberg_catalog_rest::ListNamespaceResponse
+impl core::cmp::Eq for iceberg_catalog_rest::ListNamespaceResponse
+impl core::cmp::PartialEq for iceberg_catalog_rest::ListNamespaceResponse
+pub fn iceberg_catalog_rest::ListNamespaceResponse::eq(&self, other: &iceberg_catalog_rest::ListNamespaceResponse) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::ListNamespaceResponse
+pub fn iceberg_catalog_rest::ListNamespaceResponse::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::ListNamespaceResponse
+impl serde_core::ser::Serialize for iceberg_catalog_rest::ListNamespaceResponse
+pub fn iceberg_catalog_rest::ListNamespaceResponse::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::ListNamespaceResponse
+pub fn iceberg_catalog_rest::ListNamespaceResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::ListTablesResponse
 pub iceberg_catalog_rest::ListTablesResponse::identifiers: alloc::vec::Vec<iceberg::catalog::TableIdent>
 pub iceberg_catalog_rest::ListTablesResponse::next_page_token: core::option::Option<alloc::string::String>
+impl core::clone::Clone for iceberg_catalog_rest::ListTablesResponse
+pub fn iceberg_catalog_rest::ListTablesResponse::clone(&self) -> iceberg_catalog_rest::ListTablesResponse
+impl core::cmp::Eq for iceberg_catalog_rest::ListTablesResponse
+impl core::cmp::PartialEq for iceberg_catalog_rest::ListTablesResponse
+pub fn iceberg_catalog_rest::ListTablesResponse::eq(&self, other: &iceberg_catalog_rest::ListTablesResponse) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::ListTablesResponse
+pub fn iceberg_catalog_rest::ListTablesResponse::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::ListTablesResponse
+impl serde_core::ser::Serialize for iceberg_catalog_rest::ListTablesResponse
+pub fn iceberg_catalog_rest::ListTablesResponse::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::ListTablesResponse
+pub fn iceberg_catalog_rest::ListTablesResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::LoadTableResult
 pub iceberg_catalog_rest::LoadTableResult::config: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
 pub iceberg_catalog_rest::LoadTableResult::metadata: iceberg::spec::table_metadata::TableMetadata
 pub iceberg_catalog_rest::LoadTableResult::metadata_location: core::option::Option<alloc::string::String>
 pub iceberg_catalog_rest::LoadTableResult::storage_credentials: core::option::Option<alloc::vec::Vec<iceberg_catalog_rest::StorageCredential>>
+impl core::clone::Clone for iceberg_catalog_rest::LoadTableResult
+pub fn iceberg_catalog_rest::LoadTableResult::clone(&self) -> iceberg_catalog_rest::LoadTableResult
+impl core::cmp::Eq for iceberg_catalog_rest::LoadTableResult
+impl core::cmp::PartialEq for iceberg_catalog_rest::LoadTableResult
+pub fn iceberg_catalog_rest::LoadTableResult::eq(&self, other: &iceberg_catalog_rest::LoadTableResult) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::LoadTableResult
+pub fn iceberg_catalog_rest::LoadTableResult::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::LoadTableResult
+impl serde_core::ser::Serialize for iceberg_catalog_rest::LoadTableResult
+pub fn iceberg_catalog_rest::LoadTableResult::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::LoadTableResult
+pub fn iceberg_catalog_rest::LoadTableResult::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::NamespaceResponse
 pub iceberg_catalog_rest::NamespaceResponse::namespace: iceberg::catalog::NamespaceIdent
 pub iceberg_catalog_rest::NamespaceResponse::properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+impl core::clone::Clone for iceberg_catalog_rest::NamespaceResponse
+pub fn iceberg_catalog_rest::NamespaceResponse::clone(&self) -> iceberg_catalog_rest::NamespaceResponse
+impl core::cmp::Eq for iceberg_catalog_rest::NamespaceResponse
+impl core::cmp::PartialEq for iceberg_catalog_rest::NamespaceResponse
+pub fn iceberg_catalog_rest::NamespaceResponse::eq(&self, other: &iceberg_catalog_rest::NamespaceResponse) -> bool
 impl core::convert::From<&iceberg::catalog::Namespace> for iceberg_catalog_rest::NamespaceResponse
 pub fn iceberg_catalog_rest::NamespaceResponse::from(value: &iceberg::catalog::Namespace) -> Self
 impl core::convert::From<iceberg_catalog_rest::NamespaceResponse> for iceberg::catalog::Namespace
 pub fn iceberg::catalog::Namespace::from(value: iceberg_catalog_rest::NamespaceResponse) -> Self
+impl core::fmt::Debug for iceberg_catalog_rest::NamespaceResponse
+pub fn iceberg_catalog_rest::NamespaceResponse::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::NamespaceResponse
+impl serde_core::ser::Serialize for iceberg_catalog_rest::NamespaceResponse
+pub fn iceberg_catalog_rest::NamespaceResponse::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::NamespaceResponse
+pub fn iceberg_catalog_rest::NamespaceResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::RegisterTableRequest
 pub iceberg_catalog_rest::RegisterTableRequest::metadata_location: alloc::string::String
 pub iceberg_catalog_rest::RegisterTableRequest::name: alloc::string::String
 pub iceberg_catalog_rest::RegisterTableRequest::overwrite: core::option::Option<bool>
+impl core::clone::Clone for iceberg_catalog_rest::RegisterTableRequest
+pub fn iceberg_catalog_rest::RegisterTableRequest::clone(&self) -> iceberg_catalog_rest::RegisterTableRequest
+impl core::cmp::Eq for iceberg_catalog_rest::RegisterTableRequest
+impl core::cmp::PartialEq for iceberg_catalog_rest::RegisterTableRequest
+pub fn iceberg_catalog_rest::RegisterTableRequest::eq(&self, other: &iceberg_catalog_rest::RegisterTableRequest) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::RegisterTableRequest
+pub fn iceberg_catalog_rest::RegisterTableRequest::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::RegisterTableRequest
+impl serde_core::ser::Serialize for iceberg_catalog_rest::RegisterTableRequest
+pub fn iceberg_catalog_rest::RegisterTableRequest::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::RegisterTableRequest
+pub fn iceberg_catalog_rest::RegisterTableRequest::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::RenameTableRequest
 pub iceberg_catalog_rest::RenameTableRequest::destination: iceberg::catalog::TableIdent
 pub iceberg_catalog_rest::RenameTableRequest::source: iceberg::catalog::TableIdent
+impl core::clone::Clone for iceberg_catalog_rest::RenameTableRequest
+pub fn iceberg_catalog_rest::RenameTableRequest::clone(&self) -> iceberg_catalog_rest::RenameTableRequest
+impl core::cmp::Eq for iceberg_catalog_rest::RenameTableRequest
+impl core::cmp::PartialEq for iceberg_catalog_rest::RenameTableRequest
+pub fn iceberg_catalog_rest::RenameTableRequest::eq(&self, other: &iceberg_catalog_rest::RenameTableRequest) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::RenameTableRequest
+pub fn iceberg_catalog_rest::RenameTableRequest::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::RenameTableRequest
+impl serde_core::ser::Serialize for iceberg_catalog_rest::RenameTableRequest
+pub fn iceberg_catalog_rest::RenameTableRequest::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::RenameTableRequest
+pub fn iceberg_catalog_rest::RenameTableRequest::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::RestCatalog
 impl iceberg_catalog_rest::RestCatalog
 pub async fn iceberg_catalog_rest::RestCatalog::invalidate_token(&self) -> iceberg::error::Result<()>
 pub async fn iceberg_catalog_rest::RestCatalog::regenerate_token(&self) -> iceberg::error::Result<()>
+impl core::fmt::Debug for iceberg_catalog_rest::RestCatalog
+pub fn iceberg_catalog_rest::RestCatalog::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::catalog::Catalog for iceberg_catalog_rest::RestCatalog
 pub fn iceberg_catalog_rest::RestCatalog::create_namespace<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::catalog::Namespace>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg_catalog_rest::RestCatalog::create_table<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent, creation: iceberg::catalog::TableCreation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
@@ -77,6 +210,8 @@ impl iceberg_catalog_rest::RestCatalogBuilder
 pub fn iceberg_catalog_rest::RestCatalogBuilder::with_client(self, client: reqwest::async_impl::client::Client) -> Self
 impl core::default::Default for iceberg_catalog_rest::RestCatalogBuilder
 pub fn iceberg_catalog_rest::RestCatalogBuilder::default() -> Self
+impl core::fmt::Debug for iceberg_catalog_rest::RestCatalogBuilder
+pub fn iceberg_catalog_rest::RestCatalogBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::catalog::CatalogBuilder for iceberg_catalog_rest::RestCatalogBuilder
 pub type iceberg_catalog_rest::RestCatalogBuilder::C = iceberg_catalog_rest::RestCatalog
 pub fn iceberg_catalog_rest::RestCatalogBuilder::load(self, name: impl core::convert::Into<alloc::string::String>, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> impl core::future::future::Future<Output = iceberg::error::Result<Self::C>> + core::marker::Send
@@ -85,13 +220,49 @@ pub fn iceberg_catalog_rest::RestCatalogBuilder::with_storage_factory(self, stor
 pub struct iceberg_catalog_rest::StorageCredential
 pub iceberg_catalog_rest::StorageCredential::config: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
 pub iceberg_catalog_rest::StorageCredential::prefix: alloc::string::String
+impl core::clone::Clone for iceberg_catalog_rest::StorageCredential
+pub fn iceberg_catalog_rest::StorageCredential::clone(&self) -> iceberg_catalog_rest::StorageCredential
+impl core::cmp::Eq for iceberg_catalog_rest::StorageCredential
+impl core::cmp::PartialEq for iceberg_catalog_rest::StorageCredential
+pub fn iceberg_catalog_rest::StorageCredential::eq(&self, other: &iceberg_catalog_rest::StorageCredential) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::StorageCredential
+pub fn iceberg_catalog_rest::StorageCredential::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::StorageCredential
+impl serde_core::ser::Serialize for iceberg_catalog_rest::StorageCredential
+pub fn iceberg_catalog_rest::StorageCredential::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::StorageCredential
+pub fn iceberg_catalog_rest::StorageCredential::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::UpdateNamespacePropertiesRequest
 pub iceberg_catalog_rest::UpdateNamespacePropertiesRequest::removals: core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub iceberg_catalog_rest::UpdateNamespacePropertiesRequest::updates: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+impl core::clone::Clone for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::clone(&self) -> iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+impl core::cmp::Eq for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+impl core::cmp::PartialEq for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::eq(&self, other: &iceberg_catalog_rest::UpdateNamespacePropertiesRequest) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+impl serde_core::ser::Serialize for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::UpdateNamespacePropertiesRequest
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesRequest::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::UpdateNamespacePropertiesResponse
 pub iceberg_catalog_rest::UpdateNamespacePropertiesResponse::missing: core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub iceberg_catalog_rest::UpdateNamespacePropertiesResponse::removed: alloc::vec::Vec<alloc::string::String>
 pub iceberg_catalog_rest::UpdateNamespacePropertiesResponse::updated: alloc::vec::Vec<alloc::string::String>
+impl core::clone::Clone for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::clone(&self) -> iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+impl core::cmp::Eq for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+impl core::cmp::PartialEq for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::eq(&self, other: &iceberg_catalog_rest::UpdateNamespacePropertiesResponse) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+impl serde_core::ser::Serialize for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
+pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_URI: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_WAREHOUSE: &str

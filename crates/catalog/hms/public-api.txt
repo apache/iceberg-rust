@@ -2,6 +2,10 @@ pub mod iceberg_catalog_hms
 pub enum iceberg_catalog_hms::HmsThriftTransport
 pub iceberg_catalog_hms::HmsThriftTransport::Buffered
 pub iceberg_catalog_hms::HmsThriftTransport::Framed
+impl core::default::Default for iceberg_catalog_hms::HmsThriftTransport
+pub fn iceberg_catalog_hms::HmsThriftTransport::default() -> iceberg_catalog_hms::HmsThriftTransport
+impl core::fmt::Debug for iceberg_catalog_hms::HmsThriftTransport
+pub fn iceberg_catalog_hms::HmsThriftTransport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg_catalog_hms::HmsCatalog
 impl iceberg_catalog_hms::HmsCatalog
 pub fn iceberg_catalog_hms::HmsCatalog::file_io(&self) -> iceberg::io::file_io::FileIO
@@ -26,6 +30,8 @@ pub fn iceberg_catalog_hms::HmsCatalog::update_table<'life0, 'async_trait>(&'lif
 pub struct iceberg_catalog_hms::HmsCatalogBuilder
 impl core::default::Default for iceberg_catalog_hms::HmsCatalogBuilder
 pub fn iceberg_catalog_hms::HmsCatalogBuilder::default() -> Self
+impl core::fmt::Debug for iceberg_catalog_hms::HmsCatalogBuilder
+pub fn iceberg_catalog_hms::HmsCatalogBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::catalog::CatalogBuilder for iceberg_catalog_hms::HmsCatalogBuilder
 pub type iceberg_catalog_hms::HmsCatalogBuilder::C = iceberg_catalog_hms::HmsCatalog
 pub fn iceberg_catalog_hms::HmsCatalogBuilder::load(self, name: impl core::convert::Into<alloc::string::String>, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> impl core::future::future::Future<Output = iceberg::error::Result<Self::C>> + core::marker::Send
