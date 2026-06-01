@@ -65,7 +65,7 @@ generate-public-api: install-cargo-public-api
 		manifest=$${entry##*:}; \
 		crate_dir=$$(dirname "$$manifest"); \
 		echo "Generating public API for $$crate..."; \
-		cargo public-api -p "$$crate" --all-features > "$$crate_dir/public-api.txt"; \
+		cargo public-api -p "$$crate" --all-features -ss > "$$crate_dir/public-api.txt"; \
 	done
 
 check-public-api: install-cargo-public-api
@@ -75,7 +75,7 @@ check-public-api: install-cargo-public-api
 		manifest=$${entry##*:}; \
 		crate_dir=$$(dirname "$$manifest"); \
 		echo "Checking public API for $$crate..."; \
-		cargo public-api -p "$$crate" --all-features | diff - "$$crate_dir/public-api.txt" || { \
+		cargo public-api -p "$$crate" --all-features -ss | diff - "$$crate_dir/public-api.txt" || { \
 			echo "ERROR: Public API for $$crate has changed. Run 'make generate-public-api' to update."; \
 			fail=1; \
 		}; \
