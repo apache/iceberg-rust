@@ -25,9 +25,7 @@ use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
 use crate::runtime::Runtime;
 use crate::scan::TableScanBuilder;
-use crate::spec::{
-    ManifestListReader, SchemaRef, SnapshotRef, TableMetadata, TableMetadataRef,
-};
+use crate::spec::{ManifestListReader, SchemaRef, SnapshotRef, TableMetadata, TableMetadataRef};
 use crate::{Error, ErrorKind, Result, TableIdent};
 
 /// Builder to create table scan.
