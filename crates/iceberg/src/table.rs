@@ -265,7 +265,7 @@ impl Table {
     }
 
     /// Creates a [`ManifestListReader`] for the given snapshot.
-    pub(crate) fn manifest_list_reader(&self, snapshot: &SnapshotRef) -> ManifestListReader {
+    pub fn manifest_list_reader(&self, snapshot: &SnapshotRef) -> ManifestListReader {
         ManifestListReader::new(
             snapshot.clone(),
             self.file_io.clone(),

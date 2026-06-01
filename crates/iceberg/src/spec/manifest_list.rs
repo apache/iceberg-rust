@@ -92,7 +92,7 @@ impl ManifestList {
 
 /// A manifest list reader that encapsulates the logic for loading and parsing a [`ManifestList`]
 /// from a snapshot.
-pub(crate) struct ManifestListReader {
+pub struct ManifestListReader {
     snapshot: SnapshotRef,
     file_io: FileIO,
     table_metadata: TableMetadataRef,
