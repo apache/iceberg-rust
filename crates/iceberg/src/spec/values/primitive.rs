@@ -36,9 +36,9 @@ pub enum PrimitiveLiteral {
     String(String),
     /// Binary value (without length)
     Binary(Vec<u8>),
-    /// Stored as 16-byte little-endian
+    /// Stored as 16-byte big-endian
     Int128(i128),
-    /// Stored as 16-byte little-endian
+    /// Stored as 16-byte big-endian
     UInt128(u128),
     /// When a number is larger than it can hold
     AboveMax,
