@@ -91,7 +91,7 @@ jobs:
     steps:
       - name: Maximize build space (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
-        uses: easimon/maximize-build-space@master
+        uses: easimon/maximize-build-space@v10
         with:
           remove-dotnet: "true"
           remove-android: "true"
@@ -99,7 +99,7 @@ jobs:
           remove-codeql: "true"
           remove-docker-images: "true"
           root-reserve-mb: 10240
-          temp-reserve-mb: 10240
+          temp-reserve-mb: 100
 
       - uses: actions/checkout@v5
 
@@ -141,7 +141,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: easimon/maximize-build-space@v10
         with:
           remove-dotnet: "true"
           remove-android: "true"
@@ -149,7 +149,7 @@ jobs:
           remove-codeql: "true"
           remove-docker-images: "true"
           root-reserve-mb: 10240
-          temp-reserve-mb: 10240
+          temp-reserve-mb: 100
 
       - uses: actions/checkout@v5
 
