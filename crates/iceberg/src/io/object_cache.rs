@@ -127,10 +127,14 @@ impl ObjectCache {
         table_metadata: &TableMetadataRef,
     ) -> Result<Arc<ManifestList>> {
         if self.cache_disabled {
-            return ManifestListReader::new(snapshot, &self.file_io, table_metadata)
-                .load()
-                .await
-                .map(Arc::new);
+            return ManifestListReader::new(
+                snapshot.clone(),
+                self.file_io.clone(),
+                table_metadata.clone(),
+            )
+            .load()
+            .await
+            .map(Arc::new);
         }
 
         let key = CachedObjectKey::ManifestList((
@@ -174,9 +178,13 @@ impl ObjectCache {
         snapshot: &SnapshotRef,
         table_metadata: &TableMetadataRef,
     ) -> Result<CachedItem> {
-        let manifest_list = ManifestListReader::new(snapshot, &self.file_io, table_metadata)
-            .load()
-            .await?;
+        let manifest_list = ManifestListReader::new(
+            snapshot.clone(),
+            self.file_io.clone(),
+            table_metadata.clone(),
+        )
+        .load()
+        .await?;
 
         Ok(CachedItem::ManifestList(Arc::new(manifest_list)))
     }

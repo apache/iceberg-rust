@@ -28,7 +28,7 @@ use serde_derive::{Deserialize, Serialize};
 
 use self::_const_schema::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2};
 use self::_serde::{ManifestFileV1, ManifestFileV2};
-use super::{FormatVersion, Manifest, Snapshot, TableMetadata};
+use super::{FormatVersion, Manifest, SnapshotRef, TableMetadataRef};
 use crate::error::Result;
 use crate::io::{FileIO, OutputFile};
 use crate::spec::manifest_list::_const_schema::MANIFEST_LIST_AVRO_SCHEMA_V3;
@@ -92,17 +92,17 @@ impl ManifestList {
 
 /// A manifest list reader that encapsulates the logic for loading and parsing a [`ManifestList`]
 /// from a snapshot.
-pub struct ManifestListReader<'a> {
-    snapshot: &'a Snapshot,
-    file_io: &'a FileIO,
-    table_metadata: &'a TableMetadata,
+pub struct ManifestListReader {
+    snapshot: SnapshotRef,
+    file_io: FileIO,
+    table_metadata: TableMetadataRef,
 }
 
-impl<'a> ManifestListReader<'a> {
+impl ManifestListReader {
     pub(crate) fn new(
-        snapshot: &'a Snapshot,
-        file_io: &'a FileIO,
-        table_metadata: &'a TableMetadata,
+        snapshot: SnapshotRef,
+        file_io: FileIO,
+        table_metadata: TableMetadataRef,
     ) -> Self {
         Self {
             snapshot,

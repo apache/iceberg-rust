@@ -507,7 +507,7 @@ mod tests {
             unreachable!()
         };
         let manifest_list = table
-            .manifest_list_reader(new_snapshot)
+            .manifest_list_reader(&SnapshotRef::new(new_snapshot.clone()))
             .load()
             .await
             .unwrap();

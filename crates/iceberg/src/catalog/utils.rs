@@ -23,7 +23,7 @@ use futures::{TryStreamExt, stream};
 
 use crate::Result;
 use crate::io::FileIO;
-use crate::spec::{ManifestListReader, TableMetadata};
+use crate::spec::{ManifestListReader, TableMetadata, TableMetadataRef};
 
 const DELETE_CONCURRENCY: usize = 10;
 
@@ -44,12 +44,14 @@ pub async fn drop_table_data(
     let mut manifest_lists_to_delete: HashSet<String> = HashSet::new();
     let mut manifests_to_delete: HashSet<String> = HashSet::new();
 
+    let metadata_ref = TableMetadataRef::new(metadata.clone());
     // Load all manifest lists concurrently
     let results: Vec<_> =
         futures::future::try_join_all(metadata.snapshots().map(|snapshot| async {
-            let manifest_list = ManifestListReader::new(snapshot, io, metadata)
-                .load()
-                .await?;
+            let manifest_list =
+                ManifestListReader::new(snapshot.clone(), io.clone(), metadata_ref.clone())
+                    .load()
+                    .await?;
             Ok::<_, crate::Error>((snapshot.manifest_list().to_string(), manifest_list))
         }))
         .await?;
