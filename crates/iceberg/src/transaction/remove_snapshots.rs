@@ -406,7 +406,7 @@ mod tests {
     use crate::transaction::{Transaction, TransactionAction};
     use crate::{TableIdent, TableRequirement};
 
-    fn make_v2_table_with_mutli_snapshot() -> Table {
+    fn make_v2_table_with_multi_snapshot() -> Table {
         let file = File::open(format!(
             "{}/testdata/table_metadata/{}",
             env!("CARGO_MANIFEST_DIR"),
@@ -427,7 +427,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_snapshot_action() {
-        let table = make_v2_table_with_mutli_snapshot();
+        let table = make_v2_table_with_multi_snapshot();
         let table_meta = table.metadata().clone();
         assert_eq!(5, table_meta.snapshots().count());
         {

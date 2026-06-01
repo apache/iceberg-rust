@@ -410,7 +410,7 @@ pub(crate) fn update_snapshot_summaries(
 /// `HashMap<String, String>` and may be written by any Iceberg engine
 /// (Java, Python, Rust, ...). A malformed entry, an empty string, or a
 /// value exceeding `u64::MAX` must not panic the writer — we treat any
-/// unparseable value as `0`, matching the policy in `update_totals`.
+/// unparsable value as `0`, matching the policy in `update_totals`.
 #[allow(dead_code)]
 fn previous_total_or_zero(previous_summary: &Summary, prop: &str) -> u64 {
     previous_summary
@@ -466,7 +466,7 @@ fn update_totals(
     // `HashMap<String, String>` and are written by any Iceberg engine (Java,
     // Python, Rust, ...). We must not panic if a value is missing, malformed,
     // or exceeds `u64::MAX` — that aborts the writer and produces no progress
-    // signal. Treat any unparseable value as `0` (the same as a missing
+    // signal. Treat any unparsable value as `0` (the same as a missing
     // entry) and use saturating arithmetic so a `removed > previous + added`
     // skew from a corrupt history can never underflow.
     fn parse_or_zero(value: Option<&String>) -> u64 {
@@ -617,7 +617,7 @@ mod tests {
     /// `update_snapshot_summaries` then unwrapped — so a malformed or
     /// overflowing previous value (perfectly legal in a summary written by
     /// another engine) would panic the writer. Truncation must now degrade
-    /// gracefully: unparseable totals are treated as `0` and produce no
+    /// gracefully: unparsable totals are treated as `0` and produce no
     /// `removed_*` entry, while well-formed totals still flow through.
     #[test]
     fn test_update_snapshot_summaries_truncate_overwrite_handles_malformed_and_overflow() {
