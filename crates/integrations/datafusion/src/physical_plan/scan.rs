@@ -265,7 +265,6 @@ fn stream_with_baseline_metrics(
     baseline_metrics: BaselineMetrics,
 ) -> Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>> {
     futures::stream::poll_fn(move |cx| {
-        let baseline_metrics = baseline_metrics.clone();
         let _timer = baseline_metrics.elapsed_compute().timer();
         let poll = stream.as_mut().poll_next(cx);
         baseline_metrics.record_poll(poll)
