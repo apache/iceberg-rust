@@ -19,8 +19,8 @@
 extend-ignore-identifiers-re = ["^bimap$"]
 
 [default.extend-words]
-ags = "ags"
 AGS = "AGS"
+ags = "ags"
 
 [files]
-extend-exclude = ["**/testdata", "CHANGELOG.md"]
+extend-exclude = ["**/testdata", "CHANGELOG.md", "**/public-api.txt"]

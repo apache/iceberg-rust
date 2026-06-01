@@ -667,6 +667,15 @@ impl Transform {
                 (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
                     Some(Datum::timestamp_micros(v - 1))
                 }
+                (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
+                    Some(Datum::timestamptz_micros(v - 1))
+                }
+                (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
+                    Some(Datum::timestamp_nanos(v - 1))
+                }
+                (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
+                    Some(Datum::timestamptz_nanos(v - 1))
+                }
                 _ => Some(datum.to_owned()),
             },
             PredicateOperator::GreaterThan => match (datum.data_type(), datum.literal()) {
@@ -678,6 +687,15 @@ impl Transform {
                 (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Some(Datum::date(v + 1)),
                 (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
                     Some(Datum::timestamp_micros(v + 1))
+                }
+                (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
+                    Some(Datum::timestamptz_micros(v + 1))
+                }
+                (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
+                    Some(Datum::timestamp_nanos(v + 1))
+                }
+                (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
+                    Some(Datum::timestamptz_nanos(v + 1))
                 }
                 _ => Some(datum.to_owned()),
             },
@@ -1061,4 +1079,44 @@ impl<'de> Deserialize<'de> for Transform {
 enum AdjustedProjection {
     Single(Datum),
     Set(FnvHashSet<Datum>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check_boundary(op: PredicateOperator, input: Datum, expected: Datum) {
+        let result = Transform::adjust_boundary(&op, &input).unwrap().unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_adjust_boundary_timestamp_types() {
+        for (datum, dec, inc) in [
+            (
+                Datum::timestamptz_micros(1000),
+                Datum::timestamptz_micros(999),
+                Datum::timestamptz_micros(1001),
+            ),
+            (
+                Datum::timestamp_nanos(5000),
+                Datum::timestamp_nanos(4999),
+                Datum::timestamp_nanos(5001),
+            ),
+            (
+                Datum::timestamptz_nanos(5000),
+                Datum::timestamptz_nanos(4999),
+                Datum::timestamptz_nanos(5001),
+            ),
+        ] {
+            check_boundary(PredicateOperator::LessThan, datum.clone(), dec);
+            check_boundary(PredicateOperator::GreaterThan, datum.clone(), inc);
+            check_boundary(
+                PredicateOperator::LessThanOrEq,
+                datum.clone(),
+                datum.clone(),
+            );
+            check_boundary(PredicateOperator::GreaterThanOrEq, datum.clone(), datum);
+        }
+    }
 }

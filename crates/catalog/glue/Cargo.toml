@@ -19,6 +19,7 @@
 edition = { workspace = true }
 homepage = { workspace = true }
 name = "iceberg-catalog-glue"
+publish = true
 rust-version = { workspace = true }
 version = { workspace = true }
 

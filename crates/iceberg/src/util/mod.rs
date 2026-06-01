@@ -35,11 +35,11 @@ const DEFAULT_PARALLELISM: usize = 1;
 /// parallelism can change during the lifetime of an executing
 /// process, but this should not be called in a hot loop.
 pub(crate) fn available_parallelism() -> NonZeroUsize {
-    std::thread::available_parallelism().unwrap_or_else(|_err| {
-        // Failed to get the level of parallelism.
-        // TODO: log/trace when this fallback occurs.
-
-        // Using a default value.
+    std::thread::available_parallelism().unwrap_or_else(|err| {
+        tracing::warn!(
+            error = %err,
+            "Failed to determine available parallelism; falling back to {DEFAULT_PARALLELISM}",
+        );
         NonZeroUsize::new(DEFAULT_PARALLELISM).unwrap()
     })
 }
