@@ -34,9 +34,8 @@ use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
     Runtime, TableCommit, TableCreation, TableIdent,
 };
+use iceberg_aws::{create_sdk_config, map_aws_to_s3_properties};
 use iceberg_storage_opendal::OpenDalStorageFactory;
-
-use crate::utils::create_sdk_config;
 
 /// S3Tables table bucket ARN property
 pub const S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN: &str = "table_bucket_arn";
@@ -208,7 +207,7 @@ impl S3TablesCatalog {
         let s3tables_client = if let Some(client) = config.client.clone() {
             client
         } else {
-            let aws_config = create_sdk_config(&config.props, config.endpoint_url.clone()).await;
+            let aws_config = create_sdk_config(&config.props, config.endpoint_url.as_ref()).await;
             aws_sdk_s3tables::Client::new(&aws_config)
         };
 
@@ -218,8 +217,11 @@ impl S3TablesCatalog {
                 customized_credential_load: None,
             })
         });
+
+        let file_io_props = map_aws_to_s3_properties(&config.props, config.endpoint_url.as_ref());
+
         let file_io = FileIOBuilder::new(factory)
-            .with_props(&config.props)
+            .with_props(file_io_props)
             .build();
 
         Ok(Self {
@@ -972,9 +974,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_builder_with_client_ok() {
-        use aws_config::BehaviorVersion;
-
-        let sdk_config = aws_config::defaults(BehaviorVersion::latest()).load().await;
+        let sdk_config = create_sdk_config(&HashMap::new(), None).await;
         let client = aws_sdk_s3tables::Client::new(&sdk_config);
 
         let builder = S3TablesCatalogBuilder::default().with_client(client);

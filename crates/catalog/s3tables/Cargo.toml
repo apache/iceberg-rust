@@ -33,17 +33,15 @@ repository = { workspace = true }
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-aws-config = { workspace = true }
 aws-sdk-s3tables = { workspace = true }
 iceberg = { workspace = true }
+iceberg-aws = { path = "../../integrations/aws" }
 iceberg-storage-opendal = { workspace = true, features = ["opendal-s3"] }
 
 [dev-dependencies]
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 futures = { workspace = true }
-iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
-itertools = { workspace = true }
 parquet = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }

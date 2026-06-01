@@ -1,0 +1,14 @@
+pub mod iceberg_aws
+pub mod iceberg_aws::config
+pub async fn iceberg_aws::config::create_sdk_config(properties: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, endpoint_uri: core::option::Option<&alloc::string::String>) -> aws_types::sdk_config::SdkConfig
+pub fn iceberg_aws::config::map_aws_to_s3_properties(properties: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, endpoint_uri: core::option::Option<&alloc::string::String>) -> std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub const iceberg_aws::AWS_ACCESS_KEY_ID: &str
+pub const iceberg_aws::AWS_ASSUME_ROLE_ARN: &str
+pub const iceberg_aws::AWS_ASSUME_ROLE_EXTERNAL_ID: &str
+pub const iceberg_aws::AWS_ASSUME_ROLE_SESSION_NAME: &str
+pub const iceberg_aws::AWS_PROFILE_NAME: &str
+pub const iceberg_aws::AWS_REGION_NAME: &str
+pub const iceberg_aws::AWS_SECRET_ACCESS_KEY: &str
+pub const iceberg_aws::AWS_SESSION_TOKEN: &str
+pub async fn iceberg_aws::create_sdk_config(properties: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, endpoint_uri: core::option::Option<&alloc::string::String>) -> aws_types::sdk_config::SdkConfig
+pub fn iceberg_aws::map_aws_to_s3_properties(properties: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, endpoint_uri: core::option::Option<&alloc::string::String>) -> std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
