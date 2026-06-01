@@ -35,6 +35,11 @@ on:
       - '!LICENSE'
       - '!NOTICE'
       - '!README.md'
+      - '!README.upstream.md'
+      - '!CLAUDE.md'        # fork: agent harness — docs only, no code impact
+      - '!skills/**'        # fork: per-model-tier operating manuals
+      - '!docs/**'          # fork: testing-discipline gate, etc.
+      - '!task/**'          # fork: markdown plan/lessons workflow
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
