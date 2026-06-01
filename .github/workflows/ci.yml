@@ -21,6 +21,25 @@ on:
   push:
     branches:
       - main
+    # Doc-only commits to main skip the heavy Rust matrix (same exclusions as pull_request below).
+    paths:
+      - '**'
+      - '!.github/ISSUE_TEMPLATE/**'
+      - '!scripts/**'
+      - '!website/**'
+      - '!.asf.yml'
+      - '!.gitattributes'
+      - '!.gitignore'
+      - '!CONTRIBUTING.md'
+      - '!CHANGELOG.md'
+      - '!LICENSE'
+      - '!NOTICE'
+      - '!README.md'
+      - '!README.upstream.md'
+      - '!CLAUDE.md'
+      - '!skills/**'
+      - '!docs/**'
+      - '!task/**'
   pull_request:
     paths:
       - '**'                              # Include all files and directories in the repository by default.

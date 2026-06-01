@@ -3,12 +3,17 @@
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 ![Rust](https://img.shields.io/badge/rust-edition%202024%20·%20MSRV%201.87-orange)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![Status](https://img.shields.io/badge/status-work%20in%20progress-yellow)
 
 A personal fork of [**Apache Iceberg™ Rust**](https://github.com/apache/iceberg-rust) — the Rust
 implementation of the [Apache Iceberg](https://iceberg.apache.org/) open table format — extended
 with a **pure-Python, zero-JVM drop-in for PySpark's SQL and DataFrame APIs**, built on
 [DataFusion](https://datafusion.apache.org/) + [PyIceberg](https://py.iceberg.apache.org/) +
 the project's own Rust bindings.
+
+> **🚧 Work in progress.** This is an active, experimental project — APIs, structure, and features
+> may change without notice, and not everything is finished or production-hardened. Explore and
+> learn from it, but don't depend on it being stable yet.
 
 > **This is a fork, not the official project.** It tracks `apache/iceberg-rust` and adds work on
 > top; it is independent of and not endorsed by the Apache Software Foundation. The unmodified
