@@ -501,13 +501,13 @@ mod tests {
         );
 
         // check manifest list
-        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
+        let new_snapshot: SnapshotRef = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            SnapshotRef::new(snapshot.clone())
         } else {
             unreachable!()
         };
         let manifest_list = table
-            .manifest_list_reader(&SnapshotRef::new(new_snapshot.clone()))
+            .manifest_list_reader(&new_snapshot)
             .load()
             .await
             .unwrap();
