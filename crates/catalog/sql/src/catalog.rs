@@ -40,8 +40,12 @@ pub const SQL_CATALOG_PROP_URI: &str = "uri";
 /// catalog warehouse location
 pub const SQL_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 /// catalog sql bind style
-pub const SQL_CATALOG_PROP_BIND_STYLE: &str = "sql_bind_style";
-/// catalog schema version, setting to "V1" will migrate from V0 to V1 schema
+pub const SQL_CATALOG_PROP_BIND_STYLE: &str = "sql.bind-style";
+/// Legacy (pre-`sql.bind-style`) key for [`SQL_CATALOG_PROP_BIND_STYLE`], still accepted for
+/// backward compatibility.
+const SQL_CATALOG_PROP_BIND_STYLE_LEGACY: &str = "sql_bind_style";
+/// Expected catalog schema version.
+/// If set to `V1` while the catalog table is actually `V0`, it will be migrated from `V0` to `V1`.
 pub const SQL_CATALOG_PROP_SCHEMA_VERSION: &str = "sql.schema-version";
 
 static CATALOG_TABLE_NAME: &str = "iceberg_tables";
@@ -80,6 +84,7 @@ impl Default for SqlCatalogBuilder {
                 name: "".to_string(),
                 warehouse_location: "".to_string(),
                 sql_bind_style: SqlBindStyle::DollarNumeric,
+                schema_version: None,
                 props: HashMap::new(),
             },
             storage_factory: None,
@@ -171,11 +176,30 @@ impl CatalogBuilder for SqlCatalogBuilder {
         let name = name.into();
 
         let mut valid_sql_bind_style = true;
-        if let Some(sql_bind_style) = self.config.props.remove(SQL_CATALOG_PROP_BIND_STYLE) {
+
+        // Accept the preferred `sql.bind-style` key, falling back to the legacy `sql_bind_style`.
+        let sql_bind_style = self
+            .config
+            .props
+            .remove(SQL_CATALOG_PROP_BIND_STYLE)
+            .or_else(|| self.config.props.remove(SQL_CATALOG_PROP_BIND_STYLE_LEGACY));
+
+        // Validate the SQL bind style
+        if let Some(sql_bind_style) = sql_bind_style {
             if let Ok(sql_bind_style) = SqlBindStyle::from_str(&sql_bind_style) {
                 self.config.sql_bind_style = sql_bind_style;
             } else {
                 valid_sql_bind_style = false;
+            }
+        }
+
+        // Parse the requested schema version up front so invalid values fail fast rather than
+        // silently falling back to V0.
+        let mut valid_schema_version = true;
+        if let Some(schema_version) = self.config.props.remove(SQL_CATALOG_PROP_SCHEMA_VERSION) {
+            match SchemaVersion::from_str(&schema_version) {
+                Ok(schema_version) => self.config.schema_version = Some(schema_version),
+                Err(_) => valid_schema_version = false,
             }
         }
 
@@ -195,6 +219,16 @@ impl CatalogBuilder for SqlCatalogBuilder {
                         SQL_CATALOG_PROP_BIND_STYLE,
                         SqlBindStyle::DollarNumeric,
                         SqlBindStyle::QMark
+                    ),
+                ))
+            } else if !valid_schema_version {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "`{}` values are valid only if they're `{}` or `{}`",
+                        SQL_CATALOG_PROP_SCHEMA_VERSION,
+                        SchemaVersion::V0,
+                        SchemaVersion::V1
                     ),
                 ))
             } else {
@@ -223,6 +257,7 @@ struct SqlCatalogConfig {
     name: String,
     warehouse_location: String,
     sql_bind_style: SqlBindStyle,
+    schema_version: Option<SchemaVersion>,
     props: HashMap<String, String>,
 }
 
@@ -246,6 +281,32 @@ pub enum SchemaVersion {
     V0,
     /// Extended schema with the `iceberg_type` column for view support.
     V1,
+}
+
+impl SchemaVersion {
+    /// The trailing SQL `AND` clause used to exclude view rows when querying for tables.
+    ///
+    /// `V1` schemas carry an `iceberg_type` column, so table rows are those tagged `TABLE`
+    /// (or `NULL`, for rows written before the column existed). `V0` schemas have no such
+    /// column, so no filter is applied.
+    fn record_type_filter(self) -> &'static str {
+        match self {
+            SchemaVersion::V1 => "AND (iceberg_type = 'TABLE' OR iceberg_type IS NULL)",
+            SchemaVersion::V0 => "",
+        }
+    }
+
+    /// The SQL needed to migrate a `V0` catalog table up to this schema version.
+    ///
+    /// Returns `None` when the target version requires no migration (i.e. `V0`).
+    fn migration_sql(self) -> Option<String> {
+        match self {
+            SchemaVersion::V1 => Some(format!(
+                "ALTER TABLE {CATALOG_TABLE_NAME} ADD COLUMN {CATALOG_FIELD_RECORD_TYPE} VARCHAR(5)"
+            )),
+            SchemaVersion::V0 => None,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, strum::EnumString, strum::Display)]
@@ -323,41 +384,44 @@ impl SqlCatalog {
         .await
         .map_err(from_sqlx_error)?;
 
-        // Check if the catalog table supports views, indicating that the schema is V1
-        let is_v1 = sqlx::query(&format!(
+        // Probe for the `iceberg_type` column to detect whether the catalog table is already a schema version v1 (which supports views).
+        let is_v1 = match sqlx::query(&format!(
             "SELECT {CATALOG_FIELD_RECORD_TYPE} FROM {CATALOG_TABLE_NAME} LIMIT 0"
         ))
         .execute(&pool)
         .await
-        .is_ok();
+        {
+            Ok(_) => true,
+            // The database rejected the query: the `iceberg_type` column (or table) is absent,
+            // so this is a genuine V0 schema.
+            Err(sqlx::Error::Database(_)) => false,
+            // Any other error (connection dropped, pool timeout, misconfiguration, ...) is not a
+            // signal about the schema version. Surface it rather than misclassifying as V0.
+            Err(e) => return Err(from_sqlx_error(e)),
+        };
 
-        // Migrate the schema to V1 if the catalog table does not support views and the caller opted in.
+        // Migrate the schema to V1 if the catalog table does not support views and the caller
+        // opted in via `sql.schema-version=V1`.
         let schema_version = if is_v1 {
-            tracing::debug!("{CATALOG_TABLE_NAME} already supports views");
+            tracing::debug!("detected {CATALOG_TABLE_NAME} schema v1 which already supports views");
+            SchemaVersion::V1
+        } else if config.schema_version == Some(SchemaVersion::V1) {
+            tracing::warn!(
+                "detected {CATALOG_TABLE_NAME} schema v0; migrating to v1 to enable view support"
+            );
+            if let Some(migration_sql) = SchemaVersion::V1.migration_sql() {
+                sqlx::query(&migration_sql)
+                    .execute(&pool)
+                    .await
+                    .map_err(from_sqlx_error)?;
+            }
             SchemaVersion::V1
         } else {
-            let requested: SchemaVersion = config
-                .props
-                .get(SQL_CATALOG_PROP_SCHEMA_VERSION)
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(SchemaVersion::V0);
-            if requested == SchemaVersion::V1 {
-                tracing::debug!("{CATALOG_TABLE_NAME} is being updated to support views");
-                sqlx::query(&format!(
-                    "ALTER TABLE {CATALOG_TABLE_NAME} \
-                     ADD COLUMN {CATALOG_FIELD_RECORD_TYPE} VARCHAR(5)"
-                ))
-                .execute(&pool)
-                .await
-                .map_err(from_sqlx_error)?;
-                SchemaVersion::V1
-            } else {
-                tracing::warn!(
-                    "SqlCatalog is initialized without view support. To auto-migrate the database's schema and enable view support, set {}=V1",
-                    SQL_CATALOG_PROP_SCHEMA_VERSION
-                );
-                SchemaVersion::V0
-            }
+            tracing::warn!(
+                "detected v0 {CATALOG_TABLE_NAME} schema; SqlCatalog is initialized without view support. To auto-migrate the database's schema and enable view support, set {}=V1",
+                SQL_CATALOG_PROP_SCHEMA_VERSION
+            );
+            SchemaVersion::V0
         };
 
         Ok(SqlCatalog {
@@ -369,13 +433,6 @@ impl SqlCatalog {
             runtime,
             schema_version,
         })
-    }
-
-    fn record_type_filter(&self) -> &'static str {
-        match self.schema_version {
-            SchemaVersion::V1 => "AND (iceberg_type = 'TABLE' OR iceberg_type IS NULL)",
-            SchemaVersion::V0 => "",
-        }
     }
 
     /// SQLX Any does not implement PostgresSQL bindings, so we have to do this.
@@ -747,7 +804,7 @@ impl Catalog for SqlCatalog {
                          WHERE {CATALOG_FIELD_TABLE_NAMESPACE} = ?
                           AND {CATALOG_FIELD_CATALOG_NAME} = ?
                           {}",
-                        self.record_type_filter()
+                        self.schema_version.record_type_filter()
                     ),
                     vec![Some(&namespace.join(".")), Some(&self.name)],
                 )
@@ -784,7 +841,7 @@ impl Catalog for SqlCatalog {
                       AND {CATALOG_FIELD_CATALOG_NAME} = ?
                       AND {CATALOG_FIELD_TABLE_NAME} = ?
                       {}",
-                    self.record_type_filter()
+                    self.schema_version.record_type_filter()
                 ),
                 vec![Some(&namespace), Some(&self.name), Some(table_name)],
             )
@@ -809,7 +866,7 @@ impl Catalog for SqlCatalog {
                   AND {CATALOG_FIELD_TABLE_NAME} = ?
                   AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
                   {}",
-                self.record_type_filter()
+                self.schema_version.record_type_filter()
             ),
             vec![
                 Some(&self.name),
@@ -848,7 +905,7 @@ impl Catalog for SqlCatalog {
                       AND {CATALOG_FIELD_TABLE_NAME} = ?
                       AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
                       {}",
-                    self.record_type_filter()
+                    self.schema_version.record_type_filter()
                 ),
                 vec![
                     Some(&self.name),
@@ -974,7 +1031,7 @@ impl Catalog for SqlCatalog {
                   AND {CATALOG_FIELD_TABLE_NAME} = ?
                   AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
                   {}",
-                self.record_type_filter()
+                self.schema_version.record_type_filter()
             ),
             vec![
                 Some(dest.name()),
@@ -1045,7 +1102,7 @@ impl Catalog for SqlCatalog {
                       AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
                       {}
                       AND {CATALOG_FIELD_METADATA_LOCATION_PROP} = ?",
-                    self.record_type_filter()
+                    self.schema_version.record_type_filter()
                 ),
                 vec![
                     Some(&staged_metadata_location_str),
@@ -1089,7 +1146,8 @@ mod tests {
 
     use crate::catalog::{
         NAMESPACE_LOCATION_PROPERTY_KEY, SQL_CATALOG_PROP_BIND_STYLE,
-        SQL_CATALOG_PROP_SCHEMA_VERSION, SQL_CATALOG_PROP_URI, SQL_CATALOG_PROP_WAREHOUSE,
+        SQL_CATALOG_PROP_BIND_STYLE_LEGACY, SQL_CATALOG_PROP_SCHEMA_VERSION, SQL_CATALOG_PROP_URI,
+        SQL_CATALOG_PROP_WAREHOUSE,
     };
     use crate::{SchemaVersion, SqlBindStyle, SqlCatalogBuilder};
 
@@ -2207,5 +2265,64 @@ mod tests {
             !column_exists,
             "iceberg_type column should not exist when sql.schema-version=V1 was not set"
         );
+    }
+
+    #[tokio::test]
+    async fn test_invalid_schema_version_is_rejected() {
+        install_default_drivers();
+
+        let (uri, temp_dir) = create_v0_sqlite_db().await;
+
+        // An unrecognized sql.schema-version value must fail fast rather than silently
+        // falling back to V0.
+        let props = HashMap::from_iter([
+            (SQL_CATALOG_PROP_URI.to_string(), uri),
+            (
+                SQL_CATALOG_PROP_WAREHOUSE.to_string(),
+                temp_dir.path().to_str().unwrap().to_string(),
+            ),
+            (
+                SQL_CATALOG_PROP_BIND_STYLE.to_string(),
+                SqlBindStyle::QMark.to_string(),
+            ),
+            (
+                SQL_CATALOG_PROP_SCHEMA_VERSION.to_string(),
+                "v2".to_string(),
+            ),
+        ]);
+        let result = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load("iceberg", props)
+            .await;
+
+        let err = result.expect_err("an invalid sql.schema-version should be rejected");
+        assert_eq!(err.kind(), iceberg::ErrorKind::DataInvalid);
+    }
+
+    #[tokio::test]
+    async fn test_legacy_bind_style_key_is_accepted() {
+        install_default_drivers();
+
+        let (uri, temp_dir) = create_v0_sqlite_db().await;
+
+        // The legacy `sql_bind_style` key must keep working alongside the new `sql.bind-style`.
+        let props = HashMap::from_iter([
+            (SQL_CATALOG_PROP_URI.to_string(), uri),
+            (
+                SQL_CATALOG_PROP_WAREHOUSE.to_string(),
+                temp_dir.path().to_str().unwrap().to_string(),
+            ),
+            (
+                SQL_CATALOG_PROP_BIND_STYLE_LEGACY.to_string(),
+                SqlBindStyle::QMark.to_string(),
+            ),
+        ]);
+        let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load("iceberg", props)
+            .await
+            .expect("legacy sql_bind_style key should still be accepted");
+
+        assert_eq!(catalog.sql_bind_style, SqlBindStyle::QMark);
     }
 }
