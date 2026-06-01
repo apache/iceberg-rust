@@ -1,4 +1,12 @@
 pub mod iceberg_catalog_glue
+pub use iceberg_catalog_glue::AWS_ACCESS_KEY_ID
+pub use iceberg_catalog_glue::AWS_ASSUME_ROLE_ARN
+pub use iceberg_catalog_glue::AWS_ASSUME_ROLE_EXTERNAL_ID
+pub use iceberg_catalog_glue::AWS_ASSUME_ROLE_SESSION_NAME
+pub use iceberg_catalog_glue::AWS_PROFILE_NAME
+pub use iceberg_catalog_glue::AWS_REGION_NAME
+pub use iceberg_catalog_glue::AWS_SECRET_ACCESS_KEY
+pub use iceberg_catalog_glue::AWS_SESSION_TOKEN
 pub macro iceberg_catalog_glue::with_catalog_id!
 pub struct iceberg_catalog_glue::GlueCatalog
 impl iceberg_catalog_glue::GlueCatalog
@@ -131,11 +139,6 @@ impl<Unshared, Shared> aws_smithy_runtime_api::shared::IntoShared<Shared> for ic
 pub fn iceberg_catalog_glue::GlueCatalogBuilder::into_shared(self) -> Shared
 impl<V, T> ppv_lite86::types::VZip<V> for iceberg_catalog_glue::GlueCatalogBuilder where V: ppv_lite86::types::MultiLane<T>
 pub fn iceberg_catalog_glue::GlueCatalogBuilder::vzip(self) -> V
-pub const iceberg_catalog_glue::AWS_ACCESS_KEY_ID: &str
-pub const iceberg_catalog_glue::AWS_PROFILE_NAME: &str
-pub const iceberg_catalog_glue::AWS_REGION_NAME: &str
-pub const iceberg_catalog_glue::AWS_SECRET_ACCESS_KEY: &str
-pub const iceberg_catalog_glue::AWS_SESSION_TOKEN: &str
 pub const iceberg_catalog_glue::GLUE_CATALOG_PROP_CATALOG_ID: &str
 pub const iceberg_catalog_glue::GLUE_CATALOG_PROP_URI: &str
 pub const iceberg_catalog_glue::GLUE_CATALOG_PROP_WAREHOUSE: &str
