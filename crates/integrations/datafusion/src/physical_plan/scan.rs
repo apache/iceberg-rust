@@ -292,7 +292,10 @@ mod tests {
         DataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
     };
     use datafusion::arrow::record_batch::RecordBatch;
-    use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
+    use datafusion::common::utils::memory::get_record_batch_memory_size;
+    use datafusion::physical_plan::metrics::{
+        BaselineMetrics, ExecutionPlanMetricsSet, MetricValue, MetricsSet,
+    };
     use futures::StreamExt;
 
     use super::stream_with_baseline_metrics;
@@ -302,6 +305,7 @@ mod tests {
         let metrics = ExecutionPlanMetricsSet::new();
         let baseline_metrics = BaselineMetrics::new(&metrics, 0);
         let batch = make_batch();
+        let expected_output_bytes = get_record_batch_memory_size(&batch);
         let stream = Box::pin(futures::stream::iter([Ok(batch)]));
         let mut stream = stream_with_baseline_metrics(stream, baseline_metrics);
 
@@ -317,9 +321,19 @@ mod tests {
 
         let metrics = metrics.clone_inner();
         assert_eq!(metrics.output_rows(), Some(3));
+        assert_eq!(output_batches(&metrics), Some(1));
+        assert_eq!(output_bytes(&metrics), Some(expected_output_bytes));
         assert!(
             metrics.elapsed_compute().is_some_and(|elapsed| elapsed > 0),
             "elapsed_compute should be recorded"
+        );
+        assert!(
+            start_timestamp(&metrics).is_some_and(|timestamp| timestamp > 0),
+            "start_timestamp should be recorded"
+        );
+        assert!(
+            end_timestamp(&metrics).is_some_and(|timestamp| timestamp > 0),
+            "end_timestamp should be recorded"
         );
     }
 
@@ -335,5 +349,38 @@ mod tests {
             DataType::Int64,
             false,
         )]))
+    }
+
+    fn metric_value_as_usize(
+        metrics: &MetricsSet,
+        matches_metric: impl Fn(&MetricValue) -> bool,
+    ) -> Option<usize> {
+        metrics
+            .sum(|metric| matches_metric(metric.value()))
+            .map(|metric| metric.as_usize())
+    }
+
+    fn output_batches(metrics: &MetricsSet) -> Option<usize> {
+        metric_value_as_usize(metrics, |value| {
+            matches!(value, MetricValue::OutputBatches(_))
+        })
+    }
+
+    fn output_bytes(metrics: &MetricsSet) -> Option<usize> {
+        metric_value_as_usize(metrics, |value| {
+            matches!(value, MetricValue::OutputBytes(_))
+        })
+    }
+
+    fn start_timestamp(metrics: &MetricsSet) -> Option<usize> {
+        metric_value_as_usize(metrics, |value| {
+            matches!(value, MetricValue::StartTimestamp(_))
+        })
+    }
+
+    fn end_timestamp(metrics: &MetricsSet) -> Option<usize> {
+        metric_value_as_usize(metrics, |value| {
+            matches!(value, MetricValue::EndTimestamp(_))
+        })
     }
 }
