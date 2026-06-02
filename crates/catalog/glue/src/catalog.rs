@@ -537,10 +537,14 @@ impl Catalog for GlueCatalog {
     ///
     /// Glue databases may contain a mix of Iceberg and non-Iceberg tables
     /// (e.g. plain Hive tables). Only tables whose `table_type` parameter is
-    /// set to `ICEBERG` (case-insensitive) are returned, matching the
-    /// behavior of the Java and PyIceberg Glue catalogs. The check is done
-    /// in-memory on the `GetTables` response and does not load any Iceberg
-    /// metadata files.
+    /// set to `ICEBERG` (case-insensitive) are returned
+    ///
+    /// # Returns
+    /// A `Result<Vec<TableIdent>>`, which is:
+    /// - `Ok(vec![...])` containing a vector of `TableIdent` instances, each
+    /// representing an Iceberg table within the specified namespace.
+    /// - `Err(...)` if an error occurs during namespace validation or while
+    /// querying the database.
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
         let db_name = validate_namespace(namespace)?;
 
