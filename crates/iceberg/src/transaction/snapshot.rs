@@ -19,7 +19,8 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::ops::RangeFrom;
 
-use futures::future::try_join_all;
+use futures::TryStreamExt;
+use futures::stream::FuturesUnordered;
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -182,28 +183,27 @@ impl<'a> SnapshotProducer<'a> {
             .await?;
 
         let new_files_ref = &new_files;
-        let referenced_files: Vec<String> =
-            try_join_all(manifest_list.consume_entries().into_iter().map(|entry| {
-                let file_io = file_io.clone();
-                async move {
-                    let manifest = runtime
-                        .io()
-                        .spawn(async move { entry.load_manifest(&file_io).await })
-                        .await??;
-                    Ok::<_, Error>(
-                        manifest
-                            .entries()
-                            .iter()
-                            .filter(|e| new_files_ref.contains(e.file_path()) && e.is_alive())
-                            .map(|e| e.file_path().to_string())
-                            .collect::<Vec<_>>(),
-                    )
-                }
-            }))
-            .await?
+        let referenced_files: Vec<String> = manifest_list
+            .consume_entries()
             .into_iter()
-            .flatten()
-            .collect();
+            .map(|entry| {
+                let file_io = file_io.clone();
+                runtime
+                    .io()
+                    .spawn(async move { entry.load_manifest(&file_io).await })
+            })
+            .collect::<FuturesUnordered<_>>()
+            .try_fold(Vec::new(), |mut acc, manifest| async move {
+                acc.extend(
+                    manifest?
+                        .entries()
+                        .iter()
+                        .filter(|e| new_files_ref.contains(e.file_path()) && e.is_alive())
+                        .map(|e| e.file_path().to_string()),
+                );
+                Ok(acc)
+            })
+            .await?;
 
         if !referenced_files.is_empty() {
             return Err(Error::new(
