@@ -774,7 +774,7 @@ impl Catalog for SqlCatalog {
     async fn purge_table(&self, table: &TableIdent) -> Result<()> {
         let table_info = self.load_table(table).await?;
         self.drop_table(table).await?;
-        iceberg::drop_table_data(table_info).await
+        iceberg::drop_table_data(&table_info).await
     }
 
     async fn load_table(&self, identifier: &TableIdent) -> Result<Table> {

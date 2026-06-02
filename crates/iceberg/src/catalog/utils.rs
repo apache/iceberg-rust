@@ -36,7 +36,7 @@ const DELETE_CONCURRENCY: usize = 10;
 /// Data files within manifests are only deleted if the `gc.enabled` table
 /// property is `true` (the default), to avoid corrupting other tables that
 /// may share the same data files.
-pub async fn drop_table_data(table_info: Table) -> Result<()> {
+pub async fn drop_table_data(table_info: &Table) -> Result<()> {
     let mut manifest_lists_to_delete: HashSet<String> = HashSet::new();
     let mut manifests_to_delete: HashSet<String> = HashSet::new();
 

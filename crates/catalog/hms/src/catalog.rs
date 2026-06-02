@@ -624,7 +624,7 @@ impl Catalog for HmsCatalog {
     async fn purge_table(&self, table: &TableIdent) -> Result<()> {
         let table_info = self.load_table(table).await?;
         self.drop_table(table).await?;
-        iceberg::drop_table_data(table_info).await
+        iceberg::drop_table_data(&table_info).await
     }
 
     /// Asynchronously checks the existence of a specified table
