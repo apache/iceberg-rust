@@ -1355,7 +1355,7 @@ pub(super) mod _serde {
 #[cfg(test)]
 mod test {
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::Path;
 
     use apache_avro::{Reader, Schema};
     use tempfile::TempDir;
@@ -1940,7 +1940,7 @@ mod test {
         temp_dir.close().unwrap();
     }
 
-    async fn file_writer(path: &PathBuf, io: FileIO) -> Box<dyn FileWrite> {
+    async fn file_writer(path: &Path, io: FileIO) -> Box<dyn FileWrite> {
         io.new_output(path.to_str().unwrap())
             .unwrap()
             .writer()
