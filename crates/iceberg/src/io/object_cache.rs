@@ -277,10 +277,8 @@ mod tests {
             let current_partition_spec = self.table.metadata().default_partition_spec();
 
             // Write data files
-            let output_file = self.next_manifest_file();
             let mut writer = ManifestWriterBuilder::new(
-                output_file.writer().await.unwrap(),
-                output_file.location(),
+                self.next_manifest_file(),
                 Some(current_snapshot.snapshot_id()),
                 None,
                 current_schema.clone(),

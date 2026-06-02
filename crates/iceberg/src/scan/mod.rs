@@ -822,10 +822,8 @@ pub mod tests {
             // Write the data files first, then use the file size in the manifest entries
             let parquet_file_size = self.write_parquet_data_files();
 
-            let output_file = self.next_manifest_file();
             let mut writer = ManifestWriterBuilder::new(
-                output_file.writer().await.unwrap(),
-                output_file.location(),
+                self.next_manifest_file(),
                 Some(current_snapshot.snapshot_id()),
                 None,
                 current_schema.clone(),
@@ -1048,10 +1046,8 @@ pub mod tests {
             let parquet_file_size = self.write_parquet_data_files();
 
             // Write data files using an empty partition for unpartitioned tables.
-            let output_file = self.next_manifest_file();
             let mut writer = ManifestWriterBuilder::new(
-                output_file.writer().await.unwrap(),
-                output_file.location(),
+                self.next_manifest_file(),
                 Some(current_snapshot.snapshot_id()),
                 None,
                 current_schema.clone(),
@@ -1155,11 +1151,9 @@ pub mod tests {
             let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
             let current_partition_spec = self.table.metadata().default_partition_spec();
 
-            let output_file = self.next_manifest_file();
             // 1. Write DATA manifest with MULTIPLE entries to fill buffer
             let mut writer = ManifestWriterBuilder::new(
-                output_file.writer().await.unwrap(),
-                output_file.location(),
+                self.next_manifest_file(),
                 Some(current_snapshot.snapshot_id()),
                 None,
                 current_schema.clone(),
@@ -1192,11 +1186,9 @@ pub mod tests {
             }
             let data_manifest = writer.write_manifest_file().await.unwrap();
 
-            let output_file = self.next_manifest_file();
             // 2. Write DELETE manifest
             let mut writer = ManifestWriterBuilder::new(
-                output_file.writer().await.unwrap(),
-                output_file.location(),
+                self.next_manifest_file(),
                 Some(current_snapshot.snapshot_id()),
                 None,
                 current_schema.clone(),
