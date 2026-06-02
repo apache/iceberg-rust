@@ -27,7 +27,7 @@ use super::{
     UNASSIGNED_SEQUENCE_NUMBER,
 };
 use crate::error::Result;
-use crate::io::OutputFile;
+use crate::io::FileWrite;
 use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
 use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2};
 use crate::spec::{
@@ -42,7 +42,8 @@ const UNASSIGNED_SNAPSHOT_ID: i64 = -1;
 
 /// The builder used to create a [`ManifestWriter`].
 pub struct ManifestWriterBuilder {
-    output: OutputFile,
+    writer: Box<dyn FileWrite>,
+    location: String,
     snapshot_id: Option<i64>,
     key_metadata: Option<Vec<u8>>,
     schema: SchemaRef,
@@ -52,14 +53,16 @@ pub struct ManifestWriterBuilder {
 impl ManifestWriterBuilder {
     /// Create a new builder.
     pub fn new(
-        output: OutputFile,
+        writer: Box<dyn FileWrite>,
+        location: impl Into<String>,
         snapshot_id: Option<i64>,
         key_metadata: Option<Vec<u8>>,
         schema: SchemaRef,
         partition_spec: PartitionSpec,
     ) -> Self {
         Self {
-            output,
+            writer,
+            location: location.into(),
             snapshot_id,
             key_metadata,
             schema,
@@ -77,7 +80,8 @@ impl ManifestWriterBuilder {
             .content(ManifestContentType::Data)
             .build();
         ManifestWriter::new(
-            self.output,
+            self.writer,
+            self.location,
             self.snapshot_id,
             self.key_metadata,
             metadata,
@@ -95,7 +99,8 @@ impl ManifestWriterBuilder {
             .content(ManifestContentType::Data)
             .build();
         ManifestWriter::new(
-            self.output,
+            self.writer,
+            self.location,
             self.snapshot_id,
             self.key_metadata,
             metadata,
@@ -113,7 +118,8 @@ impl ManifestWriterBuilder {
             .content(ManifestContentType::Deletes)
             .build();
         ManifestWriter::new(
-            self.output,
+            self.writer,
+            self.location,
             self.snapshot_id,
             self.key_metadata,
             metadata,
@@ -131,7 +137,8 @@ impl ManifestWriterBuilder {
             .content(ManifestContentType::Data)
             .build();
         ManifestWriter::new(
-            self.output,
+            self.writer,
+            self.location,
             self.snapshot_id,
             self.key_metadata,
             metadata,
@@ -151,7 +158,8 @@ impl ManifestWriterBuilder {
             .content(ManifestContentType::Deletes)
             .build();
         ManifestWriter::new(
-            self.output,
+            self.writer,
+            self.location,
             self.snapshot_id,
             self.key_metadata,
             metadata,
@@ -162,7 +170,8 @@ impl ManifestWriterBuilder {
 
 /// A manifest writer.
 pub struct ManifestWriter {
-    output: OutputFile,
+    writer: Box<dyn FileWrite>,
+    location: String,
 
     snapshot_id: Option<i64>,
 
@@ -186,14 +195,16 @@ pub struct ManifestWriter {
 impl ManifestWriter {
     /// Create a new manifest writer.
     pub(crate) fn new(
-        output: OutputFile,
+        writer: Box<dyn FileWrite>,
+        location: String,
         snapshot_id: Option<i64>,
         key_metadata: Option<Vec<u8>>,
         metadata: ManifestMetadata,
         first_row_id: Option<u64>,
     ) -> Self {
         Self {
-            output,
+            writer,
+            location,
             snapshot_id,
             added_files: 0,
             added_rows: 0,
@@ -467,10 +478,11 @@ impl ManifestWriter {
 
         let content = avro_writer.into_inner()?;
         let length = content.len();
-        self.output.write(Bytes::from(content)).await?;
+        self.writer.write(Bytes::from(content)).await?;
+        self.writer.close().await?;
 
         Ok(ManifestFile {
-            manifest_path: self.output.location().to_string(),
+            manifest_path: self.location,
             manifest_length: length as i64,
             partition_spec_id: self.metadata.partition_spec.spec_id(),
             content: self.metadata.content,
@@ -691,7 +703,8 @@ mod tests {
         let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
-            output_file,
+            output_file.writer().await.unwrap(),
+            output_file.location(),
             Some(3),
             None,
             metadata.schema.clone(),
@@ -779,7 +792,8 @@ mod tests {
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
 
         let mut writer = ManifestWriterBuilder::new(
-            output_file,
+            output_file.writer().await.unwrap(),
+            output_file.location(),
             Some(1),
             None,
             schema.clone(),

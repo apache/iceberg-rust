@@ -267,7 +267,8 @@ mod tests {
         let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
-            output_file,
+            output_file.writer().await.unwrap(),
+            output_file.location(),
             Some(1),
             None,
             metadata.schema.clone(),
@@ -452,7 +453,8 @@ mod tests {
         let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
-            output_file,
+            output_file.writer().await.unwrap(),
+            output_file.location(),
             Some(2),
             None,
             metadata.schema.clone(),
@@ -549,7 +551,8 @@ mod tests {
         let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
-            output_file,
+            output_file.writer().await.unwrap(),
+            output_file.location(),
             Some(3),
             None,
             metadata.schema.clone(),
@@ -658,7 +661,8 @@ mod tests {
         let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
-            output_file,
+            output_file.writer().await.unwrap(),
+            output_file.location(),
             Some(2),
             None,
             metadata.schema.clone(),
@@ -766,7 +770,8 @@ mod tests {
         let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
-            output_file,
+            output_file.writer().await.unwrap(),
+            output_file.location(),
             Some(2),
             None,
             metadata.schema.clone(),
@@ -1045,7 +1050,8 @@ mod tests {
         let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
-            output_file,
+            output_file.writer().await.unwrap(),
+            output_file.location(),
             Some(1),
             None,
             metadata.schema.clone(),

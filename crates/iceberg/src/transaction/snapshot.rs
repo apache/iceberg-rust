@@ -242,7 +242,10 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_id
     }
 
-    fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
+    async fn new_manifest_writer(
+        &mut self,
+        content: ManifestContentType,
+    ) -> Result<ManifestWriter> {
         let new_manifest_path = format!(
             "{}/{}/{}-m{}.{}",
             self.table.metadata().location(),
@@ -253,7 +256,8 @@ impl<'a> SnapshotProducer<'a> {
         );
         let output_file = self.table.file_io().new_output(new_manifest_path)?;
         let builder = ManifestWriterBuilder::new(
-            output_file,
+            output_file.writer().await?,
+            output_file.location(),
             Some(self.snapshot_id),
             self.key_metadata.clone(),
             self.table.metadata().current_schema().clone(),
@@ -331,7 +335,7 @@ impl<'a> SnapshotProducer<'a> {
                 builder.build()
             }
         });
-        let mut writer = self.new_manifest_writer(ManifestContentType::Data)?;
+        let mut writer = self.new_manifest_writer(ManifestContentType::Data).await?;
         for entry in manifest_entries {
             writer.add_entry(entry)?;
         }
