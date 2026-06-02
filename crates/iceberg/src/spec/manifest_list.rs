@@ -18,7 +18,6 @@
 //! ManifestList for Iceberg.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::str::FromStr;
 
 use apache_avro::types::Value;
@@ -1397,7 +1396,6 @@ mod test {
         let file_io = FileIO::new_with_fs();
 
         let tmp_dir = TempDir::new().unwrap();
-        let tmp_dir = TempDir::new().unwrap();
         let full_path = tmp_dir.path().join("simple_manifest_list_v1.avro");
         let file_writer = file_writer(&full_path, file_io).await;
 
@@ -1690,8 +1688,8 @@ mod test {
         let io = FileIO::new_with_fs();
         let file_writer = file_writer(&path, io).await;
 
-        let mut writer = ManifestListWriter::v1(writer, 1646658105718557341, Some(0));
-        file_writer
+        let mut writer = ManifestListWriter::v1(file_writer, 1646658105718557341, Some(0));
+        writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
         writer.close().await.unwrap();
