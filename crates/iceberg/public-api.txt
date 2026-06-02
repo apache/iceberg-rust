@@ -3668,5 +3668,5 @@ pub type iceberg::memory::MemoryCatalogBuilder::C = iceberg::memory::MemoryCatal
 pub fn iceberg::memory::MemoryCatalogBuilder::load(self, name: impl core::convert::Into<alloc::string::String>, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> impl core::future::future::Future<Output = iceberg::Result<Self::C>> + core::marker::Send
 pub fn iceberg::memory::MemoryCatalogBuilder::with_runtime(self, runtime: iceberg::Runtime) -> Self
 pub fn iceberg::memory::MemoryCatalogBuilder::with_storage_factory(self, storage_factory: alloc::sync::Arc<dyn iceberg::io::StorageFactory>) -> Self
-pub async fn iceberg::drop_table_data(table_info: iceberg::table::Table) -> iceberg::Result<()>
+pub async fn iceberg::drop_table_data(table_info: &iceberg::table::Table) -> iceberg::Result<()>
 pub type iceberg::Result<T> = core::result::Result<T, iceberg::Error>
