@@ -38,11 +38,33 @@ permissions:
   contents: read
 
 jobs:
+  # The `secrets` context is not available in job-level `if:` conditions, so we
+  # read the secret in a step (where `secrets` is allowed) and expose the result
+  # as an output. Downstream jobs gate on this output. Without this gate, jobs
+  # that reference `secrets.*` directly in `if:` would always be skipped, which
+  # GitHub reports as "No jobs were run".
+  check-secrets:
+    name: Check HF secrets availability
+    runs-on: ubuntu-latest
+    outputs:
+      has_secrets: ${{ steps.check.outputs.has_secrets }}
+    steps:
+      - id: check
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -n "${HF_TOKEN}" ]; then
+            echo "has_secrets=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_secrets=false" >> "$GITHUB_OUTPUT"
+            echo "HF_TOKEN is not available; downstream jobs will be skipped (e.g. PRs from forks)."
+          fi
+
   hf-integration:
     name: HuggingFace Hub integration tests
     runs-on: ubuntu-latest
-    # Skip the job entirely when HF secrets are not available (e.g. PRs from forks).
-    if: ${{ secrets.HF_TOKEN != '' }}
+    needs: check-secrets
+    if: needs.check-secrets.outputs.has_secrets == 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -73,8 +95,8 @@ jobs:
   cdc-python:
     name: CDC and HuggingFace Python tests
     runs-on: ubuntu-latest
-    # Skip when HF secrets are not available (e.g. PRs from forks).
-    if: ${{ secrets.HF_TOKEN != '' }}
+    needs: check-secrets
+    if: needs.check-secrets.outputs.has_secrets == 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
