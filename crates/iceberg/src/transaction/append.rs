@@ -161,8 +161,8 @@ mod tests {
     use crate::io::FileIO;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, ManifestEntry,
-        ManifestListReader, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, SnapshotRef,
-        Struct, TableMetadata,
+        ManifestListWriter, ManifestStatus, ManifestWriterBuilder, SnapshotRef, Struct,
+        TableMetadata,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
