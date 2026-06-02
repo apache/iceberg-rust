@@ -499,8 +499,14 @@ impl Literal {
                 (PrimitiveType::Uuid, JsonValue::String(s)) => Ok(Some(Literal::Primitive(
                     PrimitiveLiteral::UInt128(Uuid::parse_str(&s)?.as_u128()),
                 ))),
-                (PrimitiveType::Fixed(_), JsonValue::String(_)) => todo!(),
-                (PrimitiveType::Binary, JsonValue::String(_)) => todo!(),
+                (PrimitiveType::Fixed(size), JsonValue::String(s)) => {
+                    let bytes = decode_hex_bytes(&s)?;
+                    validate_fixed_size(bytes.len(), *size)?;
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Binary(bytes))))
+                }
+                (PrimitiveType::Binary, JsonValue::String(s)) => Ok(Some(Literal::Primitive(
+                    PrimitiveLiteral::Binary(decode_hex_bytes(&s)?),
+                ))),
                 (
                     PrimitiveType::Decimal {
                         precision: _,
@@ -659,13 +665,13 @@ impl Literal {
                 (_, PrimitiveLiteral::UInt128(val)) => {
                     Ok(JsonValue::String(Uuid::from_u128(val).to_string()))
                 }
-                (_, PrimitiveLiteral::Binary(val)) => Ok(JsonValue::String(val.iter().fold(
-                    String::new(),
-                    |mut acc, x| {
-                        acc.push_str(&format!("{x:x}"));
-                        acc
-                    },
-                ))),
+                (PrimitiveType::Fixed(size), PrimitiveLiteral::Binary(val)) => {
+                    validate_fixed_size(val.len(), *size)?;
+                    Ok(JsonValue::String(encode_hex_bytes(&val)))
+                }
+                (PrimitiveType::Binary, PrimitiveLiteral::Binary(val)) => {
+                    Ok(JsonValue::String(encode_hex_bytes(&val)))
+                }
                 (_, PrimitiveLiteral::Int128(val)) => match r#type {
                     Type::Primitive(PrimitiveType::Decimal {
                         precision: _precision,
@@ -742,5 +748,58 @@ impl Literal {
             },
             _ => unimplemented!(),
         }
+    }
+}
+
+fn decode_hex_bytes(value: &str) -> Result<Vec<u8>> {
+    if !value.len().is_multiple_of(2) {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Hex string must have an even number of characters: {value:?}"),
+        ));
+    }
+
+    value
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|chunk| {
+            let high = decode_hex_digit(chunk[0], value)?;
+            let low = decode_hex_digit(chunk[1], value)?;
+            Ok((high << 4) | low)
+        })
+        .collect()
+}
+
+fn decode_hex_digit(digit: u8, value: &str) -> Result<u8> {
+    match digit {
+        b'0'..=b'9' => Ok(digit - b'0'),
+        b'a'..=b'f' => Ok(digit - b'a' + 10),
+        b'A'..=b'F' => Ok(digit - b'A' + 10),
+        _ => Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Hex string contains invalid character: {value:?}"),
+        )),
+    }
+}
+
+fn encode_hex_bytes(bytes: &[u8]) -> String {
+    const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
+
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX_DIGITS[(byte >> 4) as usize] as char);
+        output.push(HEX_DIGITS[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+fn validate_fixed_size(actual: usize, expected: u64) -> Result<()> {
+    if actual as u64 == expected {
+        Ok(())
+    } else {
+        Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Fixed type must be exactly {expected} bytes, got {actual}"),
+        ))
     }
 }

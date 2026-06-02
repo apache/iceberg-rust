@@ -21,6 +21,7 @@ edition.workspace = true
 homepage.workspace = true
 license.workspace = true
 name = "iceberg-playground"
+publish = false
 readme = "README.md"
 repository.workspace = true
 rust-version.workspace = true
