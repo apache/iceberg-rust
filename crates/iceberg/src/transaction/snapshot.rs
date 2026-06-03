@@ -120,10 +120,7 @@ pub(crate) struct SnapshotProducer<'a> {
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
     manifest_counter: RangeFrom<u64>,
-    // Running cursor for assigning manifest-level first_row_id to new v3 data manifests.
-    // Seeded from TableMetadata.next_row_id on construction; advances as each new data
-    // manifest is created so the snapshot producer and the ManifestListWriter agree on
-    // per-manifest first_row_id values.
+    // v3 row-lineage cursor seeded from TableMetadata.next_row_id.
     next_data_manifest_first_row_id: Option<u64>,
 }
 

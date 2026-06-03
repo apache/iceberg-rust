@@ -81,9 +81,6 @@ impl ManifestWriterBuilder {
     }
 
     /// Seed the manifest-level `first_row_id` for a v3 data manifest.
-    ///
-    /// When set, ADDED entries whose `DataFile.first_row_id` is `None` are stamped with
-    /// `first_row_id + cumulative record_count of prior ADDED entries`.
     pub fn with_first_row_id(mut self, first_row_id: u64) -> Self {
         self.first_row_id = Some(first_row_id);
         self
@@ -144,11 +141,6 @@ impl ManifestWriterBuilder {
     }
 
     /// Build a [`ManifestWriter`] for format version 3, data content.
-    ///
-    /// If `with_first_row_id` was called on the builder, the writer assigns each ADDED
-    /// `DataFile.first_row_id` from a running cursor seeded with that value. Otherwise
-    /// the manifest-level `first_row_id` is assigned by the [`ManifestListWriter`] when
-    /// the manifest is added to the list and per-file ids are left as `None`.
     pub fn build_v3_data(self) -> ManifestWriter {
         let metadata = ManifestMetadata::builder()
             .schema_id(self.schema.schema_id())
@@ -909,8 +901,6 @@ mod tests {
         }
     }
 
-    // B1: v3 data manifest, first_row_id=Some(100), three ADDED files (10,20,30)
-    //  -> per-file first_row_id = 100, 110, 130; manifest added_rows_count = 60.
     #[tokio::test]
     async fn test_b1_writer_assigns_per_file_first_row_id() {
         let schema = simple_v3_schema();
@@ -952,7 +942,6 @@ mod tests {
         assert_eq!(ids, vec![Some(100), Some(110), Some(130)]);
     }
 
-    // B3: v3 data manifest, ADDED file already has first_row_id=Some(500) -> preserved.
     #[tokio::test]
     async fn test_b3_writer_preserves_preset_first_row_id() {
         let schema = simple_v3_schema();
@@ -988,7 +977,6 @@ mod tests {
         assert_eq!(ids, vec![Some(500), Some(110)]);
     }
 
-    // B4: v3 delete manifest never assigns per-file first_row_id.
     #[tokio::test]
     async fn test_b4_v3_delete_manifest_never_assigns_per_file_id() {
         let schema = simple_v3_schema();
@@ -1021,8 +1009,6 @@ mod tests {
         );
     }
 
-    // B6: cursor near i64::MAX cannot be encoded as DataFile.first_row_id -> error.
-    // (DataFile.first_row_id is i64 per spec; we use u64 internally but range-check on assign.)
     #[tokio::test]
     async fn test_b6_writer_first_row_id_overflow() {
         let schema = simple_v3_schema();

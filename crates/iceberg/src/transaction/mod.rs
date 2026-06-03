@@ -633,7 +633,6 @@ mod test_row_lineage {
         let manifest_file = &manifest_list.entries()[1];
         assert_eq!(manifest_file.first_row_id, Some(30));
 
-        // Per-DataFile.first_row_id must be stamped on the new manifest: 30 then 30+17=47.
         let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
         let per_file_ids: Vec<Option<i64>> = manifest
             .entries()
@@ -642,7 +641,6 @@ mod test_row_lineage {
             .collect();
         assert_eq!(per_file_ids, vec![Some(30), Some(47)]);
 
-        // Per-DataFile.first_row_id on the first snapshot's manifest should be 0.
         let first_manifest = manifest_list.entries()[0]
             .load_manifest(table.file_io())
             .await
