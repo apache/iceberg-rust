@@ -341,9 +341,41 @@ impl ManifestListWriter {
         match manifest.content {
             ManifestContentType::Data => {
                 match (self.next_row_id, manifest.first_row_id) {
-                    (Some(_), Some(_)) => {
-                        // Case: Manifest with already assigned first row ID.
-                        // No need to increase next_row_id, as this manifest is already assigned.
+                    (Some(writer_next_row_id), Some(manifest_first_row_id)) => {
+                        // Carry-over manifests have a first-row-id strictly less than the
+                        // writer cursor (cursor seeded with TableMetadata.next_row_id which
+                        // is the high-water mark of all prior assignments). Leave them alone.
+                        //
+                        // Newly created data manifests pre-assigned upstream by the snapshot
+                        // producer (ManifestWriterBuilder::with_first_row_id) must match the
+                        // current cursor; advance the cursor by their row counts so subsequent
+                        // unassigned manifests pick up the right value.
+                        if manifest_first_row_id < writer_next_row_id {
+                            // carry-over, no-op
+                        } else if manifest_first_row_id == writer_next_row_id {
+                            let (existing_rows_count, added_rows_count) =
+                                require_row_counts_in_manifest(manifest)?;
+                            self.next_row_id = writer_next_row_id
+                                .checked_add(existing_rows_count)
+                                .and_then(|sum| sum.checked_add(added_rows_count))
+                                .ok_or_else(|| {
+                                    Error::new(
+                                        ErrorKind::DataInvalid,
+                                        format!(
+                                            "Row ID overflow when computing next row ID for Manifest {}. Next Row ID: {writer_next_row_id}, Existing Rows Count: {existing_rows_count}, Added Rows Count: {added_rows_count}",
+                                            manifest.manifest_path
+                                        ),
+                                    )
+                                }).map(Some)?;
+                        } else {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "first-row-id for Manifest {} is ahead of writer cursor (manifest={manifest_first_row_id}, writer next-row-id={writer_next_row_id}).",
+                                    manifest.manifest_path
+                                ),
+                            ));
+                        }
                     }
                     (None, Some(manifest_first_row_id)) => {
                         // Case: Assigned first row ID for data manifest, but the writer does not have a next-row-id assigned.
@@ -888,6 +920,40 @@ impl ManifestFile {
         // Let entries inherit values from the manifest list entry.
         for entry in &mut entries {
             entry.inherit_data(self);
+        }
+
+        // v3 row lineage: assign per-DataFile.first_row_id by inheritance for ADDED/EXISTING
+        // entries in a v3 data manifest whose manifest-level first_row_id is set. Carry-over
+        // values on the DataFile are preserved; cursor advances past them.
+        if matches!(metadata.format_version, FormatVersion::V3)
+            && metadata.content == ManifestContentType::Data
+            && let Some(mut cursor) = self.first_row_id
+        {
+            for entry in &mut entries {
+                if entry.status == crate::spec::ManifestStatus::Deleted {
+                    continue;
+                }
+                let record_count = entry.data_file.record_count;
+                if entry.data_file.first_row_id.is_none() {
+                    entry.data_file.first_row_id =
+                        Some(i64::try_from(cursor).map_err(|_| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Row ID {cursor} exceeds i64::MAX and cannot be encoded as DataFile.first_row_id"
+                                ),
+                            )
+                        })?);
+                }
+                cursor = cursor.checked_add(record_count).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Row ID overflow inheriting DataFile.first_row_id (cursor={cursor}, record_count={record_count})"
+                        ),
+                    )
+                })?;
+            }
         }
 
         Ok(Manifest::new(metadata, entries))
@@ -2078,5 +2144,167 @@ mod test {
         assert_eq!(v2_manifest.deleted_rows_count, Some(0));
         assert_eq!(v2_manifest.partitions, None);
         assert_eq!(v2_manifest.key_metadata, None);
+    }
+
+    // Helpers for C-series reader-inheritance tests.
+    async fn write_v3_data_manifest_with_entries(
+        path: &std::path::Path,
+        entries: Vec<crate::spec::ManifestEntry>,
+    ) -> ManifestFile {
+        use std::sync::Arc;
+
+        use crate::spec::{
+            ManifestWriterBuilder, NestedField, PartitionSpec, PrimitiveType, Schema, Type,
+        };
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![Arc::new(NestedField::optional(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Long),
+                ))])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+        let output_file = FileIO::new_with_fs()
+            .new_output(path.to_str().unwrap())
+            .unwrap();
+        let mut writer =
+            ManifestWriterBuilder::new(output_file, Some(42), None, schema, partition_spec)
+                .build_v3_data();
+        for entry in entries {
+            writer.add_entry(entry).unwrap();
+        }
+        writer.write_manifest_file().await.unwrap()
+    }
+
+    fn data_entry(
+        status: crate::spec::ManifestStatus,
+        path: &str,
+        record_count: u64,
+        sequence_number: Option<i64>,
+        preset_first_row_id: Option<i64>,
+    ) -> crate::spec::ManifestEntry {
+        use std::collections::HashMap;
+
+        use crate::spec::{
+            DataContentType, DataFile, DataFileFormat, ManifestEntry, ManifestStatus, Struct,
+        };
+        let _ = status;
+        ManifestEntry {
+            status: ManifestStatus::Added,
+            snapshot_id: None,
+            sequence_number,
+            file_sequence_number: None,
+            data_file: DataFile {
+                content: DataContentType::Data,
+                file_path: path.to_string(),
+                file_format: DataFileFormat::Parquet,
+                partition: Struct::empty(),
+                record_count,
+                file_size_in_bytes: 100,
+                column_sizes: HashMap::new(),
+                value_counts: HashMap::new(),
+                null_value_counts: HashMap::new(),
+                nan_value_counts: HashMap::new(),
+                lower_bounds: HashMap::new(),
+                upper_bounds: HashMap::new(),
+                key_metadata: None,
+                split_offsets: None,
+                equality_ids: None,
+                sort_order_id: None,
+                partition_spec_id: 0,
+                first_row_id: preset_first_row_id,
+                referenced_data_file: None,
+                content_offset: None,
+                content_size_in_bytes: None,
+            },
+        }
+    }
+
+    // C1: manifest-level first_row_id=Some(100), per-file ids None
+    //  -> readers see 100, 110, 130.
+    #[tokio::test]
+    async fn test_c1_reader_inherits_per_file_first_row_id() {
+        use crate::spec::ManifestStatus;
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("c1.avro");
+        let mut manifest_file = write_v3_data_manifest_with_entries(&path, vec![
+            data_entry(ManifestStatus::Added, "f1.parquet", 10, None, None),
+            data_entry(ManifestStatus::Added, "f2.parquet", 20, None, None),
+            data_entry(ManifestStatus::Added, "f3.parquet", 30, None, None),
+        ])
+        .await;
+        manifest_file.first_row_id = Some(100);
+
+        let manifest = manifest_file
+            .load_manifest(&FileIO::new_with_fs())
+            .await
+            .unwrap();
+        let ids: Vec<Option<i64>> = manifest
+            .entries()
+            .iter()
+            .map(|e| e.data_file().first_row_id())
+            .collect();
+        assert_eq!(ids, vec![Some(100), Some(110), Some(130)]);
+    }
+
+    // C2: per-file first_row_id already set -> preserved on read; cursor still advances past it.
+    #[tokio::test]
+    async fn test_c2_reader_preserves_preset_per_file_id() {
+        use crate::spec::ManifestStatus;
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("c2.avro");
+        let mut manifest_file = write_v3_data_manifest_with_entries(&path, vec![
+            data_entry(ManifestStatus::Added, "f1.parquet", 10, None, Some(7)),
+            data_entry(ManifestStatus::Added, "f2.parquet", 20, None, None),
+        ])
+        .await;
+        manifest_file.first_row_id = Some(100);
+
+        let manifest = manifest_file
+            .load_manifest(&FileIO::new_with_fs())
+            .await
+            .unwrap();
+        let ids: Vec<Option<i64>> = manifest
+            .entries()
+            .iter()
+            .map(|e| e.data_file().first_row_id())
+            .collect();
+        // First file kept its preset 7; second file gets 100 + 10 = 110 (cursor advanced past first).
+        assert_eq!(ids, vec![Some(7), Some(110)]);
+    }
+
+    // C4: manifest-level first_row_id=None -> no inheritance; per-file ids stay None.
+    #[tokio::test]
+    async fn test_c4_reader_no_inheritance_when_manifest_first_row_id_unset() {
+        use crate::spec::ManifestStatus;
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("c4.avro");
+        let mut manifest_file = write_v3_data_manifest_with_entries(&path, vec![data_entry(
+            ManifestStatus::Added,
+            "f1.parquet",
+            10,
+            None,
+            None,
+        )])
+        .await;
+        manifest_file.first_row_id = None;
+
+        let manifest = manifest_file
+            .load_manifest(&FileIO::new_with_fs())
+            .await
+            .unwrap();
+        assert!(
+            manifest
+                .entries()
+                .iter()
+                .all(|e| e.data_file().first_row_id().is_none())
+        );
     }
 }
