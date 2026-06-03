@@ -27,8 +27,7 @@ use typed_builder::TypedBuilder;
 
 use super::table_metadata::SnapshotLog;
 use crate::error::{Result, timestamp_ms_to_utc};
-use crate::io::FileIO;
-use crate::spec::{ManifestList, ManifestListReader, SchemaId, SchemaRef, TableMetadata};
+use crate::spec::{SchemaId, SchemaRef, TableMetadata};
 use crate::{Error, ErrorKind};
 
 /// The ref name of the main branch of the table.
@@ -192,18 +191,6 @@ impl Snapshot {
             Some(id) => table_metadata.snapshot_by_id(id).cloned(),
             None => None,
         }
-    }
-
-    /// Load manifest list.
-    #[deprecated(since = "0.9.0", note = "Use `Table::manifest_list_reader()` instead")]
-    pub async fn load_manifest_list(
-        &self,
-        file_io: &FileIO,
-        table_metadata: &TableMetadata,
-    ) -> Result<ManifestList> {
-        ManifestListReader::new(self, file_io, table_metadata, None)
-            .load()
-            .await
     }
 
     #[allow(dead_code)]
@@ -529,7 +516,7 @@ mod tests {
     use crate::spec::manifest_list::{ManifestList, ManifestListWriter};
     use crate::spec::snapshot::_serde::SnapshotV1;
     use crate::spec::snapshot::{Operation, Snapshot, Summary};
-    use crate::spec::{ManifestListReader, TableMetadata};
+    use crate::spec::{ManifestListReader, SnapshotRef, TableMetadata, TableMetadataRef};
 
     const ENCRYPTION_TEST_V3_METADATA: &str = r#"{
         "format-version": 3,
@@ -555,8 +542,8 @@ mod tests {
         "next-row-id": 0
     }"#;
 
-    fn encryption_test_metadata() -> TableMetadata {
-        serde_json::from_str(ENCRYPTION_TEST_V3_METADATA).unwrap()
+    fn encryption_test_metadata() -> TableMetadataRef {
+        TableMetadataRef::new(serde_json::from_str(ENCRYPTION_TEST_V3_METADATA).unwrap())
     }
 
     fn encryption_test_kms() -> Arc<dyn KeyManagementClient> {
@@ -805,7 +792,7 @@ mod tests {
         );
         let metadata = encryption_test_metadata();
 
-        let err = ManifestListReader::new(&snapshot, &io, &metadata, None)
+        let err = ManifestListReader::new(SnapshotRef::new(snapshot), io, metadata, None)
             .load()
             .await
             .unwrap_err();
@@ -838,7 +825,7 @@ mod tests {
         let metadata = encryption_test_metadata();
 
         let manifest_list: ManifestList =
-            ManifestListReader::new(&snapshot, &io, &metadata, Some(&mgr))
+            ManifestListReader::new(SnapshotRef::new(snapshot), io, metadata, Some(Arc::new(mgr)))
                 .load()
                 .await
                 .unwrap();

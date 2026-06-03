@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 use std::str::FromStr;
-
+use std::sync::Arc;
 use apache_avro::types::Value;
 use apache_avro::{Reader, Writer, from_value};
 use bytes::Bytes;
@@ -28,8 +28,8 @@ use serde_derive::{Deserialize, Serialize};
 
 use self::_const_schema::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2};
 use self::_serde::{ManifestFileV1, ManifestFileV2};
-use super::{FormatVersion, Manifest, Snapshot, TableMetadata};
 use crate::encryption::{EncryptedInputFile, EncryptionManager};
+use super::{FormatVersion, Manifest, SnapshotRef, TableMetadataRef};
 use crate::error::Result;
 use crate::io::{FileIO, OutputFile};
 use crate::spec::manifest_list::_const_schema::MANIFEST_LIST_AVRO_SCHEMA_V3;
@@ -93,19 +93,19 @@ impl ManifestList {
 
 /// A manifest list reader that encapsulates the logic for loading and parsing a [`ManifestList`]
 /// from a snapshot.
-pub struct ManifestListReader<'a> {
-    snapshot: &'a Snapshot,
-    file_io: &'a FileIO,
-    table_metadata: &'a TableMetadata,
-    encryption_manager: Option<&'a EncryptionManager>,
+pub struct ManifestListReader {
+    snapshot: SnapshotRef,
+    file_io: FileIO,
+    table_metadata: TableMetadataRef,
+    encryption_manager: Option<Arc<EncryptionManager>>,
 }
 
-impl<'a> ManifestListReader<'a> {
+impl ManifestListReader {
     pub(crate) fn new(
-        snapshot: &'a Snapshot,
-        file_io: &'a FileIO,
-        table_metadata: &'a TableMetadata,
-        encryption_manager: Option<&'a EncryptionManager>,
+        snapshot: SnapshotRef,
+        file_io: FileIO,
+        table_metadata: TableMetadataRef,
+        encryption_manager: Option<Arc<EncryptionManager>>,
     ) -> Self {
         Self {
             snapshot,
@@ -119,7 +119,7 @@ impl<'a> ManifestListReader<'a> {
     pub async fn load(&self) -> Result<ManifestList> {
         let manifest_list_content = match (
             self.snapshot.encryption_key_id(),
-            self.encryption_manager,
+            self.encryption_manager.clone(),
         ) {
             (Some(_), None) => {
                 return Err(Error::new(

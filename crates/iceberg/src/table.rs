@@ -27,9 +27,7 @@ use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
 use crate::runtime::Runtime;
 use crate::scan::TableScanBuilder;
-use crate::spec::{
-    FormatVersion, ManifestListReader, SchemaRef, Snapshot, TableMetadata, TableMetadataRef,
-};
+use crate::spec::{FormatVersion, ManifestListReader, SchemaRef, SnapshotRef, TableMetadata, TableMetadataRef};
 use crate::{Error, ErrorKind, Result, TableIdent};
 
 /// Builder to create table scan.
@@ -303,12 +301,12 @@ impl Table {
     }
 
     /// Creates a [`ManifestListReader`] for the given snapshot.
-    pub fn manifest_list_reader<'a>(&'a self, snapshot: &'a Snapshot) -> ManifestListReader<'a> {
+    pub fn manifest_list_reader(&self, snapshot: &SnapshotRef) -> ManifestListReader {
         ManifestListReader::new(
-            snapshot,
-            &self.file_io,
-            &self.metadata,
-            self.encryption_manager.as_deref(),
+            snapshot.clone(),
+            self.file_io.clone(),
+            self.metadata.clone(),
+            self.encryption_manager.clone(),
         )
     }
 

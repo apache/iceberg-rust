@@ -22,9 +22,8 @@ use std::collections::HashSet;
 use futures::{TryStreamExt, stream};
 
 use crate::Result;
-use crate::encryption::EncryptionManager;
 use crate::io::FileIO;
-use crate::spec::{ManifestListReader, TableMetadata};
+use crate::table::Table;
 
 const DELETE_CONCURRENCY: usize = 10;
 
@@ -37,21 +36,16 @@ const DELETE_CONCURRENCY: usize = 10;
 /// Data files within manifests are only deleted if the `gc.enabled` table
 /// property is `true` (the default), to avoid corrupting other tables that
 /// may share the same data files.
-pub async fn drop_table_data(
-    io: &FileIO,
-    metadata: &TableMetadata,
-    metadata_location: Option<&str>,
-    encryption_manager: Option<&EncryptionManager>,
-) -> Result<()> {
+pub async fn drop_table_data(table_info: &Table) -> Result<()> {
     let mut manifest_lists_to_delete: HashSet<String> = HashSet::new();
     let mut manifests_to_delete: HashSet<String> = HashSet::new();
 
+    let metadata = table_info.metadata_ref();
+    let io = table_info.file_io();
     // Load all manifest lists concurrently
     let results: Vec<_> =
         futures::future::try_join_all(metadata.snapshots().map(|snapshot| async {
-            let manifest_list = ManifestListReader::new(snapshot, io, metadata, encryption_manager)
-                .load()
-                .await?;
+            let manifest_list = table_info.manifest_list_reader(snapshot).load().await?;
             Ok::<_, crate::Error>((snapshot.manifest_list().to_string(), manifest_list))
         }))
         .await?;
@@ -101,7 +95,7 @@ pub async fn drop_table_data(
         .await?;
 
     // Delete the current metadata file
-    if let Some(location) = metadata_location {
+    if let Some(location) = table_info.metadata_location() {
         io.delete(location).await?;
     }
 

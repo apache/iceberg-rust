@@ -139,10 +139,10 @@ impl ObjectCache {
     ) -> Result<Arc<ManifestList>> {
         if self.cache_disabled {
             return ManifestListReader::new(
-                snapshot,
-                &self.file_io,
-                table_metadata,
-                self.encryption_manager.as_deref(),
+                snapshot.clone(),
+                self.file_io.clone(),
+                table_metadata.clone(),
+                self.encryption_manager.clone(),
             )
             .load()
             .await
@@ -191,10 +191,10 @@ impl ObjectCache {
         table_metadata: &TableMetadataRef,
     ) -> Result<CachedItem> {
         let manifest_list = ManifestListReader::new(
-            snapshot,
-            &self.file_io,
-            table_metadata,
-            self.encryption_manager.as_deref(),
+            snapshot.clone(),
+            self.file_io.clone(),
+            table_metadata.clone(),
+            self.encryption_manager.clone(),
         )
         .load()
         .await?;
