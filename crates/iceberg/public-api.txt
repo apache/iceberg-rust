@@ -2025,6 +2025,9 @@ pub fn iceberg::spec::ManifestList::eq(&self, other: &iceberg::spec::ManifestLis
 impl core::fmt::Debug for iceberg::spec::ManifestList
 pub fn iceberg::spec::ManifestList::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::spec::ManifestList
+pub struct iceberg::spec::ManifestListReader
+impl iceberg::spec::ManifestListReader
+pub async fn iceberg::spec::ManifestListReader::load(&self) -> iceberg::Result<iceberg::spec::ManifestList>
 pub struct iceberg::spec::ManifestListWriter
 impl iceberg::spec::ManifestListWriter
 pub fn iceberg::spec::ManifestListWriter::add_manifests(&mut self, manifests: impl core::iter::traits::iterator::Iterator<Item = iceberg::spec::ManifestFile>) -> iceberg::Result<()>
@@ -2340,7 +2343,6 @@ impl iceberg::spec::Snapshot
 pub fn iceberg::spec::Snapshot::added_rows_count(&self) -> core::option::Option<u64>
 pub fn iceberg::spec::Snapshot::encryption_key_id(&self) -> core::option::Option<&str>
 pub fn iceberg::spec::Snapshot::first_row_id(&self) -> core::option::Option<u64>
-pub async fn iceberg::spec::Snapshot::load_manifest_list(&self, file_io: &iceberg::io::FileIO, table_metadata: &iceberg::spec::TableMetadata) -> iceberg::Result<iceberg::spec::ManifestList>
 pub fn iceberg::spec::Snapshot::manifest_list(&self) -> &str
 pub fn iceberg::spec::Snapshot::parent_snapshot_id(&self) -> core::option::Option<i64>
 pub fn iceberg::spec::Snapshot::row_range(&self) -> core::option::Option<(u64, u64)>
@@ -3014,6 +3016,7 @@ pub fn iceberg::table::Table::current_schema_ref(&self) -> iceberg::spec::Schema
 pub fn iceberg::table::Table::file_io(&self) -> &iceberg::io::FileIO
 pub fn iceberg::table::Table::identifier(&self) -> &iceberg::TableIdent
 pub fn iceberg::table::Table::inspect(&self) -> iceberg::inspect::MetadataTable<'_>
+pub fn iceberg::table::Table::manifest_list_reader(&self, snapshot: &iceberg::spec::SnapshotRef) -> iceberg::spec::ManifestListReader
 pub fn iceberg::table::Table::metadata(&self) -> &iceberg::spec::TableMetadata
 pub fn iceberg::table::Table::metadata_location(&self) -> core::option::Option<&str>
 pub fn iceberg::table::Table::metadata_location_result(&self) -> iceberg::Result<&str>
@@ -3665,5 +3668,5 @@ pub type iceberg::memory::MemoryCatalogBuilder::C = iceberg::memory::MemoryCatal
 pub fn iceberg::memory::MemoryCatalogBuilder::load(self, name: impl core::convert::Into<alloc::string::String>, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> impl core::future::future::Future<Output = iceberg::Result<Self::C>> + core::marker::Send
 pub fn iceberg::memory::MemoryCatalogBuilder::with_runtime(self, runtime: iceberg::Runtime) -> Self
 pub fn iceberg::memory::MemoryCatalogBuilder::with_storage_factory(self, storage_factory: alloc::sync::Arc<dyn iceberg::io::StorageFactory>) -> Self
-pub async fn iceberg::drop_table_data(io: &iceberg::io::FileIO, metadata: &iceberg::spec::TableMetadata, metadata_location: core::option::Option<&str>) -> iceberg::Result<()>
+pub async fn iceberg::drop_table_data(table_info: &iceberg::table::Table) -> iceberg::Result<()>
 pub type iceberg::Result<T> = core::result::Result<T, iceberg::Error>

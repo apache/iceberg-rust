@@ -128,11 +128,10 @@ impl SnapshotProduceOperation for FastAppendOperation {
             return Ok(vec![]);
         };
 
-        let manifest_list = snapshot
-            .load_manifest_list(
-                snapshot_produce.table.file_io(),
-                &snapshot_produce.table.metadata_ref(),
-            )
+        let manifest_list = snapshot_produce
+            .table
+            .manifest_list_reader(snapshot)
+            .load()
             .await?;
 
         Ok(manifest_list
@@ -162,7 +161,8 @@ mod tests {
     use crate::io::FileIO;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, ManifestEntry,
-        ManifestListWriter, ManifestStatus, ManifestWriterBuilder, Struct, TableMetadata,
+        ManifestListWriter, ManifestStatus, ManifestWriterBuilder, SnapshotRef, Struct,
+        TableMetadata,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
@@ -338,14 +338,15 @@ mod tests {
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
         let updates = action_commit.take_updates();
 
-        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
+        let new_snapshot: SnapshotRef = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            SnapshotRef::new(snapshot.clone())
         } else {
             unreachable!("first update of a fast append should be AddSnapshot")
         };
 
-        let manifest_list = new_snapshot
-            .load_manifest_list(table.file_io(), table.metadata())
+        let manifest_list = table
+            .manifest_list_reader(&new_snapshot)
+            .load()
             .await
             .unwrap();
 
@@ -502,13 +503,14 @@ mod tests {
         );
 
         // check manifest list
-        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            snapshot
+        let new_snapshot: SnapshotRef = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            SnapshotRef::new(snapshot.clone())
         } else {
             unreachable!()
         };
-        let manifest_list = new_snapshot
-            .load_manifest_list(table.file_io(), table.metadata())
+        let manifest_list = table
+            .manifest_list_reader(&new_snapshot)
+            .load()
             .await
             .unwrap();
         assert_eq!(1, manifest_list.entries().len());

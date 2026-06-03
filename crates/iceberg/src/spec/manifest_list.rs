@@ -28,7 +28,7 @@ use serde_derive::{Deserialize, Serialize};
 
 use self::_const_schema::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2};
 use self::_serde::{ManifestFileV1, ManifestFileV2};
-use super::{FormatVersion, Manifest};
+use super::{FormatVersion, Manifest, SnapshotRef, TableMetadataRef};
 use crate::error::Result;
 use crate::io::{FileIO, OutputFile};
 use crate::spec::manifest_list::_const_schema::MANIFEST_LIST_AVRO_SCHEMA_V3;
@@ -87,6 +87,41 @@ impl ManifestList {
     /// Take ownership of the entries in the manifest list, consuming it
     pub fn consume_entries(self) -> impl IntoIterator<Item = ManifestFile> {
         Box::new(self.entries.into_iter())
+    }
+}
+
+/// A manifest list reader that encapsulates the logic for loading and parsing a [`ManifestList`]
+/// from a snapshot.
+pub struct ManifestListReader {
+    snapshot: SnapshotRef,
+    file_io: FileIO,
+    table_metadata: TableMetadataRef,
+}
+
+impl ManifestListReader {
+    pub(crate) fn new(
+        snapshot: SnapshotRef,
+        file_io: FileIO,
+        table_metadata: TableMetadataRef,
+    ) -> Self {
+        Self {
+            snapshot,
+            file_io,
+            table_metadata,
+        }
+    }
+
+    /// Loads and returns the [`ManifestList`] for this snapshot.
+    pub async fn load(&self) -> Result<ManifestList> {
+        let manifest_list_content = self
+            .file_io
+            .new_input(self.snapshot.manifest_list())?
+            .read()
+            .await?;
+        ManifestList::parse_with_version(
+            &manifest_list_content,
+            self.table_metadata.format_version(),
+        )
     }
 }
 
