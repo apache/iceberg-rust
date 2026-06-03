@@ -624,98 +624,93 @@
 <a href=#624 id=624 data-nosnippet>624</a>    <span class="kw">async fn </span>purge_table(<span class="kw-2">&amp;</span><span class="self">self</span>, table: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#625 id=625 data-nosnippet>625</a>        <span class="kw">let </span>table_info = <span class="self">self</span>.load_table(table).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#626 id=626 data-nosnippet>626</a>        <span class="self">self</span>.drop_table(table).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#627 id=627 data-nosnippet>627</a>        iceberg::drop_table_data(
-<a href=#628 id=628 data-nosnippet>628</a>            table_info.file_io(),
-<a href=#629 id=629 data-nosnippet>629</a>            table_info.metadata(),
-<a href=#630 id=630 data-nosnippet>630</a>            table_info.metadata_location(),
-<a href=#631 id=631 data-nosnippet>631</a>        )
-<a href=#632 id=632 data-nosnippet>632</a>        .<span class="kw">await
-<a href=#633 id=633 data-nosnippet>633</a>    </span>}
-<a href=#634 id=634 data-nosnippet>634</a>
-<a href=#635 id=635 data-nosnippet>635</a>    <span class="doccomment">/// Asynchronously checks the existence of a specified table
-<a href=#636 id=636 data-nosnippet>636</a>    /// in the database.
-<a href=#637 id=637 data-nosnippet>637</a>    ///
-<a href=#638 id=638 data-nosnippet>638</a>    /// # Returns
-<a href=#639 id=639 data-nosnippet>639</a>    /// - `Ok(true)` if the table exists in the database.
-<a href=#640 id=640 data-nosnippet>640</a>    /// - `Ok(false)` if the table does not exist in the database.
-<a href=#641 id=641 data-nosnippet>641</a>    /// - `Err(...)` if an error occurs during the process
-<a href=#642 id=642 data-nosnippet>642</a>    </span><span class="kw">async fn </span>table_exists(<span class="kw-2">&amp;</span><span class="self">self</span>, table: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
-<a href=#643 id=643 data-nosnippet>643</a>        <span class="kw">let </span>db_name = validate_namespace(table.namespace())<span class="question-mark">?</span>;
-<a href=#644 id=644 data-nosnippet>644</a>        <span class="kw">let </span>table_name = table.name.clone();
-<a href=#645 id=645 data-nosnippet>645</a>
-<a href=#646 id=646 data-nosnippet>646</a>        <span class="kw">let </span>resp = <span class="self">self
-<a href=#647 id=647 data-nosnippet>647</a>            </span>.client
-<a href=#648 id=648 data-nosnippet>648</a>            .<span class="number">0
-<a href=#649 id=649 data-nosnippet>649</a>            </span>.get_table(db_name.into(), table_name.into())
-<a href=#650 id=650 data-nosnippet>650</a>            .<span class="kw">await</span>;
-<a href=#651 id=651 data-nosnippet>651</a>
-<a href=#652 id=652 data-nosnippet>652</a>        <span class="kw">match </span>resp {
-<a href=#653 id=653 data-nosnippet>653</a>            <span class="prelude-val">Ok</span>(MaybeException::Ok(<span class="kw">_</span>)) =&gt; <span class="prelude-val">Ok</span>(<span class="bool-val">true</span>),
-<a href=#654 id=654 data-nosnippet>654</a>            <span class="prelude-val">Ok</span>(MaybeException::Exception(ThriftHiveMetastoreGetTableException::O2(<span class="kw">_</span>))) =&gt; <span class="prelude-val">Ok</span>(<span class="bool-val">false</span>),
-<a href=#655 id=655 data-nosnippet>655</a>            <span class="prelude-val">Ok</span>(MaybeException::Exception(exception)) =&gt; <span class="prelude-val">Err</span>(Error::new(
-<a href=#656 id=656 data-nosnippet>656</a>                ErrorKind::Unexpected,
-<a href=#657 id=657 data-nosnippet>657</a>                <span class="string">"Operation failed for hitting thrift error"</span>.to_string(),
-<a href=#658 id=658 data-nosnippet>658</a>            )
-<a href=#659 id=659 data-nosnippet>659</a>            .with_source(<span class="macro">anyhow!</span>(<span class="string">"thrift error: {exception:?}"</span>))),
-<a href=#660 id=660 data-nosnippet>660</a>            <span class="prelude-val">Err</span>(err) =&gt; <span class="prelude-val">Err</span>(from_thrift_error(err)),
-<a href=#661 id=661 data-nosnippet>661</a>        }
-<a href=#662 id=662 data-nosnippet>662</a>    }
-<a href=#663 id=663 data-nosnippet>663</a>
-<a href=#664 id=664 data-nosnippet>664</a>    <span class="doccomment">/// Asynchronously renames a table within the database
-<a href=#665 id=665 data-nosnippet>665</a>    /// or moves it between namespaces (databases).
-<a href=#666 id=666 data-nosnippet>666</a>    ///
-<a href=#667 id=667 data-nosnippet>667</a>    /// # Returns
-<a href=#668 id=668 data-nosnippet>668</a>    /// - `Ok(())` on successful rename or move of the table.
-<a href=#669 id=669 data-nosnippet>669</a>    /// - `Err(...)` if an error occurs during the process.
-<a href=#670 id=670 data-nosnippet>670</a>    </span><span class="kw">async fn </span>rename_table(<span class="kw-2">&amp;</span><span class="self">self</span>, src: <span class="kw-2">&amp;</span>TableIdent, dest: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#671 id=671 data-nosnippet>671</a>        <span class="kw">let </span>src_dbname = validate_namespace(src.namespace())<span class="question-mark">?</span>;
-<a href=#672 id=672 data-nosnippet>672</a>        <span class="kw">let </span>dest_dbname = validate_namespace(dest.namespace())<span class="question-mark">?</span>;
-<a href=#673 id=673 data-nosnippet>673</a>        <span class="kw">if </span><span class="self">self</span>.table_exists(dest).<span class="kw">await</span><span class="question-mark">? </span>{
-<a href=#674 id=674 data-nosnippet>674</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
-<a href=#675 id=675 data-nosnippet>675</a>                ErrorKind::TableAlreadyExists,
-<a href=#676 id=676 data-nosnippet>676</a>                <span class="macro">format!</span>(<span class="string">"Destination table {dest:?} already exists"</span>),
-<a href=#677 id=677 data-nosnippet>677</a>            ));
-<a href=#678 id=678 data-nosnippet>678</a>        }
-<a href=#679 id=679 data-nosnippet>679</a>
-<a href=#680 id=680 data-nosnippet>680</a>        <span class="kw">let </span>src_tbl_name = src.name.clone();
-<a href=#681 id=681 data-nosnippet>681</a>        <span class="kw">let </span>dest_tbl_name = dest.name.clone();
-<a href=#682 id=682 data-nosnippet>682</a>
-<a href=#683 id=683 data-nosnippet>683</a>        <span class="kw">let </span><span class="kw-2">mut </span>tbl = <span class="self">self
-<a href=#684 id=684 data-nosnippet>684</a>            </span>.client
-<a href=#685 id=685 data-nosnippet>685</a>            .<span class="number">0
-<a href=#686 id=686 data-nosnippet>686</a>            </span>.get_table(src_dbname.clone().into(), src_tbl_name.clone().into())
-<a href=#687 id=687 data-nosnippet>687</a>            .<span class="kw">await
-<a href=#688 id=688 data-nosnippet>688</a>            </span>.map(from_thrift_exception)
-<a href=#689 id=689 data-nosnippet>689</a>            .map_err(from_thrift_error)<span class="question-mark">??</span>;
-<a href=#690 id=690 data-nosnippet>690</a>
-<a href=#691 id=691 data-nosnippet>691</a>        tbl.db_name = <span class="prelude-val">Some</span>(dest_dbname.into());
-<a href=#692 id=692 data-nosnippet>692</a>        tbl.table_name = <span class="prelude-val">Some</span>(dest_tbl_name.into());
-<a href=#693 id=693 data-nosnippet>693</a>
-<a href=#694 id=694 data-nosnippet>694</a>        <span class="self">self</span>.client
-<a href=#695 id=695 data-nosnippet>695</a>            .<span class="number">0
-<a href=#696 id=696 data-nosnippet>696</a>            </span>.alter_table(src_dbname.into(), src_tbl_name.into(), tbl)
-<a href=#697 id=697 data-nosnippet>697</a>            .<span class="kw">await
-<a href=#698 id=698 data-nosnippet>698</a>            </span>.map_err(from_thrift_error)<span class="question-mark">?</span>;
-<a href=#699 id=699 data-nosnippet>699</a>
-<a href=#700 id=700 data-nosnippet>700</a>        <span class="prelude-val">Ok</span>(())
-<a href=#701 id=701 data-nosnippet>701</a>    }
-<a href=#702 id=702 data-nosnippet>702</a>
-<a href=#703 id=703 data-nosnippet>703</a>    <span class="kw">async fn </span>register_table(
-<a href=#704 id=704 data-nosnippet>704</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#705 id=705 data-nosnippet>705</a>        _table_ident: <span class="kw-2">&amp;</span>TableIdent,
-<a href=#706 id=706 data-nosnippet>706</a>        _metadata_location: String,
-<a href=#707 id=707 data-nosnippet>707</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
-<a href=#708 id=708 data-nosnippet>708</a>        <span class="prelude-val">Err</span>(Error::new(
-<a href=#709 id=709 data-nosnippet>709</a>            ErrorKind::FeatureUnsupported,
-<a href=#710 id=710 data-nosnippet>710</a>            <span class="string">"Registering a table is not supported yet"</span>,
-<a href=#711 id=711 data-nosnippet>711</a>        ))
-<a href=#712 id=712 data-nosnippet>712</a>    }
-<a href=#713 id=713 data-nosnippet>713</a>
-<a href=#714 id=714 data-nosnippet>714</a>    <span class="kw">async fn </span>update_table(<span class="kw-2">&amp;</span><span class="self">self</span>, _commit: TableCommit) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
-<a href=#715 id=715 data-nosnippet>715</a>        <span class="prelude-val">Err</span>(Error::new(
-<a href=#716 id=716 data-nosnippet>716</a>            ErrorKind::FeatureUnsupported,
-<a href=#717 id=717 data-nosnippet>717</a>            <span class="string">"Updating a table is not supported yet"</span>,
-<a href=#718 id=718 data-nosnippet>718</a>        ))
-<a href=#719 id=719 data-nosnippet>719</a>    }
-<a href=#720 id=720 data-nosnippet>720</a>}
+<a href=#627 id=627 data-nosnippet>627</a>        iceberg::drop_table_data(<span class="kw-2">&amp;</span>table_info).<span class="kw">await
+<a href=#628 id=628 data-nosnippet>628</a>    </span>}
+<a href=#629 id=629 data-nosnippet>629</a>
+<a href=#630 id=630 data-nosnippet>630</a>    <span class="doccomment">/// Asynchronously checks the existence of a specified table
+<a href=#631 id=631 data-nosnippet>631</a>    /// in the database.
+<a href=#632 id=632 data-nosnippet>632</a>    ///
+<a href=#633 id=633 data-nosnippet>633</a>    /// # Returns
+<a href=#634 id=634 data-nosnippet>634</a>    /// - `Ok(true)` if the table exists in the database.
+<a href=#635 id=635 data-nosnippet>635</a>    /// - `Ok(false)` if the table does not exist in the database.
+<a href=#636 id=636 data-nosnippet>636</a>    /// - `Err(...)` if an error occurs during the process
+<a href=#637 id=637 data-nosnippet>637</a>    </span><span class="kw">async fn </span>table_exists(<span class="kw-2">&amp;</span><span class="self">self</span>, table: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
+<a href=#638 id=638 data-nosnippet>638</a>        <span class="kw">let </span>db_name = validate_namespace(table.namespace())<span class="question-mark">?</span>;
+<a href=#639 id=639 data-nosnippet>639</a>        <span class="kw">let </span>table_name = table.name.clone();
+<a href=#640 id=640 data-nosnippet>640</a>
+<a href=#641 id=641 data-nosnippet>641</a>        <span class="kw">let </span>resp = <span class="self">self
+<a href=#642 id=642 data-nosnippet>642</a>            </span>.client
+<a href=#643 id=643 data-nosnippet>643</a>            .<span class="number">0
+<a href=#644 id=644 data-nosnippet>644</a>            </span>.get_table(db_name.into(), table_name.into())
+<a href=#645 id=645 data-nosnippet>645</a>            .<span class="kw">await</span>;
+<a href=#646 id=646 data-nosnippet>646</a>
+<a href=#647 id=647 data-nosnippet>647</a>        <span class="kw">match </span>resp {
+<a href=#648 id=648 data-nosnippet>648</a>            <span class="prelude-val">Ok</span>(MaybeException::Ok(<span class="kw">_</span>)) =&gt; <span class="prelude-val">Ok</span>(<span class="bool-val">true</span>),
+<a href=#649 id=649 data-nosnippet>649</a>            <span class="prelude-val">Ok</span>(MaybeException::Exception(ThriftHiveMetastoreGetTableException::O2(<span class="kw">_</span>))) =&gt; <span class="prelude-val">Ok</span>(<span class="bool-val">false</span>),
+<a href=#650 id=650 data-nosnippet>650</a>            <span class="prelude-val">Ok</span>(MaybeException::Exception(exception)) =&gt; <span class="prelude-val">Err</span>(Error::new(
+<a href=#651 id=651 data-nosnippet>651</a>                ErrorKind::Unexpected,
+<a href=#652 id=652 data-nosnippet>652</a>                <span class="string">"Operation failed for hitting thrift error"</span>.to_string(),
+<a href=#653 id=653 data-nosnippet>653</a>            )
+<a href=#654 id=654 data-nosnippet>654</a>            .with_source(<span class="macro">anyhow!</span>(<span class="string">"thrift error: {exception:?}"</span>))),
+<a href=#655 id=655 data-nosnippet>655</a>            <span class="prelude-val">Err</span>(err) =&gt; <span class="prelude-val">Err</span>(from_thrift_error(err)),
+<a href=#656 id=656 data-nosnippet>656</a>        }
+<a href=#657 id=657 data-nosnippet>657</a>    }
+<a href=#658 id=658 data-nosnippet>658</a>
+<a href=#659 id=659 data-nosnippet>659</a>    <span class="doccomment">/// Asynchronously renames a table within the database
+<a href=#660 id=660 data-nosnippet>660</a>    /// or moves it between namespaces (databases).
+<a href=#661 id=661 data-nosnippet>661</a>    ///
+<a href=#662 id=662 data-nosnippet>662</a>    /// # Returns
+<a href=#663 id=663 data-nosnippet>663</a>    /// - `Ok(())` on successful rename or move of the table.
+<a href=#664 id=664 data-nosnippet>664</a>    /// - `Err(...)` if an error occurs during the process.
+<a href=#665 id=665 data-nosnippet>665</a>    </span><span class="kw">async fn </span>rename_table(<span class="kw-2">&amp;</span><span class="self">self</span>, src: <span class="kw-2">&amp;</span>TableIdent, dest: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#666 id=666 data-nosnippet>666</a>        <span class="kw">let </span>src_dbname = validate_namespace(src.namespace())<span class="question-mark">?</span>;
+<a href=#667 id=667 data-nosnippet>667</a>        <span class="kw">let </span>dest_dbname = validate_namespace(dest.namespace())<span class="question-mark">?</span>;
+<a href=#668 id=668 data-nosnippet>668</a>        <span class="kw">if </span><span class="self">self</span>.table_exists(dest).<span class="kw">await</span><span class="question-mark">? </span>{
+<a href=#669 id=669 data-nosnippet>669</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
+<a href=#670 id=670 data-nosnippet>670</a>                ErrorKind::TableAlreadyExists,
+<a href=#671 id=671 data-nosnippet>671</a>                <span class="macro">format!</span>(<span class="string">"Destination table {dest:?} already exists"</span>),
+<a href=#672 id=672 data-nosnippet>672</a>            ));
+<a href=#673 id=673 data-nosnippet>673</a>        }
+<a href=#674 id=674 data-nosnippet>674</a>
+<a href=#675 id=675 data-nosnippet>675</a>        <span class="kw">let </span>src_tbl_name = src.name.clone();
+<a href=#676 id=676 data-nosnippet>676</a>        <span class="kw">let </span>dest_tbl_name = dest.name.clone();
+<a href=#677 id=677 data-nosnippet>677</a>
+<a href=#678 id=678 data-nosnippet>678</a>        <span class="kw">let </span><span class="kw-2">mut </span>tbl = <span class="self">self
+<a href=#679 id=679 data-nosnippet>679</a>            </span>.client
+<a href=#680 id=680 data-nosnippet>680</a>            .<span class="number">0
+<a href=#681 id=681 data-nosnippet>681</a>            </span>.get_table(src_dbname.clone().into(), src_tbl_name.clone().into())
+<a href=#682 id=682 data-nosnippet>682</a>            .<span class="kw">await
+<a href=#683 id=683 data-nosnippet>683</a>            </span>.map(from_thrift_exception)
+<a href=#684 id=684 data-nosnippet>684</a>            .map_err(from_thrift_error)<span class="question-mark">??</span>;
+<a href=#685 id=685 data-nosnippet>685</a>
+<a href=#686 id=686 data-nosnippet>686</a>        tbl.db_name = <span class="prelude-val">Some</span>(dest_dbname.into());
+<a href=#687 id=687 data-nosnippet>687</a>        tbl.table_name = <span class="prelude-val">Some</span>(dest_tbl_name.into());
+<a href=#688 id=688 data-nosnippet>688</a>
+<a href=#689 id=689 data-nosnippet>689</a>        <span class="self">self</span>.client
+<a href=#690 id=690 data-nosnippet>690</a>            .<span class="number">0
+<a href=#691 id=691 data-nosnippet>691</a>            </span>.alter_table(src_dbname.into(), src_tbl_name.into(), tbl)
+<a href=#692 id=692 data-nosnippet>692</a>            .<span class="kw">await
+<a href=#693 id=693 data-nosnippet>693</a>            </span>.map_err(from_thrift_error)<span class="question-mark">?</span>;
+<a href=#694 id=694 data-nosnippet>694</a>
+<a href=#695 id=695 data-nosnippet>695</a>        <span class="prelude-val">Ok</span>(())
+<a href=#696 id=696 data-nosnippet>696</a>    }
+<a href=#697 id=697 data-nosnippet>697</a>
+<a href=#698 id=698 data-nosnippet>698</a>    <span class="kw">async fn </span>register_table(
+<a href=#699 id=699 data-nosnippet>699</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#700 id=700 data-nosnippet>700</a>        _table_ident: <span class="kw-2">&amp;</span>TableIdent,
+<a href=#701 id=701 data-nosnippet>701</a>        _metadata_location: String,
+<a href=#702 id=702 data-nosnippet>702</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
+<a href=#703 id=703 data-nosnippet>703</a>        <span class="prelude-val">Err</span>(Error::new(
+<a href=#704 id=704 data-nosnippet>704</a>            ErrorKind::FeatureUnsupported,
+<a href=#705 id=705 data-nosnippet>705</a>            <span class="string">"Registering a table is not supported yet"</span>,
+<a href=#706 id=706 data-nosnippet>706</a>        ))
+<a href=#707 id=707 data-nosnippet>707</a>    }
+<a href=#708 id=708 data-nosnippet>708</a>
+<a href=#709 id=709 data-nosnippet>709</a>    <span class="kw">async fn </span>update_table(<span class="kw-2">&amp;</span><span class="self">self</span>, _commit: TableCommit) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
+<a href=#710 id=710 data-nosnippet>710</a>        <span class="prelude-val">Err</span>(Error::new(
+<a href=#711 id=711 data-nosnippet>711</a>            ErrorKind::FeatureUnsupported,
+<a href=#712 id=712 data-nosnippet>712</a>            <span class="string">"Updating a table is not supported yet"</span>,
+<a href=#713 id=713 data-nosnippet>713</a>        ))
+<a href=#714 id=714 data-nosnippet>714</a>    }
+<a href=#715 id=715 data-nosnippet>715</a>}
 </code></pre></div></section></main></body></html>

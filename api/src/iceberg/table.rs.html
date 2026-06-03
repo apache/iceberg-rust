@@ -25,7 +25,7 @@
 <a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span><span class="kw">crate</span>::io::object_cache::ObjectCache;
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span><span class="kw">crate</span>::runtime::Runtime;
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span><span class="kw">crate</span>::scan::TableScanBuilder;
-<a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span><span class="kw">crate</span>::spec::{SchemaRef, TableMetadata, TableMetadataRef};
+<a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span><span class="kw">crate</span>::spec::{ManifestListReader, SchemaRef, SnapshotRef, TableMetadata, TableMetadataRef};
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use crate</span>::{Error, ErrorKind, <span class="prelude-ty">Result</span>, TableIdent};
 <a href=#30 id=30 data-nosnippet>30</a>
 <a href=#31 id=31 data-nosnippet>31</a><span class="doccomment">/// Builder to create table scan.
@@ -264,173 +264,182 @@
 <a href=#264 id=264 data-nosnippet>264</a>        <span class="self">self</span>.metadata.current_schema().clone()
 <a href=#265 id=265 data-nosnippet>265</a>    }
 <a href=#266 id=266 data-nosnippet>266</a>
-<a href=#267 id=267 data-nosnippet>267</a>    <span class="doccomment">/// Create a reader for the table.
-<a href=#268 id=268 data-nosnippet>268</a>    </span><span class="kw">pub fn </span>reader_builder(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ArrowReaderBuilder {
-<a href=#269 id=269 data-nosnippet>269</a>        ArrowReaderBuilder::new(<span class="self">self</span>.file_io.clone(), <span class="self">self</span>.runtime().clone())
-<a href=#270 id=270 data-nosnippet>270</a>    }
-<a href=#271 id=271 data-nosnippet>271</a>}
-<a href=#272 id=272 data-nosnippet>272</a>
-<a href=#273 id=273 data-nosnippet>273</a><span class="doccomment">/// `StaticTable` is a read-only table struct that can be created from a metadata file or from `TableMetaData` without a catalog.
-<a href=#274 id=274 data-nosnippet>274</a>/// It can only be used to read metadata and for table scan.
-<a href=#275 id=275 data-nosnippet>275</a>/// # Examples
-<a href=#276 id=276 data-nosnippet>276</a>///
-<a href=#277 id=277 data-nosnippet>277</a>/// ```rust, no_run
-<a href=#278 id=278 data-nosnippet>278</a>/// # use iceberg::io::FileIO;
-<a href=#279 id=279 data-nosnippet>279</a>/// # use iceberg::table::StaticTable;
-<a href=#280 id=280 data-nosnippet>280</a>/// # use iceberg::TableIdent;
-<a href=#281 id=281 data-nosnippet>281</a>/// # async fn example() {
-<a href=#282 id=282 data-nosnippet>282</a>/// let metadata_file_location = "s3://bucket_name/path/to/metadata.json";
-<a href=#283 id=283 data-nosnippet>283</a>/// let file_io = FileIO::new_with_fs();
-<a href=#284 id=284 data-nosnippet>284</a>/// let static_identifier = TableIdent::from_strs(["static_ns", "static_table"]).unwrap();
-<a href=#285 id=285 data-nosnippet>285</a>/// let static_table =
-<a href=#286 id=286 data-nosnippet>286</a>///     StaticTable::from_metadata_file(&amp;metadata_file_location, static_identifier, file_io)
-<a href=#287 id=287 data-nosnippet>287</a>///         .await
-<a href=#288 id=288 data-nosnippet>288</a>///         .unwrap();
-<a href=#289 id=289 data-nosnippet>289</a>/// let snapshot_id = static_table
-<a href=#290 id=290 data-nosnippet>290</a>///     .metadata()
-<a href=#291 id=291 data-nosnippet>291</a>///     .current_snapshot()
-<a href=#292 id=292 data-nosnippet>292</a>///     .unwrap()
-<a href=#293 id=293 data-nosnippet>293</a>///     .snapshot_id();
-<a href=#294 id=294 data-nosnippet>294</a>/// # }
-<a href=#295 id=295 data-nosnippet>295</a>/// ```
-<a href=#296 id=296 data-nosnippet>296</a></span><span class="attr">#[derive(Debug, Clone)]
-<a href=#297 id=297 data-nosnippet>297</a></span><span class="kw">pub struct </span>StaticTable(Table);
-<a href=#298 id=298 data-nosnippet>298</a>
-<a href=#299 id=299 data-nosnippet>299</a><span class="kw">impl </span>StaticTable {
-<a href=#300 id=300 data-nosnippet>300</a>    <span class="doccomment">/// Creates a static table from a given `TableMetadata` and `FileIO`
-<a href=#301 id=301 data-nosnippet>301</a>    </span><span class="kw">pub async fn </span>from_metadata(
-<a href=#302 id=302 data-nosnippet>302</a>        metadata: TableMetadata,
-<a href=#303 id=303 data-nosnippet>303</a>        table_ident: TableIdent,
-<a href=#304 id=304 data-nosnippet>304</a>        file_io: FileIO,
-<a href=#305 id=305 data-nosnippet>305</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#306 id=306 data-nosnippet>306</a>        <span class="kw">let </span>table = Table::builder()
-<a href=#307 id=307 data-nosnippet>307</a>            .metadata(metadata)
-<a href=#308 id=308 data-nosnippet>308</a>            .identifier(table_ident)
-<a href=#309 id=309 data-nosnippet>309</a>            .file_io(file_io.clone())
-<a href=#310 id=310 data-nosnippet>310</a>            .runtime(Runtime::try_current()<span class="question-mark">?</span>)
-<a href=#311 id=311 data-nosnippet>311</a>            .readonly(<span class="bool-val">true</span>)
-<a href=#312 id=312 data-nosnippet>312</a>            .build();
-<a href=#313 id=313 data-nosnippet>313</a>
-<a href=#314 id=314 data-nosnippet>314</a>        <span class="prelude-val">Ok</span>(<span class="self">Self</span>(table<span class="question-mark">?</span>))
-<a href=#315 id=315 data-nosnippet>315</a>    }
-<a href=#316 id=316 data-nosnippet>316</a>    <span class="doccomment">/// Creates a static table directly from metadata file and `FileIO`
-<a href=#317 id=317 data-nosnippet>317</a>    </span><span class="kw">pub async fn </span>from_metadata_file(
-<a href=#318 id=318 data-nosnippet>318</a>        metadata_location: <span class="kw-2">&amp;</span>str,
-<a href=#319 id=319 data-nosnippet>319</a>        table_ident: TableIdent,
-<a href=#320 id=320 data-nosnippet>320</a>        file_io: FileIO,
-<a href=#321 id=321 data-nosnippet>321</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#322 id=322 data-nosnippet>322</a>        <span class="kw">let </span>metadata = TableMetadata::read_from(<span class="kw-2">&amp;</span>file_io, metadata_location).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#323 id=323 data-nosnippet>323</a>
-<a href=#324 id=324 data-nosnippet>324</a>        <span class="kw">let </span>table = Table::builder()
-<a href=#325 id=325 data-nosnippet>325</a>            .metadata(metadata)
-<a href=#326 id=326 data-nosnippet>326</a>            .metadata_location(metadata_location)
-<a href=#327 id=327 data-nosnippet>327</a>            .identifier(table_ident)
-<a href=#328 id=328 data-nosnippet>328</a>            .file_io(file_io.clone())
-<a href=#329 id=329 data-nosnippet>329</a>            .runtime(Runtime::try_current()<span class="question-mark">?</span>)
-<a href=#330 id=330 data-nosnippet>330</a>            .readonly(<span class="bool-val">true</span>)
-<a href=#331 id=331 data-nosnippet>331</a>            .build();
+<a href=#267 id=267 data-nosnippet>267</a>    <span class="doccomment">/// Creates a [`ManifestListReader`] for the given snapshot.
+<a href=#268 id=268 data-nosnippet>268</a>    </span><span class="kw">pub fn </span>manifest_list_reader(<span class="kw-2">&amp;</span><span class="self">self</span>, snapshot: <span class="kw-2">&amp;</span>SnapshotRef) -&gt; ManifestListReader {
+<a href=#269 id=269 data-nosnippet>269</a>        ManifestListReader::new(
+<a href=#270 id=270 data-nosnippet>270</a>            snapshot.clone(),
+<a href=#271 id=271 data-nosnippet>271</a>            <span class="self">self</span>.file_io.clone(),
+<a href=#272 id=272 data-nosnippet>272</a>            <span class="self">self</span>.metadata.clone(),
+<a href=#273 id=273 data-nosnippet>273</a>        )
+<a href=#274 id=274 data-nosnippet>274</a>    }
+<a href=#275 id=275 data-nosnippet>275</a>
+<a href=#276 id=276 data-nosnippet>276</a>    <span class="doccomment">/// Create a reader for the table.
+<a href=#277 id=277 data-nosnippet>277</a>    </span><span class="kw">pub fn </span>reader_builder(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ArrowReaderBuilder {
+<a href=#278 id=278 data-nosnippet>278</a>        ArrowReaderBuilder::new(<span class="self">self</span>.file_io.clone(), <span class="self">self</span>.runtime().clone())
+<a href=#279 id=279 data-nosnippet>279</a>    }
+<a href=#280 id=280 data-nosnippet>280</a>}
+<a href=#281 id=281 data-nosnippet>281</a>
+<a href=#282 id=282 data-nosnippet>282</a><span class="doccomment">/// `StaticTable` is a read-only table struct that can be created from a metadata file or from `TableMetaData` without a catalog.
+<a href=#283 id=283 data-nosnippet>283</a>/// It can only be used to read metadata and for table scan.
+<a href=#284 id=284 data-nosnippet>284</a>/// # Examples
+<a href=#285 id=285 data-nosnippet>285</a>///
+<a href=#286 id=286 data-nosnippet>286</a>/// ```rust, no_run
+<a href=#287 id=287 data-nosnippet>287</a>/// # use iceberg::io::FileIO;
+<a href=#288 id=288 data-nosnippet>288</a>/// # use iceberg::table::StaticTable;
+<a href=#289 id=289 data-nosnippet>289</a>/// # use iceberg::TableIdent;
+<a href=#290 id=290 data-nosnippet>290</a>/// # async fn example() {
+<a href=#291 id=291 data-nosnippet>291</a>/// let metadata_file_location = "s3://bucket_name/path/to/metadata.json";
+<a href=#292 id=292 data-nosnippet>292</a>/// let file_io = FileIO::new_with_fs();
+<a href=#293 id=293 data-nosnippet>293</a>/// let static_identifier = TableIdent::from_strs(["static_ns", "static_table"]).unwrap();
+<a href=#294 id=294 data-nosnippet>294</a>/// let static_table =
+<a href=#295 id=295 data-nosnippet>295</a>///     StaticTable::from_metadata_file(&amp;metadata_file_location, static_identifier, file_io)
+<a href=#296 id=296 data-nosnippet>296</a>///         .await
+<a href=#297 id=297 data-nosnippet>297</a>///         .unwrap();
+<a href=#298 id=298 data-nosnippet>298</a>/// let snapshot_id = static_table
+<a href=#299 id=299 data-nosnippet>299</a>///     .metadata()
+<a href=#300 id=300 data-nosnippet>300</a>///     .current_snapshot()
+<a href=#301 id=301 data-nosnippet>301</a>///     .unwrap()
+<a href=#302 id=302 data-nosnippet>302</a>///     .snapshot_id();
+<a href=#303 id=303 data-nosnippet>303</a>/// # }
+<a href=#304 id=304 data-nosnippet>304</a>/// ```
+<a href=#305 id=305 data-nosnippet>305</a></span><span class="attr">#[derive(Debug, Clone)]
+<a href=#306 id=306 data-nosnippet>306</a></span><span class="kw">pub struct </span>StaticTable(Table);
+<a href=#307 id=307 data-nosnippet>307</a>
+<a href=#308 id=308 data-nosnippet>308</a><span class="kw">impl </span>StaticTable {
+<a href=#309 id=309 data-nosnippet>309</a>    <span class="doccomment">/// Creates a static table from a given `TableMetadata` and `FileIO`
+<a href=#310 id=310 data-nosnippet>310</a>    </span><span class="kw">pub async fn </span>from_metadata(
+<a href=#311 id=311 data-nosnippet>311</a>        metadata: TableMetadata,
+<a href=#312 id=312 data-nosnippet>312</a>        table_ident: TableIdent,
+<a href=#313 id=313 data-nosnippet>313</a>        file_io: FileIO,
+<a href=#314 id=314 data-nosnippet>314</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#315 id=315 data-nosnippet>315</a>        <span class="kw">let </span>table = Table::builder()
+<a href=#316 id=316 data-nosnippet>316</a>            .metadata(metadata)
+<a href=#317 id=317 data-nosnippet>317</a>            .identifier(table_ident)
+<a href=#318 id=318 data-nosnippet>318</a>            .file_io(file_io.clone())
+<a href=#319 id=319 data-nosnippet>319</a>            .runtime(Runtime::try_current()<span class="question-mark">?</span>)
+<a href=#320 id=320 data-nosnippet>320</a>            .readonly(<span class="bool-val">true</span>)
+<a href=#321 id=321 data-nosnippet>321</a>            .build();
+<a href=#322 id=322 data-nosnippet>322</a>
+<a href=#323 id=323 data-nosnippet>323</a>        <span class="prelude-val">Ok</span>(<span class="self">Self</span>(table<span class="question-mark">?</span>))
+<a href=#324 id=324 data-nosnippet>324</a>    }
+<a href=#325 id=325 data-nosnippet>325</a>    <span class="doccomment">/// Creates a static table directly from metadata file and `FileIO`
+<a href=#326 id=326 data-nosnippet>326</a>    </span><span class="kw">pub async fn </span>from_metadata_file(
+<a href=#327 id=327 data-nosnippet>327</a>        metadata_location: <span class="kw-2">&amp;</span>str,
+<a href=#328 id=328 data-nosnippet>328</a>        table_ident: TableIdent,
+<a href=#329 id=329 data-nosnippet>329</a>        file_io: FileIO,
+<a href=#330 id=330 data-nosnippet>330</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<a href=#331 id=331 data-nosnippet>331</a>        <span class="kw">let </span>metadata = TableMetadata::read_from(<span class="kw-2">&amp;</span>file_io, metadata_location).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#332 id=332 data-nosnippet>332</a>
-<a href=#333 id=333 data-nosnippet>333</a>        <span class="prelude-val">Ok</span>(<span class="self">Self</span>(table<span class="question-mark">?</span>))
-<a href=#334 id=334 data-nosnippet>334</a>    }
-<a href=#335 id=335 data-nosnippet>335</a>
-<a href=#336 id=336 data-nosnippet>336</a>    <span class="doccomment">/// Create a TableScanBuilder for the static table.
-<a href=#337 id=337 data-nosnippet>337</a>    </span><span class="kw">pub fn </span>scan(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TableScanBuilder&lt;<span class="lifetime">'_</span>&gt; {
-<a href=#338 id=338 data-nosnippet>338</a>        <span class="self">self</span>.<span class="number">0</span>.scan()
-<a href=#339 id=339 data-nosnippet>339</a>    }
-<a href=#340 id=340 data-nosnippet>340</a>
-<a href=#341 id=341 data-nosnippet>341</a>    <span class="doccomment">/// Get TableMetadataRef for the static table
-<a href=#342 id=342 data-nosnippet>342</a>    </span><span class="kw">pub fn </span>metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TableMetadataRef {
-<a href=#343 id=343 data-nosnippet>343</a>        <span class="self">self</span>.<span class="number">0</span>.metadata_ref()
-<a href=#344 id=344 data-nosnippet>344</a>    }
-<a href=#345 id=345 data-nosnippet>345</a>
-<a href=#346 id=346 data-nosnippet>346</a>    <span class="doccomment">/// Consumes the `StaticTable` and return it as a `Table`
-<a href=#347 id=347 data-nosnippet>347</a>    /// Please use this method carefully as the Table it returns remains detached from a catalog
-<a href=#348 id=348 data-nosnippet>348</a>    /// and can't be used to perform modifications on the table.
-<a href=#349 id=349 data-nosnippet>349</a>    </span><span class="kw">pub fn </span>into_table(<span class="self">self</span>) -&gt; Table {
-<a href=#350 id=350 data-nosnippet>350</a>        <span class="self">self</span>.<span class="number">0
-<a href=#351 id=351 data-nosnippet>351</a>    </span>}
-<a href=#352 id=352 data-nosnippet>352</a>
-<a href=#353 id=353 data-nosnippet>353</a>    <span class="doccomment">/// Create a reader for the table.
-<a href=#354 id=354 data-nosnippet>354</a>    </span><span class="kw">pub fn </span>reader_builder(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ArrowReaderBuilder {
-<a href=#355 id=355 data-nosnippet>355</a>        <span class="self">self</span>.<span class="number">0</span>.reader_builder()
-<a href=#356 id=356 data-nosnippet>356</a>    }
-<a href=#357 id=357 data-nosnippet>357</a>}
-<a href=#358 id=358 data-nosnippet>358</a>
-<a href=#359 id=359 data-nosnippet>359</a><span class="attr">#[cfg(test)]
-<a href=#360 id=360 data-nosnippet>360</a></span><span class="kw">mod </span>tests {
-<a href=#361 id=361 data-nosnippet>361</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#362 id=362 data-nosnippet>362</a>
-<a href=#363 id=363 data-nosnippet>363</a>    <span class="attr">#[tokio::test]
-<a href=#364 id=364 data-nosnippet>364</a>    </span><span class="kw">async fn </span>test_static_table_from_file() {
-<a href=#365 id=365 data-nosnippet>365</a>        <span class="kw">let </span>metadata_file_name = <span class="string">"TableMetadataV2Valid.json"</span>;
-<a href=#366 id=366 data-nosnippet>366</a>        <span class="kw">let </span>metadata_file_path = <span class="macro">format!</span>(
-<a href=#367 id=367 data-nosnippet>367</a>            <span class="string">"{}/testdata/table_metadata/{}"</span>,
-<a href=#368 id=368 data-nosnippet>368</a>            <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
-<a href=#369 id=369 data-nosnippet>369</a>            metadata_file_name
-<a href=#370 id=370 data-nosnippet>370</a>        );
-<a href=#371 id=371 data-nosnippet>371</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
-<a href=#372 id=372 data-nosnippet>372</a>        <span class="kw">let </span>static_identifier = TableIdent::from_strs([<span class="string">"static_ns"</span>, <span class="string">"static_table"</span>]).unwrap();
-<a href=#373 id=373 data-nosnippet>373</a>        <span class="kw">let </span>static_table =
-<a href=#374 id=374 data-nosnippet>374</a>            StaticTable::from_metadata_file(<span class="kw-2">&amp;</span>metadata_file_path, static_identifier, file_io)
-<a href=#375 id=375 data-nosnippet>375</a>                .<span class="kw">await
-<a href=#376 id=376 data-nosnippet>376</a>                </span>.unwrap();
-<a href=#377 id=377 data-nosnippet>377</a>        <span class="kw">let </span>snapshot_id = static_table
-<a href=#378 id=378 data-nosnippet>378</a>            .metadata()
-<a href=#379 id=379 data-nosnippet>379</a>            .current_snapshot()
-<a href=#380 id=380 data-nosnippet>380</a>            .unwrap()
-<a href=#381 id=381 data-nosnippet>381</a>            .snapshot_id();
-<a href=#382 id=382 data-nosnippet>382</a>        <span class="macro">assert_eq!</span>(
-<a href=#383 id=383 data-nosnippet>383</a>            snapshot_id, <span class="number">3055729675574597004</span>,
-<a href=#384 id=384 data-nosnippet>384</a>            <span class="string">"snapshot id from metadata don't match"
-<a href=#385 id=385 data-nosnippet>385</a>        </span>);
-<a href=#386 id=386 data-nosnippet>386</a>    }
-<a href=#387 id=387 data-nosnippet>387</a>
-<a href=#388 id=388 data-nosnippet>388</a>    <span class="attr">#[tokio::test]
-<a href=#389 id=389 data-nosnippet>389</a>    </span><span class="kw">async fn </span>test_static_into_table() {
-<a href=#390 id=390 data-nosnippet>390</a>        <span class="kw">let </span>metadata_file_name = <span class="string">"TableMetadataV2Valid.json"</span>;
-<a href=#391 id=391 data-nosnippet>391</a>        <span class="kw">let </span>metadata_file_path = <span class="macro">format!</span>(
-<a href=#392 id=392 data-nosnippet>392</a>            <span class="string">"{}/testdata/table_metadata/{}"</span>,
-<a href=#393 id=393 data-nosnippet>393</a>            <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
-<a href=#394 id=394 data-nosnippet>394</a>            metadata_file_name
-<a href=#395 id=395 data-nosnippet>395</a>        );
-<a href=#396 id=396 data-nosnippet>396</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
-<a href=#397 id=397 data-nosnippet>397</a>        <span class="kw">let </span>static_identifier = TableIdent::from_strs([<span class="string">"static_ns"</span>, <span class="string">"static_table"</span>]).unwrap();
-<a href=#398 id=398 data-nosnippet>398</a>        <span class="kw">let </span>static_table =
-<a href=#399 id=399 data-nosnippet>399</a>            StaticTable::from_metadata_file(<span class="kw-2">&amp;</span>metadata_file_path, static_identifier, file_io)
-<a href=#400 id=400 data-nosnippet>400</a>                .<span class="kw">await
-<a href=#401 id=401 data-nosnippet>401</a>                </span>.unwrap();
-<a href=#402 id=402 data-nosnippet>402</a>        <span class="kw">let </span>table = static_table.into_table();
-<a href=#403 id=403 data-nosnippet>403</a>        <span class="macro">assert!</span>(table.readonly());
-<a href=#404 id=404 data-nosnippet>404</a>        <span class="macro">assert_eq!</span>(table.identifier.name(), <span class="string">"static_table"</span>);
-<a href=#405 id=405 data-nosnippet>405</a>        <span class="macro">assert_eq!</span>(
-<a href=#406 id=406 data-nosnippet>406</a>            table.metadata_location(),
-<a href=#407 id=407 data-nosnippet>407</a>            <span class="prelude-val">Some</span>(metadata_file_path).as_deref()
-<a href=#408 id=408 data-nosnippet>408</a>        );
-<a href=#409 id=409 data-nosnippet>409</a>    }
-<a href=#410 id=410 data-nosnippet>410</a>
-<a href=#411 id=411 data-nosnippet>411</a>    <span class="attr">#[tokio::test]
-<a href=#412 id=412 data-nosnippet>412</a>    </span><span class="kw">async fn </span>test_table_readonly_flag() {
-<a href=#413 id=413 data-nosnippet>413</a>        <span class="kw">let </span>metadata_file_name = <span class="string">"TableMetadataV2Valid.json"</span>;
-<a href=#414 id=414 data-nosnippet>414</a>        <span class="kw">let </span>metadata_file_path = <span class="macro">format!</span>(
-<a href=#415 id=415 data-nosnippet>415</a>            <span class="string">"{}/testdata/table_metadata/{}"</span>,
-<a href=#416 id=416 data-nosnippet>416</a>            <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
-<a href=#417 id=417 data-nosnippet>417</a>            metadata_file_name
-<a href=#418 id=418 data-nosnippet>418</a>        );
-<a href=#419 id=419 data-nosnippet>419</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
-<a href=#420 id=420 data-nosnippet>420</a>        <span class="kw">let </span>metadata_file = file_io.new_input(metadata_file_path).unwrap();
-<a href=#421 id=421 data-nosnippet>421</a>        <span class="kw">let </span>metadata_file_content = metadata_file.read().<span class="kw">await</span>.unwrap();
-<a href=#422 id=422 data-nosnippet>422</a>        <span class="kw">let </span>table_metadata =
-<a href=#423 id=423 data-nosnippet>423</a>            serde_json::from_slice::&lt;TableMetadata&gt;(<span class="kw-2">&amp;</span>metadata_file_content).unwrap();
-<a href=#424 id=424 data-nosnippet>424</a>        <span class="kw">let </span>static_identifier = TableIdent::from_strs([<span class="string">"ns"</span>, <span class="string">"table"</span>]).unwrap();
-<a href=#425 id=425 data-nosnippet>425</a>        <span class="kw">let </span>table = Table::builder()
-<a href=#426 id=426 data-nosnippet>426</a>            .metadata(table_metadata)
-<a href=#427 id=427 data-nosnippet>427</a>            .identifier(static_identifier)
-<a href=#428 id=428 data-nosnippet>428</a>            .file_io(file_io.clone())
-<a href=#429 id=429 data-nosnippet>429</a>            .runtime(Runtime::try_current().unwrap())
-<a href=#430 id=430 data-nosnippet>430</a>            .build()
-<a href=#431 id=431 data-nosnippet>431</a>            .unwrap();
-<a href=#432 id=432 data-nosnippet>432</a>        <span class="macro">assert!</span>(!table.readonly());
-<a href=#433 id=433 data-nosnippet>433</a>        <span class="macro">assert_eq!</span>(table.identifier.name(), <span class="string">"table"</span>);
-<a href=#434 id=434 data-nosnippet>434</a>    }
-<a href=#435 id=435 data-nosnippet>435</a>}
+<a href=#333 id=333 data-nosnippet>333</a>        <span class="kw">let </span>table = Table::builder()
+<a href=#334 id=334 data-nosnippet>334</a>            .metadata(metadata)
+<a href=#335 id=335 data-nosnippet>335</a>            .metadata_location(metadata_location)
+<a href=#336 id=336 data-nosnippet>336</a>            .identifier(table_ident)
+<a href=#337 id=337 data-nosnippet>337</a>            .file_io(file_io.clone())
+<a href=#338 id=338 data-nosnippet>338</a>            .runtime(Runtime::try_current()<span class="question-mark">?</span>)
+<a href=#339 id=339 data-nosnippet>339</a>            .readonly(<span class="bool-val">true</span>)
+<a href=#340 id=340 data-nosnippet>340</a>            .build();
+<a href=#341 id=341 data-nosnippet>341</a>
+<a href=#342 id=342 data-nosnippet>342</a>        <span class="prelude-val">Ok</span>(<span class="self">Self</span>(table<span class="question-mark">?</span>))
+<a href=#343 id=343 data-nosnippet>343</a>    }
+<a href=#344 id=344 data-nosnippet>344</a>
+<a href=#345 id=345 data-nosnippet>345</a>    <span class="doccomment">/// Create a TableScanBuilder for the static table.
+<a href=#346 id=346 data-nosnippet>346</a>    </span><span class="kw">pub fn </span>scan(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TableScanBuilder&lt;<span class="lifetime">'_</span>&gt; {
+<a href=#347 id=347 data-nosnippet>347</a>        <span class="self">self</span>.<span class="number">0</span>.scan()
+<a href=#348 id=348 data-nosnippet>348</a>    }
+<a href=#349 id=349 data-nosnippet>349</a>
+<a href=#350 id=350 data-nosnippet>350</a>    <span class="doccomment">/// Get TableMetadataRef for the static table
+<a href=#351 id=351 data-nosnippet>351</a>    </span><span class="kw">pub fn </span>metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; TableMetadataRef {
+<a href=#352 id=352 data-nosnippet>352</a>        <span class="self">self</span>.<span class="number">0</span>.metadata_ref()
+<a href=#353 id=353 data-nosnippet>353</a>    }
+<a href=#354 id=354 data-nosnippet>354</a>
+<a href=#355 id=355 data-nosnippet>355</a>    <span class="doccomment">/// Consumes the `StaticTable` and return it as a `Table`
+<a href=#356 id=356 data-nosnippet>356</a>    /// Please use this method carefully as the Table it returns remains detached from a catalog
+<a href=#357 id=357 data-nosnippet>357</a>    /// and can't be used to perform modifications on the table.
+<a href=#358 id=358 data-nosnippet>358</a>    </span><span class="kw">pub fn </span>into_table(<span class="self">self</span>) -&gt; Table {
+<a href=#359 id=359 data-nosnippet>359</a>        <span class="self">self</span>.<span class="number">0
+<a href=#360 id=360 data-nosnippet>360</a>    </span>}
+<a href=#361 id=361 data-nosnippet>361</a>
+<a href=#362 id=362 data-nosnippet>362</a>    <span class="doccomment">/// Create a reader for the table.
+<a href=#363 id=363 data-nosnippet>363</a>    </span><span class="kw">pub fn </span>reader_builder(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ArrowReaderBuilder {
+<a href=#364 id=364 data-nosnippet>364</a>        <span class="self">self</span>.<span class="number">0</span>.reader_builder()
+<a href=#365 id=365 data-nosnippet>365</a>    }
+<a href=#366 id=366 data-nosnippet>366</a>}
+<a href=#367 id=367 data-nosnippet>367</a>
+<a href=#368 id=368 data-nosnippet>368</a><span class="attr">#[cfg(test)]
+<a href=#369 id=369 data-nosnippet>369</a></span><span class="kw">mod </span>tests {
+<a href=#370 id=370 data-nosnippet>370</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#371 id=371 data-nosnippet>371</a>
+<a href=#372 id=372 data-nosnippet>372</a>    <span class="attr">#[tokio::test]
+<a href=#373 id=373 data-nosnippet>373</a>    </span><span class="kw">async fn </span>test_static_table_from_file() {
+<a href=#374 id=374 data-nosnippet>374</a>        <span class="kw">let </span>metadata_file_name = <span class="string">"TableMetadataV2Valid.json"</span>;
+<a href=#375 id=375 data-nosnippet>375</a>        <span class="kw">let </span>metadata_file_path = <span class="macro">format!</span>(
+<a href=#376 id=376 data-nosnippet>376</a>            <span class="string">"{}/testdata/table_metadata/{}"</span>,
+<a href=#377 id=377 data-nosnippet>377</a>            <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
+<a href=#378 id=378 data-nosnippet>378</a>            metadata_file_name
+<a href=#379 id=379 data-nosnippet>379</a>        );
+<a href=#380 id=380 data-nosnippet>380</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
+<a href=#381 id=381 data-nosnippet>381</a>        <span class="kw">let </span>static_identifier = TableIdent::from_strs([<span class="string">"static_ns"</span>, <span class="string">"static_table"</span>]).unwrap();
+<a href=#382 id=382 data-nosnippet>382</a>        <span class="kw">let </span>static_table =
+<a href=#383 id=383 data-nosnippet>383</a>            StaticTable::from_metadata_file(<span class="kw-2">&amp;</span>metadata_file_path, static_identifier, file_io)
+<a href=#384 id=384 data-nosnippet>384</a>                .<span class="kw">await
+<a href=#385 id=385 data-nosnippet>385</a>                </span>.unwrap();
+<a href=#386 id=386 data-nosnippet>386</a>        <span class="kw">let </span>snapshot_id = static_table
+<a href=#387 id=387 data-nosnippet>387</a>            .metadata()
+<a href=#388 id=388 data-nosnippet>388</a>            .current_snapshot()
+<a href=#389 id=389 data-nosnippet>389</a>            .unwrap()
+<a href=#390 id=390 data-nosnippet>390</a>            .snapshot_id();
+<a href=#391 id=391 data-nosnippet>391</a>        <span class="macro">assert_eq!</span>(
+<a href=#392 id=392 data-nosnippet>392</a>            snapshot_id, <span class="number">3055729675574597004</span>,
+<a href=#393 id=393 data-nosnippet>393</a>            <span class="string">"snapshot id from metadata don't match"
+<a href=#394 id=394 data-nosnippet>394</a>        </span>);
+<a href=#395 id=395 data-nosnippet>395</a>    }
+<a href=#396 id=396 data-nosnippet>396</a>
+<a href=#397 id=397 data-nosnippet>397</a>    <span class="attr">#[tokio::test]
+<a href=#398 id=398 data-nosnippet>398</a>    </span><span class="kw">async fn </span>test_static_into_table() {
+<a href=#399 id=399 data-nosnippet>399</a>        <span class="kw">let </span>metadata_file_name = <span class="string">"TableMetadataV2Valid.json"</span>;
+<a href=#400 id=400 data-nosnippet>400</a>        <span class="kw">let </span>metadata_file_path = <span class="macro">format!</span>(
+<a href=#401 id=401 data-nosnippet>401</a>            <span class="string">"{}/testdata/table_metadata/{}"</span>,
+<a href=#402 id=402 data-nosnippet>402</a>            <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
+<a href=#403 id=403 data-nosnippet>403</a>            metadata_file_name
+<a href=#404 id=404 data-nosnippet>404</a>        );
+<a href=#405 id=405 data-nosnippet>405</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
+<a href=#406 id=406 data-nosnippet>406</a>        <span class="kw">let </span>static_identifier = TableIdent::from_strs([<span class="string">"static_ns"</span>, <span class="string">"static_table"</span>]).unwrap();
+<a href=#407 id=407 data-nosnippet>407</a>        <span class="kw">let </span>static_table =
+<a href=#408 id=408 data-nosnippet>408</a>            StaticTable::from_metadata_file(<span class="kw-2">&amp;</span>metadata_file_path, static_identifier, file_io)
+<a href=#409 id=409 data-nosnippet>409</a>                .<span class="kw">await
+<a href=#410 id=410 data-nosnippet>410</a>                </span>.unwrap();
+<a href=#411 id=411 data-nosnippet>411</a>        <span class="kw">let </span>table = static_table.into_table();
+<a href=#412 id=412 data-nosnippet>412</a>        <span class="macro">assert!</span>(table.readonly());
+<a href=#413 id=413 data-nosnippet>413</a>        <span class="macro">assert_eq!</span>(table.identifier.name(), <span class="string">"static_table"</span>);
+<a href=#414 id=414 data-nosnippet>414</a>        <span class="macro">assert_eq!</span>(
+<a href=#415 id=415 data-nosnippet>415</a>            table.metadata_location(),
+<a href=#416 id=416 data-nosnippet>416</a>            <span class="prelude-val">Some</span>(metadata_file_path).as_deref()
+<a href=#417 id=417 data-nosnippet>417</a>        );
+<a href=#418 id=418 data-nosnippet>418</a>    }
+<a href=#419 id=419 data-nosnippet>419</a>
+<a href=#420 id=420 data-nosnippet>420</a>    <span class="attr">#[tokio::test]
+<a href=#421 id=421 data-nosnippet>421</a>    </span><span class="kw">async fn </span>test_table_readonly_flag() {
+<a href=#422 id=422 data-nosnippet>422</a>        <span class="kw">let </span>metadata_file_name = <span class="string">"TableMetadataV2Valid.json"</span>;
+<a href=#423 id=423 data-nosnippet>423</a>        <span class="kw">let </span>metadata_file_path = <span class="macro">format!</span>(
+<a href=#424 id=424 data-nosnippet>424</a>            <span class="string">"{}/testdata/table_metadata/{}"</span>,
+<a href=#425 id=425 data-nosnippet>425</a>            <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
+<a href=#426 id=426 data-nosnippet>426</a>            metadata_file_name
+<a href=#427 id=427 data-nosnippet>427</a>        );
+<a href=#428 id=428 data-nosnippet>428</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
+<a href=#429 id=429 data-nosnippet>429</a>        <span class="kw">let </span>metadata_file = file_io.new_input(metadata_file_path).unwrap();
+<a href=#430 id=430 data-nosnippet>430</a>        <span class="kw">let </span>metadata_file_content = metadata_file.read().<span class="kw">await</span>.unwrap();
+<a href=#431 id=431 data-nosnippet>431</a>        <span class="kw">let </span>table_metadata =
+<a href=#432 id=432 data-nosnippet>432</a>            serde_json::from_slice::&lt;TableMetadata&gt;(<span class="kw-2">&amp;</span>metadata_file_content).unwrap();
+<a href=#433 id=433 data-nosnippet>433</a>        <span class="kw">let </span>static_identifier = TableIdent::from_strs([<span class="string">"ns"</span>, <span class="string">"table"</span>]).unwrap();
+<a href=#434 id=434 data-nosnippet>434</a>        <span class="kw">let </span>table = Table::builder()
+<a href=#435 id=435 data-nosnippet>435</a>            .metadata(table_metadata)
+<a href=#436 id=436 data-nosnippet>436</a>            .identifier(static_identifier)
+<a href=#437 id=437 data-nosnippet>437</a>            .file_io(file_io.clone())
+<a href=#438 id=438 data-nosnippet>438</a>            .runtime(Runtime::try_current().unwrap())
+<a href=#439 id=439 data-nosnippet>439</a>            .build()
+<a href=#440 id=440 data-nosnippet>440</a>            .unwrap();
+<a href=#441 id=441 data-nosnippet>441</a>        <span class="macro">assert!</span>(!table.readonly());
+<a href=#442 id=442 data-nosnippet>442</a>        <span class="macro">assert_eq!</span>(table.identifier.name(), <span class="string">"table"</span>);
+<a href=#443 id=443 data-nosnippet>443</a>    }
+<a href=#444 id=444 data-nosnippet>444</a>}
 </code></pre></div></section></main></body></html>
