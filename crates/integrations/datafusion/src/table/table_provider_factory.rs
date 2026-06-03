@@ -541,4 +541,61 @@ mod tests {
             .await
             .expect("registering a bucket-partitioned table without PARTITIONED BY should succeed");
     }
+
+    /// Registers the `IcebergTableProviderFactory` and runs the statement through the full
+    /// SQL pipeline (parser + planner + factory).
+    async fn iceberg_external_table_ctx() -> SessionContext {
+        let mut state = SessionStateBuilder::new().with_default_features().build();
+        state.table_factories_mut().insert(
+            "ICEBERG".to_string(),
+            Arc::new(IcebergTableProviderFactory::new()),
+        );
+        SessionContext::new_with_state(state)
+    }
+
+    #[tokio::test]
+    async fn test_partitioned_by_via_sql() {
+        let ctx = iceberg_external_table_ctx().await;
+
+        // The table is partitioned by identity(x).
+        let sql = format!(
+            "CREATE EXTERNAL TABLE static_table STORED AS ICEBERG LOCATION '{}' PARTITIONED BY (x)",
+            table_metadata_location()
+        );
+        ctx.sql(&sql)
+            .await
+            .expect("CREATE EXTERNAL TABLE ... PARTITIONED BY (x) should succeed");
+
+        let table_provider = ctx
+            .table_provider(TableReference::bare("static_table"))
+            .await
+            .expect("table not found");
+
+        assert_eq!(
+            table_provider.schema().as_ref(),
+            &table_metadata_v2_schema()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_partitioned_by_via_sql_rejects_non_identity_transform() {
+        let ctx = iceberg_external_table_ctx().await;
+
+        // The table is partitioned by bucket[4](x), which `PARTITIONED BY` cannot express.
+        let sql = format!(
+            "CREATE EXTERNAL TABLE static_table STORED AS ICEBERG LOCATION '{}' PARTITIONED BY (x_bucket)",
+            bucket_partitioned_table_metadata_location()
+        );
+
+        let err = ctx
+            .sql(&sql)
+            .await
+            .expect_err("PARTITIONED BY on a bucket-partitioned table should fail");
+
+        assert!(
+            err.to_string()
+                .contains("only supports identity-partitioned tables"),
+            "unexpected error: {err}"
+        );
+    }
 }
