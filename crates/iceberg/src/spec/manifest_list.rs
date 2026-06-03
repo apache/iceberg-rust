@@ -117,22 +117,22 @@ impl ManifestListReader {
 
     /// Loads and returns the [`ManifestList`] for this snapshot.
     pub async fn load(&self) -> Result<ManifestList> {
-        let manifest_list_content = match (
-            self.snapshot.encryption_key_id(),
-            self.encryption_manager.clone(),
-        ) {
-            (Some(_), None) => {
-                return Err(Error::new(
-                    ErrorKind::PreconditionFailed,
-                    "Snapshot has encryption_key_id but no EncryptionManager configured on Table",
-                ));
-            }
-            (Some(key_id), Some(em)) => {
+        let manifest_list_content = match self.snapshot.encryption_key_id() {
+            Some(key_id) => {
+                let em = self.encryption_manager.as_ref().ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::PreconditionFailed,
+                        "Snapshot has encryption_key_id but no EncryptionManager configured on Table",
+                    )
+                })?;
                 let key_metadata = em.decrypt_manifest_list_key_metadata(key_id).await?;
                 let input = self.file_io.new_input(self.snapshot.manifest_list())?;
                 EncryptedInputFile::new(input, key_metadata).read().await?
             }
-            (None, _) => {
+            None => {
+                // If the encryption_key_id is not present then it is implied that the
+                // manifest list isn't encrypted which is valid regardless of whether an
+                // encryption manager has been provided.
                 self.file_io
                     .new_input(self.snapshot.manifest_list())?
                     .read()
