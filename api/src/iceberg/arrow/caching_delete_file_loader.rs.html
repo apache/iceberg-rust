@@ -932,142 +932,139 @@
 <a href=#932 id=932 data-nosnippet>932</a>        </span><span class="kw">let </span>eq_delete_path = setup_write_equality_delete_file_1(table_location.to_str().unwrap());
 <a href=#933 id=933 data-nosnippet>933</a>
 <a href=#934 id=934 data-nosnippet>934</a>        <span class="comment">// Create FileScanTask with BOTH positional and equality deletes
-<a href=#935 id=935 data-nosnippet>935</a>        </span><span class="kw">let </span>pos_del = FileScanTaskDeleteFile {
-<a href=#936 id=936 data-nosnippet>936</a>            file_path: pos_del_path.clone(),
-<a href=#937 id=937 data-nosnippet>937</a>            file_size_in_bytes: std::fs::metadata(<span class="kw-2">&amp;</span>pos_del_path).unwrap().len(),
-<a href=#938 id=938 data-nosnippet>938</a>            file_type: DataContentType::PositionDeletes,
-<a href=#939 id=939 data-nosnippet>939</a>            partition_spec_id: <span class="number">0</span>,
-<a href=#940 id=940 data-nosnippet>940</a>            equality_ids: <span class="prelude-val">None</span>,
-<a href=#941 id=941 data-nosnippet>941</a>        };
-<a href=#942 id=942 data-nosnippet>942</a>
-<a href=#943 id=943 data-nosnippet>943</a>        <span class="kw">let </span>eq_del = FileScanTaskDeleteFile {
-<a href=#944 id=944 data-nosnippet>944</a>            file_path: eq_delete_path.clone(),
-<a href=#945 id=945 data-nosnippet>945</a>            file_size_in_bytes: std::fs::metadata(<span class="kw-2">&amp;</span>eq_delete_path).unwrap().len(),
-<a href=#946 id=946 data-nosnippet>946</a>            file_type: DataContentType::EqualityDeletes,
-<a href=#947 id=947 data-nosnippet>947</a>            partition_spec_id: <span class="number">0</span>,
-<a href=#948 id=948 data-nosnippet>948</a>            equality_ids: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">3</span>]), <span class="comment">// Only use field IDs that exist in both schemas
-<a href=#949 id=949 data-nosnippet>949</a>        </span>};
-<a href=#950 id=950 data-nosnippet>950</a>
-<a href=#951 id=951 data-nosnippet>951</a>        <span class="kw">let </span>file_scan_task = FileScanTask {
-<a href=#952 id=952 data-nosnippet>952</a>            file_size_in_bytes: <span class="number">0</span>,
-<a href=#953 id=953 data-nosnippet>953</a>            start: <span class="number">0</span>,
-<a href=#954 id=954 data-nosnippet>954</a>            length: <span class="number">0</span>,
-<a href=#955 id=955 data-nosnippet>955</a>            record_count: <span class="prelude-val">None</span>,
-<a href=#956 id=956 data-nosnippet>956</a>            data_file_path: <span class="macro">format!</span>(<span class="string">"{}/data-1.parquet"</span>, table_location.to_str().unwrap()),
-<a href=#957 id=957 data-nosnippet>957</a>            data_file_format: DataFileFormat::Parquet,
-<a href=#958 id=958 data-nosnippet>958</a>            schema: data_file_schema.clone(),
-<a href=#959 id=959 data-nosnippet>959</a>            project_field_ids: <span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">3</span>],
-<a href=#960 id=960 data-nosnippet>960</a>            predicate: <span class="prelude-val">None</span>,
-<a href=#961 id=961 data-nosnippet>961</a>            deletes: <span class="macro">vec!</span>[pos_del, eq_del],
-<a href=#962 id=962 data-nosnippet>962</a>            partition: <span class="prelude-val">None</span>,
-<a href=#963 id=963 data-nosnippet>963</a>            partition_spec: <span class="prelude-val">None</span>,
-<a href=#964 id=964 data-nosnippet>964</a>            name_mapping: <span class="prelude-val">None</span>,
-<a href=#965 id=965 data-nosnippet>965</a>            case_sensitive: <span class="bool-val">false</span>,
-<a href=#966 id=966 data-nosnippet>966</a>        };
-<a href=#967 id=967 data-nosnippet>967</a>
-<a href=#968 id=968 data-nosnippet>968</a>        <span class="comment">// Load the deletes - should handle both types without error
-<a href=#969 id=969 data-nosnippet>969</a>        </span><span class="kw">let </span>delete_file_loader =
-<a href=#970 id=970 data-nosnippet>970</a>            CachingDeleteFileLoader::new(file_io.clone(), <span class="number">10</span>, Runtime::current());
-<a href=#971 id=971 data-nosnippet>971</a>        <span class="kw">let </span>delete_filter = delete_file_loader
-<a href=#972 id=972 data-nosnippet>972</a>            .load_deletes(<span class="kw-2">&amp;</span>file_scan_task.deletes, file_scan_task.schema_ref())
-<a href=#973 id=973 data-nosnippet>973</a>            .<span class="kw">await
-<a href=#974 id=974 data-nosnippet>974</a>            </span>.unwrap()
-<a href=#975 id=975 data-nosnippet>975</a>            .unwrap();
-<a href=#976 id=976 data-nosnippet>976</a>
-<a href=#977 id=977 data-nosnippet>977</a>        <span class="comment">// Verify both delete types can be processed together
-<a href=#978 id=978 data-nosnippet>978</a>        </span><span class="kw">let </span>result = delete_filter
-<a href=#979 id=979 data-nosnippet>979</a>            .build_equality_delete_predicate(<span class="kw-2">&amp;</span>file_scan_task)
-<a href=#980 id=980 data-nosnippet>980</a>            .<span class="kw">await</span>;
-<a href=#981 id=981 data-nosnippet>981</a>        <span class="macro">assert!</span>(
-<a href=#982 id=982 data-nosnippet>982</a>            result.is_ok(),
-<a href=#983 id=983 data-nosnippet>983</a>            <span class="string">"Failed to build equality delete predicate: {:?}"</span>,
-<a href=#984 id=984 data-nosnippet>984</a>            result.err()
-<a href=#985 id=985 data-nosnippet>985</a>        );
-<a href=#986 id=986 data-nosnippet>986</a>    }
-<a href=#987 id=987 data-nosnippet>987</a>
-<a href=#988 id=988 data-nosnippet>988</a>    <span class="attr">#[tokio::test]
-<a href=#989 id=989 data-nosnippet>989</a>    </span><span class="kw">async fn </span>test_large_equality_delete_batch_stack_overflow() {
-<a href=#990 id=990 data-nosnippet>990</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
-<a href=#991 id=991 data-nosnippet>991</a>        <span class="kw">let </span>table_location = tmp_dir.path().as_os_str().to_str().unwrap();
-<a href=#992 id=992 data-nosnippet>992</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
-<a href=#993 id=993 data-nosnippet>993</a>
-<a href=#994 id=994 data-nosnippet>994</a>        <span class="comment">// Create a large batch of equality deletes
-<a href=#995 id=995 data-nosnippet>995</a>        </span><span class="kw">let </span>num_rows = <span class="number">20_000</span>;
-<a href=#996 id=996 data-nosnippet>996</a>        <span class="kw">let </span>col_y_vals: Vec&lt;i64&gt; = (<span class="number">0</span>..num_rows).collect();
-<a href=#997 id=997 data-nosnippet>997</a>        <span class="kw">let </span>col_y = Arc::new(Int64Array::from(col_y_vals)) <span class="kw">as </span>ArrayRef;
-<a href=#998 id=998 data-nosnippet>998</a>
-<a href=#999 id=999 data-nosnippet>999</a>        <span class="kw">let </span>schema = Arc::new(arrow_schema::Schema::new(<span class="macro">vec!</span>[
-<a href=#1000 id=1000 data-nosnippet>1000</a>            Field::new(<span class="string">"y"</span>, arrow_schema::DataType::Int64, <span class="bool-val">false</span>).with_metadata(HashMap::from([(
-<a href=#1001 id=1001 data-nosnippet>1001</a>                PARQUET_FIELD_ID_META_KEY.to_string(),
-<a href=#1002 id=1002 data-nosnippet>1002</a>                <span class="string">"2"</span>.to_string(),
-<a href=#1003 id=1003 data-nosnippet>1003</a>            )])),
-<a href=#1004 id=1004 data-nosnippet>1004</a>        ]));
-<a href=#1005 id=1005 data-nosnippet>1005</a>
-<a href=#1006 id=1006 data-nosnippet>1006</a>        <span class="kw">let </span>record_batch = RecordBatch::try_new(schema.clone(), <span class="macro">vec!</span>[col_y]).unwrap();
-<a href=#1007 id=1007 data-nosnippet>1007</a>
-<a href=#1008 id=1008 data-nosnippet>1008</a>        <span class="comment">// Write to file
-<a href=#1009 id=1009 data-nosnippet>1009</a>        </span><span class="kw">let </span>path = <span class="macro">format!</span>(<span class="string">"{}/large-eq-deletes.parquet"</span>, <span class="kw-2">&amp;</span>table_location);
-<a href=#1010 id=1010 data-nosnippet>1010</a>        <span class="kw">let </span>file = File::create(<span class="kw-2">&amp;</span>path).unwrap();
-<a href=#1011 id=1011 data-nosnippet>1011</a>        <span class="kw">let </span>props = WriterProperties::builder()
-<a href=#1012 id=1012 data-nosnippet>1012</a>            .set_compression(Compression::SNAPPY)
-<a href=#1013 id=1013 data-nosnippet>1013</a>            .build();
-<a href=#1014 id=1014 data-nosnippet>1014</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ArrowWriter::try_new(file, schema, <span class="prelude-val">Some</span>(props)).unwrap();
-<a href=#1015 id=1015 data-nosnippet>1015</a>        writer.write(<span class="kw-2">&amp;</span>record_batch).unwrap();
-<a href=#1016 id=1016 data-nosnippet>1016</a>        writer.close().unwrap();
-<a href=#1017 id=1017 data-nosnippet>1017</a>
-<a href=#1018 id=1018 data-nosnippet>1018</a>        <span class="kw">let </span>basic_delete_file_loader =
-<a href=#1019 id=1019 data-nosnippet>1019</a>            BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new());
-<a href=#1020 id=1020 data-nosnippet>1020</a>        <span class="kw">let </span>record_batch_stream = basic_delete_file_loader
-<a href=#1021 id=1021 data-nosnippet>1021</a>            .parquet_to_batch_stream(<span class="kw-2">&amp;</span>path, std::fs::metadata(<span class="kw-2">&amp;</span>path).unwrap().len())
-<a href=#1022 id=1022 data-nosnippet>1022</a>            .<span class="kw">await
-<a href=#1023 id=1023 data-nosnippet>1023</a>            </span>.expect(<span class="string">"could not get batch stream"</span>);
-<a href=#1024 id=1024 data-nosnippet>1024</a>
-<a href=#1025 id=1025 data-nosnippet>1025</a>        <span class="kw">let </span>eq_ids = HashSet::from_iter(<span class="macro">vec!</span>[<span class="number">2</span>]);
-<a href=#1026 id=1026 data-nosnippet>1026</a>
-<a href=#1027 id=1027 data-nosnippet>1027</a>        <span class="kw">let </span>result = CachingDeleteFileLoader::parse_equality_deletes_record_batch_stream(
-<a href=#1028 id=1028 data-nosnippet>1028</a>            record_batch_stream,
-<a href=#1029 id=1029 data-nosnippet>1029</a>            eq_ids,
-<a href=#1030 id=1030 data-nosnippet>1030</a>        )
-<a href=#1031 id=1031 data-nosnippet>1031</a>        .<span class="kw">await</span>;
+<a href=#935 id=935 data-nosnippet>935</a>        </span><span class="kw">let </span>pos_del = FileScanTaskDeleteFile::builder()
+<a href=#936 id=936 data-nosnippet>936</a>            .with_file_path(pos_del_path.clone())
+<a href=#937 id=937 data-nosnippet>937</a>            .with_file_size_in_bytes(std::fs::metadata(<span class="kw-2">&amp;</span>pos_del_path).unwrap().len())
+<a href=#938 id=938 data-nosnippet>938</a>            .with_file_type(DataContentType::PositionDeletes)
+<a href=#939 id=939 data-nosnippet>939</a>            .with_partition_spec_id(<span class="number">0</span>)
+<a href=#940 id=940 data-nosnippet>940</a>            .build();
+<a href=#941 id=941 data-nosnippet>941</a>
+<a href=#942 id=942 data-nosnippet>942</a>        <span class="kw">let </span>eq_del = FileScanTaskDeleteFile::builder()
+<a href=#943 id=943 data-nosnippet>943</a>            .with_file_path(eq_delete_path.clone())
+<a href=#944 id=944 data-nosnippet>944</a>            .with_file_size_in_bytes(std::fs::metadata(<span class="kw-2">&amp;</span>eq_delete_path).unwrap().len())
+<a href=#945 id=945 data-nosnippet>945</a>            .with_file_type(DataContentType::EqualityDeletes)
+<a href=#946 id=946 data-nosnippet>946</a>            .with_partition_spec_id(<span class="number">0</span>)
+<a href=#947 id=947 data-nosnippet>947</a>            .with_equality_ids(<span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">3</span>])) <span class="comment">// Only use field IDs that exist in both schemas
+<a href=#948 id=948 data-nosnippet>948</a>            </span>.build();
+<a href=#949 id=949 data-nosnippet>949</a>
+<a href=#950 id=950 data-nosnippet>950</a>        <span class="kw">let </span>file_scan_task = FileScanTask::builder()
+<a href=#951 id=951 data-nosnippet>951</a>            .with_file_size_in_bytes(<span class="number">0</span>)
+<a href=#952 id=952 data-nosnippet>952</a>            .with_start(<span class="number">0</span>)
+<a href=#953 id=953 data-nosnippet>953</a>            .with_length(<span class="number">0</span>)
+<a href=#954 id=954 data-nosnippet>954</a>            .with_data_file_path(<span class="macro">format!</span>(
+<a href=#955 id=955 data-nosnippet>955</a>                <span class="string">"{}/data-1.parquet"</span>,
+<a href=#956 id=956 data-nosnippet>956</a>                table_location.to_str().unwrap()
+<a href=#957 id=957 data-nosnippet>957</a>            ))
+<a href=#958 id=958 data-nosnippet>958</a>            .with_data_file_format(DataFileFormat::Parquet)
+<a href=#959 id=959 data-nosnippet>959</a>            .with_schema(data_file_schema.clone())
+<a href=#960 id=960 data-nosnippet>960</a>            .with_project_field_ids(<span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">3</span>])
+<a href=#961 id=961 data-nosnippet>961</a>            .with_deletes(<span class="macro">vec!</span>[pos_del, eq_del])
+<a href=#962 id=962 data-nosnippet>962</a>            .with_case_sensitive(<span class="bool-val">false</span>)
+<a href=#963 id=963 data-nosnippet>963</a>            .build();
+<a href=#964 id=964 data-nosnippet>964</a>
+<a href=#965 id=965 data-nosnippet>965</a>        <span class="comment">// Load the deletes - should handle both types without error
+<a href=#966 id=966 data-nosnippet>966</a>        </span><span class="kw">let </span>delete_file_loader =
+<a href=#967 id=967 data-nosnippet>967</a>            CachingDeleteFileLoader::new(file_io.clone(), <span class="number">10</span>, Runtime::current());
+<a href=#968 id=968 data-nosnippet>968</a>        <span class="kw">let </span>delete_filter = delete_file_loader
+<a href=#969 id=969 data-nosnippet>969</a>            .load_deletes(<span class="kw-2">&amp;</span>file_scan_task.deletes, file_scan_task.schema_ref())
+<a href=#970 id=970 data-nosnippet>970</a>            .<span class="kw">await
+<a href=#971 id=971 data-nosnippet>971</a>            </span>.unwrap()
+<a href=#972 id=972 data-nosnippet>972</a>            .unwrap();
+<a href=#973 id=973 data-nosnippet>973</a>
+<a href=#974 id=974 data-nosnippet>974</a>        <span class="comment">// Verify both delete types can be processed together
+<a href=#975 id=975 data-nosnippet>975</a>        </span><span class="kw">let </span>result = delete_filter
+<a href=#976 id=976 data-nosnippet>976</a>            .build_equality_delete_predicate(<span class="kw-2">&amp;</span>file_scan_task)
+<a href=#977 id=977 data-nosnippet>977</a>            .<span class="kw">await</span>;
+<a href=#978 id=978 data-nosnippet>978</a>        <span class="macro">assert!</span>(
+<a href=#979 id=979 data-nosnippet>979</a>            result.is_ok(),
+<a href=#980 id=980 data-nosnippet>980</a>            <span class="string">"Failed to build equality delete predicate: {:?}"</span>,
+<a href=#981 id=981 data-nosnippet>981</a>            result.err()
+<a href=#982 id=982 data-nosnippet>982</a>        );
+<a href=#983 id=983 data-nosnippet>983</a>    }
+<a href=#984 id=984 data-nosnippet>984</a>
+<a href=#985 id=985 data-nosnippet>985</a>    <span class="attr">#[tokio::test]
+<a href=#986 id=986 data-nosnippet>986</a>    </span><span class="kw">async fn </span>test_large_equality_delete_batch_stack_overflow() {
+<a href=#987 id=987 data-nosnippet>987</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
+<a href=#988 id=988 data-nosnippet>988</a>        <span class="kw">let </span>table_location = tmp_dir.path().as_os_str().to_str().unwrap();
+<a href=#989 id=989 data-nosnippet>989</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
+<a href=#990 id=990 data-nosnippet>990</a>
+<a href=#991 id=991 data-nosnippet>991</a>        <span class="comment">// Create a large batch of equality deletes
+<a href=#992 id=992 data-nosnippet>992</a>        </span><span class="kw">let </span>num_rows = <span class="number">20_000</span>;
+<a href=#993 id=993 data-nosnippet>993</a>        <span class="kw">let </span>col_y_vals: Vec&lt;i64&gt; = (<span class="number">0</span>..num_rows).collect();
+<a href=#994 id=994 data-nosnippet>994</a>        <span class="kw">let </span>col_y = Arc::new(Int64Array::from(col_y_vals)) <span class="kw">as </span>ArrayRef;
+<a href=#995 id=995 data-nosnippet>995</a>
+<a href=#996 id=996 data-nosnippet>996</a>        <span class="kw">let </span>schema = Arc::new(arrow_schema::Schema::new(<span class="macro">vec!</span>[
+<a href=#997 id=997 data-nosnippet>997</a>            Field::new(<span class="string">"y"</span>, arrow_schema::DataType::Int64, <span class="bool-val">false</span>).with_metadata(HashMap::from([(
+<a href=#998 id=998 data-nosnippet>998</a>                PARQUET_FIELD_ID_META_KEY.to_string(),
+<a href=#999 id=999 data-nosnippet>999</a>                <span class="string">"2"</span>.to_string(),
+<a href=#1000 id=1000 data-nosnippet>1000</a>            )])),
+<a href=#1001 id=1001 data-nosnippet>1001</a>        ]));
+<a href=#1002 id=1002 data-nosnippet>1002</a>
+<a href=#1003 id=1003 data-nosnippet>1003</a>        <span class="kw">let </span>record_batch = RecordBatch::try_new(schema.clone(), <span class="macro">vec!</span>[col_y]).unwrap();
+<a href=#1004 id=1004 data-nosnippet>1004</a>
+<a href=#1005 id=1005 data-nosnippet>1005</a>        <span class="comment">// Write to file
+<a href=#1006 id=1006 data-nosnippet>1006</a>        </span><span class="kw">let </span>path = <span class="macro">format!</span>(<span class="string">"{}/large-eq-deletes.parquet"</span>, <span class="kw-2">&amp;</span>table_location);
+<a href=#1007 id=1007 data-nosnippet>1007</a>        <span class="kw">let </span>file = File::create(<span class="kw-2">&amp;</span>path).unwrap();
+<a href=#1008 id=1008 data-nosnippet>1008</a>        <span class="kw">let </span>props = WriterProperties::builder()
+<a href=#1009 id=1009 data-nosnippet>1009</a>            .set_compression(Compression::SNAPPY)
+<a href=#1010 id=1010 data-nosnippet>1010</a>            .build();
+<a href=#1011 id=1011 data-nosnippet>1011</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ArrowWriter::try_new(file, schema, <span class="prelude-val">Some</span>(props)).unwrap();
+<a href=#1012 id=1012 data-nosnippet>1012</a>        writer.write(<span class="kw-2">&amp;</span>record_batch).unwrap();
+<a href=#1013 id=1013 data-nosnippet>1013</a>        writer.close().unwrap();
+<a href=#1014 id=1014 data-nosnippet>1014</a>
+<a href=#1015 id=1015 data-nosnippet>1015</a>        <span class="kw">let </span>basic_delete_file_loader =
+<a href=#1016 id=1016 data-nosnippet>1016</a>            BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new());
+<a href=#1017 id=1017 data-nosnippet>1017</a>        <span class="kw">let </span>record_batch_stream = basic_delete_file_loader
+<a href=#1018 id=1018 data-nosnippet>1018</a>            .parquet_to_batch_stream(<span class="kw-2">&amp;</span>path, std::fs::metadata(<span class="kw-2">&amp;</span>path).unwrap().len())
+<a href=#1019 id=1019 data-nosnippet>1019</a>            .<span class="kw">await
+<a href=#1020 id=1020 data-nosnippet>1020</a>            </span>.expect(<span class="string">"could not get batch stream"</span>);
+<a href=#1021 id=1021 data-nosnippet>1021</a>
+<a href=#1022 id=1022 data-nosnippet>1022</a>        <span class="kw">let </span>eq_ids = HashSet::from_iter(<span class="macro">vec!</span>[<span class="number">2</span>]);
+<a href=#1023 id=1023 data-nosnippet>1023</a>
+<a href=#1024 id=1024 data-nosnippet>1024</a>        <span class="kw">let </span>result = CachingDeleteFileLoader::parse_equality_deletes_record_batch_stream(
+<a href=#1025 id=1025 data-nosnippet>1025</a>            record_batch_stream,
+<a href=#1026 id=1026 data-nosnippet>1026</a>            eq_ids,
+<a href=#1027 id=1027 data-nosnippet>1027</a>        )
+<a href=#1028 id=1028 data-nosnippet>1028</a>        .<span class="kw">await</span>;
+<a href=#1029 id=1029 data-nosnippet>1029</a>
+<a href=#1030 id=1030 data-nosnippet>1030</a>        <span class="macro">assert!</span>(result.is_ok());
+<a href=#1031 id=1031 data-nosnippet>1031</a>    }
 <a href=#1032 id=1032 data-nosnippet>1032</a>
-<a href=#1033 id=1033 data-nosnippet>1033</a>        <span class="macro">assert!</span>(result.is_ok());
-<a href=#1034 id=1034 data-nosnippet>1034</a>    }
-<a href=#1035 id=1035 data-nosnippet>1035</a>
-<a href=#1036 id=1036 data-nosnippet>1036</a>    <span class="attr">#[tokio::test]
-<a href=#1037 id=1037 data-nosnippet>1037</a>    </span><span class="kw">async fn </span>test_caching_delete_file_loader_caches_results() {
-<a href=#1038 id=1038 data-nosnippet>1038</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
-<a href=#1039 id=1039 data-nosnippet>1039</a>        <span class="kw">let </span>table_location = tmp_dir.path();
-<a href=#1040 id=1040 data-nosnippet>1040</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
+<a href=#1033 id=1033 data-nosnippet>1033</a>    <span class="attr">#[tokio::test]
+<a href=#1034 id=1034 data-nosnippet>1034</a>    </span><span class="kw">async fn </span>test_caching_delete_file_loader_caches_results() {
+<a href=#1035 id=1035 data-nosnippet>1035</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
+<a href=#1036 id=1036 data-nosnippet>1036</a>        <span class="kw">let </span>table_location = tmp_dir.path();
+<a href=#1037 id=1037 data-nosnippet>1037</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
+<a href=#1038 id=1038 data-nosnippet>1038</a>
+<a href=#1039 id=1039 data-nosnippet>1039</a>        <span class="kw">let </span>delete_file_loader =
+<a href=#1040 id=1040 data-nosnippet>1040</a>            CachingDeleteFileLoader::new(file_io.clone(), <span class="number">10</span>, Runtime::current());
 <a href=#1041 id=1041 data-nosnippet>1041</a>
-<a href=#1042 id=1042 data-nosnippet>1042</a>        <span class="kw">let </span>delete_file_loader =
-<a href=#1043 id=1043 data-nosnippet>1043</a>            CachingDeleteFileLoader::new(file_io.clone(), <span class="number">10</span>, Runtime::current());
-<a href=#1044 id=1044 data-nosnippet>1044</a>
-<a href=#1045 id=1045 data-nosnippet>1045</a>        <span class="kw">let </span>file_scan_tasks = setup(table_location);
-<a href=#1046 id=1046 data-nosnippet>1046</a>
-<a href=#1047 id=1047 data-nosnippet>1047</a>        <span class="comment">// Load deletes for the first time
-<a href=#1048 id=1048 data-nosnippet>1048</a>        </span><span class="kw">let </span>delete_filter_1 = delete_file_loader
-<a href=#1049 id=1049 data-nosnippet>1049</a>            .load_deletes(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>].deletes, file_scan_tasks[<span class="number">0</span>].schema_ref())
-<a href=#1050 id=1050 data-nosnippet>1050</a>            .<span class="kw">await
-<a href=#1051 id=1051 data-nosnippet>1051</a>            </span>.unwrap()
-<a href=#1052 id=1052 data-nosnippet>1052</a>            .unwrap();
-<a href=#1053 id=1053 data-nosnippet>1053</a>
-<a href=#1054 id=1054 data-nosnippet>1054</a>        <span class="comment">// Load deletes for the second time (same task/files)
-<a href=#1055 id=1055 data-nosnippet>1055</a>        </span><span class="kw">let </span>delete_filter_2 = delete_file_loader
-<a href=#1056 id=1056 data-nosnippet>1056</a>            .load_deletes(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>].deletes, file_scan_tasks[<span class="number">0</span>].schema_ref())
-<a href=#1057 id=1057 data-nosnippet>1057</a>            .<span class="kw">await
-<a href=#1058 id=1058 data-nosnippet>1058</a>            </span>.unwrap()
-<a href=#1059 id=1059 data-nosnippet>1059</a>            .unwrap();
-<a href=#1060 id=1060 data-nosnippet>1060</a>
-<a href=#1061 id=1061 data-nosnippet>1061</a>        <span class="kw">let </span>dv1 = delete_filter_1
+<a href=#1042 id=1042 data-nosnippet>1042</a>        <span class="kw">let </span>file_scan_tasks = setup(table_location);
+<a href=#1043 id=1043 data-nosnippet>1043</a>
+<a href=#1044 id=1044 data-nosnippet>1044</a>        <span class="comment">// Load deletes for the first time
+<a href=#1045 id=1045 data-nosnippet>1045</a>        </span><span class="kw">let </span>delete_filter_1 = delete_file_loader
+<a href=#1046 id=1046 data-nosnippet>1046</a>            .load_deletes(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>].deletes, file_scan_tasks[<span class="number">0</span>].schema_ref())
+<a href=#1047 id=1047 data-nosnippet>1047</a>            .<span class="kw">await
+<a href=#1048 id=1048 data-nosnippet>1048</a>            </span>.unwrap()
+<a href=#1049 id=1049 data-nosnippet>1049</a>            .unwrap();
+<a href=#1050 id=1050 data-nosnippet>1050</a>
+<a href=#1051 id=1051 data-nosnippet>1051</a>        <span class="comment">// Load deletes for the second time (same task/files)
+<a href=#1052 id=1052 data-nosnippet>1052</a>        </span><span class="kw">let </span>delete_filter_2 = delete_file_loader
+<a href=#1053 id=1053 data-nosnippet>1053</a>            .load_deletes(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>].deletes, file_scan_tasks[<span class="number">0</span>].schema_ref())
+<a href=#1054 id=1054 data-nosnippet>1054</a>            .<span class="kw">await
+<a href=#1055 id=1055 data-nosnippet>1055</a>            </span>.unwrap()
+<a href=#1056 id=1056 data-nosnippet>1056</a>            .unwrap();
+<a href=#1057 id=1057 data-nosnippet>1057</a>
+<a href=#1058 id=1058 data-nosnippet>1058</a>        <span class="kw">let </span>dv1 = delete_filter_1
+<a href=#1059 id=1059 data-nosnippet>1059</a>            .get_delete_vector(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>])
+<a href=#1060 id=1060 data-nosnippet>1060</a>            .unwrap();
+<a href=#1061 id=1061 data-nosnippet>1061</a>        <span class="kw">let </span>dv2 = delete_filter_2
 <a href=#1062 id=1062 data-nosnippet>1062</a>            .get_delete_vector(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>])
 <a href=#1063 id=1063 data-nosnippet>1063</a>            .unwrap();
-<a href=#1064 id=1064 data-nosnippet>1064</a>        <span class="kw">let </span>dv2 = delete_filter_2
-<a href=#1065 id=1065 data-nosnippet>1065</a>            .get_delete_vector(<span class="kw-2">&amp;</span>file_scan_tasks[<span class="number">0</span>])
-<a href=#1066 id=1066 data-nosnippet>1066</a>            .unwrap();
-<a href=#1067 id=1067 data-nosnippet>1067</a>
-<a href=#1068 id=1068 data-nosnippet>1068</a>        <span class="comment">// Verify that the delete vectors point to the same memory location,
-<a href=#1069 id=1069 data-nosnippet>1069</a>        // confirming that the second load reused the result from the first.
-<a href=#1070 id=1070 data-nosnippet>1070</a>        </span><span class="macro">assert!</span>(Arc::ptr_eq(<span class="kw-2">&amp;</span>dv1, <span class="kw-2">&amp;</span>dv2));
-<a href=#1071 id=1071 data-nosnippet>1071</a>    }
-<a href=#1072 id=1072 data-nosnippet>1072</a>}
+<a href=#1064 id=1064 data-nosnippet>1064</a>
+<a href=#1065 id=1065 data-nosnippet>1065</a>        <span class="comment">// Verify that the delete vectors point to the same memory location,
+<a href=#1066 id=1066 data-nosnippet>1066</a>        // confirming that the second load reused the result from the first.
+<a href=#1067 id=1067 data-nosnippet>1067</a>        </span><span class="macro">assert!</span>(Arc::ptr_eq(<span class="kw-2">&amp;</span>dv1, <span class="kw-2">&amp;</span>dv2));
+<a href=#1068 id=1068 data-nosnippet>1068</a>    }
+<a href=#1069 id=1069 data-nosnippet>1069</a>}
 </code></pre></div></section></main></body></html>
