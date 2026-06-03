@@ -93,8 +93,11 @@ impl ManifestList {
 mod test {
     use std::fs;
 
+    use apache_avro::{Codec, Writer};
     use tempfile::TempDir;
 
+    use super::_const_schema::MANIFEST_LIST_AVRO_SCHEMA_V2;
+    use super::_serde::ManifestFileV2;
     use super::*;
     use crate::io::FileIO;
     use crate::spec::{Datum, FieldSummary, ManifestContentType, ManifestFile};
@@ -215,6 +218,46 @@ mod test {
         writer.close().await.unwrap();
 
         let bs = fs::read(full_path).expect("read_file must succeed");
+
+        let parsed_manifest_list =
+            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2).unwrap();
+
+        assert_eq!(manifest_list, parsed_manifest_list);
+    }
+
+    #[test]
+    fn test_parse_snappy_manifest_list_v2() {
+        let manifest_list = ManifestList {
+            entries: vec![ManifestFile {
+                manifest_path: "s3a://icebergdata/demo/s1/t1/metadata/snappy-m0.avro".to_string(),
+                manifest_length: 6926,
+                partition_spec_id: 1,
+                content: ManifestContentType::Data,
+                sequence_number: 1,
+                min_sequence_number: 1,
+                added_snapshot_id: 377075049360453639,
+                added_files_count: Some(1),
+                existing_files_count: Some(0),
+                deleted_files_count: Some(0),
+                added_rows_count: Some(3),
+                existing_rows_count: Some(0),
+                deleted_rows_count: Some(0),
+                partitions: Some(vec![FieldSummary {
+                    contains_null: false,
+                    contains_nan: Some(false),
+                    lower_bound: Some(Datum::long(1).to_bytes().unwrap()),
+                    upper_bound: Some(Datum::long(1).to_bytes().unwrap()),
+                }]),
+                key_metadata: None,
+                first_row_id: None,
+            }],
+        };
+
+        let manifest_entry: ManifestFileV2 = manifest_list.entries[0].clone().try_into().unwrap();
+        let mut writer =
+            Writer::with_codec(&MANIFEST_LIST_AVRO_SCHEMA_V2, Vec::new(), Codec::Snappy);
+        writer.append_ser(manifest_entry).unwrap();
+        let bs = writer.into_inner().unwrap();
 
         let parsed_manifest_list =
             ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2).unwrap();
