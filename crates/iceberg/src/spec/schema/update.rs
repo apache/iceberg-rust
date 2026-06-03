@@ -1615,21 +1615,121 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "not yet implemented"]
     fn add_required_column_without_default() {
-        todo!()
+        // Adding a required column with no default value is an incompatible change:
+        // existing rows have no value for the new column and there is no
+        // server-side fallback, so a read of the historical snapshot under the new
+        // schema would be undefined. Without `AllowIncompatibleChanges` this must
+        // fail with PreconditionFailed.
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let err = schema_update(schema.clone(), &[AddColumn::builder()
+            .name("data")
+            .r#type(Type::Primitive(PrimitiveType::String))
+            .is_optional(false)
+            .build()
+            .into()])
+        .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
+
+        // With AllowIncompatibleChanges the same add must succeed; the resulting
+        // column is required and has no initial/write default.
+        let expected = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
+                NestedField::required(2, "data", PrimitiveType::String.into()).into(),
+            ])
+            .build()
+            .unwrap();
+        let result = schema_update(schema, &[
+            SchemaOperation::AllowIncompatibleChanges,
+            AddColumn::builder()
+                .name("data")
+                .r#type(Type::Primitive(PrimitiveType::String))
+                .is_optional(false)
+                .build()
+                .into(),
+        ])
+        .unwrap();
+        assert_eq!(&expected, result.as_ref());
     }
 
     #[test]
-    #[ignore = "not yet implemented"]
     fn add_required_column_with_default() {
-        todo!()
+        // Adding a required column with an `initial_default` is a compatible
+        // change: old rows resolve to the default at read time, so no
+        // `AllowIncompatibleChanges` is needed.
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let expected = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
+                NestedField::required(2, "data", PrimitiveType::String.into())
+                    .with_initial_default(Literal::string("unknown"))
+                    .with_write_default(Literal::string("unknown"))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+        let result = schema_update(schema, &[AddColumn::builder()
+            .name("data")
+            .r#type(Type::Primitive(PrimitiveType::String))
+            .is_optional(false)
+            .default_value(Literal::string("unknown"))
+            .build()
+            .into()])
+        .unwrap();
+        assert_eq!(&expected, result.as_ref());
     }
 
     #[test]
-    #[ignore = "not yet implemented"]
     fn add_required_column_with_update_column_default() {
-        todo!()
+        // Two-step variant: add optional column with a default, then use
+        // UpdateColumn::new_required to flip it to required. The `is_default_add`
+        // check on the Required arm recognizes the in-flight default, so the
+        // nullability change is permitted without AllowIncompatibleChanges.
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let expected = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
+                NestedField::required(2, "data", PrimitiveType::String.into())
+                    .with_initial_default(Literal::string("unknown"))
+                    .with_write_default(Literal::string("unknown"))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+        let result = schema_update(schema, &[
+            AddColumn::builder()
+                .name("data")
+                .r#type(Type::Primitive(PrimitiveType::String))
+                .default_value(Literal::string("unknown"))
+                .build()
+                .into(),
+            UpdateColumn::new_required("data", true).into(),
+        ])
+        .unwrap();
+        assert_eq!(&expected, result.as_ref());
     }
 
     #[test]
