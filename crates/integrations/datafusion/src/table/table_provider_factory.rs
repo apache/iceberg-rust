@@ -166,7 +166,8 @@ impl TableProviderFactory for IcebergTableProviderFactory {
         // The Iceberg metadata is the source of truth for partitioning, so a
         // `PARTITIONED BY` clause is only accepted when it agrees with the
         // table's default partition spec.
-        validate_partition_columns(&table, &cmd.table_partition_cols).map_err(to_datafusion_error)?;
+        validate_partition_columns(&table, &cmd.table_partition_cols)
+            .map_err(to_datafusion_error)?;
 
         let provider = IcebergStaticTableProvider::try_new_from_table(table)
             .await
@@ -322,28 +323,23 @@ mod tests {
         ])
     }
 
-    fn table_metadata_location() -> String {
+    fn metadata_location(file_name: &str) -> String {
         format!(
-            "{}/testdata/table_metadata/{}",
-            env!("CARGO_MANIFEST_DIR"),
-            "TableMetadataV2.json"
+            "{}/testdata/table_metadata/{file_name}",
+            env!("CARGO_MANIFEST_DIR")
         )
+    }
+
+    fn table_metadata_location() -> String {
+        metadata_location("TableMetadataV2.json")
     }
 
     fn bucket_partitioned_table_metadata_location() -> String {
-        format!(
-            "{}/testdata/table_metadata/{}",
-            env!("CARGO_MANIFEST_DIR"),
-            "TableMetadataV2WithBucketPartition.json"
-        )
+        metadata_location("TableMetadataV2WithBucketPartition.json")
     }
 
     fn multi_identity_partitioned_table_metadata_location() -> String {
-        format!(
-            "{}/testdata/table_metadata/{}",
-            env!("CARGO_MANIFEST_DIR"),
-            "TableMetadataV2WithMultiIdentityPartition.json"
-        )
+        metadata_location("TableMetadataV2WithMultiIdentityPartition.json")
     }
 
     fn create_external_table_cmd() -> CreateExternalTable {
@@ -439,7 +435,10 @@ mod tests {
             .await
             .expect("create table with matching PARTITIONED BY should succeed");
 
-        assert_eq!(table_provider.schema().as_ref(), &table_metadata_v2_schema());
+        assert_eq!(
+            table_provider.schema().as_ref(),
+            &table_metadata_v2_schema()
+        );
     }
 
     #[tokio::test]
@@ -477,48 +476,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_partitioned_by_multiple_identity_columns_wrong_order() {
-        let factory = IcebergTableProviderFactory::new();
-        let state = SessionStateBuilder::new().build();
+    async fn test_partitioned_by_identity_columns_mismatch_is_rejected() {
+        // All cases run against the table partitioned by identity(x), identity(y).
+        // Each declares partition columns that differ from the spec and must be rejected.
+        let cases: [(&[&str], &str); 3] = [
+            (&["y", "x"], "wrong order"),
+            (&["x"], "subset / missing column"),
+            (&["x", "y", "z"], "extra column"),
+        ];
 
-        // Declaring the partition columns in the wrong order must fail, since partition
-        // field order is significant in Iceberg.
-        let mut cmd =
-            create_external_table_cmd_with_partition_cols(vec!["y".to_string(), "x".to_string()]);
-        cmd.location = multi_identity_partitioned_table_metadata_location();
+        for (declared_cols, description) in cases {
+            let factory = IcebergTableProviderFactory::new();
+            let state = SessionStateBuilder::new().build();
 
-        let err = factory
-            .create(&state, &cmd)
-            .await
-            .expect_err("PARTITIONED BY (y, x) should fail when the spec order is (x, y)");
+            let mut cmd = create_external_table_cmd_with_partition_cols(
+                declared_cols.iter().map(|s| s.to_string()).collect(),
+            );
+            cmd.location = multi_identity_partitioned_table_metadata_location();
 
-        assert!(
-            err.to_string()
-                .contains("do not match the table's identity partition columns"),
-            "unexpected error: {err}"
-        );
-    }
+            let err = factory.create(&state, &cmd).await.unwrap_err();
 
-    #[tokio::test]
-    async fn test_partitioned_by_partial_columns_fails() {
-        let factory = IcebergTableProviderFactory::new();
-        let state = SessionStateBuilder::new().build();
-
-        // Declaring only a subset of the partition columns must fail: the table is
-        // partitioned by identity(x), identity(y) but only `x` is declared.
-        let mut cmd = create_external_table_cmd_with_partition_cols(vec!["x".to_string()]);
-        cmd.location = multi_identity_partitioned_table_metadata_location();
-
-        let err = factory
-            .create(&state, &cmd)
-            .await
-            .expect_err("PARTITIONED BY (x) should fail when the spec is (x, y)");
-
-        assert!(
-            err.to_string()
-                .contains("do not match the table's identity partition columns"),
-            "unexpected error: {err}"
-        );
+            assert!(
+                err.to_string()
+                    .contains("do not match the table's identity partition columns"),
+                "case '{description}': unexpected error: {err}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -538,8 +521,7 @@ mod tests {
 
         let msg = err.to_string();
         assert!(
-            msg.contains("only supports identity-partitioned tables")
-                && msg.contains("bucket[4]"),
+            msg.contains("only supports identity-partitioned tables") && msg.contains("bucket[4]"),
             "unexpected error: {msg}"
         );
     }
@@ -559,5 +541,4 @@ mod tests {
             .await
             .expect("registering a bucket-partitioned table without PARTITIONED BY should succeed");
     }
-
 }
