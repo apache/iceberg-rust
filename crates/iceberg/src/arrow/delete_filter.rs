@@ -384,78 +384,65 @@ pub(crate) mod tests {
             writer.close().unwrap();
         }
 
-        let pos_del_1 = FileScanTaskDeleteFile {
-            file_path: format!("{}/pos-del-1.parquet", table_location.to_str().unwrap()),
-            file_size_in_bytes: std::fs::metadata(format!(
+        let pos_del_1 = FileScanTaskDeleteFile::builder()
+            .with_file_path(format!("{}/pos-del-1.parquet", table_location.to_str().unwrap()))
+            .with_file_size_in_bytes(std::fs::metadata(format!(
                 "{}/pos-del-1.parquet",
                 table_location.to_str().unwrap()
             ))
             .unwrap()
-            .len(),
-            file_type: DataContentType::PositionDeletes,
-            partition_spec_id: 0,
-            equality_ids: None,
-        };
+            .len())
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_partition_spec_id(0)
+            .build();
 
-        let pos_del_2 = FileScanTaskDeleteFile {
-            file_path: format!("{}/pos-del-2.parquet", table_location.to_str().unwrap()),
-            file_size_in_bytes: std::fs::metadata(format!(
+        let pos_del_2 = FileScanTaskDeleteFile::builder()
+            .with_file_path(format!("{}/pos-del-2.parquet", table_location.to_str().unwrap()))
+            .with_file_size_in_bytes(std::fs::metadata(format!(
                 "{}/pos-del-2.parquet",
                 table_location.to_str().unwrap()
             ))
             .unwrap()
-            .len(),
-            file_type: DataContentType::PositionDeletes,
-            partition_spec_id: 0,
-            equality_ids: None,
-        };
+            .len())
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_partition_spec_id(0)
+            .build();
 
-        let pos_del_3 = FileScanTaskDeleteFile {
-            file_path: format!("{}/pos-del-3.parquet", table_location.to_str().unwrap()),
-            file_size_in_bytes: std::fs::metadata(format!(
+        let pos_del_3 = FileScanTaskDeleteFile::builder()
+            .with_file_path(format!("{}/pos-del-3.parquet", table_location.to_str().unwrap()))
+            .with_file_size_in_bytes(std::fs::metadata(format!(
                 "{}/pos-del-3.parquet",
                 table_location.to_str().unwrap()
             ))
             .unwrap()
-            .len(),
-            file_type: DataContentType::PositionDeletes,
-            partition_spec_id: 0,
-            equality_ids: None,
-        };
+            .len())
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_partition_spec_id(0)
+            .build();
 
         let file_scan_tasks = vec![
-            FileScanTask {
-                file_size_in_bytes: 0,
-                start: 0,
-                length: 0,
-                record_count: None,
-                data_file_path: format!("{}/1.parquet", table_location.to_str().unwrap()),
-                data_file_format: DataFileFormat::Parquet,
-                schema: data_file_schema.clone(),
-                project_field_ids: vec![],
-                predicate: None,
-                deletes: vec![pos_del_1, pos_del_2.clone()],
-                partition: None,
-                partition_spec: None,
-                name_mapping: None,
-                case_sensitive: false,
-            },
-            FileScanTask {
-                file_size_in_bytes: 0,
-                start: 0,
-                length: 0,
-                record_count: None,
-                data_file_path: format!("{}/2.parquet", table_location.to_str().unwrap()),
-                data_file_format: DataFileFormat::Parquet,
-                schema: data_file_schema.clone(),
-                project_field_ids: vec![],
-                predicate: None,
-                deletes: vec![pos_del_3],
-                partition: None,
-                partition_spec: None,
-                name_mapping: None,
-                case_sensitive: false,
-            },
+            FileScanTask::builder()
+                .with_file_size_in_bytes(0)
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(format!("{}/1.parquet", table_location.to_str().unwrap()))
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(data_file_schema.clone())
+                .with_project_field_ids(vec![])
+                .with_deletes(vec![pos_del_1, pos_del_2.clone()])
+                .with_case_sensitive(false)
+                .build(),
+            FileScanTask::builder()
+                .with_file_size_in_bytes(0)
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(format!("{}/2.parquet", table_location.to_str().unwrap()))
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(data_file_schema.clone())
+                .with_project_field_ids(vec![])
+                .with_deletes(vec![pos_del_3])
+                .with_case_sensitive(false)
+                .build(),
         ];
 
         file_scan_tasks
@@ -491,28 +478,22 @@ pub(crate) mod tests {
         );
 
         // ---------- fake FileScanTask ----------
-        let task = FileScanTask {
-            file_size_in_bytes: 0,
-            start: 0,
-            length: 0,
-            record_count: None,
-            data_file_path: "data.parquet".to_string(),
-            data_file_format: crate::spec::DataFileFormat::Parquet,
-            schema: schema.clone(),
-            project_field_ids: vec![],
-            predicate: None,
-            deletes: vec![FileScanTaskDeleteFile {
-                file_path: "eq-del.parquet".to_string(),
-                file_size_in_bytes: 1, // never read; this test fails before opening the file
-                file_type: DataContentType::EqualityDeletes,
-                partition_spec_id: 0,
-                equality_ids: None,
-            }],
-            partition: None,
-            partition_spec: None,
-            name_mapping: None,
-            case_sensitive: true,
-        };
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(0)
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path("data.parquet".to_string())
+            .with_data_file_format(crate::spec::DataFileFormat::Parquet)
+            .with_schema(schema.clone())
+            .with_project_field_ids(vec![])
+            .with_deletes(vec![FileScanTaskDeleteFile::builder()
+                .with_file_path("eq-del.parquet".to_string())
+                .with_file_size_in_bytes(1) // never read; this test fails before opening the file
+                .with_file_type(DataContentType::EqualityDeletes)
+                .with_partition_spec_id(0)
+                .build()])
+            .with_case_sensitive(true)
+            .build();
 
         let filter = DeleteFilter::new(Runtime::current());
 
