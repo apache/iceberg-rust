@@ -1,0 +1,84 @@
+{
+  "format-version": 2,
+  "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c3",
+  "location": "s3://bucket/test/location",
+  "last-sequence-number": 34,
+  "last-updated-ms": 1602638573590,
+  "last-column-id": 3,
+  "current-schema-id": 1,
+  "schemas": [
+    {
+      "type": "struct",
+      "schema-id": 0,
+      "fields": [
+        {
+          "id": 1,
+          "name": "x",
+          "required": true,
+          "type": "long"
+        }
+      ]
+    },
+    {
+      "type": "struct",
+      "schema-id": 1,
+      "identifier-field-ids": [
+        1,
+        2
+      ],
+      "fields": [
+        {
+          "id": 1,
+          "name": "x",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 2,
+          "name": "y",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 3,
+          "name": "z",
+          "required": true,
+          "type": "long"
+        }
+      ]
+    }
+  ],
+  "default-spec-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": [
+        {
+          "name": "x",
+          "transform": "identity",
+          "source-id": 1,
+          "field-id": 1000
+        },
+        {
+          "name": "y",
+          "transform": "identity",
+          "source-id": 2,
+          "field-id": 1001
+        }
+      ]
+    }
+  ],
+  "last-partition-id": 1001,
+  "default-sort-order-id": 0,
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "properties": {},
+  "current-snapshot-id": -1,
+  "snapshots": [],
+  "snapshot-log": [],
+  "metadata-log": []
+}
