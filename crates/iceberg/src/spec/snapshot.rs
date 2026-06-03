@@ -824,11 +824,15 @@ mod tests {
         let snapshot = snapshot_pointing_at(encrypted_path, Some(key_id));
         let metadata = encryption_test_metadata();
 
-        let manifest_list: ManifestList =
-            ManifestListReader::new(SnapshotRef::new(snapshot), io, metadata, Some(Arc::new(mgr)))
-                .load()
-                .await
-                .unwrap();
+        let manifest_list: ManifestList = ManifestListReader::new(
+            SnapshotRef::new(snapshot),
+            io,
+            metadata,
+            Some(Arc::new(mgr)),
+        )
+        .load()
+        .await
+        .unwrap();
         assert_eq!(manifest_list.entries().len(), 0);
     }
 }

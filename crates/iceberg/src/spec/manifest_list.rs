@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+
 use apache_avro::types::Value;
 use apache_avro::{Reader, Writer, from_value};
 use bytes::Bytes;
@@ -28,8 +29,8 @@ use serde_derive::{Deserialize, Serialize};
 
 use self::_const_schema::{MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2};
 use self::_serde::{ManifestFileV1, ManifestFileV2};
-use crate::encryption::{EncryptedInputFile, EncryptionManager};
 use super::{FormatVersion, Manifest, SnapshotRef, TableMetadataRef};
+use crate::encryption::{EncryptedInputFile, EncryptionManager};
 use crate::error::Result;
 use crate::io::{FileIO, OutputFile};
 use crate::spec::manifest_list::_const_schema::MANIFEST_LIST_AVRO_SCHEMA_V3;
