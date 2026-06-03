@@ -227,7 +227,7 @@ fn validate_partition_columns(table: &Table, declared_partition_cols: &[String])
     //
     // TODO: support non-identity transforms (bucket/truncate/year/month/day/hour) once
     // DataFusion's `PARTITIONED BY` grammar can express transform functions such as
-    // `bucket(16, id)` or `days(ts)`. See https://github.com/apache/iceberg-rust/issues/2050.
+    // `bucket(16, id)` or `days(ts)`.
     if let Some(field) = spec
         .fields()
         .iter()
