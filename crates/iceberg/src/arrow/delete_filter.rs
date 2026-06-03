@@ -393,8 +393,10 @@ pub(crate) mod tests {
             .unwrap()
             .len(),
             file_type: DataContentType::PositionDeletes,
+            file_format: DataFileFormat::Parquet,
             partition_spec_id: 0,
             equality_ids: None,
+            referenced_data_file: None,
         };
 
         let pos_del_2 = FileScanTaskDeleteFile {
@@ -406,8 +408,10 @@ pub(crate) mod tests {
             .unwrap()
             .len(),
             file_type: DataContentType::PositionDeletes,
+            file_format: DataFileFormat::Parquet,
             partition_spec_id: 0,
             equality_ids: None,
+            referenced_data_file: None,
         };
 
         let pos_del_3 = FileScanTaskDeleteFile {
@@ -419,8 +423,10 @@ pub(crate) mod tests {
             .unwrap()
             .len(),
             file_type: DataContentType::PositionDeletes,
+            file_format: DataFileFormat::Parquet,
             partition_spec_id: 0,
             equality_ids: None,
+            referenced_data_file: None,
         };
 
         let file_scan_tasks = vec![
@@ -505,8 +511,10 @@ pub(crate) mod tests {
                 file_path: "eq-del.parquet".to_string(),
                 file_size_in_bytes: 1, // never read; this test fails before opening the file
                 file_type: DataContentType::EqualityDeletes,
+                file_format: DataFileFormat::Parquet,
                 partition_spec_id: 0,
                 equality_ids: None,
+                referenced_data_file: None,
             }],
             partition: None,
             partition_spec: None,

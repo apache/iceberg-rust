@@ -24,7 +24,9 @@
 
 use std::sync::Arc;
 
+use arrow_schema::Schema as ArrowSchema;
 use once_cell::sync::Lazy;
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::spec::{NestedField, NestedFieldRef, PrimitiveType, Type};
 use crate::{Error, ErrorKind, Result};
@@ -379,6 +381,59 @@ pub fn partition_field(partition_fields: Vec<NestedFieldRef>) -> NestedFieldRef 
     )
 }
 
+/// Returns true only for virtual scan metadata columns (prefixed with `_`).
+///
+/// This excludes persisted delete-file schema fields such as `file_path` and `pos`.
+pub fn is_scan_metadata_column_name(column_name: &str) -> bool {
+    matches!(
+        column_name,
+        RESERVED_COL_NAME_FILE
+            | RESERVED_COL_NAME_POS
+            | RESERVED_COL_NAME_DELETED
+            | RESERVED_COL_NAME_SPEC_ID
+            | RESERVED_COL_NAME_PARTITION
+            | RESERVED_COL_NAME_CHANGE_TYPE
+            | RESERVED_COL_NAME_CHANGE_ORDINAL
+            | RESERVED_COL_NAME_COMMIT_SNAPSHOT_ID
+            | RESERVED_COL_NAME_ROW_ID
+            | RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER
+    )
+}
+
+/// Resolves `file_path` and `pos` column indices in an Arrow schema by Iceberg field ID.
+pub fn resolve_position_delete_columns(schema: &ArrowSchema) -> Result<(usize, usize)> {
+    let mut file_path_idx = None;
+    let mut pos_idx = None;
+
+    for (idx, field) in schema.fields().iter().enumerate() {
+        let Some(field_id) = field
+            .metadata()
+            .get(PARQUET_FIELD_ID_META_KEY)
+            .and_then(|v| v.parse::<i32>().ok())
+        else {
+            continue;
+        };
+
+        match field_id {
+            RESERVED_FIELD_ID_DELETE_FILE_PATH => {
+                file_path_idx = Some(idx);
+            }
+            RESERVED_FIELD_ID_DELETE_FILE_POS => {
+                pos_idx = Some(idx);
+            }
+            _ => {}
+        }
+    }
+
+    match (file_path_idx, pos_idx) {
+        (Some(fp_idx), Some(pos_idx)) => Ok((fp_idx, pos_idx)),
+        _ => Err(Error::new(
+            ErrorKind::DataInvalid,
+            "Position delete file missing required columns by field ID",
+        )),
+    }
+}
+
 /// Returns the Iceberg field definition for a metadata field ID.
 ///
 /// Note: This function does not support `_partition` (field ID `i32::MAX - 5`) because
@@ -485,12 +540,22 @@ pub fn is_metadata_field(field_id: i32) -> bool {
 ///
 /// # Returns
 /// `true` if the column name is a metadata column, `false` otherwise
+#[deprecated(
+    since = "0.10.0",
+    note = "use `is_scan_metadata_column_name` for scan column resolution; this predicate also \
+            matches the persisted delete-file fields `file_path` and `pos`, which collides with \
+            user columns of the same name"
+)]
 pub fn is_metadata_column_name(column_name: &str) -> bool {
     get_metadata_field_id(column_name).is_ok()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use arrow_schema::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
+
     use super::*;
     use crate::spec::PrimitiveType;
 
@@ -568,5 +633,77 @@ mod tests {
         assert!(get_metadata_field(RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID).is_ok());
         assert!(get_metadata_field(RESERVED_FIELD_ID_ROW_ID).is_ok());
         assert!(get_metadata_field(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER).is_ok());
+    }
+
+    #[test]
+    fn test_is_scan_metadata_column_name() {
+        assert!(is_scan_metadata_column_name(RESERVED_COL_NAME_FILE));
+        assert!(is_scan_metadata_column_name(RESERVED_COL_NAME_POS));
+        assert!(!is_scan_metadata_column_name(
+            RESERVED_COL_NAME_DELETE_FILE_PATH
+        ));
+        assert!(!is_scan_metadata_column_name(
+            RESERVED_COL_NAME_DELETE_FILE_POS
+        ));
+    }
+
+    #[test]
+    fn test_resolve_position_delete_columns_reordered() {
+        let schema = ArrowSchema::new(vec![
+            ArrowField::new(
+                RESERVED_COL_NAME_DELETE_FILE_POS,
+                ArrowDataType::Int64,
+                false,
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                RESERVED_FIELD_ID_DELETE_FILE_POS.to_string(),
+            )])),
+            ArrowField::new(
+                RESERVED_COL_NAME_DELETE_FILE_PATH,
+                ArrowDataType::Utf8,
+                false,
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                RESERVED_FIELD_ID_DELETE_FILE_PATH.to_string(),
+            )])),
+        ]);
+
+        let (file_path_idx, pos_idx) = resolve_position_delete_columns(&schema).unwrap();
+        assert_eq!(file_path_idx, 1);
+        assert_eq!(pos_idx, 0);
+    }
+
+    #[test]
+    fn test_resolve_position_delete_columns_missing_required_field() {
+        let schema = ArrowSchema::new(vec![
+            ArrowField::new(
+                RESERVED_COL_NAME_DELETE_FILE_PATH,
+                ArrowDataType::Utf8,
+                false,
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                RESERVED_FIELD_ID_DELETE_FILE_PATH.to_string(),
+            )])),
+        ]);
+
+        assert!(resolve_position_delete_columns(&schema).is_err());
+
+        // The reverse case: only `pos` is present and `file_path` is missing.
+        let schema = ArrowSchema::new(vec![
+            ArrowField::new(
+                RESERVED_COL_NAME_DELETE_FILE_POS,
+                ArrowDataType::Int64,
+                false,
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                RESERVED_FIELD_ID_DELETE_FILE_POS.to_string(),
+            )])),
+        ]);
+
+        assert!(resolve_position_delete_columns(&schema).is_err());
     }
 }

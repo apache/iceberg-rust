@@ -1114,9 +1114,11 @@ pub fn iceberg::metadata_columns::get_metadata_field(field_id: i32) -> iceberg::
 pub fn iceberg::metadata_columns::get_metadata_field_id(column_name: &str) -> iceberg::Result<i32>
 pub fn iceberg::metadata_columns::is_metadata_column_name(column_name: &str) -> bool
 pub fn iceberg::metadata_columns::is_metadata_field(field_id: i32) -> bool
+pub fn iceberg::metadata_columns::is_scan_metadata_column_name(column_name: &str) -> bool
 pub fn iceberg::metadata_columns::last_updated_sequence_number_field() -> &'static iceberg::spec::NestedFieldRef
 pub fn iceberg::metadata_columns::partition_field(partition_fields: alloc::vec::Vec<iceberg::spec::NestedFieldRef>) -> iceberg::spec::NestedFieldRef
 pub fn iceberg::metadata_columns::pos_field() -> &'static iceberg::spec::NestedFieldRef
+pub fn iceberg::metadata_columns::resolve_position_delete_columns(schema: &arrow_schema::schema::Schema) -> iceberg::Result<(usize, usize)>
 pub fn iceberg::metadata_columns::row_id_field() -> &'static iceberg::spec::NestedFieldRef
 pub fn iceberg::metadata_columns::spec_id_field() -> &'static iceberg::spec::NestedFieldRef
 pub mod iceberg::puffin
@@ -1253,10 +1255,12 @@ impl<'de> serde_core::de::Deserialize<'de> for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::scan::FileScanTaskDeleteFile
 pub iceberg::scan::FileScanTaskDeleteFile::equality_ids: core::option::Option<alloc::vec::Vec<i32>>
+pub iceberg::scan::FileScanTaskDeleteFile::file_format: iceberg::spec::DataFileFormat
 pub iceberg::scan::FileScanTaskDeleteFile::file_path: alloc::string::String
 pub iceberg::scan::FileScanTaskDeleteFile::file_size_in_bytes: u64
 pub iceberg::scan::FileScanTaskDeleteFile::file_type: iceberg::spec::DataContentType
 pub iceberg::scan::FileScanTaskDeleteFile::partition_spec_id: i32
+pub iceberg::scan::FileScanTaskDeleteFile::referenced_data_file: core::option::Option<alloc::string::String>
 impl core::clone::Clone for iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::clone(&self) -> iceberg::scan::FileScanTaskDeleteFile
 impl core::cmp::PartialEq for iceberg::scan::FileScanTaskDeleteFile
