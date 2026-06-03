@@ -444,12 +444,14 @@ mod tests {
             .with_data_file_format(DataFileFormat::Parquet)
             .with_schema(table_schema.clone())
             .with_project_field_ids(vec![1])
-            .with_deletes(vec![FileScanTaskDeleteFile::builder()
-                .with_file_size_in_bytes(std::fs::metadata(&delete_file_path).unwrap().len())
-                .with_file_path(delete_file_path)
-                .with_file_type(DataContentType::PositionDeletes)
-                .with_partition_spec_id(0)
-                .build()])
+            .with_deletes(vec![
+                FileScanTaskDeleteFile::builder()
+                    .with_file_size_in_bytes(std::fs::metadata(&delete_file_path).unwrap().len())
+                    .with_file_path(delete_file_path)
+                    .with_file_type(DataContentType::PositionDeletes)
+                    .with_partition_spec_id(0)
+                    .build(),
+            ])
             .with_case_sensitive(false)
             .build();
 
@@ -660,12 +662,14 @@ mod tests {
             .with_data_file_format(DataFileFormat::Parquet)
             .with_schema(table_schema.clone())
             .with_project_field_ids(vec![1])
-            .with_deletes(vec![FileScanTaskDeleteFile::builder()
-                .with_file_size_in_bytes(std::fs::metadata(&delete_file_path).unwrap().len())
-                .with_file_path(delete_file_path)
-                .with_file_type(DataContentType::PositionDeletes)
-                .with_partition_spec_id(0)
-                .build()])
+            .with_deletes(vec![
+                FileScanTaskDeleteFile::builder()
+                    .with_file_size_in_bytes(std::fs::metadata(&delete_file_path).unwrap().len())
+                    .with_file_path(delete_file_path)
+                    .with_file_type(DataContentType::PositionDeletes)
+                    .with_partition_spec_id(0)
+                    .build(),
+            ])
             .with_case_sensitive(false)
             .build();
 
@@ -870,12 +874,14 @@ mod tests {
             .with_data_file_format(DataFileFormat::Parquet)
             .with_schema(table_schema.clone())
             .with_project_field_ids(vec![1])
-            .with_deletes(vec![FileScanTaskDeleteFile::builder()
-                .with_file_size_in_bytes(std::fs::metadata(&delete_file_path).unwrap().len())
-                .with_file_path(delete_file_path)
-                .with_file_type(DataContentType::PositionDeletes)
-                .with_partition_spec_id(0)
-                .build()])
+            .with_deletes(vec![
+                FileScanTaskDeleteFile::builder()
+                    .with_file_size_in_bytes(std::fs::metadata(&delete_file_path).unwrap().len())
+                    .with_file_path(delete_file_path)
+                    .with_file_type(DataContentType::PositionDeletes)
+                    .with_partition_spec_id(0)
+                    .build(),
+            ])
             .with_case_sensitive(false)
             .build();
 

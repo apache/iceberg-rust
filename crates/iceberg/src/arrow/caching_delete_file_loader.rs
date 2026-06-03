@@ -951,7 +951,10 @@ mod tests {
             .with_file_size_in_bytes(0)
             .with_start(0)
             .with_length(0)
-            .with_data_file_path(format!("{}/data-1.parquet", table_location.to_str().unwrap()))
+            .with_data_file_path(format!(
+                "{}/data-1.parquet",
+                table_location.to_str().unwrap()
+            ))
             .with_data_file_format(DataFileFormat::Parquet)
             .with_schema(data_file_schema.clone())
             .with_project_field_ids(vec![2, 3])

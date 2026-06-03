@@ -385,37 +385,52 @@ pub(crate) mod tests {
         }
 
         let pos_del_1 = FileScanTaskDeleteFile::builder()
-            .with_file_path(format!("{}/pos-del-1.parquet", table_location.to_str().unwrap()))
-            .with_file_size_in_bytes(std::fs::metadata(format!(
+            .with_file_path(format!(
                 "{}/pos-del-1.parquet",
                 table_location.to_str().unwrap()
             ))
-            .unwrap()
-            .len())
+            .with_file_size_in_bytes(
+                std::fs::metadata(format!(
+                    "{}/pos-del-1.parquet",
+                    table_location.to_str().unwrap()
+                ))
+                .unwrap()
+                .len(),
+            )
             .with_file_type(DataContentType::PositionDeletes)
             .with_partition_spec_id(0)
             .build();
 
         let pos_del_2 = FileScanTaskDeleteFile::builder()
-            .with_file_path(format!("{}/pos-del-2.parquet", table_location.to_str().unwrap()))
-            .with_file_size_in_bytes(std::fs::metadata(format!(
+            .with_file_path(format!(
                 "{}/pos-del-2.parquet",
                 table_location.to_str().unwrap()
             ))
-            .unwrap()
-            .len())
+            .with_file_size_in_bytes(
+                std::fs::metadata(format!(
+                    "{}/pos-del-2.parquet",
+                    table_location.to_str().unwrap()
+                ))
+                .unwrap()
+                .len(),
+            )
             .with_file_type(DataContentType::PositionDeletes)
             .with_partition_spec_id(0)
             .build();
 
         let pos_del_3 = FileScanTaskDeleteFile::builder()
-            .with_file_path(format!("{}/pos-del-3.parquet", table_location.to_str().unwrap()))
-            .with_file_size_in_bytes(std::fs::metadata(format!(
+            .with_file_path(format!(
                 "{}/pos-del-3.parquet",
                 table_location.to_str().unwrap()
             ))
-            .unwrap()
-            .len())
+            .with_file_size_in_bytes(
+                std::fs::metadata(format!(
+                    "{}/pos-del-3.parquet",
+                    table_location.to_str().unwrap()
+                ))
+                .unwrap()
+                .len(),
+            )
             .with_file_type(DataContentType::PositionDeletes)
             .with_partition_spec_id(0)
             .build();
@@ -486,12 +501,14 @@ pub(crate) mod tests {
             .with_data_file_format(crate::spec::DataFileFormat::Parquet)
             .with_schema(schema.clone())
             .with_project_field_ids(vec![])
-            .with_deletes(vec![FileScanTaskDeleteFile::builder()
-                .with_file_path("eq-del.parquet".to_string())
-                .with_file_size_in_bytes(1) // never read; this test fails before opening the file
-                .with_file_type(DataContentType::EqualityDeletes)
-                .with_partition_spec_id(0)
-                .build()])
+            .with_deletes(vec![
+                FileScanTaskDeleteFile::builder()
+                    .with_file_path("eq-del.parquet".to_string())
+                    .with_file_size_in_bytes(1) // never read; this test fails before opening the file
+                    .with_file_type(DataContentType::EqualityDeletes)
+                    .with_partition_spec_id(0)
+                    .build(),
+            ])
             .with_case_sensitive(true)
             .build();
 
