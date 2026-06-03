@@ -120,6 +120,8 @@ pub(crate) struct SnapshotProducer<'a> {
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
     manifest_counter: RangeFrom<u64>,
+    // v3 row-lineage cursor seeded from TableMetadata.next_row_id.
+    next_data_manifest_first_row_id: Option<u64>,
 }
 
 impl<'a> SnapshotProducer<'a> {
@@ -130,6 +132,9 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_properties: HashMap<String, String>,
         added_data_files: Vec<DataFile>,
     ) -> Self {
+        let next_data_manifest_first_row_id =
+            matches!(table.metadata().format_version(), FormatVersion::V3)
+                .then(|| table.metadata().next_row_id());
         Self {
             table,
             snapshot_id: Self::generate_unique_snapshot_id(table),
@@ -138,6 +143,7 @@ impl<'a> SnapshotProducer<'a> {
             snapshot_properties,
             added_data_files,
             manifest_counter: (0..),
+            next_data_manifest_first_row_id,
         }
     }
 
@@ -242,7 +248,11 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_id
     }
 
-    fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
+    fn new_manifest_writer(
+        &mut self,
+        content: ManifestContentType,
+        added_rows: u64,
+    ) -> Result<ManifestWriter> {
         let new_manifest_path = format!(
             "{}/{}/{}-m{}.{}",
             self.table.metadata().location(),
@@ -270,7 +280,23 @@ impl<'a> SnapshotProducer<'a> {
                 ManifestContentType::Deletes => Ok(builder.build_v2_deletes()),
             },
             FormatVersion::V3 => match content {
-                ManifestContentType::Data => Ok(builder.build_v3_data()),
+                ManifestContentType::Data => {
+                    let builder = if let Some(cursor) = self.next_data_manifest_first_row_id {
+                        let next_cursor = cursor.checked_add(added_rows).ok_or_else(|| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Row ID overflow assigning manifest first_row_id (cursor={cursor}, added_rows={added_rows})"
+                                ),
+                            )
+                        })?;
+                        self.next_data_manifest_first_row_id = Some(next_cursor);
+                        builder.with_first_row_id(cursor)
+                    } else {
+                        builder
+                    };
+                    Ok(builder.build_v3_data())
+                }
                 ManifestContentType::Deletes => Ok(builder.build_v3_deletes()),
             },
         }
@@ -319,6 +345,7 @@ impl<'a> SnapshotProducer<'a> {
 
         let snapshot_id = self.snapshot_id;
         let format_version = self.table.metadata().format_version();
+        let added_rows: u64 = added_data_files.iter().map(|df| df.record_count).sum();
         let manifest_entries = added_data_files.into_iter().map(|data_file| {
             let builder = ManifestEntry::builder()
                 .status(crate::spec::ManifestStatus::Added)
@@ -331,7 +358,7 @@ impl<'a> SnapshotProducer<'a> {
                 builder.build()
             }
         });
-        let mut writer = self.new_manifest_writer(ManifestContentType::Data)?;
+        let mut writer = self.new_manifest_writer(ManifestContentType::Data, added_rows)?;
         for entry in manifest_entries {
             writer.add_entry(entry)?;
         }
