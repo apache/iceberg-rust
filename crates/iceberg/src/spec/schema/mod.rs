@@ -426,65 +426,83 @@ impl Schema {
         &self.id_to_field
     }
 
-    /// Returns the minimum [`FormatVersion`] required to represent all types in this schema.
+    /// Minimum [`FormatVersion`] required to represent all *types* in this schema.
     ///
-    /// Defaults to `FormatVersion::V1` if all types are universally supported.
+    /// Types only; for initial-default version floors see [`Schema::check_format_compatibility`].
     pub fn min_format_version(&self) -> FormatVersion {
-        self.as_struct()
-            .fields()
-            .iter()
-            .map(|f| f.field_type.min_format_version())
+        // `id_to_field` is flattened, so the max over all fields covers nested ones too.
+        self.id_to_field
+            .values()
+            .map(|f| leaf_min_format_version(&f.field_type))
             .max()
             .unwrap_or(FormatVersion::V1)
     }
 
-    /// Check that all types in this schema are supported by the given format version.
+    /// Returns an error listing every field incompatible with `format_version`.
+    /// Mirrors Java's `Schema.checkCompatibility()`. Two checks per field:
     ///
-    /// Mirrors Java's `Schema.checkCompatibility()`; returns an error listing every
-    /// incompatible field. Two checks per field:
-    ///
-    /// - **Type**: `TimestampNs` / `TimestamptzNs` / `Variant` require v3+.
-    /// - **Initial default**: a non-null `initial_default` requires
-    ///   [`MIN_FORMAT_VERSION_DEFAULT_VALUES`] — it backfills pre-existing rows,
-    ///   which older readers can't honor. `write_default` only affects newly
-    ///   written rows (physically materialized, read the same at any version), so
-    ///   it is not checked.
+    /// - **Type** — per `leaf_min_format_version`.
+    /// - **Initial default** — a non-null `initial_default` backfills pre-existing rows,
+    ///   so it requires [`MIN_FORMAT_VERSION_DEFAULT_VALUES`]; `write_default` is not
+    ///   checked, as it only affects newly written rows (read identically at any version).
     pub fn check_format_compatibility(&self, format_version: FormatVersion) -> Result<()> {
-        let mut problems: Vec<String> = Vec::new();
+        // (field id, message); sorted by id below for a deterministic error.
+        let mut problems: Vec<(i32, String)> = Vec::new();
 
+        // `id_to_field` is flattened, so checking each field by its own type keeps the
+        // blame on the offending leaf, not its container (mirrors Java's `lazyIdToField`).
         for field in self.id_to_field.values() {
-            let name = self
-                .name_by_field_id(field.id)
-                .unwrap_or(field.name.as_str());
-
-            let min_version = field.field_type.min_format_version();
+            let min_version = leaf_min_format_version(&field.field_type);
             if format_version < min_version {
-                problems.push(format!(
+                let name = self
+                    .name_by_field_id(field.id)
+                    .unwrap_or(field.name.as_str());
+                problems.push((field.id, format!(
                     "Invalid type for {name}: {} is not supported until {min_version} but format version is {format_version}.",
                     field.field_type,
-                ));
+                )));
             }
 
             if let Some(default) = &field.initial_default
                 && format_version < MIN_FORMAT_VERSION_DEFAULT_VALUES
             {
-                problems.push(format!(
+                let name = self
+                    .name_by_field_id(field.id)
+                    .unwrap_or(field.name.as_str());
+                problems.push((field.id, format!(
                     "Invalid initial default for {name}: non-null default ({default:?}) is not supported until {MIN_FORMAT_VERSION_DEFAULT_VALUES} but format version is {format_version}."
-                ));
+                )));
             }
         }
 
         if problems.is_empty() {
-            Ok(())
-        } else {
-            Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid schema for {format_version}:\n- {}",
-                    problems.join("\n- ")
-                ),
-            ))
+            return Ok(());
         }
+
+        // Stable sort by id: HashMap order is nondeterministic, and stability keeps a
+        // field's type problem before its default problem (matches Java's TreeMap order).
+        let message = problems
+            .into_iter()
+            .sorted_by_key(|(id, _)| *id)
+            .map(|(_, msg)| msg)
+            .join("\n- ");
+        Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid schema for {format_version}:\n- {message}"),
+        ))
+    }
+}
+
+/// Minimum [`FormatVersion`] required by a type itself, ignoring nested fields.
+///
+/// `TimestampNs` / `TimestamptzNs` / `Variant` require v3; everything else (including
+/// nested types, validated per-leaf elsewhere) is valid from v1. Single source of truth
+/// for the type version rules, mirroring Java's `Schema.MIN_FORMAT_VERSIONS`.
+fn leaf_min_format_version(field_type: &Type) -> FormatVersion {
+    match field_type {
+        Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs)
+        | Type::Variant(_) => FormatVersion::V3,
+        _ => FormatVersion::V1,
     }
 }
 
@@ -581,6 +599,109 @@ mod tests {
             .check_format_compatibility(FormatVersion::V2)
             .unwrap_err();
         assert!(err.message().contains("inner"), "{err}");
+
+        // A v3-only type nested in a container blames the leaf, never the container.
+        let nested_variant = schema_with(vec![
+            NestedField::required(
+                1,
+                "container",
+                Type::Struct(StructType::new(vec![
+                    NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
+                ])),
+            )
+            .into(),
+        ]);
+        let err = nested_variant
+            .check_format_compatibility(FormatVersion::V2)
+            .unwrap_err();
+        assert!(err.message().contains("container.v"), "{err}");
+        assert!(
+            !err.message().contains("Invalid type for container:"),
+            "container must not be blamed: {err}"
+        );
+    }
+
+    #[test]
+    fn test_min_format_version() {
+        use crate::spec::{FormatVersion, VariantType};
+
+        fn schema_with(fields: Vec<NestedFieldRef>) -> Schema {
+            Schema::builder().with_fields(fields).build().unwrap()
+        }
+
+        // All v1-compatible types → V1.
+        let v1 = schema_with(vec![
+            NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(2, "b", Type::Primitive(PrimitiveType::String)).into(),
+        ]);
+        assert_eq!(v1.min_format_version(), FormatVersion::V1);
+
+        // A top-level variant → V3.
+        let variant = schema_with(vec![
+            NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+        ]);
+        assert_eq!(variant.min_format_version(), FormatVersion::V3);
+
+        // A v3-only type nested inside a list inside a struct → V3 (recursion).
+        let nested = schema_with(vec![
+            NestedField::required(
+                1,
+                "s",
+                Type::Struct(StructType::new(vec![
+                    NestedField::optional(
+                        2,
+                        "l",
+                        Type::List(ListType::new(
+                            NestedField::required(
+                                3,
+                                "element",
+                                Type::Primitive(PrimitiveType::TimestampNs),
+                            )
+                            .into(),
+                        )),
+                    )
+                    .into(),
+                ])),
+            )
+            .into(),
+        ]);
+        assert_eq!(nested.min_format_version(), FormatVersion::V3);
+    }
+
+    #[test]
+    fn test_check_format_compatibility_message_order() {
+        use crate::spec::{FormatVersion, PrimitiveLiteral, VariantType};
+
+        // Fields declared out of id order; field 2 fails both checks (ts_ns type
+        // AND a non-null initial default). The error must list problems by field id,
+        // with the type problem before the initial-default problem for field 2.
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(3, "c", Type::Variant(VariantType)).into(),
+                NestedField::optional(2, "b", Type::Primitive(PrimitiveType::TimestampNs))
+                    .with_initial_default(Literal::Primitive(PrimitiveLiteral::Long(0)))
+                    .into(),
+                NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let message = schema
+            .check_format_compatibility(FormatVersion::V2)
+            .unwrap_err()
+            .message()
+            .to_string();
+
+        let lines: Vec<&str> = message.lines().skip(1).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "- Invalid type for b: timestamp_ns is not supported until v3 but format version is v2.",
+                "- Invalid initial default for b: non-null default (Primitive(Long(0))) is not supported until v3 but format version is v2.",
+                "- Invalid type for c: variant is not supported until v3 but format version is v2.",
+            ],
+            "{message}"
+        );
     }
 
     #[test]

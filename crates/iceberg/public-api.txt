@@ -1690,7 +1690,6 @@ pub fn iceberg::spec::Type::is_nested(&self) -> bool
 pub fn iceberg::spec::Type::is_primitive(&self) -> bool
 pub fn iceberg::spec::Type::is_struct(&self) -> bool
 pub fn iceberg::spec::Type::is_variant(&self) -> bool
-pub fn iceberg::spec::Type::min_format_version(&self) -> iceberg::spec::FormatVersion
 pub fn iceberg::spec::Type::to_struct_type(self) -> core::option::Option<iceberg::spec::StructType>
 impl core::clone::Clone for iceberg::spec::Type
 pub fn iceberg::spec::Type::clone(&self) -> iceberg::spec::Type
