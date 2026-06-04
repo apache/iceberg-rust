@@ -194,6 +194,37 @@ mod tests {
     }
 
     #[test]
+    fn test_reassign_ids_variant() {
+        use crate::spec::VariantType;
+
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(5, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(3, "data", Type::Variant(VariantType)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let reassigned = schema
+            .into_builder()
+            .with_reassigned_field_ids(0)
+            .build()
+            .unwrap();
+
+        // Variant has no sub-fields, so it survives reassignment unchanged; only the
+        // top-level field ids shift (id → 0, data → 1).
+        let expected = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(0, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(1, "data", Type::Variant(VariantType)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        pretty_assertions::assert_eq!(expected, reassigned);
+    }
+
+    #[test]
     fn test_reassigned_ids_nested() {
         let schema = table_schema_nested();
         let reassigned_schema = schema

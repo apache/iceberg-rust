@@ -480,6 +480,7 @@ mod tests {
 
     use crate::spec::{
         DEFAULT_SCHEMA_ID, Literal, NestedField, PrimitiveType, StructType, TableMetadata, Type,
+        VariantType,
     };
     use crate::table::Table;
     use crate::transaction::Transaction;
@@ -594,6 +595,19 @@ mod tests {
     // -----------------------------------------------------------------------
     // Existing root-level tests
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_assign_fresh_ids_variant() {
+        // Variant carries no sub-fields, so fresh-id assignment only renames the field
+        // itself and leaves the type untouched.
+        let mut next_id = 10;
+        let field = NestedField::optional(1, "data", Type::Variant(VariantType));
+        let assigned = super::assign_fresh_ids(&field, &mut next_id);
+
+        assert_eq!(assigned.id, 11);
+        assert_eq!(*assigned.field_type, Type::Variant(VariantType));
+        assert_eq!(next_id, 11);
+    }
 
     #[tokio::test]
     async fn test_add_column() {
