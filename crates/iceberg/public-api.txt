@@ -2037,9 +2037,9 @@ impl iceberg::spec::ManifestListWriter
 pub fn iceberg::spec::ManifestListWriter::add_manifests(&mut self, manifests: impl core::iter::traits::iterator::Iterator<Item = iceberg::spec::ManifestFile>) -> iceberg::Result<()>
 pub async fn iceberg::spec::ManifestListWriter::close(self) -> iceberg::Result<()>
 pub fn iceberg::spec::ManifestListWriter::next_row_id(&self) -> core::option::Option<u64>
-pub fn iceberg::spec::ManifestListWriter::v1(output_file: iceberg::io::OutputFile, snapshot_id: i64, parent_snapshot_id: core::option::Option<i64>) -> Self
-pub fn iceberg::spec::ManifestListWriter::v2(output_file: iceberg::io::OutputFile, snapshot_id: i64, parent_snapshot_id: core::option::Option<i64>, sequence_number: i64) -> Self
-pub fn iceberg::spec::ManifestListWriter::v3(output_file: iceberg::io::OutputFile, snapshot_id: i64, parent_snapshot_id: core::option::Option<i64>, sequence_number: i64, first_row_id: core::option::Option<u64>) -> Self
+pub fn iceberg::spec::ManifestListWriter::v1(writer: alloc::boxed::Box<dyn iceberg::io::FileWrite>, snapshot_id: i64, parent_snapshot_id: core::option::Option<i64>) -> Self
+pub fn iceberg::spec::ManifestListWriter::v2(writer: alloc::boxed::Box<dyn iceberg::io::FileWrite>, snapshot_id: i64, parent_snapshot_id: core::option::Option<i64>, sequence_number: i64) -> Self
+pub fn iceberg::spec::ManifestListWriter::v3(writer: alloc::boxed::Box<dyn iceberg::io::FileWrite>, snapshot_id: i64, parent_snapshot_id: core::option::Option<i64>, sequence_number: i64, first_row_id: core::option::Option<u64>) -> Self
 impl core::fmt::Debug for iceberg::spec::ManifestListWriter
 pub fn iceberg::spec::ManifestListWriter::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::spec::ManifestMetadata
