@@ -53,10 +53,12 @@
 mod action;
 
 pub use action::*;
+pub use update_partition::{Term, UpdatePartitionSpecAction};
 mod append;
 mod snapshot;
 mod sort_order;
 mod update_location;
+mod update_partition;
 mod update_properties;
 mod update_schema;
 mod update_statistics;
@@ -152,6 +154,17 @@ impl Transaction {
     /// Creates replace sort order action.
     pub fn replace_sort_order(&self) -> ReplaceSortOrderAction {
         ReplaceSortOrderAction::new()
+    }
+
+    /// Update the default partition spec of table.
+    pub fn update_partition_spec(&self) -> UpdatePartitionSpecAction {
+        let metadata = self.table.metadata();
+        UpdatePartitionSpecAction::new(metadata)
+    }
+
+    /// Update the default partition spec of table.
+    pub fn update_partition(&self) -> UpdatePartitionSpecAction {
+        self.update_partition_spec()
     }
 
     /// Set the location of table

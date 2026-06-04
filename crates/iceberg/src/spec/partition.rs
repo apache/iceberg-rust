@@ -48,6 +48,21 @@ pub struct PartitionField {
 }
 
 impl PartitionField {
+    /// Create a new partition field.
+    pub fn new(
+        source_id: i32,
+        field_id: i32,
+        name: impl Into<String>,
+        transform: Transform,
+    ) -> Self {
+        PartitionField {
+            source_id,
+            field_id,
+            name: name.into(),
+            transform,
+        }
+    }
+
     /// To unbound partition field
     pub fn into_unbound(self) -> UnboundPartitionField {
         self.into()
@@ -599,7 +614,9 @@ impl PartitionSpecBuilder {
     ) -> Result<()> {
         match schema.field_by_name(field.name.as_str()) {
             Some(schema_collision) => {
-                if field.transform == Transform::Identity {
+                if field.transform == Transform::Void {
+                    Ok(())
+                } else if field.transform == Transform::Identity {
                     if schema_collision.id == field.source_id {
                         Ok(())
                     } else {
@@ -690,9 +707,12 @@ trait CorePartitionSpecValidator {
     }
 
     /// For a single source-column transformations must be unique.
+    /// Void transforms are excluded from this check because they are placeholders
+    /// for deleted fields in V1 specs, and multiple Void fields on the same source
+    /// column are valid.
     fn check_for_redundant_partitions(&self, source_id: i32, transform: &Transform) -> Result<()> {
         let collision = self.fields().iter().find(|f| {
-            f.source_id == source_id && f.transform.dedup_name() == transform.dedup_name()
+            f.source_id == source_id && *transform != Transform::Void && f.transform == *transform
         });
 
         if let Some(collision) = collision {
@@ -700,9 +720,7 @@ trait CorePartitionSpecValidator {
                 ErrorKind::DataInvalid,
                 format!(
                     "Cannot add redundant partition with source id `{}` and transform `{}`. A partition with the same source id and transform already exists with name `{}`",
-                    source_id,
-                    transform.dedup_name(),
-                    collision.name
+                    source_id, transform, collision.name
                 ),
             ))
         } else {
