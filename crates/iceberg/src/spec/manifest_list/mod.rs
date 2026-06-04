@@ -134,7 +134,12 @@ mod test {
         let full_path = format!("{}/{}", tmp_dir.path().to_str().unwrap(), file_name);
 
         let mut writer = ManifestListWriter::v1(
-            file_io.new_output(full_path.clone()).unwrap().writer().await.unwrap(),
+            file_io
+                .new_output(full_path.clone())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap(),
             1646658105718557341,
             Some(1646658105718557341),
         );
@@ -206,7 +211,12 @@ mod test {
         let full_path = format!("{}/{}", tmp_dir.path().to_str().unwrap(), file_name);
 
         let mut writer = ManifestListWriter::v2(
-            file_io.new_output(full_path.clone()).unwrap().writer().await.unwrap(),
+            file_io
+                .new_output(full_path.clone())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap(),
             1646658105718557341,
             Some(1646658105718557341),
             1,
@@ -319,7 +329,12 @@ mod test {
         let full_path = format!("{}/{}", tmp_dir.path().to_str().unwrap(), file_name);
 
         let mut writer = ManifestListWriter::v3(
-            file_io.new_output(full_path.clone()).unwrap().writer().await.unwrap(),
+            file_io
+                .new_output(full_path.clone())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap(),
             377075049360453639,
             Some(377075049360453639),
             1,
