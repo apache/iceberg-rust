@@ -88,9 +88,7 @@ impl TransactionAction for RewriteManifestsAction {
         let default_spec_id = metadata.default_partition_spec_id();
         let format_version = metadata.format_version();
 
-        let manifest_list = current_snapshot
-            .load_manifest_list(table.file_io(), &table.metadata_ref())
-            .await?;
+        let manifest_list = table.manifest_list_reader(current_snapshot).load().await?;
 
         let mut kept: Vec<ManifestFile> = Vec::new();
         let mut to_rewrite: Vec<ManifestFile> = Vec::new();
@@ -440,10 +438,8 @@ mod tests {
         assert!(seq_a < seq_b && seq_b < seq_c);
 
         let pre_manifest_count = table
-            .metadata()
-            .current_snapshot()
-            .unwrap()
-            .load_manifest_list(table.file_io(), table.metadata())
+            .manifest_list_reader(table.metadata().current_snapshot().unwrap())
+            .load()
             .await
             .unwrap()
             .entries()
@@ -462,10 +458,7 @@ mod tests {
         let snapshot = table.metadata().current_snapshot().unwrap();
         assert_eq!(snapshot.summary().operation, Operation::Replace);
 
-        let post_list = snapshot
-            .load_manifest_list(table.file_io(), table.metadata())
-            .await
-            .unwrap();
+        let post_list = table.manifest_list_reader(snapshot).load().await.unwrap();
         let total_entries: usize = {
             let mut n = 0;
             for m in post_list.entries() {
@@ -517,10 +510,8 @@ mod tests {
             .unwrap();
 
         let post_list = t
-            .metadata()
-            .current_snapshot()
-            .unwrap()
-            .load_manifest_list(t.file_io(), t.metadata())
+            .manifest_list_reader(t.metadata().current_snapshot().unwrap())
+            .load()
             .await
             .unwrap();
         assert!(
@@ -546,10 +537,8 @@ mod tests {
 
         async fn collect(t: &Table) -> Vec<(String, Option<i64>, Option<i64>, Option<i64>)> {
             let list = t
-                .metadata()
-                .current_snapshot()
-                .unwrap()
-                .load_manifest_list(t.file_io(), t.metadata())
+                .manifest_list_reader(t.metadata().current_snapshot().unwrap())
+                .load()
                 .await
                 .unwrap();
             let mut v = Vec::new();
@@ -646,10 +635,8 @@ mod tests {
             .await
             .unwrap();
         let post_count = t
-            .metadata()
-            .current_snapshot()
-            .unwrap()
-            .load_manifest_list(t.file_io(), t.metadata())
+            .manifest_list_reader(t.metadata().current_snapshot().unwrap())
+            .load()
             .await
             .unwrap()
             .entries()
@@ -696,10 +683,7 @@ mod tests {
         assert_eq!(snap.sequence_number(), pre_seq + 1);
 
         // Each output manifest's entries must all share the same partition tuple.
-        let post_list = snap
-            .load_manifest_list(table.file_io(), table.metadata())
-            .await
-            .unwrap();
+        let post_list = table.manifest_list_reader(snap).load().await.unwrap();
         assert_eq!(
             post_list.entries().len(),
             2,
