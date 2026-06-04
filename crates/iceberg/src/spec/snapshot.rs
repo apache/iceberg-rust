@@ -27,8 +27,7 @@ use typed_builder::TypedBuilder;
 
 use super::table_metadata::SnapshotLog;
 use crate::error::{Result, timestamp_ms_to_utc};
-use crate::io::FileIO;
-use crate::spec::{ManifestList, SchemaId, SchemaRef, TableMetadata};
+use crate::spec::{SchemaId, SchemaRef, TableMetadata};
 use crate::{Error, ErrorKind};
 
 /// The ref name of the main branch of the table.
@@ -192,21 +191,6 @@ impl Snapshot {
             Some(id) => table_metadata.snapshot_by_id(id).cloned(),
             None => None,
         }
-    }
-
-    /// Load manifest list.
-    pub async fn load_manifest_list(
-        &self,
-        file_io: &FileIO,
-        table_metadata: &TableMetadata,
-    ) -> Result<ManifestList> {
-        let manifest_list_content = file_io.new_input(&self.manifest_list)?.read().await?;
-        ManifestList::parse_with_version(
-            &manifest_list_content,
-            // TODO: You don't really need the version since you could just project any Avro in
-            // the version that you'd like to get (probably always the latest)
-            table_metadata.format_version(),
-        )
     }
 
     #[allow(dead_code)]

@@ -44,9 +44,18 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: ./.github/actions/overwrite-package-version # Overwrite package version with timestamp
+      - name: Compute dev version
+        id: version
+        shell: bash
+        env:
+          TIMESTAMP: ${{ needs.set-version.outputs.timestamp }}
+        run: |
+          CURRENT=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[0].version')
+          echo "pep440=${CURRENT}.dev${TIMESTAMP}" >> $GITHUB_OUTPUT
+
+      - uses: ./.github/actions/overwrite-package-version
         with:
-          timestamp: ${{ needs.set-version.outputs.TIMESTAMP }}
+          version: ${{ steps.version.outputs.pep440 }}
 
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -81,9 +90,18 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: ./.github/actions/overwrite-package-version # Overwrite package version with timestamp
+      - name: Compute dev version
+        id: version
+        shell: bash
+        env:
+          TIMESTAMP: ${{ needs.set-version.outputs.timestamp }}
+        run: |
+          CURRENT=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[0].version')
+          echo "pep440=${CURRENT}.dev${TIMESTAMP}" >> $GITHUB_OUTPUT
+
+      - uses: ./.github/actions/overwrite-package-version
         with:
-          timestamp: ${{ needs.set-version.outputs.TIMESTAMP }}
+          version: ${{ steps.version.outputs.pep440 }}
 
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
@@ -104,7 +122,7 @@ jobs:
           manylinux: ${{ matrix.manylinux || 'auto' }}
           working-directory: "bindings/python"
           command: build
-          args: --release -o dist -i python3.12 # Explicitly set interpreter; manylinux containers have multiple Pythons and maturin may pick an older one
+          args: --profile py-release -o dist -i python3.12 # Explicitly set interpreter; manylinux containers have multiple Pythons and maturin may pick an older one
 
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:

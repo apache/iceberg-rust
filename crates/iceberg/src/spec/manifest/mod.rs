@@ -161,7 +161,8 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
 
-    use serde_json::Value;
+    use apache_avro::{Codec, Writer, to_value};
+    use serde_json::{Value, to_vec};
     use tempfile::TempDir;
 
     use super::*;
@@ -286,6 +287,123 @@ mod tests {
         // The snapshot id is assigned when the entry is added to the manifest.
         entries[0].snapshot_id = Some(1);
         assert_eq!(actual_manifest, Manifest::new(metadata, entries));
+    }
+
+    #[test]
+    fn test_parse_snappy_manifest_v2() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![Arc::new(NestedField::optional(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Long),
+                ))])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+
+        for (manifest_content, file_content, file_path) in [
+            (
+                ManifestContentType::Data,
+                DataContentType::Data,
+                "s3://bucket/table/data/data.parquet",
+            ),
+            (
+                ManifestContentType::Deletes,
+                DataContentType::PositionDeletes,
+                "s3://bucket/table/data/delete.parquet",
+            ),
+        ] {
+            let metadata = ManifestMetadata {
+                schema_id: 0,
+                schema: schema.clone(),
+                partition_spec: partition_spec.clone(),
+                content: manifest_content,
+                format_version: FormatVersion::V2,
+            };
+            let entry = ManifestEntry {
+                status: ManifestStatus::Added,
+                snapshot_id: Some(1),
+                sequence_number: None,
+                file_sequence_number: None,
+                data_file: DataFile {
+                    content: file_content,
+                    file_path: file_path.to_string(),
+                    file_format: DataFileFormat::Parquet,
+                    partition: Struct::empty(),
+                    record_count: 1,
+                    file_size_in_bytes: 1024,
+                    column_sizes: HashMap::new(),
+                    value_counts: HashMap::new(),
+                    null_value_counts: HashMap::new(),
+                    nan_value_counts: HashMap::new(),
+                    lower_bounds: HashMap::new(),
+                    upper_bounds: HashMap::new(),
+                    key_metadata: None,
+                    split_offsets: None,
+                    equality_ids: None,
+                    sort_order_id: None,
+                    partition_spec_id: 0,
+                    first_row_id: None,
+                    referenced_data_file: None,
+                    content_offset: None,
+                    content_size_in_bytes: None,
+                },
+            };
+
+            let partition_type = metadata
+                .partition_spec
+                .partition_type(&metadata.schema)
+                .unwrap();
+            let avro_schema = manifest_schema_v2(&partition_type).unwrap();
+            let mut writer = Writer::with_codec(&avro_schema, Vec::new(), Codec::Snappy);
+            writer
+                .add_user_metadata("schema".to_string(), to_vec(&metadata.schema).unwrap())
+                .unwrap();
+            writer
+                .add_user_metadata(
+                    "schema-id".to_string(),
+                    metadata.schema.schema_id().to_string(),
+                )
+                .unwrap();
+            writer
+                .add_user_metadata(
+                    "partition-spec".to_string(),
+                    to_vec(&metadata.partition_spec.fields()).unwrap(),
+                )
+                .unwrap();
+            writer
+                .add_user_metadata(
+                    "partition-spec-id".to_string(),
+                    metadata.partition_spec.spec_id().to_string(),
+                )
+                .unwrap();
+            writer
+                .add_user_metadata(
+                    "format-version".to_string(),
+                    (metadata.format_version as u8).to_string(),
+                )
+                .unwrap();
+            writer
+                .add_user_metadata("content".to_string(), metadata.content.to_string())
+                .unwrap();
+            let value = to_value(
+                _serde::ManifestEntryV2::try_from(entry.clone(), &partition_type).unwrap(),
+            )
+            .unwrap()
+            .resolve(&avro_schema)
+            .unwrap();
+            writer.append(value).unwrap();
+            let bs = writer.into_inner().unwrap();
+
+            let parsed_manifest = Manifest::parse_avro(&bs).unwrap();
+
+            assert_eq!(parsed_manifest, Manifest::new(metadata, vec![entry]));
+        }
     }
 
     #[tokio::test]

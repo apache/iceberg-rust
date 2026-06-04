@@ -161,9 +161,7 @@ impl<'a> ManifestsTable<'a> {
         let mut partition_summaries = self.partition_summary_builder()?;
 
         if let Some(snapshot) = self.table.metadata().current_snapshot() {
-            let manifest_list = snapshot
-                .load_manifest_list(self.table.file_io(), &self.table.metadata_ref())
-                .await?;
+            let manifest_list = self.table.manifest_list_reader(snapshot).load().await?;
             for manifest in manifest_list.entries() {
                 content.append_value(manifest.content as i32);
                 path.append_value(manifest.manifest_path.clone());

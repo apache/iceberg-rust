@@ -16,6 +16,8 @@
 // under the License.
 
 use std::cmp::min;
+use std::future::Future;
+use std::pin::Pin;
 
 use apache_avro::{Writer as AvroWriter, to_value};
 use bytes::Bytes;
@@ -26,8 +28,9 @@ use super::{
     Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType,
     UNASSIGNED_SEQUENCE_NUMBER,
 };
+use crate::encryption::EncryptedOutputFile;
 use crate::error::Result;
-use crate::io::OutputFile;
+use crate::io::{FileWrite, OutputFile};
 use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
 use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2};
 use crate::spec::{
@@ -40,9 +43,12 @@ use crate::{Error, ErrorKind};
 /// with the actual snapshot ID before it is committed.
 const UNASSIGNED_SNAPSHOT_ID: i64 = -1;
 
+type WriterFuture = Pin<Box<dyn Future<Output = Result<Box<dyn FileWrite>>> + Send>>;
+
 /// The builder used to create a [`ManifestWriter`].
 pub struct ManifestWriterBuilder {
-    output: OutputFile,
+    writer_future: WriterFuture,
+    location: String,
     snapshot_id: Option<i64>,
     key_metadata: Option<Vec<u8>>,
     schema: SchemaRef,
@@ -58,8 +64,31 @@ impl ManifestWriterBuilder {
         schema: SchemaRef,
         partition_spec: PartitionSpec,
     ) -> Self {
+        let location = output.location().to_owned();
         Self {
-            output,
+            writer_future: Box::pin(async move { output.writer().await }),
+            location,
+            snapshot_id,
+            key_metadata,
+            schema,
+            partition_spec,
+        }
+    }
+
+    /// Create a new builder from an [`EncryptedOutputFile`].
+    ///
+    /// Use this when writing manifests with transparent encryption.
+    pub fn new_from_encrypted(
+        encrypted_output: EncryptedOutputFile,
+        snapshot_id: Option<i64>,
+        key_metadata: Option<Vec<u8>>,
+        schema: SchemaRef,
+        partition_spec: PartitionSpec,
+    ) -> Self {
+        let location = encrypted_output.location().to_owned();
+        Self {
+            writer_future: Box::pin(async move { encrypted_output.writer().await }),
+            location,
             snapshot_id,
             key_metadata,
             schema,
@@ -77,7 +106,8 @@ impl ManifestWriterBuilder {
             .content(ManifestContentType::Data)
             .build();
         ManifestWriter::new(
-            self.output,
+            self.writer_future,
+            self.location,
             self.snapshot_id,
             self.key_metadata,
             metadata,
@@ -95,7 +125,8 @@ impl ManifestWriterBuilder {
             .content(ManifestContentType::Data)
             .build();
         ManifestWriter::new(
-            self.output,
+            self.writer_future,
+            self.location,
             self.snapshot_id,
             self.key_metadata,
             metadata,
@@ -113,7 +144,8 @@ impl ManifestWriterBuilder {
             .content(ManifestContentType::Deletes)
             .build();
         ManifestWriter::new(
-            self.output,
+            self.writer_future,
+            self.location,
             self.snapshot_id,
             self.key_metadata,
             metadata,
@@ -131,7 +163,8 @@ impl ManifestWriterBuilder {
             .content(ManifestContentType::Data)
             .build();
         ManifestWriter::new(
-            self.output,
+            self.writer_future,
+            self.location,
             self.snapshot_id,
             self.key_metadata,
             metadata,
@@ -151,7 +184,8 @@ impl ManifestWriterBuilder {
             .content(ManifestContentType::Deletes)
             .build();
         ManifestWriter::new(
-            self.output,
+            self.writer_future,
+            self.location,
             self.snapshot_id,
             self.key_metadata,
             metadata,
@@ -162,7 +196,8 @@ impl ManifestWriterBuilder {
 
 /// A manifest writer.
 pub struct ManifestWriter {
-    output: OutputFile,
+    writer_future: WriterFuture,
+    location: String,
 
     snapshot_id: Option<i64>,
 
@@ -186,14 +221,16 @@ pub struct ManifestWriter {
 impl ManifestWriter {
     /// Create a new manifest writer.
     pub(crate) fn new(
-        output: OutputFile,
+        writer_future: WriterFuture,
+        location: String,
         snapshot_id: Option<i64>,
         key_metadata: Option<Vec<u8>>,
         metadata: ManifestMetadata,
         first_row_id: Option<u64>,
     ) -> Self {
         Self {
-            output,
+            writer_future,
+            location,
             snapshot_id,
             added_files: 0,
             added_rows: 0,
@@ -463,10 +500,12 @@ impl ManifestWriter {
 
         let content = avro_writer.into_inner()?;
         let length = content.len();
-        self.output.write(Bytes::from(content)).await?;
+        let mut writer = self.writer_future.await?;
+        writer.write(Bytes::from(content)).await?;
+        writer.close().await?;
 
         Ok(ManifestFile {
-            manifest_path: self.output.location().to_string(),
+            manifest_path: self.location,
             manifest_length: length as i64,
             partition_spec_id: self.metadata.partition_spec.spec_id(),
             content: self.metadata.content,

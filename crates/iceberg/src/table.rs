@@ -25,7 +25,7 @@ use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
 use crate::runtime::Runtime;
 use crate::scan::TableScanBuilder;
-use crate::spec::{SchemaRef, TableMetadata, TableMetadataRef};
+use crate::spec::{ManifestListReader, SchemaRef, SnapshotRef, TableMetadata, TableMetadataRef};
 use crate::{Error, ErrorKind, Result, TableIdent};
 
 /// Builder to create table scan.
@@ -262,6 +262,15 @@ impl Table {
     /// Returns the current schema as a shared reference.
     pub fn current_schema_ref(&self) -> SchemaRef {
         self.metadata.current_schema().clone()
+    }
+
+    /// Creates a [`ManifestListReader`] for the given snapshot.
+    pub fn manifest_list_reader(&self, snapshot: &SnapshotRef) -> ManifestListReader {
+        ManifestListReader::new(
+            snapshot.clone(),
+            self.file_io.clone(),
+            self.metadata.clone(),
+        )
     }
 
     /// Create a reader for the table.

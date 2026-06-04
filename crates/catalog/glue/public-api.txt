@@ -1,0 +1,41 @@
+pub mod iceberg_catalog_glue
+pub macro iceberg_catalog_glue::with_catalog_id!
+pub struct iceberg_catalog_glue::GlueCatalog
+impl iceberg_catalog_glue::GlueCatalog
+pub fn iceberg_catalog_glue::GlueCatalog::file_io(&self) -> iceberg::io::file_io::FileIO
+impl core::fmt::Debug for iceberg_catalog_glue::GlueCatalog
+pub fn iceberg_catalog_glue::GlueCatalog::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::catalog::Catalog for iceberg_catalog_glue::GlueCatalog
+pub fn iceberg_catalog_glue::GlueCatalog::create_namespace<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::catalog::Namespace>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_glue::GlueCatalog::create_table<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent, creation: iceberg::catalog::TableCreation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_glue::GlueCatalog::drop_namespace<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_glue::GlueCatalog::drop_table<'life0, 'life1, 'async_trait>(&'life0 self, table: &'life1 iceberg::catalog::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_glue::GlueCatalog::get_namespace<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::catalog::Namespace>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_glue::GlueCatalog::list_namespaces<'life0, 'life1, 'async_trait>(&'life0 self, parent: core::option::Option<&'life1 iceberg::catalog::NamespaceIdent>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::vec::Vec<iceberg::catalog::NamespaceIdent>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_glue::GlueCatalog::list_tables<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::vec::Vec<iceberg::catalog::TableIdent>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_glue::GlueCatalog::load_table<'life0, 'life1, 'async_trait>(&'life0 self, table: &'life1 iceberg::catalog::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_glue::GlueCatalog::namespace_exists<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_glue::GlueCatalog::purge_table<'life0, 'life1, 'async_trait>(&'life0 self, table: &'life1 iceberg::catalog::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_glue::GlueCatalog::register_table<'life0, 'life1, 'async_trait>(&'life0 self, table_ident: &'life1 iceberg::catalog::TableIdent, metadata_location: alloc::string::String) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_glue::GlueCatalog::rename_table<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, src: &'life1 iceberg::catalog::TableIdent, dest: &'life2 iceberg::catalog::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn iceberg_catalog_glue::GlueCatalog::table_exists<'life0, 'life1, 'async_trait>(&'life0 self, table: &'life1 iceberg::catalog::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_glue::GlueCatalog::update_namespace<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_glue::GlueCatalog::update_table<'life0, 'async_trait>(&'life0 self, commit: iceberg::catalog::TableCommit) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct iceberg_catalog_glue::GlueCatalogBuilder
+impl core::default::Default for iceberg_catalog_glue::GlueCatalogBuilder
+pub fn iceberg_catalog_glue::GlueCatalogBuilder::default() -> Self
+impl core::fmt::Debug for iceberg_catalog_glue::GlueCatalogBuilder
+pub fn iceberg_catalog_glue::GlueCatalogBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::catalog::CatalogBuilder for iceberg_catalog_glue::GlueCatalogBuilder
+pub type iceberg_catalog_glue::GlueCatalogBuilder::C = iceberg_catalog_glue::GlueCatalog
+pub fn iceberg_catalog_glue::GlueCatalogBuilder::load(self, name: impl core::convert::Into<alloc::string::String>, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> impl core::future::future::Future<Output = iceberg::error::Result<Self::C>> + core::marker::Send
+pub fn iceberg_catalog_glue::GlueCatalogBuilder::with_runtime(self, runtime: iceberg::runtime::Runtime) -> Self
+pub fn iceberg_catalog_glue::GlueCatalogBuilder::with_storage_factory(self, storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> Self
+pub const iceberg_catalog_glue::AWS_ACCESS_KEY_ID: &str
+pub const iceberg_catalog_glue::AWS_PROFILE_NAME: &str
+pub const iceberg_catalog_glue::AWS_REGION_NAME: &str
+pub const iceberg_catalog_glue::AWS_SECRET_ACCESS_KEY: &str
+pub const iceberg_catalog_glue::AWS_SESSION_TOKEN: &str
+pub const iceberg_catalog_glue::GLUE_CATALOG_PROP_CATALOG_ID: &str
+pub const iceberg_catalog_glue::GLUE_CATALOG_PROP_URI: &str
+pub const iceberg_catalog_glue::GLUE_CATALOG_PROP_WAREHOUSE: &str

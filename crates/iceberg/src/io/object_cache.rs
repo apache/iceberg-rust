@@ -20,7 +20,8 @@ use std::sync::Arc;
 
 use crate::io::FileIO;
 use crate::spec::{
-    FormatVersion, Manifest, ManifestFile, ManifestList, SchemaId, SnapshotRef, TableMetadataRef,
+    FormatVersion, Manifest, ManifestFile, ManifestList, ManifestListReader, SchemaId, SnapshotRef,
+    TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -126,10 +127,14 @@ impl ObjectCache {
         table_metadata: &TableMetadataRef,
     ) -> Result<Arc<ManifestList>> {
         if self.cache_disabled {
-            return snapshot
-                .load_manifest_list(&self.file_io, table_metadata)
-                .await
-                .map(Arc::new);
+            return ManifestListReader::new(
+                snapshot.clone(),
+                self.file_io.clone(),
+                table_metadata.clone(),
+            )
+            .load()
+            .await
+            .map(Arc::new);
         }
 
         let key = CachedObjectKey::ManifestList((
@@ -173,9 +178,13 @@ impl ObjectCache {
         snapshot: &SnapshotRef,
         table_metadata: &TableMetadataRef,
     ) -> Result<CachedItem> {
-        let manifest_list = snapshot
-            .load_manifest_list(&self.file_io, table_metadata)
-            .await?;
+        let manifest_list = ManifestListReader::new(
+            snapshot.clone(),
+            self.file_io.clone(),
+            table_metadata.clone(),
+        )
+        .load()
+        .await?;
 
         Ok(CachedItem::ManifestList(Arc::new(manifest_list)))
     }
@@ -298,11 +307,16 @@ mod tests {
             let data_file_manifest = writer.write_manifest_file().await.unwrap();
 
             // Write to manifest list
+            let manifest_list_writer = self
+                .table
+                .file_io()
+                .new_output(current_snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap();
             let mut manifest_list_write = ManifestListWriter::v2(
-                self.table
-                    .file_io()
-                    .new_output(current_snapshot.manifest_list())
-                    .unwrap(),
+                manifest_list_writer,
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
