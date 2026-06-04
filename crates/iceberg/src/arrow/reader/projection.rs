@@ -1000,24 +1000,20 @@ message schema {
         // Read the old Parquet file using the NEW schema (with column 'b')
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
         let tasks = Box::pin(futures::stream::iter(
-            vec![Ok(FileScanTask {
-                file_size_in_bytes: std::fs::metadata(format!("{table_location}/old_file.parquet"))
-                    .unwrap()
-                    .len(),
-                start: 0,
-                length: 0,
-                record_count: None,
-                data_file_path: format!("{table_location}/old_file.parquet"),
-                data_file_format: DataFileFormat::Parquet,
-                schema: new_schema.clone(),
-                project_field_ids: vec![1, 2], // Request both columns 'a' and 'b'
-                predicate: None,
-                deletes: vec![],
-                partition: None,
-                partition_spec: None,
-                name_mapping: None,
-                case_sensitive: false,
-            })]
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(
+                    std::fs::metadata(format!("{table_location}/old_file.parquet"))
+                        .unwrap()
+                        .len(),
+                )
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(format!("{table_location}/old_file.parquet"))
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(new_schema.clone())
+                .with_project_field_ids(vec![1, 2]) // Request both columns 'a' and 'b'
+                .with_case_sensitive(false)
+                .build())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1103,24 +1099,20 @@ message schema {
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         let tasks = Box::pin(futures::stream::iter(
-            vec![Ok(FileScanTask {
-                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
-                    .unwrap()
-                    .len(),
-                start: 0,
-                length: 0,
-                record_count: None,
-                data_file_path: format!("{table_location}/1.parquet"),
-                data_file_format: DataFileFormat::Parquet,
-                schema: schema.clone(),
-                project_field_ids: vec![1, 2],
-                predicate: None,
-                deletes: vec![],
-                partition: None,
-                partition_spec: None,
-                name_mapping: None,
-                case_sensitive: false,
-            })]
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(
+                    std::fs::metadata(format!("{table_location}/1.parquet"))
+                        .unwrap()
+                        .len(),
+                )
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(format!("{table_location}/1.parquet"))
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![1, 2])
+                .with_case_sensitive(false)
+                .build())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1205,24 +1197,20 @@ message schema {
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         let tasks = Box::pin(futures::stream::iter(
-            vec![Ok(FileScanTask {
-                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
-                    .unwrap()
-                    .len(),
-                start: 0,
-                length: 0,
-                record_count: None,
-                data_file_path: format!("{table_location}/1.parquet"),
-                data_file_format: DataFileFormat::Parquet,
-                schema: schema.clone(),
-                project_field_ids: vec![1, 3],
-                predicate: None,
-                deletes: vec![],
-                partition: None,
-                partition_spec: None,
-                name_mapping: None,
-                case_sensitive: false,
-            })]
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(
+                    std::fs::metadata(format!("{table_location}/1.parquet"))
+                        .unwrap()
+                        .len(),
+                )
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(format!("{table_location}/1.parquet"))
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![1, 3])
+                .with_case_sensitive(false)
+                .build())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1296,24 +1284,20 @@ message schema {
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         let tasks = Box::pin(futures::stream::iter(
-            vec![Ok(FileScanTask {
-                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
-                    .unwrap()
-                    .len(),
-                start: 0,
-                length: 0,
-                record_count: None,
-                data_file_path: format!("{table_location}/1.parquet"),
-                data_file_format: DataFileFormat::Parquet,
-                schema: schema.clone(),
-                project_field_ids: vec![1, 2, 3],
-                predicate: None,
-                deletes: vec![],
-                partition: None,
-                partition_spec: None,
-                name_mapping: None,
-                case_sensitive: false,
-            })]
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(
+                    std::fs::metadata(format!("{table_location}/1.parquet"))
+                        .unwrap()
+                        .len(),
+                )
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(format!("{table_location}/1.parquet"))
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![1, 2, 3])
+                .with_case_sensitive(false)
+                .build())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1401,24 +1385,20 @@ message schema {
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         let tasks = Box::pin(futures::stream::iter(
-            vec![Ok(FileScanTask {
-                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
-                    .unwrap()
-                    .len(),
-                start: 0,
-                length: 0,
-                record_count: None,
-                data_file_path: format!("{table_location}/1.parquet"),
-                data_file_format: DataFileFormat::Parquet,
-                schema: schema.clone(),
-                project_field_ids: vec![1, 2],
-                predicate: None,
-                deletes: vec![],
-                partition: None,
-                partition_spec: None,
-                name_mapping: None,
-                case_sensitive: false,
-            })]
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(
+                    std::fs::metadata(format!("{table_location}/1.parquet"))
+                        .unwrap()
+                        .len(),
+                )
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(format!("{table_location}/1.parquet"))
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![1, 2])
+                .with_case_sensitive(false)
+                .build())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1535,24 +1515,20 @@ message schema {
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         let tasks = Box::pin(futures::stream::iter(
-            vec![Ok(FileScanTask {
-                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
-                    .unwrap()
-                    .len(),
-                start: 0,
-                length: 0,
-                record_count: None,
-                data_file_path: format!("{table_location}/1.parquet"),
-                data_file_format: DataFileFormat::Parquet,
-                schema: schema.clone(),
-                project_field_ids: vec![1, 2],
-                predicate: None,
-                deletes: vec![],
-                partition: None,
-                partition_spec: None,
-                name_mapping: None,
-                case_sensitive: false,
-            })]
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(
+                    std::fs::metadata(format!("{table_location}/1.parquet"))
+                        .unwrap()
+                        .len(),
+                )
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(format!("{table_location}/1.parquet"))
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![1, 2])
+                .with_case_sensitive(false)
+                .build())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1636,24 +1612,20 @@ message schema {
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         let tasks = Box::pin(futures::stream::iter(
-            vec![Ok(FileScanTask {
-                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
-                    .unwrap()
-                    .len(),
-                start: 0,
-                length: 0,
-                record_count: None,
-                data_file_path: format!("{table_location}/1.parquet"),
-                data_file_format: DataFileFormat::Parquet,
-                schema: schema.clone(),
-                project_field_ids: vec![1, 5, 2],
-                predicate: None,
-                deletes: vec![],
-                partition: None,
-                partition_spec: None,
-                name_mapping: None,
-                case_sensitive: false,
-            })]
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(
+                    std::fs::metadata(format!("{table_location}/1.parquet"))
+                        .unwrap()
+                        .len(),
+                )
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(format!("{table_location}/1.parquet"))
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![1, 5, 2])
+                .with_case_sensitive(false)
+                .build())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1750,24 +1722,21 @@ message schema {
             .build();
 
         let tasks = Box::pin(futures::stream::iter(
-            vec![Ok(FileScanTask {
-                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
-                    .unwrap()
-                    .len(),
-                start: 0,
-                length: 0,
-                record_count: None,
-                data_file_path: format!("{table_location}/1.parquet"),
-                data_file_format: DataFileFormat::Parquet,
-                schema: schema.clone(),
-                project_field_ids: vec![1, 2, 3],
-                predicate: Some(predicate.bind(schema, true).unwrap()),
-                deletes: vec![],
-                partition: None,
-                partition_spec: None,
-                name_mapping: None,
-                case_sensitive: false,
-            })]
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(
+                    std::fs::metadata(format!("{table_location}/1.parquet"))
+                        .unwrap()
+                        .len(),
+                )
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(format!("{table_location}/1.parquet"))
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![1, 2, 3])
+                .with_case_sensitive(false)
+                .with_predicate(Some(predicate.bind(schema, true).unwrap()))
+                .build())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1894,24 +1863,22 @@ message schema {
         // Read the Parquet file with partition spec and data
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
         let tasks = Box::pin(futures::stream::iter(
-            vec![Ok(FileScanTask {
-                file_size_in_bytes: std::fs::metadata(format!("{table_location}/data.parquet"))
-                    .unwrap()
-                    .len(),
-                start: 0,
-                length: 0,
-                record_count: None,
-                data_file_path: format!("{table_location}/data.parquet"),
-                data_file_format: DataFileFormat::Parquet,
-                schema: schema.clone(),
-                project_field_ids: vec![1, 2],
-                predicate: None,
-                deletes: vec![],
-                partition: Some(partition_data),
-                partition_spec: Some(partition_spec),
-                name_mapping: None,
-                case_sensitive: false,
-            })]
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(
+                    std::fs::metadata(format!("{table_location}/data.parquet"))
+                        .unwrap()
+                        .len(),
+                )
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(format!("{table_location}/data.parquet"))
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![1, 2])
+                .with_case_sensitive(false)
+                .with_partition(Some(partition_data))
+                .with_partition_spec(Some(partition_spec))
+                .build())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -2108,22 +2075,17 @@ message schema {
             .build();
 
         let tasks = Box::pin(futures::stream::iter(
-            vec![Ok(FileScanTask {
-                file_size_in_bytes: std::fs::metadata(&file_path).unwrap().len(),
-                start: 0,
-                length: 0,
-                record_count: None,
-                data_file_path: file_path,
-                data_file_format: DataFileFormat::Parquet,
-                schema: iceberg_schema.clone(),
-                project_field_ids: vec![4],
-                predicate: Some(predicate.bind(iceberg_schema, true).unwrap()),
-                deletes: vec![],
-                partition: None,
-                partition_spec: None,
-                name_mapping: None,
-                case_sensitive: false,
-            })]
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(file_path)
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(iceberg_schema.clone())
+                .with_project_field_ids(vec![4])
+                .with_case_sensitive(false)
+                .with_predicate(Some(predicate.bind(iceberg_schema, true).unwrap()))
+                .build())]
             .into_iter(),
         )) as FileScanTaskStream;
 
