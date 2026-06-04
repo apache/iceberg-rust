@@ -116,31 +116,27 @@ impl ManifestEntryContext {
             )
             .await;
 
-        Ok(FileScanTask {
-            file_size_in_bytes: self.manifest_entry.file_size_in_bytes(),
-            start: 0,
-            length: self.manifest_entry.file_size_in_bytes(),
-            record_count: Some(self.manifest_entry.record_count()),
-
-            data_file_path: self.manifest_entry.file_path().to_string(),
-            data_file_format: self.manifest_entry.file_format(),
-
-            schema: self.snapshot_schema,
-            project_field_ids: self.field_ids.to_vec(),
-            predicate: self
-                .bound_predicates
-                .map(|x| x.as_ref().snapshot_bound_predicate.clone()),
-
-            deletes,
-
-            // Include partition data and spec from manifest entry
-            partition: Some(self.manifest_entry.data_file.partition.clone()),
+        Ok(FileScanTask::builder()
+            .with_file_size_in_bytes(self.manifest_entry.file_size_in_bytes())
+            .with_start(0)
+            .with_length(self.manifest_entry.file_size_in_bytes())
+            .with_record_count(Some(self.manifest_entry.record_count()))
+            .with_data_file_path(self.manifest_entry.file_path().to_string())
+            .with_data_file_format(self.manifest_entry.file_format())
+            .with_schema(self.snapshot_schema)
+            .with_project_field_ids(self.field_ids.to_vec())
+            .with_predicate(
+                self.bound_predicates
+                    .map(|x| x.as_ref().snapshot_bound_predicate.clone()),
+            )
+            .with_deletes(deletes)
+            .with_partition(Some(self.manifest_entry.data_file.partition.clone()))
             // TODO: Pass actual PartitionSpec through context chain for native flow
-            partition_spec: None,
+            .with_partition_spec(None)
             // TODO: Extract name_mapping from table metadata property "schema.name-mapping.default"
-            name_mapping: None,
-            case_sensitive: self.case_sensitive,
-        })
+            .with_name_mapping(None)
+            .with_case_sensitive(self.case_sensitive)
+            .build())
     }
 }
 
