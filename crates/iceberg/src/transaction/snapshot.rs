@@ -36,21 +36,26 @@ use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
 
-/// Generate a snapshot id that is not already used by any snapshot in `table`.
-///
-/// `i64::MIN` is masked off so the result is always representable as a positive
-/// `i64` (avoiding the `-i64::MIN` overflow that the previous `if id < 0 { -id }`
-/// branch would have hit).
 pub(crate) fn generate_unique_snapshot_id(table: &Table) -> i64 {
-    let gen_id = || -> i64 {
+    let generate_random_id = || -> i64 {
         let (lhs, rhs) = Uuid::new_v4().as_u64_pair();
-        ((lhs ^ rhs) & (i64::MAX as u64)) as i64
+        let snapshot_id = (lhs ^ rhs) as i64;
+        if snapshot_id < 0 {
+            -snapshot_id
+        } else {
+            snapshot_id
+        }
     };
-    let mut id = gen_id();
-    while table.metadata().snapshots().any(|s| s.snapshot_id() == id) {
-        id = gen_id();
+    let mut snapshot_id = generate_random_id();
+
+    while table
+        .metadata()
+        .snapshots()
+        .any(|s| s.snapshot_id() == snapshot_id)
+    {
+        snapshot_id = generate_random_id();
     }
-    id
+    snapshot_id
 }
 
 /// A trait that defines how different table operations produce new snapshots.
