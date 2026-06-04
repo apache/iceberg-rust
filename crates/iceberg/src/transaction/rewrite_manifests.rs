@@ -227,8 +227,8 @@ impl TransactionAction for RewriteManifestsAction {
                 Some(next_row_id),
             ),
         };
-        let manifests_created = new_manifests.len().to_string();
-        let manifests_kept = kept.len().to_string();
+        let manifests_created = new_manifests.len();
+        let manifests_kept = kept.len();
         list_writer.add_manifests(new_manifests.into_iter().chain(kept))?;
         list_writer.close().await?;
 
@@ -245,12 +245,15 @@ impl TransactionAction for RewriteManifestsAction {
                 additional_properties.insert(k.to_string(), v.clone());
             }
         }
-        additional_properties.insert("manifests-created".to_string(), manifests_created);
+        additional_properties.insert(
+            "manifests-created".to_string(),
+            manifests_created.to_string(),
+        );
         additional_properties.insert(
             "manifests-replaced".to_string(),
             manifests_replaced.to_string(),
         );
-        additional_properties.insert("manifests-kept".to_string(), manifests_kept);
+        additional_properties.insert("manifests-kept".to_string(), manifests_kept.to_string());
         additional_properties.insert(
             "entries-processed".to_string(),
             entries_processed.to_string(),
@@ -371,8 +374,10 @@ mod tests {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
         let action = tx.rewrite_manifests();
-        let res = Arc::new(action).commit(&table).await;
-        assert!(res.is_err(), "expected PreconditionFailed without snapshot");
+        match Arc::new(action).commit(&table).await {
+            Ok(_) => panic!("expected error"),
+            Err(e) => assert_eq!(e.kind(), crate::ErrorKind::PreconditionFailed),
+        }
     }
 
     #[tokio::test]
@@ -386,7 +391,7 @@ mod tests {
         let action = tx.rewrite_manifests();
         let mut commit = Arc::new(action).commit(&table).await.unwrap();
         let updates = commit.take_updates();
-        assert!(updates.is_empty(), "single small manifest should be no-op");
+        assert!(updates.is_empty());
 
         let table = tx
             .rewrite_manifests()
@@ -479,6 +484,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_target_size_from_table_property() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let mut t = table;
+        for i in 0..6 {
+            t = append_one(&catalog, t, data_file(&format!("f{i}"), 1, 10_000, 1)).await;
+        }
+
+        let tx = Transaction::new(&t);
+        let t = tx
+            .update_table_properties()
+            .set(
+                "commit.manifest.target-size-bytes".to_string(),
+                "400".to_string(),
+            )
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        let tx = Transaction::new(&t);
+        let t = tx
+            .rewrite_manifests()
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        let post_list = t
+            .manifest_list_reader(t.metadata().current_snapshot().unwrap())
+            .load()
+            .await
+            .unwrap();
+        assert!(post_list.entries().len() > 1);
+    }
+
+    #[tokio::test]
     async fn test_target_size_rolls_multiple_manifests() {
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
@@ -502,10 +546,7 @@ mod tests {
             .load()
             .await
             .unwrap();
-        assert!(
-            post_list.entries().len() > 1,
-            "rolling should produce multiple manifests when target is small"
-        );
+        assert!(post_list.entries().len() > 1);
 
         let mut total = 0;
         for m in post_list.entries() {
@@ -744,11 +785,7 @@ mod tests {
         assert_ne!(snap.snapshot_id(), pre_id);
 
         let post_list = table.manifest_list_reader(snap).load().await.unwrap();
-        assert_eq!(
-            post_list.entries().len(),
-            2,
-            "two distinct partitions → two output manifests"
-        );
+        assert_eq!(post_list.entries().len(), 2);
         for m in post_list.entries() {
             let manifest = m.load_manifest(table.file_io()).await.unwrap();
             let partitions: std::collections::HashSet<Struct> = manifest
