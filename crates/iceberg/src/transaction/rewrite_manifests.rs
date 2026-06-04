@@ -36,7 +36,6 @@ use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const FALLBACK_BYTES_PER_ENTRY: u64 = 256;
 
-/// Bin-pack live data manifests into manifests of approximately `target_size_bytes`.
 pub struct RewriteManifestsAction {
     target_size_bytes: Option<u64>,
     snapshot_properties: HashMap<String, String>,
@@ -102,11 +101,24 @@ impl TransactionAction for RewriteManifestsAction {
         if to_rewrite.len() == 1 && total_size <= target_size_bytes {
             return Ok(ActionCommit::new(vec![], vec![]));
         }
+        let total_input_entries: u64 = to_rewrite
+            .iter()
+            .map(|m| {
+                u64::from(m.added_files_count.unwrap_or(0))
+                    + u64::from(m.existing_files_count.unwrap_or(0))
+            })
+            .sum();
+        let bytes_per_entry = if total_input_entries > 0 {
+            (total_size / total_input_entries).max(1)
+        } else {
+            FALLBACK_BYTES_PER_ENTRY
+        };
+        let manifests_replaced = to_rewrite.len();
 
         let commit_uuid = Uuid::now_v7();
         let snapshot_id = generate_unique_snapshot_id(table);
 
-        let loaded: Vec<_> = stream::iter(to_rewrite.iter().cloned())
+        let loaded: Vec<_> = stream::iter(to_rewrite)
             .map(|m| {
                 let file_io = table.file_io().clone();
                 async move { m.load_manifest(&file_io).await }
@@ -150,12 +162,6 @@ impl TransactionAction for RewriteManifestsAction {
                 entries_processed += 1;
             }
         }
-
-        let bytes_per_entry = if entries_processed > 0 {
-            total_size / entries_processed
-        } else {
-            FALLBACK_BYTES_PER_ENTRY
-        };
 
         let mut counter: u64 = 0;
         let mut new_manifests: Vec<ManifestFile> = Vec::with_capacity(grouped.len());
@@ -222,7 +228,6 @@ impl TransactionAction for RewriteManifestsAction {
             ),
         };
         let manifests_created = new_manifests.len().to_string();
-        let manifests_replaced = to_rewrite.len().to_string();
         let manifests_kept = kept.len().to_string();
         list_writer.add_manifests(new_manifests.into_iter().chain(kept))?;
         list_writer.close().await?;
@@ -241,7 +246,10 @@ impl TransactionAction for RewriteManifestsAction {
             }
         }
         additional_properties.insert("manifests-created".to_string(), manifests_created);
-        additional_properties.insert("manifests-replaced".to_string(), manifests_replaced);
+        additional_properties.insert(
+            "manifests-replaced".to_string(),
+            manifests_replaced.to_string(),
+        );
         additional_properties.insert("manifests-kept".to_string(), manifests_kept);
         additional_properties.insert(
             "entries-processed".to_string(),
@@ -508,6 +516,64 @@ mod tests {
                 "each rolled manifest should hold at most ~2 entries when target is just above bytes_per_entry"
             );
             total += n;
+        }
+        assert_eq!(total, 6);
+    }
+
+    #[tokio::test]
+    async fn test_oversized_single_manifest_is_split() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let files: Vec<_> = (0..6)
+            .map(|i| data_file(&format!("f{i}"), 1, 10_000, 1))
+            .collect();
+
+        let tx = Transaction::new(&table);
+        let table = tx
+            .fast_append()
+            .add_data_files(files)
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        let pre_list = table
+            .manifest_list_reader(table.metadata().current_snapshot().unwrap())
+            .load()
+            .await
+            .unwrap();
+        assert_eq!(pre_list.entries().len(), 1);
+
+        let tx = Transaction::new(&table);
+        let table = tx
+            .rewrite_manifests()
+            .set_target_size_bytes(400)
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        let snap = table.metadata().current_snapshot().unwrap();
+        let post_list = table.manifest_list_reader(snap).load().await.unwrap();
+        assert!(post_list.entries().len() > 1);
+        assert_eq!(
+            snap.summary()
+                .additional_properties
+                .get("manifests-replaced")
+                .unwrap(),
+            "1"
+        );
+
+        let mut total = 0;
+        for m in post_list.entries() {
+            total += m
+                .load_manifest(table.file_io())
+                .await
+                .unwrap()
+                .entries()
+                .len();
         }
         assert_eq!(total, 6);
     }
