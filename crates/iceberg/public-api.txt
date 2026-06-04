@@ -1652,6 +1652,7 @@ pub iceberg::spec::Transform::Void
 pub iceberg::spec::Transform::Year
 impl iceberg::spec::Transform
 pub fn iceberg::spec::Transform::dedup_name(&self) -> alloc::string::String
+pub fn iceberg::spec::Transform::is_time_transform(&self) -> bool
 pub fn iceberg::spec::Transform::preserves_order(&self) -> bool
 pub fn iceberg::spec::Transform::project(&self, name: &str, predicate: &iceberg::expr::BoundPredicate) -> iceberg::Result<core::option::Option<iceberg::expr::Predicate>>
 pub fn iceberg::spec::Transform::result_type(&self, input_type: &iceberg::spec::Type) -> iceberg::Result<iceberg::spec::Type>
@@ -2213,6 +2214,7 @@ pub iceberg::spec::PartitionField::source_id: i32
 pub iceberg::spec::PartitionField::transform: iceberg::spec::Transform
 impl iceberg::spec::PartitionField
 pub fn iceberg::spec::PartitionField::into_unbound(self) -> iceberg::spec::UnboundPartitionField
+pub fn iceberg::spec::PartitionField::new(source_id: i32, field_id: i32, name: impl core::convert::Into<alloc::string::String>, transform: iceberg::spec::Transform) -> Self
 impl core::clone::Clone for iceberg::spec::PartitionField
 pub fn iceberg::spec::PartitionField::clone(&self) -> iceberg::spec::PartitionField
 impl core::cmp::Eq for iceberg::spec::PartitionField
@@ -3059,6 +3061,24 @@ pub fn iceberg::transaction::AddColumn::optional(name: impl alloc::string::ToStr
 pub fn iceberg::transaction::AddColumn::required(name: impl alloc::string::ToString, field_type: iceberg::spec::Type, initial_default: iceberg::spec::Literal) -> Self
 impl iceberg::transaction::AddColumn
 pub fn iceberg::transaction::AddColumn::builder() -> AddColumnBuilder<((), (), (), (), (), (), ())>
+pub struct iceberg::transaction::Term
+impl iceberg::transaction::Term
+pub fn iceberg::transaction::Term::bucket(source_name: impl core::convert::Into<alloc::string::String>, num_buckets: u32) -> Self
+pub fn iceberg::transaction::Term::day(source_name: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn iceberg::transaction::Term::hour(source_name: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn iceberg::transaction::Term::identity(source_name: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn iceberg::transaction::Term::month(source_name: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn iceberg::transaction::Term::new(source_name: impl core::convert::Into<alloc::string::String>, transform: iceberg::spec::Transform) -> Self
+pub fn iceberg::transaction::Term::truncate(source_name: impl core::convert::Into<alloc::string::String>, width: u32) -> Self
+pub fn iceberg::transaction::Term::year(source_name: impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for iceberg::transaction::Term
+pub fn iceberg::transaction::Term::clone(&self) -> iceberg::transaction::Term
+impl core::cmp::Eq for iceberg::transaction::Term
+impl core::cmp::PartialEq for iceberg::transaction::Term
+pub fn iceberg::transaction::Term::eq(&self, other: &iceberg::transaction::Term) -> bool
+impl core::fmt::Debug for iceberg::transaction::Term
+pub fn iceberg::transaction::Term::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::transaction::Term
 pub struct iceberg::transaction::Transaction
 impl iceberg::transaction::Transaction
 pub async fn iceberg::transaction::Transaction::commit(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>
@@ -3066,16 +3086,27 @@ pub fn iceberg::transaction::Transaction::fast_append(&self) -> iceberg::transac
 pub fn iceberg::transaction::Transaction::new(table: &iceberg::table::Table) -> Self
 pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::sort_order::ReplaceSortOrderAction
 pub fn iceberg::transaction::Transaction::update_location(&self) -> iceberg::transaction::update_location::UpdateLocationAction
+pub fn iceberg::transaction::Transaction::update_partition(&self) -> iceberg::transaction::UpdatePartitionSpecAction
+pub fn iceberg::transaction::Transaction::update_partition_spec(&self) -> iceberg::transaction::UpdatePartitionSpecAction
 pub fn iceberg::transaction::Transaction::update_schema(&self) -> iceberg::transaction::update_schema::UpdateSchemaAction
 pub fn iceberg::transaction::Transaction::update_statistics(&self) -> iceberg::transaction::update_statistics::UpdateStatisticsAction
 pub fn iceberg::transaction::Transaction::update_table_properties(&self) -> iceberg::transaction::update_properties::UpdatePropertiesAction
 pub fn iceberg::transaction::Transaction::upgrade_table_version(&self) -> iceberg::transaction::upgrade_format_version::UpgradeFormatVersionAction
 impl core::clone::Clone for iceberg::transaction::Transaction
 pub fn iceberg::transaction::Transaction::clone(&self) -> iceberg::transaction::Transaction
+pub struct iceberg::transaction::UpdatePartitionSpecAction
+impl iceberg::transaction::UpdatePartitionSpecAction
+pub fn iceberg::transaction::UpdatePartitionSpecAction::add_field(self, name: core::option::Option<alloc::string::String>, term: iceberg::transaction::Term) -> iceberg::Result<Self>
+pub fn iceberg::transaction::UpdatePartitionSpecAction::add_non_default_spec(self) -> Self
+pub fn iceberg::transaction::UpdatePartitionSpecAction::case_sensitive(self, case_sensitive: bool) -> Self
+pub fn iceberg::transaction::UpdatePartitionSpecAction::new(metadata: &iceberg::spec::TableMetadata) -> Self
+pub fn iceberg::transaction::UpdatePartitionSpecAction::remove_field_by_name(self, name: impl core::convert::Into<alloc::string::String>) -> iceberg::Result<Self>
+pub fn iceberg::transaction::UpdatePartitionSpecAction::remove_field_by_term(self, term: iceberg::transaction::Term) -> iceberg::Result<Self>
+pub fn iceberg::transaction::UpdatePartitionSpecAction::rename_field(self, name: impl core::convert::Into<alloc::string::String>, new_name: impl core::convert::Into<alloc::string::String>) -> iceberg::Result<Self>
 pub trait iceberg::transaction::ApplyTransactionAction
 pub fn iceberg::transaction::ApplyTransactionAction::apply(self, tx: iceberg::transaction::Transaction) -> iceberg::Result<iceberg::transaction::Transaction>
 impl<T: TransactionAction + 'static> iceberg::transaction::ApplyTransactionAction for T
-pub fn T::apply(self, tx: iceberg::transaction::Transaction) -> iceberg::Result<iceberg::transaction::Transaction> where Self: core::marker::Sized
+pub fn T::apply(self, tx: iceberg::transaction::Transaction) -> core::result::Result<iceberg::transaction::Transaction, iceberg::Error>
 pub mod iceberg::transform
 pub trait iceberg::transform::TransformFunction: core::marker::Send + core::marker::Sync + core::fmt::Debug
 pub fn iceberg::transform::TransformFunction::transform(&self, input: arrow_array::array::ArrayRef) -> iceberg::Result<arrow_array::array::ArrayRef>
@@ -3274,6 +3305,7 @@ impl<B, L, F> iceberg::writer::IcebergWriterBuilder for iceberg::writer::base_wr
 pub type iceberg::writer::base_writer::equality_delete_writer::EqualityDeleteFileWriterBuilder<B, L, F>::R = iceberg::writer::base_writer::equality_delete_writer::EqualityDeleteFileWriter<B, L, F>
 pub fn iceberg::writer::base_writer::equality_delete_writer::EqualityDeleteFileWriterBuilder<B, L, F>::build<'life0, 'async_trait>(&'life0 self, partition_key: core::option::Option<iceberg::spec::PartitionKey>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<Self::R>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub macro iceberg::ensure_data_valid!
+pub macro iceberg::ensure_precondition!
 #[non_exhaustive] pub enum iceberg::ErrorKind
 pub iceberg::ErrorKind::CatalogCommitConflicts
 pub iceberg::ErrorKind::DataInvalid
