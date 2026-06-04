@@ -2990,7 +2990,7 @@ pub fn iceberg::spec::SchemaVisitor::map(&mut self, map: &iceberg::spec::MapType
 pub fn iceberg::spec::SchemaVisitor::primitive(&mut self, p: &iceberg::spec::PrimitiveType) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::SchemaVisitor::schema(&mut self, schema: &iceberg::spec::Schema, value: Self::T) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::SchemaVisitor::struct(&mut self, struct: &iceberg::spec::StructType, results: alloc::vec::Vec<Self::T>) -> iceberg::Result<Self::T>
-pub fn iceberg::spec::SchemaVisitor::variant(&mut self, _v: &iceberg::spec::VariantType) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::SchemaVisitor::variant(&mut self, v: &iceberg::spec::VariantType) -> iceberg::Result<Self::T>
 pub trait iceberg::spec::SchemaWithPartnerVisitor<P>
 pub type iceberg::spec::SchemaWithPartnerVisitor::T
 pub fn iceberg::spec::SchemaWithPartnerVisitor::after_list_element(&mut self, _field: &iceberg::spec::NestedFieldRef, _partner: &P) -> iceberg::Result<()>
@@ -3007,7 +3007,7 @@ pub fn iceberg::spec::SchemaWithPartnerVisitor::map(&mut self, map: &iceberg::sp
 pub fn iceberg::spec::SchemaWithPartnerVisitor::primitive(&mut self, p: &iceberg::spec::PrimitiveType, partner: &P) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::SchemaWithPartnerVisitor::schema(&mut self, schema: &iceberg::spec::Schema, partner: &P, value: Self::T) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::SchemaWithPartnerVisitor::struct(&mut self, struct: &iceberg::spec::StructType, partner: &P, results: alloc::vec::Vec<Self::T>) -> iceberg::Result<Self::T>
-pub fn iceberg::spec::SchemaWithPartnerVisitor::variant(&mut self, _v: &iceberg::spec::VariantType, _partner: &P) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::SchemaWithPartnerVisitor::variant(&mut self, v: &iceberg::spec::VariantType, partner: &P) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::deserialize_data_file_from_json(json: &str, partition_spec_id: i32, partition_type: &iceberg::spec::StructType, schema: &iceberg::spec::Schema) -> iceberg::Result<iceberg::spec::DataFile>
 pub fn iceberg::spec::prune_columns(schema: &iceberg::spec::Schema, selected: impl core::iter::traits::collect::IntoIterator<Item = i32>, select_full_types: bool) -> iceberg::Result<iceberg::spec::Type>
 pub fn iceberg::spec::read_data_files_from_avro<R: std::io::Read>(reader: &mut R, schema: &iceberg::spec::Schema, partition_spec_id: i32, partition_type: &iceberg::spec::StructType, version: iceberg::spec::FormatVersion) -> iceberg::Result<alloc::vec::Vec<iceberg::spec::DataFile>>
