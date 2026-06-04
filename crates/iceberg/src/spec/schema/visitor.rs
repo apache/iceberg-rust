@@ -72,7 +72,7 @@ pub trait SchemaVisitor {
     fn primitive(&mut self, p: &PrimitiveType) -> Result<Self::T>;
 
     /// Called when see a variant type.
-    fn variant(&mut self, _v: &VariantType) -> Result<Self::T>;
+    fn variant(&mut self, v: &VariantType) -> Result<Self::T>;
 }
 
 /// Visiting a type in post order.
@@ -191,7 +191,7 @@ pub trait SchemaWithPartnerVisitor<P> {
     /// Called when see a primitive type.
     fn primitive(&mut self, p: &PrimitiveType, partner: &P) -> Result<Self::T>;
     /// Called when see a variant type.
-    fn variant(&mut self, _v: &VariantType, _partner: &P) -> Result<Self::T>;
+    fn variant(&mut self, v: &VariantType, partner: &P) -> Result<Self::T>;
 }
 
 /// Accessor used to get child partner from parent partner.

@@ -1399,6 +1399,33 @@ mod tests {
     }
 
     #[test]
+    fn test_builder_disallows_variant_source() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(crate::spec::PrimitiveType::Int))
+                    .into(),
+                NestedField::optional(2, "v", Type::Variant(crate::spec::VariantType)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let err = PartitionSpec::builder(schema)
+            .with_spec_id(1)
+            .add_unbound_fields(vec![UnboundPartitionField {
+                source_id: 2,
+                field_id: None,
+                name: "v_part".to_string(),
+                transform: Transform::Identity,
+            }])
+            .expect_err("variant must not be allowed as a partition source");
+
+        assert_eq!(
+            err.message(),
+            "Cannot partition by non-primitive source field: 'variant'."
+        );
+    }
+
+    #[test]
     fn test_builder_disallows_redundant() {
         let err = UnboundPartitionSpec::builder()
             .with_spec_id(1)

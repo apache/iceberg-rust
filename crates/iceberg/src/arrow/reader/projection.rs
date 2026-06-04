@@ -578,7 +578,7 @@ mod tests {
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskStream};
     use crate::spec::{
-        DataFileFormat, Datum, NestedField, PrimitiveType, Schema, Type, VariantType,
+        DataFileFormat, Datum, NestedField, PrimitiveType, Schema, StructType, Type, VariantType,
     };
     use crate::{ErrorKind, Runtime};
 
@@ -2146,5 +2146,251 @@ message schema {
             })
             .collect();
         assert_eq!(ids, vec![2, 3]);
+    }
+
+    // ---------------------------------------------------------------------
+    // Variant read tests (synthetic Parquet).
+    //
+    // These exercise the full reader path — projection mask + decode — against
+    // the unshredded Parquet variant layout (a `group { metadata; value }` whose
+    // leaves carry no field id, only the group does). They replace the former
+    // Spark-seeded integration tests in `crates/integration_tests`.
+    // ---------------------------------------------------------------------
+
+    fn field_id_meta(id: i32) -> HashMap<String, String> {
+        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string())])
+    }
+
+    /// Arrow `Struct(metadata: Binary, value: Binary)` — the variant physical layout.
+    fn variant_arrow_fields() -> arrow_schema::Fields {
+        arrow_schema::Fields::from(vec![
+            Field::new("metadata", DataType::Binary, false),
+            Field::new("value", DataType::Binary, false),
+        ])
+    }
+
+    // Known variant bytes the reader must round-trip unchanged. `metadata` is a
+    // fixed empty-variant header; `value` is distinct per row so an assertion catches
+    // dropped or reordered rows, not just the struct shape.
+    const VARIANT_METADATA: [&[u8]; 3] = [b"\x01", b"\x01", b"\x01"];
+    const VARIANT_VALUE: [&[u8]; 3] = [b"\x0a", b"\x0b", b"\x0c"];
+
+    /// Builds the 3-row variant `StructArray` for [`VARIANT_METADATA`]/[`VARIANT_VALUE`].
+    fn variant_struct_array() -> ArrayRef {
+        use arrow_array::{BinaryArray, StructArray};
+        let metadata = Arc::new(BinaryArray::from(VARIANT_METADATA.to_vec())) as ArrayRef;
+        let value = Arc::new(BinaryArray::from(VARIANT_VALUE.to_vec())) as ArrayRef;
+        Arc::new(StructArray::new(
+            variant_arrow_fields(),
+            vec![metadata, value],
+            None,
+        )) as ArrayRef
+    }
+
+    /// Asserts `col` is `Struct(metadata: Binary, value: Binary)` AND that its bytes
+    /// round-tripped exactly as written (shape + content + order).
+    fn assert_variant_data(col: &ArrayRef) {
+        let s = col.as_struct();
+        assert_eq!(
+            s.fields().len(),
+            2,
+            "variant must have exactly metadata + value, got {:?}",
+            s.fields()
+        );
+        let metadata = s
+            .column_by_name("metadata")
+            .expect("missing 'metadata'")
+            .as_binary::<i32>();
+        let value = s
+            .column_by_name("value")
+            .expect("missing 'value'")
+            .as_binary::<i32>();
+        assert_eq!(
+            metadata.iter().collect::<Vec<_>>(),
+            VARIANT_METADATA
+                .iter()
+                .copied()
+                .map(Some)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            value.iter().collect::<Vec<_>>(),
+            VARIANT_VALUE.iter().copied().map(Some).collect::<Vec<_>>()
+        );
+    }
+
+    fn write_parquet(arrow_schema: Arc<ArrowSchema>, columns: Vec<ArrayRef>, dir: &str) -> String {
+        let batch = RecordBatch::try_new(arrow_schema.clone(), columns).unwrap();
+        let path = format!("{dir}/variant.parquet");
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let mut writer =
+            ArrowWriter::try_new(File::create(&path).unwrap(), arrow_schema, Some(props)).unwrap();
+        writer.write(&batch).expect("writing batch");
+        writer.close().unwrap();
+        path
+    }
+
+    /// Asserts the `id` column holds exactly `[1, 2, 3]`.
+    fn assert_id_values(col: &ArrayRef) {
+        let ids = col.as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!(ids.values(), &[1, 2, 3]);
+    }
+
+    async fn read(
+        schema: Arc<Schema>,
+        path: &str,
+        project_field_ids: Vec<i32>,
+    ) -> Vec<RecordBatch> {
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask {
+                file_size_in_bytes: std::fs::metadata(path).unwrap().len(),
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: path.to_string(),
+                data_file_format: DataFileFormat::Parquet,
+                schema,
+                project_field_ids,
+                predicate: None,
+                deletes: vec![],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
+            })]
+            .into_iter(),
+        )) as FileScanTaskStream;
+        reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap()
+    }
+
+    /// `id` (int, field-id 1) + `v` (variant, field-id 2). 3 rows.
+    fn write_top_level_variant(dir: &str) -> Arc<Schema> {
+        use arrow_array::Int32Array;
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(field_id_meta(1)),
+            Field::new("v", DataType::Struct(variant_arrow_fields()), false)
+                .with_metadata(field_id_meta(2)),
+        ]));
+        let id = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        write_parquet(arrow_schema, vec![id, variant_struct_array()], dir);
+        schema
+    }
+
+    #[tokio::test]
+    async fn test_read_variant_full_scan() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap();
+        let schema = write_top_level_variant(dir);
+
+        let batches = read(schema, &format!("{dir}/variant.parquet"), vec![1, 2]).await;
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
+        assert_eq!(batch.num_rows(), 3);
+        assert_id_values(batch.column_by_name("id").expect("'id' column dropped"));
+        assert_variant_data(batch.column_by_name("v").expect("variant column dropped"));
+    }
+
+    #[tokio::test]
+    async fn test_read_variant_only() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap();
+        let schema = write_top_level_variant(dir);
+
+        let batches = read(schema, &format!("{dir}/variant.parquet"), vec![2]).await;
+        assert_eq!(batches[0].num_rows(), 3);
+        assert_variant_data(
+            batches[0]
+                .column_by_name("v")
+                .expect("variant-only projection dropped 'v'"),
+        );
+        assert!(batches[0].column_by_name("id").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_read_variant_sibling_only_excludes_variant() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap();
+        let schema = write_top_level_variant(dir);
+
+        let batches = read(schema, &format!("{dir}/variant.parquet"), vec![1]).await;
+        assert_eq!(batches[0].num_rows(), 3);
+        assert_id_values(
+            batches[0]
+                .column_by_name("id")
+                .expect("'id' column dropped"),
+        );
+        assert!(
+            batches[0].column_by_name("v").is_none(),
+            "variant leaked into an id-only projection"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_variant_nested_in_struct() {
+        use arrow_array::{Int32Array, StructArray};
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap();
+
+        // id (int, 1) + nested struct (2) { payload variant (3) }.
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(
+                        2,
+                        "nested",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(3, "payload", Type::Variant(VariantType)).into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let payload_field = Field::new("payload", DataType::Struct(variant_arrow_fields()), false)
+            .with_metadata(field_id_meta(3));
+        let nested_fields = arrow_schema::Fields::from(vec![payload_field]);
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(field_id_meta(1)),
+            Field::new("nested", DataType::Struct(nested_fields.clone()), false)
+                .with_metadata(field_id_meta(2)),
+        ]));
+        let id = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let nested = Arc::new(StructArray::new(
+            nested_fields,
+            vec![variant_struct_array()],
+            None,
+        )) as ArrayRef;
+        let path = write_parquet(arrow_schema, vec![id, nested], dir);
+
+        // Projecting the struct keeps the inner variant's sub-leaves intact.
+        let batches = read(schema, &path, vec![2]).await;
+        assert_eq!(batches[0].num_rows(), 3);
+        let payload = batches[0]
+            .column_by_name("nested")
+            .expect("nested struct dropped")
+            .as_struct()
+            .column_by_name("payload")
+            .expect("nested.payload variant dropped");
+        assert_variant_data(payload);
     }
 }
