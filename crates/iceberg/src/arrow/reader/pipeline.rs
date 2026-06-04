@@ -26,6 +26,7 @@ use std::sync::atomic::AtomicU64;
 use futures::{StreamExt, TryStreamExt};
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ParquetRecordBatchStreamBuilder};
+use parquet::encryption::decrypt::FileDecryptionProperties;
 
 use super::{
     ArrowFileReader, ArrowReader, ParquetReadOptions, add_fallback_field_ids_to_arrow_schema,
@@ -35,6 +36,7 @@ use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
 use crate::arrow::int96::coerce_int96_timestamps;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics, ScanResult};
+use crate::encryption::StandardKeyMetadata;
 use crate::error::Result;
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, is_metadata_field};
@@ -120,6 +122,7 @@ impl FileScanTaskReader {
             task.file_size_in_bytes,
             parquet_read_options,
             self.scan_metrics.bytes_read_counter(),
+            task.key_metadata.as_deref(),
         )
         .await?;
 
@@ -415,6 +418,7 @@ impl ArrowReader {
         file_size_in_bytes: u64,
         parquet_read_options: ParquetReadOptions,
         bytes_read: &Arc<AtomicU64>,
+        key_metadata: Option<&[u8]>,
     ) -> Result<(ArrowFileReader, ArrowReaderMetadata)> {
         let parquet_file = file_io.new_input(data_file_path)?;
         let counting_reader =
@@ -423,6 +427,7 @@ impl ArrowReader {
             Box::new(counting_reader),
             file_size_in_bytes,
             parquet_read_options,
+            key_metadata,
         )
         .await
     }
@@ -431,6 +436,7 @@ impl ArrowReader {
         parquet_reader: Box<dyn FileRead>,
         file_size_in_bytes: u64,
         parquet_read_options: ParquetReadOptions,
+        key_metadata: Option<&[u8]>,
     ) -> Result<(ArrowFileReader, ArrowReaderMetadata)> {
         let mut reader = ArrowFileReader::new(
             FileMetadata {
@@ -440,13 +446,43 @@ impl ArrowReader {
         )
         .with_parquet_read_options(parquet_read_options);
 
-        let arrow_metadata = ArrowReaderMetadata::load_async(&mut reader, Default::default())
+        let arrow_reader_options = Self::build_arrow_reader_options(key_metadata)?;
+
+        let arrow_metadata = ArrowReaderMetadata::load_async(&mut reader, arrow_reader_options)
             .await
             .map_err(|e| {
                 Error::new(ErrorKind::Unexpected, "Failed to load Parquet metadata").with_source(e)
             })?;
 
         Ok((reader, arrow_metadata))
+    }
+
+    /// Builds `ArrowReaderOptions`, adding `FileDecryptionProperties` when
+    /// key metadata is present for Parquet Modular Encryption.
+    fn build_arrow_reader_options(key_metadata: Option<&[u8]>) -> Result<ArrowReaderOptions> {
+        match key_metadata {
+            Some(km) => {
+                let standard_key_metadata = StandardKeyMetadata::decode(km)?;
+                let mut builder = FileDecryptionProperties::builder(
+                    standard_key_metadata.encryption_key().as_bytes().to_vec(),
+                );
+                if let Some(aad) = standard_key_metadata.aad_prefix() {
+                    builder = builder.with_aad_prefix(aad.to_vec());
+                }
+                let decryption_properties = builder.build().map_err(|e| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "Failed to build Parquet file decryption properties",
+                    )
+                    .with_source(e)
+                })?;
+                Ok(
+                    ArrowReaderOptions::new()
+                        .with_file_decryption_properties(decryption_properties),
+                )
+            }
+            None => Ok(ArrowReaderOptions::default()),
+        }
     }
 }
 
@@ -457,11 +493,12 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
-    use arrow_array::{Array, ArrayRef, RecordBatch};
+    use arrow_array::{Array, ArrayRef, Int32Array, RecordBatch};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use futures::TryStreamExt;
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
+    use parquet::encryption::encrypt::FileEncryptionProperties;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
@@ -645,6 +682,222 @@ mod tests {
                 ts_array.value(i)
             );
         }
+    }
+
+    fn write_encrypted_parquet(
+        path: &str,
+        batch: &RecordBatch,
+        key: &[u8],
+        aad_prefix: Option<&[u8]>,
+    ) {
+        let mut builder = FileEncryptionProperties::builder(key.to_vec());
+        if let Some(aad) = aad_prefix {
+            builder = builder.with_aad_prefix(aad.to_vec());
+        }
+        let encryption_properties = builder.build().unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .with_file_encryption_properties(encryption_properties)
+            .build();
+
+        let file = File::create(path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
+        writer.write(batch).expect("Writing batch");
+        writer.close().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_read_encrypted_parquet() {
+        let encryption_key = b"0123456789abcdef";
+        let aad_prefix = b"my-table-uuid!!";
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIO::new_with_fs();
+
+        let id_data = Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef;
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![id_data]).unwrap();
+
+        let file_path = format!("{table_location}/encrypted.parquet");
+        write_encrypted_parquet(&file_path, &batch, encryption_key, Some(aad_prefix));
+
+        let key_metadata = crate::encryption::StandardKeyMetadata::new(encryption_key)
+            .with_aad_prefix(aad_prefix)
+            .encode()
+            .unwrap();
+
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
+
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema)
+            .with_project_field_ids(vec![1])
+            .with_case_sensitive(false)
+            .with_key_metadata(Some(key_metadata))
+            .build();
+
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(batches.len(), 1);
+        let ids = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(ids.values(), &[10, 20, 30]);
+    }
+
+    #[tokio::test]
+    async fn test_read_encrypted_parquet_without_key_metadata_fails() {
+        let encryption_key = b"0123456789abcdef";
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIO::new_with_fs();
+
+        let id_data = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![id_data]).unwrap();
+
+        let file_path = format!("{table_location}/encrypted_no_key.parquet");
+        write_encrypted_parquet(&file_path, &batch, encryption_key, None);
+
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
+
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema)
+            .with_project_field_ids(vec![1])
+            .with_case_sensitive(false)
+            .build();
+
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let result: Result<Vec<RecordBatch>, _> =
+            reader.read(tasks).unwrap().stream().try_collect().await;
+
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), crate::ErrorKind::Unexpected);
+        let err_str = format!("{err}");
+        assert!(
+            err_str.contains("encrypted footer"),
+            "Expected error about encrypted footer, got: {err_str}"
+        );
+        assert!(
+            err_str.contains("decryption properties were not provided"),
+            "Expected error about missing decryption properties, got: {err_str}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_encrypted_parquet_with_wrong_key_fails() {
+        let encryption_key = b"0123456789abcdef";
+        let wrong_key = b"fedcba9876543210";
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIO::new_with_fs();
+
+        let id_data = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![id_data]).unwrap();
+
+        let file_path = format!("{table_location}/encrypted_wrong_key.parquet");
+        write_encrypted_parquet(&file_path, &batch, encryption_key, None);
+
+        let wrong_key_metadata = crate::encryption::StandardKeyMetadata::new(wrong_key)
+            .encode()
+            .unwrap();
+
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
+
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema)
+            .with_project_field_ids(vec![1])
+            .with_case_sensitive(false)
+            .with_key_metadata(Some(wrong_key_metadata))
+            .build();
+
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let result: Result<Vec<RecordBatch>, _> =
+            reader.read(tasks).unwrap().stream().try_collect().await;
+
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), crate::ErrorKind::Unexpected);
+        let err_str = format!("{err}");
+        assert!(
+            err_str.contains("unable to decrypt parquet footer"),
+            "Expected error about decryption failure, got: {err_str}"
+        );
     }
 
     /// Test that concurrency=1 reads all files correctly and in deterministic order.
