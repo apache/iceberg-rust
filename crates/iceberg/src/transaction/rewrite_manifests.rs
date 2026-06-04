@@ -208,19 +208,23 @@ impl TransactionAction for RewriteManifestsAction {
         );
         let next_seq_num = metadata.next_sequence_number();
         let next_row_id = metadata.next_row_id();
-        let output = table.file_io().new_output(manifest_list_path.clone())?;
+        let writer = table
+            .file_io()
+            .new_output(manifest_list_path.clone())?
+            .writer()
+            .await?;
         let mut list_writer = match format_version {
             FormatVersion::V1 => {
-                ManifestListWriter::v1(output, snapshot_id, metadata.current_snapshot_id())
+                ManifestListWriter::v1(writer, snapshot_id, metadata.current_snapshot_id())
             }
             FormatVersion::V2 => ManifestListWriter::v2(
-                output,
+                writer,
                 snapshot_id,
                 metadata.current_snapshot_id(),
                 next_seq_num,
             ),
             FormatVersion::V3 => ManifestListWriter::v3(
-                output,
+                writer,
                 snapshot_id,
                 metadata.current_snapshot_id(),
                 next_seq_num,
