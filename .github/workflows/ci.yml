@@ -25,7 +25,7 @@ on:
     paths:
       - '**'                              # Include all files and directories in the repository by default.
       - '!.github/ISSUE_TEMPLATE/**'      # Exclude files and directories that don't impact tests or code like templates, metadata, and documentation.
-      - '!scripts/**'
+      - '!dev/release/**'
       - '!website/**'
       - '!.asf.yml'
       - '!.gitattributes'
@@ -77,6 +77,9 @@ jobs:
       - name: Check diff
         run: git diff --exit-code
 
+      - name: Check Cargo.lock is up-to-date
+        run: cargo update --workspace --locked
+
       - name: Cargo clippy
         run: make check-clippy
 
@@ -116,7 +119,7 @@ jobs:
   check_standalone:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
@@ -192,7 +195,7 @@ jobs:
 
       - name: Install cargo-nextest
         if: matrix.test-suite.name == 'default'
-        uses: taiki-e/install-action@ec28e287910af896fd98e04056d31fa68607e7ad # v2.77.4
+        uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
         with:
           tool: cargo-nextest
 

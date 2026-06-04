@@ -29,6 +29,11 @@ ignore = [
   #
   # Introduced by hive_metastore, tracked at https://github.com/cloudwego/pilota/issues/293
   "RUSTSEC-2024-0436",
+  # `generational-arena` is unmaintained; consider using an alternative
+  #
+  # Introduced by datafusion-ffi through abi_stable/async-ffi until upstream
+  # provides a replacement path.
+  "RUSTSEC-2024-0014",
   # `rustls-pemfile` is unmaintained
   #
   # Introduced by object_store, see https://github.com/apache/arrow-rs-object-store/issues/564

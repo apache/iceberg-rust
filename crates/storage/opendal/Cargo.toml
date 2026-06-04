@@ -16,11 +16,12 @@
 # under the License.
 
 [package]
-name = "iceberg-storage-opendal"
 edition = { workspace = true }
-version = { workspace = true }
 license = { workspace = true }
+name = "iceberg-storage-opendal"
+publish = true
 repository = { workspace = true }
+version = { workspace = true }
 
 categories = ["database"]
 description = "Apache Iceberg OpenDAL storage implementation"
@@ -28,28 +29,37 @@ keywords = ["iceberg", "opendal", "storage"]
 
 [features]
 default = ["opendal-memory", "opendal-fs", "opendal-s3"]
-opendal-all = ["opendal-memory", "opendal-fs", "opendal-s3", "opendal-gcs", "opendal-oss", "opendal-azdls"]
+opendal-all = [
+  "opendal-memory",
+  "opendal-fs",
+  "opendal-s3",
+  "opendal-gcs",
+  "opendal-oss",
+  "opendal-azdls",
+  "opendal-hf",
+]
 
 opendal-azdls = ["opendal/services-azdls"]
 opendal-fs = ["opendal/services-fs"]
 opendal-gcs = ["opendal/services-gcs"]
+opendal-hf = ["opendal/services-hf"]
 opendal-memory = ["opendal/services-memory"]
 opendal-oss = ["opendal/services-oss"]
 opendal-s3 = ["opendal/services-s3", "reqsign-aws-v4", "reqsign-core"]
 
 [dependencies]
 anyhow = { workspace = true }
-cfg-if = { workspace = true }
-iceberg = { workspace = true }
-opendal = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
+cfg-if = { workspace = true }
+futures = { workspace = true }
+iceberg = { workspace = true }
+opendal = { workspace = true }
 reqsign-aws-v4 = { version = "3.0.0", optional = true }
 reqsign-core = { version = "3.0.0", optional = true }
 serde = { workspace = true }
 typetag = { workspace = true }
 url = { workspace = true }
-futures = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }

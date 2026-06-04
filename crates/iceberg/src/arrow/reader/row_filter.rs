@@ -218,24 +218,21 @@ mod tests {
         reader: ArrowReader,
     ) -> Vec<Option<String>> {
         let tasks = Box::pin(futures::stream::iter(
-            vec![Ok(FileScanTask {
-                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
-                    .unwrap()
-                    .len(),
-                start: 0,
-                length: 0,
-                record_count: None,
-                data_file_path: format!("{table_location}/1.parquet"),
-                data_file_format: DataFileFormat::Parquet,
-                schema: schema.clone(),
-                project_field_ids: vec![1],
-                predicate: Some(predicate.bind(schema, true).unwrap()),
-                deletes: vec![],
-                partition: None,
-                partition_spec: None,
-                name_mapping: None,
-                case_sensitive: false,
-            })]
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(
+                    std::fs::metadata(format!("{table_location}/1.parquet"))
+                        .unwrap()
+                        .len(),
+                )
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(format!("{table_location}/1.parquet"))
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![1])
+                .with_predicate(Some(predicate.bind(schema, true).unwrap()))
+                .with_case_sensitive(false)
+                .build())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -517,40 +514,30 @@ mod tests {
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
         // Task 1: read only the first row group
-        let task1 = FileScanTask {
-            file_size_in_bytes: std::fs::metadata(&file_path).unwrap().len(),
-            start: rg0_start,
-            length: row_group_0.compressed_size() as u64,
-            record_count: Some(100),
-            data_file_path: file_path.clone(),
-            data_file_format: DataFileFormat::Parquet,
-            schema: schema.clone(),
-            project_field_ids: vec![1],
-            predicate: None,
-            deletes: vec![],
-            partition: None,
-            partition_spec: None,
-            name_mapping: None,
-            case_sensitive: false,
-        };
+        let task1 = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(rg0_start)
+            .with_length(row_group_0.compressed_size() as u64)
+            .with_data_file_path(file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema.clone())
+            .with_project_field_ids(vec![1])
+            .with_record_count(Some(100))
+            .with_case_sensitive(false)
+            .build();
 
         // Task 2: read the second and third row groups
-        let task2 = FileScanTask {
-            file_size_in_bytes: std::fs::metadata(&file_path).unwrap().len(),
-            start: rg1_start,
-            length: file_end - rg1_start,
-            record_count: Some(200),
-            data_file_path: file_path.clone(),
-            data_file_format: DataFileFormat::Parquet,
-            schema: schema.clone(),
-            project_field_ids: vec![1],
-            predicate: None,
-            deletes: vec![],
-            partition: None,
-            partition_spec: None,
-            name_mapping: None,
-            case_sensitive: false,
-        };
+        let task2 = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(rg1_start)
+            .with_length(file_end - rg1_start)
+            .with_data_file_path(file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema.clone())
+            .with_project_field_ids(vec![1])
+            .with_record_count(Some(200))
+            .with_case_sensitive(false)
+            .build();
 
         let tasks1 = Box::pin(futures::stream::iter(vec![Ok(task1)])) as FileScanTaskStream;
         let result1 = reader
