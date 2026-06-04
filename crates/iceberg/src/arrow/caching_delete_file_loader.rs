@@ -252,7 +252,11 @@ impl CachingDeleteFileLoader {
                     PosDelLoadAction::Load => Ok(DeleteFileContext::PosDels {
                         file_path: task.file_path.clone(),
                         stream: basic_delete_file_loader
-                            .parquet_to_batch_stream(&task.file_path, task.file_size_in_bytes)
+                            .parquet_to_batch_stream(
+                                &task.file_path,
+                                task.file_size_in_bytes,
+                                task.key_metadata.as_deref(),
+                            )
                             .await?,
                     }),
                 }
@@ -271,7 +275,11 @@ impl CachingDeleteFileLoader {
                 let equality_ids_vec = task.equality_ids.clone().unwrap();
                 let evolved_stream = BasicDeleteFileLoader::evolve_schema(
                     basic_delete_file_loader
-                        .parquet_to_batch_stream(&task.file_path, task.file_size_in_bytes)
+                        .parquet_to_batch_stream(
+                            &task.file_path,
+                            task.file_size_in_bytes,
+                            task.key_metadata.as_deref(),
+                        )
                         .await?,
                     schema,
                     &equality_ids_vec,
@@ -635,6 +643,7 @@ mod tests {
             .parquet_to_batch_stream(
                 &eq_delete_file_path,
                 std::fs::metadata(&eq_delete_file_path).unwrap().len(),
+                None,
             )
             .await
             .expect("could not get batch stream");
@@ -834,6 +843,7 @@ mod tests {
             .parquet_to_batch_stream(
                 &delete_file_path,
                 std::fs::metadata(&delete_file_path).unwrap().len(),
+                None,
             )
             .await
             .unwrap();
@@ -1015,7 +1025,7 @@ mod tests {
         let basic_delete_file_loader =
             BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new());
         let record_batch_stream = basic_delete_file_loader
-            .parquet_to_batch_stream(&path, std::fs::metadata(&path).unwrap().len())
+            .parquet_to_batch_stream(&path, std::fs::metadata(&path).unwrap().len(), None)
             .await
             .expect("could not get batch stream");
 

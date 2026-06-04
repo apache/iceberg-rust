@@ -136,6 +136,7 @@ impl ManifestEntryContext {
             // TODO: Extract name_mapping from table metadata property "schema.name-mapping.default"
             .with_name_mapping(None)
             .with_case_sensitive(self.case_sensitive)
+            .with_key_metadata(self.manifest_entry.data_file.key_metadata().map(Box::from))
             .build())
     }
 }
