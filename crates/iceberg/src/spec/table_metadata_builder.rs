@@ -2931,7 +2931,7 @@ mod tests {
         assert!(error_message.contains(
             "Cannot create partition with name 'existing_field' that conflicts with schema field"
         ));
-        assert!(error_message.contains("and is not an identity transform"));
+        assert!(error_message.contains("and is not an identity/void transform"));
     }
 
     #[test]
