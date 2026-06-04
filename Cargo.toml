@@ -44,7 +44,7 @@ rust-version = "1.92"
 aes = { version = "0.8", features = ["zeroize"] }
 aes-gcm = "0.10"
 anyhow = "1.0.72"
-apache-avro = { version = "0.21", features = ["zstandard"] }
+apache-avro = { version = "0.21", features = ["snappy", "zstandard"] }
 array-init = "2"
 arrow = "58"
 arrow-arith = "58"
