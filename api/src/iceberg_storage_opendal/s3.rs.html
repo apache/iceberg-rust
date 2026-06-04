@@ -109,7 +109,7 @@
 <a href=#109 id=109 data-nosnippet>109</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(allow_anonymous) = m.remove(S3_ALLOW_ANONYMOUS)
 <a href=#110 id=110 data-nosnippet>110</a>        &amp;&amp; is_truthy(allow_anonymous.to_lowercase().as_str())
 <a href=#111 id=111 data-nosnippet>111</a>    {
-<a href=#112 id=112 data-nosnippet>112</a>        cfg.allow_anonymous = <span class="bool-val">true</span>;
+<a href=#112 id=112 data-nosnippet>112</a>        cfg.skip_signature = <span class="bool-val">true</span>;
 <a href=#113 id=113 data-nosnippet>113</a>    }
 <a href=#114 id=114 data-nosnippet>114</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(disable_ec2_metadata) = m.remove(S3_DISABLE_EC2_METADATA)
 <a href=#115 id=115 data-nosnippet>115</a>        &amp;&amp; is_truthy(disable_ec2_metadata.to_lowercase().as_str())
