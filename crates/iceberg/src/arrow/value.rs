@@ -1331,7 +1331,7 @@ mod test {
     #[test]
     fn test_arrow_variant_to_literal_is_unsupported() {
         // Converting a variant Arrow array back to an Iceberg literal is not implemented;
-        // the visitor must reject it rather than silently mis-decode.
+        // the visitor must reject it rather than silently decode it incorrectly.
         let variant_child = Arc::new(StructArray::from(vec![
             (
                 Arc::new(Field::new("metadata", DataType::Binary, false)),
