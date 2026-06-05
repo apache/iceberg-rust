@@ -518,32 +518,13 @@ mod tests {
     use crate::spec::snapshot::{Operation, Snapshot, Summary};
     use crate::spec::{ManifestListReader, SnapshotRef, TableMetadata, TableMetadataRef};
 
-    const ENCRYPTION_TEST_V3_METADATA: &str = r#"{
-        "format-version": 3,
-        "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
-        "location": "memory:///table",
-        "last-sequence-number": 0,
-        "last-updated-ms": 1602638573590,
-        "last-column-id": 1,
-        "current-schema-id": 0,
-        "schemas": [{"type": "struct", "schema-id": 0, "fields": [
-            {"id": 1, "name": "x", "required": true, "type": "long"}
-        ]}],
-        "default-spec-id": 0,
-        "partition-specs": [{"spec-id": 0, "fields": []}],
-        "last-partition-id": 1000,
-        "default-sort-order-id": 0,
-        "sort-orders": [{"order-id": 0, "fields": []}],
-        "properties": {},
-        "snapshots": [],
-        "snapshot-log": [],
-        "metadata-log": [],
-        "refs": {},
-        "next-row-id": 0
-    }"#;
-
     fn encryption_test_metadata() -> TableMetadataRef {
-        TableMetadataRef::new(serde_json::from_str(ENCRYPTION_TEST_V3_METADATA).unwrap())
+        let path = format!(
+            "{}/testdata/table_metadata/TableMetadataV3ValidEncryption.json",
+            env!("CARGO_MANIFEST_DIR"),
+        );
+        let json = std::fs::read_to_string(path).unwrap();
+        TableMetadataRef::new(serde_json::from_str(&json).unwrap())
     }
 
     fn encryption_test_kms() -> Arc<dyn KeyManagementClient> {

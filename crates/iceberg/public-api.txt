@@ -279,6 +279,7 @@ impl iceberg::encryption::EncryptionManager
 pub async fn iceberg::encryption::EncryptionManager::decrypt_manifest_list_key_metadata(&self, encryption_key_id: &str) -> iceberg::Result<iceberg::encryption::StandardKeyMetadata>
 pub fn iceberg::encryption::EncryptionManager::encrypt(&self, raw_output: iceberg::io::OutputFile) -> iceberg::encryption::EncryptedOutputFile
 pub async fn iceberg::encryption::EncryptionManager::encrypt_manifest_list_key_metadata(&self, key_metadata: &iceberg::encryption::StandardKeyMetadata) -> iceberg::Result<alloc::string::String>
+pub fn iceberg::encryption::EncryptionManager::from_table_metadata(kms_client: core::option::Option<&alloc::sync::Arc<dyn iceberg::encryption::kms::KeyManagementClient>>, metadata: &iceberg::spec::TableMetadataRef) -> iceberg::Result<core::option::Option<alloc::sync::Arc<iceberg::encryption::EncryptionManager>>>
 pub fn iceberg::encryption::EncryptionManager::with_encryption_keys<F, R>(&self, f: F) -> R where F: core::ops::function::FnOnce(&std::collections::hash::map::HashMap<alloc::string::String, iceberg::spec::EncryptedKey>) -> R
 impl core::fmt::Debug for iceberg::encryption::EncryptionManager
 pub fn iceberg::encryption::EncryptionManager::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
