@@ -110,7 +110,7 @@ impl EncryptionManager {
     /// Returns `Ok(None)` if the format version is below v3 or the
     /// `encryption.key-id` property is not set. Returns an error if the
     /// property is set but no [`KeyManagementClient`] was provided.
-    pub fn from_table_metadata(
+    pub(crate) fn from_table_metadata(
         kms_client: Option<&Arc<dyn KeyManagementClient>>,
         metadata: &TableMetadataRef,
     ) -> Result<Option<Arc<Self>>> {
