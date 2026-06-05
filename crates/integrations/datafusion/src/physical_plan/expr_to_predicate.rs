@@ -336,23 +336,15 @@ fn is_finite_nonzero_literal(expr: &Expr) -> bool {
     matches!(literal_as_f64(expr), Some(v) if v.is_finite() && v != 0.0)
 }
 
-/// Returns the value of `expr` as an `f64` if it is a numeric literal. Used only
-/// to inspect the finiteness and sign of literals (precision loss is irrelevant).
+/// Returns the value of `expr` as an `f64` if it is a numeric literal, delegating
+/// the numeric conversion to DataFusion's [`ScalarValue::cast_to`]. Used only to
+/// inspect the finiteness and sign of literals (precision loss is irrelevant).
 fn literal_as_f64(expr: &Expr) -> Option<f64> {
     let Expr::Literal(value, _) = expr else {
         return None;
     };
-    match value {
-        ScalarValue::Int8(Some(v)) => Some(*v as f64),
-        ScalarValue::Int16(Some(v)) => Some(*v as f64),
-        ScalarValue::Int32(Some(v)) => Some(*v as f64),
-        ScalarValue::Int64(Some(v)) => Some(*v as f64),
-        ScalarValue::UInt8(Some(v)) => Some(*v as f64),
-        ScalarValue::UInt16(Some(v)) => Some(*v as f64),
-        ScalarValue::UInt32(Some(v)) => Some(*v as f64),
-        ScalarValue::UInt64(Some(v)) => Some(*v as f64),
-        ScalarValue::Float32(Some(v)) => Some(*v as f64),
-        ScalarValue::Float64(Some(v)) => Some(*v),
+    match value.cast_to(&DataType::Float64).ok()? {
+        ScalarValue::Float64(Some(v)) => Some(v),
         _ => None,
     }
 }
