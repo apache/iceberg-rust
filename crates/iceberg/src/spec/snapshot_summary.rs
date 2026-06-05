@@ -893,4 +893,34 @@ mod tests {
         assert_eq!(props.get(TOTAL_POSITION_DELETES).unwrap(), "2");
         assert_eq!(props.get(TOTAL_EQUALITY_DELETES).unwrap(), "0");
     }
+
+    #[test]
+    fn test_collector_totals_no_changes() {
+        let prev_props: HashMap<String, String> = [
+            (TOTAL_DATA_FILES.to_string(), "10".to_string()),
+            (TOTAL_DELETE_FILES.to_string(), "5".to_string()),
+            (TOTAL_RECORDS.to_string(), "100".to_string()),
+            (TOTAL_FILE_SIZE.to_string(), "1000".to_string()),
+            (TOTAL_POSITION_DELETES.to_string(), "3".to_string()),
+            (TOTAL_EQUALITY_DELETES.to_string(), "2".to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        let previous_summary = Summary {
+            operation: Operation::Replace,
+            additional_properties: prev_props,
+        };
+
+        let collector = SnapshotSummaryCollector::default();
+
+        let props = collector.build(Some(&previous_summary));
+
+        assert_eq!(props.get(TOTAL_DATA_FILES).unwrap(), "10");
+        assert_eq!(props.get(TOTAL_DELETE_FILES).unwrap(), "5");
+        assert_eq!(props.get(TOTAL_RECORDS).unwrap(), "100");
+        assert_eq!(props.get(TOTAL_FILE_SIZE).unwrap(), "1000");
+        assert_eq!(props.get(TOTAL_POSITION_DELETES).unwrap(), "3");
+        assert_eq!(props.get(TOTAL_EQUALITY_DELETES).unwrap(), "2");
+    }
 }
