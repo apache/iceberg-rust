@@ -208,6 +208,11 @@ jobs:
         env:
           # Disable debug info to speed up compilation and reduce artifact size
           RUSTFLAGS: "-C debuginfo=0"
+          # HuggingFace Hub integration tests self-skip when these are unset
+          # (e.g. PRs from forks); see crates/storage/opendal/tests/file_io_hf_test.rs
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_BUCKET: ${{ secrets.HF_BUCKET }}
+          HF_DATASET: ${{ secrets.HF_DATASET }}
         run: |
           if [ "${{ matrix.test-suite.name }}" = "default" ]; then
             cargo nextest run ${{ matrix.test-suite.args }}
