@@ -249,13 +249,15 @@ fn scalar_function_to_iceberg_predicate(func_name: &str, args: &[Expr]) -> Trans
 /// wrapped column is NaN — so both `isnan(arg)` and `NOT isnan(arg)` are sound:
 ///
 /// * negation: `-x` is NaN iff `x` is NaN
-/// * `abs(x)`: `abs(x)` is NaN iff `x` is NaN
 /// * casts between numeric types preserve NaN
 /// * `x + c`, `c + x`, `x - c`, `c - x` for a finite literal `c`
 /// * `x * c`, `c * x`, `x / c` for a finite, non-zero literal `c`
 ///
 /// Multiplication/division by zero and `c / x` are intentionally rejected: e.g.
 /// `x * 0` is NaN when `x` is `±inf`, so it does not imply `x` is NaN.
+///
+/// Scalar-function arguments (e.g. `abs(x)`) are intentionally left for a
+/// follow-up; only references, negation, casts and arithmetic are resolved here.
 ///
 /// [`IcebergTableProvider::supports_filters_pushdown`]: crate::table::IcebergTableProvider
 fn resolve_nan_preserving_reference(expr: &Expr) -> Option<Reference> {
@@ -269,11 +271,6 @@ fn resolve_nan_preserving_reference(expr: &Expr) -> Option<Reference> {
                 return None;
             }
             resolve_nan_preserving_reference(&cast.expr)
-        }
-        Expr::ScalarFunction(ScalarFunction { func, args })
-            if func.name() == "abs" && args.len() == 1 =>
-        {
-            resolve_nan_preserving_reference(&args[0])
         }
         Expr::BinaryExpr(binary) => resolve_nan_preserving_binary(binary),
         _ => None,
@@ -866,13 +863,6 @@ mod tests {
     }
 
     #[test]
-    fn test_predicate_conversion_with_isnan_abs() {
-        // abs(x) is NaN iff x is NaN
-        let predicate = convert_to_iceberg_predicate("isnan(abs(qux))").unwrap();
-        assert_eq!(predicate, Reference::new("qux").is_nan());
-    }
-
-    #[test]
     fn test_predicate_conversion_with_isnan_additive() {
         // x + c, c + x, x - c, c - x are NaN iff x is NaN (for finite c)
         for sql in [
@@ -899,7 +889,7 @@ mod tests {
     #[test]
     fn test_predicate_conversion_with_isnan_nested_expr() {
         // Nested NaN-preserving transformations resolve to the inner column
-        let predicate = convert_to_iceberg_predicate("isnan(-(abs(qux) + 1) * 3)").unwrap();
+        let predicate = convert_to_iceberg_predicate("isnan(-(qux + 1) * 3)").unwrap();
         assert_eq!(predicate, Reference::new("qux").is_nan());
     }
 
@@ -927,6 +917,9 @@ mod tests {
         // Expressions referencing more than one column cannot be reduced to a
         // single column reference.
         assert_eq!(convert_to_iceberg_predicate("isnan(qux + foo)"), None);
+
+        // Scalar-function arguments (e.g. abs) are left for a follow-up.
+        assert_eq!(convert_to_iceberg_predicate("isnan(abs(qux))"), None);
 
         // Unknown scalar functions are not pushed down.
         assert_eq!(convert_to_iceberg_predicate("isnan(sqrt(qux))"), None);
