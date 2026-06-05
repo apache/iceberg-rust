@@ -286,9 +286,9 @@ fn resolve_nan_preserving_binary(binary: &BinaryExpr) -> Option<Reference> {
         // `x + c`, `c + x`, `x - c` and `c - x` are NaN iff `x` is NaN, for any
         // finite literal `c`. The column may be on either side.
         Operator::Plus | Operator::Minus => {
-            if is_finite_literal(right) {
+            if finite_literal(right).is_some() {
                 resolve_nan_preserving_reference(left)
-            } else if is_finite_literal(left) {
+            } else if finite_literal(left).is_some() {
                 resolve_nan_preserving_reference(right)
             } else {
                 None
@@ -299,9 +299,9 @@ fn resolve_nan_preserving_binary(binary: &BinaryExpr) -> Option<Reference> {
         // non-zero: `±inf * 0` is NaN even though `±inf` is not. The column may
         // be on either side.
         Operator::Multiply => {
-            if is_finite_nonzero_literal(right) {
+            if matches!(finite_literal(right), Some(c) if c != 0.0) {
                 resolve_nan_preserving_reference(left)
-            } else if is_finite_nonzero_literal(left) {
+            } else if matches!(finite_literal(left), Some(c) if c != 0.0) {
                 resolve_nan_preserving_reference(right)
             } else {
                 None
@@ -312,7 +312,7 @@ fn resolve_nan_preserving_binary(binary: &BinaryExpr) -> Option<Reference> {
         // `c / x` is rejected because it is not NaN-preserving (e.g. `0 / 0` is
         // NaN while `0` is not), so the column must be the dividend (left side).
         Operator::Divide => {
-            if is_finite_nonzero_literal(right) {
+            if matches!(finite_literal(right), Some(c) if c != 0.0) {
                 resolve_nan_preserving_reference(left)
             } else {
                 None
@@ -323,25 +323,16 @@ fn resolve_nan_preserving_binary(binary: &BinaryExpr) -> Option<Reference> {
     }
 }
 
-/// Returns `true` if `expr` is a finite numeric literal (not infinite or NaN).
-fn is_finite_literal(expr: &Expr) -> bool {
-    matches!(literal_as_f64(expr), Some(v) if v.is_finite())
-}
-
-/// Returns `true` if `expr` is a finite, non-zero numeric literal.
-fn is_finite_nonzero_literal(expr: &Expr) -> bool {
-    matches!(literal_as_f64(expr), Some(v) if v.is_finite() && v != 0.0)
-}
-
-/// Returns the value of `expr` as an `f64` if it is a numeric literal, delegating
-/// the numeric conversion to DataFusion's [`ScalarValue::cast_to`]. Used only to
-/// inspect the finiteness and sign of literals (precision loss is irrelevant).
-fn literal_as_f64(expr: &Expr) -> Option<f64> {
+/// Returns the value of `expr` as an `f64` if it is a finite numeric literal
+/// (i.e. not a non-literal, non-numeric, or infinite/NaN value). The numeric
+/// conversion is delegated to DataFusion's [`ScalarValue::cast_to`]; the value
+/// is only used to inspect finiteness and sign (precision loss is irrelevant).
+fn finite_literal(expr: &Expr) -> Option<f64> {
     let Expr::Literal(value, _) = expr else {
         return None;
     };
     match value.cast_to(&DataType::Float64).ok()? {
-        ScalarValue::Float64(Some(v)) => Some(v),
+        ScalarValue::Float64(Some(v)) if v.is_finite() => Some(v),
         _ => None,
     }
 }
