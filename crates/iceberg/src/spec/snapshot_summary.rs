@@ -20,8 +20,7 @@ use std::collections::HashMap;
 use itertools::Itertools;
 
 use super::{DataContentType, DataFile, PartitionSpecRef};
-use crate::spec::{ManifestContentType, ManifestFile, Operation, SchemaRef, Summary};
-use crate::{Error, ErrorKind, Result};
+use crate::spec::{ManifestContentType, ManifestFile, SchemaRef, Summary};
 
 const ADDED_DATA_FILES: &str = "added-data-files";
 const ADDED_DELETE_FILES: &str = "added-delete-files";
@@ -142,8 +141,52 @@ impl SnapshotSummaryCollector {
     }
 
     /// Builds final map of summaries
-    pub fn build(&self) -> HashMap<String, String> {
+    pub fn build(&self, prev_summary: Option<&Summary>) -> HashMap<String, String> {
         let mut properties = self.metrics.to_map();
+
+        update_total(
+            prev_summary,
+            &mut properties,
+            self.metrics.added_data_files as u64,
+            self.metrics.removed_data_files as u64,
+            TOTAL_DATA_FILES,
+        );
+        update_total(
+            prev_summary,
+            &mut properties,
+            self.metrics.added_delete_files as u64,
+            self.metrics.removed_delete_files as u64,
+            TOTAL_DELETE_FILES,
+        );
+        update_total(
+            prev_summary,
+            &mut properties,
+            self.metrics.added_records,
+            self.metrics.deleted_records,
+            TOTAL_RECORDS,
+        );
+        update_total(
+            prev_summary,
+            &mut properties,
+            self.metrics.added_file_size,
+            self.metrics.removed_file_size,
+            TOTAL_FILE_SIZE,
+        );
+        update_total(
+            prev_summary,
+            &mut properties,
+            self.metrics.added_pos_deletes,
+            self.metrics.removed_pos_deletes,
+            TOTAL_POSITION_DELETES,
+        );
+        update_total(
+            prev_summary,
+            &mut properties,
+            self.metrics.added_eq_deletes,
+            self.metrics.removed_eq_deletes,
+            TOTAL_EQUALITY_DELETES,
+        );
+
         let changed_partitions_count = self.partition_metrics.len() as u64;
         set_if_positive(
             &mut properties,
@@ -329,195 +372,35 @@ where T: PartialOrd + Default + ToString {
     }
 }
 
-pub(crate) fn update_snapshot_summaries(
-    summary: Summary,
-    previous_summary: Option<&Summary>,
-    truncate_full_table: bool,
-) -> Result<Summary> {
-    // Validate that the operation is supported
-    if summary.operation != Operation::Append
-        && summary.operation != Operation::Overwrite
-        && summary.operation != Operation::Delete
-    {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            "Operation is not supported.",
-        ));
-    }
-
-    let mut summary = match previous_summary {
-        Some(prev_summary) if truncate_full_table && summary.operation == Operation::Overwrite => {
-            truncate_table_summary(summary, prev_summary).map_err(|err| {
-                Error::new(ErrorKind::Unexpected, "Failed to truncate table summary.")
-                    .with_source(err)
-            })?
-        }
-        _ => summary,
-    };
-
-    update_totals(
-        &mut summary,
-        previous_summary,
-        TOTAL_DATA_FILES,
-        ADDED_DATA_FILES,
-        DELETED_DATA_FILES,
-    );
-
-    update_totals(
-        &mut summary,
-        previous_summary,
-        TOTAL_DELETE_FILES,
-        ADDED_DELETE_FILES,
-        REMOVED_DELETE_FILES,
-    );
-
-    update_totals(
-        &mut summary,
-        previous_summary,
-        TOTAL_RECORDS,
-        ADDED_RECORDS,
-        DELETED_RECORDS,
-    );
-
-    update_totals(
-        &mut summary,
-        previous_summary,
-        TOTAL_FILE_SIZE,
-        ADDED_FILE_SIZE,
-        REMOVED_FILE_SIZE,
-    );
-
-    update_totals(
-        &mut summary,
-        previous_summary,
-        TOTAL_POSITION_DELETES,
-        ADDED_POSITION_DELETES,
-        REMOVED_POSITION_DELETES,
-    );
-
-    update_totals(
-        &mut summary,
-        previous_summary,
-        TOTAL_EQUALITY_DELETES,
-        ADDED_EQUALITY_DELETES,
-        REMOVED_EQUALITY_DELETES,
-    );
-    Ok(summary)
-}
-
-fn get_prop(previous_summary: &Summary, prop: &str) -> Result<u64> {
-    let value_str = previous_summary
-        .additional_properties
-        .get(prop)
-        .map(String::as_str)
-        .unwrap_or("0");
-    value_str.parse::<u64>().map_err(|err| {
-        Error::new(
-            ErrorKind::Unexpected,
-            format!("Failed to parse summary property '{prop}' value '{value_str}' as u64."),
-        )
-        .with_source(err)
-    })
-}
-
-fn truncate_table_summary(mut summary: Summary, previous_summary: &Summary) -> Result<Summary> {
-    for prop in [
-        TOTAL_DATA_FILES,
-        TOTAL_DELETE_FILES,
-        TOTAL_RECORDS,
-        TOTAL_FILE_SIZE,
-        TOTAL_POSITION_DELETES,
-        TOTAL_EQUALITY_DELETES,
-    ] {
-        summary
-            .additional_properties
-            .insert(prop.to_string(), "0".to_string());
-    }
-
-    let value = get_prop(previous_summary, TOTAL_DATA_FILES)?;
-    if value != 0 {
-        summary
-            .additional_properties
-            .insert(DELETED_DATA_FILES.to_string(), value.to_string());
-    }
-    let value = get_prop(previous_summary, TOTAL_DELETE_FILES)?;
-    if value != 0 {
-        summary
-            .additional_properties
-            .insert(REMOVED_DELETE_FILES.to_string(), value.to_string());
-    }
-    let value = get_prop(previous_summary, TOTAL_RECORDS)?;
-    if value != 0 {
-        summary
-            .additional_properties
-            .insert(DELETED_RECORDS.to_string(), value.to_string());
-    }
-    let value = get_prop(previous_summary, TOTAL_FILE_SIZE)?;
-    if value != 0 {
-        summary
-            .additional_properties
-            .insert(REMOVED_FILE_SIZE.to_string(), value.to_string());
-    }
-
-    let value = get_prop(previous_summary, TOTAL_POSITION_DELETES)?;
-    if value != 0 {
-        summary
-            .additional_properties
-            .insert(REMOVED_POSITION_DELETES.to_string(), value.to_string());
-    }
-
-    let value = get_prop(previous_summary, TOTAL_EQUALITY_DELETES)?;
-    if value != 0 {
-        summary
-            .additional_properties
-            .insert(REMOVED_EQUALITY_DELETES.to_string(), value.to_string());
-    }
-
-    Ok(summary)
-}
-
-fn update_totals(
-    summary: &mut Summary,
-    previous_summary: Option<&Summary>,
-    total_property: &str,
-    added_property: &str,
-    removed_property: &str,
+fn update_total(
+    prev_summary: Option<&Summary>,
+    new_props: &mut HashMap<String, String>,
+    added: u64,
+    removed: u64,
+    total_prop: &str,
 ) {
-    let previous_total = match previous_summary {
-        Some(previous_summary) => {
-            match previous_summary.additional_properties.get(total_property) {
-                Some(value) => match value.parse::<u64>() {
-                    Ok(v) => v,
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to parse previous summary property '{total_property}' value '{value}': {e}. \
-                                Skipping total computation.",
-                        );
-                        return;
-                    }
-                },
-                None => return,
+    let prev_total = match prev_summary {
+        Some(prev) => {
+            let Some(value) = prev.additional_properties.get(total_prop) else {
+                // If there was a previous snapshot, but no total - we cannot compute a new total.
+                return;
+            };
+            match value.parse::<u64>() {
+                Ok(v) => v,
+                Err(parse_err) => {
+                    tracing::warn!(
+                        "Failed to parse previous summary property '{total_prop}' \
+                            value '{value}' as u64: {parse_err}. Skipping total computation.",
+                    );
+                    return;
+                }
             }
         }
         None => 0,
     };
 
-    let mut new_total = previous_total;
-    if let Some(value) = summary.additional_properties.get(added_property) {
-        match value.parse::<u64>() {
-            Ok(v) => new_total += v,
-            Err(_) => return,
-        }
-    }
-    if let Some(value) = summary.additional_properties.get(removed_property) {
-        match value.parse::<u64>() {
-            Ok(v) => new_total -= v,
-            Err(_) => return,
-        }
-    }
-    summary
-        .additional_properties
-        .insert(total_property.to_string(), new_total.to_string());
+    let new_total = prev_total + added - removed;
+    new_props.insert(total_prop.to_string(), new_total.to_string());
 }
 
 #[cfg(test)]
@@ -527,12 +410,12 @@ mod tests {
 
     use super::*;
     use crate::spec::{
-        DataFileFormat, Datum, Literal, NestedField, PartitionSpec, PrimitiveType, Schema, Struct,
-        Transform, Type, UnboundPartitionField,
+        DataFileFormat, Datum, Literal, NestedField, Operation, PartitionSpec, PrimitiveType,
+        Schema, Struct, Transform, Type, UnboundPartitionField,
     };
 
     #[test]
-    fn test_update_snapshot_summaries_append() {
+    fn test_build_totals_with_previous_summary() {
         let prev_props: HashMap<String, String> = [
             (TOTAL_DATA_FILES.to_string(), "10".to_string()),
             (TOTAL_DELETE_FILES.to_string(), "5".to_string()),
@@ -549,251 +432,33 @@ mod tests {
             additional_properties: prev_props,
         };
 
-        let new_props: HashMap<String, String> = [
-            (ADDED_DATA_FILES.to_string(), "4".to_string()),
-            (DELETED_DATA_FILES.to_string(), "1".to_string()),
-            (ADDED_DELETE_FILES.to_string(), "2".to_string()),
-            (REMOVED_DELETE_FILES.to_string(), "1".to_string()),
-            (ADDED_RECORDS.to_string(), "40".to_string()),
-            (DELETED_RECORDS.to_string(), "10".to_string()),
-            (ADDED_FILE_SIZE.to_string(), "400".to_string()),
-            (REMOVED_FILE_SIZE.to_string(), "100".to_string()),
-            (ADDED_POSITION_DELETES.to_string(), "5".to_string()),
-            (REMOVED_POSITION_DELETES.to_string(), "2".to_string()),
-            (ADDED_EQUALITY_DELETES.to_string(), "3".to_string()),
-            (REMOVED_EQUALITY_DELETES.to_string(), "1".to_string()),
-        ]
-        .into_iter()
-        .collect();
-
-        let summary = Summary {
-            operation: Operation::Append,
-            additional_properties: new_props,
+        let collector = SnapshotSummaryCollector {
+            metrics: UpdateMetrics {
+                added_data_files: 4,
+                removed_data_files: 1,
+                added_delete_files: 2,
+                removed_delete_files: 1,
+                added_records: 40,
+                deleted_records: 10,
+                added_file_size: 400,
+                removed_file_size: 100,
+                added_pos_deletes: 5,
+                removed_pos_deletes: 2,
+                added_eq_deletes: 3,
+                removed_eq_deletes: 1,
+                ..Default::default()
+            },
+            ..Default::default()
         };
 
-        let updated = update_snapshot_summaries(summary, Some(&previous_summary), false).unwrap();
+        let props = collector.build(Some(&previous_summary));
 
-        assert_eq!(
-            updated.additional_properties.get(TOTAL_DATA_FILES).unwrap(),
-            "13"
-        );
-        assert_eq!(
-            updated
-                .additional_properties
-                .get(TOTAL_DELETE_FILES)
-                .unwrap(),
-            "6"
-        );
-        assert_eq!(
-            updated.additional_properties.get(TOTAL_RECORDS).unwrap(),
-            "130"
-        );
-        assert_eq!(
-            updated.additional_properties.get(TOTAL_FILE_SIZE).unwrap(),
-            "1300"
-        );
-        assert_eq!(
-            updated
-                .additional_properties
-                .get(TOTAL_POSITION_DELETES)
-                .unwrap(),
-            "6"
-        );
-        assert_eq!(
-            updated
-                .additional_properties
-                .get(TOTAL_EQUALITY_DELETES)
-                .unwrap(),
-            "4"
-        );
-    }
-
-    #[test]
-    fn test_truncate_table_summary() {
-        let prev_props: HashMap<String, String> = [
-            (TOTAL_DATA_FILES.to_string(), "10".to_string()),
-            (TOTAL_DELETE_FILES.to_string(), "5".to_string()),
-            (TOTAL_RECORDS.to_string(), "100".to_string()),
-            (TOTAL_FILE_SIZE.to_string(), "1000".to_string()),
-            (TOTAL_POSITION_DELETES.to_string(), "3".to_string()),
-            (TOTAL_EQUALITY_DELETES.to_string(), "2".to_string()),
-        ]
-        .into_iter()
-        .collect();
-
-        let previous_summary = Summary {
-            operation: Operation::Overwrite,
-            additional_properties: prev_props,
-        };
-
-        let mut new_props = HashMap::new();
-        new_props.insert("dummy".to_string(), "value".to_string());
-        let summary = Summary {
-            operation: Operation::Overwrite,
-            additional_properties: new_props,
-        };
-
-        let truncated = truncate_table_summary(summary, &previous_summary).unwrap();
-
-        assert_eq!(
-            truncated
-                .additional_properties
-                .get(TOTAL_DATA_FILES)
-                .unwrap(),
-            "0"
-        );
-        assert_eq!(
-            truncated
-                .additional_properties
-                .get(TOTAL_DELETE_FILES)
-                .unwrap(),
-            "0"
-        );
-        assert_eq!(
-            truncated.additional_properties.get(TOTAL_RECORDS).unwrap(),
-            "0"
-        );
-        assert_eq!(
-            truncated
-                .additional_properties
-                .get(TOTAL_FILE_SIZE)
-                .unwrap(),
-            "0"
-        );
-        assert_eq!(
-            truncated
-                .additional_properties
-                .get(TOTAL_POSITION_DELETES)
-                .unwrap(),
-            "0"
-        );
-        assert_eq!(
-            truncated
-                .additional_properties
-                .get(TOTAL_EQUALITY_DELETES)
-                .unwrap(),
-            "0"
-        );
-
-        assert_eq!(
-            truncated
-                .additional_properties
-                .get(DELETED_DATA_FILES)
-                .unwrap(),
-            "10"
-        );
-        assert_eq!(
-            truncated
-                .additional_properties
-                .get(REMOVED_DELETE_FILES)
-                .unwrap(),
-            "5"
-        );
-        assert_eq!(
-            truncated
-                .additional_properties
-                .get(DELETED_RECORDS)
-                .unwrap(),
-            "100"
-        );
-        assert_eq!(
-            truncated
-                .additional_properties
-                .get(REMOVED_FILE_SIZE)
-                .unwrap(),
-            "1000"
-        );
-        assert_eq!(
-            truncated
-                .additional_properties
-                .get(REMOVED_POSITION_DELETES)
-                .unwrap(),
-            "3"
-        );
-        assert_eq!(
-            truncated
-                .additional_properties
-                .get(REMOVED_EQUALITY_DELETES)
-                .unwrap(),
-            "2"
-        );
-    }
-
-    #[test]
-    fn test_update_snapshot_summaries_overwrite_truncate_handles_totals_above_i32_max() {
-        // A table can legitimately accumulate more than i32::MAX rows or files
-        // over its lifetime. Truncating such a table on overwrite must succeed
-        // and surface the previous totals into the deleted-* counters.
-        let big = (i32::MAX as u64 + 1).to_string(); // 2_147_483_648
-        let prev_props: HashMap<String, String> = [
-            (TOTAL_DATA_FILES.to_string(), big.clone()),
-            (TOTAL_DELETE_FILES.to_string(), "0".to_string()),
-            (TOTAL_RECORDS.to_string(), big.clone()),
-            (TOTAL_FILE_SIZE.to_string(), "0".to_string()),
-            (TOTAL_POSITION_DELETES.to_string(), "0".to_string()),
-            (TOTAL_EQUALITY_DELETES.to_string(), "0".to_string()),
-        ]
-        .into_iter()
-        .collect();
-
-        let previous_summary = Summary {
-            operation: Operation::Overwrite,
-            additional_properties: prev_props,
-        };
-
-        let summary = Summary {
-            operation: Operation::Overwrite,
-            additional_properties: HashMap::new(),
-        };
-
-        let updated = update_snapshot_summaries(summary, Some(&previous_summary), true)
-            .expect("overwrite truncation should accept totals above i32::MAX");
-        assert_eq!(
-            updated
-                .additional_properties
-                .get(DELETED_DATA_FILES)
-                .unwrap(),
-            &big
-        );
-        assert_eq!(
-            updated.additional_properties.get(DELETED_RECORDS).unwrap(),
-            &big
-        );
-    }
-
-    #[test]
-    fn test_update_snapshot_summaries_overwrite_truncate_returns_err_on_malformed_total() {
-        // Non-numeric values in the previous summary (corruption, manual edits,
-        // a foreign implementation) must surface as a recoverable Err - not
-        // crash the process.
-        let prev_props: HashMap<String, String> = [
-            (TOTAL_DATA_FILES.to_string(), "not_a_number".to_string()),
-            (TOTAL_DELETE_FILES.to_string(), "0".to_string()),
-            (TOTAL_RECORDS.to_string(), "0".to_string()),
-            (TOTAL_FILE_SIZE.to_string(), "0".to_string()),
-            (TOTAL_POSITION_DELETES.to_string(), "0".to_string()),
-            (TOTAL_EQUALITY_DELETES.to_string(), "0".to_string()),
-        ]
-        .into_iter()
-        .collect();
-
-        let previous_summary = Summary {
-            operation: Operation::Overwrite,
-            additional_properties: prev_props,
-        };
-
-        let summary = Summary {
-            operation: Operation::Overwrite,
-            additional_properties: HashMap::new(),
-        };
-
-        let err = update_snapshot_summaries(summary, Some(&previous_summary), true)
-            .expect_err("malformed previous summary must produce an Err, not a panic");
-        assert!(
-            err.message().contains("truncate table summary"),
-            "expected wrapped 'Failed to truncate table summary' context, got: {}",
-            err.message()
-        );
+        assert_eq!(props.get(TOTAL_DATA_FILES).unwrap(), "13");
+        assert_eq!(props.get(TOTAL_DELETE_FILES).unwrap(), "6");
+        assert_eq!(props.get(TOTAL_RECORDS).unwrap(), "130");
+        assert_eq!(props.get(TOTAL_FILE_SIZE).unwrap(), "1300");
+        assert_eq!(props.get(TOTAL_POSITION_DELETES).unwrap(), "6");
+        assert_eq!(props.get(TOTAL_EQUALITY_DELETES).unwrap(), "4");
     }
 
     #[test]
@@ -895,10 +560,30 @@ mod tests {
 
         collector.remove_file(&file1, schema.clone(), partition_spec.clone());
 
-        let props = collector.build();
+        let prev_summary = {
+            let prev_props: HashMap<String, String> = [
+                (TOTAL_DATA_FILES, "10"),
+                (TOTAL_DELETE_FILES, "5"),
+                (TOTAL_RECORDS, "100"),
+                (TOTAL_FILE_SIZE, "1000"),
+                (TOTAL_POSITION_DELETES, "3"),
+                (TOTAL_EQUALITY_DELETES, "2"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+
+            Summary {
+                operation: Operation::Append,
+                additional_properties: prev_props,
+            }
+        };
+
+        let props = collector.build(Some(&prev_summary));
 
         assert_eq!(props.get(ADDED_FILE_SIZE).unwrap(), "300");
         assert_eq!(props.get(REMOVED_FILE_SIZE).unwrap(), "100");
+        assert_eq!(props.get(TOTAL_FILE_SIZE).unwrap(), "1200");
 
         let partition_key = format!("{}{}", CHANGED_PARTITION_PREFIX, "year=2025");
 
@@ -939,7 +624,7 @@ mod tests {
             .insert("dummy".to_string(), UpdateMetrics::default());
         collector.add_manifest(&manifest);
 
-        let props = collector.build();
+        let props = collector.build(None);
         assert_eq!(props.get(ADDED_DATA_FILES).unwrap(), "3");
         assert_eq!(props.get(DELETED_DATA_FILES).unwrap(), "1");
         assert_eq!(props.get(ADDED_RECORDS).unwrap(), "100");
@@ -1033,7 +718,7 @@ mod tests {
         );
 
         summary_one.merge(summary_two);
-        let props = summary_one.build();
+        let props = summary_one.build(None);
         assert_eq!(props.get(ADDED_DATA_FILES).unwrap(), "2");
         assert_eq!(props.get(ADDED_RECORDS).unwrap(), "30");
 
@@ -1088,7 +773,7 @@ mod tests {
         );
 
         summary_three.merge(summary_four);
-        let props = summary_three.build();
+        let props = summary_three.build(None);
 
         assert_eq!(props.get(ADDED_DATA_FILES).unwrap(), "2");
         assert_eq!(props.get(ADDED_RECORDS).unwrap(), "6");
@@ -1100,96 +785,76 @@ mod tests {
     }
 
     #[test]
-    fn test_update_totals_skipped_when_previous_summary_missing_totals() {
-        let prev_props: HashMap<String, String> = [
-            (TOTAL_DATA_FILES, "8"),
-            (ADDED_DATA_FILES, "4"),
-            (DELETED_DATA_FILES, "2"),
-        ]
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
+    fn test_collector_total_skipped_when_prev_total_omitted() {
+        let prev_props: HashMap<String, String> = [(TOTAL_DATA_FILES, "8")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
 
         let previous_summary = Summary {
             operation: Operation::Append,
             additional_properties: prev_props,
         };
 
-        let new_props: HashMap<String, String> = [
-            (ADDED_DATA_FILES, "4"),
-            (ADDED_DELETE_FILES, "2"),
-            (ADDED_RECORDS, "40"),
-            (ADDED_FILE_SIZE, "400"),
-            (ADDED_POSITION_DELETES, "5"),
-            (ADDED_EQUALITY_DELETES, "3"),
-        ]
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
-
-        let summary = Summary {
-            operation: Operation::Append,
-            additional_properties: new_props,
+        let collector = SnapshotSummaryCollector {
+            metrics: UpdateMetrics {
+                added_data_files: 4,
+                removed_data_files: 0,
+                added_delete_files: 2,
+                added_records: 40,
+                added_file_size: 400,
+                added_pos_deletes: 5,
+                ..Default::default()
+            },
+            ..Default::default()
         };
 
-        let truncate_full_table = false;
-        let updated =
-            update_snapshot_summaries(summary, Some(&previous_summary), truncate_full_table)
-                .unwrap();
+        let props = collector.build(Some(&previous_summary));
 
-        let new_total_data_files = updated.additional_properties.get(TOTAL_DATA_FILES)
-            .expect("total-data-files should be set based on previous summary value, even when other totals weren't set");
-        assert_eq!(new_total_data_files, "12");
+        assert_eq!(
+            props.get(TOTAL_DATA_FILES).unwrap(),
+            "12",
+            "total-data-files should be set based on previous summary value"
+        );
 
         let other_total_fields = [
             TOTAL_DELETE_FILES,
             TOTAL_RECORDS,
             TOTAL_FILE_SIZE,
             TOTAL_POSITION_DELETES,
-            TOTAL_EQUALITY_DELETES,
         ];
         for total_field in other_total_fields {
             assert!(
-                updated.additional_properties.get(total_field).is_none(),
-                "{:?} should not be set when previous summary lacks totals",
-                total_field,
+                !props.contains_key(total_field),
+                "{total_field:?} should not be set when previous summary lacks it",
             );
         }
     }
 
     #[test]
-    fn test_update_totals_computed_when_no_previous_summary() {
-        let new_props: HashMap<String, String> = [
-            (ADDED_DATA_FILES.to_string(), "4".to_string()),
-            (ADDED_RECORDS.to_string(), "40".to_string()),
-            (ADDED_FILE_SIZE.to_string(), "400".to_string()),
-        ]
-        .into_iter()
-        .collect();
-
-        let summary = Summary {
-            operation: Operation::Append,
-            additional_properties: new_props,
+    fn test_collector_totals_initialized_when_no_previous_summary() {
+        let collector = SnapshotSummaryCollector {
+            metrics: UpdateMetrics {
+                added_data_files: 4,
+                added_records: 40,
+                added_file_size: 400,
+                ..Default::default()
+            },
+            ..Default::default()
         };
 
-        let updated = update_snapshot_summaries(summary, None, false).unwrap();
+        let props = collector.build(None);
 
-        assert_eq!(
-            updated.additional_properties.get(TOTAL_DATA_FILES).unwrap(),
-            "4"
-        );
-        assert_eq!(
-            updated.additional_properties.get(TOTAL_RECORDS).unwrap(),
-            "40"
-        );
-        assert_eq!(
-            updated.additional_properties.get(TOTAL_FILE_SIZE).unwrap(),
-            "400"
-        );
+        assert_eq!(props.get(TOTAL_DATA_FILES).unwrap(), "4");
+        assert_eq!(props.get(TOTAL_RECORDS).unwrap(), "40");
+        assert_eq!(props.get(TOTAL_FILE_SIZE).unwrap(), "400");
+        assert_eq!(props.get(TOTAL_DELETE_FILES).unwrap(), "0");
+        assert_eq!(props.get(TOTAL_POSITION_DELETES).unwrap(), "0");
+        assert_eq!(props.get(TOTAL_EQUALITY_DELETES).unwrap(), "0");
     }
 
     #[test]
-    fn test_update_totals_with_previous_total_and_removed_but_no_added() {
+    fn test_collector_totals_with_removes_only() {
         let prev_props: HashMap<String, String> = [
             (TOTAL_DATA_FILES.to_string(), "10".to_string()),
             (TOTAL_DELETE_FILES.to_string(), "5".to_string()),
@@ -1206,56 +871,26 @@ mod tests {
             additional_properties: prev_props,
         };
 
-        let new_props: HashMap<String, String> = [
-            (DELETED_DATA_FILES.to_string(), "2".to_string()),
-            (REMOVED_DELETE_FILES.to_string(), "1".to_string()),
-            (DELETED_RECORDS.to_string(), "20".to_string()),
-            (REMOVED_FILE_SIZE.to_string(), "200".to_string()),
-            (REMOVED_POSITION_DELETES.to_string(), "1".to_string()),
-            (REMOVED_EQUALITY_DELETES.to_string(), "1".to_string()),
-        ]
-        .into_iter()
-        .collect();
-
-        let summary = Summary {
-            operation: Operation::Delete,
-            additional_properties: new_props,
+        let collector = SnapshotSummaryCollector {
+            metrics: UpdateMetrics {
+                removed_data_files: 2,
+                removed_delete_files: 1,
+                deleted_records: 20,
+                removed_file_size: 200,
+                removed_pos_deletes: 1,
+                removed_eq_deletes: 2,
+                ..Default::default()
+            },
+            ..Default::default()
         };
 
-        let updated = update_snapshot_summaries(summary, Some(&previous_summary), false).unwrap();
+        let props = collector.build(Some(&previous_summary));
 
-        assert_eq!(
-            updated.additional_properties.get(TOTAL_DATA_FILES).unwrap(),
-            "8"
-        );
-        assert_eq!(
-            updated
-                .additional_properties
-                .get(TOTAL_DELETE_FILES)
-                .unwrap(),
-            "4"
-        );
-        assert_eq!(
-            updated.additional_properties.get(TOTAL_RECORDS).unwrap(),
-            "80"
-        );
-        assert_eq!(
-            updated.additional_properties.get(TOTAL_FILE_SIZE).unwrap(),
-            "800"
-        );
-        assert_eq!(
-            updated
-                .additional_properties
-                .get(TOTAL_POSITION_DELETES)
-                .unwrap(),
-            "2"
-        );
-        assert_eq!(
-            updated
-                .additional_properties
-                .get(TOTAL_EQUALITY_DELETES)
-                .unwrap(),
-            "1"
-        );
+        assert_eq!(props.get(TOTAL_DATA_FILES).unwrap(), "8");
+        assert_eq!(props.get(TOTAL_DELETE_FILES).unwrap(), "4");
+        assert_eq!(props.get(TOTAL_RECORDS).unwrap(), "80");
+        assert_eq!(props.get(TOTAL_FILE_SIZE).unwrap(), "800");
+        assert_eq!(props.get(TOTAL_POSITION_DELETES).unwrap(), "2");
+        assert_eq!(props.get(TOTAL_EQUALITY_DELETES).unwrap(), "0");
     }
 }

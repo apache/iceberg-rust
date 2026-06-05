@@ -28,7 +28,7 @@ use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
     ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
     SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
-    TableProperties, update_snapshot_summaries,
+    TableProperties,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -403,20 +403,15 @@ impl<'a> SnapshotProducer<'a> {
         }
 
         let previous_snapshot = table_metadata.current_snapshot();
+        let previous_summary = previous_snapshot.map(|snapshot| snapshot.summary());
 
-        let mut additional_properties = summary_collector.build();
-        additional_properties.extend(self.snapshot_properties.clone());
+        let mut additional_properties = self.snapshot_properties.clone();
+        additional_properties.extend(summary_collector.build(previous_summary));
 
-        let summary = Summary {
+        Ok(Summary {
             operation: snapshot_produce_operation.operation(),
             additional_properties,
-        };
-
-        update_snapshot_summaries(
-            summary,
-            previous_snapshot.map(|s| s.summary()),
-            snapshot_produce_operation.operation() == Operation::Overwrite,
-        )
+        })
     }
 
     fn generate_manifest_list_file_path(&self, attempt: i64) -> String {
