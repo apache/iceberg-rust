@@ -165,7 +165,9 @@ impl SchemaProvider for IcebergSchemaProvider {
             .map_err(to_datafusion_error)?;
 
         // Use at least V2, and upgrade to V3 if the schema requires it (e.g. timestamp_ns / variant).
-        let format_version = iceberg_schema.min_format_version().max(FormatVersion::V2);
+        let format_version = iceberg_schema
+            .calc_min_compatible_format()
+            .max(FormatVersion::V2);
 
         // Create the table in the Iceberg catalog
         let table_creation = TableCreation::builder()

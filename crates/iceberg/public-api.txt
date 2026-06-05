@@ -2307,6 +2307,7 @@ impl iceberg::spec::Schema
 pub fn iceberg::spec::Schema::accessor_by_field_id(&self, field_id: i32) -> core::option::Option<alloc::sync::Arc<iceberg::expr::accessor::StructAccessor>>
 pub fn iceberg::spec::Schema::as_struct(&self) -> &iceberg::spec::StructType
 pub fn iceberg::spec::Schema::builder() -> iceberg::spec::SchemaBuilder
+pub fn iceberg::spec::Schema::calc_min_compatible_format(&self) -> iceberg::spec::FormatVersion
 pub fn iceberg::spec::Schema::check_format_compatibility(&self, format_version: iceberg::spec::FormatVersion) -> iceberg::Result<()>
 pub fn iceberg::spec::Schema::field_by_alias(&self, alias: &str) -> core::option::Option<&iceberg::spec::NestedFieldRef>
 pub fn iceberg::spec::Schema::field_by_id(&self, field_id: i32) -> core::option::Option<&iceberg::spec::NestedFieldRef>
@@ -2318,7 +2319,6 @@ pub fn iceberg::spec::Schema::field_id_to_name_map(&self) -> &std::collections::
 pub fn iceberg::spec::Schema::highest_field_id(&self) -> i32
 pub fn iceberg::spec::Schema::identifier_field_ids(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = i32> + '_
 pub fn iceberg::spec::Schema::into_builder(self) -> iceberg::spec::SchemaBuilder
-pub fn iceberg::spec::Schema::min_format_version(&self) -> iceberg::spec::FormatVersion
 pub fn iceberg::spec::Schema::name_by_field_id(&self, field_id: i32) -> core::option::Option<&str>
 pub fn iceberg::spec::Schema::schema_id(&self) -> iceberg::spec::SchemaId
 impl core::clone::Clone for iceberg::spec::Schema
@@ -2954,7 +2954,6 @@ pub const iceberg::spec::LIST_FIELD_NAME: &str
 pub const iceberg::spec::MAIN_BRANCH: &str
 pub const iceberg::spec::MAP_KEY_FIELD_NAME: &str
 pub const iceberg::spec::MAP_VALUE_FIELD_NAME: &str
-pub const iceberg::spec::MIN_FORMAT_VERSION_DEFAULT_VALUES: iceberg::spec::FormatVersion
 pub const iceberg::spec::MIN_FORMAT_VERSION_ROW_LINEAGE: iceberg::spec::FormatVersion
 pub const iceberg::spec::SCHEMA_NAME_DELIMITER: &str
 pub const iceberg::spec::UNASSIGNED_SEQUENCE_NUMBER: i64

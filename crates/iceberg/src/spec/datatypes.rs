@@ -32,7 +32,7 @@ use serde_json::Value as JsonValue;
 use super::values::Literal;
 use crate::ensure_data_valid;
 use crate::error::Result;
-use crate::spec::PrimitiveLiteral;
+use crate::spec::{FormatVersion, PrimitiveLiteral};
 use crate::spec::datatypes::_decimal::{MAX_PRECISION, REQUIRED_LENGTH};
 
 /// Field name for list type.
@@ -129,6 +129,24 @@ impl Type {
     #[inline(always)]
     pub fn is_variant(&self) -> bool {
         matches!(self, Type::Variant(_))
+    }
+
+    /// Minimum [`FormatVersion`] required to support this type, **without** taking
+    /// nested field types into account.
+    ///
+    /// `TimestampNs` / `TimestamptzNs` / `Variant` require [`FormatVersion::V3`]; every
+    /// other type is valid from [`FormatVersion::V1`]. Mirrors Java's
+    /// `Schema.MIN_FORMAT_VERSIONS` (a shallow lookup keyed by type id), so it
+    /// intentionally does not recurse: callers needing the floor for a whole schema
+    /// iterate its flattened fields (see [`Schema::calc_min_compatible_format`]).
+    ///
+    /// [`Schema::calc_min_compatible_format`]: crate::spec::Schema::calc_min_compatible_format
+    pub(crate) fn min_format_version(&self) -> FormatVersion {
+        match self {
+            Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs)
+            | Type::Variant(_) => FormatVersion::V3,
+            _ => FormatVersion::V1,
+        }
     }
 
     /// Convert Type to reference of PrimitiveType
