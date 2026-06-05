@@ -284,51 +284,68 @@ fn resolve_nan_preserving_reference(expr: &Expr) -> Option<Reference> {
 /// single column with a finite literal while preserving NaN-ness. See
 /// [`resolve_nan_preserving_reference`] for the soundness argument.
 fn resolve_nan_preserving_binary(binary: &BinaryExpr) -> Option<Reference> {
-    // `nonzero` requires the literal to be non-zero (`x * 0` / `x / 0` are NaN
-    // for infinite `x`). `literal_allowed_left` indicates whether the literal may
-    // sit on the left operand: `c + x`, `c - x`, `c * x` all preserve NaN-ness,
-    // but `c / x` does not (e.g. `0 / 0` is NaN while `0` is not).
-    let (nonzero, literal_allowed_left) = match binary.op {
-        Operator::Plus | Operator::Minus => (false, true),
-        Operator::Multiply => (true, true),
-        Operator::Divide => (true, false),
-        _ => return None,
-    };
-
-    let is_literal = |expr: &Expr| {
-        if nonzero {
-            finite_nonzero_literal(expr).is_some()
-        } else {
-            finite_literal(expr).is_some()
+    let (left, right) = (&binary.left, &binary.right);
+    match binary.op {
+        // `x + c`, `c + x`, `x - c` and `c - x` are NaN iff `x` is NaN, for any
+        // finite literal `c`. The column may be on either side.
+        Operator::Plus | Operator::Minus => {
+            if is_finite_literal(right) {
+                resolve_nan_preserving_reference(left)
+            } else if is_finite_literal(left) {
+                resolve_nan_preserving_reference(right)
+            } else {
+                None
+            }
         }
-    };
 
-    if is_literal(&binary.right) {
-        // <column> <op> <literal>
-        resolve_nan_preserving_reference(&binary.left)
-    } else if literal_allowed_left && is_literal(&binary.left) {
-        // <literal> <op> <column>
-        resolve_nan_preserving_reference(&binary.right)
-    } else {
-        None
-    }
-}
+        // `x * c` and `c * x` are NaN iff `x` is NaN, but only when `c` is
+        // non-zero: `±inf * 0` is NaN even though `±inf` is not. The column may
+        // be on either side.
+        Operator::Multiply => {
+            if is_finite_nonzero_literal(right) {
+                resolve_nan_preserving_reference(left)
+            } else if is_finite_nonzero_literal(left) {
+                resolve_nan_preserving_reference(right)
+            } else {
+                None
+            }
+        }
 
-/// Returns the literal's numeric value if `expr` is a finite numeric literal.
-fn finite_literal(expr: &Expr) -> Option<f64> {
-    match expr {
-        Expr::Literal(value, _) => scalar_value_as_f64(value).filter(|v| v.is_finite()),
+        // `x / c` is NaN iff `x` is NaN, for a finite non-zero literal `c`.
+        // `c / x` is rejected because it is not NaN-preserving (e.g. `0 / 0` is
+        // NaN while `0` is not), so the column must be the dividend (left side).
+        Operator::Divide => {
+            if is_finite_nonzero_literal(right) {
+                resolve_nan_preserving_reference(left)
+            } else {
+                None
+            }
+        }
+
         _ => None,
     }
 }
 
-/// Returns the literal's numeric value if `expr` is a finite, non-zero numeric literal.
-fn finite_nonzero_literal(expr: &Expr) -> Option<f64> {
-    finite_literal(expr).filter(|v| *v != 0.0)
+/// Returns `true` if `expr` is a finite numeric literal (not infinite or NaN).
+fn is_finite_literal(expr: &Expr) -> bool {
+    matches!(literal_as_f64(expr), Some(v) if v.is_finite())
 }
 
-/// Extracts a numeric [`ScalarValue`] as an `f64`, used only to inspect
-/// finiteness and sign of literals (precision loss is irrelevant here).
+/// Returns `true` if `expr` is a finite, non-zero numeric literal.
+fn is_finite_nonzero_literal(expr: &Expr) -> bool {
+    matches!(literal_as_f64(expr), Some(v) if v.is_finite() && v != 0.0)
+}
+
+/// Returns the value of `expr` as an `f64` if it is a numeric literal. Used only
+/// to inspect the finiteness and sign of literals (precision loss is irrelevant).
+fn literal_as_f64(expr: &Expr) -> Option<f64> {
+    match expr {
+        Expr::Literal(value, _) => scalar_value_as_f64(value),
+        _ => None,
+    }
+}
+
+/// Extracts a numeric [`ScalarValue`] as an `f64`.
 fn scalar_value_as_f64(value: &ScalarValue) -> Option<f64> {
     match value {
         ScalarValue::Int8(Some(v)) => Some(*v as f64),
