@@ -613,7 +613,7 @@ mod tests {
 
     #[tokio::test]
     async fn table_builder_skips_encryption_when_property_absent() {
-        let metadata: TableMetadata = load_test_metadata("TableMetadataV2ValidMinimal.json");
+        let metadata: TableMetadata = load_test_metadata("TableMetadataV3ValidMinimal.json");
         let table = Table::builder()
             .file_io(FileIO::new_with_memory())
             .metadata(metadata)
