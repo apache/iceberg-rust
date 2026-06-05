@@ -440,26 +440,26 @@ impl<'a> SnapshotProducer<'a> {
         let manifest_list_path = self.generate_manifest_list_file_path(0);
         let next_seq_num = self.table.metadata().next_sequence_number();
         let first_row_id = self.table.metadata().next_row_id();
+        let writer = self
+            .table
+            .file_io()
+            .new_output(manifest_list_path.clone())?
+            .writer()
+            .await?;
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
-                self.table
-                    .file_io()
-                    .new_output(manifest_list_path.clone())?,
+                writer,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
             ),
             FormatVersion::V2 => ManifestListWriter::v2(
-                self.table
-                    .file_io()
-                    .new_output(manifest_list_path.clone())?,
+                writer,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
             ),
             FormatVersion::V3 => ManifestListWriter::v3(
-                self.table
-                    .file_io()
-                    .new_output(manifest_list_path.clone())?,
+                writer,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,

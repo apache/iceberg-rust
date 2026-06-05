@@ -301,6 +301,9 @@ mod tests {
             table
                 .file_io()
                 .new_output(current_snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
                 .unwrap(),
             current_snapshot.snapshot_id(),
             current_snapshot.parent_snapshot_id(),
