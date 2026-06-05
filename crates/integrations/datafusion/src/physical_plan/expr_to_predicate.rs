@@ -273,6 +273,8 @@ fn resolve_nan_preserving_reference(expr: &Expr) -> Option<Reference> {
             resolve_nan_preserving_reference(&cast.expr)
         }
         Expr::BinaryExpr(binary) => resolve_nan_preserving_binary(binary),
+        // TODO(#2154): resolve NaN-preserving scalar-function arguments such as
+        // `abs(x)` (and similar, e.g. `signum`).
         _ => None,
     }
 }
