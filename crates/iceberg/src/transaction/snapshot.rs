@@ -338,7 +338,10 @@ impl<'a> SnapshotProducer<'a> {
         writer.write_manifest_file().await
     }
 
-    async fn manifest_file<OP: SnapshotProduceOperation, MP: ManifestProcess>(
+    /// Collects the list of manifest files to be included in the new snapshot.
+    ///
+    /// This method also writes the new manifests where required.
+    async fn produce_manifest_file_list<OP: SnapshotProduceOperation, MP: ManifestProcess>(
         &mut self,
         snapshot_produce_operation: &OP,
         manifest_process: &MP,
@@ -475,7 +478,7 @@ impl<'a> SnapshotProducer<'a> {
         })?;
 
         let new_manifests = self
-            .manifest_file(&snapshot_produce_operation, &process)
+            .produce_manifest_file_list(&snapshot_produce_operation, &process)
             .await?;
 
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;
