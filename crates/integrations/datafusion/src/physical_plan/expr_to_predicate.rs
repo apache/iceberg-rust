@@ -226,10 +226,7 @@ fn to_iceberg_operation(op: Operator) -> OpTransformedResult {
 fn scalar_function_to_iceberg_predicate(func_name: &str, args: &[Expr]) -> TransformedResult {
     match func_name {
         "isnan" if args.len() == 1 => match resolve_nan_preserving_reference(&args[0]) {
-            Some(r) => TransformedResult::Predicate(Predicate::Unary(UnaryExpression::new(
-                PredicateOperator::IsNan,
-                r,
-            ))),
+            Some(r) => TransformedResult::Predicate(r.is_nan()),
             None => TransformedResult::NotTransformed,
         },
         _ => TransformedResult::NotTransformed,
