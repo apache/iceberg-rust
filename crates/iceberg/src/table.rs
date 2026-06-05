@@ -503,7 +503,7 @@ mod tests {
     }
 
     async fn write_empty_manifest_list_bytes(io: &FileIO, path: &str) -> bytes::Bytes {
-        let output = io.new_output(path).unwrap();
+        let output = io.new_output(path).unwrap().writer().await.unwrap();
         let mut writer = ManifestListWriter::v3(output, 1, None, 0, Some(0));
         writer.add_manifests(std::iter::empty()).unwrap();
         writer.close().await.unwrap();
