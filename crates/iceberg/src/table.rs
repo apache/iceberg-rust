@@ -534,13 +534,9 @@ mod tests {
         // Snapshot the wrapped keys (manifest-list entry + KEK) the manager produced.
         let encryption_keys = mgr.with_encryption_keys(|keys| keys.clone());
 
-        // Build a TableMetadata with those keys, the encryption.key-id property,
-        // and a snapshot whose encryption_key_id points at the wrapped entry.
+        // Build a TableMetadata with those keys and a snapshot whose
+        // encryption_key_id points at the wrapped entry.
         let mut metadata: TableMetadata = load_test_metadata("TableMetadataV3ValidEncryption.json");
-        metadata.properties.insert(
-            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
-            "master-1".to_string(),
-        );
         metadata.encryption_keys = encryption_keys;
 
         let snapshot = Snapshot::builder()
@@ -582,11 +578,7 @@ mod tests {
 
     #[tokio::test]
     async fn table_builder_errors_when_encryption_key_id_set_but_no_kms() {
-        let mut metadata: TableMetadata = load_test_metadata("TableMetadataV3ValidEncryption.json");
-        metadata.properties.insert(
-            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
-            "master-1".to_string(),
-        );
+        let metadata: TableMetadata = load_test_metadata("TableMetadataV3ValidEncryption.json");
 
         let err = Table::builder()
             .file_io(FileIO::new_with_memory())
@@ -602,7 +594,7 @@ mod tests {
     async fn table_builder_skips_encryption_on_pre_v3_table() {
         // Encryption is a v3 spec feature; pre-v3 tables silently skip
         // encryption even if encryption.key-id is set.
-        let mut metadata: TableMetadata = load_test_metadata("TableMetadataV2ValidEncryption.json");
+        let mut metadata: TableMetadata = load_test_metadata("TableMetadataV2ValidMinimal.json");
         metadata.properties.insert(
             TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
             "master-1".to_string(),
@@ -621,7 +613,7 @@ mod tests {
 
     #[tokio::test]
     async fn table_builder_skips_encryption_when_property_absent() {
-        let metadata: TableMetadata = load_test_metadata("TableMetadataV2ValidEncryption.json");
+        let metadata: TableMetadata = load_test_metadata("TableMetadataV2ValidMinimal.json");
         let table = Table::builder()
             .file_io(FileIO::new_with_memory())
             .metadata(metadata)

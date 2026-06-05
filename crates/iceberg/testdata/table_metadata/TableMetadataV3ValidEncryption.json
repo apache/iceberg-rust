@@ -35,7 +35,9 @@
       "fields": []
     }
   ],
-  "properties": {},
+  "properties": {
+    "encryption.key-id": "master-1"
+  },
   "snapshots": [],
   "snapshot-log": [],
   "metadata-log": [],
