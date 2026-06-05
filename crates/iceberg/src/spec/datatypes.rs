@@ -32,8 +32,8 @@ use serde_json::Value as JsonValue;
 use super::values::Literal;
 use crate::ensure_data_valid;
 use crate::error::Result;
-use crate::spec::{FormatVersion, PrimitiveLiteral};
 use crate::spec::datatypes::_decimal::{MAX_PRECISION, REQUIRED_LENGTH};
+use crate::spec::{FormatVersion, PrimitiveLiteral};
 
 /// Field name for list type.
 pub const LIST_FIELD_NAME: &str = "element";

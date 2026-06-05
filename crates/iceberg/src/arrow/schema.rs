@@ -1931,6 +1931,20 @@ mod tests {
     }
 
     #[test]
+    fn test_variant_type_to_arrow_type() {
+        // Variant maps to a struct of two required binary fields {metadata, value},
+        // with no field ids on the sub-fields, matching the Parquet BINARY layout.
+        let arrow_type = type_to_arrow_type(&Type::Variant(VariantType)).unwrap();
+        assert_eq!(
+            arrow_type,
+            DataType::Struct(Fields::from(vec![
+                Field::new("metadata", DataType::Binary, false),
+                Field::new("value", DataType::Binary, false),
+            ]))
+        );
+    }
+
+    #[test]
     fn test_type_conversion() {
         // test primitive type
         {

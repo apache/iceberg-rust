@@ -191,15 +191,23 @@ impl SchemaVisitor for GlueSchemaBuilder {
 #[cfg(test)]
 mod tests {
     use iceberg::TableCreation;
-    use iceberg::spec::{Schema, TableMetadataBuilder};
+    use iceberg::spec::{FormatVersion, Schema, TableMetadataBuilder};
 
     use super::*;
 
     fn create_metadata(schema: Schema) -> Result<TableMetadata> {
+        create_metadata_with_format_version(schema, FormatVersion::V2)
+    }
+
+    fn create_metadata_with_format_version(
+        schema: Schema,
+        format_version: FormatVersion,
+    ) -> Result<TableMetadata> {
         let table_creation = TableCreation::builder()
             .name("my_table".to_string())
             .location("my_location".to_string())
             .schema(schema)
+            .format_version(format_version)
             .build();
         let metadata = TableMetadataBuilder::from_table_creation(table_creation)?
             .build()?
@@ -523,6 +531,33 @@ mod tests {
             create_column("required_field", "string", "1", false)?,
             create_column("optional_field", "int", "2", true)?,
         ];
+
+        assert_eq!(result, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_schema_with_variant() -> Result<()> {
+        let record = r#"{
+            "type": "struct",
+            "schema-id": 1,
+            "fields": [
+                {
+                    "id": 1,
+                    "name": "v",
+                    "required": true,
+                    "type": "variant"
+                }
+            ]
+        }"#;
+
+        let schema = serde_json::from_str::<Schema>(record)?;
+        // Variant requires format version 3.
+        let metadata = create_metadata_with_format_version(schema, FormatVersion::V3)?;
+
+        let result = GlueSchemaBuilder::from_iceberg(&metadata)?.build();
+
+        let expected = vec![create_column("v", "variant", "1", false)?];
 
         assert_eq!(result, expected);
         Ok(())

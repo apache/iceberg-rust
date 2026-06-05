@@ -463,7 +463,10 @@ impl Schema {
                 let name = self.name_by_field_id(field.id).ok_or_else(|| {
                     Error::new(
                         ErrorKind::Unexpected,
-                        format!("Field id {} is missing from the schema's name index", field.id),
+                        format!(
+                            "Field id {} is missing from the schema's name index",
+                            field.id
+                        ),
                     )
                 })?;
                 problems.push((field.id, format!(
@@ -478,7 +481,10 @@ impl Schema {
                 let name = self.name_by_field_id(field.id).ok_or_else(|| {
                     Error::new(
                         ErrorKind::Unexpected,
-                        format!("Field id {} is missing from the schema's name index", field.id),
+                        format!(
+                            "Field id {} is missing from the schema's name index",
+                            field.id
+                        ),
                     )
                 })?;
                 problems.push((field.id, format!(

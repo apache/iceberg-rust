@@ -794,6 +794,24 @@ mod tests {
         assert_eq!(visitor.name_to_id, expect);
     }
 
+    #[test]
+    fn test_index_by_parquet_path_variant() {
+        // A variant is a leaf, so it is indexed by its column name like a primitive.
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
+            ])
+            .build()
+            .unwrap();
+        let mut visitor = IndexByParquetPathName::new();
+        visit_schema(&schema, &mut visitor).unwrap();
+        assert_eq!(
+            visitor.name_to_id,
+            HashMap::from([("id".to_string(), 1), ("v".to_string(), 2)])
+        );
+    }
+
     #[tokio::test]
     async fn test_parquet_writer() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
