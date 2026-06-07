@@ -31,7 +31,7 @@ use crate::error::{Error, ErrorKind, Result};
 use crate::spec::{EncryptedKey, INITIAL_ROW_ID, MIN_FORMAT_VERSION_ROW_LINEAGE};
 use crate::{TableCreation, TableUpdate};
 
-const FIRST_FIELD_ID: u32 = 1;
+pub(crate) const FIRST_FIELD_ID: i32 = 1;
 
 /// Manipulating table metadata.
 ///
@@ -233,6 +233,8 @@ impl TableMetadataBuilder {
                 }
                 FormatVersion::V3 => {
                     self.metadata.format_version = format_version;
+                    // Set next-row-id to 0 when upgrading to v3 as per Iceberg spec
+                    self.metadata.next_row_id = INITIAL_ROW_ID;
                     self.changes
                         .push(TableUpdate::UpgradeFormatVersion { format_version });
                 }
@@ -572,7 +574,6 @@ impl TableMetadataBuilder {
     pub fn remove_ref(mut self, ref_name: &str) -> Self {
         if ref_name == MAIN_BRANCH {
             self.metadata.current_snapshot_id = None;
-            self.metadata.snapshot_log.clear();
         }
 
         if self.metadata.refs.remove(ref_name).is_some() || ref_name == MAIN_BRANCH {
@@ -834,6 +835,9 @@ impl TableMetadataBuilder {
         // Check if partition field names conflict with schema field names across all schemas
         self.validate_partition_field_names(&unbound_spec)?;
 
+        // Reuse field IDs for equivalent fields from existing partition specs
+        let unbound_spec = self.reuse_partition_field_ids(unbound_spec)?;
+
         let spec = PartitionSpecBuilder::new_from_unbound(unbound_spec.clone(), schema)?
             .with_last_assigned_field_id(self.metadata.last_partition_id)
             .build()?;
@@ -874,6 +878,44 @@ impl TableMetadataBuilder {
             std::cmp::max(self.metadata.last_partition_id, highest_field_id);
 
         Ok(self)
+    }
+
+    /// Reuse partition field IDs for equivalent fields from existing partition specs.
+    ///
+    /// According to the Iceberg spec, partition field IDs must be reused if an existing
+    /// partition spec contains an equivalent field (same source_id and transform).
+    fn reuse_partition_field_ids(
+        &self,
+        unbound_spec: UnboundPartitionSpec,
+    ) -> Result<UnboundPartitionSpec> {
+        // Build a map of (source_id, transform) -> field_id from existing specs
+        let equivalent_field_ids: HashMap<_, _> = self
+            .metadata
+            .partition_specs
+            .values()
+            .flat_map(|spec| spec.fields())
+            .map(|field| ((field.source_id, &field.transform), field.field_id))
+            .collect();
+
+        // Create new fields with reused field IDs where possible
+        let fields = unbound_spec
+            .fields
+            .into_iter()
+            .map(|mut field| {
+                if field.field_id.is_none()
+                    && let Some(&existing_field_id) =
+                        equivalent_field_ids.get(&(field.source_id, &field.transform))
+                {
+                    field.field_id = Some(existing_field_id);
+                }
+                field
+            })
+            .collect();
+
+        Ok(UnboundPartitionSpec {
+            spec_id: unbound_spec.spec_id,
+            fields,
+        })
     }
 
     /// Set the default partition spec.
@@ -1424,7 +1466,7 @@ mod tests {
 
     use super::*;
     use crate::TableIdent;
-    use crate::io::FileIOBuilder;
+    use crate::io::FileIO;
     use crate::spec::{
         BlobMetadata, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
         SnapshotRetention, SortDirection, SortField, StructType, Summary, TableProperties,
@@ -2238,6 +2280,73 @@ mod tests {
     }
 
     #[test]
+    fn test_remove_main_ref_keeps_snapshot_log() {
+        let builder = builder_without_changes(FormatVersion::V2);
+
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_timestamp_ms(builder.metadata.last_updated_ms + 1)
+            .with_sequence_number(0)
+            .with_schema_id(0)
+            .with_manifest_list("/snap-1.avro")
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::from_iter(vec![
+                    (
+                        "spark.app.id".to_string(),
+                        "local-1662532784305".to_string(),
+                    ),
+                    ("added-data-files".to_string(), "4".to_string()),
+                    ("added-records".to_string(), "4".to_string()),
+                    ("added-files-size".to_string(), "6001".to_string()),
+                ]),
+            })
+            .build();
+
+        let result = builder
+            .add_snapshot(snapshot.clone())
+            .unwrap()
+            .set_ref(MAIN_BRANCH, SnapshotReference {
+                snapshot_id: 1,
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: Some(10),
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            })
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Verify snapshot log was created
+        assert_eq!(result.metadata.snapshot_log.len(), 1);
+        assert_eq!(result.metadata.snapshot_log[0].snapshot_id, 1);
+        assert_eq!(result.metadata.current_snapshot_id, Some(1));
+
+        // Remove the main ref
+        let result_after_remove = result
+            .metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata2.json".to_string(),
+            ))
+            .remove_ref(MAIN_BRANCH)
+            .build()
+            .unwrap();
+
+        // Verify snapshot log is kept even after removing main ref
+        assert_eq!(result_after_remove.metadata.snapshot_log.len(), 1);
+        assert_eq!(result_after_remove.metadata.snapshot_log[0].snapshot_id, 1);
+        assert_eq!(result_after_remove.metadata.current_snapshot_id, None);
+        assert_eq!(result_after_remove.changes.len(), 1);
+        assert_eq!(
+            result_after_remove.changes[0],
+            TableUpdate::RemoveSnapshotRef {
+                ref_name: MAIN_BRANCH.to_string()
+            }
+        );
+    }
+
+    #[test]
     fn test_set_branch_snapshot_creates_branch_if_not_exists() {
         let builder = builder_without_changes(FormatVersion::V2);
 
@@ -2602,7 +2711,7 @@ mod tests {
             .metadata(resp)
             .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
-            .file_io(FileIOBuilder::new("memory").build().unwrap())
+            .file_io(FileIO::new_with_memory())
             .build()
             .unwrap();
 
@@ -2633,7 +2742,7 @@ mod tests {
             .metadata(resp)
             .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
-            .file_io(FileIOBuilder::new("memory").build().unwrap())
+            .file_io(FileIO::new_with_memory())
             .build()
             .unwrap();
 
@@ -3438,5 +3547,64 @@ mod tests {
         // Verify empty encryption_keys_iter()
         let keys = build_result.metadata.encryption_keys_iter();
         assert_eq!(keys.len(), 0);
+    }
+
+    #[test]
+    fn test_partition_field_id_reuse_across_specs() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(3, "timestamp", Type::Primitive(PrimitiveType::Timestamp))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+
+        // Create initial table with spec 0: identity(id) -> field_id = 1000
+        let initial_spec = UnboundPartitionSpec::builder()
+            .add_partition_field(1, "id", Transform::Identity)
+            .unwrap()
+            .build();
+
+        let mut metadata = TableMetadataBuilder::new(
+            schema,
+            initial_spec,
+            SortOrder::unsorted_order(),
+            "s3://bucket/table".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        // Add spec 1: bucket(data) -> field_id = 1001
+        let spec1 = UnboundPartitionSpec::builder()
+            .add_partition_field(2, "data_bucket", Transform::Bucket(10))
+            .unwrap()
+            .build();
+        let builder = metadata.into_builder(Some("s3://bucket/table/metadata/v1.json".to_string()));
+        let result = builder.add_partition_spec(spec1).unwrap().build().unwrap();
+        metadata = result.metadata;
+
+        // Add spec 2: identity(id) + bucket(data) + year(timestamp)
+        // Should reuse field_id 1000 for identity(id) and 1001 for bucket(data)
+        let spec2 = UnboundPartitionSpec::builder()
+            .add_partition_field(1, "id", Transform::Identity) // Should reuse 1000
+            .unwrap()
+            .add_partition_field(2, "data_bucket", Transform::Bucket(10)) // Should reuse 1001
+            .unwrap()
+            .add_partition_field(3, "year", Transform::Year) // Should get new 1002
+            .unwrap()
+            .build();
+        let builder = metadata.into_builder(Some("s3://bucket/table/metadata/v2.json".to_string()));
+        let result = builder.add_partition_spec(spec2).unwrap().build().unwrap();
+
+        // Verify field ID reuse: spec 2 should reuse IDs from specs 0 and 1, assign new ID for new field
+        let spec2 = result.metadata.partition_spec_by_id(2).unwrap();
+        let field_ids: Vec<i32> = spec2.fields().iter().map(|f| f.field_id).collect();
+        assert_eq!(field_ids, vec![1000, 1001, 1002]); // Reused 1000, 1001; new 1002
     }
 }

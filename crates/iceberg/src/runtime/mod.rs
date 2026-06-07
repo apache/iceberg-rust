@@ -21,28 +21,20 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-pub enum JoinHandle<T> {
-    #[cfg(feature = "tokio")]
-    Tokio(tokio::task::JoinHandle<T>),
-    #[cfg(all(feature = "smol", not(feature = "tokio")))]
-    Smol(smol::Task<T>),
-    #[cfg(all(not(feature = "smol"), not(feature = "tokio")))]
-    Unimplemented(Box<T>),
-}
+use tokio::task;
+
+pub struct JoinHandle<T>(task::JoinHandle<T>);
+
+impl<T> Unpin for JoinHandle<T> {}
 
 impl<T: Send + 'static> Future for JoinHandle<T> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.get_mut() {
-            #[cfg(feature = "tokio")]
-            JoinHandle::Tokio(handle) => Pin::new(handle)
+            JoinHandle(handle) => Pin::new(handle)
                 .poll(cx)
-                .map(|h| h.expect("tokio spawned task failed")),
-            #[cfg(all(feature = "smol", not(feature = "tokio")))]
-            JoinHandle::Smol(handle) => Pin::new(handle).poll(cx),
-            #[cfg(all(not(feature = "smol"), not(feature = "tokio")))]
-            JoinHandle::Unimplemented(_) => unimplemented!("no runtime has been enabled"),
+                .map(|r| r.expect("tokio spawned task failed")),
         }
     }
 }
@@ -50,17 +42,10 @@ impl<T: Send + 'static> Future for JoinHandle<T> {
 #[allow(dead_code)]
 pub fn spawn<F>(f: F) -> JoinHandle<F::Output>
 where
-    F: Future + Send + 'static,
+    F: std::future::Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    #[cfg(feature = "tokio")]
-    return JoinHandle::Tokio(tokio::task::spawn(f));
-
-    #[cfg(all(feature = "smol", not(feature = "tokio")))]
-    return JoinHandle::Smol(smol::spawn(f));
-
-    #[cfg(all(not(feature = "smol"), not(feature = "tokio")))]
-    unimplemented!("no runtime has been enabled")
+    JoinHandle(task::spawn(f))
 }
 
 #[allow(dead_code)]
@@ -69,44 +54,21 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    #[cfg(feature = "tokio")]
-    return JoinHandle::Tokio(tokio::task::spawn_blocking(f));
-
-    #[cfg(all(feature = "smol", not(feature = "tokio")))]
-    return JoinHandle::Smol(smol::unblock(f));
-
-    #[cfg(all(not(feature = "smol"), not(feature = "tokio")))]
-    unimplemented!("no runtime has been enabled")
+    JoinHandle(task::spawn_blocking(f))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn test_tokio_spawn() {
         let handle = spawn(async { 1 + 1 });
         assert_eq!(handle.await, 2);
     }
 
-    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn test_tokio_spawn_blocking() {
-        let handle = spawn_blocking(|| 1 + 1);
-        assert_eq!(handle.await, 2);
-    }
-
-    #[cfg(all(feature = "smol", not(feature = "tokio")))]
-    #[smol::test]
-    async fn test_smol_spawn() {
-        let handle = spawn(async { 1 + 1 });
-        assert_eq!(handle.await, 2);
-    }
-
-    #[cfg(all(feature = "smol", not(feature = "tokio")))]
-    #[smo::test]
-    async fn test_smol_spawn_blocking() {
         let handle = spawn_blocking(|| 1 + 1);
         assert_eq!(handle.await, 2);
     }

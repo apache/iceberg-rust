@@ -77,6 +77,7 @@ pub mod table;
 
 mod avro;
 pub mod cache;
+pub mod compression;
 pub mod io;
 pub mod spec;
 
@@ -96,4 +97,5 @@ mod utils;
 pub mod writer;
 
 mod delete_vector;
+pub mod metadata_columns;
 pub mod puffin;

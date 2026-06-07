@@ -165,7 +165,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::io::FileIOBuilder;
+    use crate::io::FileIO;
     use crate::spec::{Literal, NestedField, PrimitiveType, Struct, Transform, Type};
 
     #[tokio::test]
@@ -257,14 +257,14 @@ mod tests {
                     snapshot_id: None,
                     sequence_number: None,
                     file_sequence_number: None,
-                    data_file: DataFile {content:DataContentType::Data,file_path:"s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),file_format:DataFileFormat::Parquet,partition:Struct::empty(),record_count:1,file_size_in_bytes:5442,column_sizes:HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)]),value_counts:HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),null_value_counts:HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),nan_value_counts:HashMap::new(),lower_bounds:HashMap::new(),upper_bounds:HashMap::new(),key_metadata:None,split_offsets:vec![4],equality_ids:Some(Vec::new()),sort_order_id:None, partition_spec_id: 0,first_row_id: None,referenced_data_file: None,content_offset: None,content_size_in_bytes: None }
+                    data_file: DataFile {content:DataContentType::Data,file_path:"s3a://icebergdata/demo/s1/t1/data/00000-0-ba56fbfa-f2ff-40c9-bb27-565ad6dc2be8-00000.parquet".to_string(),file_format:DataFileFormat::Parquet,partition:Struct::empty(),record_count:1,file_size_in_bytes:5442,column_sizes:HashMap::from([(0,73),(6,34),(2,73),(7,61),(3,61),(5,62),(9,79),(10,73),(1,61),(4,73),(8,73)]),value_counts:HashMap::from([(4,1),(5,1),(2,1),(0,1),(3,1),(6,1),(8,1),(1,1),(10,1),(7,1),(9,1)]),null_value_counts:HashMap::from([(1,0),(6,0),(2,0),(8,0),(0,0),(3,0),(5,0),(9,0),(7,0),(4,0),(10,0)]),nan_value_counts:HashMap::new(),lower_bounds:HashMap::new(),upper_bounds:HashMap::new(),key_metadata:None,split_offsets:Some(vec![4]),equality_ids:Some(Vec::new()),sort_order_id:None, partition_spec_id: 0,first_row_id: None,referenced_data_file: None,content_offset: None,content_size_in_bytes: None }
                 }
             ];
 
         // write manifest to file
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join("test_manifest.avro");
-        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
             output_file,
@@ -435,7 +435,7 @@ mod tests {
                     lower_bounds: HashMap::new(),
                     upper_bounds: HashMap::new(),
                     key_metadata: None,
-                    split_offsets: vec![4],
+                    split_offsets: Some(vec![4]),
                     equality_ids: Some(Vec::new()),
                     sort_order_id: None,
                     partition_spec_id: 0,
@@ -449,7 +449,7 @@ mod tests {
         // write manifest to file and check the return manifest file.
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join("test_manifest.avro");
-        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
             output_file,
@@ -532,7 +532,7 @@ mod tests {
                     lower_bounds: HashMap::from([(1,Datum::int(1)),(2,Datum::string("a")),(3,Datum::string("AC/DC"))]),
                     upper_bounds: HashMap::from([(1,Datum::int(1)),(2,Datum::string("a")),(3,Datum::string("AC/DC"))]),
                     key_metadata: None,
-                    split_offsets: vec![4],
+                    split_offsets: Some(vec![4]),
                     equality_ids: None,
                     sort_order_id: Some(0),
                     partition_spec_id: 0,
@@ -546,7 +546,7 @@ mod tests {
         // write manifest to file
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join("test_manifest.avro");
-        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
             output_file,
@@ -640,7 +640,7 @@ mod tests {
                         (3, Datum::string("x"))
                         ]),
                         key_metadata: None,
-                        split_offsets: vec![4],
+                        split_offsets: Some(vec![4]),
                         equality_ids: None,
                         sort_order_id: Some(0),
                         partition_spec_id: 0,
@@ -655,7 +655,7 @@ mod tests {
         // write manifest to file
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join("test_manifest.avro");
-        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
             output_file,
@@ -749,7 +749,7 @@ mod tests {
                         (3, Datum::string("x"))
                     ]),
                     key_metadata: None,
-                    split_offsets: vec![4],
+                    split_offsets: Some(vec![4]),
                     equality_ids: None,
                     sort_order_id: None,
                     partition_spec_id: 0,
@@ -763,7 +763,7 @@ mod tests {
         // write manifest to file
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join("test_manifest.avro");
-        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
             output_file,
@@ -840,7 +840,7 @@ mod tests {
                         (2, Datum::int(2)),
                     ]),
                     key_metadata: None,
-                    split_offsets: vec![4],
+                    split_offsets: Some(vec![4]),
                     equality_ids: None,
                     sort_order_id: None,
                     partition_spec_id: 0,
@@ -922,7 +922,7 @@ mod tests {
                     lower_bounds: HashMap::new(),
                     upper_bounds: HashMap::new(),
                     key_metadata: None,
-                    split_offsets: vec![4],
+                    split_offsets: Some(vec![4]),
                     equality_ids: None,
                     sort_order_id: None,
                     partition_spec_id: 0,
@@ -957,7 +957,7 @@ mod tests {
                         lower_bounds: HashMap::new(),
                         upper_bounds: HashMap::new(),
                         key_metadata: None,
-                        split_offsets: vec![4],
+                        split_offsets: Some(vec![4]),
                         equality_ids: None,
                         sort_order_id: None,
                         partition_spec_id: 0,
@@ -992,7 +992,7 @@ mod tests {
                         lower_bounds: HashMap::new(),
                         upper_bounds: HashMap::new(),
                         key_metadata: None,
-                        split_offsets: vec![4],
+                        split_offsets: Some(vec![4]),
                         equality_ids: None,
                         sort_order_id: None,
                         partition_spec_id: 0,
@@ -1027,7 +1027,7 @@ mod tests {
                         lower_bounds: HashMap::new(),
                         upper_bounds: HashMap::new(),
                         key_metadata: None,
-                        split_offsets: vec![4],
+                        split_offsets: Some(vec![4]),
                         equality_ids: None,
                         sort_order_id: None,
                         partition_spec_id: 0,
@@ -1042,7 +1042,7 @@ mod tests {
         // write manifest to file
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join("test_manifest.avro");
-        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let io = FileIO::new_with_fs();
         let output_file = io.new_output(path.to_str().unwrap()).unwrap();
         let mut writer = ManifestWriterBuilder::new(
             output_file,
@@ -1182,7 +1182,7 @@ mod tests {
             "lower_bounds": [],
             "upper_bounds": [],
             "key_metadata": null,
-            "split_offsets": [],
+            "split_offsets": null,
             "equality_ids": null,
             "sort_order_id": null,
             "first_row_id": null,
@@ -1213,7 +1213,7 @@ mod tests {
             "lower_bounds": [],
             "upper_bounds": [],
             "key_metadata": null,
-            "split_offsets": [],
+            "split_offsets": null,
             "equality_ids": null,
             "sort_order_id": null,
             "first_row_id": null,

@@ -1,0 +1,58 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+[package]
+name = "iceberg-storage-opendal"
+edition = { workspace = true }
+version = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+
+categories = ["database"]
+description = "Apache Iceberg OpenDAL storage implementation"
+keywords = ["iceberg", "opendal", "storage"]
+
+[features]
+default = ["opendal-memory", "opendal-fs", "opendal-s3"]
+opendal-all = ["opendal-memory", "opendal-fs", "opendal-s3", "opendal-gcs", "opendal-oss", "opendal-azdls"]
+
+opendal-azdls = ["opendal/services-azdls"]
+opendal-fs = ["opendal/services-fs"]
+opendal-gcs = ["opendal/services-gcs"]
+opendal-memory = ["opendal/services-memory"]
+opendal-oss = ["opendal/services-oss"]
+opendal-s3 = ["opendal/services-s3", "reqsign"]
+
+[dependencies]
+anyhow = { workspace = true }
+cfg-if = { workspace = true }
+iceberg = { workspace = true }
+opendal = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+reqsign = { version = "0.16.3", optional = true, default-features = false }
+reqwest = { workspace = true }
+serde = { workspace = true }
+typetag = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
+reqsign = { version = "0.16.3", default-features = false }
+reqwest = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

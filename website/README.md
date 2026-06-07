@@ -19,22 +19,10 @@
 
 # Iceberg Rust Website
 
-## Setup
-
-Install mdbook first
-
-```shell
-cargo install mdbook
-```
-
 ## Preview
 
-```shell
-mdbook serve
-```
-
-## Build
+This will automatically install mdbook if needed.
 
 ```shell
-mdbook build
+make site
 ```

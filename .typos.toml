@@ -15,17 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
+[type.rust]
+extend-ignore-identifiers-re = ["^bimap$"]
+
 [files]
 extend-exclude = ["**/testdata", "CHANGELOG.md"]
-
-# Short, intentional identifiers/aliases in iceberg-spark-python tests and docs
-# (e.g. `import StructType as IST`, `.alias("ba")`, table names "tre"/"thex") — not typos.
-[default.extend-identifiers]
-IST = "IST"
-IIT = "IIT"
-
-[default.extend-words]
-ba = "ba"
-nd = "nd"
-tre = "tre"
-thex = "thex"

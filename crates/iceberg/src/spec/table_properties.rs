@@ -49,6 +49,8 @@ pub struct TableProperties {
     pub write_format_default: String,
     /// The target file size for files.
     pub write_target_file_size_bytes: usize,
+    /// Whether to use `FanoutWriter` for partitioned tables.
+    pub write_datafusion_fanout_enabled: bool,
 }
 
 impl TableProperties {
@@ -137,6 +139,11 @@ impl TableProperties {
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str = "write.target-file-size-bytes";
     /// Default target file size
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
+    /// Whether to use `FanoutWriter` for partitioned tables (handles unsorted data).
+    /// If false, uses `ClusteredWriter` (requires sorted data, more memory efficient).
+    pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &str = "write.datafusion.fanout.enabled";
+    /// Default value for fanout writer enabled
+    pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool = true;
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {
@@ -174,6 +181,11 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 props,
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
+            )?,
+            write_datafusion_fanout_enabled: parse_property(
+                props,
+                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED,
+                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT,
             )?,
         })
     }

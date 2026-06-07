@@ -1995,7 +1995,7 @@ mod test {
             lower_bounds: Default::default(),
             upper_bounds: Default::default(),
             key_metadata: None,
-            split_offsets: vec![],
+            split_offsets: None,
             equality_ids: None,
             sort_order_id: None,
             partition_spec_id: 0,
@@ -2021,7 +2021,7 @@ mod test {
             lower_bounds: Default::default(),
             upper_bounds: Default::default(),
             key_metadata: None,
-            split_offsets: vec![],
+            split_offsets: None,
             equality_ids: None,
             sort_order_id: None,
             partition_spec_id: 0,
@@ -2083,7 +2083,7 @@ mod test {
 
             column_sizes: Default::default(),
             key_metadata: None,
-            split_offsets: vec![],
+            split_offsets: None,
             equality_ids: None,
             sort_order_id: None,
             partition_spec_id: 0,
@@ -2114,7 +2114,7 @@ mod test {
 
             column_sizes: Default::default(),
             key_metadata: None,
-            split_offsets: vec![],
+            split_offsets: None,
             equality_ids: None,
             sort_order_id: None,
             partition_spec_id: 0,
@@ -2146,7 +2146,7 @@ mod test {
 
             column_sizes: Default::default(),
             key_metadata: None,
-            split_offsets: vec![],
+            split_offsets: None,
             equality_ids: None,
             sort_order_id: None,
             partition_spec_id: 0,
@@ -2178,7 +2178,7 @@ mod test {
 
             column_sizes: Default::default(),
             key_metadata: None,
-            split_offsets: vec![],
+            split_offsets: None,
             equality_ids: None,
             sort_order_id: None,
             partition_spec_id: 0,

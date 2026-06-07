@@ -1,3 +1,22 @@
+<!--
+  ~ Licensed to the Apache Software Foundation (ASF) under one
+  ~ or more contributor license agreements.  See the NOTICE file
+  ~ distributed with this work for additional information
+  ~ regarding copyright ownership.  The ASF licenses this file
+  ~ to you under the Apache License, Version 2.0 (the
+  ~ "License"); you may not use this file except in compliance
+  ~ with the License.  You may obtain a copy of the License at
+  ~
+  ~   http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing,
+  ~ software distributed under the License is distributed on an
+  ~ "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  ~ KIND, either express or implied.  See the License for the
+  ~ specific language governing permissions and limitations
+  ~ under the License.
+-->
+
 # Rust & Python Engineering Assistant — Operating Manual (Opus)
 
 ## Identity & Priority Stack
@@ -204,7 +223,7 @@ Diff behavior between the base branch and your changes when relevant. Ask: "Woul
 ### 7. Dependency & API Rules
 
 - Before writing any code using an external library, verify the API is current and not deprecated.
-- Libraries to always verify (this stack): Apache DataFusion (+ `iceberg`, `iceberg-datafusion`), Apache Arrow (`arrow-rs` / PyArrow), Parquet, OpenDAL, Apache Iceberg / PyIceberg / `pyiceberg-core`, PyO3, tokio, anyhow, thiserror, serde; for the Python layer, Polars, PySpark, and `datafusion` (Python).
+- Libraries to always verify (this stack): Apache DataFusion (+ `iceberg`, `iceberg-datafusion`), Apache Arrow (`arrow-rs`), Parquet, OpenDAL, Apache Iceberg (this fork's crates), tokio, anyhow, thiserror, serde.
 - If your intended usage differs from the current library API, record the correct usage in [task/lessons.md](../task/lessons.md).
 - Plan for Apache Arrow columnar format throughout — Parquet, OLAP, and the like; Arrow is the in-memory currency of this stack.
 - When using a library function, use the exact method signature — do not guess parameter names or assume default behavior.
@@ -300,7 +319,7 @@ Whenever you feel the pull to abbreviate, write the full name first, then ask: "
 ### Verification commands (canonical — referenced by §4 and the Pre-Flight checklist)
 
 - **Rust:** `make check` (fmt-check + clippy `-D warnings` + TOML check + unused-deps) and `make test` (doc + all-targets tests). Or directly: `cargo fmt --all -- --check` · `cargo clippy --all-targets --all-features --workspace -- -D warnings` · `cargo test --no-fail-fast --all-targets --all-features --workspace`. Workspace layout in [Cargo.toml](../Cargo.toml); formatter config in [rustfmt.toml](../rustfmt.toml). The clippy gate is `-D warnings` (there is no `[workspace.lints]` table). MSRV is checked with `make check-msrv`.
-- **Python:** run from the package directory. `ruff check .` · `ruff format --check .` · `pytest` (e.g. `iceberg-spark-python` uses `uv run …`). Ruff config lives in that package's `pyproject.toml`; line length 100.
+- **Python:** there is no Python layer in this fork (it was removed in Phase 0; Python is deferred). If one is reintroduced, run its checks from its package directory (`ruff check .` · `ruff format --check .` · `pytest`, via `uv run …`).
 
 ### Rust
 

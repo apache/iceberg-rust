@@ -435,7 +435,7 @@ mod tests {
     #[tokio::test]
     async fn test_config_with_custom_endpoint() {
         let properties = HashMap::new();
-        let endpoint_url = "http://custom_url:5000";
+        let endpoint_url = "http://custom_url:5001";
 
         let sdk_config = create_sdk_config(&properties, Some(&endpoint_url.to_string())).await;
 

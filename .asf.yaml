@@ -43,7 +43,9 @@ github:
         dismiss_stale_reviews: false
 
       required_linear_history: true
-  del_branch_on_merge: true
+  pull_requests:
+    # auto-delete head branches after being merged
+    del_branch_on_merge: true
   features:
     wiki: false
     issues: true
@@ -52,6 +54,8 @@ github:
   collaborators:
     - JanKaul
     - c-thiel
+    - mbutrovich
+    - CTTY
   ghp_branch: gh-pages
   ghp_path: /
 
@@ -59,5 +63,6 @@ notifications:
   commits: commits@iceberg.apache.org
   issues: issues@iceberg.apache.org
   pullrequests: issues@iceberg.apache.org
+  jobs:         ci-jobs@iceberg.apache.org
   jira_options: link label link label
   discussions: issues@iceberg.apache.org

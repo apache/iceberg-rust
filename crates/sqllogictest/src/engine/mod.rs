@@ -17,29 +17,45 @@
 
 mod datafusion;
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::anyhow;
+use serde::Deserialize;
 use sqllogictest::{AsyncDB, MakeConnection, Runner, parse_file};
-use toml::Table as TomlTable;
 
 use crate::engine::datafusion::DataFusionEngine;
 use crate::error::{Error, Result};
 
-const TYPE_DATAFUSION: &str = "datafusion";
+/// Configuration for the catalog used by the DataFusion engine
+#[derive(Debug, Clone, Deserialize)]
+pub struct DatafusionCatalogConfig {
+    /// Catalog type: "memory", "rest", "glue", "hms", "s3tables", "sql"
+    #[serde(rename = "type")]
+    pub catalog_type: String,
+    /// Catalog properties passed to the catalog loader
+    #[serde(default)]
+    pub props: HashMap<String, String>,
+}
+
+/// Engine configuration as a tagged enum
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum EngineConfig {
+    Datafusion {
+        #[serde(default)]
+        catalog: Option<DatafusionCatalogConfig>,
+    },
+}
 
 #[async_trait::async_trait]
 pub trait EngineRunner: Send {
     async fn run_slt_file(&mut self, path: &Path) -> Result<()>;
 }
 
-pub async fn load_engine_runner(
-    engine_type: &str,
-    cfg: TomlTable,
-) -> Result<Box<dyn EngineRunner>> {
-    match engine_type {
-        TYPE_DATAFUSION => Ok(Box::new(DataFusionEngine::new(cfg).await?)),
-        _ => Err(anyhow::anyhow!("Unsupported engine type: {engine_type}").into()),
+pub async fn load_engine_runner(config: EngineConfig) -> Result<Box<dyn EngineRunner>> {
+    match config {
+        EngineConfig::Datafusion { catalog } => Ok(Box::new(DataFusionEngine::new(catalog).await?)),
     }
 }
 
@@ -65,29 +81,63 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::{TYPE_DATAFUSION, load_engine_runner};
+    use crate::engine::{DatafusionCatalogConfig, EngineConfig, load_engine_runner};
 
-    #[tokio::test]
-    async fn test_engine_invalid_type() {
+    #[test]
+    fn test_deserialize_engine_config() {
+        let input = r#"type = "datafusion""#;
+
+        let config: EngineConfig = toml::from_str(input).unwrap();
+        assert!(matches!(config, EngineConfig::Datafusion { catalog: None }));
+    }
+
+    #[test]
+    fn test_deserialize_engine_config_with_catalog() {
         let input = r#"
-            [engines]
-            random = { type = "random_engine", url = "http://localhost:8181" }
-        "#;
-        let tbl = toml::from_str(input).unwrap();
-        let result = load_engine_runner("random_engine", tbl).await;
+            type = "datafusion"
 
-        assert!(result.is_err());
+            [catalog]
+            type = "rest"
+
+            [catalog.props]
+            uri = "http://localhost:8181"
+        "#;
+
+        let config: EngineConfig = toml::from_str(input).unwrap();
+        match config {
+            EngineConfig::Datafusion { catalog: Some(cat) } => {
+                assert_eq!(cat.catalog_type, "rest");
+                assert_eq!(
+                    cat.props.get("uri"),
+                    Some(&"http://localhost:8181".to_string())
+                );
+            }
+            _ => panic!("Expected Datafusion with catalog"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_catalog_config() {
+        let input = r#"
+            type = "memory"
+
+            [props]
+            warehouse = "file:///tmp/warehouse"
+        "#;
+
+        let config: DatafusionCatalogConfig = toml::from_str(input).unwrap();
+        assert_eq!(config.catalog_type, "memory");
+        assert_eq!(
+            config.props.get("warehouse"),
+            Some(&"file:///tmp/warehouse".to_string())
+        );
     }
 
     #[tokio::test]
     async fn test_load_datafusion() {
-        let input = r#"
-            [engines]
-            df = { type = "datafusion" }
-        "#;
-        let tbl = toml::from_str(input).unwrap();
-        let result = load_engine_runner(TYPE_DATAFUSION, tbl).await;
+        let config = EngineConfig::Datafusion { catalog: None };
 
+        let result = load_engine_runner(config).await;
         assert!(result.is_ok());
     }
 }

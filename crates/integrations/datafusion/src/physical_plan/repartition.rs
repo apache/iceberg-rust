@@ -86,7 +86,6 @@ use iceberg::spec::{TableMetadata, TableMetadataRef, Transform};
 ///     NonZeroUsize::new(4).unwrap(),
 /// )?;
 /// ```
-#[allow(dead_code)]
 pub(crate) fn repartition(
     input: Arc<dyn ExecutionPlan>,
     table_metadata: TableMetadataRef,
@@ -160,9 +159,8 @@ fn determine_partitioning_strategy(
 
         // Case 2: Partitioned table missing _partition column (normally this should not happen)
         (true, Err(_)) => Err(DataFusionError::Plan(format!(
-            "Partitioned table input missing {} column. \
-             Ensure projection happens before repartitioning.",
-            PROJECTED_PARTITION_VALUE_COLUMN
+            "Partitioned table input missing {PROJECTED_PARTITION_VALUE_COLUMN} column. \
+             Ensure projection happens before repartitioning."
         ))),
 
         // Case 3: Unpartitioned table, always use RoundRobinBatch
@@ -223,7 +221,7 @@ mod tests {
         Table::builder()
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
-            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .file_io(FileIO::new_with_fs())
             .metadata_location("/test/metadata.json".to_string())
             .build()
             .unwrap()
@@ -380,7 +378,7 @@ mod tests {
         let table = Table::builder()
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "bucketed_table"]).unwrap())
-            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .file_io(FileIO::new_with_fs())
             .metadata_location("/test/bucketed_metadata.json".to_string())
             .build()
             .unwrap();
@@ -465,7 +463,7 @@ mod tests {
         let table = Table::builder()
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "partitioned_bucketed_table"]).unwrap())
-            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .file_io(FileIO::new_with_fs())
             .metadata_location("/test/partitioned_bucketed_metadata.json".to_string())
             .build()
             .unwrap();
@@ -509,8 +507,7 @@ mod tests {
 
                 assert!(
                     column_names.contains(&PROJECTED_PARTITION_VALUE_COLUMN.to_string()),
-                    "Should use _partition column, got: {:?}",
-                    column_names
+                    "Should use _partition column, got: {column_names:?}"
                 );
             }
             _ => panic!("Expected Hash partitioning with Identity transform"),
@@ -550,7 +547,7 @@ mod tests {
         let table = Table::builder()
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "none_table"]).unwrap())
-            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .file_io(FileIO::new_with_fs())
             .metadata_location("/test/none_metadata.json".to_string())
             .build()
             .unwrap();
@@ -622,7 +619,7 @@ mod tests {
         let table = Table::builder()
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "range_only_table"]).unwrap())
-            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .file_io(FileIO::new_with_fs())
             .metadata_location("/test/range_only_metadata.json".to_string())
             .build()
             .unwrap();
@@ -697,7 +694,7 @@ mod tests {
         let table = Table::builder()
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "mixed_transforms_table"]).unwrap())
-            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .file_io(FileIO::new_with_fs())
             .metadata_location("/test/mixed_transforms_metadata.json".to_string())
             .build()
             .unwrap();
@@ -734,8 +731,7 @@ mod tests {
                     .collect();
                 assert!(
                     column_names.contains(&PROJECTED_PARTITION_VALUE_COLUMN.to_string()),
-                    "Should use _partition column for mixed transforms with Identity, got: {:?}",
-                    column_names
+                    "Should use _partition column for mixed transforms with Identity, got: {column_names:?}"
                 );
             }
             _ => panic!("Expected Hash partitioning for table with identity transforms"),
@@ -781,7 +777,7 @@ mod tests {
         let table = Table::builder()
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "temporal_partition"]).unwrap())
-            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .file_io(FileIO::new_with_fs())
             .metadata_location("/test/temporal_metadata.json".to_string())
             .build()
             .unwrap();
@@ -854,7 +850,7 @@ mod tests {
         let table = Table::builder()
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "identity_partition"]).unwrap())
-            .file_io(FileIO::from_path("/tmp").unwrap().build().unwrap())
+            .file_io(FileIO::new_with_fs())
             .metadata_location("/test/identity_metadata.json".to_string())
             .build()
             .unwrap();

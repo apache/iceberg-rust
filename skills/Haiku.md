@@ -1,3 +1,22 @@
+<!--
+  ~ Licensed to the Apache Software Foundation (ASF) under one
+  ~ or more contributor license agreements.  See the NOTICE file
+  ~ distributed with this work for additional information
+  ~ regarding copyright ownership.  The ASF licenses this file
+  ~ to you under the Apache License, Version 2.0 (the
+  ~ "License"); you may not use this file except in compliance
+  ~ with the License.  You may obtain a copy of the License at
+  ~
+  ~   http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing,
+  ~ software distributed under the License is distributed on an
+  ~ "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  ~ KIND, either express or implied.  See the License for the
+  ~ specific language governing permissions and limitations
+  ~ under the License.
+-->
+
 # Rust & Python Engineering Assistant — Operating Manual (Haiku)
 
 > **How to use this manual.** This is the most *explicit and procedural* of the three tier manuals: it spells out the steps, gives concrete examples, and prefers a checklist over judgment. When a rule says "do X," do exactly X — do not infer a shortcut. When in doubt, do less and ask (interactive) or stop and report (delegated). The rules here are identical to the Opus and Sonnet manuals; only the level of detail differs.
@@ -203,7 +222,7 @@ Ask: "Would a senior engineer approve of this — including the tests?" **Never 
 ### 7. Dependency & API Rules
 
 - Before writing any code using an external library, verify the API is current and not deprecated.
-- Libraries to always verify (this stack): Apache DataFusion (+ `iceberg`, `iceberg-datafusion`), Apache Arrow (`arrow-rs` / PyArrow), Parquet, OpenDAL, Apache Iceberg / PyIceberg / `pyiceberg-core`, PyO3, tokio, anyhow, thiserror, serde; for the Python layer, Polars, PySpark, `datafusion` (Python).
+- Libraries to always verify (this stack): Apache DataFusion (+ `iceberg`, `iceberg-datafusion`), Apache Arrow (`arrow-rs`), Parquet, OpenDAL, Apache Iceberg (this fork's crates), tokio, anyhow, thiserror, serde.
 - If what you intended to write differs from the current library API, record the correct usage in [task/lessons.md](../task/lessons.md).
 - When using a library function, use the exact method signature — do not guess parameter names or assume default behavior. Arrow is the in-memory currency of this stack (Parquet, OLAP) — plan for it.
 - **Never modify dependency files** (`Cargo.toml`, `Cargo.lock`, `pyproject.toml`, `requirements.txt`, or any lockfile) **without explicit approval** (Non-Negotiables).
@@ -293,7 +312,7 @@ If you feel pulled to abbreviate, write the full name first. Ask: "would a new h
 ### Verification commands (canonical — referenced by §4 and the Pre-Flight checklist)
 
 - **Rust:** `make check` (fmt-check + clippy `-D warnings` + TOML check + unused-deps) and `make test` (doc + all-targets tests). Or directly: `cargo fmt --all -- --check` · `cargo clippy --all-targets --all-features --workspace -- -D warnings` · `cargo test --no-fail-fast --all-targets --all-features --workspace`. Workspace layout in [Cargo.toml](../Cargo.toml); formatter config in [rustfmt.toml](../rustfmt.toml). The clippy gate is `-D warnings` (there is no `[workspace.lints]` table). MSRV via `make check-msrv`.
-- **Python:** run from the package directory. `ruff check .` · `ruff format --check .` · `pytest` (e.g. `iceberg-spark-python` uses `uv run …`). Ruff config in the package's `pyproject.toml`; line length 100.
+- **Python:** there is no Python layer in this fork (it was removed in Phase 0; Python is deferred). If one is reintroduced, run its checks from its package directory (`ruff check .` · `ruff format --check .` · `pytest`, via `uv run …`).
 
 ### Rust
 

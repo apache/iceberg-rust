@@ -28,6 +28,7 @@ version = { workspace = true }
 futures = { workspace = true }
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
+iceberg-storage-opendal = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["full"] }
 
 [[example]]
@@ -45,4 +46,4 @@ required-features = ["storage-oss"]
 
 [features]
 default = []
-storage-oss = ["iceberg/storage-oss"]
+storage-oss = ["iceberg-storage-opendal/opendal-oss"]

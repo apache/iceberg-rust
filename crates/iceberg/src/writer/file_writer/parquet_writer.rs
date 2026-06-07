@@ -27,12 +27,9 @@ use itertools::Itertools;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics;
-use parquet::format::FileMetaData;
-use parquet::thrift::{TCompactOutputProtocol, TSerializable};
-use thrift::protocol::TOutputProtocol;
 
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
@@ -81,11 +78,11 @@ impl ParquetWriterBuilder {
 impl FileWriterBuilder for ParquetWriterBuilder {
     type R = ParquetWriter;
 
-    async fn build(self, output_file: OutputFile) -> Result<Self::R> {
+    async fn build(&self, output_file: OutputFile) -> Result<Self::R> {
         Ok(ParquetWriter {
             schema: self.schema.clone(),
             inner_writer: None,
-            writer_properties: self.props,
+            writer_properties: self.props.clone(),
             current_row_num: 0,
             output_file,
             nan_value_count_visitor: NanValueCountVisitor::new_with_match_mode(self.match_mode),
@@ -215,7 +212,7 @@ impl SchemaVisitor for IndexByParquetPathName {
 pub struct ParquetWriter {
     schema: SchemaRef,
     output_file: OutputFile,
-    inner_writer: Option<AsyncArrowWriter<AsyncFileWriter<Box<dyn FileWrite>>>>,
+    inner_writer: Option<AsyncArrowWriter<AsyncFileWriter>>,
     writer_properties: WriterProperties,
     current_row_num: usize,
     nan_value_count_visitor: NanValueCountVisitor,
@@ -349,29 +346,6 @@ impl ParquetWriter {
         Ok(data_files)
     }
 
-    fn thrift_to_parquet_metadata(&self, file_metadata: FileMetaData) -> Result<ParquetMetaData> {
-        let mut buffer = Vec::new();
-        {
-            let mut protocol = TCompactOutputProtocol::new(&mut buffer);
-            file_metadata
-                .write_to_out_protocol(&mut protocol)
-                .map_err(|err| {
-                    Error::new(ErrorKind::Unexpected, "Failed to write parquet metadata")
-                        .with_source(err)
-                })?;
-
-            protocol.flush().map_err(|err| {
-                Error::new(ErrorKind::Unexpected, "Failed to flush protocol").with_source(err)
-            })?;
-        }
-
-        let parquet_metadata = ParquetMetaDataReader::decode_metadata(&buffer).map_err(|err| {
-            Error::new(ErrorKind::Unexpected, "Failed to decode parquet metadata").with_source(err)
-        })?;
-
-        Ok(parquet_metadata)
-    }
-
     /// `ParquetMetadata` to data file builder
     pub(crate) fn parquet_to_data_file_builder(
         schema: SchemaRef,
@@ -438,13 +412,13 @@ impl ParquetWriter {
             // - We can ignore implementing distinct_counts due to this: https://lists.apache.org/thread/j52tsojv0x4bopxyzsp7m7bqt23n5fnd
             .lower_bounds(lower_bounds)
             .upper_bounds(upper_bounds)
-            .split_offsets(
+            .split_offsets(Some(
                 metadata
                     .row_groups()
                     .iter()
                     .filter_map(|group| group.file_offset())
                     .collect(),
-            );
+            ));
 
         Ok(builder)
     }
@@ -564,14 +538,7 @@ impl FileWriter for ParquetWriter {
             })?;
             Ok(vec![])
         } else {
-            let parquet_metadata =
-                Arc::new(self.thrift_to_parquet_metadata(metadata).map_err(|err| {
-                    Error::new(
-                        ErrorKind::Unexpected,
-                        "Failed to convert metadata from thrift to parquet.",
-                    )
-                    .with_source(err)
-                })?);
+            let parquet_metadata = Arc::new(metadata);
 
             Ok(vec![Self::parquet_to_data_file_builder(
                 self.schema,
@@ -610,16 +577,16 @@ impl CurrentFileStatus for ParquetWriter {
 /// # NOTES
 ///
 /// We keep this wrapper been used inside only.
-struct AsyncFileWriter<W: FileWrite>(W);
+struct AsyncFileWriter(Box<dyn FileWrite>);
 
-impl<W: FileWrite> AsyncFileWriter<W> {
+impl AsyncFileWriter {
     /// Create a new `AsyncFileWriter` with the given writer.
-    pub fn new(writer: W) -> Self {
+    pub fn new(writer: Box<dyn FileWrite>) -> Self {
         Self(writer)
     }
 }
 
-impl<W: FileWrite> ArrowAsyncFileWriter for AsyncFileWriter<W> {
+impl ArrowAsyncFileWriter for AsyncFileWriter {
     fn write(&mut self, bs: Bytes) -> BoxFuture<'_, parquet::errors::Result<()>> {
         Box::pin(async {
             self.0
@@ -655,13 +622,13 @@ mod tests {
     use arrow_select::concat::concat_batches;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::file::statistics::ValueStatistics;
-    use rust_decimal::Decimal;
     use tempfile::TempDir;
     use uuid::Uuid;
 
     use super::*;
     use crate::arrow::schema_to_arrow_schema;
-    use crate::io::FileIOBuilder;
+    use crate::io::FileIO;
+    use crate::spec::decimal_utils::{decimal_mantissa, decimal_new, decimal_scale};
     use crate::spec::{PrimitiveLiteral, Struct, *};
     use crate::writer::file_writer::location_generator::{
         DefaultFileNameGenerator, DefaultLocationGenerator, FileNameGenerator, LocationGenerator,
@@ -823,7 +790,7 @@ mod tests {
     #[tokio::test]
     async fn test_parquet_writer() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -897,7 +864,7 @@ mod tests {
     #[tokio::test]
     async fn test_parquet_writer_with_complex_schema() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -1120,7 +1087,7 @@ mod tests {
     #[tokio::test]
     async fn test_all_type_for_write() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -1361,7 +1328,7 @@ mod tests {
     #[tokio::test]
     async fn test_decimal_bound() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -1411,12 +1378,12 @@ mod tests {
             .unwrap();
         assert_eq!(
             data_file.upper_bounds().get(&0),
-            Some(Datum::decimal_with_precision(Decimal::new(22000000000_i64, 10), 28).unwrap())
+            Some(Datum::decimal_with_precision(decimal_new(22000000000_i64, 10), 28).unwrap())
                 .as_ref()
         );
         assert_eq!(
             data_file.lower_bounds().get(&0),
-            Some(Datum::decimal_with_precision(Decimal::new(11000000000_i64, 10), 28).unwrap())
+            Some(Datum::decimal_with_precision(decimal_new(11000000000_i64, 10), 28).unwrap())
                 .as_ref()
         );
 
@@ -1463,19 +1430,22 @@ mod tests {
             .unwrap();
         assert_eq!(
             data_file.upper_bounds().get(&0),
-            Some(Datum::decimal_with_precision(Decimal::new(-11000000000_i64, 10), 28).unwrap())
+            Some(Datum::decimal_with_precision(decimal_new(-11000000000_i64, 10), 28).unwrap())
                 .as_ref()
         );
         assert_eq!(
             data_file.lower_bounds().get(&0),
-            Some(Datum::decimal_with_precision(Decimal::new(-22000000000_i64, 10), 28).unwrap())
+            Some(Datum::decimal_with_precision(decimal_new(-22000000000_i64, 10), 28).unwrap())
                 .as_ref()
         );
 
-        // test max and min of rust_decimal
-        let decimal_max = Decimal::MAX;
-        let decimal_min = Decimal::MIN;
-        assert_eq!(decimal_max.scale(), decimal_min.scale());
+        // test 38-digit precision decimal values (Iceberg spec max)
+        // Note: fastnum D128::MAX/MIN have impractical exponents, so we use meaningful values
+        use crate::spec::decimal_utils::decimal_from_str_exact;
+        let decimal_max = decimal_from_str_exact("99999999999999999999999999999999999999").unwrap();
+        let decimal_min =
+            decimal_from_str_exact("-99999999999999999999999999999999999999").unwrap();
+        assert_eq!(decimal_scale(&decimal_max), decimal_scale(&decimal_min));
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
@@ -1484,7 +1454,7 @@ mod tests {
                         "decimal",
                         Type::Primitive(PrimitiveType::Decimal {
                             precision: 38,
-                            scale: decimal_max.scale(),
+                            scale: decimal_scale(&decimal_max),
                         }),
                     )
                     .into(),
@@ -1501,8 +1471,8 @@ mod tests {
             .await?;
         let col0 = Arc::new(
             Decimal128Array::from(vec![
-                Some(decimal_max.mantissa()),
-                Some(decimal_min.mantissa()),
+                Some(decimal_mantissa(&decimal_max)),
+                Some(decimal_mantissa(&decimal_min)),
             ])
             .with_data_type(DataType::Decimal128(38, 0)),
         ) as ArrayRef;
@@ -1603,7 +1573,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_write() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -1653,7 +1623,7 @@ mod tests {
     #[tokio::test]
     async fn test_nan_val_cnts_primitive_type() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -1741,7 +1711,7 @@ mod tests {
     #[tokio::test]
     async fn test_nan_val_cnts_struct_type() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -1881,7 +1851,7 @@ mod tests {
     #[tokio::test]
     async fn test_nan_val_cnts_list_type() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -2083,7 +2053,7 @@ mod tests {
     #[tokio::test]
     async fn test_nan_val_cnts_map_type() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -2239,7 +2209,7 @@ mod tests {
     #[tokio::test]
     async fn test_write_empty_parquet_file() {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );

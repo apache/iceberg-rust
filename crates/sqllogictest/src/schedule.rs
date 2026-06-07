@@ -21,10 +21,18 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow};
 use serde::{Deserialize, Serialize};
-use toml::{Table as TomlTable, Value};
 use tracing::info;
 
-use crate::engine::{EngineRunner, load_engine_runner};
+use crate::engine::{EngineConfig, EngineRunner, load_engine_runner};
+
+/// Raw configuration parsed from the schedule TOML file
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScheduleConfig {
+    /// Engine name to engine configuration
+    pub engines: HashMap<String, EngineConfig>,
+    /// List of test steps to run
+    pub steps: Vec<Step>,
+}
 
 pub struct Schedule {
     /// Engine names to engine instances
@@ -59,15 +67,27 @@ impl Schedule {
     pub async fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         let path_str = path.as_ref().to_string_lossy().to_string();
         let content = read_to_string(path)?;
-        let toml_value = content.parse::<Value>()?;
-        let toml_table = toml_value
-            .as_table()
-            .ok_or_else(|| anyhow!("Schedule file must be a TOML table"))?;
 
-        let engines = Schedule::parse_engines(toml_table).await?;
-        let steps = Schedule::parse_steps(toml_table)?;
+        let config: ScheduleConfig = toml::from_str(&content)
+            .with_context(|| format!("Failed to parse schedule file: {path_str}"))?;
 
-        Ok(Self::new(engines, steps, path_str))
+        let engines = Self::instantiate_engines(config.engines).await?;
+
+        Ok(Self::new(engines, config.steps, path_str))
+    }
+
+    /// Instantiate engine runners from their configurations
+    async fn instantiate_engines(
+        configs: HashMap<String, EngineConfig>,
+    ) -> anyhow::Result<HashMap<String, Box<dyn EngineRunner>>> {
+        let mut engines = HashMap::new();
+
+        for (name, config) in configs {
+            let engine = load_engine_runner(config).await?;
+            engines.insert(name, engine);
+        }
+
+        Ok(engines)
     }
 
     pub async fn run(mut self) -> anyhow::Result<()> {
@@ -105,103 +125,131 @@ impl Schedule {
         }
         Ok(())
     }
-
-    async fn parse_engines(
-        table: &TomlTable,
-    ) -> anyhow::Result<HashMap<String, Box<dyn EngineRunner>>> {
-        let engines_tbl = table
-            .get("engines")
-            .with_context(|| "Schedule file must have an 'engines' table")?
-            .as_table()
-            .ok_or_else(|| anyhow!("'engines' must be a table"))?;
-
-        let mut engines = HashMap::new();
-
-        for (name, engine_val) in engines_tbl {
-            let cfg_tbl = engine_val
-                .as_table()
-                .ok_or_else(|| anyhow!("Config of engine '{name}' is not a table"))?
-                .clone();
-
-            let engine_type = cfg_tbl
-                .get("type")
-                .ok_or_else(|| anyhow::anyhow!("Engine {name} doesn't have a 'type' field"))?
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("Engine {name} type must be a string"))?;
-
-            let engine = load_engine_runner(engine_type, cfg_tbl.clone()).await?;
-
-            if engines.insert(name.clone(), engine).is_some() {
-                return Err(anyhow!("Duplicate engine '{name}'"));
-            }
-        }
-
-        Ok(engines)
-    }
-
-    fn parse_steps(table: &TomlTable) -> anyhow::Result<Vec<Step>> {
-        let steps_val = table
-            .get("steps")
-            .with_context(|| "Schedule file must have a 'steps' array")?;
-
-        let steps: Vec<Step> = steps_val
-            .clone()
-            .try_into()
-            .with_context(|| "Failed to deserialize steps")?;
-
-        Ok(steps)
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use toml::Table as TomlTable;
-
-    use crate::schedule::Schedule;
+    use crate::engine::EngineConfig;
+    use crate::schedule::ScheduleConfig;
 
     #[test]
-    fn test_parse_steps() {
+    fn test_deserialize_schedule_config() {
         let input = r#"
+            [engines]
+            df = { type = "datafusion" }
+
+            [[steps]]
+            engine = "df"
+            slt = "test.slt"
+        "#;
+
+        let config: ScheduleConfig = toml::from_str(input).unwrap();
+
+        assert_eq!(config.engines.len(), 1);
+        assert!(config.engines.contains_key("df"));
+        assert!(matches!(config.engines["df"], EngineConfig::Datafusion {
+            catalog: None
+        }));
+        assert_eq!(config.steps.len(), 1);
+        assert_eq!(config.steps[0].engine, "df");
+        assert_eq!(config.steps[0].slt, "test.slt");
+    }
+
+    #[test]
+    fn test_deserialize_multiple_steps() {
+        let input = r#"
+            [engines]
+            datafusion = { type = "datafusion" }
+
             [[steps]]
             engine = "datafusion"
             slt = "test.slt"
 
             [[steps]]
-            engine = "spark"
+            engine = "datafusion"
             slt = "test2.slt"
         "#;
 
-        let tbl: TomlTable = toml::from_str(input).unwrap();
-        let steps = Schedule::parse_steps(&tbl).unwrap();
+        let config: ScheduleConfig = toml::from_str(input).unwrap();
 
-        assert_eq!(steps.len(), 2);
-        assert_eq!(steps[0].engine, "datafusion");
-        assert_eq!(steps[0].slt, "test.slt");
-        assert_eq!(steps[1].engine, "spark");
-        assert_eq!(steps[1].slt, "test2.slt");
+        assert_eq!(config.steps.len(), 2);
+        assert_eq!(config.steps[0].engine, "datafusion");
+        assert_eq!(config.steps[0].slt, "test.slt");
+        assert_eq!(config.steps[1].engine, "datafusion");
+        assert_eq!(config.steps[1].slt, "test2.slt");
     }
 
     #[test]
-    fn test_parse_steps_empty() {
+    fn test_deserialize_with_catalog_config() {
         let input = r#"
+            [engines.df]
+            type = "datafusion"
+
+            [engines.df.catalog]
+            type = "rest"
+
+            [engines.df.catalog.props]
+            uri = "http://localhost:8181"
+
+            [[steps]]
+            engine = "df"
+            slt = "test.slt"
+        "#;
+
+        let config: ScheduleConfig = toml::from_str(input).unwrap();
+
+        match &config.engines["df"] {
+            EngineConfig::Datafusion { catalog: Some(cat) } => {
+                assert_eq!(cat.catalog_type, "rest");
+                assert_eq!(
+                    cat.props.get("uri"),
+                    Some(&"http://localhost:8181".to_string())
+                );
+            }
+            _ => panic!("Expected Datafusion with catalog config"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_missing_engine_type() {
+        let input = r#"
+            [engines]
+            df = { }
+
+            [[steps]]
+            engine = "df"
+            slt = "test.slt"
+        "#;
+
+        let result: Result<ScheduleConfig, _> = toml::from_str(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_invalid_engine_type() {
+        let input = r#"
+            [engines]
+            df = { type = "unknown_engine" }
+
+            [[steps]]
+            engine = "df"
+            slt = "test.slt"
+        "#;
+
+        let result: Result<ScheduleConfig, _> = toml::from_str(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_missing_step_fields() {
+        let input = r#"
+            [engines]
+            df = { type = "datafusion" }
+
             [[steps]]
         "#;
 
-        let tbl: TomlTable = toml::from_str(input).unwrap();
-        let steps = Schedule::parse_steps(&tbl);
-
-        assert!(steps.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_parse_engines_invalid_table() {
-        let toml_content = r#"
-            engines = "not_a_table"
-        "#;
-
-        let table: TomlTable = toml::from_str(toml_content).unwrap();
-        let result = Schedule::parse_engines(&table).await;
-
+        let result: Result<ScheduleConfig, _> = toml::from_str(input);
         assert!(result.is_err());
     }
 }

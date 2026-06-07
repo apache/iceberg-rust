@@ -33,9 +33,9 @@ use arrow_string::like::starts_with;
 use bytes::Bytes;
 use fnv::FnvHashSet;
 use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, try_join};
+use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use parquet::arrow::arrow_reader::{
-    ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection, RowSelector,
+    ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions, RowFilter, RowSelection, RowSelector,
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ParquetRecordBatchStreamBuilder, ProjectionMask};
@@ -43,9 +43,11 @@ use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
 };
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
+use typed_builder::TypedBuilder;
 
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
-use crate::arrow::record_batch_transformer::RecordBatchTransformer;
+use crate::arrow::int96::coerce_int96_timestamps;
+use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::{arrow_schema_to_schema, get_arrow_datum};
 use crate::delete_vector::DeleteVector;
 use crate::error::Result;
@@ -54,10 +56,83 @@ use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::io::{FileIO, FileMetadata, FileRead};
+use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, is_metadata_field};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
-use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
+use crate::spec::{Datum, NameMapping, NestedField, PrimitiveType, Schema, Type};
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind};
+
+/// Default gap between byte ranges below which they are coalesced into a
+/// single request. Matches object_store's `OBJECT_STORE_COALESCE_DEFAULT`.
+const DEFAULT_RANGE_COALESCE_BYTES: u64 = 1024 * 1024;
+
+/// Default maximum number of coalesced byte ranges fetched concurrently.
+/// Matches object_store's `OBJECT_STORE_COALESCE_PARALLEL`.
+const DEFAULT_RANGE_FETCH_CONCURRENCY: usize = 10;
+
+/// Default number of bytes to prefetch when parsing Parquet footer metadata.
+/// Matches DataFusion's default `ParquetOptions::metadata_size_hint`.
+const DEFAULT_METADATA_SIZE_HINT: usize = 512 * 1024;
+
+/// Options for tuning Parquet file I/O.
+#[derive(Clone, Copy, Debug, TypedBuilder)]
+#[builder(field_defaults(setter(prefix = "with_")))]
+pub(crate) struct ParquetReadOptions {
+    /// Number of bytes to prefetch for parsing the Parquet metadata.
+    ///
+    /// This hint can help reduce the number of fetch requests. For more details see the
+    /// [ParquetMetaDataReader documentation](https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html#method.with_prefetch_hint).
+    ///
+    /// Defaults to 512 KiB, matching DataFusion's default `ParquetOptions::metadata_size_hint`.
+    #[builder(default = Some(DEFAULT_METADATA_SIZE_HINT))]
+    pub(crate) metadata_size_hint: Option<usize>,
+    /// Gap threshold for merging nearby byte ranges into a single request.
+    /// Ranges with gaps smaller than this value will be coalesced.
+    ///
+    /// Defaults to 1 MiB, matching object_store's `OBJECT_STORE_COALESCE_DEFAULT`.
+    #[builder(default = DEFAULT_RANGE_COALESCE_BYTES)]
+    pub(crate) range_coalesce_bytes: u64,
+    /// Maximum number of merged byte ranges to fetch concurrently.
+    ///
+    /// Defaults to 10, matching object_store's `OBJECT_STORE_COALESCE_PARALLEL`.
+    #[builder(default = DEFAULT_RANGE_FETCH_CONCURRENCY)]
+    pub(crate) range_fetch_concurrency: usize,
+    /// Whether to preload the column index when reading Parquet metadata.
+    #[builder(default = true)]
+    pub(crate) preload_column_index: bool,
+    /// Whether to preload the offset index when reading Parquet metadata.
+    #[builder(default = true)]
+    pub(crate) preload_offset_index: bool,
+    /// Whether to preload the page index when reading Parquet metadata.
+    #[builder(default = false)]
+    pub(crate) preload_page_index: bool,
+}
+
+impl ParquetReadOptions {
+    pub(crate) fn metadata_size_hint(&self) -> Option<usize> {
+        self.metadata_size_hint
+    }
+
+    pub(crate) fn range_coalesce_bytes(&self) -> u64 {
+        self.range_coalesce_bytes
+    }
+
+    pub(crate) fn range_fetch_concurrency(&self) -> usize {
+        self.range_fetch_concurrency
+    }
+
+    pub(crate) fn preload_column_index(&self) -> bool {
+        self.preload_column_index
+    }
+
+    pub(crate) fn preload_offset_index(&self) -> bool {
+        self.preload_offset_index
+    }
+
+    pub(crate) fn preload_page_index(&self) -> bool {
+        self.preload_page_index
+    }
+}
 
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {
@@ -66,6 +141,7 @@ pub struct ArrowReaderBuilder {
     concurrency_limit_data_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    parquet_read_options: ParquetReadOptions,
 }
 
 impl ArrowReaderBuilder {
@@ -79,6 +155,7 @@ impl ArrowReaderBuilder {
             concurrency_limit_data_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            parquet_read_options: ParquetReadOptions::builder().build(),
         }
     }
 
@@ -107,6 +184,32 @@ impl ArrowReaderBuilder {
         self
     }
 
+    /// Provide a hint as to the number of bytes to prefetch for parsing the Parquet metadata
+    ///
+    /// This hint can help reduce the number of fetch requests. For more details see the
+    /// [ParquetMetaDataReader documentation](https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html#method.with_prefetch_hint).
+    pub fn with_metadata_size_hint(mut self, metadata_size_hint: usize) -> Self {
+        self.parquet_read_options.metadata_size_hint = Some(metadata_size_hint);
+        self
+    }
+
+    /// Sets the gap threshold for merging nearby byte ranges into a single request.
+    /// Ranges with gaps smaller than this value will be coalesced.
+    ///
+    /// Defaults to 1 MiB, matching object_store's OBJECT_STORE_COALESCE_DEFAULT.
+    pub fn with_range_coalesce_bytes(mut self, range_coalesce_bytes: u64) -> Self {
+        self.parquet_read_options.range_coalesce_bytes = range_coalesce_bytes;
+        self
+    }
+
+    /// Sets the maximum number of merged byte ranges to fetch concurrently.
+    ///
+    /// Defaults to 10, matching object_store's OBJECT_STORE_COALESCE_PARALLEL.
+    pub fn with_range_fetch_concurrency(mut self, range_fetch_concurrency: usize) -> Self {
+        self.parquet_read_options.range_fetch_concurrency = range_fetch_concurrency;
+        self
+    }
+
     /// Build the ArrowReader.
     pub fn build(self) -> ArrowReader {
         ArrowReader {
@@ -119,6 +222,7 @@ impl ArrowReaderBuilder {
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            parquet_read_options: self.parquet_read_options,
         }
     }
 }
@@ -135,6 +239,7 @@ pub struct ArrowReader {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    parquet_read_options: ParquetReadOptions,
 }
 
 impl ArrowReader {
@@ -146,30 +251,59 @@ impl ArrowReader {
         let concurrency_limit_data_files = self.concurrency_limit_data_files;
         let row_group_filtering_enabled = self.row_group_filtering_enabled;
         let row_selection_enabled = self.row_selection_enabled;
+        let parquet_read_options = self.parquet_read_options;
 
-        let stream = tasks
-            .map_ok(move |task| {
-                let file_io = file_io.clone();
+        // Fast-path for single concurrency to avoid overhead of try_flatten_unordered
+        let stream: ArrowRecordBatchStream = if concurrency_limit_data_files == 1 {
+            Box::pin(
+                tasks
+                    .and_then(move |task| {
+                        let file_io = file_io.clone();
 
-                Self::process_file_scan_task(
-                    task,
-                    batch_size,
-                    file_io,
-                    self.delete_file_loader.clone(),
-                    row_group_filtering_enabled,
-                    row_selection_enabled,
-                )
-            })
-            .map_err(|err| {
-                Error::new(ErrorKind::Unexpected, "file scan task generate failed").with_source(err)
-            })
-            .try_buffer_unordered(concurrency_limit_data_files)
-            .try_flatten_unordered(concurrency_limit_data_files);
+                        Self::process_file_scan_task(
+                            task,
+                            batch_size,
+                            file_io,
+                            self.delete_file_loader.clone(),
+                            row_group_filtering_enabled,
+                            row_selection_enabled,
+                            parquet_read_options,
+                        )
+                    })
+                    .map_err(|err| {
+                        Error::new(ErrorKind::Unexpected, "file scan task generate failed")
+                            .with_source(err)
+                    })
+                    .try_flatten(),
+            )
+        } else {
+            Box::pin(
+                tasks
+                    .map_ok(move |task| {
+                        let file_io = file_io.clone();
 
-        Ok(Box::pin(stream) as ArrowRecordBatchStream)
+                        Self::process_file_scan_task(
+                            task,
+                            batch_size,
+                            file_io,
+                            self.delete_file_loader.clone(),
+                            row_group_filtering_enabled,
+                            row_selection_enabled,
+                            parquet_read_options,
+                        )
+                    })
+                    .map_err(|err| {
+                        Error::new(ErrorKind::Unexpected, "file scan task generate failed")
+                            .with_source(err)
+                    })
+                    .try_buffer_unordered(concurrency_limit_data_files)
+                    .try_flatten_unordered(concurrency_limit_data_files),
+            )
+        };
+
+        Ok(stream)
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn process_file_scan_task(
         task: FileScanTask,
         batch_size: Option<usize>,
@@ -177,52 +311,121 @@ impl ArrowReader {
         delete_file_loader: CachingDeleteFileLoader,
         row_group_filtering_enabled: bool,
         row_selection_enabled: bool,
+        parquet_read_options: ParquetReadOptions,
     ) -> Result<ArrowRecordBatchStream> {
         let should_load_page_index =
             (row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
+        let mut parquet_read_options = parquet_read_options;
+        parquet_read_options.preload_page_index = should_load_page_index;
 
-        let delete_filter_rx = delete_file_loader.load_deletes(&task.deletes, task.schema.clone());
+        let delete_filter_rx =
+            delete_file_loader.load_deletes(&task.deletes, Arc::clone(&task.schema));
 
-        // Migrated tables lack field IDs, requiring us to inspect the schema to choose
-        // between field-ID-based or position-based projection
-        let initial_stream_builder = Self::create_parquet_record_batch_stream_builder(
+        // Open the Parquet file once, loading its metadata
+        let (parquet_file_reader, arrow_metadata) = Self::open_parquet_file(
             &task.data_file_path,
-            file_io.clone(),
-            should_load_page_index,
-            None,
+            &file_io,
+            task.file_size_in_bytes,
+            parquet_read_options,
         )
         .await?;
 
-        // Parquet files from Hive/Spark migrations lack field IDs in their metadata
-        let missing_field_ids = initial_stream_builder
+        // Check if Parquet file has embedded field IDs
+        // Corresponds to Java's ParquetSchemaUtil.hasIds()
+        // Reference: parquet/src/main/java/org/apache/iceberg/parquet/ParquetSchemaUtil.java:118
+        let missing_field_ids = arrow_metadata
             .schema()
             .fields()
             .iter()
             .next()
             .is_some_and(|f| f.metadata().get(PARQUET_FIELD_ID_META_KEY).is_none());
 
-        // Adding position-based fallback IDs at schema level (not per-batch) enables projection
-        // on files that lack embedded field IDs. We recreate the builder to apply the modified schema.
-        let mut record_batch_stream_builder = if missing_field_ids {
-            let arrow_schema =
-                add_fallback_field_ids_to_arrow_schema(initial_stream_builder.schema());
-            let options = ArrowReaderOptions::new().with_schema(arrow_schema);
+        // Three-branch schema resolution strategy matching Java's ReadConf constructor
+        //
+        // Per Iceberg spec Column Projection rules:
+        // "Columns in Iceberg data files are selected by field id. The table schema's column
+        //  names and order may change after a data file is written, and projection must be done
+        //  using field ids."
+        // https://iceberg.apache.org/spec/#column-projection
+        //
+        // When Parquet files lack field IDs (e.g., Hive/Spark migrations via add_files),
+        // we must assign field IDs BEFORE reading data to enable correct projection.
+        //
+        // Java's ReadConf determines field ID strategy:
+        // - Branch 1: hasIds(fileSchema) → trust embedded field IDs, use pruneColumns()
+        // - Branch 2: nameMapping present → applyNameMapping(), then pruneColumns()
+        // - Branch 3: fallback → addFallbackIds(), then pruneColumnsFallback()
+        let arrow_metadata = if missing_field_ids {
+            // Parquet file lacks field IDs - must assign them before reading
+            let arrow_schema = if let Some(name_mapping) = &task.name_mapping {
+                // Branch 2: Apply name mapping to assign correct Iceberg field IDs
+                // Per spec rule #2: "Use schema.name-mapping.default metadata to map field id
+                // to columns without field id"
+                // Corresponds to Java's ParquetSchemaUtil.applyNameMapping()
+                apply_name_mapping_to_arrow_schema(
+                    Arc::clone(arrow_metadata.schema()),
+                    name_mapping,
+                )?
+            } else {
+                // Branch 3: No name mapping - use position-based fallback IDs
+                // Corresponds to Java's ParquetSchemaUtil.addFallbackIds()
+                add_fallback_field_ids_to_arrow_schema(arrow_metadata.schema())
+            };
 
-            Self::create_parquet_record_batch_stream_builder(
-                &task.data_file_path,
-                file_io.clone(),
-                should_load_page_index,
-                Some(options),
-            )
-            .await?
+            let options = ArrowReaderOptions::new().with_schema(arrow_schema);
+            ArrowReaderMetadata::try_new(Arc::clone(arrow_metadata.metadata()), options).map_err(
+                |e| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "Failed to create ArrowReaderMetadata with field ID schema",
+                    )
+                    .with_source(e)
+                },
+            )?
         } else {
-            initial_stream_builder
+            // Branch 1: File has embedded field IDs - trust them
+            arrow_metadata
         };
 
-        // Fallback IDs don't match Parquet's embedded field IDs (since they don't exist),
-        // so we must use position-based projection instead of field-ID matching
+        // Coerce INT96 timestamp columns to the resolution specified by the Iceberg schema.
+        // This must happen before building the stream reader to avoid i64 overflow in arrow-rs.
+        let arrow_metadata = if let Some(coerced_schema) =
+            coerce_int96_timestamps(arrow_metadata.schema(), &task.schema)
+        {
+            let options = ArrowReaderOptions::new().with_schema(Arc::clone(&coerced_schema));
+            ArrowReaderMetadata::try_new(Arc::clone(arrow_metadata.metadata()), options).map_err(
+                |e| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        format!(
+                            "Failed to create ArrowReaderMetadata with INT96-coerced schema: {coerced_schema}"
+                        ),
+                    )
+                    .with_source(e)
+                },
+            )?
+        } else {
+            arrow_metadata
+        };
+
+        // Build the stream reader, reusing the already-opened file reader
+        let mut record_batch_stream_builder =
+            ParquetRecordBatchStreamBuilder::new_with_metadata(parquet_file_reader, arrow_metadata);
+
+        // Filter out metadata fields for Parquet projection (they don't exist in files)
+        let project_field_ids_without_metadata: Vec<i32> = task
+            .project_field_ids
+            .iter()
+            .filter(|&&id| !is_metadata_field(id))
+            .copied()
+            .collect();
+
+        // Create projection mask based on field IDs
+        // - If file has embedded IDs: field-ID-based projection (missing_field_ids=false)
+        // - If name mapping applied: field-ID-based projection (missing_field_ids=true but IDs now match)
+        // - If fallback IDs: position-based projection (missing_field_ids=true)
         let projection_mask = Self::get_arrow_projection_mask(
-            &task.project_field_ids,
+            &project_field_ids_without_metadata,
             &task.schema,
             record_batch_stream_builder.parquet_schema(),
             record_batch_stream_builder.schema(),
@@ -233,10 +436,26 @@ impl ArrowReader {
             record_batch_stream_builder.with_projection(projection_mask.clone());
 
         // RecordBatchTransformer performs any transformations required on the RecordBatches
-        // that come back from the file, such as type promotion, default column insertion
-        // and column re-ordering
-        let mut record_batch_transformer =
-            RecordBatchTransformer::build(task.schema_ref(), task.project_field_ids());
+        // that come back from the file, such as type promotion, default column insertion,
+        // column re-ordering, partition constants, and virtual field addition (like _file)
+        let mut record_batch_transformer_builder =
+            RecordBatchTransformerBuilder::new(task.schema_ref(), task.project_field_ids());
+
+        // Add the _file metadata column if it's in the projected fields
+        if task.project_field_ids().contains(&RESERVED_FIELD_ID_FILE) {
+            let file_datum = Datum::string(task.data_file_path.clone());
+            record_batch_transformer_builder =
+                record_batch_transformer_builder.with_constant(RESERVED_FIELD_ID_FILE, file_datum);
+        }
+
+        if let (Some(partition_spec), Some(partition_data)) =
+            (task.partition_spec.clone(), task.partition.clone())
+        {
+            record_batch_transformer_builder =
+                record_batch_transformer_builder.with_partition(partition_spec, partition_data)?;
+        }
+
+        let mut record_batch_transformer = record_batch_transformer_builder.build();
 
         if let Some(batch_size) = batch_size {
             record_batch_stream_builder = record_batch_stream_builder.with_batch_size(batch_size);
@@ -374,34 +593,42 @@ impl ArrowReader {
             record_batch_stream_builder
                 .build()?
                 .map(move |batch| match batch {
-                    Ok(batch) => record_batch_transformer.process_record_batch(batch),
+                    Ok(batch) => {
+                        // Process the record batch (type promotion, column reordering, virtual fields, etc.)
+                        record_batch_transformer.process_record_batch(batch)
+                    }
                     Err(err) => Err(err.into()),
                 });
 
         Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
     }
 
-    pub(crate) async fn create_parquet_record_batch_stream_builder(
+    /// Opens a Parquet file and loads its metadata, returning both the reader and metadata.
+    /// The reader can be reused to build a `ParquetRecordBatchStreamBuilder` without
+    /// reopening the file.
+    pub(crate) async fn open_parquet_file(
         data_file_path: &str,
-        file_io: FileIO,
-        should_load_page_index: bool,
-        arrow_reader_options: Option<ArrowReaderOptions>,
-    ) -> Result<ParquetRecordBatchStreamBuilder<ArrowFileReader<impl FileRead + Sized>>> {
-        // Get the metadata for the Parquet file we need to read and build
-        // a reader for the data within
+        file_io: &FileIO,
+        file_size_in_bytes: u64,
+        parquet_read_options: ParquetReadOptions,
+    ) -> Result<(ArrowFileReader, ArrowReaderMetadata)> {
         let parquet_file = file_io.new_input(data_file_path)?;
-        let (parquet_metadata, parquet_reader) =
-            try_join!(parquet_file.metadata(), parquet_file.reader())?;
-        let parquet_file_reader = ArrowFileReader::new(parquet_metadata, parquet_reader)
-            .with_preload_column_index(true)
-            .with_preload_offset_index(true)
-            .with_preload_page_index(should_load_page_index);
+        let parquet_reader = parquet_file.reader().await?;
+        let mut reader = ArrowFileReader::new(
+            FileMetadata {
+                size: file_size_in_bytes,
+            },
+            parquet_reader,
+        )
+        .with_parquet_read_options(parquet_read_options);
 
-        // Create the record batch stream builder, which wraps the parquet file reader
-        let options = arrow_reader_options.unwrap_or_default();
-        let record_batch_stream_builder =
-            ParquetRecordBatchStreamBuilder::new_with_options(parquet_file_reader, options).await?;
-        Ok(record_batch_stream_builder)
+        let arrow_metadata = ArrowReaderMetadata::load_async(&mut reader, Default::default())
+            .await
+            .map_err(|e| {
+                Error::new(ErrorKind::Unexpected, "Failed to load Parquet metadata").with_source(e)
+            })?;
+
+        Ok((reader, arrow_metadata))
     }
 
     /// computes a `RowSelection` from positional delete indices.
@@ -443,10 +670,10 @@ impl ArrowReader {
                     // we need to call next() to update the cache with the newly positioned value.
                     delete_vector_iter.advance_to(next_row_group_base_idx);
                     // Only update the cache if the cached value is stale (in the skipped range)
-                    if let Some(cached_idx) = next_deleted_row_idx_opt {
-                        if cached_idx < next_row_group_base_idx {
-                            next_deleted_row_idx_opt = delete_vector_iter.next();
-                        }
+                    if let Some(cached_idx) = next_deleted_row_idx_opt
+                        && cached_idx < next_row_group_base_idx
+                    {
+                        next_deleted_row_idx_opt = delete_vector_iter.next();
                     }
 
                     // still increment the current page base index but then skip to the next row group
@@ -800,10 +1027,10 @@ impl ArrowReader {
         };
 
         // If all row groups were filtered out, return an empty RowSelection (select no rows)
-        if let Some(selected_row_groups) = selected_row_groups {
-            if selected_row_groups.is_empty() {
-                return Ok(RowSelection::from(Vec::new()));
-            }
+        if let Some(selected_row_groups) = selected_row_groups
+            && selected_row_groups.is_empty()
+        {
+            return Ok(RowSelection::from(Vec::new()));
         }
 
         let mut selected_row_groups_idx = 0;
@@ -836,10 +1063,10 @@ impl ArrowReader {
 
             results.push(selections_for_page);
 
-            if let Some(selected_row_groups) = selected_row_groups {
-                if selected_row_groups_idx == selected_row_groups.len() {
-                    break;
-                }
+            if let Some(selected_row_groups) = selected_row_groups
+                && selected_row_groups_idx == selected_row_groups.len()
+            {
+                break;
             }
         }
 
@@ -895,7 +1122,7 @@ fn build_field_id_map(parquet_schema: &SchemaDescriptor) -> Result<Option<HashMa
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                        "Leave column in schema should be primitive type but got {field_type:?}"
+                        "Leaf column in schema should be primitive type but got {field_type:?}"
                     ),
                 ));
             }
@@ -906,17 +1133,109 @@ fn build_field_id_map(parquet_schema: &SchemaDescriptor) -> Result<Option<HashMa
 }
 
 /// Build a fallback field ID map for Parquet files without embedded field IDs.
-/// Position-based (1, 2, 3, ...) for compatibility with iceberg-java migrations.
+///
+/// Returns the number of primitive (leaf) columns in a Parquet type, recursing into groups.
+fn leaf_count(ty: &parquet::schema::types::Type) -> usize {
+    if ty.is_primitive() {
+        1
+    } else {
+        ty.get_fields().iter().map(|f| leaf_count(f)).sum()
+    }
+}
+
+/// Builds a mapping from fallback field IDs to leaf column indices for Parquet files
+/// without embedded field IDs. Returns entries only for primitive top-level fields.
+///
+/// Must use top-level field positions (not leaf column positions) to stay consistent
+/// with `add_fallback_field_ids_to_arrow_schema`, which assigns ordinal IDs to
+/// top-level Arrow fields. Using leaf positions instead would produce wrong indices
+/// when nested types (struct/list/map) expand into multiple leaf columns.
+///
+/// Mirrors iceberg-java's ParquetSchemaUtil.addFallbackIds() which iterates
+/// fileSchema.getFields() assigning ordinal IDs to top-level fields.
 fn build_fallback_field_id_map(parquet_schema: &SchemaDescriptor) -> HashMap<i32, usize> {
     let mut column_map = HashMap::new();
+    let mut leaf_idx = 0;
 
-    // 1-indexed to match iceberg-java's convention
-    for (idx, _field) in parquet_schema.columns().iter().enumerate() {
-        let field_id = (idx + 1) as i32;
-        column_map.insert(field_id, idx);
+    for (top_pos, field) in parquet_schema.root_schema().get_fields().iter().enumerate() {
+        let field_id = (top_pos + 1) as i32;
+        if field.is_primitive() {
+            column_map.insert(field_id, leaf_idx);
+        }
+        leaf_idx += leaf_count(field);
     }
 
     column_map
+}
+
+/// Apply name mapping to Arrow schema for Parquet files lacking field IDs.
+///
+/// Assigns Iceberg field IDs based on column names using the name mapping,
+/// enabling correct projection on migrated files (e.g., from Hive/Spark via add_files).
+///
+/// Per Iceberg spec Column Projection rule #2:
+/// "Use schema.name-mapping.default metadata to map field id to columns without field id"
+/// https://iceberg.apache.org/spec/#column-projection
+///
+/// Corresponds to Java's ParquetSchemaUtil.applyNameMapping() and ApplyNameMapping visitor.
+/// The key difference is Java operates on Parquet MessageType, while we operate on Arrow Schema.
+///
+/// # Arguments
+/// * `arrow_schema` - Arrow schema from Parquet file (without field IDs)
+/// * `name_mapping` - Name mapping from table metadata (TableProperties.DEFAULT_NAME_MAPPING)
+///
+/// # Returns
+/// Arrow schema with field IDs assigned based on name mapping
+fn apply_name_mapping_to_arrow_schema(
+    arrow_schema: ArrowSchemaRef,
+    name_mapping: &NameMapping,
+) -> Result<Arc<ArrowSchema>> {
+    debug_assert!(
+        arrow_schema
+            .fields()
+            .iter()
+            .next()
+            .is_none_or(|f| f.metadata().get(PARQUET_FIELD_ID_META_KEY).is_none()),
+        "Schema already has field IDs - name mapping should not be applied"
+    );
+
+    use arrow_schema::Field;
+
+    let fields_with_mapped_ids: Vec<_> = arrow_schema
+        .fields()
+        .iter()
+        .map(|field| {
+            // Look up this column name in name mapping to get the Iceberg field ID.
+            // Corresponds to Java's ApplyNameMapping visitor which calls
+            // nameMapping.find(currentPath()) and returns field.withId() if found.
+            //
+            // If the field isn't in the mapping, leave it WITHOUT assigning an ID
+            // (matching Java's behavior of returning the field unchanged).
+            // Later, during projection, fields without IDs are filtered out.
+            let mapped_field_opt = name_mapping
+                .fields()
+                .iter()
+                .find(|f| f.names().contains(&field.name().to_string()));
+
+            let mut metadata = field.metadata().clone();
+
+            if let Some(mapped_field) = mapped_field_opt
+                && let Some(field_id) = mapped_field.field_id()
+            {
+                // Field found in mapping with a field_id → assign it
+                metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string());
+            }
+            // If field_id is None, leave the field without an ID (will be filtered by projection)
+
+            Field::new(field.name(), field.data_type().clone(), field.is_nullable())
+                .with_metadata(metadata)
+        })
+        .collect();
+
+    Ok(Arc::new(ArrowSchema::new_with_metadata(
+        fields_with_mapped_ids,
+        arrow_schema.metadata().clone(),
+    )))
 }
 
 /// Add position-based fallback field IDs to Arrow schema for Parquet files lacking them.
@@ -1134,7 +1453,7 @@ impl PredicateConverter<'_> {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                        "Leave column `{}` in predicates isn't a root column in Parquet schema.",
+                        "Leaf column `{}` in predicates isn't a root column in Parquet schema.",
                         reference.field().name
                     ),
                 ));
@@ -1148,7 +1467,7 @@ impl PredicateConverter<'_> {
                 .ok_or(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                "Leave column `{}` in predicates cannot be found in the required column indices.",
+                "Leaf column `{}` in predicates cannot be found in the required column indices.",
                 reference.field().name
             ),
                 ))?;
@@ -1515,63 +1834,79 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 }
 
 /// ArrowFileReader is a wrapper around a FileRead that impls parquets AsyncFileReader.
-pub struct ArrowFileReader<R: FileRead> {
+pub struct ArrowFileReader {
     meta: FileMetadata,
-    preload_column_index: bool,
-    preload_offset_index: bool,
-    preload_page_index: bool,
-    metadata_size_hint: Option<usize>,
-    r: R,
+    parquet_read_options: ParquetReadOptions,
+    r: Box<dyn FileRead>,
 }
 
-impl<R: FileRead> ArrowFileReader<R> {
+impl ArrowFileReader {
     /// Create a new ArrowFileReader
-    pub fn new(meta: FileMetadata, r: R) -> Self {
+    pub fn new(meta: FileMetadata, r: Box<dyn FileRead>) -> Self {
         Self {
             meta,
-            preload_column_index: false,
-            preload_offset_index: false,
-            preload_page_index: false,
-            metadata_size_hint: None,
+            parquet_read_options: ParquetReadOptions::builder().build(),
             r,
         }
     }
 
-    /// Enable or disable preloading of the column index
-    pub fn with_preload_column_index(mut self, preload: bool) -> Self {
-        self.preload_column_index = preload;
-        self
-    }
-
-    /// Enable or disable preloading of the offset index
-    pub fn with_preload_offset_index(mut self, preload: bool) -> Self {
-        self.preload_offset_index = preload;
-        self
-    }
-
-    /// Enable or disable preloading of the page index
-    pub fn with_preload_page_index(mut self, preload: bool) -> Self {
-        self.preload_page_index = preload;
-        self
-    }
-
-    /// Provide a hint as to the number of bytes to prefetch for parsing the Parquet metadata
-    ///
-    /// This hint can help reduce the number of fetch requests. For more details see the
-    /// [ParquetMetaDataReader documentation](https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html#method.with_prefetch_hint).
-    pub fn with_metadata_size_hint(mut self, hint: usize) -> Self {
-        self.metadata_size_hint = Some(hint);
+    /// Configure all Parquet read options.
+    pub(crate) fn with_parquet_read_options(mut self, options: ParquetReadOptions) -> Self {
+        self.parquet_read_options = options;
         self
     }
 }
 
-impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
+impl AsyncFileReader for ArrowFileReader {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         Box::pin(
             self.r
                 .read(range.start..range.end)
                 .map_err(|err| parquet::errors::ParquetError::External(Box::new(err))),
         )
+    }
+
+    /// Override the default `get_byte_ranges` which calls `get_bytes` sequentially.
+    /// The parquet reader calls this to fetch column chunks for a row group, so
+    /// without this override each column chunk is a serial round-trip to object storage.
+    /// Adapted from object_store's `coalesce_ranges` in `util.rs`.
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<u64>>,
+    ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>> {
+        let coalesce_bytes = self.parquet_read_options.range_coalesce_bytes();
+        let concurrency = self.parquet_read_options.range_fetch_concurrency().max(1);
+
+        async move {
+            // Merge nearby ranges to reduce the number of object store requests.
+            let fetch_ranges = merge_ranges(&ranges, coalesce_bytes);
+            let r = &self.r;
+
+            // Fetch merged ranges concurrently.
+            let fetched: Vec<Bytes> = futures::stream::iter(fetch_ranges.iter().cloned())
+                .map(|range| async move {
+                    r.read(range)
+                        .await
+                        .map_err(|e| parquet::errors::ParquetError::External(Box::new(e)))
+                })
+                .buffered(concurrency)
+                .try_collect()
+                .await?;
+
+            // Slice the fetched data back into the originally requested ranges.
+            Ok(ranges
+                .iter()
+                .map(|range| {
+                    let idx = fetch_ranges.partition_point(|v| v.start <= range.start) - 1;
+                    let fetch_range = &fetch_ranges[idx];
+                    let fetch_bytes = &fetched[idx];
+                    let start = (range.start - fetch_range.start) as usize;
+                    let end = (range.end - fetch_range.start) as usize;
+                    fetch_bytes.slice(start..end.min(fetch_bytes.len()))
+                })
+                .collect())
+        }
+        .boxed()
     }
 
     // TODO: currently we don't respect `ArrowReaderOptions` cause it don't expose any method to access the option field
@@ -1582,11 +1917,17 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
     ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         async move {
             let reader = ParquetMetaDataReader::new()
-                .with_prefetch_hint(self.metadata_size_hint)
+                .with_prefetch_hint(self.parquet_read_options.metadata_size_hint())
                 // Set the page policy first because it updates both column and offset policies.
-                .with_page_index_policy(PageIndexPolicy::from(self.preload_page_index))
-                .with_column_index_policy(PageIndexPolicy::from(self.preload_column_index))
-                .with_offset_index_policy(PageIndexPolicy::from(self.preload_offset_index));
+                .with_page_index_policy(PageIndexPolicy::from(
+                    self.parquet_read_options.preload_page_index(),
+                ))
+                .with_column_index_policy(PageIndexPolicy::from(
+                    self.parquet_read_options.preload_column_index(),
+                ))
+                .with_offset_index_policy(PageIndexPolicy::from(
+                    self.parquet_read_options.preload_offset_index(),
+                ));
             let size = self.meta.size;
             let meta = reader.load_and_finish(self, size).await?;
 
@@ -1594,6 +1935,42 @@ impl<R: FileRead> AsyncFileReader for ArrowFileReader<R> {
         }
         .boxed()
     }
+}
+
+/// Merge overlapping or nearby byte ranges, combining ranges with gaps <= `coalesce` bytes.
+/// Adapted from object_store's `merge_ranges` in `util.rs`.
+fn merge_ranges(ranges: &[Range<u64>], coalesce: u64) -> Vec<Range<u64>> {
+    if ranges.is_empty() {
+        return vec![];
+    }
+
+    let mut ranges = ranges.to_vec();
+    ranges.sort_unstable_by_key(|r| r.start);
+
+    let mut merged = Vec::with_capacity(ranges.len());
+    let mut start_idx = 0;
+    let mut end_idx = 1;
+
+    while start_idx != ranges.len() {
+        let mut range_end = ranges[start_idx].end;
+
+        while end_idx != ranges.len()
+            && ranges[end_idx]
+                .start
+                .checked_sub(range_end)
+                .map(|delta| delta <= coalesce)
+                .unwrap_or(true)
+        {
+            range_end = range_end.max(ranges[end_idx].end);
+            end_idx += 1;
+        }
+
+        merged.push(ranges[start_idx].start..range_end);
+        start_idx = end_idx;
+        end_idx += 1;
+    }
+
+    merged
 }
 
 /// The Arrow type of an array that the Parquet reader reads may not match the exact Arrow type
@@ -1621,6 +1998,7 @@ fn try_cast_literal(
 mod tests {
     use std::collections::{HashMap, HashSet};
     use std::fs::File;
+    use std::ops::Range;
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
@@ -1783,7 +2161,7 @@ message schema {
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert_eq!(
             err.to_string(),
-            "DataInvalid => Unsupported Arrow data type: Duration(Microsecond)".to_string()
+            "DataInvalid => Unsupported Arrow data type: Duration(µs)".to_string()
         );
 
         // Omitting field c2, we still get an error due to c3 being selected
@@ -1939,6 +2317,9 @@ message schema {
     ) -> Vec<Option<String>> {
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -1948,6 +2329,10 @@ message schema {
                 project_field_ids: vec![1],
                 predicate: Some(predicate.bind(schema, true).unwrap()),
                 deletes: vec![],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -1991,7 +2376,7 @@ message schema {
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
 
-        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         let col = match col_a_type {
             DataType::Utf8 => Arc::new(StringArray::from(data_for_col_a)) as ArrayRef,
@@ -2006,7 +2391,7 @@ message schema {
             .set_compression(Compression::SNAPPY)
             .build();
 
-        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
         let mut writer =
             ArrowWriter::try_new(file, to_write.schema(), Some(props.clone())).unwrap();
 
@@ -2187,7 +2572,7 @@ message schema {
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
-        let file_path = format!("{}/multi_row_group.parquet", &table_location);
+        let file_path = format!("{table_location}/multi_row_group.parquet");
 
         // Force each batch into its own row group for testing byte range filtering.
         let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(Int32Array::from(
@@ -2252,11 +2637,12 @@ message schema {
             row_group_2.compressed_size()
         );
 
-        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let reader = ArrowReaderBuilder::new(file_io).build();
 
         // Task 1: read only the first row group
         let task1 = FileScanTask {
+            file_size_in_bytes: std::fs::metadata(&file_path).unwrap().len(),
             start: rg0_start,
             length: row_group_0.compressed_size() as u64,
             record_count: Some(100),
@@ -2266,10 +2652,15 @@ message schema {
             project_field_ids: vec![1],
             predicate: None,
             deletes: vec![],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: false,
         };
 
         // Task 2: read the second and third row groups
         let task2 = FileScanTask {
+            file_size_in_bytes: std::fs::metadata(&file_path).unwrap().len(),
             start: rg1_start,
             length: file_end - rg1_start,
             record_count: Some(200),
@@ -2279,6 +2670,10 @@ message schema {
             project_field_ids: vec![1],
             predicate: None,
             deletes: vec![],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: false,
         };
 
         let tasks1 = Box::pin(futures::stream::iter(vec![Ok(task1)])) as FileScanTaskStream;
@@ -2377,7 +2772,7 @@ message schema {
         // Write old Parquet file with only column 'a'
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
-        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         let data_a = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
         let to_write = RecordBatch::try_new(arrow_schema_old.clone(), vec![data_a]).unwrap();
@@ -2385,7 +2780,7 @@ message schema {
         let props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
             .build();
-        let file = File::create(format!("{}/old_file.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/old_file.parquet")).unwrap();
         let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
@@ -2394,6 +2789,9 @@ message schema {
         let reader = ArrowReaderBuilder::new(file_io).build();
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/old_file.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -2403,6 +2801,10 @@ message schema {
                 project_field_ids: vec![1, 2], // Request both columns 'a' and 'b'
                 predicate: None,
                 deletes: vec![],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -2488,7 +2890,7 @@ message schema {
         // Step 1: Create data file with 200 rows in 2 row groups
         // Row group 0: rows 0-99 (ids 1-100)
         // Row group 1: rows 100-199 (ids 101-200)
-        let data_file_path = format!("{}/data.parquet", &table_location);
+        let data_file_path = format!("{table_location}/data.parquet");
 
         let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
             Int32Array::from_iter_values(1..=100),
@@ -2522,7 +2924,7 @@ message schema {
         );
 
         // Step 2: Create position delete file that deletes row 199 (id=200, last row in row group 1)
-        let delete_file_path = format!("{}/deletes.parquet", &table_location);
+        let delete_file_path = format!("{table_location}/deletes.parquet");
 
         let delete_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
@@ -2553,10 +2955,11 @@ message schema {
         delete_writer.close().unwrap();
 
         // Step 3: Read the data file with the delete applied
-        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let reader = ArrowReaderBuilder::new(file_io).build();
 
         let task = FileScanTask {
+            file_size_in_bytes: std::fs::metadata(&data_file_path).unwrap().len(),
             start: 0,
             length: 0,
             record_count: Some(200),
@@ -2566,11 +2969,16 @@ message schema {
             project_field_ids: vec![1],
             predicate: None,
             deletes: vec![FileScanTaskDeleteFile {
+                file_size_in_bytes: std::fs::metadata(&delete_file_path).unwrap().len(),
                 file_path: delete_file_path,
                 file_type: DataContentType::PositionDeletes,
                 partition_spec_id: 0,
                 equality_ids: None,
             }],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: false,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -2584,15 +2992,14 @@ message schema {
         // Step 4: Verify we got 199 rows (not 200)
         let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
 
-        println!("Total rows read: {}", total_rows);
+        println!("Total rows read: {total_rows}");
         println!("Expected: 199 rows (deleted row 199 which had id=200)");
 
         // This assertion will FAIL before the fix and PASS after the fix
         assert_eq!(
             total_rows, 199,
-            "Expected 199 rows after deleting row 199, but got {} rows. \
-             The bug causes position deletes in later row groups to be ignored.",
-            total_rows
+            "Expected 199 rows after deleting row 199, but got {total_rows} rows. \
+             The bug causes position deletes in later row groups to be ignored."
         );
 
         // Verify the deleted row (id=200) is not present
@@ -2679,7 +3086,7 @@ message schema {
         // Step 1: Create data file with 200 rows in 2 row groups
         // Row group 0: rows 0-99 (ids 1-100)
         // Row group 1: rows 100-199 (ids 101-200)
-        let data_file_path = format!("{}/data.parquet", &table_location);
+        let data_file_path = format!("{table_location}/data.parquet");
 
         let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
             Int32Array::from_iter_values(1..=100),
@@ -2713,7 +3120,7 @@ message schema {
         );
 
         // Step 2: Create position delete file that deletes row 199 (id=200, last row in row group 1)
-        let delete_file_path = format!("{}/deletes.parquet", &table_location);
+        let delete_file_path = format!("{table_location}/deletes.parquet");
 
         let delete_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
@@ -2767,11 +3174,12 @@ message schema {
             row_group_1.compressed_size()
         );
 
-        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let reader = ArrowReaderBuilder::new(file_io).build();
 
         // Create FileScanTask that reads ONLY row group 1 via byte range filtering
         let task = FileScanTask {
+            file_size_in_bytes: std::fs::metadata(&data_file_path).unwrap().len(),
             start: rg1_start,
             length: rg1_length,
             record_count: Some(100), // Row group 1 has 100 rows
@@ -2781,11 +3189,16 @@ message schema {
             project_field_ids: vec![1],
             predicate: None,
             deletes: vec![FileScanTaskDeleteFile {
+                file_size_in_bytes: std::fs::metadata(&delete_file_path).unwrap().len(),
                 file_path: delete_file_path,
                 file_type: DataContentType::PositionDeletes,
                 partition_spec_id: 0,
                 equality_ids: None,
             }],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: false,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -2800,16 +3213,15 @@ message schema {
         // Row group 1 has 100 rows (ids 101-200), minus 1 delete (id=200) = 99 rows
         let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
 
-        println!("Total rows read from row group 1: {}", total_rows);
+        println!("Total rows read from row group 1: {total_rows}");
         println!("Expected: 99 rows (row group 1 has 100 rows, 1 delete at position 199)");
 
         // This assertion will FAIL before the fix and PASS after the fix
         assert_eq!(
             total_rows, 99,
-            "Expected 99 rows from row group 1 after deleting position 199, but got {} rows. \
+            "Expected 99 rows from row group 1 after deleting position 199, but got {total_rows} rows. \
              The bug causes position deletes to be lost when advance_to() is followed by next() \
-             when skipping unselected row groups.",
-            total_rows
+             when skipping unselected row groups."
         );
 
         // Verify the deleted row (id=200) is not present
@@ -2898,7 +3310,7 @@ message schema {
         // Step 1: Create data file with 200 rows in 2 row groups
         // Row group 0: rows 0-99 (ids 1-100)
         // Row group 1: rows 100-199 (ids 101-200)
-        let data_file_path = format!("{}/data.parquet", &table_location);
+        let data_file_path = format!("{table_location}/data.parquet");
 
         let batch1 = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
             Int32Array::from_iter_values(1..=100),
@@ -2932,7 +3344,7 @@ message schema {
         );
 
         // Step 2: Create position delete file that deletes row 0 (id=1, first row in row group 0)
-        let delete_file_path = format!("{}/deletes.parquet", &table_location);
+        let delete_file_path = format!("{table_location}/deletes.parquet");
 
         let delete_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("file_path", DataType::Utf8, false).with_metadata(HashMap::from([(
@@ -2975,11 +3387,12 @@ message schema {
         let rg1_start = rg0_start + row_group_0.compressed_size() as u64;
         let rg1_length = row_group_1.compressed_size() as u64;
 
-        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let reader = ArrowReaderBuilder::new(file_io).build();
 
         // Create FileScanTask that reads ONLY row group 1 via byte range filtering
         let task = FileScanTask {
+            file_size_in_bytes: std::fs::metadata(&data_file_path).unwrap().len(),
             start: rg1_start,
             length: rg1_length,
             record_count: Some(100), // Row group 1 has 100 rows
@@ -2989,11 +3402,16 @@ message schema {
             project_field_ids: vec![1],
             predicate: None,
             deletes: vec![FileScanTaskDeleteFile {
+                file_size_in_bytes: std::fs::metadata(&delete_file_path).unwrap().len(),
                 file_path: delete_file_path,
                 file_type: DataContentType::PositionDeletes,
                 partition_spec_id: 0,
                 equality_ids: None,
             }],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: false,
         };
 
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -3060,7 +3478,7 @@ message schema {
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
-        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         let name_data = vec!["Alice", "Bob", "Charlie"];
         let age_data = vec![30, 25, 35];
@@ -3075,7 +3493,7 @@ message schema {
             .set_compression(Compression::SNAPPY)
             .build();
 
-        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
         let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
 
         writer.write(&to_write).expect("Writing batch");
@@ -3085,15 +3503,22 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_path: format!("{table_location}/1.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3153,7 +3578,7 @@ message schema {
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
-        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         let col1_data = Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef;
         let col2_data = Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef;
@@ -3169,7 +3594,7 @@ message schema {
             .set_compression(Compression::SNAPPY)
             .build();
 
-        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
         let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
 
         writer.write(&to_write).expect("Writing batch");
@@ -3179,15 +3604,22 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_path: format!("{table_location}/1.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1, 3],
                 predicate: None,
                 deletes: vec![],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3240,7 +3672,7 @@ message schema {
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
-        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         let name_data = Arc::new(StringArray::from(vec!["Alice", "Bob"])) as ArrayRef;
         let age_data = Arc::new(Int32Array::from(vec![30, 25])) as ArrayRef;
@@ -3252,7 +3684,7 @@ message schema {
             .set_compression(Compression::SNAPPY)
             .build();
 
-        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
         let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
 
         writer.write(&to_write).expect("Writing batch");
@@ -3262,15 +3694,22 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_path: format!("{table_location}/1.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2, 3],
                 predicate: None,
                 deletes: vec![],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3328,7 +3767,7 @@ message schema {
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
-        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         // Small row group size to create multiple row groups
         let props = WriterProperties::builder()
@@ -3337,7 +3776,7 @@ message schema {
             .set_max_row_group_size(2)
             .build();
 
-        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
         let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
 
         // Write 6 rows in 3 batches (will create 3 row groups)
@@ -3359,15 +3798,22 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_path: format!("{table_location}/1.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3400,7 +3846,7 @@ message schema {
         assert_eq!(all_values.len(), 6);
 
         for i in 0..6 {
-            assert_eq!(all_names[i], format!("name_{}", i));
+            assert_eq!(all_names[i], format!("name_{i}"));
             assert_eq!(all_values[i], i as i32);
         }
     }
@@ -3452,7 +3898,7 @@ message schema {
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
-        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         let id_data = Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef;
         let name_data = Arc::new(StringArray::from(vec!["Alice", "Bob"])) as ArrayRef;
@@ -3475,7 +3921,7 @@ message schema {
             .set_compression(Compression::SNAPPY)
             .build();
 
-        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
         let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
 
         writer.write(&to_write).expect("Writing batch");
@@ -3485,15 +3931,22 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_path: format!("{table_location}/1.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2],
                 predicate: None,
                 deletes: vec![],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3557,7 +4010,7 @@ message schema {
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
-        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         let col0_data = Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef;
         let col1_data = Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef;
@@ -3569,7 +4022,7 @@ message schema {
             .set_compression(Compression::SNAPPY)
             .build();
 
-        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
         let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
@@ -3578,15 +4031,22 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_path: format!("{table_location}/1.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1, 5, 2],
                 predicate: None,
                 deletes: vec![],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3653,7 +4113,7 @@ message schema {
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
-        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+        let file_io = FileIO::new_with_fs();
 
         // Write data where all ids are >= 10
         let id_data = Arc::new(Int32Array::from(vec![10, 11, 12])) as ArrayRef;
@@ -3668,7 +4128,7 @@ message schema {
             .set_compression(Compression::SNAPPY)
             .build();
 
-        let file = File::create(format!("{}/1.parquet", &table_location)).unwrap();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
         let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
         writer.write(&to_write).expect("Writing batch");
         writer.close().unwrap();
@@ -3684,15 +4144,22 @@ message schema {
 
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask {
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/1.parquet"))
+                    .unwrap()
+                    .len(),
                 start: 0,
                 length: 0,
                 record_count: None,
-                data_file_path: format!("{}/1.parquet", table_location),
+                data_file_path: format!("{table_location}/1.parquet"),
                 data_file_format: DataFileFormat::Parquet,
                 schema: schema.clone(),
                 project_field_ids: vec![1, 2, 3],
                 predicate: Some(predicate.bind(schema, true).unwrap()),
                 deletes: vec![],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
             })]
             .into_iter(),
         )) as FileScanTaskStream;
@@ -3707,5 +4174,1294 @@ message schema {
 
         // Should return empty results
         assert!(result.is_empty() || result.iter().all(|batch| batch.num_rows() == 0));
+    }
+
+    /// Test that concurrency=1 reads all files correctly and in deterministic order.
+    /// This verifies the fast-path optimization for single concurrency.
+    #[tokio::test]
+    async fn test_read_with_concurrency_one() {
+        use arrow_array::Int32Array;
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "file_num", Type::Primitive(PrimitiveType::Int))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("file_num", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIO::new_with_fs();
+
+        // Create 3 parquet files with different data
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        for file_num in 0..3 {
+            let id_data = Arc::new(Int32Array::from_iter_values(
+                file_num * 10..(file_num + 1) * 10,
+            )) as ArrayRef;
+            let file_num_data = Arc::new(Int32Array::from(vec![file_num; 10])) as ArrayRef;
+
+            let to_write =
+                RecordBatch::try_new(arrow_schema.clone(), vec![id_data, file_num_data]).unwrap();
+
+            let file = File::create(format!("{table_location}/file_{file_num}.parquet")).unwrap();
+            let mut writer =
+                ArrowWriter::try_new(file, to_write.schema(), Some(props.clone())).unwrap();
+            writer.write(&to_write).expect("Writing batch");
+            writer.close().unwrap();
+        }
+
+        // Read with concurrency=1 (fast-path)
+        let reader = ArrowReaderBuilder::new(file_io)
+            .with_data_file_concurrency_limit(1)
+            .build();
+
+        // Create tasks in a specific order: file_0, file_1, file_2
+        let tasks = vec![
+            Ok(FileScanTask {
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/file_0.parquet"))
+                    .unwrap()
+                    .len(),
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: format!("{table_location}/file_0.parquet"),
+                data_file_format: DataFileFormat::Parquet,
+                schema: schema.clone(),
+                project_field_ids: vec![1, 2],
+                predicate: None,
+                deletes: vec![],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
+            }),
+            Ok(FileScanTask {
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/file_1.parquet"))
+                    .unwrap()
+                    .len(),
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: format!("{table_location}/file_1.parquet"),
+                data_file_format: DataFileFormat::Parquet,
+                schema: schema.clone(),
+                project_field_ids: vec![1, 2],
+                predicate: None,
+                deletes: vec![],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
+            }),
+            Ok(FileScanTask {
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/file_2.parquet"))
+                    .unwrap()
+                    .len(),
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: format!("{table_location}/file_2.parquet"),
+                data_file_format: DataFileFormat::Parquet,
+                schema: schema.clone(),
+                project_field_ids: vec![1, 2],
+                predicate: None,
+                deletes: vec![],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
+            }),
+        ];
+
+        let tasks_stream = Box::pin(futures::stream::iter(tasks)) as FileScanTaskStream;
+
+        let result = reader
+            .read(tasks_stream)
+            .unwrap()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        // Verify we got all 30 rows (10 from each file)
+        let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 30, "Should have 30 total rows");
+
+        // Collect all ids and file_nums to verify data
+        let mut all_ids = Vec::new();
+        let mut all_file_nums = Vec::new();
+
+        for batch in &result {
+            let id_col = batch
+                .column(0)
+                .as_primitive::<arrow_array::types::Int32Type>();
+            let file_num_col = batch
+                .column(1)
+                .as_primitive::<arrow_array::types::Int32Type>();
+
+            for i in 0..batch.num_rows() {
+                all_ids.push(id_col.value(i));
+                all_file_nums.push(file_num_col.value(i));
+            }
+        }
+
+        assert_eq!(all_ids.len(), 30);
+        assert_eq!(all_file_nums.len(), 30);
+
+        // With concurrency=1 and sequential processing, files should be processed in order
+        // file_0: ids 0-9, file_num=0
+        // file_1: ids 10-19, file_num=1
+        // file_2: ids 20-29, file_num=2
+        for i in 0..10 {
+            assert_eq!(all_file_nums[i], 0, "First 10 rows should be from file_0");
+            assert_eq!(all_ids[i], i as i32, "IDs should be 0-9");
+        }
+        for i in 10..20 {
+            assert_eq!(all_file_nums[i], 1, "Next 10 rows should be from file_1");
+            assert_eq!(all_ids[i], i as i32, "IDs should be 10-19");
+        }
+        for i in 20..30 {
+            assert_eq!(all_file_nums[i], 2, "Last 10 rows should be from file_2");
+            assert_eq!(all_ids[i], i as i32, "IDs should be 20-29");
+        }
+    }
+
+    /// Test bucket partitioning reads source column from data file (not partition metadata).
+    ///
+    /// This is an integration test verifying the complete ArrowReader pipeline with bucket partitioning.
+    /// It corresponds to TestRuntimeFiltering tests in Iceberg Java (e.g., testRenamedSourceColumnTable).
+    ///
+    /// # Iceberg Spec Requirements
+    ///
+    /// Per the Iceberg spec "Column Projection" section:
+    /// > "Return the value from partition metadata if an **Identity Transform** exists for the field"
+    ///
+    /// This means:
+    /// - Identity transforms (e.g., `identity(dept)`) use constants from partition metadata
+    /// - Non-identity transforms (e.g., `bucket(4, id)`) must read source columns from data files
+    /// - Partition metadata for bucket transforms stores bucket numbers (0-3), NOT source values
+    ///
+    /// Java's PartitionUtil.constantsMap() implements this via:
+    /// ```java
+    /// if (field.transform().isIdentity()) {
+    ///     idToConstant.put(field.sourceId(), converted);
+    /// }
+    /// ```
+    ///
+    /// # What This Test Verifies
+    ///
+    /// This test ensures the full ArrowReader → RecordBatchTransformer pipeline correctly handles
+    /// bucket partitioning when FileScanTask provides partition_spec and partition_data:
+    ///
+    /// - Parquet file has field_id=1 named "id" with actual data [1, 5, 9, 13]
+    /// - FileScanTask specifies partition_spec with bucket(4, id) and partition_data with bucket=1
+    /// - RecordBatchTransformer.constants_map() excludes bucket-partitioned field from constants
+    /// - ArrowReader correctly reads [1, 5, 9, 13] from the data file
+    /// - Values are NOT replaced with constant 1 from partition metadata
+    ///
+    /// # Why This Matters
+    ///
+    /// Without correct handling:
+    /// - Runtime filtering would break (e.g., `WHERE id = 5` would fail)
+    /// - Query results would be incorrect (all rows would have id=1)
+    /// - Bucket partitioning would be unusable for query optimization
+    ///
+    /// # References
+    /// - Iceberg spec: format/spec.md "Column Projection" + "Partition Transforms"
+    /// - Java test: spark/src/test/java/.../TestRuntimeFiltering.java
+    /// - Java impl: core/src/main/java/org/apache/iceberg/util/PartitionUtil.java
+    #[tokio::test]
+    async fn test_bucket_partitioning_reads_source_column_from_file() {
+        use arrow_array::Int32Array;
+
+        use crate::spec::{Literal, PartitionSpec, Struct, Transform};
+
+        // Iceberg schema with id and name columns
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Partition spec: bucket(4, id)
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .with_spec_id(0)
+                .add_partition_field("id", "id_bucket", Transform::Bucket(4))
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        // Partition data: bucket value is 1
+        let partition_data = Struct::from_iter(vec![Some(Literal::int(1))]);
+
+        // Create Arrow schema with field IDs for Parquet file
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+
+        // Write Parquet file with data
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIO::new_with_fs();
+
+        let id_data = Arc::new(Int32Array::from(vec![1, 5, 9, 13])) as ArrayRef;
+        let name_data =
+            Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie", "Dave"])) as ArrayRef;
+
+        let to_write =
+            RecordBatch::try_new(arrow_schema.clone(), vec![id_data, name_data]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let file = File::create(format!("{}/data.parquet", &table_location)).unwrap();
+        let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
+        writer.write(&to_write).expect("Writing batch");
+        writer.close().unwrap();
+
+        // Read the Parquet file with partition spec and data
+        let reader = ArrowReaderBuilder::new(file_io).build();
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask {
+                file_size_in_bytes: std::fs::metadata(format!("{table_location}/data.parquet"))
+                    .unwrap()
+                    .len(),
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: format!("{table_location}/data.parquet"),
+                data_file_format: DataFileFormat::Parquet,
+                schema: schema.clone(),
+                project_field_ids: vec![1, 2],
+                predicate: None,
+                deletes: vec![],
+                partition: Some(partition_data),
+                partition_spec: Some(partition_spec),
+                name_mapping: None,
+                case_sensitive: false,
+            })]
+            .into_iter(),
+        )) as FileScanTaskStream;
+
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        // Verify we got the correct data
+        assert_eq!(result.len(), 1);
+        let batch = &result[0];
+
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.num_rows(), 4);
+
+        // The id column MUST contain actual values from the Parquet file [1, 5, 9, 13],
+        // NOT the constant partition value 1
+        let id_col = batch
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!(id_col.value(0), 1);
+        assert_eq!(id_col.value(1), 5);
+        assert_eq!(id_col.value(2), 9);
+        assert_eq!(id_col.value(3), 13);
+
+        let name_col = batch.column(1).as_string::<i32>();
+        assert_eq!(name_col.value(0), "Alice");
+        assert_eq!(name_col.value(1), "Bob");
+        assert_eq!(name_col.value(2), "Charlie");
+        assert_eq!(name_col.value(3), "Dave");
+    }
+
+    #[test]
+    fn test_merge_ranges_empty() {
+        assert_eq!(super::merge_ranges(&[], 1024), Vec::<Range<u64>>::new());
+    }
+
+    #[test]
+    fn test_merge_ranges_no_coalesce() {
+        // Ranges far apart should not be merged
+        let ranges = vec![0..100, 1_000_000..1_000_100];
+        let merged = super::merge_ranges(&ranges, 1024);
+        assert_eq!(merged, vec![0..100, 1_000_000..1_000_100]);
+    }
+
+    #[test]
+    fn test_merge_ranges_coalesce() {
+        // Ranges within the gap threshold should be merged
+        let ranges = vec![0..100, 200..300, 500..600];
+        let merged = super::merge_ranges(&ranges, 1024);
+        assert_eq!(merged, vec![0..600]);
+    }
+
+    #[test]
+    fn test_merge_ranges_overlapping() {
+        let ranges = vec![0..200, 100..300];
+        let merged = super::merge_ranges(&ranges, 0);
+        assert_eq!(merged, vec![0..300]);
+    }
+
+    #[test]
+    fn test_merge_ranges_unsorted() {
+        let ranges = vec![500..600, 0..100, 200..300];
+        let merged = super::merge_ranges(&ranges, 1024);
+        assert_eq!(merged, vec![0..600]);
+    }
+
+    /// Mock FileRead backed by a flat byte buffer.
+    struct MockFileRead {
+        data: bytes::Bytes,
+    }
+
+    impl MockFileRead {
+        fn new(size: usize) -> Self {
+            // Fill with sequential byte values so slices are verifiable.
+            let data: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
+            Self {
+                data: bytes::Bytes::from(data),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::io::FileRead for MockFileRead {
+        async fn read(&self, range: Range<u64>) -> crate::Result<bytes::Bytes> {
+            Ok(self.data.slice(range.start as usize..range.end as usize))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_byte_ranges_no_coalesce() {
+        use parquet::arrow::async_reader::AsyncFileReader;
+
+        let mock = MockFileRead::new(2048);
+        let expected_0 = mock.data.slice(0..100);
+        let expected_1 = mock.data.slice(1500..1600);
+
+        let mut reader =
+            super::ArrowFileReader::new(crate::io::FileMetadata { size: 2048 }, Box::new(mock))
+                .with_parquet_read_options(
+                    super::ParquetReadOptions::builder()
+                        .with_range_coalesce_bytes(0)
+                        .build(),
+                );
+
+        let result = reader
+            .get_byte_ranges(vec![0..100, 1500..1600])
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], expected_0);
+        assert_eq!(result[1], expected_1);
+    }
+
+    #[tokio::test]
+    async fn test_get_byte_ranges_with_coalesce() {
+        use parquet::arrow::async_reader::AsyncFileReader;
+
+        let mock = MockFileRead::new(1024);
+        let expected_0 = mock.data.slice(0..100);
+        let expected_1 = mock.data.slice(200..300);
+        let expected_2 = mock.data.slice(500..600);
+
+        let mut reader =
+            super::ArrowFileReader::new(crate::io::FileMetadata { size: 1024 }, Box::new(mock))
+                .with_parquet_read_options(
+                    super::ParquetReadOptions::builder()
+                        .with_range_coalesce_bytes(1024)
+                        .build(),
+                );
+
+        // All ranges within coalesce threshold — should merge into one fetch.
+        let result = reader
+            .get_byte_ranges(vec![0..100, 200..300, 500..600])
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], expected_0);
+        assert_eq!(result[1], expected_1);
+        assert_eq!(result[2], expected_2);
+    }
+
+    #[tokio::test]
+    async fn test_get_byte_ranges_empty() {
+        use parquet::arrow::async_reader::AsyncFileReader;
+
+        let mock = MockFileRead::new(1024);
+        let mut reader =
+            super::ArrowFileReader::new(crate::io::FileMetadata { size: 1024 }, Box::new(mock));
+
+        let result = reader.get_byte_ranges(vec![]).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_byte_ranges_coalesce_max() {
+        use parquet::arrow::async_reader::AsyncFileReader;
+
+        let mock = MockFileRead::new(2048);
+        let expected_0 = mock.data.slice(0..100);
+        let expected_1 = mock.data.slice(1500..1600);
+
+        let mut reader =
+            super::ArrowFileReader::new(crate::io::FileMetadata { size: 2048 }, Box::new(mock))
+                .with_parquet_read_options(
+                    super::ParquetReadOptions::builder()
+                        .with_range_coalesce_bytes(u64::MAX)
+                        .build(),
+                );
+
+        // u64::MAX coalesce — all ranges merge into a single fetch.
+        let result = reader
+            .get_byte_ranges(vec![0..100, 1500..1600])
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], expected_0);
+        assert_eq!(result[1], expected_1);
+    }
+
+    #[tokio::test]
+    async fn test_get_byte_ranges_concurrency_zero() {
+        use parquet::arrow::async_reader::AsyncFileReader;
+
+        // concurrency=0 is clamped to 1, so this should not hang.
+        let mock = MockFileRead::new(1024);
+        let expected = mock.data.slice(0..100);
+
+        let mut reader =
+            super::ArrowFileReader::new(crate::io::FileMetadata { size: 1024 }, Box::new(mock))
+                .with_parquet_read_options(
+                    super::ParquetReadOptions::builder()
+                        .with_range_fetch_concurrency(0)
+                        .build(),
+                );
+
+        let result = reader
+            .get_byte_ranges(vec![0..100, 200..300])
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], expected);
+    }
+
+    #[tokio::test]
+    async fn test_get_byte_ranges_concurrency_one() {
+        use parquet::arrow::async_reader::AsyncFileReader;
+
+        let mock = MockFileRead::new(2048);
+        let expected_0 = mock.data.slice(0..100);
+        let expected_1 = mock.data.slice(500..600);
+        let expected_2 = mock.data.slice(1500..1600);
+
+        let mut reader =
+            super::ArrowFileReader::new(crate::io::FileMetadata { size: 2048 }, Box::new(mock))
+                .with_parquet_read_options(
+                    super::ParquetReadOptions::builder()
+                        .with_range_coalesce_bytes(0)
+                        .with_range_fetch_concurrency(1)
+                        .build(),
+                );
+
+        // concurrency=1 with no coalescing — sequential fetches.
+        let result = reader
+            .get_byte_ranges(vec![0..100, 500..600, 1500..1600])
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], expected_0);
+        assert_eq!(result[1], expected_1);
+        assert_eq!(result[2], expected_2);
+    }
+
+    /// Regression for <https://github.com/apache/iceberg-rust/issues/2306>:
+    /// predicate on a column after nested types in a migrated file (no field IDs).
+    /// Schema has struct, list, and map columns before the predicate target (`id`),
+    /// exercising the fallback field ID mapping across all nested type variants.
+    #[tokio::test]
+    async fn test_predicate_on_migrated_file_with_nested_types() {
+        use serde::{Deserialize, Serialize};
+        use serde_arrow::schema::{SchemaLike, TracingOptions};
+
+        #[derive(Serialize, Deserialize)]
+        struct Person {
+            name: String,
+            age: i32,
+        }
+
+        #[derive(Serialize, Deserialize)]
+        struct Row {
+            person: Person,
+            people: Vec<Person>,
+            props: std::collections::BTreeMap<String, String>,
+            id: i32,
+        }
+
+        let rows = vec![
+            Row {
+                person: Person {
+                    name: "Alice".into(),
+                    age: 30,
+                },
+                people: vec![Person {
+                    name: "Alice".into(),
+                    age: 30,
+                }],
+                props: [("k1".into(), "v1".into())].into(),
+                id: 1,
+            },
+            Row {
+                person: Person {
+                    name: "Bob".into(),
+                    age: 25,
+                },
+                people: vec![Person {
+                    name: "Bob".into(),
+                    age: 25,
+                }],
+                props: [("k2".into(), "v2".into())].into(),
+                id: 2,
+            },
+            Row {
+                person: Person {
+                    name: "Carol".into(),
+                    age: 40,
+                },
+                people: vec![Person {
+                    name: "Carol".into(),
+                    age: 40,
+                }],
+                props: [("k3".into(), "v3".into())].into(),
+                id: 3,
+            },
+        ];
+
+        let tracing_options = TracingOptions::default()
+            .map_as_struct(false)
+            .strings_as_large_utf8(false)
+            .sequence_as_large_list(false);
+        let fields = Vec::<arrow_schema::FieldRef>::from_type::<Row>(tracing_options).unwrap();
+        let arrow_schema = Arc::new(ArrowSchema::new(fields.clone()));
+        let batch = serde_arrow::to_record_batch(&fields, &rows).unwrap();
+
+        // Fallback field IDs: person=1, people=2, props=3, id=4
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(
+                        1,
+                        "person",
+                        Type::Struct(crate::spec::StructType::new(vec![
+                            NestedField::required(
+                                5,
+                                "name",
+                                Type::Primitive(PrimitiveType::String),
+                            )
+                            .into(),
+                            NestedField::required(6, "age", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                    NestedField::required(
+                        2,
+                        "people",
+                        Type::List(crate::spec::ListType {
+                            element_field: NestedField::required(
+                                7,
+                                "element",
+                                Type::Struct(crate::spec::StructType::new(vec![
+                                    NestedField::required(
+                                        8,
+                                        "name",
+                                        Type::Primitive(PrimitiveType::String),
+                                    )
+                                    .into(),
+                                    NestedField::required(
+                                        9,
+                                        "age",
+                                        Type::Primitive(PrimitiveType::Int),
+                                    )
+                                    .into(),
+                                ])),
+                            )
+                            .into(),
+                        }),
+                    )
+                    .into(),
+                    NestedField::required(
+                        3,
+                        "props",
+                        Type::Map(crate::spec::MapType {
+                            key_field: NestedField::required(
+                                10,
+                                "key",
+                                Type::Primitive(PrimitiveType::String),
+                            )
+                            .into(),
+                            value_field: NestedField::required(
+                                11,
+                                "value",
+                                Type::Primitive(PrimitiveType::String),
+                            )
+                            .into(),
+                        }),
+                    )
+                    .into(),
+                    NestedField::required(4, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_path = format!("{table_location}/1.parquet");
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let file = File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema, Some(props)).unwrap();
+        writer.write(&batch).expect("Writing batch");
+        writer.close().unwrap();
+
+        let predicate = Reference::new("id").greater_than(Datum::int(1));
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs())
+            .with_row_group_filtering_enabled(true)
+            .with_row_selection_enabled(true)
+            .build();
+
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask {
+                file_size_in_bytes: std::fs::metadata(&file_path).unwrap().len(),
+                start: 0,
+                length: 0,
+                record_count: None,
+                data_file_path: file_path,
+                data_file_format: DataFileFormat::Parquet,
+                schema: iceberg_schema.clone(),
+                project_field_ids: vec![4],
+                predicate: Some(predicate.bind(iceberg_schema, true).unwrap()),
+                deletes: vec![],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
+            })]
+            .into_iter(),
+        )) as FileScanTaskStream;
+
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        let ids: Vec<i32> = result
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_primitive::<arrow_array::types::Int32Type>()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect();
+        assert_eq!(ids, vec![2, 3]);
+    }
+
+    // INT96 encoding: [nanos_low_u32, nanos_high_u32, julian_day_u32]
+    // Julian day 2_440_588 = Unix epoch (1970-01-01)
+    const UNIX_EPOCH_JULIAN: i64 = 2_440_588;
+    const MICROS_PER_DAY: i64 = 86_400_000_000;
+    // Noon on 3333-01-01 (Julian day 2_953_529) — outside the i64 nanosecond range (~1677-2262).
+    const INT96_TEST_NANOS_WITHIN_DAY: u64 = 43_200_000_000_000;
+    const INT96_TEST_JULIAN_DAY: u32 = 2_953_529;
+
+    fn make_int96_test_value() -> (parquet::data_type::Int96, i64) {
+        let mut val = parquet::data_type::Int96::new();
+        val.set_data(
+            (INT96_TEST_NANOS_WITHIN_DAY & 0xFFFFFFFF) as u32,
+            (INT96_TEST_NANOS_WITHIN_DAY >> 32) as u32,
+            INT96_TEST_JULIAN_DAY,
+        );
+        let expected_micros = (INT96_TEST_JULIAN_DAY as i64 - UNIX_EPOCH_JULIAN) * MICROS_PER_DAY
+            + (INT96_TEST_NANOS_WITHIN_DAY / 1_000) as i64;
+        (val, expected_micros)
+    }
+
+    async fn read_int96_batches(
+        file_path: &str,
+        schema: SchemaRef,
+        project_field_ids: Vec<i32>,
+    ) -> Vec<RecordBatch> {
+        let file_io = FileIO::new_with_fs();
+        let reader = ArrowReaderBuilder::new(file_io).build();
+
+        let file_size = std::fs::metadata(file_path).unwrap().len();
+        let task = FileScanTask {
+            file_size_in_bytes: file_size,
+            start: 0,
+            length: file_size,
+            record_count: None,
+            data_file_path: file_path.to_string(),
+            data_file_format: DataFileFormat::Parquet,
+            schema,
+            project_field_ids,
+            predicate: None,
+            deletes: vec![],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: false,
+        };
+
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        reader.read(tasks).unwrap().try_collect().await.unwrap()
+    }
+
+    // ArrowWriter cannot write INT96, so we use SerializedFileWriter directly.
+    fn write_int96_parquet_file(
+        table_location: &str,
+        filename: &str,
+        with_field_ids: bool,
+    ) -> (String, Vec<i64>) {
+        use parquet::basic::{Repetition, Type as PhysicalType};
+        use parquet::data_type::{Int32Type, Int96, Int96Type};
+        use parquet::file::writer::SerializedFileWriter;
+        use parquet::schema::types::Type as SchemaType;
+
+        let file_path = format!("{table_location}/{filename}");
+
+        let mut ts_builder = SchemaType::primitive_type_builder("ts", PhysicalType::INT96)
+            .with_repetition(Repetition::OPTIONAL);
+        let mut id_builder = SchemaType::primitive_type_builder("id", PhysicalType::INT32)
+            .with_repetition(Repetition::REQUIRED);
+
+        if with_field_ids {
+            ts_builder = ts_builder.with_id(Some(1));
+            id_builder = id_builder.with_id(Some(2));
+        }
+
+        let schema = SchemaType::group_type_builder("schema")
+            .with_fields(vec![
+                Arc::new(ts_builder.build().unwrap()),
+                Arc::new(id_builder.build().unwrap()),
+            ])
+            .build()
+            .unwrap();
+
+        // Dates outside the i64 nanosecond range (~1677-2262) overflow without coercion.
+        const NOON_NANOS: u64 = INT96_TEST_NANOS_WITHIN_DAY;
+        const JULIAN_3333: u32 = INT96_TEST_JULIAN_DAY;
+        const JULIAN_2100: u32 = 2_488_070;
+
+        let test_data: Vec<(u32, u32, u32, i64)> = vec![
+            // 3333-01-01 00:00:00
+            (
+                0,
+                0,
+                JULIAN_3333,
+                (JULIAN_3333 as i64 - UNIX_EPOCH_JULIAN) * MICROS_PER_DAY,
+            ),
+            // 3333-01-01 12:00:00
+            (
+                (NOON_NANOS & 0xFFFFFFFF) as u32,
+                (NOON_NANOS >> 32) as u32,
+                JULIAN_3333,
+                (JULIAN_3333 as i64 - UNIX_EPOCH_JULIAN) * MICROS_PER_DAY
+                    + (NOON_NANOS / 1_000) as i64,
+            ),
+            // 2100-01-01 00:00:00
+            (
+                0,
+                0,
+                JULIAN_2100,
+                (JULIAN_2100 as i64 - UNIX_EPOCH_JULIAN) * MICROS_PER_DAY,
+            ),
+        ];
+
+        let int96_values: Vec<Int96> = test_data
+            .iter()
+            .map(|(lo, hi, day, _)| {
+                let mut v = Int96::new();
+                v.set_data(*lo, *hi, *day);
+                v
+            })
+            .collect();
+
+        let id_values: Vec<i32> = (0..test_data.len() as i32).collect();
+        let expected_micros: Vec<i64> = test_data.iter().map(|(_, _, _, m)| *m).collect();
+
+        let file = File::create(&file_path).unwrap();
+        let mut writer =
+            SerializedFileWriter::new(file, Arc::new(schema), Default::default()).unwrap();
+
+        let mut row_group = writer.next_row_group().unwrap();
+        {
+            // def=1: ts is OPTIONAL and present. No repetition levels (top-level columns).
+            let mut col = row_group.next_column().unwrap().unwrap();
+            col.typed::<Int96Type>()
+                .write_batch(&int96_values, Some(&vec![1; test_data.len()]), None)
+                .unwrap();
+            col.close().unwrap();
+        }
+        {
+            let mut col = row_group.next_column().unwrap().unwrap();
+            col.typed::<Int32Type>()
+                .write_batch(&id_values, None, None)
+                .unwrap();
+            col.close().unwrap();
+        }
+        row_group.close().unwrap();
+        writer.close().unwrap();
+
+        (file_path, expected_micros)
+    }
+
+    async fn assert_int96_read_matches(
+        file_path: &str,
+        schema: SchemaRef,
+        project_field_ids: Vec<i32>,
+        expected_micros: &[i64],
+    ) {
+        use arrow_array::TimestampMicrosecondArray;
+
+        let batches = read_int96_batches(file_path, schema, project_field_ids).await;
+
+        assert_eq!(batches.len(), 1);
+        let ts_array = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .expect("Expected TimestampMicrosecondArray");
+
+        for (i, expected) in expected_micros.iter().enumerate() {
+            assert_eq!(
+                ts_array.value(i),
+                *expected,
+                "Row {i}: got {}, expected {expected}",
+                ts_array.value(i)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_int96_timestamps_with_field_ids() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                        .into(),
+                    NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let (file_path, expected_micros) =
+            write_int96_parquet_file(&table_location, "with_ids.parquet", true);
+
+        assert_int96_read_matches(&file_path, schema, vec![1, 2], &expected_micros).await;
+    }
+
+    #[tokio::test]
+    async fn test_read_int96_timestamps_without_field_ids() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                        .into(),
+                    NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let (file_path, expected_micros) =
+            write_int96_parquet_file(&table_location, "no_ids.parquet", false);
+
+        assert_int96_read_matches(&file_path, schema, vec![1, 2], &expected_micros).await;
+    }
+
+    #[tokio::test]
+    async fn test_read_int96_timestamps_in_struct() {
+        use arrow_array::{StructArray, TimestampMicrosecondArray};
+        use parquet::basic::{Repetition, Type as PhysicalType};
+        use parquet::data_type::Int96Type;
+        use parquet::file::writer::SerializedFileWriter;
+        use parquet::schema::types::Type as SchemaType;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_path = format!("{table_location}/struct_int96.parquet");
+
+        let ts_type = SchemaType::primitive_type_builder("ts", PhysicalType::INT96)
+            .with_repetition(Repetition::OPTIONAL)
+            .with_id(Some(2))
+            .build()
+            .unwrap();
+
+        let struct_type = SchemaType::group_type_builder("data")
+            .with_repetition(Repetition::REQUIRED)
+            .with_id(Some(1))
+            .with_fields(vec![Arc::new(ts_type)])
+            .build()
+            .unwrap();
+
+        let parquet_schema = SchemaType::group_type_builder("schema")
+            .with_fields(vec![Arc::new(struct_type)])
+            .build()
+            .unwrap();
+
+        let (int96_val, expected_micros) = make_int96_test_value();
+
+        let file = File::create(&file_path).unwrap();
+        let mut writer =
+            SerializedFileWriter::new(file, Arc::new(parquet_schema), Default::default()).unwrap();
+
+        // def=1: struct is REQUIRED so no level, ts is OPTIONAL and present (1).
+        // No repetition levels needed (no repeated groups).
+        let mut row_group = writer.next_row_group().unwrap();
+        {
+            let mut col = row_group.next_column().unwrap().unwrap();
+            col.typed::<Int96Type>()
+                .write_batch(&[int96_val], Some(&[1]), None)
+                .unwrap();
+            col.close().unwrap();
+        }
+        row_group.close().unwrap();
+        writer.close().unwrap();
+
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(
+                        1,
+                        "data",
+                        Type::Struct(crate::spec::StructType::new(vec![
+                            NestedField::optional(
+                                2,
+                                "ts",
+                                Type::Primitive(PrimitiveType::Timestamp),
+                            )
+                            .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let batches = read_int96_batches(&file_path, iceberg_schema, vec![1]).await;
+
+        assert_eq!(batches.len(), 1);
+        let struct_array = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("Expected StructArray");
+        let ts_array = struct_array
+            .column(0)
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .expect("Expected TimestampMicrosecondArray inside struct");
+
+        assert_eq!(
+            ts_array.value(0),
+            expected_micros,
+            "INT96 in struct: got {}, expected {expected_micros}",
+            ts_array.value(0)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_int96_timestamps_in_list() {
+        use arrow_array::{ListArray, TimestampMicrosecondArray};
+        use parquet::basic::{Repetition, Type as PhysicalType};
+        use parquet::data_type::Int96Type;
+        use parquet::file::writer::SerializedFileWriter;
+        use parquet::schema::types::Type as SchemaType;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_path = format!("{table_location}/list_int96.parquet");
+
+        // 3-level LIST encoding:
+        //   optional group timestamps (LIST) {
+        //     repeated group list {
+        //       optional int96 element;
+        //     }
+        //   }
+        let element_type = SchemaType::primitive_type_builder("element", PhysicalType::INT96)
+            .with_repetition(Repetition::OPTIONAL)
+            .with_id(Some(2))
+            .build()
+            .unwrap();
+
+        let list_group = SchemaType::group_type_builder("list")
+            .with_repetition(Repetition::REPEATED)
+            .with_fields(vec![Arc::new(element_type)])
+            .build()
+            .unwrap();
+
+        let list_type = SchemaType::group_type_builder("timestamps")
+            .with_repetition(Repetition::OPTIONAL)
+            .with_id(Some(1))
+            .with_logical_type(Some(parquet::basic::LogicalType::List))
+            .with_fields(vec![Arc::new(list_group)])
+            .build()
+            .unwrap();
+
+        let parquet_schema = SchemaType::group_type_builder("schema")
+            .with_fields(vec![Arc::new(list_type)])
+            .build()
+            .unwrap();
+
+        let (int96_val, expected_micros) = make_int96_test_value();
+
+        let file = File::create(&file_path).unwrap();
+        let mut writer =
+            SerializedFileWriter::new(file, Arc::new(parquet_schema), Default::default()).unwrap();
+
+        // Write a single row with a list containing one INT96 element.
+        // def=3: list present (1) + repeated group (2) + element present (3)
+        // rep=0: start of a new list
+        let mut row_group = writer.next_row_group().unwrap();
+        {
+            let mut col = row_group.next_column().unwrap().unwrap();
+            col.typed::<Int96Type>()
+                .write_batch(&[int96_val], Some(&[3]), Some(&[0]))
+                .unwrap();
+            col.close().unwrap();
+        }
+        row_group.close().unwrap();
+        writer.close().unwrap();
+
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(
+                        1,
+                        "timestamps",
+                        Type::List(crate::spec::ListType {
+                            element_field: NestedField::optional(
+                                2,
+                                "element",
+                                Type::Primitive(PrimitiveType::Timestamp),
+                            )
+                            .into(),
+                        }),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let batches = read_int96_batches(&file_path, iceberg_schema, vec![1]).await;
+
+        assert_eq!(batches.len(), 1);
+        let list_array = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("Expected ListArray");
+        let ts_array = list_array
+            .values()
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .expect("Expected TimestampMicrosecondArray inside list");
+
+        assert_eq!(
+            ts_array.value(0),
+            expected_micros,
+            "INT96 in list: got {}, expected {expected_micros}",
+            ts_array.value(0)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_int96_timestamps_in_map() {
+        use arrow_array::{MapArray, TimestampMicrosecondArray};
+        use parquet::basic::{Repetition, Type as PhysicalType};
+        use parquet::data_type::{ByteArrayType, Int96Type};
+        use parquet::file::writer::SerializedFileWriter;
+        use parquet::schema::types::Type as SchemaType;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_path = format!("{table_location}/map_int96.parquet");
+
+        // MAP encoding:
+        //   optional group ts_map (MAP) {
+        //     repeated group key_value {
+        //       required binary key (UTF8);
+        //       optional int96 value;
+        //     }
+        //   }
+        let key_type = SchemaType::primitive_type_builder("key", PhysicalType::BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(parquet::basic::LogicalType::String))
+            .with_id(Some(2))
+            .build()
+            .unwrap();
+
+        let value_type = SchemaType::primitive_type_builder("value", PhysicalType::INT96)
+            .with_repetition(Repetition::OPTIONAL)
+            .with_id(Some(3))
+            .build()
+            .unwrap();
+
+        let key_value_group = SchemaType::group_type_builder("key_value")
+            .with_repetition(Repetition::REPEATED)
+            .with_fields(vec![Arc::new(key_type), Arc::new(value_type)])
+            .build()
+            .unwrap();
+
+        let map_type = SchemaType::group_type_builder("ts_map")
+            .with_repetition(Repetition::OPTIONAL)
+            .with_id(Some(1))
+            .with_logical_type(Some(parquet::basic::LogicalType::Map))
+            .with_fields(vec![Arc::new(key_value_group)])
+            .build()
+            .unwrap();
+
+        let parquet_schema = SchemaType::group_type_builder("schema")
+            .with_fields(vec![Arc::new(map_type)])
+            .build()
+            .unwrap();
+
+        let (int96_val, expected_micros) = make_int96_test_value();
+
+        let file = File::create(&file_path).unwrap();
+        let mut writer =
+            SerializedFileWriter::new(file, Arc::new(parquet_schema), Default::default()).unwrap();
+
+        // Write a single row with a map containing one key-value pair.
+        // rep=0 for both columns: start of a new map.
+        // key def=2: map present (1) + key_value entry present (2), key is REQUIRED.
+        // value def=3: map present (1) + key_value entry present (2) + value present (3).
+        let mut row_group = writer.next_row_group().unwrap();
+        {
+            let mut col = row_group.next_column().unwrap().unwrap();
+            col.typed::<ByteArrayType>()
+                .write_batch(
+                    &[parquet::data_type::ByteArray::from("event_time")],
+                    Some(&[2]),
+                    Some(&[0]),
+                )
+                .unwrap();
+            col.close().unwrap();
+        }
+        {
+            let mut col = row_group.next_column().unwrap().unwrap();
+            col.typed::<Int96Type>()
+                .write_batch(&[int96_val], Some(&[3]), Some(&[0]))
+                .unwrap();
+            col.close().unwrap();
+        }
+        row_group.close().unwrap();
+        writer.close().unwrap();
+
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(
+                        1,
+                        "ts_map",
+                        Type::Map(crate::spec::MapType {
+                            key_field: NestedField::required(
+                                2,
+                                "key",
+                                Type::Primitive(PrimitiveType::String),
+                            )
+                            .into(),
+                            value_field: NestedField::optional(
+                                3,
+                                "value",
+                                Type::Primitive(PrimitiveType::Timestamp),
+                            )
+                            .into(),
+                        }),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let batches = read_int96_batches(&file_path, iceberg_schema, vec![1]).await;
+
+        assert_eq!(batches.len(), 1);
+        let map_array = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<MapArray>()
+            .expect("Expected MapArray");
+        let ts_array = map_array
+            .values()
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .expect("Expected TimestampMicrosecondArray as map values");
+
+        assert_eq!(
+            ts_array.value(0),
+            expected_micros,
+            "INT96 in map: got {}, expected {expected_micros}",
+            ts_array.value(0)
+        );
     }
 }

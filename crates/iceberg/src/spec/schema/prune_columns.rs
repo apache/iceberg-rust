@@ -110,19 +110,19 @@ impl SchemaVisitor for PruneColumn {
             if self.select_full_types {
                 Ok(Some(*field.field_type.clone()))
             } else if field.field_type.is_struct() {
-                return Ok(Some(Type::Struct(PruneColumn::project_selected_struct(
+                Ok(Some(Type::Struct(PruneColumn::project_selected_struct(
                     value,
-                )?)));
+                )?)))
             } else if !field.field_type.is_nested() {
-                return Ok(Some(*field.field_type.clone()));
+                Ok(Some(*field.field_type.clone()))
             } else {
-                return Err(Error::new(
+                Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Can't project list or map field directly when not selecting full type."
                         .to_string(),
                 )
                 .with_context("field_id", field.id.to_string())
-                .with_context("field_type", field.field_type.to_string()));
+                .with_context("field_type", field.field_type.to_string()))
             }
         } else {
             Ok(value)
@@ -174,20 +174,20 @@ impl SchemaVisitor for PruneColumn {
                 Ok(Some(Type::List(list.clone())))
             } else if list.element_field.field_type.is_struct() {
                 let projected_struct = PruneColumn::project_selected_struct(value).unwrap();
-                return Ok(Some(Type::List(PruneColumn::project_list(
+                Ok(Some(Type::List(PruneColumn::project_list(
                     list,
                     Type::Struct(projected_struct),
-                )?)));
+                )?)))
             } else if list.element_field.field_type.is_primitive() {
-                return Ok(Some(Type::List(list.clone())));
+                Ok(Some(Type::List(list.clone())))
             } else {
-                return Err(Error::new(
+                Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
                         "Cannot explicitly project List or Map types, List element {} of type {} was selected",
                         list.element_field.id, list.element_field.field_type
                     ),
-                ));
+                ))
             }
         } else if let Some(result) = value {
             Ok(Some(Type::List(PruneColumn::project_list(list, result)?)))
@@ -208,26 +208,26 @@ impl SchemaVisitor for PruneColumn {
             } else if map.value_field.field_type.is_struct() {
                 let projected_struct =
                     PruneColumn::project_selected_struct(Some(value.unwrap())).unwrap();
-                return Ok(Some(Type::Map(PruneColumn::project_map(
+                Ok(Some(Type::Map(PruneColumn::project_map(
                     map,
                     Type::Struct(projected_struct),
-                )?)));
+                )?)))
             } else if map.value_field.field_type.is_primitive() {
-                return Ok(Some(Type::Map(map.clone())));
+                Ok(Some(Type::Map(map.clone())))
             } else {
-                return Err(Error::new(
+                Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
                         "Cannot explicitly project List or Map types, Map value {} of type {} was selected",
                         map.value_field.id, map.value_field.field_type
                     ),
-                ));
+                ))
             }
         } else if let Some(value_result) = value {
-            return Ok(Some(Type::Map(PruneColumn::project_map(
+            Ok(Some(Type::Map(PruneColumn::project_map(
                 map,
                 value_result,
-            )?)));
+            )?)))
         } else if self.selected.contains(&map.key_field.id) {
             Ok(Some(Type::Map(map.clone())))
         } else {

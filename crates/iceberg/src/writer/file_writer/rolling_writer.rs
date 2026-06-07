@@ -103,15 +103,15 @@ where
     }
 
     /// Build a new [`RollingFileWriter`].
-    pub fn build(self) -> RollingFileWriter<B, L, F> {
+    pub fn build(&self) -> RollingFileWriter<B, L, F> {
         RollingFileWriter {
             inner: None,
-            inner_builder: self.inner_builder,
+            inner_builder: self.inner_builder.clone(),
             target_file_size: self.target_file_size,
             data_file_builders: vec![],
-            file_io: self.file_io,
-            location_generator: self.location_generator,
-            file_name_generator: self.file_name_generator,
+            file_io: self.file_io.clone(),
+            location_generator: self.location_generator.clone(),
+            file_name_generator: self.file_name_generator.clone(),
         }
     }
 }
@@ -192,25 +192,23 @@ where
             // initialize inner writer
             self.inner = Some(
                 self.inner_builder
-                    .clone()
                     .build(self.new_output_file(partition_key)?)
                     .await?,
             );
         }
 
-        if self.should_roll() {
-            if let Some(inner) = self.inner.take() {
-                // close the current writer, roll to a new file
-                self.data_file_builders.extend(inner.close().await?);
+        if self.should_roll()
+            && let Some(inner) = self.inner.take()
+        {
+            // close the current writer, roll to a new file
+            self.data_file_builders.extend(inner.close().await?);
 
-                // start a new writer
-                self.inner = Some(
-                    self.inner_builder
-                        .clone()
-                        .build(self.new_output_file(partition_key)?)
-                        .await?,
-                );
-            }
+            // start a new writer
+            self.inner = Some(
+                self.inner_builder
+                    .build(self.new_output_file(partition_key)?)
+                    .await?,
+            );
         }
 
         // write the input
@@ -270,7 +268,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::io::FileIOBuilder;
+    use crate::io::FileIO;
     use crate::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, Type};
     use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
     use crate::writer::file_writer::ParquetWriterBuilder;
@@ -306,7 +304,7 @@ mod tests {
     #[tokio::test]
     async fn test_rolling_writer_basic() -> Result<()> {
         let temp_dir = TempDir::new()?;
-        let file_io = FileIOBuilder::new_fs_io().build()?;
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -364,7 +362,7 @@ mod tests {
     #[tokio::test]
     async fn test_rolling_writer_with_rolling() -> Result<()> {
         let temp_dir = TempDir::new()?;
-        let file_io = FileIOBuilder::new_fs_io().build()?;
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -401,7 +399,7 @@ mod tests {
             "Kelly", "Larry", "Mallory", "Shawn",
         ];
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let batch_num = 10;
         let batch_rows = 100;
         let expected_rows = batch_num * batch_rows;

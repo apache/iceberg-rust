@@ -24,7 +24,7 @@ use crate::Result;
 use crate::spec::{DataFileFormat, PartitionKey, TableMetadata};
 
 /// `LocationGenerator` used to generate the location of data file.
-pub trait LocationGenerator: Clone + Send + 'static {
+pub trait LocationGenerator: Clone + Send + Sync + 'static {
     /// Generate an absolute path for the given file name that includes the partition path.
     ///
     /// # Arguments
@@ -94,7 +94,7 @@ impl LocationGenerator for DefaultLocationGenerator {
 }
 
 /// `FileNameGeneratorTrait` used to generate file name for data file. The file name can be passed to `LocationGenerator` to generate the location of the file.
-pub trait FileNameGenerator: Clone + Send + 'static {
+pub trait FileNameGenerator: Clone + Send + Sync + 'static {
     /// Generate a file name.
     fn generate_file_name(&self) -> String;
 }

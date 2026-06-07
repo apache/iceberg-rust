@@ -101,10 +101,7 @@ cargo 1.69.0 (6e9a83356 2023-04-12)
 
 #### Install Docker or Podman
 
-Currently, iceberg-rust uses Docker to set up environment for integration tests. Native Docker has some limitations, please check (https://github.com/apache/iceberg-rust/pull/748). Please use Orbstack or Podman.
-
-For MacOS users, you can install [OrbStack as a docker alternative](website/src/reference/orbstack.md).
-For Podman users, refer to [Using Podman instead of Docker](website/src/reference/podman.md)
+Currently, iceberg-rust uses Docker to set up environment for integration tests. See [Container Runtimes](website/src/reference/container-runtimes.md) for setup instructions.
 
 ## Build
 

@@ -127,9 +127,10 @@ pub struct DataFile {
     /// element field id: 133
     ///
     /// Split offsets for the data file. For example, all row group offsets
-    /// in a Parquet file. Must be sorted ascending
+    /// in a Parquet file. Must be sorted ascending. Optional field that
+    /// should be serialized as null when not present.
     #[builder(default)]
-    pub(crate) split_offsets: Vec<i64>,
+    pub(crate) split_offsets: Option<Vec<i64>>,
     /// field id: 135
     /// element field id: 136
     ///
@@ -247,8 +248,9 @@ impl DataFile {
     }
     /// Get the split offsets of the data file.
     /// For example, all row group offsets in a Parquet file.
-    pub fn split_offsets(&self) -> &[i64] {
-        &self.split_offsets
+    /// Returns `None` if no split offsets are present.
+    pub fn split_offsets(&self) -> Option<&[i64]> {
+        self.split_offsets.as_deref()
     }
     /// Get the equality ids of the data file.
     /// Field ids used to determine row equality in equality delete files.

@@ -27,7 +27,7 @@ use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
 /// Builder for `DataFileWriter`.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct DataFileWriterBuilder<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> {
     inner: RollingFileWriterBuilder<B, L, F>,
 }
@@ -53,9 +53,9 @@ where
 {
     type R = DataFileWriter<B, L, F>;
 
-    async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
+    async fn build(&self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
         Ok(DataFileWriter {
-            inner: Some(self.inner.clone().build()),
+            inner: Some(self.inner.build()),
             partition_key,
         })
     }
@@ -147,7 +147,7 @@ mod test {
     use tempfile::TempDir;
 
     use crate::Result;
-    use crate::io::FileIOBuilder;
+    use crate::io::FileIO;
     use crate::spec::{
         DataContentType, DataFileFormat, Literal, NestedField, PartitionKey, PartitionSpec,
         PrimitiveType, Schema, Struct, Type,
@@ -163,7 +163,7 @@ mod test {
     #[tokio::test]
     async fn test_parquet_writer() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );
@@ -237,7 +237,7 @@ mod test {
     #[tokio::test]
     async fn test_parquet_writer_with_partition() -> Result<()> {
         let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIOBuilder::new_fs_io().build().unwrap();
+        let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
         );

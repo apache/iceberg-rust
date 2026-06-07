@@ -93,13 +93,11 @@ impl TransactionAction for FastAppendAction {
         );
 
         // validate added files
-        snapshot_producer.validate_added_data_files(&self.added_data_files)?;
+        snapshot_producer.validate_added_data_files()?;
 
         // Checks duplicate files
         if self.check_duplicate {
-            snapshot_producer
-                .validate_duplicate_files(&self.added_data_files)
-                .await?;
+            snapshot_producer.validate_duplicate_files().await?;
         }
 
         snapshot_producer

@@ -22,13 +22,13 @@ use std::sync::Arc;
 use datafusion::catalog::CatalogProvider;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_sqllogictest::DataFusion;
-use iceberg::CatalogBuilder;
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+use iceberg::spec::{NestedField, PrimitiveType, Schema, Transform, Type, UnboundPartitionSpec};
+use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation};
 use iceberg_datafusion::IcebergCatalogProvider;
 use indicatif::ProgressBar;
-use toml::Table as TomlTable;
 
-use crate::engine::{EngineRunner, run_slt_with_runner};
+use crate::engine::{DatafusionCatalogConfig, EngineRunner, run_slt_with_runner};
 use crate::error::Result;
 
 pub struct DataFusionEngine {
@@ -58,12 +58,15 @@ impl EngineRunner for DataFusionEngine {
 }
 
 impl DataFusionEngine {
-    pub async fn new(config: TomlTable) -> Result<Self> {
+    pub async fn new(catalog_config: Option<DatafusionCatalogConfig>) -> Result<Self> {
         let session_config = SessionConfig::new()
             .with_target_partitions(4)
             .with_information_schema(true);
         let ctx = SessionContext::new_with_config(session_config);
-        ctx.register_catalog("default", Self::create_catalog(&config).await?);
+        ctx.register_catalog(
+            "default",
+            Self::create_catalog(catalog_config.as_ref()).await?,
+        );
 
         Ok(Self {
             test_data_path: PathBuf::from("testdata"),
@@ -71,9 +74,11 @@ impl DataFusionEngine {
         })
     }
 
-    async fn create_catalog(_: &TomlTable) -> anyhow::Result<Arc<dyn CatalogProvider>> {
-        // TODO: support dynamic catalog configuration
-        //  See: https://github.com/apache/iceberg-rust/issues/1780
+    async fn create_catalog(
+        _catalog_config: Option<&DatafusionCatalogConfig>,
+    ) -> anyhow::Result<Arc<dyn CatalogProvider>> {
+        // TODO: Use catalog_config to load different catalog types via iceberg-catalog-loader
+        // See: https://github.com/apache/iceberg-rust/issues/1780
         let catalog = MemoryCatalogBuilder::default()
             .load(
                 "memory",
@@ -84,8 +89,77 @@ impl DataFusionEngine {
             )
             .await?;
 
+        // Create a test namespace for INSERT INTO tests
+        let namespace = NamespaceIdent::new("default".to_string());
+        catalog.create_namespace(&namespace, HashMap::new()).await?;
+
+        // Create partitioned test table (unpartitioned tables are now created via SQL)
+        Self::create_partitioned_table(&catalog, &namespace).await?;
+        Self::create_binary_table(&catalog, &namespace).await?;
+
         Ok(Arc::new(
             IcebergCatalogProvider::try_new(Arc::new(catalog)).await?,
         ))
+    }
+
+    /// Create a partitioned test table with id, category, and value columns
+    /// Partitioned by category using identity transform
+    /// TODO: this can be removed when we support CREATE EXTERNAL TABLE
+    async fn create_partitioned_table(
+        catalog: &impl Catalog,
+        namespace: &NamespaceIdent,
+    ) -> anyhow::Result<()> {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "category", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(3, "value", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()?;
+
+        let partition_spec = UnboundPartitionSpec::builder()
+            .with_spec_id(0)
+            .add_partition_field(2, "category", Transform::Identity)?
+            .build();
+
+        catalog
+            .create_table(
+                namespace,
+                TableCreation::builder()
+                    .name("test_partitioned_table".to_string())
+                    .schema(schema)
+                    .partition_spec(partition_spec)
+                    .build(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    /// Create a test table with binary type column
+    /// Used for testing binary predicate pushdown
+    /// TODO: this can be removed when we support CREATE TABLE
+    async fn create_binary_table(
+        catalog: &impl Catalog,
+        namespace: &NamespaceIdent,
+    ) -> anyhow::Result<()> {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "data", Type::Primitive(PrimitiveType::Binary)).into(),
+            ])
+            .build()?;
+
+        catalog
+            .create_table(
+                namespace,
+                TableCreation::builder()
+                    .name("test_binary_table".to_string())
+                    .schema(schema)
+                    .build(),
+            )
+            .await?;
+
+        Ok(())
     }
 }

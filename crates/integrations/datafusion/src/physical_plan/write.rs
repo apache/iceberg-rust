@@ -36,7 +36,7 @@ use datafusion::physical_plan::{
 };
 use futures::StreamExt;
 use iceberg::arrow::FieldMatchMode;
-use iceberg::spec::{DataFileFormat, TableProperties, serialize_data_file_to_json};
+use iceberg::spec::{DataFileFormat, serialize_data_file_to_json};
 use iceberg::table::Table;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
@@ -205,20 +205,19 @@ impl ExecutionPlan for IcebergWriteExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> DFResult<SendableRecordBatchStream> {
-        let partition_spec = self.table.metadata().default_partition_spec().clone();
-        let is_partitioned = !partition_spec.is_unpartitioned();
         let partition_type = self.table.metadata().default_partition_type().clone();
         let format_version = self.table.metadata().format_version();
 
+        // Get typed table properties
+        let table_props = self
+            .table
+            .metadata()
+            .table_properties()
+            .map_err(to_datafusion_error)?;
+
         // Check data file format
-        let file_format = DataFileFormat::from_str(
-            self.table
-                .metadata()
-                .properties()
-                .get(TableProperties::PROPERTY_DEFAULT_FILE_FORMAT)
-                .unwrap_or(&TableProperties::PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT.to_string()),
-        )
-        .map_err(to_datafusion_error)?;
+        let file_format = DataFileFormat::from_str(&table_props.write_format_default)
+            .map_err(to_datafusion_error)?;
         if file_format != DataFileFormat::Parquet {
             return Err(to_datafusion_error(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -232,24 +231,7 @@ impl ExecutionPlan for IcebergWriteExec {
             self.table.metadata().current_schema().clone(),
             FieldMatchMode::Name,
         );
-        let target_file_size = match self
-            .table
-            .metadata()
-            .properties()
-            .get(TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES)
-        {
-            Some(value_str) => value_str
-                .parse::<usize>()
-                .map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Invalid value for write.target-file-size-bytes",
-                    )
-                    .with_source(e)
-                })
-                .map_err(to_datafusion_error)?,
-            None => TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
-        };
+        let target_file_size = table_props.write_target_file_size_bytes;
 
         let file_io = self.table.file_io().clone();
         // todo location_gen and file_name_gen should be configurable
@@ -267,43 +249,42 @@ impl ExecutionPlan for IcebergWriteExec {
         );
         let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
 
-        // Get input data.
-        // For partitioned tables, the input includes a _partition column added by
-        // project_with_partition(). We use the input's own schema so the stream
-        // adapter doesn't reject the extra column.
-        let input_schema = self.input.schema();
+        // Create TaskWriter
+        let fanout_enabled = table_props.write_datafusion_fanout_enabled;
+        let schema = self.table.metadata().current_schema().clone();
+        let partition_spec = self.table.metadata().default_partition_spec().clone();
+        let task_writer = TaskWriter::try_new(
+            data_file_writer_builder,
+            fanout_enabled,
+            schema.clone(),
+            partition_spec,
+        )
+        .map_err(to_datafusion_error)?;
+
+        // Get input data
         let data = execute_input_stream(
             Arc::clone(&self.input),
-            input_schema,
+            self.input.schema(), // input schema may have projected column `_partition`
             partition,
             Arc::clone(&context),
         )?;
 
-        // Build the TaskWriter with fanout enabled for partitioned tables
-        let schema = self.table.metadata().current_schema().clone();
-        let partition_spec_ref = partition_spec;
-
         // Create write stream
         let stream = futures::stream::once(async move {
-            let mut task_writer = TaskWriter::new(
-                data_file_writer_builder,
-                is_partitioned, // fanout_enabled
-                schema,
-                partition_spec_ref,
-            );
-
+            let mut task_writer = task_writer;
             let mut input_stream = data;
 
             while let Some(batch) = input_stream.next().await {
+                let batch = batch?;
                 task_writer
-                    .write(batch?)
+                    .write(batch)
                     .await
                     .map_err(to_datafusion_error)?;
             }
 
             let data_files = task_writer.close().await.map_err(to_datafusion_error)?;
 
-            // Convert data files to JSON strings
+            // Convert builders to data files and then to JSON strings
             let data_files_strs: Vec<String> = data_files
                 .into_iter()
                 .map(|data_file| {

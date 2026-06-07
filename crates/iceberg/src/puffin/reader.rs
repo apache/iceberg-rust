@@ -17,8 +17,9 @@
 
 use tokio::sync::OnceCell;
 
+use super::validate_puffin_compression;
 use crate::Result;
-use crate::io::{FileRead, InputFile};
+use crate::io::InputFile;
 use crate::puffin::blob::Blob;
 use crate::puffin::metadata::{BlobMetadata, FileMetadata};
 
@@ -46,11 +47,13 @@ impl PuffinReader {
 
     /// Returns blob
     pub async fn blob(&self, blob_metadata: &BlobMetadata) -> Result<Blob> {
+        validate_puffin_compression(blob_metadata.compression_codec)?;
+
         let file_read = self.input_file.reader().await?;
         let start = blob_metadata.offset;
         let end = start + blob_metadata.length;
-        let bytes = file_read.read(start..end).await?.to_vec();
-        let data = blob_metadata.compression_codec.decompress(bytes)?;
+        let bytes = file_read.read(start..end).await?;
+        let data = blob_metadata.compression_codec.decompress(bytes.to_vec())?;
 
         Ok(Blob {
             r#type: blob_metadata.r#type.clone(),
@@ -65,7 +68,11 @@ impl PuffinReader {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
 
+    use crate::ErrorKind;
+    use crate::compression::CompressionCodec;
+    use crate::puffin::metadata::BlobMetadata;
     use crate::puffin::reader::PuffinReader;
     use crate::puffin::test_utils::{
         blob_0, blob_1, java_uncompressed_metric_input_file,
@@ -121,5 +128,35 @@ mod tests {
                 .unwrap(),
             blob_1(),
         )
+    }
+
+    #[tokio::test]
+    async fn test_gzip_compression_rejected_on_blob_access() {
+        // Use a real puffin file
+        let input_file = java_uncompressed_metric_input_file();
+        let reader = PuffinReader::new(input_file);
+
+        // Create a BlobMetadata with Gzip compression
+        let gzip_blob_metadata = BlobMetadata {
+            r#type: "test-type".to_string(),
+            fields: vec![1],
+            snapshot_id: 1,
+            sequence_number: 1,
+            offset: 4,
+            length: 10,
+            compression_codec: CompressionCodec::Gzip,
+            properties: HashMap::new(),
+        };
+
+        // Attempting to access the blob should fail
+        let result = reader.blob(&gzip_blob_metadata).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.to_string().contains("Gzip"));
+        assert!(
+            err.to_string()
+                .contains("is not supported for Puffin files")
+        );
     }
 }

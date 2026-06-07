@@ -148,7 +148,7 @@
 //! impl<B: IcebergWriterBuilder> IcebergWriterBuilder for LatencyRecordWriterBuilder<B> {
 //!     type R = LatencyRecordWriter<B::R>;
 //!
-//!     async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
+//!     async fn build(&self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
 //!         Ok(LatencyRecordWriter {
 //!             inner_writer: self.inner_writer_builder.build(partition_key).await?,
 //!         })
@@ -398,13 +398,11 @@ type DefaultOutput = Vec<DataFile>;
 
 /// The builder for iceberg writer.
 #[async_trait::async_trait]
-pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>:
-    Send + Clone + 'static
-{
+pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>: Send + Sync + 'static {
     /// The associated writer type.
     type R: IcebergWriter<I, O>;
     /// Build the iceberg writer with an optional partition key.
-    async fn build(self, partition_key: Option<PartitionKey>) -> Result<Self::R>;
+    async fn build(&self, partition_key: Option<PartitionKey>) -> Result<Self::R>;
 }
 
 /// The iceberg writer used to write data to iceberg table.

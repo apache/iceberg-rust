@@ -34,15 +34,40 @@ enum EqDelState {
     Loaded(Predicate),
 }
 
+/// State tracking for positional delete files.
+/// Unlike equality deletes, positional deletes must be fully loaded before
+/// the ArrowReader proceeds because retrieval is synchronous and non-blocking.
+#[derive(Debug)]
+enum PosDelState {
+    /// The file is currently being loaded by a task.
+    /// The notifier allows other tasks to wait for completion.
+    Loading(Arc<Notify>),
+    /// The file has been fully loaded and merged into the delete vector map.
+    Loaded,
+}
+
 #[derive(Debug, Default)]
 struct DeleteFileFilterState {
     delete_vectors: HashMap<String, Arc<Mutex<DeleteVector>>>,
     equality_deletes: HashMap<String, EqDelState>,
+    positional_deletes: HashMap<String, PosDelState>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DeleteFilter {
     state: Arc<RwLock<DeleteFileFilterState>>,
+}
+
+/// Action to take when trying to start loading a positional delete file
+pub(crate) enum PosDelLoadAction {
+    /// The file is not loaded, the caller should load it.
+    Load,
+    /// The file is already loaded, nothing to do.
+    AlreadyLoaded,
+    /// The file is currently being loaded by another task.
+    /// The caller *must* wait for this notifier to ensure data availability
+    /// before returning, as subsequent access (get_delete_vector) is synchronous.
+    WaitFor(Arc<Notify>),
 }
 
 impl DeleteFilter {
@@ -57,12 +82,12 @@ impl DeleteFilter {
     /// Retrieve a delete vector for a data file
     pub(crate) fn get_delete_vector_for_path(
         &self,
-        delete_file_path: &str,
+        data_file_path: &str,
     ) -> Option<Arc<Mutex<DeleteVector>>> {
         self.state
             .read()
             .ok()
-            .and_then(|st| st.delete_vectors.get(delete_file_path).cloned())
+            .and_then(|st| st.delete_vectors.get(data_file_path).cloned())
     }
 
     pub(crate) fn try_start_eq_del_load(&self, file_path: &str) -> Option<Arc<Notify>> {
@@ -80,6 +105,47 @@ impl DeleteFilter {
             .insert(file_path.to_string(), EqDelState::Loading(notifier.clone()));
 
         Some(notifier)
+    }
+
+    /// Attempts to mark a positional delete file as "loading".
+    ///
+    /// Returns an action dictating whether the caller should load the file,
+    /// wait for another task to load it, or do nothing.
+    pub(crate) fn try_start_pos_del_load(&self, file_path: &str) -> PosDelLoadAction {
+        let mut state = self.state.write().unwrap();
+
+        if let Some(state) = state.positional_deletes.get(file_path) {
+            match state {
+                PosDelState::Loaded => return PosDelLoadAction::AlreadyLoaded,
+                PosDelState::Loading(notify) => return PosDelLoadAction::WaitFor(notify.clone()),
+            }
+        }
+
+        let notifier = Arc::new(Notify::new());
+        state
+            .positional_deletes
+            .insert(file_path.to_string(), PosDelState::Loading(notifier));
+
+        PosDelLoadAction::Load
+    }
+
+    /// Marks a positional delete file as successfully loaded and notifies any waiting tasks.
+    pub(crate) fn finish_pos_del_load(&self, file_path: &str) {
+        let notify = {
+            let mut state = self.state.write().unwrap();
+            if let Some(PosDelState::Loading(notify)) = state
+                .positional_deletes
+                .insert(file_path.to_string(), PosDelState::Loaded)
+            {
+                Some(notify)
+            } else {
+                None
+            }
+        };
+
+        if let Some(notify) = notify {
+            notify.notify_waiters();
+        }
     }
 
     /// Retrieve the equality delete predicate for a given eq delete file path
@@ -141,8 +207,8 @@ impl DeleteFilter {
             return Ok(None);
         }
 
-        // TODO: handle case-insensitive case
-        let bound_predicate = combined_predicate.bind(file_scan_task.schema.clone(), false)?;
+        let bound_predicate = combined_predicate
+            .bind(file_scan_task.schema.clone(), file_scan_task.case_sensitive)?;
         Ok(Some(bound_predicate))
     }
 
@@ -211,8 +277,9 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
+    use crate::expr::Reference;
     use crate::io::FileIO;
-    use crate::spec::{DataFileFormat, Schema};
+    use crate::spec::{DataFileFormat, Datum, NestedField, PrimitiveType, Schema, Type};
 
     type ArrowSchemaRef = Arc<ArrowSchema>;
 
@@ -223,10 +290,7 @@ pub(crate) mod tests {
     async fn test_delete_file_filter_load_deletes() {
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path();
-        let file_io = FileIO::from_path(table_location.as_os_str().to_str().unwrap())
-            .unwrap()
-            .build()
-            .unwrap();
+        let file_io = FileIO::new_with_fs();
 
         let delete_file_loader = CachingDeleteFileLoader::new(file_io.clone(), 10);
 
@@ -311,6 +375,12 @@ pub(crate) mod tests {
 
         let pos_del_1 = FileScanTaskDeleteFile {
             file_path: format!("{}/pos-del-1.parquet", table_location.to_str().unwrap()),
+            file_size_in_bytes: std::fs::metadata(format!(
+                "{}/pos-del-1.parquet",
+                table_location.to_str().unwrap()
+            ))
+            .unwrap()
+            .len(),
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
             equality_ids: None,
@@ -318,6 +388,12 @@ pub(crate) mod tests {
 
         let pos_del_2 = FileScanTaskDeleteFile {
             file_path: format!("{}/pos-del-2.parquet", table_location.to_str().unwrap()),
+            file_size_in_bytes: std::fs::metadata(format!(
+                "{}/pos-del-2.parquet",
+                table_location.to_str().unwrap()
+            ))
+            .unwrap()
+            .len(),
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
             equality_ids: None,
@@ -325,6 +401,12 @@ pub(crate) mod tests {
 
         let pos_del_3 = FileScanTaskDeleteFile {
             file_path: format!("{}/pos-del-3.parquet", table_location.to_str().unwrap()),
+            file_size_in_bytes: std::fs::metadata(format!(
+                "{}/pos-del-3.parquet",
+                table_location.to_str().unwrap()
+            ))
+            .unwrap()
+            .len(),
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
             equality_ids: None,
@@ -332,6 +414,7 @@ pub(crate) mod tests {
 
         let file_scan_tasks = vec![
             FileScanTask {
+                file_size_in_bytes: 0,
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -341,8 +424,13 @@ pub(crate) mod tests {
                 project_field_ids: vec![],
                 predicate: None,
                 deletes: vec![pos_del_1, pos_del_2.clone()],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
             },
             FileScanTask {
+                file_size_in_bytes: 0,
                 start: 0,
                 length: 0,
                 record_count: None,
@@ -352,6 +440,10 @@ pub(crate) mod tests {
                 project_field_ids: vec![],
                 predicate: None,
                 deletes: vec![pos_del_3],
+                partition: None,
+                partition_spec: None,
+                name_mapping: None,
+                case_sensitive: false,
             },
         ];
 
@@ -373,5 +465,60 @@ pub(crate) mod tests {
             ),
         ];
         Arc::new(arrow_schema::Schema::new(fields))
+    }
+
+    #[tokio::test]
+    async fn test_build_equality_delete_predicate_case_sensitive() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "Id", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // ---------- fake FileScanTask ----------
+        let task = FileScanTask {
+            file_size_in_bytes: 0,
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path: "data.parquet".to_string(),
+            data_file_format: crate::spec::DataFileFormat::Parquet,
+            schema: schema.clone(),
+            project_field_ids: vec![],
+            predicate: None,
+            deletes: vec![FileScanTaskDeleteFile {
+                file_path: "eq-del.parquet".to_string(),
+                file_size_in_bytes: 1, // never read; this test fails before opening the file
+                file_type: DataContentType::EqualityDeletes,
+                partition_spec_id: 0,
+                equality_ids: None,
+            }],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: true,
+        };
+
+        let filter = DeleteFilter::default();
+
+        // ---------- insert equality delete predicate ----------
+        let pred = Reference::new("id").equal_to(Datum::long(10));
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        filter.insert_equality_delete("eq-del.parquet", rx);
+
+        tx.send(pred).unwrap();
+
+        // ---------- should FAIL ----------
+        let result = filter.build_equality_delete_predicate(&task).await;
+
+        assert!(
+            result.is_err(),
+            "case_sensitive=true should fail when column case mismatches"
+        );
     }
 }

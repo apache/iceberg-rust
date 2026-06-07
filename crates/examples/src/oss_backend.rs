@@ -16,10 +16,12 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use futures::stream::StreamExt;
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableIdent};
 use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalogBuilder};
+use iceberg_storage_opendal::OpenDalStorageFactory;
 
 // Configure these values according to your environment
 
@@ -41,8 +43,9 @@ static OSS_ACCESS_KEY_SECRET: &str = "99999999999999999999999999999999";
 /// The example also requires valid OSS credentials and endpoint to be configured.
 #[tokio::main]
 async fn main() {
-    // Create the REST iceberg catalog.
+    // Create the REST iceberg catalog with explicit OSS storage factory.
     let catalog = RestCatalogBuilder::default()
+        .with_storage_factory(Arc::new(OpenDalStorageFactory::Oss))
         .load(
             "rest",
             HashMap::from([

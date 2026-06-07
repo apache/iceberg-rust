@@ -29,17 +29,24 @@ See the [API documentation](https://docs.rs/iceberg/latest) for examples and the
 ## Usage
 
 ```rust
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use futures::TryStreamExt;
-use iceberg::io::{FileIO, FileIOBuilder};
-use iceberg::{Catalog, Result, TableIdent};
-use iceberg_catalog_memory::MemoryCatalog;
+use iceberg::io::MemoryStorageFactory;
+use iceberg::memory::{MemoryCatalogBuilder, MEMORY_CATALOG_WAREHOUSE};
+use iceberg::{Catalog, CatalogBuilder, Result, TableIdent};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Build your file IO.
-    let file_io = FileIOBuilder::new("memory").build()?;
-    // Connect to a catalog.
-    let catalog = MemoryCatalog::new(file_io, None);
+    // Connect to a catalog with a memory storage factory.
+    let catalog = MemoryCatalogBuilder::default()
+        .with_storage_factory(Arc::new(MemoryStorageFactory))
+        .load(
+            "my_catalog",
+            HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), "/tmp/warehouse".to_string())]),
+        )
+        .await?;
     // Load table from catalog.
     let table = catalog
         .load_table(&TableIdent::from_strs(["hello", "world"])?)
@@ -58,26 +65,6 @@ async fn main() -> Result<()> {
 }
 ```
 
-## IO Support
+## Storage Backends
 
-Iceberg Rust provides various storage backends through feature flags. Here are the currently supported storage backends:
-
-| Storage Backend      | Feature Flag     | Status         | Description                                   |
-| -------------------- | ---------------- | -------------- | --------------------------------------------- |
-| Memory               | `storage-memory` | ✅ Stable       | In-memory storage for testing and development |
-| Local Filesystem     | `storage-fs`     | ✅ Stable       | Local filesystem storage                      |
-| Amazon S3            | `storage-s3`     | ✅ Stable       | Amazon S3 storage                             |
-| Google Cloud Storage | `storage-gcs`    | ✅ Stable       | Google Cloud Storage                          |
-| Alibaba Cloud OSS    | `storage-oss`    | 🧪 Experimental | Alibaba Cloud Object Storage Service          |
-| Azure Datalake       | `storage-azdls`  | 🧪 Experimental | Azure Datalake Storage v2                     |
-
-You can enable all stable storage backends at once using the `storage-all` feature flag. 
-
-> Note that `storage-oss` and `storage-azdls` are currently experimental and not included in `storage-all`.
-
-Example usage in `Cargo.toml`:
-
-```toml
-[dependencies]
-iceberg = { version = "x.y.z", features = ["storage-s3", "storage-fs"] }
-```
+For storage backend support (S3, GCS, local filesystem, etc.), use the [`iceberg-storage-opendal`](https://crates.io/crates/iceberg-storage-opendal) crate. See its [README](../storage/opendal/README.md) for available backends and feature flags.

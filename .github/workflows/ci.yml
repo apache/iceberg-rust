@@ -21,25 +21,6 @@ on:
   push:
     branches:
       - main
-    # Doc-only commits to main skip the heavy Rust matrix (same exclusions as pull_request below).
-    paths:
-      - '**'
-      - '!.github/ISSUE_TEMPLATE/**'
-      - '!scripts/**'
-      - '!website/**'
-      - '!.asf.yml'
-      - '!.gitattributes'
-      - '!.gitignore'
-      - '!CONTRIBUTING.md'
-      - '!CHANGELOG.md'
-      - '!LICENSE'
-      - '!NOTICE'
-      - '!README.md'
-      - '!README.upstream.md'
-      - '!CLAUDE.md'
-      - '!skills/**'
-      - '!docs/**'
-      - '!task/**'
   pull_request:
     paths:
       - '**'                              # Include all files and directories in the repository by default.
@@ -54,41 +35,39 @@ on:
       - '!LICENSE'
       - '!NOTICE'
       - '!README.md'
-      - '!README.upstream.md'
-      - '!CLAUDE.md'        # fork: agent harness — docs only, no code impact
-      - '!skills/**'        # fork: per-model-tier operating manuals
-      - '!docs/**'          # fork: testing-discipline gate, etc.
-      - '!task/**'          # fork: markdown plan/lessons workflow
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
-env:
-  rust_msrv: "1.87"
+permissions:
+  contents: read
 
 jobs:
   check:
     runs-on: ${{ matrix.os }}
     strategy:
+      max-parallel: 15
       matrix:
         os:
           - ubuntu-latest
           - macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
 
       - name: Check License Header
-        uses: apache/skywalking-eyes/header@v0.8.0
+        uses: apache/skywalking-eyes/header@61275cc80d0798a405cb070f7d3a8aaf7cf2c2c1 # v0.8.0
 
       - name: Check toml format
         run: make check-toml
 
       - name: Install protoc
-        uses: arduino/setup-protoc@v3
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -107,34 +86,25 @@ jobs:
   build:
     runs-on: ${{ matrix.os }}
     strategy:
+      max-parallel: 15
       matrix:
         os:
           - ubuntu-latest
           - macos-latest
           - windows-latest
     steps:
-      - name: Maximize build space (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
-        uses: easimon/maximize-build-space@v10
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          remove-dotnet: "true"
-          remove-android: "true"
-          remove-haskell: "true"
-          remove-codeql: "true"
-          remove-docker-images: "true"
-          root-reserve-mb: 10240
-          temp-reserve-mb: 100
-
-      - uses: actions/checkout@v5
+          persist-credentials: false
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Install protoc
-        uses: arduino/setup-protoc@v3
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -144,72 +114,97 @@ jobs:
   build_with_no_default_features:
     runs-on: ${{ matrix.os }}
     strategy:
+      max-parallel: 15
       matrix:
         os:
           - ubuntu-latest
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Build
         run: cargo build -p iceberg --no-default-features
 
-  unit:
+  tests:
     runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 15
+      matrix:
+        test-suite:
+          - { name: "default", args: "--all-targets --all-features --workspace" }
+          - { name: "doc", args: "--doc --all-features --workspace" }
+    name: Tests (${{ matrix.test-suite.name }})
     steps:
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@v10
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          remove-dotnet: "true"
-          remove-android: "true"
-          remove-haskell: "true"
-          remove-codeql: "true"
-          remove-docker-images: "true"
-          root-reserve-mb: 10240
-          temp-reserve-mb: 100
-
-      - uses: actions/checkout@v5
+          persist-credentials: false
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
 
       - name: Install protoc
-        uses: arduino/setup-protoc@v3
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: ${{ matrix.test-suite.name }}
 
-      - name: Test
-        run: cargo test --no-fail-fast --all-targets --all-features --workspace
+      - name: Install cargo-nextest
+        if: matrix.test-suite.name == 'default'
+        uses: taiki-e/install-action@0fde6d128a3d980ceac30be8c8b8739abd963b81 # v2.70.0
+        with:
+          tool: cargo-nextest
 
-      - name: Smol Test
-        run: cargo test --no-fail-fast --all-targets --no-default-features --features "smol" --features "storage-all" --workspace
+      - name: Start Docker containers
+        if: matrix.test-suite.name == 'default'
+        run: make docker-up
 
-      - name: Doc Test
-        run: cargo test --no-fail-fast --doc --all-features --workspace
+      - name: Run tests
+        shell: bash
+        env:
+          # Disable debug info to speed up compilation and reduce artifact size
+          RUSTFLAGS: "-C debuginfo=0"
+        run: |
+          if [ "${{ matrix.test-suite.name }}" = "default" ]; then
+            cargo nextest run ${{ matrix.test-suite.args }}
+          else
+            cargo test --no-fail-fast ${{ matrix.test-suite.args }}
+          fi
+
+      - name: Stop Docker containers
+        if: always() && matrix.test-suite.name == 'default'
+        run: make docker-down
 
   msrv:
     name: Verify MSRV
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
       - name: Install protoc
-        uses: arduino/setup-protoc@v3
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Get MSRV
+        id: get-msrv
+        uses: ./.github/actions/get-msrv
       - name: Setup MSRV Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: ${{ env.rust_msrv }}
+          rust-version: ${{ steps.get-msrv.outputs.msrv }}
       - name: Setup Nightly Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Check MSRV

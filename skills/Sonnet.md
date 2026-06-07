@@ -1,3 +1,22 @@
+<!--
+  ~ Licensed to the Apache Software Foundation (ASF) under one
+  ~ or more contributor license agreements.  See the NOTICE file
+  ~ distributed with this work for additional information
+  ~ regarding copyright ownership.  The ASF licenses this file
+  ~ to you under the Apache License, Version 2.0 (the
+  ~ "License"); you may not use this file except in compliance
+  ~ with the License.  You may obtain a copy of the License at
+  ~
+  ~   http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing,
+  ~ software distributed under the License is distributed on an
+  ~ "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  ~ KIND, either express or implied.  See the License for the
+  ~ specific language governing permissions and limitations
+  ~ under the License.
+-->
+
 # Rust & Python Engineering Assistant — Operating Manual (Sonnet)
 
 ## Identity & Priority Stack
@@ -166,7 +185,7 @@ Diff the base branch vs. your changes when relevant. Ask: "Would a staff enginee
 
 ### 7. Dependency & API Rules
 - Before writing code against an external library, verify the API is current and not deprecated.
-- Always verify (this stack): Apache DataFusion (+ `iceberg`, `iceberg-datafusion`), Apache Arrow (`arrow-rs` / PyArrow), Parquet, OpenDAL, Apache Iceberg / PyIceberg / `pyiceberg-core`, PyO3, tokio, anyhow, thiserror, serde; for the Python layer, Polars, PySpark, `datafusion` (Python).
+- Always verify (this stack): Apache DataFusion (+ `iceberg`, `iceberg-datafusion`), Apache Arrow (`arrow-rs`), Parquet, OpenDAL, Apache Iceberg (this fork's crates), tokio, anyhow, thiserror, serde.
 - If actual usage differs from what you intended to write, record the correct usage in [task/lessons.md](../task/lessons.md).
 - Use the exact method signature — never guess parameter names or assume default behavior. Arrow is the in-memory currency of this stack (Parquet, OLAP) — plan for it.
 - **Never modify dependency files without explicit approval** (Non-Negotiables).
@@ -228,7 +247,7 @@ DO: `extract_user_records`, `parse_manifest_entry`, `is_snapshot_expired` — DO
 
 ### Verification commands (canonical — referenced by §4 and Pre-Flight)
 - **Rust:** `make check` (fmt-check + clippy `-D warnings` + TOML check + unused-deps) and `make test`. Or directly: `cargo fmt --all -- --check` · `cargo clippy --all-targets --all-features --workspace -- -D warnings` · `cargo test --no-fail-fast --all-targets --all-features --workspace`. Workspace layout in [Cargo.toml](../Cargo.toml); formatter config in [rustfmt.toml](../rustfmt.toml). The clippy gate is `-D warnings` (no `[workspace.lints]` table). MSRV via `make check-msrv`.
-- **Python:** run from the package directory. `ruff check .` · `ruff format --check .` · `pytest` (e.g. `iceberg-spark-python` uses `uv run …`). Ruff config in the package's `pyproject.toml`; line length 100.
+- **Python:** there is no Python layer in this fork (it was removed in Phase 0; Python is deferred). If one is reintroduced, run its checks from its package directory (`ruff check .` · `ruff format --check .` · `pytest`, via `uv run …`).
 
 ### Rust
 
