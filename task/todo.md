@@ -12,6 +12,49 @@ How to use it (see the manuals' §1):
 
 ---
 
-## (no active task)
+## Active: Phase 1 — Spec & metadata completeness
 
-- [ ] _Replace this with the plan for the current task._
+Parity target: Java `iceberg-core` evolution APIs. Authoritative plan: [Roadmap.md](../Roadmap.md)
+Phase 1; status checklist: [docs/parity/GAP_MATRIX.md](../docs/parity/GAP_MATRIX.md).
+
+**Scaffolding (verified on 0.9.1):** actions follow the `transaction/sort_order.rs` pattern — a builder
+struct + `#[async_trait] impl TransactionAction { async fn commit(self: Arc<Self>, &Table) ->
+Result<ActionCommit> }` returning `ActionCommit::new(updates, requirements)`, plus a `pub fn` ctor on
+`Transaction` and a `mod`/`use` line in `transaction/mod.rs`. `TableMetadataBuilder` already has the
+low-level primitives; `TableUpdate` already has `SetSnapshotRef`/`RemoveSnapshotRef`/`AddSchema`/
+`SetCurrentSchema`/`AddSpec`/`SetDefaultSpec`; `TableRequirement::RefSnapshotIdMatch{ref, snapshot_id:
+Option<i64>}` (None ⇒ ref must not exist) guards concurrency. Java ref at `/tmp/iceberg-java-ref`.
+
+### Sequencing (dependency, then value)
+1. **ManageSnapshots** (this increment) — self-contained ref manipulation; primitives all exist.
+2. **UpdatePartitionSpec** — addField/removeField/renameField → new spec via `AddSpec`/`SetDefaultSpec`.
+3. **UpdateSchema** (largest) — add/drop/rename/update-type/move/make-req-opt + field-id reassignment
+   and type-promotion validation → `AddSchema`/`SetCurrentSchema`. Split into sub-steps.
+4. ManageSnapshots tail — `cherrypick` (needs snapshot replay) + `rollbackToTime`.
+5. V3 groundwork — row-lineage fields, finish column-default plumbing.
+
+Each item: behavioral parity with Java + unit tests (same change) + GAP_MATRIX row flip.
+
+### Increment 1 — ManageSnapshots ✅ DONE
+New file `crates/iceberg/src/transaction/manage_snapshots.rs`; wired into `transaction/mod.rs`.
+
+- [x] create/replace/remove branch+tag (kind-checked); `rename_branch`.
+- [x] `set_current_snapshot`; `rollback_to` (ancestry-validated); `fast_forward` (ancestry-validated).
+- [x] retention: `set_min_snapshots_to_keep` / `set_max_snapshot_age_ms` / `set_max_ref_age_ms`
+      (branch-only fields rejected on tags).
+- [x] commit(): ops resolved in order against a working ref map seeded from `metadata().refs`; emits
+      `SetSnapshotRef`/`RemoveSnapshotRef` + per-ref `RefSnapshotIdMatch` guard (original id, None if
+      absent); snapshot ids validated via `snapshot_by_id`.
+- [x] 12 unit tests via `make_v2_table()`; build + clippy(-D warnings) + fmt + offline lib suite green
+      (1170 tests, stable across 6 runs).
+- [x] Flipped `ManageSnapshots` + snapshot-refs GAP_MATRIX rows to 🟡.
+  - Side fix: relaxed a flaky upstream assertion in `catalog/memory/catalog.rs` test_update_table
+    (`last_updated_ms() <` → `<=`), exposed by the extra parallel test load. See task/lessons.md.
+
+**Outcome:** branch/tag lifecycle + rollback + fast-forward + retention land with optimistic-concurrency
+guards. **Deferred to increment 4:** `cherrypick` (needs snapshot replay), `rollbackToTime`,
+`replaceBranch(from,to)`; a Java interop round-trip before the row flips to ✅.
+
+### Next up — Increment 2: UpdatePartitionSpec
+addField/removeField/renameField → new spec via `TableUpdate::AddSpec`/`SetDefaultSpec`
+(`TableMetadataBuilder::add_partition_spec`/`set_default_partition_spec` already exist).

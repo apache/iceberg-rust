@@ -42,8 +42,8 @@
 | Schema evolution (`UpdateSchema`) | ❌ | `api/UpdateSchema.java` | no transaction action |
 | Partition evolution (`UpdatePartitionSpec`) | ❌ | `api/UpdatePartitionSpec.java` | none |
 | Sort order (`ReplaceSortOrder`) | ✅ | `api/ReplaceSortOrder.java` | `transaction/sort_order.rs` |
-| Snapshot model + refs (branches/tags) | 🟡 | `api/Snapshot.java`, `SnapshotRef.java` | spec types only; no ops |
-| Snapshot management (`ManageSnapshots`: branch/tag CRUD, rollback, cherrypick, set-current, fast-forward) | ❌ | `api/ManageSnapshots.java` | none |
+| Snapshot model + refs (branches/tags) | 🟡 | `api/Snapshot.java`, `SnapshotRef.java` | spec types + ref ops (`transaction/manage_snapshots.rs`) |
+| Snapshot management (`ManageSnapshots`: branch/tag CRUD, rollback, cherrypick, set-current, fast-forward) | 🟡 | `api/ManageSnapshots.java` | `transaction/manage_snapshots.rs`: create/replace/remove branch+tag, rename-branch, set-current, rollback (ancestry-checked), fast-forward, retention — with optimistic-concurrency `RefSnapshotIdMatch` guards + unit tests. **Deferred:** cherrypick, rollbackToTime; Java interop test pending before ✅. |
 | Manifest + manifest-list read/write | ✅ | `core/.../ManifestReader/Writer` | `spec/manifest`, `spec/manifest_list.rs` |
 | `RewriteManifests` | ❌ | `api/RewriteManifests.java` | none |
 | Write: fast append | ✅ | `api/AppendFiles.java` | `transaction/append.rs` |
