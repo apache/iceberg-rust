@@ -158,8 +158,10 @@ impl ManageSnapshotsAction {
         self
     }
 
-    /// Fast-forward branch `from` to the snapshot referenced by branch `to`. The current snapshot
-    /// of `from` must be an ancestor of `to`'s snapshot.
+    /// Fast-forward branch `from` to the snapshot referenced by `to`. `to` may be any ref (branch
+    /// or tag). If `from` already exists it must be a branch and its snapshot must be an ancestor of
+    /// `to`'s snapshot; if `from` does not exist it is created as a branch at `to`'s snapshot
+    /// (matching Java `ManageSnapshots.fastForwardBranch`).
     pub fn fast_forward(mut self, from: &str, to: &str) -> Self {
         self.ops.push(SnapshotOp::FastForward {
             from: from.to_string(),
@@ -341,24 +343,50 @@ impl TransactionAction for ManageSnapshotsAction {
                     mark_touched(MAIN_BRANCH, &mut touched_order, &mut touched_set);
                 }
                 SnapshotOp::FastForward { from, to } => {
-                    let from_ref = refs
-                        .get(from)
-                        .ok_or_else(|| data_invalid(format!("Branch {from} does not exist")))?;
-                    check_kind(from, from_ref, true)?;
-                    let from_snapshot = from_ref.snapshot_id;
-                    let to_ref = refs
+                    // Matches Java `UpdateSnapshotReferencesOperation.replaceBranch(from, to, true)`:
+                    // `to` may be ANY ref (branch or tag) — only its snapshot id matters; and an
+                    // absent `from` is auto-created as a branch at `to`'s snapshot (no ancestry check).
+                    let to_snapshot = refs
                         .get(to)
-                        .ok_or_else(|| data_invalid(format!("Branch {to} does not exist")))?;
-                    check_kind(to, to_ref, true)?;
-                    let to_snapshot = to_ref.snapshot_id;
-                    if !is_ancestor_of(metadata, from_snapshot, to_snapshot) {
-                        return Err(data_invalid(format!(
-                            "Cannot fast-forward {from} to {to}: {from}'s snapshot {from_snapshot} \
-                             is not an ancestor of {to}'s snapshot {to_snapshot}"
-                        )));
+                        .ok_or_else(|| data_invalid(format!("Ref {to} does not exist")))?
+                        .snapshot_id;
+                    // Copy `from`'s state out so the borrow ends before we mutate `refs`.
+                    let from_state = refs
+                        .get(from)
+                        .map(|r| (r.is_branch(), r.snapshot_id, r.retention.clone()));
+                    match from_state {
+                        None => {
+                            refs.insert(
+                                from.clone(),
+                                SnapshotReference::new(
+                                    to_snapshot,
+                                    SnapshotRetention::branch(None, None, None),
+                                ),
+                            );
+                        }
+                        Some((is_branch, from_snapshot, retention)) => {
+                            if !is_branch {
+                                return Err(data_invalid(format!(
+                                    "Ref {from} is a tag, but a branch was expected"
+                                )));
+                            }
+                            // No-op when already at target (Java returns early; the emit-time
+                            // suppression below would also drop it, but skip the ancestry check too).
+                            if from_snapshot != to_snapshot {
+                                if !is_ancestor_of(metadata, from_snapshot, to_snapshot) {
+                                    return Err(data_invalid(format!(
+                                        "Cannot fast-forward {from} to {to}: {from}'s snapshot \
+                                         {from_snapshot} is not an ancestor of {to}'s snapshot \
+                                         {to_snapshot}"
+                                    )));
+                                }
+                                refs.insert(
+                                    from.clone(),
+                                    SnapshotReference::new(to_snapshot, retention),
+                                );
+                            }
+                        }
                     }
-                    let retention = from_ref.retention.clone();
-                    refs.insert(from.clone(), SnapshotReference::new(to_snapshot, retention));
                     mark_touched(from, &mut touched_order, &mut touched_set);
                 }
                 SnapshotOp::SetRetention { name, field } => {
@@ -376,13 +404,21 @@ impl TransactionAction for ManageSnapshotsAction {
         let mut updates: Vec<TableUpdate> = Vec::with_capacity(touched_order.len());
         let mut requirements: Vec<TableRequirement> = Vec::with_capacity(touched_order.len());
         for name in &touched_order {
+            let original = metadata.refs.get(name);
+            let resolved = refs.get(name);
+            // Net no-op: a ref that ends in the same state it started (unchanged, or created and
+            // then removed within this action). Emit nothing — matching Java, which only records
+            // refs that actually changed, and keeping the commit idempotent at the catalog layer.
+            if original == resolved {
+                continue;
+            }
             // Optimistic-concurrency guard: the ref must still be at the snapshot we observed
-            // (or still absent), or the commit is rejected and retried.
+            // (or still absent, when snapshot_id is None), or the commit is rejected and retried.
             requirements.push(TableRequirement::RefSnapshotIdMatch {
                 r#ref: name.clone(),
-                snapshot_id: metadata.refs.get(name).map(|r| r.snapshot_id),
+                snapshot_id: original.map(|r| r.snapshot_id),
             });
-            match refs.get(name) {
+            match resolved {
                 Some(reference) => updates.push(TableUpdate::SetSnapshotRef {
                     ref_name: name.clone(),
                     reference: reference.clone(),
@@ -459,9 +495,12 @@ fn apply_retention(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
-    use crate::spec::{MAIN_BRANCH, SnapshotReference, SnapshotRetention};
+    use crate::spec::{
+        MAIN_BRANCH, Operation, Snapshot, SnapshotReference, SnapshotRetention, Summary,
+    };
     use crate::table::Table;
     use crate::transaction::{Transaction, TransactionAction};
     use crate::{TableRequirement, TableUpdate};
@@ -469,9 +508,68 @@ mod tests {
     // From TableMetadataV2Valid.json: main -> 3055..., whose parent is the root 3051....
     const CURRENT: i64 = 3055729675574597004;
     const ROOT: i64 = 3051729675574597004;
+    // A snapshot we graft on as a SIBLING of CURRENT (also a child of ROOT) — it exists but is NOT
+    // in main's ancestry, which is exactly what the rollback/fast-forward negative tests need.
+    const SIBLING: i64 = 3060729675574597004;
 
     fn table() -> Table {
         crate::transaction::tests::make_v2_table()
+    }
+
+    /// `make_v2_table()` augmented with a forked history and pre-existing refs:
+    /// snapshots {ROOT, CURRENT(child of ROOT), SIBLING(child of ROOT)}; refs
+    /// {main->CURRENT, `dev` branch->CURRENT, `stable` tag->ROOT}. This lets us exercise paths the
+    /// straight-line base fixture cannot: a valid-but-non-ancestor snapshot, and remove/replace of a
+    /// ref that already existed at commit time (so the optimistic-concurrency guard carries the
+    /// original snapshot id rather than `None`).
+    fn forked_table() -> Table {
+        let base = table();
+        let sibling = Snapshot::builder()
+            .with_snapshot_id(SIBLING)
+            .with_parent_snapshot_id(Some(ROOT))
+            .with_sequence_number(35) // > fixture last-sequence-number (34)
+            .with_timestamp_ms(1700000000000) // after the fixture's last-updated-ms (1602638573590)
+            .with_manifest_list("/tmp/sibling-manifest-list.avro")
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .with_schema_id(1)
+            .build();
+        let metadata = base
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .add_snapshot(sibling)
+            .expect("add sibling snapshot")
+            .set_ref(
+                "dev",
+                SnapshotReference::new(CURRENT, SnapshotRetention::branch(None, None, None)),
+            )
+            .expect("add dev branch")
+            .set_ref(
+                "stable",
+                SnapshotReference::new(ROOT, SnapshotRetention::Tag {
+                    max_ref_age_ms: None,
+                }),
+            )
+            .expect("add stable tag")
+            .build()
+            .expect("build forked metadata")
+            .metadata;
+        base.with_metadata(Arc::new(metadata))
+    }
+
+    /// The `snapshot_id` carried by the `RefSnapshotIdMatch` requirement for `name`, if present.
+    /// Outer `Option`: was a requirement emitted? Inner `Option<i64>`: the guarded snapshot id
+    /// (`None` ⇒ "ref must not already exist").
+    fn requirement_for(reqs: &[TableRequirement], name: &str) -> Option<Option<i64>> {
+        reqs.iter().find_map(|r| match r {
+            TableRequirement::RefSnapshotIdMatch { r#ref, snapshot_id } if r#ref == name => {
+                Some(*snapshot_id)
+            }
+            _ => None,
+        })
     }
 
     fn find_set<'a>(updates: &'a [TableUpdate], name: &str) -> Option<&'a SnapshotReference> {
@@ -586,20 +684,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_remove_and_rename_branch() {
-        let table = table();
+    async fn test_rename_preexisting_branch() {
+        // Rename a branch that already exists at commit time: the old name is removed (with its
+        // original-snapshot guard) and the new name is set to the same snapshot.
+        let table = forked_table();
         let action = Transaction::new(&table)
             .manage_snapshots()
-            .create_branch("b1", ROOT)
-            .create_branch("b2", ROOT)
-            .remove_branch("b1")
-            .rename_branch("b2", "b3");
+            .rename_branch("dev", "dev_renamed");
         let mut commit = Arc::new(action).commit(&table).await.unwrap();
         let updates = commit.take_updates();
+        let requirements = commit.take_requirements();
 
-        assert!(is_removed(&updates, "b1"));
-        assert!(is_removed(&updates, "b2"));
-        assert_eq!(find_set(&updates, "b3").unwrap().snapshot_id, ROOT);
+        assert!(is_removed(&updates, "dev"));
+        assert_eq!(requirement_for(&requirements, "dev"), Some(Some(CURRENT)));
+        assert_eq!(
+            find_set(&updates, "dev_renamed").unwrap().snapshot_id,
+            CURRENT
+        );
+        assert_eq!(requirement_for(&requirements, "dev_renamed"), Some(None));
     }
 
     #[tokio::test]
@@ -663,5 +765,208 @@ mod tests {
             .create_tag("t1", ROOT)
             .set_min_snapshots_to_keep("t1", 3); // invalid on a tag
         assert!(Arc::new(action).commit(&table).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_set_max_ref_age_on_branch() {
+        let table = table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .create_branch("b1", ROOT)
+            .set_max_ref_age_ms("b1", 777);
+        let mut commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = commit.take_updates();
+        match &find_set(&updates, "b1").unwrap().retention {
+            SnapshotRetention::Branch { max_ref_age_ms, .. } => {
+                assert_eq!(*max_ref_age_ms, Some(777))
+            }
+            _ => panic!("b1 should be a branch"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_remove_main_branch_fails() {
+        let table = table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .remove_branch(MAIN_BRANCH);
+        assert!(Arc::new(action).commit(&table).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_rename_main_branch_fails() {
+        let table = table();
+        let from_main = Transaction::new(&table)
+            .manage_snapshots()
+            .rename_branch(MAIN_BRANCH, "x");
+        assert!(Arc::new(from_main).commit(&table).await.is_err());
+
+        let to_main = Transaction::new(&table)
+            .manage_snapshots()
+            .create_branch("b1", ROOT)
+            .rename_branch("b1", MAIN_BRANCH);
+        assert!(Arc::new(to_main).commit(&table).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_rename_branch_to_existing_name_fails() {
+        let table = table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .create_branch("b1", ROOT)
+            .create_branch("b2", ROOT)
+            .rename_branch("b1", "b2"); // b2 already exists
+        assert!(Arc::new(action).commit(&table).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_create_then_remove_new_ref_is_suppressed() {
+        let table = table();
+        // A ref that is created and removed within the same action nets to no change: emit nothing.
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .create_branch("b1", ROOT)
+            .remove_branch("b1");
+        let mut commit = Arc::new(action).commit(&table).await.unwrap();
+        assert!(
+            commit.take_updates().is_empty(),
+            "net no-op must emit no updates"
+        );
+        assert!(
+            commit.take_requirements().is_empty(),
+            "net no-op must emit no requirements"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fast_forward_to_a_tag_is_allowed() {
+        // `to` may be a tag (Java only requires `from` to be a branch).
+        let table = table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .create_branch("b1", ROOT) // b1 at the root, an ancestor of CURRENT
+            .create_tag("release", CURRENT) // tag at CURRENT
+            .fast_forward("b1", "release");
+        let mut commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = commit.take_updates();
+        assert_eq!(find_set(&updates, "b1").unwrap().snapshot_id, CURRENT);
+    }
+
+    #[tokio::test]
+    async fn test_fast_forward_creates_absent_from() {
+        // An absent `from` is auto-created as a branch at `to`'s snapshot.
+        let table = table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .fast_forward("newb", MAIN_BRANCH);
+        let mut commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = commit.take_updates();
+        let requirements = commit.take_requirements();
+        let newb = find_set(&updates, "newb").expect("newb created");
+        assert_eq!(newb.snapshot_id, CURRENT);
+        assert!(newb.is_branch());
+        assert_eq!(requirement_for(&requirements, "newb"), Some(None)); // must-not-exist guard
+    }
+
+    #[tokio::test]
+    async fn test_fast_forward_non_ancestor_fails() {
+        // b1 at CURRENT is NOT an ancestor of b2 at ROOT, so fast-forwarding b1->b2 must fail.
+        let table = table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .create_branch("b1", CURRENT)
+            .create_branch("b2", ROOT)
+            .fast_forward("b1", "b2");
+        assert!(Arc::new(action).commit(&table).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_fast_forward_noop_is_suppressed() {
+        // main is already at CURRENT; fast-forwarding it to a tag also at CURRENT is a no-op.
+        let table = table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .create_tag("here", CURRENT)
+            .fast_forward(MAIN_BRANCH, "here");
+        let mut commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = commit.take_updates();
+        let requirements = commit.take_requirements();
+        // The tag is created, but main is unchanged and must not be emitted.
+        assert!(find_set(&updates, "here").is_some());
+        assert!(
+            find_set(&updates, MAIN_BRANCH).is_none(),
+            "no-op main must be suppressed"
+        );
+        assert_eq!(requirement_for(&requirements, MAIN_BRANCH), None);
+    }
+
+    #[tokio::test]
+    async fn test_rollback_to_non_ancestor_fails() {
+        // SIBLING exists but is not in main's ancestry (it is a sibling of CURRENT) -> reject.
+        let table = forked_table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .rollback_to(SIBLING);
+        assert!(Arc::new(action).commit(&table).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_remove_preexisting_tag_emits_guard() {
+        let table = forked_table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .remove_tag("stable");
+        let mut commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = commit.take_updates();
+        let requirements = commit.take_requirements();
+        assert!(is_removed(&updates, "stable"));
+        // Guard must carry the ORIGINAL snapshot id (ROOT), not None.
+        assert_eq!(requirement_for(&requirements, "stable"), Some(Some(ROOT)));
+    }
+
+    #[tokio::test]
+    async fn test_replace_preexisting_tag() {
+        let table = forked_table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .replace_tag("stable", CURRENT);
+        let mut commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = commit.take_updates();
+        let requirements = commit.take_requirements();
+        let stable = find_set(&updates, "stable").expect("stable replaced");
+        assert_eq!(stable.snapshot_id, CURRENT);
+        assert!(!stable.is_branch(), "stable must stay a tag");
+        assert_eq!(requirement_for(&requirements, "stable"), Some(Some(ROOT)));
+    }
+
+    #[tokio::test]
+    async fn test_remove_preexisting_branch_emits_guard() {
+        let table = forked_table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .remove_branch("dev");
+        let mut commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = commit.take_updates();
+        let requirements = commit.take_requirements();
+        assert!(is_removed(&updates, "dev"));
+        assert_eq!(requirement_for(&requirements, "dev"), Some(Some(CURRENT)));
+    }
+
+    #[tokio::test]
+    async fn test_fast_forward_preexisting_branch_to_tag() {
+        // dev (branch at CURRENT) cannot fast-forward to stable (tag at ROOT): CURRENT is not an
+        // ancestor of ROOT. But a branch AT root CAN fast-forward to a ref at CURRENT.
+        let table = forked_table();
+        let ok = Transaction::new(&table)
+            .manage_snapshots()
+            .create_branch("at_root", ROOT)
+            .fast_forward("at_root", "dev"); // dev is a branch at CURRENT
+        let mut commit = Arc::new(ok).commit(&table).await.unwrap();
+        assert_eq!(
+            find_set(&commit.take_updates(), "at_root")
+                .unwrap()
+                .snapshot_id,
+            CURRENT
+        );
     }
 }
