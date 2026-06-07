@@ -60,10 +60,10 @@ layers are removed in Phase 0.
 
 1. Read [CLAUDE.md](CLAUDE.md) (intent, prohibitions, conventions, read order) → this `Roadmap.md` →
    [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRIX.md) → [docs/testing.md](docs/testing.md).
-2. **Phase 0 is complete (2026-06-07); Phase 1 is in progress.** **`main` is the owned 0.9.1 base** —
-   `sync/0.9.1` was merged into it on 2026-06-07, so start from `main` (or a short-lived feature branch
-   off it). Within Phase 1, increment 1 (`ManageSnapshots`) has landed (🟡); **the next move is increment
-   2 — `UpdatePartitionSpec`**. The live, increment-level plan and checkbox state are in
+2. **Phase 0 is complete (2026-06-07); Phase 1 is in progress.** **`main` is the owned 0.9.1 base** (the
+   Phase 0 sync landed on it 2026-06-07) — start from `main`, or a short-lived feature branch off it.
+   Within Phase 1, increment 1 (`ManageSnapshots`) has landed (🟡); **the next move is increment 2 —
+   `UpdatePartitionSpec`**. The live, increment-level plan and checkbox state are in
    [task/todo.md](task/todo.md) — read it (and [task/lessons.md](task/lessons.md) in full) before starting.
 3. Verify the build before and after each change:
    ```bash
