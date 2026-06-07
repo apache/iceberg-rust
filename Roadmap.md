@@ -113,15 +113,18 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
   documents the *real* synced versions). **Recommended human checkpoints:** after the sync (the riskiest,
   most conflict-prone step) and before the irreversible Python deletion.
 
-### Phase 1 — Spec & metadata completeness  ·  **Status: ❌**
+### Phase 1 — Spec & metadata completeness  ·  **Status: 🟡 in progress**
 - **Goal:** the metadata-evolution surface that writes depend on.
 - **Gates on:** Phase 0.
 - **Key deliverables:** `UpdateSchema` (add/drop/rename/reorder/promote, make-optional/required);
   `UpdatePartitionSpec` (partition evolution); `ManageSnapshots` (branch/tag CRUD, rollback, cherry-pick,
-  set-current, fast-forward); full snapshot-ref handling; V3 groundwork (row-lineage fields, column
-  default values).
+  set-current, fast-forward); full snapshot-ref handling; V3 groundwork (row-lineage fields). (Column
+  default values already present in the 0.9.1 base — see GAP_MATRIX.)
+- **Progress:** increment 1 — `ManageSnapshots` (branch/tag lifecycle, rollback, fast-forward, retention)
+  landed with unit tests (🟡 — `cherrypick` + `rollbackToTime` deferred; Java interop test pending).
+  Next: `UpdatePartitionSpec`, then `UpdateSchema`.
 - **Exit criteria:** each action matches the Java contract behavior, with unit + interop tests; GAP_MATRIX
-  rows flipped.
+  rows flipped to ✅ (interop proven).
 
 ### Phase 2 — Write engine  ·  **Status: ❌ (largest functional gap)**
 - **Goal:** the full commit/write surface beyond fast-append.
@@ -145,8 +148,9 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
 ### Phase 4 — Format & type breadth  ·  **Status: ❌ (heavy)**
 - **Goal:** data-file format and V3 type coverage on par with Java `data/`.
 - **Gates on:** Phase 1 (types in spec).
-- **Key deliverables:** ORC + Avro **data** file read/write; V3 types end-to-end — variant (incl.
-  shredding), geometry/geography + geospatial predicates, `timestamp_ns`, `unknown`, column default values.
+- **Key deliverables:** ORC + Avro **data** file read/write; remaining V3 types end-to-end — variant
+  (incl. shredding), geometry/geography + geospatial predicates, `unknown`. (`timestamp_ns` and column
+  default values already landed in the 0.9.1 base — see GAP_MATRIX.)
 - **Exit criteria:** read/write parity for ORC + Avro data; V3 types round-trip and interop with Java.
 
 ### Phase 5 — Catalog & views  ·  **Status: 🟡**
@@ -200,9 +204,11 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
 
 1. **Write engine** — everything beyond fast-append (`OverwriteFiles`, `ReplacePartitions`, `DeleteFiles`,
    `RowDelta`, `RewriteFiles`, `RewriteManifests`, merge append) + finalized position-delete / DV writers.
-2. **Schema/partition evolution + snapshot management** (`UpdateSchema`, `UpdatePartitionSpec`,
-   `ManageSnapshots`).
-3. **Format & type breadth** — ORC + Avro data files; V3 types (variant, geo, `timestamp_ns`, defaults).
+2. **Schema/partition evolution + snapshot management** (`UpdateSchema`, `UpdatePartitionSpec`;
+   `ManageSnapshots` is 🟡 — branch/tag lifecycle/rollback/fast-forward landed, `cherrypick`/`rollbackToTime`
+   remain).
+3. **Format & type breadth** — ORC + Avro data files; remaining V3 types (variant, geo, `unknown`).
+   (`timestamp_ns` and column default values already present — see GAP_MATRIX.)
 4. **Views in catalogs** (`ViewCatalog` + view operations).
 5. **Maintenance actions** (expire / orphan / compaction / rewrite-deletes / compute-stats / migrate).
 6. **Encryption** (`EncryptionManager`, KMS, encrypted FileIO / manifests).

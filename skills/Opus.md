@@ -300,7 +300,7 @@ Whenever you feel the pull to abbreviate, write the full name first, then ask: "
 ### Verification commands (canonical — referenced by §4 and the Pre-Flight checklist)
 
 - **Rust:** `make check` (fmt-check + clippy `-D warnings` + TOML check + unused-deps) and `make test` (doc + all-targets tests). Or directly: `cargo fmt --all -- --check` · `cargo clippy --all-targets --all-features --workspace -- -D warnings` · `cargo test --no-fail-fast --all-targets --all-features --workspace`. Workspace layout in [Cargo.toml](../Cargo.toml); formatter config in [rustfmt.toml](../rustfmt.toml). The clippy gate is `-D warnings` (there is no `[workspace.lints]` table). MSRV is checked with `make check-msrv`.
-- **Python:** run from the package directory. `ruff check .` · `ruff format --check .` · `pytest` (e.g. `iceberg-spark-python` uses `uv run …`). Ruff config lives in that package's `pyproject.toml`; line length 100.
+- **Python:** there is no Python layer in this fork (it was removed in Phase 0; Python is deferred). If one is reintroduced, run its checks from its package directory (`ruff check .` · `ruff format --check .` · `pytest`, via `uv run …`).
 
 ### Rust
 

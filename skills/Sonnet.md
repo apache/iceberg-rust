@@ -228,7 +228,7 @@ DO: `extract_user_records`, `parse_manifest_entry`, `is_snapshot_expired` — DO
 
 ### Verification commands (canonical — referenced by §4 and Pre-Flight)
 - **Rust:** `make check` (fmt-check + clippy `-D warnings` + TOML check + unused-deps) and `make test`. Or directly: `cargo fmt --all -- --check` · `cargo clippy --all-targets --all-features --workspace -- -D warnings` · `cargo test --no-fail-fast --all-targets --all-features --workspace`. Workspace layout in [Cargo.toml](../Cargo.toml); formatter config in [rustfmt.toml](../rustfmt.toml). The clippy gate is `-D warnings` (no `[workspace.lints]` table). MSRV via `make check-msrv`.
-- **Python:** run from the package directory. `ruff check .` · `ruff format --check .` · `pytest` (e.g. `iceberg-spark-python` uses `uv run …`). Ruff config in the package's `pyproject.toml`; line length 100.
+- **Python:** there is no Python layer in this fork (it was removed in Phase 0; Python is deferred). If one is reintroduced, run its checks from its package directory (`ruff check .` · `ruff format --check .` · `pytest`, via `uv run …`).
 
 ### Rust
 

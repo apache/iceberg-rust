@@ -37,3 +37,28 @@ How to use it (see the manuals' §2):
   Result<ActionCommit> }` resolving against `table.metadata()` and returning
   `ActionCommit::new(updates, requirements)`; add `mod x;` + `use ...XAction;` + a `pub fn x()` ctor in
   `transaction/mod.rs`. The `TransactionAction` trait must be `use`d in tests to call `.commit()`.
+
+### 2026-06-07 (multi-agent review remediation)
+- **DO** verify a parity contract against the Java *source*, not intuition, before implementing the
+  Rust side. *Why:* the first `fast_forward` cut wrongly required `to` to be a branch and rejected an
+  absent `from`; Java `UpdateSnapshotReferencesOperation.replaceBranch` only requires `from` to be a
+  branch and **auto-creates** an absent `from`. Read `/tmp/iceberg-java-ref` for the exact precondition
+  checks (`Preconditions.checkArgument(...)`) and the early-return no-op cases.
+- **DO** emit only refs whose final state differs from their original (no-op suppression) in
+  metadata-mutating commit actions. *Why:* create-then-remove, fast-forward-to-same, replace-to-same
+  should produce zero `TableUpdate`s — matches Java's "only changed refs" and keeps the commit
+  idempotent at the catalog layer. Compare `metadata.refs.get(name) == working.get(name)` (both
+  `SnapshotReference: PartialEq`).
+- **DO** flag an agent finding you could NOT confirm rather than acting on it. *Why:* a reviewer
+  claimed Java rejects non-positive retention (`> 0`); a grep of `SnapshotRef.java` showed no such
+  `checkArgument`. Left unimplemented and tracked in `task/todo.md` as a follow-up — don't add
+  validation that may diverge from Java on an unverified claim.
+- **DO** test pre-existing-ref paths with a fixture that actually contains those refs. *Why:* the
+  straight-line `make_v2_table()` has only `main`, so remove/replace/rollback-non-ancestor were
+  untestable; build a forked fixture (`add_snapshot` a sibling + `set_ref` a branch/tag). `add_snapshot`
+  validates the timestamp against the metadata's `last-updated-ms` (not just snapshot timestamps) — set
+  the grafted snapshot's `timestamp_ms` after it.
+- **DO** keep summary/headline sections in sync with the detail table when flipping a status. *Why:*
+  the GAP_MATRIX + Roadmap "Headline gaps" kept listing `timestamp_ns`/column-defaults as missing after
+  the matrix body flipped them to ✅. When you change a row's status, grep for the capability name and
+  reconcile every mention.

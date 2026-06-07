@@ -55,6 +55,18 @@ New file `crates/iceberg/src/transaction/manage_snapshots.rs`; wired into `trans
 guards. **Deferred to increment 4:** `cherrypick` (needs snapshot replay), `rollbackToTime`,
 `replaceBranch(from,to)`; a Java interop round-trip before the row flips to ✅.
 
+#### Review remediation (2026-06-07, post multi-agent review) — DONE
+- [x] `fast_forward` Java-parity fixes: `to` may be a tag; absent `from` auto-created; no-op when
+      already at target. Verified against `UpdateSnapshotReferencesOperation.replaceBranch`.
+- [x] commit() emit-time no-op suppression (create-then-remove, ff-to-same, replace-to-same emit nothing).
+- [x] +14 tests (now 26): rollback non-ancestor, ff wrong-direction, remove/rename main guards, rename
+      collision, remove/replace of pre-existing refs (guard carries original id), forked fixture.
+- [x] Created `docs/testing.md` (was referenced 14× but missing); reconciled headline-gaps + Roadmap
+      Phase 1 status (🟡) with the matrix; removed stale `iceberg-spark-python` line from `skills/*.md`.
+- [ ] **Follow-up (unverified):** retention positivity validation (Java may reject `≤ 0` for
+      min_snapshots_to_keep / max_snapshot_age_ms / max_ref_age_ms). A grep of `SnapshotRef.java` found
+      no such `checkArgument` — confirm where (if anywhere) Java enforces it before adding it here.
+
 ### Next up — Increment 2: UpdatePartitionSpec
 addField/removeField/renameField → new spec via `TableUpdate::AddSpec`/`SetDefaultSpec`
 (`TableMetadataBuilder::add_partition_spec`/`set_default_partition_spec` already exist).

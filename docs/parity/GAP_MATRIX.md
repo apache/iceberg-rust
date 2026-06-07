@@ -37,7 +37,7 @@
 | V3 types: geometry / geography | ❌ | `api/.../geospatial/` | none |
 | V3 types: timestamp_ns | ✅ | `types/Types.java` | `spec/datatypes.rs` (`PrimitiveType::TimestampNs`) |
 | V3 types: unknown | ❌ | `types/Types.java` | none |
-| Column default values (initial/write) | ✅ | `Schema`/`Types` | `spec/schema` fields carry `initial_default`/`write_default` |
+| Column default values (initial/write) | ✅ | `Schema`/`Types` | `spec/datatypes.rs` `NestedField` carries `initial_default`/`write_default` |
 | Partition transforms (identity/bucket/truncate/year/month/day/hour/void) | ✅ | `api/.../transforms/` | `spec/transform.rs` |
 | Schema evolution (`UpdateSchema`) | ❌ | `api/UpdateSchema.java` | no transaction action |
 | Partition evolution (`UpdatePartitionSpec`) | ❌ | `api/UpdatePartitionSpec.java` | none |
@@ -98,7 +98,8 @@
    `DeleteFiles`, `RowDelta`, `RewriteFiles`, `RewriteManifests`, merge append).
 2. **Schema/partition evolution + snapshot management** (`UpdateSchema`, `UpdatePartitionSpec`,
    `ManageSnapshots`).
-3. **Format & type breadth** — ORC + Avro data files; V3 types (variant, geo, timestamp_ns, defaults).
+3. **Format & type breadth** — ORC + Avro data files; remaining V3 types (variant, geo, unknown).
+   (`timestamp_ns` and column default values already landed in the 0.8/0.9 base — see the matrix.)
 4. **Views in catalogs** (`ViewCatalog` + view operations).
 5. **Maintenance actions** (expire/orphan/compaction/rewrite-deletes/compute-stats/migrate).
 6. **Encryption** (`EncryptionManager`, KMS, encrypted FileIO/manifests).
