@@ -16,7 +16,6 @@
 # under the License.
 
 [workspace]
-exclude = ["bindings/python"]
 members = [
   "crates/catalog/*",
   "crates/examples",

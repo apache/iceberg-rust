@@ -33,6 +33,5 @@ header:
     - "dist/*"
     - "target"
     - "Cargo.lock"
-    - "bindings/python/uv.lock"
     - ".github/PULL_REQUEST_TEMPLATE.md"
   comment: on-failure
