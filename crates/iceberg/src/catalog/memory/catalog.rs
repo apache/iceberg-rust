@@ -1877,7 +1877,10 @@ pub(crate) mod tests {
 
         assert_eq!(table.identifier(), updated_table.identifier());
         assert_eq!(table.metadata().uuid(), updated_table.metadata().uuid());
-        assert!(table.metadata().last_updated_ms() < updated_table.metadata().last_updated_ms());
+        // `last_updated_ms` is millisecond-precision wall-clock; a fast update can land in the same
+        // millisecond as table creation, so this must be `<=` (strict `<` is flaky under parallel
+        // test load). That an update actually occurred is asserted via the metadata-log growth below.
+        assert!(table.metadata().last_updated_ms() <= updated_table.metadata().last_updated_ms());
         assert_ne!(table.metadata_location(), updated_table.metadata_location());
 
         assert!(
