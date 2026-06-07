@@ -1,3 +1,22 @@
+<!--
+  ~ Licensed to the Apache Software Foundation (ASF) under one
+  ~ or more contributor license agreements.  See the NOTICE file
+  ~ distributed with this work for additional information
+  ~ regarding copyright ownership.  The ASF licenses this file
+  ~ to you under the Apache License, Version 2.0 (the
+  ~ "License"); you may not use this file except in compliance
+  ~ with the License.  You may obtain a copy of the License at
+  ~
+  ~   http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing,
+  ~ software distributed under the License is distributed on an
+  ~ "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  ~ KIND, either express or implied.  See the License for the
+  ~ specific language governing permissions and limitations
+  ~ under the License.
+-->
+
 # Java ↔ Rust Capability Gap Matrix
 
 > **Goal:** 1-to-1 capability parity between this Rust implementation and the Apache Iceberg
@@ -51,7 +70,7 @@
 | Write: `OverwriteFiles` | ❌ | `api/OverwriteFiles.java` | none |
 | Write: `ReplacePartitions` (dynamic/static overwrite) | ❌ | `api/ReplacePartitions.java` | none |
 | Write: `DeleteFiles` | ❌ | `api/DeleteFiles.java` | none |
-| Write: `RowDelta` (MOR) | ❌ | `api/RowDelta.java` | none |
+| Write: `RowDelta` (merge-on-read) | ❌ | `api/RowDelta.java` | none |
 | Write: `RewriteFiles` (compaction commit) | ❌ | `api/RewriteFiles.java` | none |
 | Transaction action extension seam | 🟡 | `core/.../BaseTransaction` | `transaction/action.rs` — `TransactionAction`/`ApplyTransactionAction` + `ActionCommit` exist (trait is `pub(crate)`; we own it → make `pub` in Phase 2) |
 | Write: `upgrade_format_version` action | ✅ | format-version upgrade | `transaction/upgrade_format_version.rs` (new in 0.9) |
