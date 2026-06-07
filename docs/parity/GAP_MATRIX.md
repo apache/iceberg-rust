@@ -13,13 +13,20 @@
 
 ## Audit provenance
 
-- **Rust base audited:** fork at `iceberg` **0.7.0** (datafusion 50, arrow 56.2). Source of truth:
-  `crates/iceberg/src/{spec,expr,scan,transaction,writer,arrow,io,inspect,puffin,catalog}`.
-- **Java reference:** `apache/iceberg` `main` (shallow clone), modules `api/` + `core/` +
-  `data/` + `orc/` + `parquet/` + `arrow/`.
-- **⚠️ This matrix predates the upstream 0.9.x sync (Phase 0).** Upstream 0.8.0 (Jan 2026), 0.9.0
-  (Mar 2026), and 0.9.1 (May 2026) likely close several rows below — **re-run this audit against the
-  0.9.x base before starting Phase 1** and strike the rows already solved.
+- **Rust base audited:** owned fork on upstream **`iceberg` 0.9.1** (datafusion 52.2, arrow 57.1,
+  parquet 57.1, MSRV 1.92), **re-audited 2026-06-07** after the Phase 0 sync. Source of truth:
+  `crates/iceberg/src/{spec,expr,scan,transaction,writer,arrow,io,inspect,puffin,catalog}` plus the
+  new `crates/storage/opendal` FileIO crate.
+- **Java reference:** `apache/iceberg` `main`, modules `api/` + `core/` + `data/` + `orc/` +
+  `parquet/` + `arrow/`.
+- **Re-audit policy:** re-run after every upstream sync and after each parity phase; date-stamp this
+  block and strike the rows the sync/phase solved.
+- **What the 0.7→0.9.1 sync changed (flipped rows below):** `timestamp_ns` type, column default
+  values (`initial_default`/`write_default`), merge-on-read **read** application of position-deletes +
+  deletion-vectors during scan, the `upgrade_format_version` transaction action, and a real
+  `TransactionAction`/`ApplyTransactionAction` extension seam. The **headline gaps are unchanged**:
+  write-engine actions, schema/partition/snapshot evolution, incremental scans, ORC/Avro data files,
+  variant/geo/unknown types, catalog view ops, maintenance actions, encryption.
 
 ## Matrix
 
@@ -28,8 +35,9 @@
 | Primitive + nested types | ✅ | `api/.../types/Types.java` | `spec/datatypes.rs` |
 | V3 types: variant | ❌ | `api/.../variants/` | none |
 | V3 types: geometry / geography | ❌ | `api/.../geospatial/` | none |
-| V3 types: timestamp_ns, unknown | ❌ | `types/Types.java` | none |
-| Column default values (initial/write) | ❌ | `Schema`/`Types` | none |
+| V3 types: timestamp_ns | ✅ | `types/Types.java` | `spec/datatypes.rs` (`PrimitiveType::TimestampNs`) |
+| V3 types: unknown | ❌ | `types/Types.java` | none |
+| Column default values (initial/write) | ✅ | `Schema`/`Types` | `spec/schema` fields carry `initial_default`/`write_default` |
 | Partition transforms (identity/bucket/truncate/year/month/day/hour/void) | ✅ | `api/.../transforms/` | `spec/transform.rs` |
 | Schema evolution (`UpdateSchema`) | ❌ | `api/UpdateSchema.java` | no transaction action |
 | Partition evolution (`UpdatePartitionSpec`) | ❌ | `api/UpdatePartitionSpec.java` | none |
@@ -45,13 +53,16 @@
 | Write: `DeleteFiles` | ❌ | `api/DeleteFiles.java` | none |
 | Write: `RowDelta` (MOR) | ❌ | `api/RowDelta.java` | none |
 | Write: `RewriteFiles` (compaction commit) | ❌ | `api/RewriteFiles.java` | none |
-| Multi-op transactions + optimistic-concurrency retry | 🟡 | `api/Transaction.java` | `catalog.update_table`; needs validation |
+| Transaction action extension seam | 🟡 | `core/.../BaseTransaction` | `transaction/action.rs` — `TransactionAction`/`ApplyTransactionAction` + `ActionCommit` exist (trait is `pub(crate)`; we own it → make `pub` in Phase 2) |
+| Write: `upgrade_format_version` action | ✅ | format-version upgrade | `transaction/upgrade_format_version.rs` (new in 0.9) |
+| Multi-op transactions + optimistic-concurrency retry | 🟡 | `api/Transaction.java` | `catalog.update_table`; needs validation against Glue/S3 Tables |
 | Writer: data file | ✅ | `data/` | `writer/base_writer/data_file_writer.rs` |
 | Writer: equality-delete | ✅ | `data/` | `writer/base_writer/equality_delete_writer.rs` |
-| Writer: position-delete | 🟡 | `data/` | partial |
-| Writer: deletion-vector (V3 puffin DV) | 🟡 | `core/.../deletes` | `delete_vector.rs` + `puffin/` |
+| Writer: position-delete | 🟡 | `data/` | no dedicated `PositionDeleteWriter` in `writer/base_writer/`; read-side apply is done (see below) |
+| Writer: deletion-vector (V3 puffin DV) | 🟡 | `core/.../deletes` | `delete_vector.rs` + `puffin/` (read solid; write side partial) |
 | Writer: partitioning (fanout/clustered/unpartitioned) | ✅ | — | `writer/partitioning/` |
 | Read: Parquet → Arrow | ✅ | `parquet/` | `arrow/reader.rs` |
+| Read: merge-on-read apply (position-deletes + DVs during scan) | ✅ | `data/.../DeleteFilter` | `arrow/delete_filter.rs`, `arrow/caching_delete_file_loader.rs`, `delete_file_index.rs` (new in 0.8/0.9) |
 | Read: ORC data files | ❌ | `orc/` | none |
 | Read/write: Avro data files | ❌ | `core/.../avro` (data) | Avro is manifest-only here |
 | Scan planning + partition pruning | ✅ | `api/TableScan.java` | `scan/` |
@@ -61,11 +72,11 @@
 | `BatchScan` | ❌ | `api/BatchScan.java` | none |
 | Scan/commit metrics reporting (`ScanReport`, `MetricsReporter`) | ❌ | `metrics/` | none |
 | Catalogs: REST, Hive, Glue, S3 Tables, SQL/JDBC, in-memory | ✅ | `core/.../{rest,jdbc,inmemory}`, `aws`, `hive-metastore` | `crates/catalog/*`, `catalog/memory` |
-| `ViewCatalog` + view operations (create/replace/drop/list, versions) | 🟡 | `api/catalog/ViewCatalog.java`, `api/view/` | view *metadata* spec only (`spec/view_*`) |
+| `ViewCatalog` + view operations (create/replace/drop/list, versions) | 🟡 | `api/catalog/ViewCatalog.java`, `api/view/` | view metadata spec + builder (`spec/view_metadata*`, `view_version.rs`) and `ViewCreation`/`ViewUpdate` types in `catalog/mod.rs`; **no `ViewCatalog` trait / no catalog view ops** (REST/Glue/etc.) |
 | `SessionCatalog` | ❌ | `api/catalog/SessionCatalog.java` | none |
 | `LockManager` | 🟡 | `api/LockManager.java` | partial |
 | Encryption (`EncryptionManager`, KMS, encrypted FileIO/manifests) | ❌ | `api/encryption/`, `core/.../encryption` | V3 `spec/encrypted_key.rs` stub only |
-| FileIO (S3/GCS/Azure/OSS/fs/memory) | ✅ | `core/.../io`, cloud modules | `io/storage_*.rs` (OpenDAL) |
+| FileIO (S3/GCS/Azure/OSS/fs/memory) | ✅ | `core/.../io`, cloud modules | `io/` + extracted `crates/storage/opendal` (OpenDAL) |
 | Puffin read/write + blob types (theta NDV, DV) | 🟡 | `core/.../puffin`, `api/.../puffin` | `puffin/` (blob coverage partial) |
 | Maintenance: `ExpireSnapshots` | ❌ | `api/actions/ExpireSnapshots.java` | none |
 | Maintenance: `DeleteOrphanFiles` | ❌ | `api/actions/DeleteOrphanFiles.java` | none |
