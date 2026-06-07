@@ -60,10 +60,10 @@ layers are removed in Phase 0.
 
 1. Read [CLAUDE.md](CLAUDE.md) (intent, prohibitions, conventions, read order) → this `Roadmap.md` →
    [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRIX.md) → [docs/testing.md](docs/testing.md).
-2. **Phase 0 is complete (2026-06-07); Phase 1 is in progress.** Active branch: **`sync/0.9.1`** (origin
-   `main` is still the pre-sync base until it is merged — do not start from `main`). Within Phase 1,
-   increment 1 (`ManageSnapshots`) has landed (🟡); **the next move is increment 2 —
-   `UpdatePartitionSpec`**. The live, increment-level plan and checkbox state are in
+2. **Phase 0 is complete (2026-06-07); Phase 1 is in progress.** **`main` is the owned 0.9.1 base** —
+   `sync/0.9.1` was merged into it on 2026-06-07, so start from `main` (or a short-lived feature branch
+   off it). Within Phase 1, increment 1 (`ManageSnapshots`) has landed (🟡); **the next move is increment
+   2 — `UpdatePartitionSpec`**. The live, increment-level plan and checkbox state are in
    [task/todo.md](task/todo.md) — read it (and [task/lessons.md](task/lessons.md) in full) before starting.
 3. Verify the build before and after each change:
    ```bash
@@ -86,7 +86,7 @@ policy is lifted; everything else is comfortably single-agent.
 ## Current state
 
 **Base: upstream `iceberg` 0.9.1** (datafusion 52.2, arrow 57.1, parquet 57.1, MSRV 1.92), adopted as the
-owned fork in Phase 0 (2026-06-07), on branch `sync/0.9.1`. No Python layers remain. The workspace builds
+owned fork in Phase 0 (2026-06-07) and merged to **`main`** (the canonical base). No Python layers remain. The workspace builds
 green and the offline lib/unit suite passes (0 failures); service-bound integration suites need Docker
 (`make test`) and the `sqllogictest` crate needs `protoc`. Roughly: spec types, partition transforms,
 manifest read/write, fast-append, data/equality-delete writers, Parquet→Arrow read **plus merge-on-read
