@@ -41,8 +41,11 @@ layers are removed in Phase 0.
 
 1. Read [CLAUDE.md](CLAUDE.md) (intent, prohibitions, conventions, read order) → this `Roadmap.md` →
    [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRIX.md) → [docs/testing.md](docs/testing.md).
-2. **Phase 0 (base sync + repo reset) is complete (2026-06-07).** The next move is **Phase 1** (spec &
-   metadata completeness); Phases 1+ are now unblocked.
+2. **Phase 0 is complete (2026-06-07); Phase 1 is in progress.** Active branch: **`sync/0.9.1`** (origin
+   `main` is still the pre-sync base until it is merged — do not start from `main`). Within Phase 1,
+   increment 1 (`ManageSnapshots`) has landed (🟡); **the next move is increment 2 —
+   `UpdatePartitionSpec`**. The live, increment-level plan and checkbox state are in
+   [task/todo.md](task/todo.md) — read it (and [task/lessons.md](task/lessons.md) in full) before starting.
 3. Verify the build before and after each change:
    ```bash
    cargo build --workspace
@@ -64,15 +67,17 @@ policy is lifted; everything else is comfortably single-agent.
 ## Current state
 
 **Base: upstream `iceberg` 0.9.1** (datafusion 52.2, arrow 57.1, parquet 57.1, MSRV 1.92), adopted as the
-owned fork in Phase 0 (2026-06-07). No Python layers remain. The workspace builds green and the offline
-lib/unit suite passes (~1,391 tests, 0 failures); service-bound integration suites need Docker
+owned fork in Phase 0 (2026-06-07), on branch `sync/0.9.1`. No Python layers remain. The workspace builds
+green and the offline lib/unit suite passes (0 failures); service-bound integration suites need Docker
 (`make test`) and the `sqllogictest` crate needs `protoc`. Roughly: spec types, partition transforms,
 manifest read/write, fast-append, data/equality-delete writers, Parquet→Arrow read **plus merge-on-read
 delete application**, scan planning, the catalog set (REST/Hive/Glue/S3 Tables/SQL/memory), FileIO,
-`timestamp_ns` + column default values are **present**; the **write engine beyond fast-append,
-schema/partition/snapshot evolution, incremental scans, ORC/Avro data files, variant/geo/unknown types,
-catalog view ops, and all maintenance actions are missing**. Full row-by-row status (re-audited on 0.9.1):
-[docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRIX.md).
+`timestamp_ns` + column default values are **present**; **snapshot management (`ManageSnapshots`) is
+partial** (Phase 1 increment 1: branch/tag lifecycle, rollback, fast-forward, retention — `cherrypick`/
+`rollbackToTime` and a Java interop test remain); the **write engine beyond fast-append, schema/partition
+evolution (`UpdateSchema`/`UpdatePartitionSpec`), incremental scans, ORC/Avro data files,
+variant/geo/unknown types, catalog view ops, and all maintenance actions are missing**. Full row-by-row
+status (re-audited on 0.9.1): [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRIX.md).
 
 ---
 
