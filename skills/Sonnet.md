@@ -166,7 +166,7 @@ Diff the base branch vs. your changes when relevant. Ask: "Would a staff enginee
 
 ### 7. Dependency & API Rules
 - Before writing code against an external library, verify the API is current and not deprecated.
-- Always verify (this stack): Apache DataFusion (+ `iceberg`, `iceberg-datafusion`), Apache Arrow (`arrow-rs` / PyArrow), Parquet, OpenDAL, Apache Iceberg / PyIceberg / `pyiceberg-core`, PyO3, tokio, anyhow, thiserror, serde; for the Python layer, Polars, PySpark, `datafusion` (Python).
+- Always verify (this stack): Apache DataFusion (+ `iceberg`, `iceberg-datafusion`), Apache Arrow (`arrow-rs`), Parquet, OpenDAL, Apache Iceberg (this fork's crates), tokio, anyhow, thiserror, serde.
 - If actual usage differs from what you intended to write, record the correct usage in [task/lessons.md](../task/lessons.md).
 - Use the exact method signature — never guess parameter names or assume default behavior. Arrow is the in-memory currency of this stack (Parquet, OLAP) — plan for it.
 - **Never modify dependency files without explicit approval** (Non-Negotiables).

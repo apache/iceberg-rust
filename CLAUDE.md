@@ -2,21 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> **⚠️ Ownership pivot (2026-06-06) — this file is being superseded.** This repo is now an **owned
-> fork** maintained for 1:1 Java `iceberg-core` parity; [docs/parity/ROADMAP.md](docs/parity/ROADMAP.md)
-> is authoritative. Two rules still written below are now **reversed**, kept only until the Phase 0-D
-> rewrite of this file lands: **(1) mergeability with upstream is NO LONGER a constraint** — diverge
-> freely; sync up from and cherry-pick upstream opportunistically. **(2) The Python layers**
-> (`iceberg-spark-python`, `iceberg-spark-pyspark`, `bindings/python`) are **slated for deletion** in
-> Phase 0, not active components. Where this file and `docs/parity/ROADMAP.md` disagree, the
-> **ROADMAP wins**.
+This is an **owned fork of [Apache Iceberg™ Rust](https://github.com/apache/iceberg-rust)** — the Rust
+implementation of the [Apache Iceberg](https://iceberg.apache.org/) open table format. We maintain it to
+reach **1:1 capability parity with the Java `iceberg-core` / `iceberg-api` library** (the engine-agnostic
+table-format core, **not** the Spark engine surface). Upstream `apache/iceberg-rust` is a **sync baseline
+we cherry-pick from, not a mergeability constraint** — we diverge freely in service of parity. The
+deliverable is a **Rust-native library**; Python / PySpark is deferred (there is no Python layer in this
+repo). **Glue + S3 Tables** are the first-priority catalogs.
 
-Orientation for sessions working in this repository. This is an **owned fork of
-[Apache Iceberg™ Rust](https://github.com/apache/iceberg-rust)** — the Rust implementation of the
-[Apache Iceberg](https://iceberg.apache.org/) open table format. We maintain it for **Java
-`iceberg-core` parity** (Glue + S3 Tables first); upstream is a baseline we sync from and cherry-pick,
-**not** a mergeability constraint. (The legacy Python layers it still carries are slated for deletion —
-see the banner above.)
+The authoritative plan is **[Roadmap.md](Roadmap.md)** (phase plan + sequencing); the living capability
+checklist is **[docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRIX.md)**. When this file and the Roadmap
+disagree on direction, the **Roadmap wins**; when the Roadmap and the GAP_MATRIX disagree on a
+capability's *status*, the **GAP_MATRIX** (re-audited against the live base) wins.
 
 > **A note on the XML tags in this file.** A few sections are wrapped in semantic tags
 > (`<read_order>`, `<map_md_navigation>`, `<subagent_policy>`). They mark the load-bearing
@@ -29,17 +26,32 @@ see the banner above.)
 ## Read order (every session)
 
 1. **This file (CLAUDE.md)** — repository intent, prohibitions, and the navigation contract.
-2. **The operating manual for your model tier** — [skills/Opus.md](skills/Opus.md),
+2. **[Roadmap.md](Roadmap.md)** — the parity phase plan and the current phase; then
+   **[docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRIX.md)** for per-capability status.
+3. **The operating manual for your model tier** — [skills/Opus.md](skills/Opus.md),
    [skills/Sonnet.md](skills/Sonnet.md), or [skills/Haiku.md](skills/Haiku.md) (the portable
    engineering contract; see [skills/map.md](skills/map.md)). CLAUDE.md wins on any conflict.
-3. **[task/lessons.md](task/lessons.md) in full, then [task/todo.md](task/todo.md)** — accumulated
+4. **[task/lessons.md](task/lessons.md) in full, then [task/todo.md](task/todo.md)** — accumulated
    lessons and any mid-flight plan to pick up.
-4. **The `map.md` of every directory your task will touch** (where present — see the navigation
+5. **The `map.md` of every directory your task will touch** (where present — see the navigation
    rule below).
-5. **Upstream docs when you need depth:** [README.md](README.md), [CONTRIBUTING.md](CONTRIBUTING.md),
+6. **Upstream docs when you need depth:** [README.md](README.md), [CONTRIBUTING.md](CONTRIBUTING.md),
    the per-crate `README.md` files, and the [Iceberg Rust site](https://rust.iceberg.apache.org/).
 
 </read_order>
+
+## Parity mandate
+
+The north star is behavioral 1:1 parity with Java `iceberg-core` / `iceberg-api`. Concretely:
+
+- **The Java repo is the spec-by-example.** Keep a reference checkout of `apache/iceberg` and re-crawl on
+  each Java release. A capability is "done" only when the Rust API matches the Java contract's behavior.
+- **Tests land with the code, in the same change.** Behavior added without tests is a hard block.
+- **Interop is the only true 1:1 evidence.** Where applicable, prove byte-level round-trips: read tables
+  Java wrote, and prove Java reads what we write. A GAP_MATRIX row flips to ✅ only with unit tests **and**
+  an interop test.
+- **Re-audit the GAP_MATRIX after every upstream sync and every phase**, and date-stamp the provenance.
+- **Order by dependency, then value:** metadata correctness underpins writes; writes underpin maintenance.
 
 <map_md_navigation>
 
@@ -72,10 +84,10 @@ Each `map.md` has two parts in one file:
 
 Apache Iceberg Rust implements the **Iceberg table format spec** in Rust: reading and writing table
 metadata and data, expression/predicate handling, partition transforms, snapshot and schema
-evolution, and pluggable catalogs and object storage. It is a **library workspace** (plus a Python
-binding), not an application — most code is `#![no_main]` library crates consumed by downstream
-projects. Primarily **Rust** (edition 2024, MSRV 1.87 on stable), with a **Python** binding via
-PyO3/maturin and, in this fork, a pure-Python PySpark-compatible layer.
+evolution, and pluggable catalogs and object storage. It is a **library workspace**, not an
+application — most code is library crates consumed by downstream projects. **Rust** edition 2024, MSRV
+**1.92** (see [Cargo.toml](Cargo.toml) `rust-version`). Base synced to upstream **0.9.1** (datafusion
+52.2 / arrow 57.1 / parquet 57.1).
 
 ## Big-picture architecture
 
@@ -83,43 +95,42 @@ PyO3/maturin and, in this fork, a pure-Python PySpark-compatible layer.
 
 | Crate | Path | Role |
 |---|---|---|
-| **iceberg** | [crates/iceberg/](crates/iceberg/) | The core: spec types, catalog trait, table scans, transactions, writers, Arrow/Avro/Parquet IO, expressions, partition transforms, metadata inspection, Puffin. |
+| **iceberg** | [crates/iceberg/](crates/iceberg/) | The core: spec types, catalog trait, table scans, transactions, writers, Arrow/Avro/Parquet IO, expressions, partition transforms, metadata inspection, Puffin, deletion vectors. |
 | **iceberg-datafusion** | [crates/integrations/datafusion/](crates/integrations/datafusion/) | DataFusion integration — `TableProvider` / `CatalogProvider` / physical plans so Iceberg tables are queryable from DataFusion SQL. |
-| **catalog/{rest,hms,glue,s3tables,sql}** | [crates/catalog/](crates/catalog/) | Concrete `Catalog` implementations: REST, Hive Metastore, AWS Glue, S3 Tables, and SQL-backed. |
+| **catalog/{rest,hms,glue,s3tables,sql}** | [crates/catalog/](crates/catalog/) | Concrete `Catalog` implementations: REST, Hive Metastore, AWS Glue, S3 Tables, and SQL-backed. **Glue + S3 Tables are the parity priority.** |
 | **catalog/loader** | [crates/catalog/loader/](crates/catalog/loader/) | Config-driven catalog construction (pick a catalog impl at runtime). |
+| **storage/opendal** | [crates/storage/opendal/](crates/storage/opendal/) | OpenDAL-backed FileIO storage (extracted from the core in the 0.8/0.9 cycle). |
 | **integrations/cache-moka** | [crates/integrations/cache-moka/](crates/integrations/cache-moka/) | Moka-backed object/metadata cache. |
 | **integrations/playground** | [crates/integrations/playground/](crates/integrations/playground/) | `iceberg-playground` — scratch crate for experimentation. |
 | **examples, sqllogictest, test_utils, integration_tests** | [crates/](crates/) | Runnable examples, SQL logic tests, shared test helpers, end-to-end integration suites. |
-
-### Fork additions (not upstream) — ⚠️ slated for deletion in fork Phase 0 (Workstream C)
-
-| Path | What it is |
-|---|---|
-| [bindings/python/](bindings/python/) | `pyiceberg-core` — PyO3/maturin Python binding to the Rust core (this is upstream, but the fork tracks it closely). |
-| [iceberg-spark-python/](iceberg-spark-python/) | Pure-Python PySpark-compatible SQL/DataFrame layer over DataFusion + PyIceberg + `pyiceberg-core`. |
-| [iceberg-spark-pyspark/](iceberg-spark-pyspark/) | A thin PySpark import-shim package that re-exports the layer above. |
 
 ### Inside the `iceberg` crate
 
 ```
 crates/iceberg/src/
-├── spec/         table/manifest/schema/snapshot/partition spec types (the on-disk format)
-├── catalog/      the Catalog trait + table identifiers + metadata
+├── spec/         table/manifest/schema/snapshot/partition/view metadata types (the on-disk format)
+├── catalog/      the Catalog trait + table/view identifiers + creation/update types
 ├── scan/         table scan planning → Arrow record batches
-├── transaction/  atomic metadata updates (append, overwrite, schema change)
-├── writer/       data + position/equality delete writers
-├── arrow/        Arrow ⇄ Iceberg schema and value conversions
-├── io/           object storage abstraction (OpenDAL-backed FileIO)
-├── expr/         predicate / boolean expression trees + binding
-├── transform/    partition transforms (identity, bucket, truncate, year/month/day/hour)
-├── inspect/      metadata tables (snapshots, manifests) — more variants live in the Python layer
-└── puffin/       Puffin file format (stats / deletion vectors)
+├── transaction/  atomic metadata updates (append, sort-order, properties, location, statistics,
+│                 upgrade-format-version) + the TransactionAction / ApplyTransactionAction seam
+├── writer/       data + equality-delete writers, file/rolling/partitioning writers
+├── arrow/        Arrow ⇄ Iceberg schema/value conversion + merge-on-read delete application
+├── avro/         Avro encoding for manifests/metadata
+├── io/           object storage abstraction (FileIO; OpenDAL impl in crates/storage/opendal)
+├── expr/         predicate / boolean expression trees + binding + visitors
+├── transform/    partition transforms (identity, bucket, truncate, year/month/day/hour, void)
+├── inspect/      metadata tables (snapshots, manifests — more variants are a parity gap)
+├── puffin/       Puffin file format (stats / deletion vectors)
+├── delete_vector.rs / delete_file_index.rs   merge-on-read delete handling
+└── metadata_columns.rs                        reserved metadata columns (_file, _pos, ...)
 ```
 
 Patterns to internalize: **the spec module is the source of truth** for the on-disk format —
 changes there ripple through every reader and writer. **Catalogs are pluggable** behind one trait;
 **FileIO is pluggable** behind OpenDAL. **Arrow is the in-memory currency** — scans produce Arrow,
-writers consume it.
+writers consume it. **Transactions extend via `TransactionAction`** (`transaction/action.rs`); the
+trait is currently `pub(crate)` — since we own this fork, opening it is the sanctioned path to new
+write actions in Phase 2 (see [Roadmap.md](Roadmap.md)).
 
 ## Build & test commands
 
@@ -128,34 +139,35 @@ The canonical entry points are in the [Makefile](Makefile) (run from the repo ro
 ```bash
 make build         # cargo build --all-targets --all-features --workspace
 make check         # fmt --check + clippy -D warnings + taplo TOML check + cargo-machete (unused deps)
-make test          # doc tests + cargo test --no-fail-fast --all-targets --all-features --workspace
 make unit-test     # doc tests + lib tests only (faster)
+make test          # docker-up + doc tests + cargo test --no-fail-fast --all-targets --all-features --workspace
 make check-msrv    # cargo +<MSRV> check --workspace
 ```
 
 Or the underlying cargo commands directly:
 
 ```bash
-cargo build --all-targets --all-features --workspace
+cargo build --workspace
+cargo test --workspace --no-fail-fast
+cargo clippy --all-targets --workspace -- -D warnings
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features --workspace -- -D warnings
-cargo test --no-fail-fast --all-targets --all-features --workspace
 ```
 
-- **Toolchain:** stable Rust, MSRV **1.87** (see [Cargo.toml](Cargo.toml) `rust-version`); a pinned
-  nightly ([rust-toolchain.toml](rust-toolchain.toml)) runs the lint gate — both `cargo fmt` and
-  `cargo clippy` (it declares the `rustfmt` and `clippy` components).
-- **Formatter:** [rustfmt.toml](rustfmt.toml) (`StdExternalCrate` import grouping, module-granularity
-  imports, doc-comment formatting). **There is no `[workspace.lints]` table** — the clippy gate is
-  `-D warnings` from the Makefile / CI, not a lints config.
-- **TOML:** `taplo fmt` / `taplo check` ([.taplo.toml](.taplo.toml)). **Unused deps:** `cargo machete`.
-- **Python** (per package, not workspace): run from the package directory.
-  - `bindings/python` — maturin/PyO3 (`maturin develop`, then `pytest`).
-  - `iceberg-spark-python` — uses `uv`: `uv run ruff check .` · `uv run ruff format --check .` ·
-    `uv run pytest`. Ruff config lives in that package's [pyproject.toml](iceberg-spark-python/pyproject.toml).
+- **Toolchain:** the lint gate runs on a pinned nightly ([rust-toolchain.toml](rust-toolchain.toml),
+  currently `nightly-2025-10-27`, which `rustup` fetches automatically); downstream only needs MSRV
+  **1.92**. The pinned nightly declares the `rustfmt` and `clippy` components.
+- **`protoc` prerequisite:** `crates/sqllogictest` transitively pulls `datafusion-substrait` →
+  `substrait`, whose build needs the Protobuf compiler. If `protoc` is unavailable, the core surface
+  still builds/tests via `cargo test --workspace --exclude iceberg-sqllogictest`. Install
+  `protobuf-compiler` to run the full suite.
+- **`make test` starts Docker** (`docker-up`) for integration suites (REST fixture, MinIO, etc.).
+  AWS/Glue/S3-Tables integration tests need real credentials and are not part of the offline gate.
+- **Formatter:** [rustfmt.toml](rustfmt.toml) (`StdExternalCrate` import grouping, module granularity).
+  **TOML:** `taplo`. **Unused deps:** `cargo machete`.
 
-CI lives in [.github/workflows/](.github/workflows/) — `ci.yml` (Rust), `bindings_python_ci.yml`,
-`ci_typos.yml`, `audit.yml`, plus release/website jobs.
+CI lives in [.github/workflows/](.github/workflows/) — `ci.yml` (Rust), `ci_typos.yml`, `audit.yml`,
+`codeql.yml`, `publish.yml`, plus website jobs. (Python binding CI/release workflows were removed with
+the Python layer.)
 
 ## Absolute prohibitions
 
@@ -166,15 +178,13 @@ These are irreversible or hard-block. The operating manuals (Non-Negotiables) re
   live catalog, no resource teardown. There is no rollback.
 - **Never commit or log secrets, credentials, or tokens** — not in code, tests, fixtures, or
   `tracing` output. Treat AWS keys, catalog tokens, and S3 URIs with embedded creds as radioactive.
-- **Do not break the public API or the on-disk format without explicit approval** — a changed
-  trait, signature, or spec encoding silently breaks downstream crates and already-written tables.
-  This is a table-format library; format stability is the product.
-- **Never edit dependency files** — [Cargo.toml](Cargo.toml), `Cargo.lock`, any crate `Cargo.toml`,
-  or a Python `pyproject.toml` — without explicit approval.
-- **(Superseded 2026-06-06 — no longer a prohibition.)** ~~Keep the fork mergeable with upstream.~~
-  This is an **owned fork**: edit any file freely in service of Java `iceberg-core` parity.
-  Mergeability with `apache/iceberg-rust` is **not** a constraint; cherry-pick upstream wins
-  opportunistically. See [docs/parity/ROADMAP.md](docs/parity/ROADMAP.md).
+- **Do not break the on-disk format without explicit approval** — a changed spec encoding silently
+  corrupts already-written tables. This is a table-format library; format stability is the product.
+  (The public *Rust* API may evolve in service of parity — this is an owned fork — but call out any
+  breaking surface change so downstream pins can follow.)
+- **Never edit dependency files** — [Cargo.toml](Cargo.toml), `Cargo.lock`, any crate `Cargo.toml` —
+  without explicit approval. (The Phase 0 version-family sync to 0.9.1 was the sanctioned exception and
+  is complete; routine work does not touch these.)
 
 ## Rust conventions
 
@@ -186,12 +196,12 @@ repo-specific house style they point to.
   may use `anyhow`. **No bare `.unwrap()` / `.unwrap_err()` in production paths** — carry context.
 - **Imports & formatting:** let `cargo fmt` own layout (config in [rustfmt.toml](rustfmt.toml)); do
   not hand-format imports — the `StdExternalCrate` grouping and module granularity are automatic.
-- **Lints:** code must pass `cargo clippy --all-targets --all-features --workspace -- -D warnings`.
+- **Lints:** code must pass `cargo clippy --all-targets --workspace -- -D warnings`.
 - **House style — section banners + one blank line between top-level items.** For large modules,
   group related items under a banner: a `///` doc block followed by a `///` + space + a run of `=`
   characters out to the formatter width, with the closing banner directly above the item (no blank
-  line between). Banners are hand-authored and `cargo fmt`-compatible. One blank line between
-  top-level items. (Adopt this only where the surrounding module already uses it.)
+  line between). Banners are hand-authored and `cargo fmt`-compatible. (Adopt this only where the
+  surrounding module already uses it.)
 - **Logging:** `tracing` with structured fields (`?error`, ids, durations), never `println!` in
   library code, and never log secrets.
 
@@ -202,18 +212,21 @@ repo-specific house style they point to.
 **Single agent by default — do the work in the main thread.** Favor cost control and determinism.
 Do **not** spawn sub-agents (`Agent` / Task fan-out, `Workflow` orchestration, plan-mode
 `Explore` / `Plan` helpers) unless the user explicitly asks. Need to search or read broadly? Use
-the read/search tools inline. When the user *does* ask for sub-agents, default them to Sonnet or
-Haiku; only run an Opus sub-agent on a direct, explicit instruction naming Opus.
+the read/search tools inline. The two heavy parity phases — **Phase 2 (write engine)** and
+**Phase 4 (formats & V3 types)** — are the natural fan-out candidates **if** the user lifts this
+policy; everything else is comfortably single-agent. When the user *does* ask for sub-agents, default
+them to Sonnet or Haiku; only run an Opus sub-agent on a direct, explicit instruction naming Opus.
 
 </subagent_policy>
 
 ## Working conventions
 
-- **Upstream is a sync baseline, not a constraint.** This is an **owned fork** for Java `iceberg-core`
+- **Upstream is a sync baseline, not a constraint.** This is an owned fork for Java `iceberg-core`
   parity — edit freely; sync up from upstream and cherry-pick wins, but mergeability is not required.
-  (Supersedes the prior "keep changes additive and mergeable" rule, 2026-06-06.)
-- **Tests ship with the change.** Behavior added without tests is a hard block (see the manuals'
-  §4 Done gate and [docs/testing.md](docs/testing.md)), not a "strong default."
+- **Tests ship with the change**, plus interop tests where applicable (see the Parity mandate and the
+  manuals' §4 Done gate).
 - **Keep `map.md` in lockstep** with the directories that use it (see `<map_md_navigation>`).
 - **Follow the operating manual for your tier** ([skills/](skills/)) — Risk-First, naming, the
-  Rust/Python rules, the debugging protocol, and the verification gate. CLAUDE.md wins on conflict.
+  Rust rules, the debugging protocol, and the verification gate. CLAUDE.md wins on conflict.
+</content>
+</invoke>
