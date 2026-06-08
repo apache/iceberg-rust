@@ -483,7 +483,10 @@ impl RestCatalog {
                 )
             })?;
 
-        let file_io = FileIOBuilder::new(factory).with_props(props).build();
+        let file_io = FileIOBuilder::new(factory)
+            .with_props(props)
+            .with_runtime(self.runtime.clone())
+            .build();
 
         Ok(file_io)
     }

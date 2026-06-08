@@ -3031,6 +3031,7 @@ pub fn iceberg::table::Table::metadata_ref(&self) -> iceberg::spec::TableMetadat
 pub fn iceberg::table::Table::reader_builder(&self) -> iceberg::arrow::ArrowReaderBuilder
 pub fn iceberg::table::Table::readonly(&self) -> bool
 pub fn iceberg::table::Table::scan(&self) -> iceberg::scan::TableScanBuilder<'_>
+pub fn iceberg::table::Table::with_runtime(self, runtime: iceberg::Runtime) -> Self
 impl core::clone::Clone for iceberg::table::Table
 pub fn iceberg::table::Table::clone(&self) -> iceberg::table::Table
 impl core::fmt::Debug for iceberg::table::Table

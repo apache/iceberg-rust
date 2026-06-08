@@ -145,6 +145,8 @@ impl TableBuilder {
             ));
         };
 
+        let file_io = file_io.with_runtime(runtime.clone());
+
         let object_cache = if disable_cache {
             Arc::new(ObjectCache::with_disabled_cache(file_io.clone()))
         } else if let Some(cache_size_bytes) = cache_size_bytes {
@@ -190,6 +192,15 @@ impl Table {
     /// Sets the [`Table`] metadata location and returns an updated instance.
     pub(crate) fn with_metadata_location(mut self, metadata_location: String) -> Self {
         self.metadata_location = Some(metadata_location);
+        self
+    }
+
+    /// Sets the runtime this table uses when spawning tasks.
+    pub fn with_runtime(mut self, runtime: Runtime) -> Self {
+        let file_io = self.file_io.with_runtime(runtime.clone());
+        self.object_cache = Arc::new(self.object_cache.with_file_io(file_io.clone()));
+        self.file_io = file_io;
+        self.runtime = runtime;
         self
     }
 

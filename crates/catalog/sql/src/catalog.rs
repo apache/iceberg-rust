@@ -261,6 +261,7 @@ impl SqlCatalog {
         // Unrecognized keys are ignored by backends.
         let fileio = FileIOBuilder::new(factory)
             .with_props(config.props.clone())
+            .with_runtime(runtime.clone())
             .build();
 
         install_default_drivers();
