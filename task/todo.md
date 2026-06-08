@@ -2110,3 +2110,81 @@ production `.rs` logic changed, no Cargo edits, no commit. Row stays 🟡 (data-
 **Deferred, correctly scoped (flagged not fixed):** `validateReplacedPartitions` (concurrent-change partition
 scan), the second commit-time `WapUtil.validateWapPublish(base)` re-check against a concurrently-refreshed
 base, and data-level Java interop — all tracked, none a correctness bug in the single-writer surface.
+
+### Increment 8 (5c) — V3 deletion-vector (DV) writer (BUILDER Opus, 2026-06-08)
+Complete the merge-on-read WRITE story: V3 tables require deletion vectors (Puffin `deletion-vector-v1`
+blobs) instead of position-delete parquet files. INTEROP-CRITICAL: the DV blob bytes MUST match Java
+`BitmapPositionDeleteIndex.serialize` exactly or Java (and our own read side) cannot apply the deletes.
+
+**Java byte layout verified against source** (`core/.../deletes/BitmapPositionDeleteIndex.java` +
+`RoaringPositionBitmap.java`), DV blob content =
+`[bitmapDataLength: 4 bytes BIG-endian]` + `[MAGIC_NUMBER 1681511377: 4 bytes LITTLE-endian]` +
+`[portable roaring treemap]` + `[CRC-32 of (magic+bitmap): 4 bytes BIG-endian]`, where `bitmapDataLength
+= 4 (magic) + treemap_len`, and the CRC covers the magic+treemap (offset 4, length `bitmapDataLength`).
+The treemap portable format (`RoaringPositionBitmap.serialize`): 8-byte LE count + per-bitmap [4-byte LE
+key + standard 32-bit RoaringBitmap]. Rust `roaring::RoaringTreemap::serialize_into` is documented
+Java-compatible and produces EXACTLY this (verified by reading roaring-0.11.3 `treemap/serialization.rs`:
+`write_u64::<LittleEndian>(len)` then per (key,bitmap) `write_u32::<LittleEndian>(key)` +
+`bitmap.serialize_into`). DIVERGENCE (benign): Java calls `bitmap.runOptimize()` (RLE) before serializing;
+the roaring Rust crate does not. Both are valid portable encodings that BOTH readers accept — byte-level
+non-identical but mutually readable. The DataFile DV `content_offset`/`content_size_in_bytes` MUST equal
+the blob's offset/length in the Puffin footer (`BaseDVFileWriter.createDV` uses `blobMetadata.offset()`/
+`.length()`).
+
+**CRC dependency check (STOP condition resolved):** NO `crc`/`crc32fast` crate is a DIRECT dep of
+`iceberg` (`crc32fast` is only transitive via `flate2`). Adding it is forbidden (Cargo edit). Resolution:
+implement a small, self-contained, auditable IEEE 802.3 / zlib CRC-32 (reflected, poly 0xEDB88320, init
+0xFFFFFFFF, final-XOR 0xFFFFFFFF — identical to Java `java.util.zip.CRC32`) inside `delete_vector.rs`,
+pinned by the canonical check value `crc32(b"123456789") == 0xCBF43926`. No Cargo edit needed.
+
+**Puffin writer helper (genuinely missing — flagged):** `PuffinWriter::add` computes the blob `(offset,
+length)` but returns `()`, discarding them — there is NO way to get the blob's Puffin-footer offset/length
+the DataFile requires. Mirror Java `PuffinWriter.write(blob) -> BlobMetadata`: change `add` to return the
+`BlobMetadata` it already builds. Also add `PuffinWriter::file_size()` (Java `PuffinWriter.fileSize()`) so
+the DV writer can set the DataFile's `file_size_in_bytes` to the full Puffin file size. Both are additive;
+the existing call sites (`add(...).await?` in tests) still compile (returned value ignored).
+
+Plan:
+- [x] A. `DeleteVector::serialize() -> Result<Vec<u8>>` (Java `BitmapPositionDeleteIndex.serialize`) +
+      `DeleteVector::deserialize(&[u8]) -> Result<DeleteVector>` (the read-side parser — none existed;
+      caching loader had only a TODO). Self-contained `crc32` fn. Named consts MAGIC_NUMBER /
+      LENGTH_SIZE_BYTES / MAGIC_NUMBER_SIZE_BYTES / CRC_SIZE_BYTES.
+- [x] B. Puffin: `PuffinWriter::add` returns `BlobMetadata`; `PuffinWriter::close` returns the file size
+      (chosen over a separate `file_size()` getter — `close` consumes the writer and is the natural place to
+      surface the final size; existing `close().await?` call sites that ignore the value still compile).
+- [x] C. `writer/base_writer/deletion_vector_writer.rs`: `DeletionVectorFileWriter` — given a Puffin
+      `OutputFile` + referenced data-file path + `DeleteVector` (+ optional `PartitionKey`), writes ONE
+      `deletion-vector-v1` blob (type DELETION_VECTOR_V1, fields=[_pos id 2147483645], snap/seq = -1,
+      data = dv.serialize(), props referenced-data-file + cardinality — mirroring `BaseDVFileWriter.toBlob`),
+      closes the Puffin file, returns a `DataFile{content=PositionDeletes, file_format=Puffin, file_path=
+      puffin path, referenced_data_file=path, content_offset=blob.offset, content_size_in_bytes=blob.length,
+      record_count=dv.len, partition/partition_spec_id from the PartitionKey}`. Wired via `pub mod` in
+      `writer/base_writer/mod.rs`.
+- [x] Tests: serialize round-trip {1,3,5,1000,2_000_000_000} (32-bit boundary); writer round-trip {1,3} →
+      DataFile fields + content_offset/size index the Puffin blob + read back via PuffinReader+deserialize ==
+      {1,3}; byte-level magic + length framing; CRC known-answer; mutation (corrupt magic / endianness → fail).
+- [x] Docs: GAP_MATRIX `Writer: deletion-vector` + `Puffin read/write` rows → write side lands; Roadmap;
+      this todo (check off 5c); lessons. Verify gate from repo root.
+
+**Outcome (2026-06-08, Increment 8 / 5c, BUILDER Opus):** the V3 deletion-vector WRITER lands 🟡,
+completing the merge-on-read write story. **A** `DeleteVector::serialize`/`deserialize` (`delete_vector.rs`)
+at byte-level Java parity with `BitmapPositionDeleteIndex.serialize` (`[len:4 BE][magic 1681511377:4 LE]
+[portable roaring treemap:LE][CRC-32:4 BE over magic+treemap]`); treemap via `roaring::serialize_into`
+(verified byte-equal to Java `RoaringPositionBitmap`); inline IEEE CRC-32 (no dep added — `crc32fast` is
+only transitive, so STOP-on-Cargo respected; pinned by `crc32(b"123456789")==0xCBF43926`); `deserialize`
+IS the read-side parser (none existed — caching loader had only a `// TODO`). **B** `PuffinWriter::add` →
+`BlobMetadata`, `PuffinWriter::close` → file size (the genuinely-missing helpers — the writer was
+discarding the blob offset/length the DV `DataFile` requires; FLAGGED, minimal additive change to
+`puffin/writer.rs`). **C** `writer/base_writer/deletion_vector_writer.rs::DeletionVectorFileWriter` writes
+one `deletion-vector-v1` blob per referenced data file and returns the `DataFile` (mirrors
+`BaseDVFileWriter.createDV`; `content_offset`/`content_size_in_bytes` = the Puffin-footer blob offset/length,
+proven by the crown-jewel test slicing the raw file at exactly those bytes → deserialize == input). 12 new
+tests (9 serialize + 3 writer), incl. byte-level frame, CRC known-answer, 3 mutation tests (corrupt magic /
+bitmap-via-CRC / wrong length). **Verify (repo root, pinned nightly):** build clean; lib ×2 = 1431/0 both
+runs (was 1419 baseline → +12); interop 4/4 ×3 (manage_snapshots / update_schema / update_partition_spec);
+clippy -D warnings clean; fmt --check clean. **Files touched exactly the allowed set:** `delete_vector.rs`,
+`puffin/writer.rs` (flagged helper), `writer/base_writer/{mod.rs,deletion_vector_writer.rs}` (new), GAP_MATRIX,
+Roadmap, todo, lessons. **NO Cargo.toml/lockfile edits** (roaring present; CRC inline). No commit. **Deferred
+(flagged):** RowDelta-for-V3 e2e (a V3 DV is a DeleteFile → composes), `BaseDVFileWriter` multi-data-file
+batching, the DV read path wired into `caching_delete_file_loader` (parser now exists), Java interop round-trip
+(→ ✅). Row stays 🟡. An Opus REVIEWER verifies next.

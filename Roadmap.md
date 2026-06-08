@@ -108,9 +108,12 @@ layers are removed in Phase 0.
    landed 🟡 the same day. Increment 5a — the `PositionDeleteFileWriter`
    (`writer/base_writer/position_delete_writer.rs`, first piece of the `RowDelta` merge-on-read write path:
    writes the Iceberg position-delete file `file_path`/`pos` with `content(PositionDeletes)`, Java-faithful
-   write-as-given) — landed 🟡 on 2026-06-08. Next Phase-2 increments: `RowDelta` action (5b) + producer
-   delete-manifest handling, deletion-vector writer (5c), `RewriteManifests`, merge append. (V3
-   groundwork — row-lineage fields + the remaining `MIN_FORMAT_VERSIONS` types
+   write-as-given) — landed 🟡 on 2026-06-08. Increment 5b — the `RowDelta` action + producer
+   delete-manifest handling — landed 🟡 on 2026-06-08 (the crown-jewel write→read merge-on-read chain).
+   Increment 5c — the V3 deletion-vector writer (`delete_vector.rs` byte-level DV serialization +
+   `writer/base_writer/deletion_vector_writer.rs`) — landed 🟡 on 2026-06-08, completing the merge-on-read
+   WRITE story. Next Phase-2 increments: wire the DV writer into RowDelta-for-V3 end-to-end, `RewriteManifests`,
+   merge append. (V3 groundwork — row-lineage fields + the remaining `MIN_FORMAT_VERSIONS` types
    `variant`/`unknown`/`geometry`/`geography` — also remains.)** The live,
    increment-level plan and checkbox
    state are in
@@ -287,7 +290,7 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
   `UpdatePartitionSpec` ✅ (bidirectional interop landed 2026-06-07, surfacing+fixing the identity-only
   partition-name collision divergence); `ManageSnapshots` awaits the same interop treatment.**
 
-### Phase 2 — Write engine  ·  **Status: 🟡 (in progress — `DeleteFiles` + manifest-filter machinery + `OverwriteFiles` + `ReplacePartitions` + `RewriteFiles` landed 2026-06-07; `PositionDeleteFileWriter` (RowDelta increment 5a) + `RowDelta` action (5b) landed 2026-06-08 — the merge-on-read write→read chain is now end-to-end; the concurrent-commit conflict-validation FOUNDATION + `ReplacePartitions.validateNoConflictingData` (increment 6) landed 2026-06-08 — the serializable-isolation safety layer; `cherrypick` (snapshot replay onto `main`: fast-forward / append-replay / dynamic-overwrite) landed 2026-06-08 as increment 7 — no longer Phase-2-gated)**
+### Phase 2 — Write engine  ·  **Status: 🟡 (in progress — `DeleteFiles` + manifest-filter machinery + `OverwriteFiles` + `ReplacePartitions` + `RewriteFiles` landed 2026-06-07; `PositionDeleteFileWriter` (RowDelta increment 5a) + `RowDelta` action (5b) landed 2026-06-08 — the merge-on-read write→read chain is now end-to-end; the concurrent-commit conflict-validation FOUNDATION + `ReplacePartitions.validateNoConflictingData` (increment 6) landed 2026-06-08 — the serializable-isolation safety layer; `cherrypick` (snapshot replay onto `main`: fast-forward / append-replay / dynamic-overwrite) landed 2026-06-08 as increment 7 — no longer Phase-2-gated; the V3 deletion-vector (DV) writer (increment 5c) landed 2026-06-08 — `DeleteVector::serialize`/`deserialize` at byte-level Java parity + `DeletionVectorFileWriter`, completing the merge-on-read WRITE story for V3)**
 - **Goal:** the full commit/write surface beyond fast-append.
 - **Gates on:** Phase 1.
 - **Increment sequence (dependency, then value):** **1. `DeleteFiles`** (done 🟡 — delete data files by
@@ -315,7 +318,17 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
   `write_added_delete_manifest`, the `Deletes` writer; empty-commit precondition relaxed); added delete
   entries inherit the new snapshot's seq so they apply to earlier data; dynamic op (Java
   `BaseRowDelta.operation()`). THE CROWN-JEWEL test proves a scan drops the deleted rows after the row
-  delta — the full merge-on-read write→read chain], 5c deletion-vector writer**),
+  delta — the full merge-on-read write→read chain], 5c deletion-vector writer [**done 🟡 2026-06-08** —
+  `delete_vector.rs`: `DeleteVector::serialize`/`deserialize` at byte-level Java parity with
+  `BitmapPositionDeleteIndex.serialize` (`[len: 4 BE][magic 1681511377: 4 LE][portable roaring treemap:
+  LE][CRC-32: 4 BE]`; treemap via `roaring::serialize_into` = Java `RoaringPositionBitmap`; inline CRC-32,
+  no dep added); `writer/base_writer/deletion_vector_writer.rs`: `DeletionVectorFileWriter` writes ONE DV
+  blob per referenced data file into a Puffin file and returns a `DataFile{content=PositionDeletes,
+  format=Puffin, referenced_data_file, content_offset/content_size = the Puffin-footer blob offset/length,
+  record_count=cardinality}` (mirrors `BaseDVFileWriter.createDV`); Puffin `add` now returns `BlobMetadata`
+  + `close` returns the file size. Round-trip + byte-level + CRC + mutation tests prove the offset/size index
+  the blob and the bytes round-trip. **Deferred:** RowDelta-for-V3 e2e (a V3 DV is a DeleteFile → composes),
+  `BaseDVFileWriter` multi-data-file batching, Java interop round-trip]**),
   **6. concurrent-commit conflict-validation FOUNDATION + `ReplacePartitions.validateNoConflictingData`**
   (**done 🟡 2026-06-08** — the serializable-isolation safety layer: `Transaction` captures
   `starting_snapshot_id` (surviving the `do_commit` re-base); a default-no-op `TransactionAction::validate`

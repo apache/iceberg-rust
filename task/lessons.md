@@ -1351,3 +1351,103 @@ probe), each mutation-verified as load-bearing. Lessons:
   wired for cherry-pick yet — same sub-sequence as `validateReplacedPartitions`). (c) Data-level Java
   interop. All three are the documented gate to ✅; row stays 🟡. None is a correctness bug in the
   single-writer surface the increment claims.
+
+### 2026-06-08 (Increment 8 / 5c — V3 deletion-vector writer, BUILDER Opus)
+- **DO read BOTH `BitmapPositionDeleteIndex.java` AND `RoaringPositionBitmap.java` before serializing a DV
+  blob — the byte layout spans two classes and mixes endianness.** *Why:* the DV blob content (Java
+  `BitmapPositionDeleteIndex.serialize`) is `[bitmap-data-length: 4 BIG-endian]` + `[MAGIC_NUMBER 1681511377:
+  4 LITTLE-endian]` + `[roaring treemap]` + `[CRC-32: 4 BIG-endian]`. The mixed endianness is a TRAP: the
+  outer `ByteBuffer` is left big-endian (so length + CRC are BE via `putInt`), but the `bitmapData` SLICE is
+  explicitly `.order(LITTLE_ENDIAN)` (so the magic + treemap are LE). `bitmap-data-length == 4 (magic) +
+  treemap_len` and the CRC-32 covers `magic + treemap` (offset 4, length `bitmap-data-length`), NOT the
+  length field and NOT the CRC itself. The treemap portable format lives in the SECOND class
+  (`RoaringPositionBitmap.serialize`): 8-byte LE count + per-bitmap `[4-byte LE key + standard 32-bit
+  RoaringBitmap]`. A digest paraphrase that says only "portable roaring, little-endian" hides the
+  length/CRC endianness; read the source.
+- **DO trust `roaring::RoaringTreemap::serialize_into` (roaring 0.11) as a byte-exact match for Java
+  `RoaringPositionBitmap.serialize` — but VERIFY by reading the crate's `treemap/serialization.rs`, don't
+  assume.** *Why:* confirmed `serialize_into` writes `write_u64::<LittleEndian>(map.len())` then per `(key,
+  bitmap)` `write_u32::<LittleEndian>(key)` + `bitmap.serialize_into` — identical to Java's `putLong(len)` +
+  per-key `putInt(key)` + `bitmaps[key].serialize(buffer)`. The crate doc explicitly claims C/C++/Java/Go
+  compatibility. The `BTreeMap` key order (ascending unsigned) matches Java's ascending-key requirement.
+  **Divergence (benign, flagged):** Java calls `bitmap.runOptimize()` (RLE) before serializing; the Rust
+  crate does not. Both are valid portable encodings BOTH readers accept (RLE is a space optimization, not a
+  correctness/format requirement), so the bytes are non-identical but mutually readable. A Java-interop
+  fixture round-trip (deferred) would confirm.
+- **DO implement CRC-32 inline rather than add a `crc`/`crc32fast` dep — the STOP condition is "add a
+  dependency," not "compute a CRC."** *Why:* `crc32fast` is only a TRANSITIVE dep (via `flate2`), so `use
+  crc32fast` would require adding it to `crates/iceberg/Cargo.toml` (forbidden Cargo edit). Java's
+  `java.util.zip.CRC32` is the standard IEEE 802.3 / zlib CRC-32 (reflected, poly `0xEDB88320`, init/final
+  `0xFFFFFFFF`). A 12-line bit-by-bit reflected implementation is boring, auditable, and pinned by the
+  canonical check value `crc32(b"123456789") == 0xCBF43926` (plus `crc32(b"") == 0` and `crc32(b"a") ==
+  0xE8B7BE43`). Don't reach for a table-driven version — the input is a few hundred bytes; clarity wins.
+- **DO surface the Puffin blob's `(offset, length)` from `PuffinWriter::add` — they ARE the DV `DataFile`'s
+  `content_offset`/`content_size_in_bytes`, and the writer was discarding them.** *Why:* the DV spec
+  REQUIRES `content_offset`/`content_size_in_bytes` to exactly equal the blob's offset/length in the Puffin
+  footer (readers seek the blob by them); Java `BaseDVFileWriter.createDV` reads `blobMetadata.offset()` /
+  `.length()` from the `BlobMetadata` that `PuffinWriter.write(blob)` RETURNS. The Rust `PuffinWriter::add`
+  computed both into the `BlobMetadata` it pushed but returned `()` — there was NO way to recover them. The
+  genuinely-missing helper is to return the `BlobMetadata` (and have `close` return the total file size for
+  `file_size_in_bytes`, since `close` consumes the writer). Both are additive: existing `add(...).await?` /
+  `close().await?` call sites that ignore the value still compile.
+- **DO pin "the offset/size INDEX the blob" by slicing the raw Puffin file at exactly `content_offset
+  ..content_offset+content_size` and deserializing — not merely by checking a blob exists.** *Why:* the
+  interop-critical failure is an offset/size that is off by even one byte (or points at the footer): a blob
+  "exists" but a reader seeking by the recorded bytes gets garbage. The crown-jewel test reads the whole
+  Puffin file, slices `[content_offset, content_offset+content_size)`, and `DeleteVector::deserialize`s it
+  back to the exact positions — AND cross-checks that slice against the Puffin footer's `BlobMetadata.offset/
+  length` and against the high-level `PuffinReader::blob` bytes. Three independent paths agreeing is the
+  proof; a "blob count == 1" assertion is not.
+- **DEFERRED, correctly scoped (flagged not fixed):** (a) wiring the DV writer into RowDelta-for-V3
+  end-to-end — a V3 DV is a `DeleteFile` (content=PositionDeletes), so it composes through the existing
+  `RowDelta` action; the V3 RowDelta scan-application e2e is a follow-up. (b) `BaseDVFileWriter` multi-data-
+  file batching (one Puffin file carrying DVs for many data files) — this writer is one-DV-per-file. (c) A
+  Java interop round-trip (the byte-level + RLE-divergence confirmation that flips the row → ✅). (d) Wiring
+  `DeleteVector::deserialize` into `caching_delete_file_loader`'s `// TODO: Delete Vector loader from Puffin
+  files` (the read path) — the parser now exists for it.
+
+### 2026-06-08 (Increment 8 / 5c — V3 deletion-vector writer, REVIEWER Opus)
+- **DO verify a "portable roaring == Java" CRATE-BEHAVIOR claim with an out-of-crate byte probe, not by
+  trusting the crate's doc string.** *Why:* the whole DV interop rests on `roaring 0.11.3`'s
+  `RoaringTreemap::serialize_into` matching Java `RoaringPositionBitmap.serialize` byte-for-byte. The crate
+  DOES self-document "compatible with the official C/C++, Java and Go implementations," and reading
+  `treemap/serialization.rs` shows `write_u64::<LittleEndian>(map.len())` then per-key
+  `write_u32::<LittleEndian>(key)` + inner `bitmap.serialize_into` over a `BTreeMap<u32,_>` (so keys ascend).
+  But I confirmed it EMPIRICALLY with a throwaway crate depending only on `roaring`: positions `{1, 2, 2^32+5}`
+  serialize to count=2 (8-byte LE), key[0]=0 (4-byte LE), inner cookie `0x303A`=12346
+  (`SERIAL_COOKIE_NO_RUNCONTAINER`, the standard format); keys emit ascending even when inserted `3,0,1`.
+  Exactly Java's layout. A doc string is a claim; the bytes are the proof.
+- **DO confirm BOTH directions of the runOptimize/RLE divergence with a probe before calling it "benign."**
+  *Why:* Java runs `runLengthEncode()` before serializing; Rust does not. The dangerous direction is
+  Rust-writes→Java-reads: Rust emits the `NO_RUNCONTAINER` cookie (12346), the baseline standard format every
+  compliant RoaringBitmap reader (incl. Java) must handle — so Java reads our non-RLE DV. The reverse
+  (Java-writes-RLE→Rust-reads) needs Rust's reader to accept run containers (cookie 12347 `SERIAL_COOKIE`):
+  PROVED by serializing an RLE-optimized bitmap (lo16 cookie = 12347) and round-tripping it through both
+  `RoaringBitmap::deserialize_from` AND a hand-framed `RoaringTreemap::deserialize_from` (len preserved). RLE
+  is a per-container reader-agnostic flag; mutual readability holds both ways. Benign — verified, not asserted.
+- **DO cross-check a hand-rolled CRC-32 against a SECOND independent implementation, not just the KATs.** *Why:*
+  the DV CRC is hand-implemented (couldn't add `crc32fast` — it is only a TRANSITIVE dep in `Cargo.lock`, and a
+  direct dep is a forbidden Cargo edit). The three canonical vectors (`123456789`→0xCBF43926, `""`→0, `a`→
+  0xE8B7BE43) pass, AND a 256-entry table-driven CRC-32 (the classic zlib approach) agrees with the
+  under-review bit-by-bit version on a non-trivial binary payload (0x1BAECBB1). Two independent algorithms
+  agreeing on arbitrary bytes is far stronger evidence than three fixed strings.
+- **DO map every DV `DataFile`/blob field to Java `BaseDVFileWriter.createDV`+`toBlob` by line.** All match:
+  `createDV` → content=PositionDeletes, format=PUFFIN, path=puffin path, size=`writer.fileSize()`,
+  referencedDataFile, contentOffset=`blobMetadata.offset()`, contentSize=`blobMetadata.length()`,
+  recordCount=`cardinality`; `toBlob` → type=`DV_V1` (="deletion-vector-v1"), fields=`[ROW_POSITION.fieldId()]`
+  (=Integer.MAX_VALUE-2 = Rust `RESERVED_FIELD_ID_POS` = i32::MAX-2), snapshot/seq = -1 (inherited),
+  uncompressed, properties {referenced-data-file, cardinality}. The Puffin `add()` captures
+  `offset=num_bytes_written` BEFORE writing + `length=compressed.len()` and pushes the SAME `BlobMetadata` into
+  the footer, so the returned offset/length EQUAL the footer's — the crown-jewel test slices `[offset,
+  offset+size)` from the raw Puffin file and deserializes back to the input positions. `close()` returns the
+  footer-inclusive `num_bytes_written` = full file size.
+- **DO confirm the Puffin `add`/`close` signature change broke no caller by running the bit-identical-to-Java
+  Puffin tests.** *Why:* `add` now returns `BlobMetadata` (was `()`) and `close` returns `u64` (was `()`); the
+  only callers are the new DV writer (consumes them) and the test helper (uses `?`, discards). The 36 puffin
+  module tests — including `test_uncompressed_metric_data_is_bit_identical_to_java_generated_file` — stay green,
+  proving the wire output is unperturbed; a signature change that touched the byte path would fail those.
+- **NOTE (pre-existing, not in this diff): the `delete_vector.rs` doc comment "our Cargo.toml temporarily uses
+  a git reference for the roaring dependency" is STALE** — `roaring = "0.11"` resolves to `0.11.3` from the
+  crates.io REGISTRY (no git ref in Cargo.toml/lock). The comment predates this increment (not introduced by
+  the diff) and is about `BitmapIter`/`advance_to`, not the DV format. Left untouched (out of this change's
+  scope); flagged for a future cleanup pass.
