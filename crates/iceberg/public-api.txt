@@ -692,6 +692,7 @@ pub fn iceberg::io::FileIO::new_input(&self, path: impl core::convert::AsRef<str
 pub fn iceberg::io::FileIO::new_output(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<iceberg::io::OutputFile>
 pub fn iceberg::io::FileIO::new_with_fs() -> Self
 pub fn iceberg::io::FileIO::new_with_memory() -> Self
+pub fn iceberg::io::FileIO::with_runtime(self, runtime: iceberg::Runtime) -> Self
 impl core::clone::Clone for iceberg::io::FileIO
 pub fn iceberg::io::FileIO::clone(&self) -> iceberg::io::FileIO
 impl core::fmt::Debug for iceberg::io::FileIO
@@ -703,6 +704,7 @@ pub fn iceberg::io::FileIOBuilder::config(&self) -> &iceberg::io::StorageConfig
 pub fn iceberg::io::FileIOBuilder::new(factory: alloc::sync::Arc<dyn iceberg::io::StorageFactory>) -> Self
 pub fn iceberg::io::FileIOBuilder::with_prop(self, key: impl alloc::string::ToString, value: impl alloc::string::ToString) -> Self
 pub fn iceberg::io::FileIOBuilder::with_props(self, args: impl core::iter::traits::collect::IntoIterator<Item = (impl alloc::string::ToString, impl alloc::string::ToString)>) -> Self
+pub fn iceberg::io::FileIOBuilder::with_runtime(self, runtime: iceberg::Runtime) -> Self
 impl core::clone::Clone for iceberg::io::FileIOBuilder
 pub fn iceberg::io::FileIOBuilder::clone(&self) -> iceberg::io::FileIOBuilder
 impl core::fmt::Debug for iceberg::io::FileIOBuilder
