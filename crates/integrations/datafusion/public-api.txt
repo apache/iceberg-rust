@@ -74,6 +74,8 @@ pub fn iceberg_datafusion::IcebergStaticTableProvider::schema(&self) -> arrow_sc
 pub fn iceberg_datafusion::IcebergStaticTableProvider::supports_filters_pushdown(&self, filters: &[&datafusion_expr::expr::Expr]) -> datafusion_common::error::Result<alloc::vec::Vec<datafusion_expr::table_source::TableProviderFilterPushDown>>
 pub fn iceberg_datafusion::IcebergStaticTableProvider::table_type(&self) -> datafusion_expr::table_source::TableType
 pub struct iceberg_datafusion::table::IcebergTableProvider
+impl iceberg_datafusion::IcebergTableProvider
+pub async fn iceberg_datafusion::IcebergTableProvider::try_new_with_runtime(catalog: alloc::sync::Arc<dyn iceberg::catalog::Catalog>, namespace: iceberg::catalog::NamespaceIdent, name: impl core::convert::Into<alloc::string::String>, runtime: iceberg::runtime::Runtime) -> iceberg::error::Result<Self>
 impl core::clone::Clone for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::clone(&self) -> iceberg_datafusion::IcebergTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergTableProvider
@@ -99,6 +101,7 @@ pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::
 pub struct iceberg_datafusion::IcebergCatalogProvider
 impl iceberg_datafusion::IcebergCatalogProvider
 pub async fn iceberg_datafusion::IcebergCatalogProvider::try_new(client: alloc::sync::Arc<dyn iceberg::catalog::Catalog>) -> iceberg::error::Result<Self>
+pub async fn iceberg_datafusion::IcebergCatalogProvider::try_new_with_runtime(client: alloc::sync::Arc<dyn iceberg::catalog::Catalog>, runtime: iceberg::runtime::Runtime) -> iceberg::error::Result<Self>
 impl core::fmt::Debug for iceberg_datafusion::IcebergCatalogProvider
 pub fn iceberg_datafusion::IcebergCatalogProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl datafusion_catalog::catalog::CatalogProvider for iceberg_datafusion::IcebergCatalogProvider
@@ -121,6 +124,8 @@ pub fn iceberg_datafusion::IcebergStaticTableProvider::schema(&self) -> arrow_sc
 pub fn iceberg_datafusion::IcebergStaticTableProvider::supports_filters_pushdown(&self, filters: &[&datafusion_expr::expr::Expr]) -> datafusion_common::error::Result<alloc::vec::Vec<datafusion_expr::table_source::TableProviderFilterPushDown>>
 pub fn iceberg_datafusion::IcebergStaticTableProvider::table_type(&self) -> datafusion_expr::table_source::TableType
 pub struct iceberg_datafusion::IcebergTableProvider
+impl iceberg_datafusion::IcebergTableProvider
+pub async fn iceberg_datafusion::IcebergTableProvider::try_new_with_runtime(catalog: alloc::sync::Arc<dyn iceberg::catalog::Catalog>, namespace: iceberg::catalog::NamespaceIdent, name: impl core::convert::Into<alloc::string::String>, runtime: iceberg::runtime::Runtime) -> iceberg::error::Result<Self>
 impl core::clone::Clone for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::clone(&self) -> iceberg_datafusion::IcebergTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergTableProvider

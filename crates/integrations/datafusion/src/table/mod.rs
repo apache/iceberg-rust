@@ -46,7 +46,7 @@ use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::inspect::MetadataTableType;
 use iceberg::spec::TableProperties;
 use iceberg::table::Table;
-use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
+use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, Runtime, TableIdent};
 use metadata_table::IcebergMetadataTableProvider;
 
 use crate::error::to_datafusion_error;
@@ -65,6 +65,10 @@ use crate::physical_plan::write::IcebergWriteExec;
 ///
 /// For read-only access to a specific snapshot without catalog overhead, use
 /// [`IcebergStaticTableProvider`] instead.
+///
+/// When using a CPU/IO split runtime, pass a [`Runtime`] via
+/// [`Self::try_new_with_runtime`] so that table loads use the IO runtime and
+/// loaded tables use the configured Iceberg runtime.
 #[derive(Debug, Clone)]
 pub struct IcebergTableProvider {
     /// The catalog that manages this table
@@ -73,37 +77,77 @@ pub struct IcebergTableProvider {
     table_ident: TableIdent,
     /// A reference-counted arrow `Schema` (cached at construction)
     schema: ArrowSchemaRef,
+    /// When `Some`, catalog reloads use `runtime.io()` and loaded tables use
+    /// this runtime for Iceberg-internal IO and CPU task scheduling.
+    runtime: Option<Runtime>,
 }
 
 impl IcebergTableProvider {
-    /// Creates a new catalog-backed table provider.
-    ///
-    /// Loads the table once to get the initial schema, then stores the catalog
-    /// reference for future metadata refreshes on each operation.
-    pub(crate) async fn try_new(
+    /// Creates a catalog-backed table provider and routes table loads through
+    /// `runtime.io()` instead of running inline on the caller's runtime.
+    pub async fn try_new_with_runtime(
         catalog: Arc<dyn Catalog>,
         namespace: NamespaceIdent,
         name: impl Into<String>,
+        runtime: Runtime,
+    ) -> Result<Self> {
+        Self::try_new_optional_runtime(catalog, namespace, name, Some(runtime)).await
+    }
+
+    pub(crate) async fn try_new_optional_runtime(
+        catalog: Arc<dyn Catalog>,
+        namespace: NamespaceIdent,
+        name: impl Into<String>,
+        runtime: Option<Runtime>,
     ) -> Result<Self> {
         let table_ident = TableIdent::new(namespace, name.into());
 
-        // Load table once to get initial schema
-        let table = catalog.load_table(&table_ident).await?;
+        let table =
+            Self::load_table_on_io(catalog.clone(), table_ident.clone(), runtime.as_ref()).await?;
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
 
         Ok(IcebergTableProvider {
             catalog,
             table_ident,
             schema,
+            runtime,
         })
+    }
+
+    async fn load_table_on_io(
+        catalog: Arc<dyn Catalog>,
+        table_ident: TableIdent,
+        runtime: Option<&Runtime>,
+    ) -> Result<Table> {
+        let table = match runtime {
+            Some(runtime) => {
+                runtime
+                    .io()
+                    .spawn(async move { catalog.load_table(&table_ident).await })
+                    .await??
+            }
+            None => catalog.load_table(&table_ident).await?,
+        };
+        Ok(Self::table_with_runtime(table, runtime))
+    }
+
+    fn table_with_runtime(table: Table, runtime: Option<&Runtime>) -> Table {
+        match runtime {
+            Some(runtime) => table.with_runtime(runtime.clone()),
+            None => table,
+        }
     }
 
     pub(crate) async fn metadata_table(
         &self,
         r#type: MetadataTableType,
     ) -> Result<IcebergMetadataTableProvider> {
-        // Load fresh table metadata for metadata table access
-        let table = self.catalog.load_table(&self.table_ident).await?;
+        let table = Self::load_table_on_io(
+            self.catalog.clone(),
+            self.table_ident.clone(),
+            self.runtime.as_ref(),
+        )
+        .await?;
         Ok(IcebergMetadataTableProvider { table, r#type })
     }
 }
@@ -129,12 +173,13 @@ impl TableProvider for IcebergTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        // Load fresh table metadata from catalog
-        let table = self
-            .catalog
-            .load_table(&self.table_ident)
-            .await
-            .map_err(to_datafusion_error)?;
+        let table = Self::load_table_on_io(
+            self.catalog.clone(),
+            self.table_ident.clone(),
+            self.runtime.as_ref(),
+        )
+        .await
+        .map_err(to_datafusion_error)?;
 
         // Create scan with fresh metadata (always use current snapshot)
         Ok(Arc::new(IcebergTableScan::new(
@@ -161,12 +206,13 @@ impl TableProvider for IcebergTableProvider {
         input: Arc<dyn ExecutionPlan>,
         _insert_op: InsertOp,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        // Load fresh table metadata from catalog
-        let table = self
-            .catalog
-            .load_table(&self.table_ident)
-            .await
-            .map_err(to_datafusion_error)?;
+        let table = Self::load_table_on_io(
+            self.catalog.clone(),
+            self.table_ident.clone(),
+            self.runtime.as_ref(),
+        )
+        .await
+        .map_err(to_datafusion_error)?;
 
         let partition_spec = table.metadata().default_partition_spec();
 
@@ -428,6 +474,21 @@ mod tests {
         )
     }
 
+    async fn new_catalog_backed_provider(
+        catalog: &Arc<dyn Catalog>,
+        namespace: &NamespaceIdent,
+        table_name: &str,
+    ) -> IcebergTableProvider {
+        IcebergTableProvider::try_new_optional_runtime(
+            catalog.clone(),
+            namespace.clone(),
+            table_name,
+            None,
+        )
+        .await
+        .unwrap()
+    }
+
     // Tests for IcebergStaticTableProvider
 
     #[tokio::test]
@@ -526,10 +587,7 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
         // Test creating a catalog-backed provider
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = new_catalog_backed_provider(&catalog, &namespace, &table_name).await;
 
         // Verify the schema is loaded correctly
         let schema = provider.schema();
@@ -542,10 +600,7 @@ mod tests {
     async fn test_catalog_backed_provider_scan() {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = new_catalog_backed_provider(&catalog, &namespace, &table_name).await;
 
         let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
@@ -568,10 +623,7 @@ mod tests {
     async fn test_catalog_backed_provider_insert() {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = new_catalog_backed_provider(&catalog, &namespace, &table_name).await;
 
         let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
@@ -595,10 +647,7 @@ mod tests {
     async fn test_physical_input_schema_consistent_with_logical_input_schema() {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = new_catalog_backed_provider(&catalog, &namespace, &table_name).await;
 
         let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
@@ -720,10 +769,7 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) =
             get_partitioned_test_catalog_and_table(Some(true)).await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = new_catalog_backed_provider(&catalog, &namespace, &table_name).await;
 
         let ctx = SessionContext::new();
         let input_schema = provider.schema();
@@ -752,10 +798,7 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) =
             get_partitioned_test_catalog_and_table(Some(false)).await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = new_catalog_backed_provider(&catalog, &namespace, &table_name).await;
 
         let ctx = SessionContext::new();
         let input_schema = provider.schema();
@@ -812,10 +855,7 @@ mod tests {
 
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = new_catalog_backed_provider(&catalog, &namespace, &table_name).await;
 
         let ctx = SessionContext::new();
         let state = ctx.state();

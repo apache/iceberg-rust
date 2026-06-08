@@ -590,10 +590,11 @@ mod tests {
         let source_table = Arc::new(MemTable::try_new(Arc::clone(&arrow_schema), partitions)?);
         ctx.register_table("source_table", source_table)?;
 
-        let iceberg_table_provider = IcebergTableProvider::try_new(
+        let iceberg_table_provider = IcebergTableProvider::try_new_optional_runtime(
             catalog.clone(),
             namespace.clone(),
             table_name.to_string(),
+            None,
         )
         .await?;
         ctx.register_table("iceberg_table", Arc::new(iceberg_table_provider))?;
