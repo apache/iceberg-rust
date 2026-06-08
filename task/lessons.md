@@ -1594,3 +1594,259 @@ How to use it (see the manuals' §2):
   pulled it into `inspect/partition_summary.rs` (`pub(super)` free fns) rather than duplicate it; this also
   let me drop the old `manifests.rs` bare `.unwrap()`s (propagate errors / `.expect` only the statically-valid
   schema build) in one place. The shared module means the two tables physically cannot drift.
+
+### 2026-06-08 (Phase 3 Increment 1 — ResidualEvaluator core, BUILDER Opus)
+- **DO mirror Java `ResidualVisitor.not` with a constant-folding `simplifying_not`, NOT the `Predicate` `!`
+  operator.** *Why:* Java `Expressions.not` (`api/.../expressions/Expressions.java` L63-73) folds
+  `not(true)=false`, `not(false)=true`, `not(not x)=x`, else wraps; but Rust's `impl Not for Predicate`
+  (`predicate.rs`) deliberately does NOT simplify — it just wraps in `Predicate::Not`. So a residual
+  `NOT(category==5)` whose inner leaf reduced to `AlwaysTrue` came out as `Not(AlwaysTrue)` instead of
+  `AlwaysFalse`. The bound→unbound reconstruction's `Not` arm has the same trap. Pin it with a test that
+  asserts a `not` over a partition leaf collapses to a bare constant both ways
+  (`test_not_over_partition_leaf_negates_the_reduced_constant`). (Contrast: `Predicate::{and,or}` DO simplify
+  constants, so `and`/`or` can use the operators directly — it's only `not` that needs the helper.)
+- **DO compute a bucket-partition test's partition value with `create_transform_function(&Transform::Bucket(n))
+  .transform_literal(&Datum::int(v))`, not a hand-guessed integer.** *Why:* the bucket-keep test must place the
+  partition value where an `x = v` row actually lands — `bucket(x) == bucket(v)` — so the INCLUSIVE projection
+  evaluates TRUE (does not reduce to false) and, bucket having no strict projection for `eq`, the predicate
+  survives (the residual KEEPs it). A guessed value (e.g. `3`) almost never equals `bucket(5,16)`, so the
+  inclusive projection is false and the residual wrongly collapses to `AlwaysFalse` — the test then fails for
+  the wrong reason. `transform_literal` returns `Option<Datum>` whose `.literal()` is `PrimitiveLiteral::Int`.
+- **DO pass the table `schema` into the residual evaluator's `of` ctor and precompute the partition `Schema`
+  once.** *Why:* Java's `PartitionSpec` carries its schema so `spec.partitionType()` is free; Rust's
+  `PartitionSpec::partition_type(schema)` REQUIRES the schema. The projected (partition-column) predicates from
+  `Transform::{project,strict_project}` are UNBOUND and must be bound to the partition type before evaluating
+  against the partition `Struct` — build a partition `Schema` from `partition_type.fields()` in the ctor (the
+  same shape `expression_evaluator.rs`'s test helper `create_partition_filter` uses) and reuse it for every
+  `residual_for` call. Binding an `AlwaysTrue`/`AlwaysFalse` projection short-circuits to its constant before
+  the `ExpressionEvaluatorVisitor` runs (Java: "if the result is not a predicate it must be a constant").
+- **DO reconstruct the leaf "keep the original predicate" residual from the bound leaf by the source field's
+  NAME, and lean on the existing `BoundReference::field().name`.** *Why:* Java returns the original BOUND
+  `pred`, but the Rust residual is an unbound `Predicate`; there is NO public bound→unbound conversion and no
+  `column_name` accessor on `BoundReference`. Partition-source columns are always TOP-LEVEL schema fields, so
+  `Reference::new(reference.field().name.clone())` is the faithful unbound reference (the nested-path
+  `column_name` distinction never applies to a partition source). A generic `bound_to_unbound` that recurses
+  And/Or/Not and rebuilds Unary/Binary/Set from the field name covers both the leaf-keep and the unpartitioned
+  cases.
+- **DO mutation-check the strict-vs-inclusive DIRECTION, not just "it reduces."** *Why:* swapping
+  `strict_project`↔`project` in `reduce_leaf` still reduces SOME cases, so a single happy-path "reduces to
+  AlwaysTrue" test survives the swap. The discriminating tests are the day-example "equals ONE bound" cases
+  (strict decides the satisfied half ⇒ that half drops; inclusive only gates the false short-circuit) — the
+  swap makes those keep/drop the wrong half. Confirmed: the swap fails exactly the 3 "equals bound" day cases
+  + the bucket-keep (4 total), and the partition-ignore mutation fails the 9 reduction tests while the 7
+  "kept verbatim" tests legitimately survive.
+
+### 2026-06-08 (Phase 3 Increment 1 — ResidualEvaluator core, REVIEWER Opus)
+- **DO test the `bound_to_unbound` logical (And/Or/Not) arms through the UNPARTITIONED path — they are
+  unreachable from the partitioned path.** *Why:* in `residual_for`, the partitioned branch runs the
+  `visit`/`BoundPredicateVisitor`, which decomposes And/Or/Not BEFORE the leaf methods, so `reduce_leaf`
+  only ever hands `bound_to_unbound` a single Unary/Binary/Set leaf. The And/Or/Not arms of
+  `bound_to_unbound` are reached ONLY by the unpartitioned `residual_for` (`bound_to_unbound(&self.filter)`).
+  The Increment-1 builder's unpartitioned tests used only `And` + a single binary, leaving the `Not` arm
+  untested — a mutation that drops the negation there (`simplifying_not(inner)` → `inner`) SURVIVED all 16
+  tests. Added `test_unpartitioned_spec_round_trips_a_not_filter_keeping_the_negation` (a `NOT(id>100)`
+  filter, unpartitioned) which the mutation now fails. Lesson: when a helper has arms reachable by two
+  different callers, enumerate which caller reaches each arm and test from that caller.
+- **DO pin a residual test for transform classes beyond day/identity/bucket — truncate, a temporal
+  (year/month/hour), and void all feed scan correctness.** *Why:* the residual is correct for ALL partition
+  types or it silently drops/over-scans rows. Verified empirically (throwaway probes) that truncate reduces
+  all three ways (straddling→kept, all-above→AlwaysTrue, all-below→AlwaysFalse), year keeps both bounds
+  inside the year + AlwaysFalse outside, and void KEEPS the predicate (Java `VoidTransform.project`/
+  `projectStrict` both return null → no projection → no reduction, no panic on the null partition value).
+  Added pinning tests for all three; the truncate/year tests also fail the strict↔inclusive swap, proving
+  they are not theater.
+- **DO pin the multi-partition-field-per-source loop (`getFieldsBySourceId`) — the single-field tests can't
+  exercise it.** *Why:* Java loops over EVERY partition field whose source id matches the predicate column;
+  a `break`-after-first mutation survives any spec with one field per source. A spec with BOTH
+  bucket(category) (inconclusive for eq) AND identity(category) (conclusive) forces the loop to continue
+  past bucket to let identity decide. Added a test (AlwaysTrue on match / AlwaysFalse on miss); the
+  break-after-first mutation fails it.
+
+### 2026-06-08 (Phase 3 Increment 2 — residual scan-wiring, BUILDER Opus)
+- **DO state + test the residual-validity invariant as the load-bearing correctness claim.** *Why:* the whole
+  reduction is only result-equivalent because every row in a data file belongs to that file's SINGLE partition
+  tuple, so the partition-implied leaves the residual drops are TRUE for all rows in the file. Wrote it as a
+  comment in `into_file_scan_task` and proved it with read tests that assert the residual-path rows EXACTLY
+  equal the full-filter row set (identity AND truncate partitions). A residual regression silently returns
+  wrong scan results, so this is the one invariant the tests must pin, not just "the predicate is reduced."
+- **DO resolve the `partition_spec: None` TODO via `table_metadata.partition_spec_by_id(manifest_file.
+  partition_spec_id)` in `PlanContext::create_manifest_file_context` (it has `table_metadata`), thread it onto
+  `ManifestFileContext` → `ManifestEntryContext` → the task.** *Why:* all files in one manifest share the
+  manifest's `partition_spec_id`, so the spec (and the `ResidualEvaluator` built from spec+filter) is resolved
+  ONCE per manifest file and shared across its entries — the per-spec cache pattern, but per-manifest, so no
+  shared mutable cache is needed. Per-file rebuild would re-run `spec.partition_type(schema)` + a `Schema`
+  build for every file.
+- **FLAG, DON'T MISS: setting `task.partition_spec = Some(spec)` ACTIVATES the arrow reader's
+  identity-partition constant materialization (`reader.rs:451-455` → `record_batch_transformer::constants_map`,
+  Java `PartitionUtil.constantsMap`), which is dormant while the field is `None`.** *Why it bites:* threading
+  the spec (a required TODO) silently changes how identity-partition columns are READ — they become run-end-
+  encoded constants from the partition METADATA, not values read from the data file. This is correct Iceberg
+  behavior, but it exposed a pre-existing inconsistency in `TableTestFixture` (partition `x`=100/200/300 vs the
+  parquet `x` column `[1; 1024]`) and broke 9 tests asserting `x`==1 as a plain `Int64Array`. A change that
+  only "sets a field on a struct" can still alter downstream read behavior — grep the field's consumers
+  (`task.partition_spec`) before assuming "reader unchanged."
+  **REVERTED (2026-06-08, post-push): the constants-map activation was BACKED OUT — `task.partition_spec` is
+  left `None`.** *Why:* CI's INTEGRATION tests (which my `-p iceberg` + workspace-BUILD gate never RAN) exposed
+  two latent bugs in `record_batch_transformer::constants_map`: it emits a `RunEndEncoded` column where the
+  declared scan schema is plain `Utf8` (`test_insert_into_partitioned` — "expected Utf8 but found
+  RunEndEncoded"), and it cannot widen an `Int(i32)` partition literal to an `Int64` column
+  (`test_evolved_schema` — "Unsupported constant type combination: Int64 with Some(Int(19))"). The constants-map
+  is a SEPARATE parity feature with real bugs; activating it was a BUNDLED extra in the residual increment, not
+  the residual goal — the residual works with `partition_spec = None` (the reader reads identity-partition
+  columns from the data file). Reverting kept the residual + the (still-necessary) fixture-consistency fix and
+  removed the blast radius; the constants-map + its fixes are deferred to a dedicated increment gated by the
+  datafusion + integration read tests. Reverting also required removing the now-dead `partition_spec` field
+  threading through `ManifestFileContext`/`ManifestEntryContext` (the local spec that builds the residual
+  evaluator stays) and undoing the RunEndEncoded read assertions (`x` is plain `Int64` again).
+- **PROCESS (2nd gate-widening): the per-increment gate must RUN the downstream crates' TESTS, not just BUILD
+  them.** *Why:* the residual scan-wiring built the workspace clean and passed `-p iceberg`, but
+  `iceberg-datafusion`'s INTEGRATION tests (MemoryCatalog-backed, runnable locally — NO Docker) failed on the
+  constants-map activation, and the Docker-gated `iceberg-integration-tests` failed too. A workspace BUILD
+  compiles datafusion's tests but does not RUN them. Add `cargo test -p iceberg-datafusion` (lib + the
+  MemoryCatalog `integration_datafusion_test`) to the gate for any change that touches the SCAN/READ path
+  (first gate-widening was the non-exhaustive-match → workspace BUILD; this one is read-path → datafusion
+  TESTS). The Docker-only suites (`iceberg-integration-tests` REST/MinIO) still can't run locally, so a
+  read-path change that can't be proven locally is a flag to scope conservatively.
+- **DO make a contrived test fixture INTERNALLY CONSISTENT rather than asserting on inconsistent data.** *Why:*
+  the old fixture's partition values were arbitrary distinct constants (100/200/300) for manifest realism,
+  never reconciled with the parquet data because `partition_spec` was always `None` (the constant path never
+  ran). Once the spec is threaded, the partition value IS authoritative for an identity column — so the
+  truthful fix is partition `x`=1 (= the data), not "assert `x`==100 (the now-materialized constant)". A
+  consistent fixture is the higher-integrity resolution and keeps the read tests meaningful. The change rippled
+  one `inspect/manifests.rs` expect-snapshot (partition-summary bounds `"100"`/`"300"` → `"1"`); a shared
+  fixture's partition values can reach any test that snapshots partition summaries — grep for the old values.
+
+### 2026-06-08 — Residual scan-wiring REVIEW (spec-evolution mutation gap)
+- **DO mutation-test "use the FILE's own spec vs the table DEFAULT spec" when a scan reads a per-file spec by
+  id.** *Why it bites silently:* `scan/context.rs` resolves the residual's spec via
+  `partition_spec_by_id(manifest_file.partition_spec_id)`. A fixture with only ONE spec CANNOT distinguish this
+  from `default_partition_spec()` — the swap mutation passed all 1500 tests. After partition evolution an older
+  manifest's `partition_spec_id` differs from the current default, so the default-spec bug would compute the
+  residual (and the identity-constant materialization) against the WRONG spec → a silent wrong-rows scan. *Fix:*
+  a 2-spec fixture (`new_with_evolved_default_spec`) writes the live file under the NON-default spec; pin that
+  the residual reduces by the file's spec (`AlwaysTrue`) and `task.partition_spec.spec_id()` is the file's, not
+  the default. A single-spec fixture is structurally blind to this class of bug — add the spec-evolution case.
+- **DO reject a "better" multi-partition fixture fix when the data is shared and no coverage is at stake.** The
+  shared `TableTestFixture` writes byte-identical parquet to all files in one loop; keeping distinct partition
+  values valid would mean per-file distinct data + rippling every read assertion, for ZERO coverage gain
+  (no test filtered on the partition column, and the multi-partition inspect tests build their own inline
+  manifests). Collapse-to-consistent is the right call; spend the effort on the spec-evolution pin instead.
+
+### 2026-06-08 (Increment 3 — OverwriteFiles filter-based validateNoConflictingData, BUILDER Opus)
+- **DO reuse `InclusiveMetricsEvaluator::eval(&bound_filter, file, true)` as the per-file conflict TEST when
+  porting Java `MergingSnapshotProducer.validateAddedDataFiles` / `ManifestGroup.filterData`.** *Why:* Java's
+  "could this added file contain records matching the conflict filter?" IS the inclusive-metrics question
+  (bounds/null/nan stats → may-match). The Rust evaluator already answers it (`pub(crate)` in
+  `expr/visitors/inclusive_metrics_evaluator.rs`); the conflict validation differs from ReplacePartitions'
+  `(spec_id, partition) ∈ drop-set` test ONLY in this leaf. NOTE the signature is THREE args
+  (`filter, data_file, include_empty_files: bool`), not the two the brief implied — pass
+  `include_empty_files=true` (conservative: never auto-exclude a 0-record file on emptiness). Build the bound
+  filter once via `Predicate::bind(schema, case_sensitive)` (the `Bind` trait), not per-file.
+- **DO default a `None` conflict-detection filter to `Predicate::AlwaysTrue` (any concurrent add conflicts),
+  NOT to "no conflict".** *Why:* Java `BaseOverwriteFiles.dataConflictDetectionFilter()` returns `alwaysTrue()`
+  when neither a `conflictDetectionFilter` nor a (non-alwaysFalse) `rowFilter` is set — the MOST conservative
+  serializable check. Treating `None` as "skip" would invert the safety property and let every concurrent
+  append through (a serializable-isolation hole). Pin it with a no-bounds concurrent file that MUST still be a
+  conflict under the None default. (Our `overwriteByRowFilter` is deferred, so `rowFilter()` is effectively
+  `alwaysFalse()` and Java's middle branch can never apply → `None ⇒ AlwaysTrue` is the exact mirror.)
+- **DO report a serializable-isolation conflict as a NON-retryable `ErrorKind::DataInvalid` (Java's
+  non-retryable `ValidationException`) and VERIFY the property two ways.** *Why:* a retryable error makes the
+  `do_commit` retry loop spin and re-fail the same check forever, then return a misleading retry-exhausted
+  `CatalogCommitConflicts`. Assert `kind()==DataInvalid` AND `!err.retryable()`; the genuinely-verified proof
+  is a `.with_retryable(true)` mutation that makes the `!retryable()` assertion fail AND visibly inflates the
+  test runtime (the loop actually loops, 0.12s→1.57s here) — kind-equality alone does not prove the loop stops.
+- **DO simulate the concurrent commit with a REAL second `fast_append` through the same `MemoryCatalog`
+  between txn-build and txn-commit (the landed ReplacePartitions pattern), so `do_commit`'s genuine
+  refresh/re-base runs `validate` against the refreshed head.** *Why:* a hand-mocked base would not exercise
+  the `Transaction::new`-captured `starting_snapshot_id` surviving the re-base — the one subtle correctness
+  property. Pin it with a test that calls ONLY `validate_no_conflicting_data()` (no `validate_from_snapshot`):
+  if the start were re-read from the refreshed head, start==head ⇒ empty concurrent set ⇒ the check silently
+  always passes. Build the discriminating data files WITH column bounds (`DataFileBuilder.lower_bounds/
+  upper_bounds`, which survive the manifest round-trip and reach `added_data_files_after`) so the inclusive
+  evaluator can include (overlap) vs exclude (bounds outside the predicate).
+
+### 2026-06-08 (Increment 3 — OverwriteFiles filter-based validateNoConflictingData, REVIEWER Opus)
+- **VERDICT: CHANGES-MADE (docs only) — the production `validate` + 9 tests are correct and well-pinned;
+  no production change needed.** All 6 adversarial-checklist mutations are CAUGHT by the existing suite
+  (verified by running each, then restoring byte-identical): (a) invert the metrics decision → the EXCLUDE
+  no-false-conflict test AND the 4 match/None tests fail (BOTH the false-positive and false-negative guards
+  are load-bearing); (b) `validate` early-`Ok` → exactly the 4 rejection tests fail, OK tests green; (c) kind
+  → `CatalogCommitConflicts` → the 4 `kind()==DataInvalid` assertions fail; (d) drop the
+  `validate_from_snapshot` override → exactly `..override_changes_concurrent_window` fails; (e) re-read the
+  refreshed head instead of the tx-captured start (the silent-always-pass false-negative) → exactly
+  `..tx_captured_starting_snapshot` fails; (f) `.with_retryable(true)` → the `!retryable()` assertions fail
+  AND runtime jumps 0.11s→1.59s (the retry loop demonstrably loops only when retryable). I ALSO mutated the
+  SHARED `added_data_files_after` boundary EXCLUSIVE→INCLUSIVE (snapshot.rs) — 5 tests fail across
+  OverwriteFiles + ReplacePartitions (incl. the dedicated `..excludes_carried_forward_manifests`), proving
+  the exclusive-of-start boundary is pinned. No surviving mutation → no new pinning test required.
+- **The FALSE-NEGATIVE enumeration check (the most important finding): the Rust added-file set MATCHES Java's,
+  no under-reject.** Read `MergingSnapshotProducer.validationHistory` (L913-963) + `addedDataFiles` (L424-462)
+  + `SnapshotUtil.ancestorsBetween`/`ancestorsOf` directly. Java: walk `ancestorsBetween(parent, startingId)`
+  = INCLUSIVE of parent, EXCLUSIVE of starting (the lookup returns null at `oldestSnapshotId`, and
+  `latest==oldest ⇒ empty`); for each snapshot whose op ∈ {APPEND, OVERWRITE} collect `dataManifests` where
+  `manifest.snapshotId() == snapshot.snapshotId()`, then keep entries with `ignoreDeleted().ignoreExisting()`
+  (= Added status). The Rust `added_data_files_after` walk is byte-for-byte the same semantics: same
+  inclusive/exclusive boundary (break at top when `current.snapshot_id()==starting`), same op set
+  (`operation_adds_data_files` = {Append,Overwrite}), same manifest filter (`added_snapshot_id ==
+  snapshot_id`), same Added-only entry filter. Java's extra `newSnapshots.contains(entry.snapshotId())`
+  filter is jointly satisfied by exactly the Added entries in a self-added manifest (an Added entry inherits
+  the manifest's `added_snapshot_id`), so it adds nothing Rust drops. The ONE divergence (Increment-6 reviewer
+  already flagged + pinned): Java throws if `startingId` is not an ancestor of parent; Rust silently
+  over-scans to root — Rust-STRICTER (over-reject only), never an under-reject. **No false-negative vector in
+  the enumeration.**
+- **None-filter = `AlwaysTrue` is the faithful Java mirror.** `BaseOverwriteFiles.dataConflictDetectionFilter()`
+  (L180-188): filter if set; else `rowFilter()` when `!= alwaysFalse && deletedDataFiles.isEmpty()`; else
+  `alwaysTrue()`. `overwriteByRowFilter` is deferred ⇒ `rowFilter()` defaults to `alwaysFalse()` ⇒ the middle
+  branch is unreachable ⇒ `None ⇒ alwaysTrue()` exactly. Pinned by the no-bounds-concurrent-file test.
+- **Non-retryable is REAL and independent of the error KIND.** `Error::new` sets `retryable: false` by
+  default (error.rs:235); `retryable()` returns the field, NOT a kind→bool map. So the conflict
+  `Error::new(DataInvalid, …)` (no `.with_retryable(true)`) is non-retryable, and the `commit` retry loop
+  (`.when(|e| e.retryable())`) stops + propagates. The 0.11→1.59s runtime jump under the `.with_retryable(true)`
+  mutation is the load-bearing proof the loop does NOT spin on the real error.
+- **`validate` IS invoked by the real commit path with the correct starting snapshot.** `do_commit`
+  (mod.rs:308-312) loops every action's `.validate(self.starting_snapshot_id, &current_table)` AFTER the
+  refresh/re-base (line 295) and BEFORE the re-apply (line 314), with `current_table` = the refreshed base.
+  `starting_snapshot_id` is captured once in `Transaction::new` (line 117) as its OWN field and survives the
+  re-base. Not dead code.
+- **DO reconcile the Roadmap NARRATIVE mentions when a status flips, not just the detail/header.** The builder
+  updated the GAP_MATRIX row (accurate + honest: states the over-scan, None-default, case-sensitivity, 🟡
+  rationale) and the Phase 2 status header, but left two Roadmap narrative lines saying "conflict validation …
+  deferred" for OverwriteFiles (an under-claim) and the `mod.rs::overwrite_files()` ctor doc saying conflict
+  validation is "not yet supported." Fixed all three (the only changes this review made). Recurring lesson:
+  grep the capability name across Roadmap + the public-API ctor doc, not only the matrix.
+
+### 2026-06-08 (Increment 4 — RowDelta validateNoConflictingDataFiles + shared conflict-check helper, BUILDER Opus)
+- **DO extract a shared `pub(crate)` helper on the second use of a load-bearing safety check, and PROVE the
+  refactor behavior-preserving with the EXISTING tests (don't write new pins for the refactor).** *Why:*
+  `RowDelta.validateNoConflictingDataFiles` is the IDENTICAL filter-based added-data-file conflict check as
+  `OverwriteFiles.validateNoConflictingData` (both = Java `MergingSnapshotProducer.validateAddedDataFiles`).
+  Per Rule-of-Three this is exactly the "extract on the 2nd use when the duplication is unmistakably the same
+  concept" case (no plausible divergence — the two leaf checks differ only in the action's flag/filter
+  plumbing, which STAYS in each action). Factored the walk+bind(None⇒AlwaysTrue)+per-file
+  `InclusiveMetricsEvaluator::eval`+first-conflict-non-retryable-`DataInvalid` into
+  `validate_no_conflicting_added_data_files(current, effective_start, conflict_filter, case_sensitive)` next to
+  `added_data_files_after`. The behavior-preservation PROOF is that Increment-3's 9 OverwriteFiles conflict
+  tests stayed GREEN unchanged after `OverwriteFiles::validate` was rewritten to delegate — a refactor that
+  needs new tests to validate it isn't behavior-preserving by definition. Keep the per-action flag-guard +
+  `effective_start = validate_from_snapshot.or(starting_snapshot_id)` in each action; only the shared mechanics
+  move.
+- **DO render the conflict-filter the same way in the shared helper as the inline code did, so the error
+  message + tests are unchanged across the refactor.** *Why:* the Increment-3 message rendered a `None` filter
+  as the literal `"true"` (`conflict_filter.map_or_else(|| "true".to_string(), |f| format!("{f}"))`,
+  `Predicate: Display`). The helper takes `Option<&Predicate>` and renders it identically, so the
+  `err.message().contains("conflicting files")` + file-path assertions in BOTH actions' tests pass verbatim —
+  no test churn, the strongest signal the extraction changed nothing observable.
+- **DO mutation-test a SHARED helper from BOTH consumers (the cross-action mutation).** *Why:* a shared safety
+  helper's load-bearing-ness must be proven for EVERY caller, not just one. Inverting the helper's
+  `InclusiveMetricsEvaluator::eval` decision (`if !eval(...)`) failed the EXCLUDE/no-false-conflict test in
+  BOTH `transaction::overwrite_files` AND `transaction::row_delta` simultaneously — the single mutation, two
+  failures, is the proof neither action's coverage is a gap and the helper can't silently rot for one caller.
+  (The action-local mutations — force RowDelta `validate` always-`Ok` → its 4 rejection tests fail; retryable
+  error kind → `!retryable()` fails + the retry loop spins 0.06s→1.57s — pin the per-action plumbing.)
+- **DO build the discriminating conflict-test data files WITH column bounds (`lower_bounds`/`upper_bounds` on
+  the filtered field id), reusing the OverwriteFiles `data_file_with_y_bounds` shape.** *Why:* the
+  include-vs-exclude decision is the `InclusiveMetricsEvaluator` reading the file's bounds against the
+  predicate; a file with NO bounds is always a (conservative) match, so it can only pin the None/AlwaysTrue
+  default, not the metrics path. A file with `y∈[60,70]` overlaps `y>=50` (match) and `y∈[10,20]` is below it
+  (exclude) — the two halves of the metrics decision. The bounds must be on the schema field id (here `y`=id 2),
+  and they survive the manifest round-trip into `added_data_files_after`.

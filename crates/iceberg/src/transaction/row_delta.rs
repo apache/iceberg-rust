@@ -35,12 +35,24 @@
 //! both → [`Operation::Overwrite`]. The snapshot summary carries the added data-file / delete-file and
 //! position/equality-delete counts in every case.
 //!
+//! **Concurrent-commit conflict validation (`validateNoConflictingDataFiles`, OPT-IN):** when enabled
+//! via [`RowDeltaAction::validate_no_conflicting_data_files`], the commit is rejected (a non-retryable
+//! `ValidationException` in Java terms) if any DATA file ADDED by a concurrent commit since the
+//! operation's starting snapshot COULD contain records matching the conflict-detection filter. This is
+//! the serializable-isolation safety layer for the merge-on-read write path (Java `BaseRowDelta.validate`
+//! → `validateNewDataFiles` → `MergingSnapshotProducer.validateAddedDataFiles`). It delegates to the
+//! SHARED [`validate_no_conflicting_added_data_files`] helper — the SAME filter-based added-data-file
+//! check `OverwriteFiles` uses — so the two checks cannot drift. Default (this not enabled) = snapshot
+//! isolation, behavior unchanged.
+//!
 //! **Out of scope (deferred):**
 //! - Equality-delete WRITER end-to-end (the writer exists; the RowDelta-with-equality-deletes scan
 //!   application may have gaps — the end-to-end test focuses on POSITION deletes).
-//! - Concurrent-commit conflict validation (`validateFromSnapshot` / `validateNoConflictingDataFiles`
-//!   / `validateNoConflictingDeleteFiles` / `validateDeletedFiles` / `validateDataFilesExist`) — these
-//!   implement serializable isolation and need validation-history replay across the ancestor chain.
+//! - The DELETE-file conflict blocks of Java `BaseRowDelta.validate` — `validateNoConflictingDeleteFiles`
+//!   (`validateNoNewDeleteFiles` / `validateNoNewDeletesForDataFiles`), `validateDeletedFiles` /
+//!   `validateDataFilesExist`, and `validateAddedDVs`. These need a concurrent-DELETE-file enumeration
+//!   helper (the sibling of `added_data_files_after` for delete manifests) that does not exist yet —
+//!   each is its own follow-up.
 //! - `removeRows` / `removeDeletes` (removing existing data / delete files) — RowDelta the ADD-commit
 //!   primitive is this increment's deliverable.
 //! - The deletion-vector (V3 Puffin) write path.
@@ -52,10 +64,12 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::error::Result;
+use crate::expr::Predicate;
 use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
 use crate::table::Table;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
+    validate_no_conflicting_added_data_files,
 };
 use crate::transaction::{ActionCommit, TransactionAction};
 
@@ -76,6 +90,20 @@ pub struct RowDeltaAction {
     commit_uuid: Option<Uuid>,
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
+    /// Whether concurrent-commit conflict validation is enabled (Java
+    /// `RowDelta.validateNoConflictingDataFiles`). OFF by default = snapshot isolation (no validation,
+    /// current behavior). When ON, the commit is rejected if a concurrent snapshot added a DATA file that
+    /// could contain records matching the conflict filter.
+    validate_no_conflicting_data_files: bool,
+    /// The conflict-detection filter (Java `RowDelta.conflictDetectionFilter`). When `Some`, only
+    /// concurrently-added files whose metrics COULD match this predicate are conflicts. When `None`, the
+    /// filter defaults to `AlwaysTrue` (any concurrently-added DATA file is a conflict — the most
+    /// conservative serializable check), mirroring Java `BaseRowDelta`'s default `conflictDetectionFilter`
+    /// of `Expressions.alwaysTrue()`.
+    conflict_detection_filter: Option<Predicate>,
+    /// An explicit starting snapshot for conflict validation (Java `validateFromSnapshot`). When `None`, the
+    /// validation uses the transaction's starting snapshot (the table head when the transaction was created).
+    validate_from_snapshot: Option<i64>,
 }
 
 impl RowDeltaAction {
@@ -86,6 +114,9 @@ impl RowDeltaAction {
             commit_uuid: None,
             key_metadata: None,
             snapshot_properties: HashMap::default(),
+            validate_no_conflicting_data_files: false,
+            conflict_detection_filter: None,
+            validate_from_snapshot: None,
         }
     }
 
@@ -122,6 +153,41 @@ impl RowDeltaAction {
         self.snapshot_properties = snapshot_properties;
         self
     }
+
+    /// ENABLE concurrent-commit conflict validation (Java `RowDelta.validateNoConflictingDataFiles`): the
+    /// commit is rejected with a non-retryable `ValidationException` if any DATA file ADDED by a concurrent
+    /// snapshot since the starting snapshot could contain records matching the conflict-detection filter
+    /// (see [`Self::conflict_detection_filter`]). This is the serializable-isolation guard against silently
+    /// committing a row delta against data that was concurrently appended.
+    ///
+    /// Default (this method NOT called) = snapshot isolation = no validation (current behavior unchanged).
+    pub fn validate_no_conflicting_data_files(mut self) -> Self {
+        self.validate_no_conflicting_data_files = true;
+        self
+    }
+
+    /// Set the conflict-detection filter (Java `RowDelta.conflictDetectionFilter(Expression)`): only a
+    /// concurrently-added DATA file whose metrics COULD contain records matching this predicate is treated as
+    /// a conflict. When no filter is set (the default), the conflict filter is `AlwaysTrue` — ANY
+    /// concurrently-added data file conflicts (the most conservative serializable check), matching Java
+    /// `BaseRowDelta`'s default `conflictDetectionFilter` of `Expressions.alwaysTrue()`.
+    ///
+    /// On its own this does NOT enable validation — call [`Self::validate_no_conflicting_data_files`] for that.
+    pub fn conflict_detection_filter(mut self, filter: Predicate) -> Self {
+        self.conflict_detection_filter = Some(filter);
+        self
+    }
+
+    /// Override the snapshot from which concurrent-commit conflict validation starts (Java
+    /// `RowDelta.validateFromSnapshot(long)`). By default the validation uses the transaction's starting
+    /// snapshot (the table head when [`crate::transaction::Transaction::new`] was called); this lets the
+    /// caller pin a specific earlier snapshot id (the snapshot it read when building the row delta).
+    ///
+    /// On its own this does NOT enable validation — call [`Self::validate_no_conflicting_data_files`] for that.
+    pub fn validate_from_snapshot(mut self, snapshot_id: i64) -> Self {
+        self.validate_from_snapshot = Some(snapshot_id);
+        self
+    }
 }
 
 #[async_trait]
@@ -154,6 +220,50 @@ impl TransactionAction for RowDeltaAction {
                 DefaultManifestProcess,
             )
             .await
+    }
+
+    /// Serializable-isolation conflict validation (Java `BaseRowDelta.validate` → `validateNewDataFiles` →
+    /// `MergingSnapshotProducer.validateAddedDataFiles`, L155-157 / L391-412). Only runs when
+    /// [`Self::validate_no_conflicting_data_files`] was enabled; otherwise a no-op (snapshot isolation).
+    ///
+    /// When enabled: compute the effective starting snapshot ([`Self::validate_from_snapshot`] if set, else
+    /// the transaction-provided `starting_snapshot_id`) and delegate to the SHARED
+    /// [`validate_no_conflicting_added_data_files`] helper — the SAME filter-based added-data-file check
+    /// `OverwriteFiles` uses (enumerate the DATA files added by concurrent commits, reject if ANY could
+    /// contain records matching the conflict-detection filter via the inclusive metrics evaluator). The
+    /// conflict filter is the caller's [`Self::conflict_detection_filter`] when set, else `AlwaysTrue` (any
+    /// concurrently-added data file conflicts), mirroring Java `BaseRowDelta`'s default
+    /// `conflictDetectionFilter` of `Expressions.alwaysTrue()`. The rejection is a NON-retryable
+    /// `DataInvalid` (Java's non-retryable `ValidationException`), so the commit retry loop stops.
+    ///
+    /// This covers ONLY the `validateNoConflictingDataFiles` branch of Java `BaseRowDelta.validate`. The
+    /// DELETE-file conflict blocks (`validateNoConflictingDeleteFiles`, `validateDeletedFiles` /
+    /// `validateDataFilesExist`, `validateAddedDVs`) remain deferred — they need a concurrent-DELETE-file
+    /// enumeration helper that does not exist yet.
+    ///
+    /// **Case sensitivity:** Java binds the conflict filter with `isCaseSensitive()`. This action has no such
+    /// field, so the filter is bound case-sensitive (`true`) — the Iceberg/Java default for column resolution.
+    async fn validate(
+        self: Arc<Self>,
+        starting_snapshot_id: Option<i64>,
+        current: &Table,
+    ) -> Result<()> {
+        if !self.validate_no_conflicting_data_files {
+            // Default: snapshot isolation, no conflict check (current behavior unchanged).
+            return Ok(());
+        }
+
+        // Java `BaseRowDelta.validate` uses `startingSnapshotId` (the `validateFromSnapshot` override) when
+        // set, else the operation's starting snapshot. The walk + bind + per-file inclusive-metrics
+        // evaluation + non-retryable-conflict error are the shared helper (also used by `OverwriteFiles`).
+        let effective_start = self.validate_from_snapshot.or(starting_snapshot_id);
+        validate_no_conflicting_added_data_files(
+            current,
+            effective_start,
+            self.conflict_detection_filter.as_ref(),
+            true,
+        )
+        .await
     }
 }
 
@@ -225,16 +335,17 @@ impl SnapshotProduceOperation for RowDeltaOperation {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
     use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
     use futures::TryStreamExt;
 
+    use crate::expr::Reference;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
-        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, ManifestContentType,
-        ManifestStatus, Operation, Struct,
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Datum, Literal,
+        ManifestContentType, ManifestStatus, Operation, Struct,
     };
     use crate::table::Table;
     use crate::transaction::tests::make_v3_minimal_table_in_catalog;
@@ -984,5 +1095,495 @@ mod tests {
             }
         }
         values
+    }
+
+    // ============================================================================================
+    // Filter-based concurrent-commit conflict validation (Java `validateNoConflictingDataFiles` —
+    // serializable isolation). Java `BaseRowDelta.validate` → `validateNewDataFiles` →
+    // `MergingSnapshotProducer.validateAddedDataFiles` (L155-157 / L391-412): enumerate DATA files added by
+    // concurrent commits since the starting snapshot, and reject the commit if ANY could contain records
+    // matching the conflict-detection filter (via the inclusive metrics evaluator). RowDelta reuses the SAME
+    // shared `validate_no_conflicting_added_data_files` helper as OverwriteFiles.
+    //
+    // The race these tests simulate: a `row_delta` is BUILT against table head S0, but BEFORE it commits a
+    // SEPARATE `fast_append` lands on the catalog (advancing the head to S1). When the row delta then commits,
+    // `do_commit` refreshes to S1 and runs the action's `validate` against that refreshed base. With
+    // `validate_no_conflicting_data_files()` enabled, a concurrent append whose file could match the conflict
+    // filter must FAIL the commit (non-retryable). With validation OFF (the default), it does not.
+    // ============================================================================================
+
+    /// A synthetic data file routed to partition `x = part_value` whose column `y` (schema field id 2, a
+    /// `long`) carries `[y_lower, y_upper]` value bounds. The bounds let the `InclusiveMetricsEvaluator`
+    /// include or exclude this file against a conflict-detection filter on `y` — the discriminating input for
+    /// the metrics-MATCH vs metrics-EXCLUDE conflict tests. The minimal V3 schema is `x,y,z: long` (ids 1,2,3).
+    fn data_file_with_y_bounds(
+        path: &str,
+        part_value: i64,
+        y_lower: i64,
+        y_upper: i64,
+    ) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(0)
+            .partition(Struct::from_iter([Some(Literal::long(part_value))]))
+            .lower_bounds(HashMap::from([(2, Datum::long(y_lower))]))
+            .upper_bounds(HashMap::from([(2, Datum::long(y_upper))]))
+            .build()
+            .unwrap()
+    }
+
+    /// Collect the set of live (Added or Existing) DATA file paths across the table's current snapshot — the
+    /// real correctness signal (what files a scan would read).
+    async fn live_data_file_paths(table: &Table) -> HashSet<String> {
+        let snapshot = table
+            .metadata()
+            .current_snapshot()
+            .expect("table should have a current snapshot");
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .expect("manifest list should load");
+
+        let mut live = HashSet::new();
+        for manifest_file in manifest_list.entries() {
+            if manifest_file.content != ManifestContentType::Data {
+                continue;
+            }
+            let manifest = manifest_file
+                .load_manifest(table.file_io())
+                .await
+                .expect("manifest should load");
+            for entry in manifest.entries() {
+                if entry.is_alive() {
+                    live.insert(entry.file_path().to_string());
+                }
+            }
+        }
+        live
+    }
+
+    /// Append the given files in a fast-append commit and return the snapshot id that commit produced, plus
+    /// the updated table. Used to capture the starting snapshot id S0 before a concurrent commit.
+    async fn append_and_snapshot_id(
+        catalog: &impl Catalog,
+        table: &Table,
+        files: Vec<DataFile>,
+    ) -> (Table, i64) {
+        let table = append_files(catalog, table, files).await;
+        let id = table.metadata().current_snapshot().unwrap().snapshot_id();
+        (table, id)
+    }
+
+    /// NO CONCURRENT COMMIT. With validation enabled but nothing landing concurrently, the row delta commits
+    /// normally (the concurrent-added set is empty ⇒ no conflict). Pins that enabling validation does not
+    /// block a race-free commit. Risk: a validation that wrongly fails when there is no concurrent commit.
+    #[tokio::test]
+    async fn test_row_delta_validation_no_concurrent_commit_succeeds() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        // Row delta adds a delete file with validation enabled — but NO concurrent commit lands.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/a-pos-del.parquet", 0)])
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_data_files();
+        let tx = action.apply(tx).unwrap();
+        let table = tx
+            .commit(&catalog)
+            .await
+            .expect("a race-free row delta must commit even with validation enabled");
+
+        // The delete manifest is present (the commit went through).
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        assert!(
+            manifest_list
+                .entries()
+                .iter()
+                .any(|m| m.content == ManifestContentType::Deletes),
+            "the row delta committed: a DELETE manifest is present"
+        );
+    }
+
+    /// THE HEADLINE TEST. Append S0. Build a `row_delta` with `.conflict_detection_filter(y >= 50)` and
+    /// `.validate_no_conflicting_data_files()`. Then a CONCURRENT `fast_append` lands a DATA file whose `y`
+    /// bounds `[60,70]` OVERLAP the filter (could contain `y >= 50`). The row-delta commit must FAIL with a
+    /// NON-retryable `DataInvalid` that NAMES the conflicting file.
+    ///
+    /// Risk pinned: silently committing a row delta (e.g. deletes computed against the snapshot the txn read)
+    /// while a concurrent append added rows matching the same filter = a lost/incorrect merge-on-read result
+    /// under serializable isolation. Without the check the row delta would commit blind to S1's new rows.
+    #[tokio::test]
+    async fn test_row_delta_rejects_concurrent_added_file_matching_filter() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        // Row delta adds a delete file, conflict filter `y >= 50`, validation enabled, pinned to S0.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/a-pos-del.parquet", 0)])
+            .conflict_detection_filter(
+                Reference::new("y").greater_than_or_equal_to(Datum::long(50)),
+            )
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_data_files();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a file whose y bounds [60,70] overlap `y >= 50` (could match).
+        let _concurrent = append_files(&catalog, &table, vec![data_file_with_y_bounds(
+            "test/concurrent.parquet",
+            0,
+            60,
+            70,
+        )])
+        .await;
+
+        let err = tx
+            .commit(&catalog)
+            .await
+            .expect_err("row delta must fail: a concurrent file could match the conflict filter");
+
+        assert_eq!(
+            err.kind(),
+            ErrorKind::DataInvalid,
+            "a conflict is a non-retryable validation failure (DataInvalid), not a commit conflict"
+        );
+        assert!(
+            !err.retryable(),
+            "the validation failure must be NON-retryable so the retry loop stops and it propagates"
+        );
+        assert!(
+            err.message().contains("conflicting files"),
+            "the error must name the conflict, got: {}",
+            err.message()
+        );
+        assert!(
+            err.message().contains("test/concurrent.parquet"),
+            "the error must name the conflicting FILE, got: {}",
+            err.message()
+        );
+
+        // The catalog head is still S1 (the concurrent append) — the row delta did NOT commit over it.
+        let reloaded = catalog.load_table(table.identifier()).await.unwrap();
+        let live = live_data_file_paths(&reloaded).await;
+        assert!(
+            live.contains("test/concurrent.parquet"),
+            "the concurrently-added file must survive (the conflicting row delta was rejected)"
+        );
+    }
+
+    /// NO-FALSE-CONFLICT TEST. Same setup as the headline, but the concurrent file's `y` bounds `[10,20]` lie
+    /// ENTIRELY BELOW the filter `y >= 50` — the inclusive evaluator EXCLUDES it. The row delta must COMMIT.
+    ///
+    /// Risk pinned: an over-eager check that rejects ANY concurrent append (ignoring the metrics) would break
+    /// legitimate concurrent writes whose data cannot match the filter (a false positive). This is the test
+    /// that fails if the helper's metrics include/exclude decision is inverted.
+    #[tokio::test]
+    async fn test_row_delta_allows_concurrent_added_file_excluded_by_filter() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/a-pos-del.parquet", 0)])
+            .conflict_detection_filter(
+                Reference::new("y").greater_than_or_equal_to(Datum::long(50)),
+            )
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_data_files();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a file whose y bounds [10,20] are entirely BELOW `y >= 50` (cannot match).
+        let _concurrent = append_files(&catalog, &table, vec![data_file_with_y_bounds(
+            "test/concurrent.parquet",
+            0,
+            10,
+            20,
+        )])
+        .await;
+
+        // The row delta must SUCCEED — the concurrent file's metrics exclude the filter.
+        let table = tx
+            .commit(&catalog)
+            .await
+            .expect("row delta must commit: the concurrent file cannot match the conflict filter");
+
+        // The row delta re-bases onto S1, so the non-conflicting concurrent file also survives, and the
+        // delete manifest landed.
+        let live = live_data_file_paths(&table).await;
+        assert!(
+            live.contains("test/concurrent.parquet"),
+            "the non-conflicting concurrent file survives the re-based row delta"
+        );
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        assert!(
+            manifest_list
+                .entries()
+                .iter()
+                .any(|m| m.content == ManifestContentType::Deletes),
+            "the row delta committed: a DELETE manifest is present"
+        );
+    }
+
+    /// FLAG-OFF CONTROL. With validation NOT enabled (no `validate_no_conflicting_data_files()` call), a
+    /// concurrent append of a file that WOULD match the filter does NOT fail the commit — this is snapshot
+    /// isolation, the DEFAULT behavior, unchanged by this increment.
+    ///
+    /// Risk pinned: the conflict validation must be OPT-IN — turning it on for every row delta by default
+    /// would change existing behavior and break callers relying on snapshot isolation.
+    #[tokio::test]
+    async fn test_row_delta_without_validation_allows_conflicting_concurrent_append() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        // Build a row delta WITHOUT enabling validation (default = snapshot isolation). A conflict filter is
+        // even provided, to prove it is inert without the flag.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/a-pos-del.parquet", 0)])
+            .conflict_detection_filter(
+                Reference::new("y").greater_than_or_equal_to(Datum::long(50)),
+            );
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a file whose y bounds [60,70] WOULD match `y >= 50` if validation were on.
+        let _concurrent = append_files(&catalog, &table, vec![data_file_with_y_bounds(
+            "test/concurrent.parquet",
+            0,
+            60,
+            70,
+        )])
+        .await;
+
+        // With validation OFF, the row delta COMMITS (default behavior unchanged).
+        let table = tx.commit(&catalog).await.expect(
+            "with validation OFF, a conflicting concurrent append must not block the commit",
+        );
+
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        assert!(
+            manifest_list
+                .entries()
+                .iter()
+                .any(|m| m.content == ManifestContentType::Deletes),
+            "the row delta committed (snapshot isolation, no conflict check)"
+        );
+    }
+
+    /// NONE-FILTER DEFAULT TEST. With validation enabled and NO `conflict_detection_filter` set, the conflict
+    /// filter defaults to `AlwaysTrue` (Java `BaseRowDelta`'s default `conflictDetectionFilter` =
+    /// `alwaysTrue()`) — so ANY concurrently-added data file is a conflict, even one with no bounds at all.
+    ///
+    /// Risk pinned: a `None` filter silently behaving as "no conflict" (the OPPOSITE of the conservative
+    /// serializable default) would let every concurrent append through — a serializable-isolation hole.
+    #[tokio::test]
+    async fn test_row_delta_none_filter_treats_any_concurrent_add_as_conflict() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        // Row delta with validation enabled but NO conflict_detection_filter ⇒ AlwaysTrue default.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/a-pos-del.parquet", 0)])
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_data_files();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a plain file with NO bounds — still a conflict under AlwaysTrue.
+        let _concurrent = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/concurrent.parquet",
+            0,
+        )])
+        .await;
+
+        let err = tx
+            .commit(&catalog)
+            .await
+            .expect_err("a None filter defaults to AlwaysTrue: any concurrent add is a conflict");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable());
+        assert!(err.message().contains("test/concurrent.parquet"));
+    }
+
+    /// VALIDATE-FROM-SNAPSHOT OVERRIDE TEST. The `validate_from_snapshot(id)` override changes which commits
+    /// count as concurrent. Append S0, then append S1 (BEFORE the transaction is built), then build the row
+    /// delta. With `validate_from_snapshot(S0)` (an EARLIER snapshot), S1's file IS counted as concurrent ⇒
+    /// rejected (None filter ⇒ AlwaysTrue). This proves the override widens the concurrent window to include
+    /// commits between S0 and S1.
+    ///
+    /// Risk pinned: ignoring the `validate_from_snapshot` override (always using the tx start) would miss a
+    /// conflict the caller explicitly asked to guard against by reading from an earlier snapshot.
+    #[tokio::test]
+    async fn test_row_delta_validate_from_snapshot_override_changes_concurrent_window() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // S0: a. Capture S0.
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+        // S1: a file added BEFORE the transaction is built (part of the base under the default tx start).
+        let (table, _s1) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+            "test/s1.parquet",
+            0,
+        )])
+        .await;
+
+        // Build the row delta when the head is S1. Override the start to the EARLIER S0 so S1 counts as
+        // concurrent. None filter ⇒ AlwaysTrue ⇒ S1's added file is a conflict.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/a-pos-del.parquet", 0)])
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_data_files();
+        let tx = action.apply(tx).unwrap();
+
+        let err = tx.commit(&catalog).await.expect_err(
+            "validate_from_snapshot(S0) widens the window to include S1's add ⇒ conflict",
+        );
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable());
+        assert!(err.message().contains("test/s1.parquet"));
+    }
+
+    /// NEGATIVE HALF of the override test: with `validate_from_snapshot(S1)` (the CURRENT head when the tx is
+    /// built), S1's file is at the start boundary and is NOT concurrent — so the same row delta COMMITS. This
+    /// pins that the override genuinely shifts the boundary (the S0 half above rejects the SAME S1 file).
+    #[tokio::test]
+    async fn test_row_delta_validate_from_snapshot_at_head_finds_no_conflict() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+        let (table, s1) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+            "test/s1.parquet",
+            0,
+        )])
+        .await;
+
+        // Override the start to S1 (the current head) — nothing is concurrent.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/a-pos-del.parquet", 0)])
+            .validate_from_snapshot(s1)
+            .validate_no_conflicting_data_files();
+        let tx = action.apply(tx).unwrap();
+        let table = tx
+            .commit(&catalog)
+            .await
+            .expect("with start = current head, nothing is concurrent ⇒ commit succeeds");
+
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        assert!(
+            manifest_list
+                .entries()
+                .iter()
+                .any(|m| m.content == ManifestContentType::Deletes),
+            "the row delta committed: a DELETE manifest is present"
+        );
+    }
+
+    /// TX-CAPTURED START SURVIVES RE-BASE. The conflict check works WITHOUT an explicit
+    /// `validate_from_snapshot`, relying solely on the transaction-captured starting snapshot id surviving
+    /// `do_commit`'s re-base. The action calls ONLY `.validate_no_conflicting_data_files()` (None filter ⇒
+    /// AlwaysTrue). The starting snapshot is the one captured in `Transaction::new` (= S0); `do_commit`
+    /// overwrites `self.table` with the refreshed base (S1), but `starting_snapshot_id` must SURVIVE — so the
+    /// concurrent S1 is still enumerated and rejected.
+    ///
+    /// Risk pinned: if the start were re-read from the refreshed head at validation time, start == current
+    /// head ⇒ the concurrent set is empty ⇒ the check silently always passes (a serializable-isolation hole).
+    /// The other enabled tests pin `validate_from_snapshot`, so this is the only RowDelta test that the
+    /// `Transaction::new` capture survives the re-base.
+    #[tokio::test]
+    async fn test_row_delta_rejects_concurrent_using_tx_captured_starting_snapshot() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        // Build the row delta with validation enabled but WITHOUT validate_from_snapshot — the start is the
+        // tx-captured head (S0).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/a-pos-del.parquet", 0)])
+            .validate_no_conflicting_data_files();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1).
+        let _concurrent = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/concurrent.parquet",
+            0,
+        )])
+        .await;
+
+        let err = tx
+            .commit(&catalog)
+            .await
+            .expect_err("conflict must be detected via the tx-captured starting snapshot");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable());
+        assert!(err.message().contains("test/concurrent.parquet"));
     }
 }

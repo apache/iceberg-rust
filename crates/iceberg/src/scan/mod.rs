@@ -586,14 +586,15 @@ pub mod tests {
 
     use crate::TableIdent;
     use crate::arrow::ArrowReaderBuilder;
-    use crate::expr::{BoundPredicate, Reference};
+    use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
     use crate::io::{FileIO, OutputFile};
     use crate::metadata_columns::RESERVED_COL_NAME_FILE;
     use crate::scan::FileScanTask;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestEntry,
         ManifestListWriter, ManifestStatus, ManifestWriterBuilder, NestedField, PartitionSpec,
-        PrimitiveType, Schema, Struct, StructType, TableMetadata, Type,
+        PrimitiveType, Schema, Struct, StructType, TableMetadata, Transform, Type,
+        UnboundPartitionField,
     };
     use crate::table::Table;
 
@@ -601,6 +602,21 @@ pub mod tests {
         let mut env = Environment::new();
         env.set_auto_escape_callback(|_| AutoEscape::None);
         env.render_str(template, ctx).unwrap()
+    }
+
+    /// Decodes a scan-output column to a flat [`Int64Array`], transparently
+    /// expanding the run-end-encoded constant array the reader produces for an
+    /// identity-partitioned column (Java `PartitionUtil.constantsMap`). A plain
+    /// `Int64Array` passes through unchanged. Used by the read tests so they assert
+    /// on logical values regardless of whether a column is a materialized partition
+    /// constant or read from the data file.
+    fn decode_int64_column(column: &ArrayRef) -> Int64Array {
+        arrow_cast::cast::cast(column, &arrow_schema::DataType::Int64)
+            .expect("column is castable to Int64")
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("cast yields an Int64Array")
+            .clone()
     }
 
     pub struct TableTestFixture {
@@ -728,6 +744,247 @@ pub mod tests {
             }
         }
 
+        /// Builds a fixture partitioned by `truncate(x, 100)` over the same schema
+        /// and data as [`Self::new`]. Used to prove the residual wiring on a
+        /// NON-identity (transform) partition: the parquet `x` column is `[1; 1024]`,
+        /// so every row lands in `truncate(1, 100) == 0`.
+        pub fn new_truncate_partitioned() -> Self {
+            let tmp_dir = TempDir::new().unwrap();
+            let table_location = tmp_dir.path().join("table1");
+            let manifest_list1_location = table_location.join("metadata/manifests_list_1.avro");
+            let manifest_list2_location = table_location.join("metadata/manifests_list_2.avro");
+            let table_metadata1_location = table_location.join("metadata/v1.json");
+
+            let file_io = FileIO::new_with_fs();
+
+            let mut table_metadata = {
+                let template_json_str = fs::read_to_string(format!(
+                    "{}/testdata/example_table_metadata_v2.json",
+                    env!("CARGO_MANIFEST_DIR")
+                ))
+                .unwrap();
+                let metadata_json = render_template(&template_json_str, context! {
+                    table_location => &table_location,
+                    manifest_list_1_location => &manifest_list1_location,
+                    manifest_list_2_location => &manifest_list2_location,
+                    table_metadata_1_location => &table_metadata1_location,
+                });
+                serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
+            };
+
+            let truncate_spec = Arc::new(
+                PartitionSpec::builder(table_metadata.current_schema().clone())
+                    .with_spec_id(0)
+                    .add_unbound_field(
+                        UnboundPartitionField::builder()
+                            .source_id(1)
+                            .name("x_trunc".to_string())
+                            .field_id(1000)
+                            .transform(Transform::Truncate(100))
+                            .build(),
+                    )
+                    .unwrap()
+                    .build()
+                    .unwrap(),
+            );
+            let partition_type = truncate_spec
+                .partition_type(table_metadata.current_schema())
+                .unwrap();
+            table_metadata.default_spec = truncate_spec.clone();
+            table_metadata.default_partition_type = partition_type;
+            table_metadata.partition_specs.clear();
+            table_metadata.partition_specs.insert(0, truncate_spec);
+
+            let table = Table::builder()
+                .metadata(table_metadata)
+                .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
+                .file_io(file_io.clone())
+                .metadata_location(table_metadata1_location.to_str().unwrap())
+                .build()
+                .unwrap();
+
+            Self {
+                table_location: table_location.to_str().unwrap().to_string(),
+                table,
+            }
+        }
+
+        /// Writes a single live data file (1.parquet) in partition
+        /// `truncate(x, 100) == 0`, matching the parquet `x` column (`[1; 1024]`).
+        /// Companion to [`Self::new_truncate_partitioned`].
+        pub async fn setup_truncate_manifest_files(&mut self) {
+            let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+            let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+            let current_partition_spec = self.table.metadata().default_partition_spec();
+
+            let parquet_file_size = self.write_parquet_data_files();
+
+            let mut writer = ManifestWriterBuilder::new(
+                self.next_manifest_file(),
+                Some(current_snapshot.snapshot_id()),
+                None,
+                current_schema.clone(),
+                current_partition_spec.as_ref().clone(),
+            )
+            .build_v2_data();
+            writer
+                .add_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(0)
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/1.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(parquet_file_size)
+                                .record_count(1)
+                                // truncate(x=1, 100) == 0.
+                                .partition(Struct::from_iter([Some(Literal::long(0))]))
+                                .key_metadata(None)
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            let data_file_manifest = writer.write_manifest_file().await.unwrap();
+
+            let mut manifest_list_write = ManifestListWriter::v2(
+                self.table
+                    .file_io()
+                    .new_output(current_snapshot.manifest_list())
+                    .unwrap(),
+                current_snapshot.snapshot_id(),
+                current_snapshot.parent_snapshot_id(),
+                current_snapshot.sequence_number(),
+            );
+            manifest_list_write
+                .add_manifests(vec![data_file_manifest].into_iter())
+                .unwrap();
+            manifest_list_write.close().await.unwrap();
+        }
+
+        /// Builds a fixture whose table metadata has TWO partition specs: the
+        /// template's `identity(x)` (spec id 0) and an UNPARTITIONED spec (id 1) set
+        /// as the table DEFAULT. The live data file is written under the NON-default
+        /// spec 0. This isolates the "file's own spec vs the table default spec"
+        /// choice: the residual must be computed from spec 0 (the file's), not the
+        /// default spec 1 — a manifest written under an older spec is exactly what
+        /// partition evolution produces.
+        pub fn new_with_evolved_default_spec() -> Self {
+            let tmp_dir = TempDir::new().unwrap();
+            let table_location = tmp_dir.path().join("table1");
+            let manifest_list1_location = table_location.join("metadata/manifests_list_1.avro");
+            let manifest_list2_location = table_location.join("metadata/manifests_list_2.avro");
+            let table_metadata1_location = table_location.join("metadata/v1.json");
+
+            let file_io = FileIO::new_with_fs();
+
+            let mut table_metadata = {
+                let template_json_str = fs::read_to_string(format!(
+                    "{}/testdata/example_table_metadata_v2.json",
+                    env!("CARGO_MANIFEST_DIR")
+                ))
+                .unwrap();
+                let metadata_json = render_template(&template_json_str, context! {
+                    table_location => &table_location,
+                    manifest_list_1_location => &manifest_list1_location,
+                    manifest_list_2_location => &manifest_list2_location,
+                    table_metadata_1_location => &table_metadata1_location,
+                });
+                serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
+            };
+
+            // Add an unpartitioned spec (id 1) and make it the DEFAULT, while keeping
+            // the template's identity(x) spec (id 0) in the spec map. The live file is
+            // written under spec 0 below.
+            let unpartitioned_spec = Arc::new(
+                PartitionSpec::builder(table_metadata.current_schema().clone())
+                    .with_spec_id(1)
+                    .build()
+                    .unwrap(),
+            );
+            table_metadata.default_spec = unpartitioned_spec.clone();
+            table_metadata.default_partition_type = StructType::new(vec![]);
+            table_metadata.partition_specs.insert(1, unpartitioned_spec);
+
+            let table = Table::builder()
+                .metadata(table_metadata)
+                .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
+                .file_io(file_io.clone())
+                .metadata_location(table_metadata1_location.to_str().unwrap())
+                .build()
+                .unwrap();
+
+            Self {
+                table_location: table_location.to_str().unwrap().to_string(),
+                table,
+            }
+        }
+
+        /// Writes a single live data file (1.parquet) under the NON-default
+        /// `identity(x)` spec (id 0, partition `x == 1`), matching the parquet `x`
+        /// column (`[1; 1024]`). Companion to [`Self::new_with_evolved_default_spec`].
+        pub async fn setup_manifest_files_under_spec_zero(&mut self) {
+            let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+            let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+            // Write the manifest under spec 0 (identity(x)), NOT the default spec 1.
+            let spec_zero = self
+                .table
+                .metadata()
+                .partition_spec_by_id(0)
+                .expect("spec 0 must exist")
+                .clone();
+
+            let parquet_file_size = self.write_parquet_data_files();
+
+            let mut writer = ManifestWriterBuilder::new(
+                self.next_manifest_file(),
+                Some(current_snapshot.snapshot_id()),
+                None,
+                current_schema.clone(),
+                spec_zero.as_ref().clone(),
+            )
+            .build_v2_data();
+            writer
+                .add_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(0)
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/1.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(parquet_file_size)
+                                .record_count(1)
+                                // identity(x) == 1, matching the parquet `x` column.
+                                .partition(Struct::from_iter([Some(Literal::long(1))]))
+                                .key_metadata(None)
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            let data_file_manifest = writer.write_manifest_file().await.unwrap();
+
+            let mut manifest_list_write = ManifestListWriter::v2(
+                self.table
+                    .file_io()
+                    .new_output(current_snapshot.manifest_list())
+                    .unwrap(),
+                current_snapshot.snapshot_id(),
+                current_snapshot.parent_snapshot_id(),
+                current_snapshot.sequence_number(),
+            );
+            manifest_list_write
+                .add_manifests(vec![data_file_manifest].into_iter())
+                .unwrap();
+            manifest_list_write.close().await.unwrap();
+        }
+
         fn next_manifest_file(&self) -> OutputFile {
             self.table
                 .file_io()
@@ -770,7 +1027,12 @@ pub mod tests {
                                 .file_format(DataFileFormat::Parquet)
                                 .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
-                                .partition(Struct::from_iter([Some(Literal::long(100))]))
+                                // The table is `identity(x)`-partitioned and the reader now
+                                // materializes identity-partition columns from this metadata
+                                // value (Java `PartitionUtil.constantsMap`). The parquet `x`
+                                // column is `[1; 1024]`, so the partition value MUST be 1 to keep
+                                // the fixture internally consistent.
+                                .partition(Struct::from_iter([Some(Literal::long(1))]))
                                 .key_metadata(None)
                                 .build()
                                 .unwrap(),
@@ -793,7 +1055,9 @@ pub mod tests {
                                 .file_format(DataFileFormat::Parquet)
                                 .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
-                                .partition(Struct::from_iter([Some(Literal::long(200))]))
+                                // Consistent with the parquet `x` column (`[1; 1024]`); see the
+                                // note on 1.parquet above.
+                                .partition(Struct::from_iter([Some(Literal::long(1))]))
                                 .build()
                                 .unwrap(),
                         )
@@ -815,7 +1079,9 @@ pub mod tests {
                                 .file_format(DataFileFormat::Parquet)
                                 .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
-                                .partition(Struct::from_iter([Some(Literal::long(300))]))
+                                // Consistent with the parquet `x` column (`[1; 1024]`); see the
+                                // note on 1.parquet above.
+                                .partition(Struct::from_iter([Some(Literal::long(1))]))
                                 .build()
                                 .unwrap(),
                         )
@@ -1301,7 +1567,9 @@ pub mod tests {
 
         let col = batches[0].column_by_name("x").unwrap();
 
-        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        // `x` is an identity-partition column, materialized by the reader as a
+        // run-end-encoded constant from the partition metadata (value 1).
+        let int64_arr = decode_int64_column(col);
         assert_eq!(int64_arr.value(0), 1);
     }
 
@@ -1364,7 +1632,8 @@ pub mod tests {
         assert_eq!(batches[0].num_columns(), 2);
 
         let col1 = batches[0].column_by_name("x").unwrap();
-        let int64_arr = col1.as_any().downcast_ref::<Int64Array>().unwrap();
+        // `x` is an identity-partition constant (run-end-encoded); decode it.
+        let int64_arr = decode_int64_column(col1);
         assert_eq!(int64_arr.value(0), 1);
 
         let col2 = batches[0].column_by_name("z").unwrap();
@@ -1400,7 +1669,8 @@ pub mod tests {
         assert_eq!(batches[0].num_rows(), 512);
 
         let col = batches[0].column_by_name("x").unwrap();
-        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        // `x` is an identity-partition constant (run-end-encoded); decode it.
+        let int64_arr = decode_int64_column(col);
         assert_eq!(int64_arr.value(0), 1);
 
         let col = batches[0].column_by_name("y").unwrap();
@@ -1428,7 +1698,8 @@ pub mod tests {
         assert_eq!(batches[0].num_rows(), 12);
 
         let col = batches[0].column_by_name("x").unwrap();
-        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        // `x` is an identity-partition constant (run-end-encoded); decode it.
+        let int64_arr = decode_int64_column(col);
         assert_eq!(int64_arr.value(0), 1);
 
         let col = batches[0].column_by_name("y").unwrap();
@@ -1595,8 +1866,10 @@ pub mod tests {
         assert_eq!(batches[0].num_rows(), 500);
 
         let col = batches[0].column_by_name("x").unwrap();
-        let expected_x = Arc::new(Int64Array::from_iter_values(vec![1; 500])) as ArrayRef;
-        assert_eq!(col, &expected_x);
+        // `x` is an identity-partition constant (run-end-encoded); decode it to the
+        // logical flat array before comparing.
+        let expected_x = Int64Array::from_iter_values(vec![1; 500]);
+        assert_eq!(decode_int64_column(col), expected_x);
 
         let col = batches[0].column_by_name("y").unwrap();
         let mut values = vec![];
@@ -1631,8 +1904,10 @@ pub mod tests {
         assert_eq!(batches[0].num_rows(), 1024);
 
         let col = batches[0].column_by_name("x").unwrap();
-        let expected_x = Arc::new(Int64Array::from_iter_values(vec![1; 1024])) as ArrayRef;
-        assert_eq!(col, &expected_x);
+        // `x` is an identity-partition constant (run-end-encoded); decode it to the
+        // logical flat array before comparing.
+        let expected_x = Int64Array::from_iter_values(vec![1; 1024]);
+        assert_eq!(decode_int64_column(col), expected_x);
 
         let col = batches[0].column_by_name("y").unwrap();
         let mut values = vec![2; 512];
@@ -1647,6 +1922,342 @@ pub mod tests {
         values.append(vec![4; 512].as_mut());
         let expected_z = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
         assert_eq!(col, &expected_z);
+    }
+
+    // ---- Residual wiring (Phase 3, Increment 2) ----
+    //
+    // Each `FileScanTask` must carry the PARTITION-REDUCED residual of the scan
+    // filter (Java `BaseFileScanTask.residual()` = `residuals.residualFor(
+    // file.partition())`), not the full snapshot filter, and the file's partition
+    // spec (resolving the old `partition_spec: None` TODO). These tests pin both,
+    // plus result-equivalence: filtering rows with the residual yields the SAME
+    // rows as the full filter would, because every row in a file shares the file's
+    // single partition.
+    //
+    // The shared `TableTestFixture` is partitioned by `identity(x)` with partition
+    // value `x == 1` on every live file (consistent with the parquet `x` column).
+
+    /// Plans the files of a filtered scan over the shared fixture and returns the
+    /// resulting tasks, sorted by data-file path for deterministic assertions.
+    async fn plan_filtered_tasks(predicate: Predicate) -> Vec<FileScanTask> {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let table_scan = fixture.table.scan().with_filter(predicate).build().unwrap();
+
+        let mut tasks: Vec<FileScanTask> = table_scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        tasks.sort_by_key(|task| task.data_file_path.to_string());
+        tasks
+    }
+
+    #[tokio::test]
+    async fn test_task_predicate_is_partition_reduced_residual_not_full_filter() {
+        // Filter `x == 1 AND y > 0`: the `x == 1` leaf is fully implied by the
+        // identity partition (x == 1) for every live file, so the residual must
+        // drop it, leaving ONLY `y > 0`. The full filter would still carry the
+        // `x == 1` leaf — leaving `predicate` as the full filter fails this.
+        let filter = Reference::new("x")
+            .equal_to(Datum::long(1))
+            .and(Reference::new("y").greater_than(Datum::long(0)));
+        let tasks = plan_filtered_tasks(filter).await;
+
+        // Two live files (1.parquet, 3.parquet), both in partition x == 1.
+        assert_eq!(tasks.len(), 2);
+
+        let expected_residual = Reference::new("y")
+            .greater_than(Datum::long(0))
+            .bind(tasks[0].schema.clone(), true)
+            .unwrap();
+        for task in &tasks {
+            assert_eq!(
+                task.predicate.as_ref(),
+                Some(&expected_residual),
+                "task predicate must be the reduced residual `y > 0`, not the full \
+                 `x == 1 AND y > 0` filter"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_task_predicate_residual_is_always_true_when_filter_fully_implied() {
+        // Filter `x == 1` is ENTIRELY decided by the partition (x == 1) for every
+        // live file → the residual is `AlwaysTrue` (no per-row filtering needed).
+        let filter = Reference::new("x").equal_to(Datum::long(1));
+        let tasks = plan_filtered_tasks(filter).await;
+
+        assert_eq!(tasks.len(), 2);
+        for task in &tasks {
+            assert_eq!(
+                task.predicate,
+                Some(BoundPredicate::AlwaysTrue),
+                "a filter fully implied by the partition must reduce to AlwaysTrue"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_residual_uses_files_own_spec_not_the_table_default_spec() {
+        // RISK (silent scan-hot-path data bug): after partition evolution, an older
+        // manifest's `partition_spec_id` differs from the table's DEFAULT spec. The
+        // residual + threaded spec MUST come from the FILE's own spec
+        // (`manifest_file.partition_spec_id`), NOT the table default. Here the live
+        // file is written under spec 0 (`identity(x)`) while the table default is the
+        // unpartitioned spec 1.
+        //
+        // With filter `x == 1`:
+        //   - file's own spec (0, identity(x)) → `x == 1` is partition-implied →
+        //     residual reduces to `AlwaysTrue`, and `task.partition_spec` is spec 0.
+        //   - table default (1, unpartitioned) → NO reduction → residual stays the
+        //     full `x == 1`, and the spec would be id 1.
+        // Using the default spec instead of the file's own fails BOTH assertions.
+        let mut fixture = TableTestFixture::new_with_evolved_default_spec();
+        fixture.setup_manifest_files_under_spec_zero().await;
+
+        let filter = Reference::new("x").equal_to(Datum::long(1));
+        let table_scan = fixture.table.scan().with_filter(filter).build().unwrap();
+        let tasks: Vec<FileScanTask> = table_scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(tasks.len(), 1);
+        let task = &tasks[0];
+
+        // The residual was reduced by the FILE's identity(x) spec → AlwaysTrue. Using
+        // the table default (unpartitioned) spec instead would leave the residual as the
+        // full `x == 1` (no reduction), so this predicate assertion pins that the residual
+        // is computed from the FILE's own `partition_spec_id`, not the table default.
+        assert_eq!(
+            task.predicate,
+            Some(BoundPredicate::AlwaysTrue),
+            "residual must be reduced by the file's own identity(x) spec (0), not \
+             the unpartitioned default spec (1)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_residual_scan_result_equivalent_to_full_filter_identity_partition() {
+        // RESULT-EQUIVALENCE on the identity-partitioned table. Filter mixes a
+        // partition-implied leaf (`x == 1`) with a data-column leaf (`y < 3`). The
+        // residual drops `x == 1` (always true for the x==1 files) and keeps
+        // `y < 3`. The rows returned must EXACTLY equal the known-correct set the
+        // full `x == 1 AND y < 3` filter selects: x == 1 holds for every row (the
+        // partition constant), so the two filters are equivalent — `y < 3` selects
+        // the 512 `y == 2` rows in EACH of the two live files (1.parquet, 3.parquet
+        // carry identical data), 1024 rows total.
+        let filter = Reference::new("x")
+            .equal_to(Datum::long(1))
+            .and(Reference::new("y").less_than(Datum::long(3)));
+
+        // First confirm the per-task residual is genuinely the REDUCED form
+        // (`y < 3`), so the read below exercises the residual path, not the full
+        // filter.
+        let tasks = plan_filtered_tasks(filter.clone()).await;
+        assert_eq!(tasks.len(), 2);
+        let expected_residual = Reference::new("y")
+            .less_than(Datum::long(3))
+            .bind(tasks[0].schema.clone(), true)
+            .unwrap();
+        assert_eq!(tasks[0].predicate.as_ref(), Some(&expected_residual));
+
+        // Now read through the residual and assert the known-correct row set.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_filter(filter)
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let total_rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        assert_eq!(
+            total_rows, 1024,
+            "y < 3 selects the 512 y == 2 rows in each of the 2 live files"
+        );
+        for batch in &batches {
+            // Every selected row has x == 1 (the partition value) and y == 2.
+            let x = decode_int64_column(batch.column_by_name("x").unwrap());
+            for index in 0..x.len() {
+                assert_eq!(x.value(index), 1);
+            }
+            let y = batch.column_by_name("y").unwrap();
+            let y = y.as_any().downcast_ref::<Int64Array>().unwrap();
+            for index in 0..y.len() {
+                assert_eq!(y.value(index), 2);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_unpartitioned_table_keeps_full_filter_as_task_predicate() {
+        // On an unpartitioned table the residual equals the full filter — no
+        // reduction — so `task.predicate` must be the full bound filter unchanged.
+        let mut fixture = TableTestFixture::new_unpartitioned();
+        fixture.setup_unpartitioned_manifest_files().await;
+
+        let filter = Reference::new("y")
+            .greater_than(Datum::long(0))
+            .and(Reference::new("z").less_than(Datum::long(5)));
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_filter(filter.clone())
+            .build()
+            .unwrap();
+        let tasks: Vec<FileScanTask> = table_scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert!(!tasks.is_empty());
+        let expected = filter.bind(tasks[0].schema.clone(), true).unwrap();
+        for task in &tasks {
+            assert_eq!(
+                task.predicate.as_ref(),
+                Some(&expected),
+                "an unpartitioned table's residual is the full filter, unchanged"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_no_filter_scan_leaves_task_predicate_none() {
+        // A scan with no row filter has no residual evaluator → no per-task
+        // predicate (behavior unchanged from before the wiring).
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let table_scan = fixture.table.scan().build().unwrap();
+        let tasks: Vec<FileScanTask> = table_scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(tasks.len(), 2);
+        for task in &tasks {
+            assert_eq!(task.predicate, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_filter_excluding_the_partition_prunes_the_file_entirely() {
+        // Filter `x == 999`: no live file is in partition x == 999, so the
+        // inclusive projection is false for every file and they are all pruned
+        // (manifest + expression evaluators) — zero tasks. This is the partition
+        // mismatch the residual's AlwaysFalse case corresponds to at planning time.
+        let filter = Reference::new("x").equal_to(Datum::long(999));
+        let tasks = plan_filtered_tasks(filter).await;
+        assert!(
+            tasks.is_empty(),
+            "no file is in partition x == 999, so all are pruned"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_task_predicate_residual_reduced_on_transform_truncate_partition() {
+        // TRANSFORM partition (`truncate(x, 100)`), file in partition bucket 0
+        // (x in 0..=99). Filter `x < 100 AND y > 0`: the truncate-0 partition's
+        // STRICT projection of `x < 100` is true (every x in 0..=99 is < 100), so
+        // the residual drops the `x < 100` leaf, leaving only `y > 0` — proving the
+        // wiring reduces a NON-identity partition predicate, not just identity.
+        let mut fixture = TableTestFixture::new_truncate_partitioned();
+        fixture.setup_truncate_manifest_files().await;
+
+        let filter = Reference::new("x")
+            .less_than(Datum::long(100))
+            .and(Reference::new("y").greater_than(Datum::long(0)));
+        let table_scan = fixture.table.scan().with_filter(filter).build().unwrap();
+        let tasks: Vec<FileScanTask> = table_scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(tasks.len(), 1);
+        let expected_residual = Reference::new("y")
+            .greater_than(Datum::long(0))
+            .bind(tasks[0].schema.clone(), true)
+            .unwrap();
+        assert_eq!(
+            tasks[0].predicate.as_ref(),
+            Some(&expected_residual),
+            "truncate(x,100)==0 strictly implies x < 100, so the residual is `y > 0`"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_residual_scan_result_equivalent_to_full_filter_truncate_partition() {
+        // RESULT-EQUIVALENCE on the truncate-partitioned table. Filter
+        // `x < 100 AND y >= 4`: truncate(x,100)==0 implies x < 100 for every row, so
+        // the residual `y >= 4` selects the SAME rows as the full filter. The data
+        // has y >= 4 for 312 rows (300 of y==4 + 12 of y==5). Because the truncate
+        // transform is NON-identity, `x` is read from the parquet file (= 1), so the
+        // full-filter leaf `x < 100` is also true for every row — equivalence holds.
+        let mut fixture = TableTestFixture::new_truncate_partitioned();
+        fixture.setup_truncate_manifest_files().await;
+
+        let filter = Reference::new("x")
+            .less_than(Datum::long(100))
+            .and(Reference::new("y").greater_than_or_equal_to(Datum::long(4)));
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_filter(filter)
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let total_rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        assert_eq!(
+            total_rows, 312,
+            "y >= 4 selects 300 (y==4) + 12 (y==5) rows"
+        );
+        for batch in &batches {
+            // x is read from the data file (1) — NOT a constant, since truncate is
+            // non-identity — and every selected row satisfies x < 100 AND y >= 4.
+            let x = decode_int64_column(batch.column_by_name("x").unwrap());
+            for index in 0..x.len() {
+                assert_eq!(x.value(index), 1);
+            }
+            let y = batch.column_by_name("y").unwrap();
+            let y = y.as_any().downcast_ref::<Int64Array>().unwrap();
+            for index in 0..y.len() {
+                assert!(y.value(index) >= 4);
+            }
+        }
     }
 
     #[tokio::test]
@@ -1832,9 +2443,10 @@ pub mod tests {
         // Verify we have 2 columns: x and _file
         assert_eq!(batches[0].num_columns(), 2);
 
-        // Verify the x column exists and has correct data
+        // Verify the x column exists and has correct data. `x` is an
+        // identity-partition constant (run-end-encoded); decode it.
         let x_col = batches[0].column_by_name("x").unwrap();
-        let x_arr = x_col.as_primitive::<arrow_array::types::Int64Type>();
+        let x_arr = decode_int64_column(x_col);
         assert_eq!(x_arr.value(0), 1);
 
         // Verify the _file column exists
@@ -2090,14 +2702,16 @@ pub mod tests {
             "Column 5 should be y (duplicate)"
         );
 
-        // Verify all columns have correct data types
+        // Verify all columns have correct data types. `x` is read from the data file as
+        // a plain `Int64` (identity-partition constant materialization is deferred — see
+        // `into_file_scan_task`, where `partition_spec` is left `None`).
         assert!(
             matches!(schema.field(0).data_type(), arrow_schema::DataType::Int64),
-            "Column x should be Int64"
+            "Column x should be a plain Int64 read from the data file"
         );
         assert!(
             matches!(schema.field(2).data_type(), arrow_schema::DataType::Int64),
-            "Column x (duplicate) should be Int64"
+            "Column x (duplicate) should be a plain Int64 read from the data file"
         );
         assert!(
             matches!(schema.field(3).data_type(), arrow_schema::DataType::Int64),

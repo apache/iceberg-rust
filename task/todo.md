@@ -2705,3 +2705,572 @@ exact panic). Updated the schema doc-comment + GAP_MATRIX to document the diverg
 documented deviation from Java's NOMINAL `required` flag (which Java never enforces); correctness > nominal
 metadata parity. lib total **1467** (was 1466; +1 net regression test, probe removed). Full gate (all 7)
 re-run clean after the fix.
+
+---
+
+## SEQUENCE: ResidualEvaluator + filter-based conflict validation (Phase 3, started 2026-06-08)
+Branch `phase3-residual-eval` (off merged `main` `a31657dd`). The inspection-table set is COMPLETE; this
+sequence builds the residual-evaluation gap + the deferred Phase-2 filter-based conflict validation it unblocks.
+
+**Why:** Java `api/.../expressions/ResidualEvaluator.java` is ABSENT in Rust. It partially-evaluates a row
+filter against a partition's values → the residual predicate. Needed for (a) correct per-task scan residuals
+(`FileScanTask` today carries the FULL bound predicate, not the partition-reduced residual) and (b) the
+DEFERRED `OverwriteFiles`/`RowDelta` `validateNoConflictingData` (filter-based concurrent-commit safety).
+
+Infrastructure that already exists (the build leans on it): `BoundPredicateVisitor` trait
+(`expr/visitors/bound_predicate_visitor.rs`); `Transform::project` (inclusive) + `Transform::strict_project`
+(strict) in `spec/transform.rs`; the `ExpressionEvaluatorVisitor` pattern (`expr/visitors/expression_evaluator.rs`)
+that evaluates a bound predicate against a partition `Struct` → bool; `Predicate::{AlwaysTrue,AlwaysFalse}` +
+`BoundPredicate::{AlwaysTrue,AlwaysFalse}`; `PartitionField.source_id` for the by-source lookup; the scan
+already carries a `partition_bound_predicate` (`scan/mod.rs`).
+
+### Increment 1 — ResidualEvaluator core (THIS increment)
+New `crates/iceberg/src/expr/visitors/residual_evaluator.rs`. Mirror Java `ResidualEvaluator`:
+- `ResidualEvaluator` holding `(partition_spec, filter, case_sensitive)`; constructors `unpartitioned(filter)`
+  (residual is ALWAYS the filter unchanged) and `of(spec, filter, case_sensitive)` (→ unpartitioned when the
+  spec has no fields).
+- `residual_for(&self, partition: &Struct) -> Result<Predicate>` — the residual visitor:
+  - and/or/not → recurse + combine; alwaysTrue/alwaysFalse pass through.
+  - leaf unary/binary/set predicate on a partition-SOURCE column: get the partition fields with
+    `source_id == ref.field_id()`; for each, compute `strict_project` (if its evaluation against the partition
+    struct is TRUE → residual `AlwaysTrue`) and `project` (inclusive; if FALSE → residual `AlwaysFalse`); else
+    keep the original predicate. (Java `predicate()` L227-288.) Evaluate the projected (partition-bound)
+    predicate against the partition struct via the `ExpressionEvaluatorVisitor` pattern.
+  - leaf on a non-partition column → keep the predicate (can't reduce).
+- Tests: the Javadoc `day(ts)` example's 4 residual cases (`d>day(a)&&d<day(b)`→true; `d==day(a)`→`ts>=a`;
+  `d==day(b)`→`ts<=b`; `d==day(a)==day(b)`→both); identity partition (eq reduces to alwaysTrue/false);
+  bucket partition (non-reducible → keeps predicate); unpartitioned (returns filter verbatim); alwaysTrue/
+  alwaysFalse filters; a predicate on a non-partition column (kept). Mutation-pin strict-vs-inclusive.
+
+Plan / checkboxes (Increment 1):
+- [x] New `expr/visitors/residual_evaluator.rs`: `ResidualEvaluator { spec, filter (BoundPredicate),
+      partition_schema, case_sensitive }` + `unpartitioned(filter)` + `of(spec, schema, filter, case_sensitive)`.
+- [x] `residual_for(&self, partition: &Struct) -> Result<Predicate>` via a `ResidualVisitor`
+      (`BoundPredicateVisitor<T = Predicate>`): and/or/not via the simplifying combinators; leaf →
+      strict-true ⇒ `AlwaysTrue`, inclusive-false ⇒ `AlwaysFalse`, else keep the original (bound→unbound).
+- [x] Register `pub(crate) mod residual_evaluator;` in `expr/visitors/mod.rs`.
+- [x] Tests (in-crate): 4 day-example cases + identity + bucket + non-partition + unpartitioned + alwaysTrue/
+      alwaysFalse + and/or/not mixes; mutation-pin strict↔inclusive and partition-ignore.
+- [x] Docs: GAP_MATRIX residual row, Roadmap Phase 3, todo Outcome, lessons.
+- [x] Gate: build -p iceberg / workspace build / lib ×2 / 3 interop / clippy / fmt.
+
+### Increment 2 — wire residuals into scan FileScanTask
+Compute the per-task residual during planning so each `FileScanTask` carries the partition-reduced residual
+(Java parity), connecting to the existing `partition_bound_predicate` machinery in `scan/mod.rs`. Guard
+behavior-equivalence (residual ⊆ original filter; row-level filtering must not change results).
+
+### Increment 3 — OverwriteFiles (+ RowDelta) filter-based validateNoConflictingData
+Consume the residual/metrics evaluators to implement the deferred filter-based conflict validation, building
+on the Phase-2 foundation (`Transaction.starting_snapshot_id` + `TransactionAction::validate` +
+`added_data_files_after`; `ReplacePartitions.validate_no_conflicting_data` already wired). Scope precisely
+against Java `MergingSnapshotProducer.validateAddedDataFiles` / `OverwriteFiles` when reached.
+
+**Outcome (2026-06-08, Phase 3 Increment 1 — ResidualEvaluator core, BUILDER Opus):** `ResidualEvaluator`
+landed 🟡 in the new `crates/iceberg/src/expr/visitors/residual_evaluator.rs`. It partially evaluates a bound
+row filter against a partition's `Struct` and returns the residual — the part of the filter NOT already
+decided by the partition.
+
+**Type decisions (deliberate divergences from Java, documented in the module + GAP_MATRIX):**
+- Java's `ResidualEvaluator` holds one `Expression expr` (the bound/unbound union) and `residualFor` returns
+  an `Expression`. The Rust port holds the filter as a `BoundPredicate` (the scan binds before planning) and
+  returns the residual as an UNBOUND `Predicate`. Signature:
+  `ResidualEvaluator::of(spec: PartitionSpecRef, schema: &Schema, filter: BoundPredicate, case_sensitive: bool)
+  -> Result<Self>`, `ResidualEvaluator::unpartitioned(filter: BoundPredicate) -> Self`,
+  `residual_for(&self, partition: &Struct) -> Result<Predicate>`.
+- `of` takes the table `schema` (Java's `PartitionSpec` carries its schema; the Rust one does not), used once
+  in the ctor to compute `spec.partition_type(schema)` → a partition `Schema` the projected predicates bind to.
+- For the leaf "keep the original predicate" case Java returns the original BOUND `pred`; the Rust port
+  reconstructs the unbound `Predicate` from the bound leaf by the source field's NAME
+  (`bound_to_unbound` + `unbound_reference`) — partition-source columns are top-level schema fields, so the
+  field name is the unbound reference name.
+- Visibility `pub(crate)` (Increments 2/3 are in-crate consumers); `#![allow(dead_code)]` until they land.
+
+**Residual algorithm (mirrors Java `ResidualVisitor`):** a `BoundPredicateVisitor<T = Predicate>`. and/or →
+the simplifying `Predicate::{and,or}` combinators (so AlwaysTrue/AlwaysFalse short-circuit like
+`Expressions.and/or`); not → a Java-`Expressions.not`-faithful `simplifying_not` (`not(true)=false`,
+`not(false)=true`, `not(not x)=x`, else wrap) because the `Predicate` `!` operator does NOT simplify
+constants. Every leaf method routes to `reduce_leaf(reference, predicate)`: find the partition fields with
+`source_id == reference.field().id`; if none, keep the predicate; otherwise for each part compute
+`Transform::strict_project` (bind to the partition schema, evaluate against the partition via
+`ExpressionEvaluatorVisitor` → if TRUE, return `AlwaysTrue`) then `Transform::project` (inclusive; if FALSE,
+return `AlwaysFalse`); if neither is conclusive, keep the original predicate. An `AlwaysTrue`/`AlwaysFalse`
+*projection* short-circuits to its constant (Java's "if the result is not a predicate it must be a constant").
+
+**Reuse:** made `ExpressionEvaluatorVisitor` + its `new` `pub(crate)` in `expression_evaluator.rs` (the ONLY
+edit to that file — the brief's sanctioned small helper) so the residual evaluator reuses the exact
+per-operator bound-predicate-against-partition-`Struct` evaluation rather than duplicating it.
+
+**Java lines verified:** `ResidualEvaluator.unpartitioned` L73-75 + `UnpartitionedResidualEvaluator` L53-65
+(residual is always the whole expr); `of` L84-90 (empty spec → unpartitioned); the leaf methods L146-223
+(each evaluates the bound ref against the partition struct → alwaysTrue/alwaysFalse); the load-bearing
+`predicate(BoundPredicate)` L227-288 (strict-projection-true ⇒ alwaysTrue; inclusive-projection-false ⇒
+alwaysFalse; else keep `pred`); and `Expressions.not` L63-73 (the constant-folding negation).
+
+**Tests (16, each named for its risk):** the 4 Javadoc `day(utc_timestamp)` cases
+(`*_strictly_between_bounds_reduces_to_always_true`, `*_equals_lower_bound_keeps_lower_predicate_only`,
+`*_equals_upper_bound_keeps_upper_predicate_only`, `*_equals_both_bounds_keeps_both_predicates`) — the
+headline reductions; `*_identity_partition_eq_matching_value_reduces_to_always_true` /
+`*_non_matching_value_reduces_to_always_false` (identity eq collapses by the partition value);
+`*_bucket_partition_keeps_predicate_unchanged` (non-invertible transform → predicate survives; the partition
+value is computed as the real `bucket(5,16)` via `transform_literal` so the inclusive projection is true and
+strict is absent); `*_predicate_on_non_partition_column_is_kept`;
+`*_unpartitioned_spec_returns_filter_verbatim` (empty spec via `of`) + `*_unpartitioned_constructor_*`;
+`*_always_true_filter_passes_through` / `*_always_false_*`;
+`*_and_of_reducible_and_non_reducible_keeps_only_the_non_reducible`,
+`*_and_short_circuits_to_false_when_partition_excludes_the_partition_leaf`,
+`*_or_of_reducible_true_and_non_reducible_short_circuits_to_true`,
+`*_not_over_partition_leaf_negates_the_reduced_constant` (and/or/not mixes of a reducible + a non-reducible
+leaf).
+
+**Mutations run (each caught):** (a) swap `strict_project`↔`project` in `reduce_leaf` → 4 reduction tests
+FAIL (the three "equals one bound" day cases + the bucket-keep). (b) make `residual_for` ignore the partition
+(always `bound_to_unbound(filter)`) → 9 reduction tests FAIL (all day reductions + identity + the and/or/not
+combinations); the 7 "kept verbatim" tests legitimately still pass. Both restored after.
+
+**Gate (all clean, from repo root, pinned nightly):** `cargo build -p iceberg` ✅; `cargo build --workspace
+--exclude iceberg-sqllogictest --all-targets` ✅; `cargo test -p iceberg --lib` ×2 = **1483 passed / 0 failed**
+both runs (was 1467 → +16 residual tests); 3 interop suites (`interop_manage_snapshots` /
+`interop_update_schema` / `interop_update_partition_spec`) = 4/4 each ✅; `cargo clippy --workspace --exclude
+iceberg-sqllogictest --all-targets -- -D warnings` clean ✅ (collapsed two `if let { if }` into let-chains);
+`cargo fmt --all -- --check` clean ✅. No commit, no branch switch, no Cargo/spec/scan/transaction edits.
+Files: NEW `expr/visitors/residual_evaluator.rs`; `expr/visitors/mod.rs` (`pub(crate) mod residual_evaluator;`);
+`expr/visitors/expression_evaluator.rs` (`ExpressionEvaluatorVisitor` + `new` → `pub(crate)`); docs
+(GAP_MATRIX/Roadmap/todo/lessons).
+
+#### Phase 3 Increment 1 — REVIEW (2026-06-08, Opus REVIEWER, DELEGATED)
+Adversarially verified the ResidualEvaluator port against the Java source (`/tmp/iceberg-java-ref`) and by
+running 7 code mutations. Findings:
+- **Strict/inclusive direction: CONFIRMED CORRECT (not swapped).** Java `predicate(BoundPredicate)`
+  L248-262: `projectStrict` result `op()==TRUE` ⇒ `alwaysTrue`; L265-283: `project` (inclusive) result
+  `op()==FALSE` ⇒ `alwaysFalse`. Rust `reduce_leaf` uses `strict_project`→AlwaysTrue then `project`
+  (inclusive)→AlwaysFalse — same direction. Swap mutation fails 4-6 tests (the 3 day "equals one bound" +
+  bucket-keep, now also truncate + year).
+- **The 4 day-residual cases: asserted EXACTLY** (strictly-between→`AlwaysTrue`; `==day(a)`→`ts>=a`;
+  `==day(b)`→`ts<=b`; `==both`→`ts>=a AND ts<=b`), not weakened to "not AlwaysTrue".
+- **Untested transform classes: VERIFIED + PINNED.** Exercised truncate / year / void through `residual_for`
+  (throwaway probes): all reduce correctly (truncate all-three-ways; year keeps-both-inside + AlwaysFalse-
+  outside; void KEEPS — Java `VoidTransform` returns null for both projections, no panic). Added permanent
+  pinning tests for all three.
+- **Leaf reconstruction round-trip: VERIFIED + PINNED** for set (`in`/`not_in`) and unary (`is_null`) on a
+  non-partition column (builder only covered binary). `not(in)` correctly round-trips as `Not(In{..})` (the
+  binder keeps the `Not` wrapper, not a `NotIn` operator) — faithful, not a bug.
+- **Combinator simplification: CONFIRMED.** `Predicate::and`/`or` constant-fold (predicate.rs L563-599);
+  `simplifying_not` mirrors Java `Expressions.not` L63-73 EXACTLY (not(true)=false/not(false)=true/
+  not(not x)=x, else wrap). The `!` operator does NOT fold, so `simplifying_not` is load-bearing.
+- **Multi-field-per-source loop: PINNED.** A spec with bucket(category)+identity(category) forces the loop
+  to continue past the inconclusive bucket field; break-after-first mutation now fails.
+- **Mutations run (all caught):** (a) strict↔inclusive swap; (b) ignore-partition; (c) drop inclusive-false;
+  (d) drop strict-true; (e) break `not` folding; (f) drop negation in `bound_to_unbound` `Not` arm
+  [SURVIVED the builder's 16 tests — a real gap, now closed]; (g) break-after-first in the parts loop
+  [closed].
+- **Scope + floor: CLEAN.** Production code byte-identical to the builder's (only test additions);
+  `expression_evaluator.rs` is ONLY the visibility bump; `#![allow(dead_code)]` is module-scoped; no bare
+  `.unwrap()` in production paths; no Cargo/spec/scan/transaction edits; no commit/branch switch.
+
+**Review outcome:** CHANGES-MADE — added 8 tests (16→24); closed two genuine test-strength gaps (the
+unpartitioned-`Not` reconstruction and the multi-field-per-source loop) the builder's suite did not catch.
+**Verify:** build -p iceberg clean; workspace build clean; lib ×2 = 1491/0 (was 1483 → +8); 3 interop
+suites 4/4 each; clippy -D warnings clean; fmt clean. Row stays 🟡 (scan-wiring Inc 2 + conflict-validation
+Inc 3 + Java interop still pending). Files touched: `residual_evaluator.rs` (tests only), todo, lessons.
+
+### Increment 2 — wire the ResidualEvaluator into scan FileScanTask (DETAIL, 2026-06-08)
+Java `BaseFileScanTask.residual()` = `residuals.residualFor(file.partition())` — each task carries the
+PARTITION-REDUCED residual, and the reader filters rows with it. Today Rust sets `FileScanTask.predicate` to
+the FULL `snapshot_bound_predicate` (`scan/context.rs::into_file_scan_task`), and `partition_spec` is `None`
+(a TODO). The ONLY runtime consumer of `task.predicate` is `arrow/reader.rs` (row filtering); datafusion does
+not read it.
+
+Plan:
+- [x] Thread the file's `Arc<PartitionSpec>` into `ManifestEntryContext` / `into_file_scan_task` (resolve the
+      `partition_spec: None` TODO) — resolved in `PlanContext::create_manifest_file_context` via
+      `table_metadata.partition_spec_by_id(manifest_file.partition_spec_id)`. Set `partition_spec: Some(spec)`
+      on the task too.
+- [x] In `into_file_scan_task`, when there is a filter: compute the residual via the per-manifest
+      `ResidualEvaluator`, BIND the resulting unbound `Predicate` to `snapshot_schema`, and store it as
+      `predicate`. No filter ⇒ `predicate: None`; unpartitioned spec ⇒ residual == the full filter (unchanged
+      behavior). The evaluator is constructed ONCE per manifest file (the spec + snapshot filter are constant
+      within a manifest) and shared across its entries — the per-spec cache pattern, but per-manifest, so no
+      shared mutable cache was needed.
+- [x] Reader UNCHANGED (it already uses `task.predicate` for row filtering; now it's the residual — and
+      `task.partition_spec` for identity-partition constants, which the threading newly activates).
+- [x] Tests (CRITICAL — prove RESULT-EQUIVALENCE + genuine reduction): 11 scan-wiring tests on identity AND
+      truncate transform partitions; reduced-residual (not full filter); fully-implied → `AlwaysTrue`; spec
+      populated; result-equivalence reads; unpartitioned/no-filter unchanged; partition-mismatch pruning.
+      Mutations caught: (a) leave `predicate`=full filter → 3 reduction tests fail; (b) residual against the
+      WRONG (empty) partition → all 5 residual tests fail.
+- [x] Docs: GAP_MATRIX residual/scan row (scan wiring done), Roadmap, todo, lessons.
+
+**Outcome (2026-06-08, Phase 3 Increment 2 — residual scan-wiring, BUILDER Opus):** each `FileScanTask` now
+carries the PARTITION-REDUCED residual of the scan filter, not the full snapshot filter — Java
+`BaseFileScanTask.residual()` parity (`residuals.residualFor(file.partition())`). **What I threaded:** the
+file's `Arc<PartitionSpec>` (`table_metadata.partition_spec_by_id(manifest_file.partition_spec_id)`) and an
+`Arc<ResidualEvaluator>`, both added to `ManifestFileContext` (built in
+`PlanContext::create_manifest_file_context`, which has `table_metadata`) and propagated to each
+`ManifestEntryContext`. **Where the residual is computed:** `ManifestEntryContext::into_file_scan_task` calls a
+new `residual_predicate()` helper — it runs the per-manifest evaluator's `residual_for(file.partition())`,
+binds the unbound residual `Predicate` back to the snapshot schema, and stores the `BoundPredicate` as
+`task.predicate`. The evaluator is built ONCE per manifest file (spec + filter constant within a manifest) and
+shared across entries — the cleaner choice over a shared mutable cache, since each manifest already maps to one
+spec id. `partition_spec: None` → `Some(spec)` resolves the TODO. **Result-equivalence argument:** every row in
+a data file belongs to that file's single partition tuple, so the partition-implied conditions the residual
+drops are TRUE for all rows in the file; filtering with the residual therefore selects exactly the rows the
+full filter would — result-preserving, only cheaper. Stated in an `into_file_scan_task` comment and proven by
+the equivalence read tests (identity + truncate). **Java lines verified:** `BaseFileScanTask.residual()` =
+`residuals.residualFor(file.partition())` (the per-task residual is the partition-reduced one); the
+`ResidualEvaluator` semantics were verified in Increment 1. **The one unforeseen interaction (flagged):**
+threading `task.partition_spec` ALSO activates the arrow reader's identity-partition constant materialization
+(`reader.rs:451-455` → `record_batch_transformer::constants_map`, Java `PartitionUtil.constantsMap`), which was
+dormant while the field was `None`. This is CORRECT Iceberg behavior but exposed a pre-existing inconsistency in
+the shared `TableTestFixture` (partition `x`=100/200/300 vs the parquet `x` column `[1; 1024]`). I made the
+fixture consistent (partition `x`=1, matching the data) — a test-only change in `scan/mod.rs` — which is the
+truthful resolution; no read test prunes on `x`, so nothing else changes. This rippled one expect-snapshot in
+`inspect/manifests.rs` (partition-summary bounds `"100"`/`"300"` → `"1"`/`"1"`, mechanical) — OUTSIDE the
+allowed-edit set, flagged here and in the final report. **Test list (11, each pins a risk):**
+`test_task_predicate_is_partition_reduced_residual_not_full_filter` (residual reduced, not full filter —
+mutation (a) target); `test_task_predicate_residual_is_always_true_when_filter_fully_implied` (filter fully
+implied by partition → `AlwaysTrue`); `test_task_partition_spec_is_populated_from_table_metadata` (TODO
+resolved); `test_residual_scan_result_equivalent_to_full_filter_identity_partition` (RESULT-EQUIVALENCE read,
+identity); `test_unpartitioned_table_keeps_full_filter_as_task_predicate` (no reduction on unpartitioned);
+`test_no_filter_scan_leaves_task_predicate_none` (no-filter unchanged + spec still threaded);
+`test_filter_excluding_the_partition_prunes_the_file_entirely` (partition mismatch → file pruned);
+`test_task_predicate_residual_reduced_on_transform_truncate_partition` (NON-identity transform residual
+reduced); `test_residual_scan_result_equivalent_to_full_filter_truncate_partition` (RESULT-EQUIVALENCE read,
+truncate transform — x read from data, not constant). Plus the 8 pre-existing scan read tests updated to decode
+the now-run-encoded identity-partition `x` constant (new `decode_int64_column` helper), and the
+`test_select_with_repeated_column_names` type assertions (`x` is `RunEndEncoded`, like `_file`).
+**Mutations run (each caught):** (a) `residual_predicate` returns the full `snapshot_bound_predicate` →
+`test_task_predicate_is_partition_reduced_*` + `*_residual_is_always_true_*` +
+`*_residual_reduced_on_transform_truncate_*` all FAIL; (b) `residual_for(&Struct::empty())` (wrong partition) →
+all 5 residual tests FAIL (3 panic in the accessor, 2 wrong-result). Both restored; production byte-identical
+after. **Removed** the module-scoped `#![allow(dead_code)]` from `residual_evaluator.rs` (now consumed in
+production — clippy `-D warnings` confirms every item is reachable). **Gate (all from repo root, pinned
+nightly):** `cargo build -p iceberg` ✅; `cargo build --workspace --exclude iceberg-sqllogictest --all-targets`
+✅; `cargo test -p iceberg --lib` ×2 = **1500 passed / 0 failed** both runs (was 1491 → +9 residual-wiring
+tests, net; the 8 updated read tests + 1 inspect snapshot are edits not adds); 3 interop suites
+(`interop_manage_snapshots`/`interop_update_schema`/`interop_update_partition_spec`) = 4/4 each ✅; `cargo
+clippy --workspace --exclude iceberg-sqllogictest --all-targets -- -D warnings` clean ✅; `cargo fmt --all --
+--check` clean ✅. Existing scan/reader filtered-read tests all still pass. No commit, no branch switch, no
+Cargo/spec/transaction edits; `arrow/reader.rs` behavior unchanged (only the now-active partition-constant path
+it already contained). **Files:** `scan/context.rs` (spec + residual threading, residual computation),
+`scan/mod.rs` (fixture consistency + truncate fixture + 9 new tests + 8 read-test decode updates),
+`expr/visitors/residual_evaluator.rs` (removed `allow(dead_code)` + doc), `inspect/manifests.rs` (forced
+expect-snapshot ripple), docs (GAP_MATRIX/Roadmap/todo/lessons).
+- [x] Verify from repo root: build -p iceberg + workspace; lib ×2; 3 interop; clippy (workspace); fmt.
+
+#### Phase 3 Increment 2 — REVIEW (2026-06-08, Opus REVIEWER, DELEGATED)
+Adversarially verified residual result-equivalence and scope against the Java source + 3 code mutations.
+**VERDICT: CHANGES-MADE.**
+- **Residual result-equivalence: CONFIRMED.** The residual is computed from the FILE's own spec
+  (`partition_spec_by_id(manifest_file.partition_spec_id)`, resolved per manifest), evaluated against the
+  FILE's own `data_file().partition()`, then BOUND BACK to the snapshot schema — exactly Java
+  `BaseFileScanTask.residual()` = `residuals.residualFor(file.partition())`. The data-matches-partition
+  invariant (the original fixture VIOLATED it: data `x`=1, partition `x`=100/200/300) makes the
+  fixture-consistency fix genuinely NECESSARY, not optional — confirmed independently.
+- **Fixture fix DECISION: KEPT the collapse (3→1 partition).** Investigated the multi-partition alternative
+  and REJECTED it: the shared fixture writes BYTE-IDENTICAL parquet data to all three files via one
+  `for n in 1..=3` loop (only 2 are live — 2.parquet is the Deleted entry), so keeping 100/200/300 would
+  require rewriting `write_parquet_data_files` to emit per-file distinct `x` data and rippling ~8 read tests —
+  disproportionate. Crucially, NO coverage is lost: the base `scan/mod.rs` had ZERO tests filtering on the
+  partition column `x` with 100/200/300, and the dedicated multi-partition inspect tests
+  (`all_manifests`/`entries`/`files`/`partitions`) build their OWN inline 3-partition manifests (untouched,
+  60/60 green). The collapse is adequate and the better fix is disproportionately heavy.
+- **Constants-map activation (`partition_spec=Some`) DECISION: KEPT, justified.** Verified by REAL reads:
+  `record_batch_transformer::constants_map` materializes ONLY identity-transform fields (line 60-61); the
+  identity fixture reads `x` as a RunEndEncoded constant from partition metadata (value 1) and the truncate
+  fixture reads `x` from the data file (non-identity) — both confirmed by equivalence read tests. `arrow/reader.rs`
+  is byte-unchanged (not in the diff). Correct Iceberg behavior (Java `PartitionUtil.constantsMap`), resolves a
+  real TODO, fully pinned — KEEP over DEFER.
+- **inspect/manifests.rs ripple: BENIGN.** Mechanical consequence of the (necessary) partition-value change on
+  the SAME manifest the scan reads; the partition-summary bound is genuinely now 1. Not a masked bug.
+- **Mutations run (3):** (a) store full filter instead of residual → CAUGHT (4 tests, incl. the identity
+  equivalence read via its pre-read reduced-residual assertion); (b) residual vs EMPTY partition → CAUGHT
+  (5 tests, incl. BOTH equivalence reads); (c) use the table DEFAULT spec instead of the file's own
+  `partition_spec_id` → **SURVIVED** the builder's suite (fixture had only one spec) — a real test-strength
+  gap (the exact silent partition-evolution data bug). **CLOSED** by a new pinning test.
+- **Test added:** `test_residual_uses_files_own_spec_not_the_table_default_spec` — a 2-spec fixture
+  (`new_with_evolved_default_spec` + `setup_manifest_files_under_spec_zero`) where the live file is written
+  under non-default `identity(x)` spec 0 while the table default is unpartitioned spec 1; pins that the
+  residual reduces to `AlwaysTrue` (file's spec) and `task.partition_spec.spec_id()==0`. Re-running mutation
+  (c) now FAILS it.
+- **Scope + floor: CLEAN.** Production code byte-identical to the builder's after every mutation reverted; my
+  additions are test-only (fixture builder + 1 test) in `scan/mod.rs`; no bare `.unwrap()` added in production;
+  no Cargo/spec/reader-logic/transaction edits; no commit/branch switch.
+- **Gate (all clean, repo root, pinned nightly):** build -p iceberg ✅; workspace build (--exclude
+  sqllogictest --all-targets) ✅; lib ×2 = **1501/0** both (was 1500 → +1 spec-evolution pin); 3 interop
+  suites 4/4 each ✅; clippy -D warnings clean ✅; fmt clean ✅. Row stays 🟡 (Increment 3 conflict-validation
+  + Java interop still pending).
+
+### Increment 3 — OverwriteFiles filter-based validateNoConflictingData (DETAIL, 2026-06-08)
+The headline write-safety unblock. Java `BaseOverwriteFiles.validate` → `validateNewDataFiles` →
+`MergingSnapshotProducer.validateAddedDataFiles(base, startingSnapshotId, conflictDetectionFilter, parent)`:
+enumerate DATA files ADDED by concurrent commits since the starting snapshot, and reject the commit if ANY
+could contain records matching the conflict-detection filter. SCOPE: OverwriteFiles `validateNoConflictingData`
+ONLY (the filter-based added-data-file conflict check). DEFER: `validateAddedFilesMatchOverwriteFilter`
+(block 1, the writer's own files), `validateNoConflictingDeletes` (block 3, delete conflicts), and RowDelta —
+each its own follow-up.
+
+Model (already landed): `transaction/replace_partitions.rs::validate` — flag → `effective_start =
+validate_from_snapshot.or(starting_snapshot_id)` → `added_data_files_after(current, effective_start)` →
+per-file conflict test → non-retryable `ErrorKind::DataInvalid` on the first conflict. OverwriteFiles differs
+ONLY in the conflict test: instead of `(spec_id, partition) ∈ drop-set`, it's "could this added file match the
+conflict filter?" via the EXISTING `InclusiveMetricsEvaluator::eval(&bound_filter, file) -> Result<bool>`
+(file metrics/bounds; `pub(crate)` in `expr/visitors/inclusive_metrics_evaluator.rs`).
+
+Building blocks (all exist): `added_data_files_after(table, Option<i64>) -> Result<Vec<DataFile>>`
+(`transaction/snapshot.rs`); `InclusiveMetricsEvaluator::eval`; `Predicate::bind(schema, case_sensitive) ->
+Result<BoundPredicate>`. The `validate` hook is `async fn validate(self: Arc<Self>, starting_snapshot_id:
+Option<i64>, current: &Table) -> Result<()>` (default no-op; override it, mirroring ReplacePartitions).
+
+Plan:
+- [x] Add fields to `OverwriteFilesAction`: `validate_no_conflicting_data: bool`, `conflict_detection_filter:
+      Option<Predicate>`, `validate_from_snapshot: Option<i64>` (+ builder methods named like ReplacePartitions:
+      `validate_no_conflicting_data()`, `conflict_detection_filter(Predicate)`, `validate_from_snapshot(i64)`).
+- [x] Override `validate`: no-op unless the flag is set; `effective_start`; `added_data_files_after`; bind the
+      conflict filter (if `None`, treat as `AlwaysTrue` = ANY concurrent added data file conflicts — the most
+      conservative serializable check); for each added file `InclusiveMetricsEvaluator::eval(&bound, file, true)?`
+      → first match → non-retryable `DataInvalid` naming the file + filter (Java "Found conflicting files that
+      can contain records matching %s: %s"). Default case-sensitivity true (Java `isCaseSensitive()`; the
+      action has no such field — noted in the `validate` doc-comment).
+- [x] Module doc: drop `validateNoConflictingData` from the deferred list (note block1/block3/RowDelta remain).
+- [x] Tests (MemoryCatalog, the ReplacePartitions conflict-test pattern — commit a CONCURRENT snapshot after
+      the txn's starting point, then validate): (1) no concurrent commit → commit OK; (2) concurrent commit
+      adds a file whose metrics MATCH the filter → validate fails `DataInvalid` (non-retryable, doesn't loop);
+      (3) concurrent commit adds a file whose metrics EXCLUDE the filter (bounds outside) → commit OK; (4) flag
+      OFF → no check (snapshot isolation) even with a conflict; (5) `conflict_detection_filter` None → any
+      concurrent added file conflicts; (6) `validate_from_snapshot` override (+ a negative half + a
+      tx-captured-start survives-rebase pin). Build files WITH bounds so the inclusive evaluator can
+      include/exclude. Mutation-pin: the include-vs-exclude metrics decision + the non-retryable error kind.
+- [x] Docs: GAP_MATRIX (OverwriteFiles validateNoConflictingData landed, row stays 🟡), Roadmap, todo, lessons.
+- [x] Verify from repo root: build -p iceberg + workspace; lib ×2; 3 interop; clippy (workspace); fmt.
+
+**Outcome (2026-06-08, Phase 3 Increment 3 — OverwriteFiles filter-based `validateNoConflictingData`, BUILDER
+Opus):** Added the serializable-isolation write-safety layer to `OverwriteFilesAction` in
+`transaction/overwrite_files.rs` (the ONLY production file touched besides docs). It is the SAME shape as the
+already-landed `ReplacePartitions.validate`; only the per-file conflict TEST differs.
+- **Builder API:** three opt-in fields + builders, named exactly like ReplacePartitions —
+  `validate_no_conflicting_data(self) -> Self` (enable), `validate_from_snapshot(self, i64) -> Self` (override
+  the starting snapshot), and the NEW `conflict_detection_filter(self, Predicate) -> Self` (the data filter
+  OverwriteFiles has but ReplacePartitions doesn't). All default OFF/None in `new()`.
+- **`validate` algorithm** (overrides the `TransactionAction` default no-op): `if
+  !validate_no_conflicting_data { return Ok(()) }` → `effective_start = validate_from_snapshot.or(starting_
+  snapshot_id)` → `added = added_data_files_after(current, effective_start).await?` (empty ⇒ Ok) → bind the
+  conflict filter against `current.metadata().current_schema()` case-sensitive=`true` (the filter is the
+  caller's `conflict_detection_filter` when set, else `Predicate::AlwaysTrue`) → for each added file, if
+  `InclusiveMetricsEvaluator::eval(&bound_filter, file, true)?` is true, return a non-retryable
+  `Error::new(ErrorKind::DataInvalid, "Found conflicting files that can contain records matching {filter}:
+  {path}")` on the FIRST conflict.
+- **Java lines verified against** (`/tmp/iceberg-java-ref`): `BaseOverwriteFiles.validate` L136-179 — the
+  `validateNewDataFiles` branch L163-165 calls `validateAddedDataFiles(base, startingSnapshotId,
+  dataConflictDetectionFilter(), parent)`; `MergingSnapshotProducer.validateAddedDataFiles` L391-412 (build a
+  `ManifestGroup` over the concurrent-added DATA manifests filtered by the conflict filter; throw "Found
+  conflicting files that can contain records matching %s: %s" if any entry survives); `dataConflictDetection
+  Filter()` L181-187 (filter when set, else rowFilter when not alwaysFalse + no deleted files, else
+  `alwaysTrue()`). VERIFIED our `overwriteByRowFilter` is deferred so `rowFilter()` is effectively
+  `alwaysFalse()` and the row-filter branch can never apply → None ⇒ `AlwaysTrue`, matching Java.
+- **None-filter default decision:** a `None` `conflict_detection_filter` binds `Predicate::AlwaysTrue` ⇒ ANY
+  concurrently-added DATA file is a conflict (the most conservative serializable check). This mirrors Java
+  `dataConflictDetectionFilter()` returning `alwaysTrue()` and is pinned by
+  `test_overwrite_none_filter_treats_any_concurrent_add_as_conflict` (a no-bounds concurrent file is still a
+  conflict).
+- **Case-sensitivity default decision:** Java binds with `isCaseSensitive()`. `OverwriteFilesAction` has no
+  case-sensitivity field, so the filter is bound case-sensitive (`true` = the Iceberg/Java default); noted in
+  the `validate` doc-comment. (Adding a `case_sensitive` builder is a trivial future follow-up if needed.)
+- **Test list (9 new conflict tests; each risk pinned):**
+  1. `test_overwrite_validation_no_concurrent_commit_succeeds` — validation enabled but nothing concurrent ⇒
+     commit OK (a race-free commit must not be blocked).
+  2. `test_overwrite_rejects_concurrent_added_file_matching_filter` — HEADLINE: concurrent file with y bounds
+     [60,70] vs filter `y>=50` ⇒ REJECTED, non-retryable, error names the file (silent lost-write prevention).
+  3. `test_overwrite_allows_concurrent_added_file_excluded_by_filter` — concurrent file y bounds [10,20]
+     entirely below `y>=50` ⇒ inclusive evaluator EXCLUDES ⇒ commit OK (no false conflict).
+  4. `test_overwrite_without_validation_allows_conflicting_concurrent_append` — flag OFF (filter present but
+     inert) ⇒ a would-be-conflict concurrent append does NOT block (snapshot isolation unchanged / opt-in).
+  5. `test_overwrite_none_filter_treats_any_concurrent_add_as_conflict` — None filter ⇒ AlwaysTrue ⇒ a
+     no-bounds concurrent add is a conflict (the conservative serializable default; the OPPOSITE of "no check").
+  6. `test_overwrite_validate_from_snapshot_override_changes_concurrent_window` — `validate_from_snapshot(S0)`
+     widens the window to include S1's add ⇒ REJECTED (the override genuinely shifts the boundary).
+  7. `test_overwrite_validate_from_snapshot_at_head_finds_no_conflict` — `validate_from_snapshot(S1=head)` ⇒
+     nothing concurrent ⇒ commit OK (the negative half proving the boundary shift is real).
+  8. `test_overwrite_rejects_concurrent_using_tx_captured_starting_snapshot` — NO `validate_from_snapshot`;
+     relies on the tx-captured start surviving `do_commit`'s re-base ⇒ REJECTED (the only test exercising the
+     capture; if the start were re-read from the refreshed head the check would silently always pass).
+  All 9 use the ReplacePartitions concurrent-commit pattern: a SEPARATE `fast_append` lands between building
+  the txn and committing it, advancing the catalog head; `do_commit` refreshes to that head and runs `validate`
+  against it. Data files carry y-column bounds via the new `data_file_with_y_bounds(path, part, lo, hi)` helper
+  (sets `lower_bounds`/`upper_bounds` on schema field id 2).
+- **Mutations run + each caught:** (a) invert the metrics decision (`if !eval(...)`) → the EXCLUDE test
+  (`..excluded_by_filter`) AND the MATCH/None tests fail; (b) make `validate` early-`return Ok(())` (skip the
+  check) → exactly the 4 rejection tests (#2/#5/#6/#8) fail, the OK tests stay green; (c) change the error kind
+  to `CatalogCommitConflicts` → the 4 rejection tests' `kind()==DataInvalid` assertions fail. Bonus
+  genuinely-non-retryable check: `.with_retryable(true)` on the conflict error → the `!err.retryable()`
+  assertion fails AND the test runtime jumps 0.12s→1.57s (the retry loop demonstrably loops) — confirming the
+  property is verified, not merely asserted.
+- **Gate (all from repo root, pinned nightly):** `cargo build -p iceberg` ✅ (Finished); `cargo build
+  --workspace --exclude iceberg-sqllogictest --all-targets` ✅ (Finished); `cargo test -p iceberg --lib` ✅ TWICE
+  (run1 1509 passed / 0 failed; run2 1509 passed / 0 failed — **new lib total 1509**, was 1500, +9 tests);
+  3 interop binaries ✅ (`interop_manage_snapshots` 4/4, `interop_update_partition_spec` 4/4,
+  `interop_update_schema` 4/4); `cargo clippy --workspace --exclude iceberg-sqllogictest --all-targets -- -D
+  warnings` ✅ (Finished, no warnings); `cargo fmt --all -- --check` ✅ (clean after one `cargo fmt`);
+  `cargo test -p iceberg --lib transaction::` ✅ (225 passed). `transaction::overwrite_files` alone: 18/18.
+- **Scope:** touched ONLY `transaction/overwrite_files.rs` + docs (GAP_MATRIX, Roadmap, todo, lessons). No
+  edits to `snapshot.rs` / `inclusive_metrics_evaluator.rs` / `action.rs` / `predicate.rs` / `replace_partitions.rs`
+  (read-only). No `Cargo.toml`/lockfile/spec/scan/arrow changes. No commit, no branch switch, no push.
+- **UNSURE / flagged:** (1) The Java `addedDataFiles` builds a `ManifestGroup` that pre-filters at the MANIFEST
+  level (manifest partition/metrics summary) BEFORE the per-entry inclusive-metrics test; the Rust port
+  approximates this at the FILE level only (`added_data_files_after` returns every added DATA file, then we run
+  `InclusiveMetricsEvaluator::eval` per file). This is a CONSERVATIVE over-scan — it can only over-reject
+  (inspect a file Java's manifest pre-filter would skip), never under-reject, so it cannot let a real conflict
+  through; it is a performance/precision gap, not a correctness one. (2) `include_empty_files = true` is passed
+  to `eval` so a zero-record concurrent file is evaluated by its bounds rather than auto-excluded on emptiness
+  — conservative (a 0-record file is effectively never a real conflict, but never excluding it is safe). (3)
+  The concurrent commit is simulated EXACTLY as the landed ReplacePartitions tests do it (a real second
+  `fast_append` through the same `MemoryCatalog`, between txn-build and txn-commit), so `do_commit`'s genuine
+  refresh/re-base path runs — not a hand-mocked base. The non-retryable property is verified by BOTH the
+  `!err.retryable()` assertion AND the runtime-doesn't-loop mutation evidence above.
+
+#### Increment 3 — REVIEW (2026-06-08, Opus REVIEWER, DELEGATED). VERDICT: CHANGES-MADE (docs only).
+Adversarially verified against the Java source (`/tmp/iceberg-java-ref`) + 7 code mutations. Production
+`validate` + 9 conflict tests are CORRECT and well-pinned; NO production change made.
+- **`validate` invoked by the real commit path:** `do_commit` (mod.rs:308-312) runs each action's
+  `.validate(self.starting_snapshot_id, &current_table)` AFTER the refresh/re-base (line 295) and BEFORE
+  re-apply (314), against the refreshed base; `starting_snapshot_id` captured once in `Transaction::new`
+  (117), survives the re-base. Not dead code.
+- **THE KEY FINDING — enumeration MATCHES Java, no under-reject:** read `validationHistory` (L913-963) +
+  `addedDataFiles` (L424-462) + `SnapshotUtil.ancestorsBetween`/`ancestorsOf`. Same INCLUSIVE-parent /
+  EXCLUSIVE-start boundary, same op set {APPEND,OVERWRITE}, same `manifest.snapshotId()==snapshot.snapshotId()`
+  manifest filter, same Added-only entry filter. Java's `newSnapshots.contains(entry.snapshotId())` is
+  jointly satisfied by exactly those Added entries. The only divergence (Inc-6, already pinned): non-ancestor
+  start → Java throws, Rust over-scans = Rust-STRICTER. NO false-negative vector.
+- **None-filter=AlwaysTrue:** faithful mirror of `dataConflictDetectionFilter()` (rowFilter branch unreachable
+  while `overwriteByRowFilter` deferred). **Non-retryable:** `Error::new` defaults `retryable:false`
+  (error.rs:235), independent of kind; loop stops (`.when(|e| e.retryable())`).
+- **Mutations run (all CAUGHT):** invert metrics (exclude + match tests fail); skip check (4 rejection fail);
+  kind→CatalogCommitConflicts (4 kind asserts fail); drop validate_from_snapshot (override test fails);
+  re-read refreshed head instead of tx-captured start (tx-captured test fails — the silent-always-pass
+  guard); `.with_retryable(true)` (retryable asserts fail + 0.11→1.59s loop); EXCLUSIVE→INCLUSIVE boundary in
+  shared `added_data_files_after` (5 tests fail across both actions). No surviving mutation.
+- **CHANGES-MADE (docs only):** reconciled two stale Roadmap narrative mentions (lines ~159, ~302 said
+  "conflict validation … deferred" for OverwriteFiles — under-claim) + the `mod.rs::overwrite_files()` ctor
+  doc ("not yet supported"). GAP_MATRIX row 75 was already accurate + honest (over-scan, None-default,
+  case-sensitivity, 🟡 rationale). Production `overwrite_files.rs`/`snapshot.rs` byte-identical to pre-review.
+- **Scope + floor: CLEAN.** No bare `.unwrap()` in the production `validate` path. **Gate (repo root, pinned
+  nightly):** build -p iceberg ✅; workspace --exclude sqllogictest --all-targets ✅; lib ×2 = 1509/0 both;
+  transaction:: 225; 3 interop 4/4 each; clippy -D warnings ✅; fmt ✅. Row stays 🟡 (data-level Java interop
+  + `overwriteByRowFilter` + `validateNoConflictingDeletes` still pending).
+
+### Increment 4 — RowDelta validateNoConflictingDataFiles + shared conflict-check helper (DETAIL, 2026-06-08)
+Java `BaseRowDelta.validate` → `validateNewDataFiles` → `validateAddedDataFiles(base, startingSnapshotId,
+conflictDetectionFilter, parent)` — the IDENTICAL filter-based added-data-file conflict check just built for
+OverwriteFiles (Increment 3). SCOPE: RowDelta `validateNoConflictingDataFiles` ONLY. DEFER (need a new
+concurrent-DELETE-file enumeration helper — bigger, separate): `validateNoConflictingDeleteFiles`
+(`validateNoNewDeleteFiles`), `validateDeletedFiles`/`validateDataFilesExist`, `validateAddedDVs`.
+
+Because this is the 2nd use of the exact same load-bearing safety check, FACTOR a shared `pub(crate)` helper
+(next to `added_data_files_after` in `transaction/snapshot.rs`) so OverwriteFiles + RowDelta cannot drift:
+`async fn validate_no_conflicting_added_data_files(current: &Table, effective_start: Option<i64>,
+conflict_filter: Option<&Predicate>, case_sensitive: bool) -> Result<()>` doing the
+`added_data_files_after` walk + bind (None ⇒ AlwaysTrue) + per-file `InclusiveMetricsEvaluator::eval` +
+first-conflict non-retryable `DataInvalid`. Refactor OverwriteFiles.validate to call it (BEHAVIOR-PRESERVING —
+Increment 3's 9 tests stay green, the proof).
+
+Plan:
+- [x] `transaction/snapshot.rs`: add the shared `pub(crate)` helper next to `added_data_files_after`. No
+      behavior change to existing functions.
+- [x] `transaction/overwrite_files.rs`: refactor `validate` to call the helper (keep the flag-guard +
+      `effective_start`); Increment-3 tests unchanged + green = behavior-preserving proof.
+- [x] `transaction/row_delta.rs`: add fields `validate_no_conflicting_data_files: bool`,
+      `conflict_detection_filter: Option<Predicate>`, `validate_from_snapshot: Option<i64>` + builder methods;
+      override `validate` (flag-guard → `effective_start = validate_from_snapshot.or(starting_snapshot_id)` →
+      the shared helper). Update the module doc (drop `validateNoConflictingDataFiles` from deferred; note the
+      delete-file blocks remain).
+- [x] Tests (RowDelta, MemoryCatalog + real concurrent fast_append, mirroring Increment 3): no-concurrent → OK;
+      metrics-match → rejected non-retryable (names file); metrics-exclude → OK; flag OFF → snapshot isolation;
+      None filter → any concurrent add conflicts; `validate_from_snapshot` override. Mutation-pin the
+      include/exclude decision + the non-retryable kind. (OverwriteFiles tests double as the helper's pins.)
+- [x] Docs: GAP_MATRIX (RowDelta validateNoConflictingDataFiles 🟡), Roadmap, todo, lessons.
+- [x] Verify from repo root: build -p iceberg + workspace; lib ×2; transaction::; 3 interop; clippy; fmt.
+
+**Outcome (2026-06-08, Phase 3 Increment 4 — RowDelta `validateNoConflictingDataFiles` + shared conflict-check
+helper, BUILDER Opus):** `RowDelta` gained the SAME filter-based concurrent-commit conflict validation
+`OverwriteFiles` has, and because this was the 2nd use of the load-bearing safety logic it was FACTORED into a
+shared helper so the two checks cannot drift.
+- **Shared helper** (`transaction/snapshot.rs`, right next to `added_data_files_after`, nothing else in that
+  file touched — `added_data_files_after` is BYTE-IDENTICAL): `pub(crate) async fn
+  validate_no_conflicting_added_data_files(current: &Table, effective_start: Option<i64>, conflict_filter:
+  Option<&Predicate>, case_sensitive: bool) -> Result<()>`. It runs `added_data_files_after` → empty ⇒ `Ok`
+  → binds the filter to the table's current schema (`None` ⇒ `Predicate::AlwaysTrue`) → per added file
+  `InclusiveMetricsEvaluator::eval(&bound, file, true)` → first match ⇒ non-retryable
+  `Error::new(ErrorKind::DataInvalid, "Found conflicting files that can contain records matching {filter}:
+  {path}")` (filter rendered as `"true"` for `None`, else `Display`, exactly the Increment-3 wording).
+- **OverwriteFiles refactor (BEHAVIOR-PRESERVING):** `OverwriteFilesAction::validate` keeps its flag-guard +
+  `effective_start` computation and now delegates the walk+bind+eval+error to the shared helper (the inline
+  ~35 lines deleted; `Bind`/`BoundPredicate`/`InclusiveMetricsEvaluator`/`added_data_files_after`/`Error`/
+  `ErrorKind` imports removed from `overwrite_files.rs`). **Proof of behavior-preservation:** Increment 3's
+  9 OverwriteFiles conflict tests (+ the 9 core overwrite tests = 18 total) stayed GREEN unchanged.
+- **RowDelta feature:** added fields `validate_no_conflicting_data_files: bool` (default false),
+  `conflict_detection_filter: Option<Predicate>` (None), `validate_from_snapshot: Option<i64>` (None), all
+  init in `new()`; builder methods `validate_no_conflicting_data_files(self)`, `conflict_detection_filter(self,
+  Predicate)`, `validate_from_snapshot(self, i64)` (named exactly like OverwriteFiles). Overrode `validate` in
+  the `TransactionAction for RowDeltaAction` impl: `if !self.validate_no_conflicting_data_files { return Ok(()) }`
+  → `effective_start = self.validate_from_snapshot.or(starting_snapshot_id)` → the shared helper with
+  `self.conflict_detection_filter.as_ref()` and case-sensitive `true` (Java `isCaseSensitive()`; the action has
+  no such field — defaults to `true`, noted in the doc). Updated the module doc: dropped
+  `validateNoConflictingDataFiles` from the deferred list; the delete-file blocks
+  (`validateNoConflictingDeleteFiles`/`validateDataFilesExist`/`validateAddedDVs`) remain deferred (they need a
+  concurrent-DELETE-file enumeration helper that does not exist yet).
+- **Java lines verified** (`/tmp/iceberg-java-ref`): `BaseRowDelta.validate` L132-174 — the `validateNewDataFiles`
+  branch L155-157 calls `validateAddedDataFiles(base, startingSnapshotId, conflictDetectionFilter, parent)`, the
+  IDENTICAL call OverwriteFiles makes; `MergingSnapshotProducer.validateAddedDataFiles` L391-412 (build the
+  conflict iterable, throw "Found conflicting files that can contain records matching %s: %s" if any). The other
+  blocks I DEFERRED, confirmed against the source: `validateDataFilesExist` (L141-149, referenced-files),
+  `validateNewDeleteFiles`/`validateNoNewDeleteFiles` (L159-168), `validateNoConflictingFileAndPositionDeletes`
+  (L170/L181-193), `validateAddedDVs` (L172) — all need delete-file enumeration that does not exist yet.
+- **RowDelta test list (8 new, each pins a risk):**
+  1. `test_row_delta_validation_no_concurrent_commit_succeeds` — validation enabled, nothing concurrent ⇒ OK
+     (a race-free commit must not be blocked).
+  2. `test_row_delta_rejects_concurrent_added_file_matching_filter` — HEADLINE: concurrent file y bounds [60,70]
+     vs filter `y>=50` ⇒ REJECTED non-retryable, error names the file (lost/incorrect merge-on-read prevention).
+  3. `test_row_delta_allows_concurrent_added_file_excluded_by_filter` — concurrent file y bounds [10,20] below
+     `y>=50` ⇒ inclusive evaluator EXCLUDES ⇒ OK (no false conflict). The mutation-(a) target.
+  4. `test_row_delta_without_validation_allows_conflicting_concurrent_append` — flag OFF ⇒ snapshot isolation
+     unchanged / opt-in.
+  5. `test_row_delta_none_filter_treats_any_concurrent_add_as_conflict` — None filter ⇒ AlwaysTrue ⇒ a no-bounds
+     concurrent add conflicts (the conservative serializable default, opposite of "no check").
+  6. `test_row_delta_validate_from_snapshot_override_changes_concurrent_window` — `validate_from_snapshot(S0)`
+     widens the window to include S1's add ⇒ REJECTED (override genuinely shifts the boundary).
+  7. `test_row_delta_validate_from_snapshot_at_head_finds_no_conflict` — `validate_from_snapshot(S1=head)` ⇒
+     nothing concurrent ⇒ OK (the negative half).
+  8. `test_row_delta_rejects_concurrent_using_tx_captured_starting_snapshot` — NO override; the tx-captured
+     start surviving `do_commit`'s re-base is the only thing that detects the conflict (if the start were
+     re-read from the refreshed head the check would silently always pass).
+  All 8 simulate a REAL concurrent commit (a separate `fast_append` lands between txn-build and txn-commit, so
+  `do_commit` refreshes to the new head and runs `validate` against it). Data files carry y-column bounds via a
+  new `data_file_with_y_bounds(path, part, lo, hi)` helper (schema field id 2).
+- **Mutations run (each caught), incl. the cross-action one:** (a) invert the metrics decision in the SHARED
+  helper (`if !eval(...)`) → the EXCLUDE test fails for BOTH `transaction::overwrite_files` AND
+  `transaction::row_delta` (the cross-action proof the shared helper is load-bearing for both). (b) force
+  RowDelta's `validate` always-`Ok` → exactly its 4 rejection tests (#2/#5/#6/#8) fail, OK tests green. (c) make
+  the helper's conflict error retryable (`.with_retryable(true)`) → the `!err.retryable()` assertion fails AND
+  the retry loop visibly spins (0.06s → 1.57s, a kind/timing failure). All restored byte-identical; verified the
+  OverwriteFiles 9 conflict tests stay green after the refactor (behavior-preservation).
+- **Gate (all from repo root, pinned nightly):** `cargo build -p iceberg` ✅; `cargo build --workspace
+  --exclude iceberg-sqllogictest --all-targets` ✅; `cargo test -p iceberg --lib` ✅ TWICE (run1 1517 passed /
+  0 failed; run2 1517 passed / 0 failed — **new lib total 1517**, was 1509, +8 RowDelta conflict tests);
+  `cargo test -p iceberg --lib transaction::` ✅ (233 passed; `transaction::overwrite_files` 18/18 unchanged,
+  `transaction::row_delta` 19/19); 3 interop binaries ✅ (`interop_manage_snapshots` 4/4,
+  `interop_update_partition_spec` 4/4, `interop_update_schema` 4/4); `cargo clippy --workspace --exclude
+  iceberg-sqllogictest --all-targets -- -D warnings` ✅ (no warnings); `cargo fmt --all -- --check` ✅ (clean
+  after one `cargo fmt`).
+- **Scope:** touched ONLY `transaction/snapshot.rs` (ADDED the shared helper + 2 imports — `added_data_files_after`
+  unchanged), `transaction/overwrite_files.rs` (refactor `validate` to delegate), `transaction/row_delta.rs`
+  (feature + 8 tests), and docs (GAP_MATRIX, Roadmap, todo, lessons). No edits to
+  `inclusive_metrics_evaluator.rs` / `action.rs` / `replace_partitions.rs` / `predicate.rs` / `spec/` / `scan/`
+  / `arrow/` / Cargo / lockfiles. No on-disk format change. No commit, no branch switch, no push — work left on
+  `phase3-residual-eval`.
+- **UNSURE / flagged:** (1) The RowDelta conflict tests assert `add_deletes`-only commits with SYNTHETIC delete
+  files (no real parquet) — same as the existing RowDelta manifest/summary tests; the conflict check is on the
+  concurrently-added DATA files, independent of the delete-file payload, so synthetic delete files are
+  sufficient and faithful. (2) Java `BaseRowDelta`'s `conflictDetectionFilter` DEFAULTS to `Expressions.alwaysTrue()`
+  (not null) and is shared across ALL the validate blocks; our `None ⇒ AlwaysTrue` binding mirrors the default
+  for the data-file block, the only block we implement. (3) The non-ancestor `validate_from_snapshot` over-scan
+  divergence (Rust over-scans to root where Java throws) is inherited UNCHANGED from `added_data_files_after`
+  (Increment-6-flagged, Rust-STRICTER, over-reject-only) — not re-introduced here.

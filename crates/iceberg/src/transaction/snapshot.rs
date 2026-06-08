@@ -22,6 +22,8 @@ use std::ops::RangeFrom;
 use uuid::Uuid;
 
 use crate::error::Result;
+use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
+use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, Manifest, ManifestContentType,
     ManifestEntry, ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder,
@@ -1033,4 +1035,77 @@ pub(crate) async fn added_data_files_after(
     }
 
     Ok(added)
+}
+
+/// Reject the commit if any DATA file ADDED by a concurrent commit since `effective_start` COULD contain
+/// records matching `conflict_filter` — the filter-based serializable-isolation conflict check shared by
+/// the write actions that mirror Java `MergingSnapshotProducer.validateAddedDataFiles`
+/// (`OverwriteFiles.validateNoConflictingData`, `RowDelta.validateNoConflictingDataFiles`).
+///
+/// This is the Rust port of Java `MergingSnapshotProducer.validateAddedDataFiles`
+/// (`core/MergingSnapshotProducer.java` L391-412): it enumerates the concurrently-added DATA files via
+/// the shared [`added_data_files_after`] walk and throws a non-retryable `ValidationException` ("Found
+/// conflicting files that can contain records matching %s: %s") on the FIRST file whose metrics permit a
+/// match. The per-file "could this added file match the filter?" test is the existing
+/// [`InclusiveMetricsEvaluator`] (Java `ManifestGroup.filterData` = inclusive-metrics evaluation over the
+/// file's bounds / null / nan stats).
+///
+/// Arguments:
+/// - `current` — the REFRESHED base (Java `parent` metadata); the walk inspects the snapshots it gained.
+/// - `effective_start` — the starting snapshot id (exclusive). `None` ⇒ inspect from the root (validate
+///   every version, Java's null `startingSnapshotId`).
+/// - `conflict_filter` — the conflict-detection predicate. `None` ⇒ bind `AlwaysTrue` (ANY concurrently
+///   added DATA file conflicts — the most conservative serializable check, Java
+///   `dataConflictDetectionFilter()` returning `alwaysTrue()` when no filter is set).
+/// - `case_sensitive` — column-resolution case sensitivity for binding the filter (Java
+///   `isCaseSensitive()`; the actions default this to `true`, the Iceberg/Java default).
+///
+/// Returns `Ok(())` when nothing concurrently-added can match (including when the concurrent-added set is
+/// empty). On the first conflict it returns a NON-retryable [`ErrorKind::DataInvalid`] error naming the
+/// filter + the conflicting file path, so the commit retry loop stops and the error propagates (Java's
+/// non-retryable `ValidationException`).
+///
+/// Sharing this in one place keeps `OverwriteFiles` and `RowDelta` (and any future filter-based check)
+/// from drifting on the load-bearing walk + bind + per-file evaluation + error contract.
+pub(crate) async fn validate_no_conflicting_added_data_files(
+    current: &Table,
+    effective_start: Option<i64>,
+    conflict_filter: Option<&Predicate>,
+    case_sensitive: bool,
+) -> Result<()> {
+    let added = added_data_files_after(current, effective_start).await?;
+    if added.is_empty() {
+        // No concurrent commit added data — nothing can conflict.
+        return Ok(());
+    }
+
+    // Build the conflict filter as a `BoundPredicate` against the table's current schema (Java
+    // `dataConflictDetectionFilter()`): the caller's filter when set, else `AlwaysTrue` = any
+    // concurrently-added data file conflicts (the most conservative serializable check). Bind ONCE,
+    // not per file.
+    let schema = current.metadata().current_schema().clone();
+    let bound_filter: BoundPredicate = conflict_filter
+        .cloned()
+        .unwrap_or(Predicate::AlwaysTrue)
+        .bind(schema, case_sensitive)?;
+
+    // Find the first concurrently-added file that COULD contain records matching the filter (Java throws
+    // on the first conflict entry). `InclusiveMetricsEvaluator::eval` returns whether the file's metrics
+    // permit a match; `include_empty_files = true` keeps a zero-record file's evaluation conservative
+    // (it never excludes on emptiness alone).
+    for file in &added {
+        if InclusiveMetricsEvaluator::eval(&bound_filter, file, true)? {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Found conflicting files that can contain records matching {}: {}",
+                    conflict_filter
+                        .map_or_else(|| "true".to_string(), |filter| format!("{filter}")),
+                    file.file_path()
+                ),
+            ));
+        }
+    }
+
+    Ok(())
 }

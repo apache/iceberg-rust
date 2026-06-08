@@ -53,15 +53,19 @@ impl ExpressionEvaluator {
 /// Acts as a visitor for [`ExpressionEvaluator`] to apply
 /// evaluation logic to different parts of a data structure,
 /// specifically for data file partitions.
+///
+/// Exposed as `pub(crate)` so the residual evaluator can reuse the exact
+/// per-operator evaluation of a bound predicate against a partition [`Struct`]
+/// (it evaluates the strict/inclusive *projected* predicate the same way).
 #[derive(Debug)]
-struct ExpressionEvaluatorVisitor<'a> {
+pub(crate) struct ExpressionEvaluatorVisitor<'a> {
     /// Reference to a [`DataFile`]'s partition [`Struct`].
     partition: &'a Struct,
 }
 
 impl<'a> ExpressionEvaluatorVisitor<'a> {
     /// Creates a new [`ExpressionEvaluatorVisitor`].
-    fn new(partition: &'a Struct) -> Self {
+    pub(crate) fn new(partition: &'a Struct) -> Self {
         Self { partition }
     }
 }

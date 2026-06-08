@@ -174,8 +174,9 @@ impl Transaction {
 
     /// Creates an overwrite-files action (add data files AND remove data files in one snapshot). The
     /// recorded operation is dynamic, matching Java `BaseOverwriteFiles`: add-only → `Append`,
-    /// delete-only → `Delete`, both → `Overwrite`. Overwrite-by-row-filter and concurrent-commit
-    /// conflict validation are not yet supported.
+    /// delete-only → `Delete`, both → `Overwrite`. Opt-in filter-based concurrent-commit conflict
+    /// validation is available via [`OverwriteFilesAction::validate_no_conflicting_data`]; overwrite-by-row-
+    /// filter and `validateNoConflictingDeletes` are not yet supported.
     pub fn overwrite_files(&self) -> OverwriteFilesAction {
         OverwriteFilesAction::new()
     }

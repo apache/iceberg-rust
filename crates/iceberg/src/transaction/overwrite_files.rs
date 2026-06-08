@@ -33,14 +33,26 @@
 //! `deletesDataFiles()`. The snapshot summary carries the precise added/deleted file & record counts in
 //! every case.
 //!
-//! **Out of scope (deferred):**
-//! - `overwriteByRowFilter(Expression)` (Java) — needs inclusive/strict metrics evaluators to select
-//!   and validate files by row predicate.
-//! - Concurrent-commit conflict validation (`validateNoConflictingData` /
-//!   `validateNoConflictingDeletes` / `validateFromSnapshot` / `conflictDetectionFilter`) — these
-//!   implement serializable isolation and need validation-history replay across the ancestor chain.
+//! **Concurrent-commit conflict validation (`validateNoConflictingData`, OPT-IN):** when enabled via
+//! [`OverwriteFilesAction::validate_no_conflicting_data`], the commit is rejected (a non-retryable
+//! [`Operation::Overwrite`]-blocking `ValidationException` in Java terms) if any DATA file ADDED by a
+//! concurrent commit since the operation's starting snapshot COULD contain records matching the
+//! conflict-detection filter. This is the serializable-isolation safety layer (Java
+//! `BaseOverwriteFiles.validate` → `validateNewDataFiles` →
+//! `MergingSnapshotProducer.validateAddedDataFiles`). It delegates to the shared
+//! [`validate_no_conflicting_added_data_files`] helper (the concurrent-added-files walk + bind + per-file
+//! inclusive-metrics evaluation), which `RowDelta` also uses so the two checks cannot drift. Default
+//! (this not enabled) = snapshot isolation, behavior unchanged.
 //!
-//! This increment is the explicit add + delete core.
+//! **Out of scope (deferred):**
+//! - `overwriteByRowFilter(Expression)` (Java) — needs inclusive/strict metrics evaluators to SELECT
+//!   and validate added files by row predicate (Java `validateAddedFilesMatchOverwriteFilter`,
+//!   `BaseOverwriteFiles.validate` block 1).
+//! - `validateNoConflictingDeletes` (Java `BaseOverwriteFiles.validate` block 3) — concurrent delete-file
+//!   conflicts; needs the added-delete-files-since / deleted-data-files-since helpers.
+//! - `RowDelta` filter-based conflict validation — a separate follow-up on the same foundation.
+//!
+//! This increment is the explicit add + delete core plus the filter-based `validateNoConflictingData`.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -49,10 +61,12 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::error::Result;
+use crate::expr::Predicate;
 use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
 use crate::table::Table;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
+    validate_no_conflicting_added_data_files,
 };
 use crate::transaction::{ActionCommit, TransactionAction};
 
@@ -74,6 +88,19 @@ pub struct OverwriteFilesAction {
     commit_uuid: Option<Uuid>,
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
+    /// Whether concurrent-commit conflict validation is enabled (Java `validateNoConflictingData`). OFF by
+    /// default = snapshot isolation (no validation, current behavior). When ON, the commit is rejected if a
+    /// concurrent snapshot added a DATA file that could contain records matching the conflict filter.
+    validate_no_conflicting_data: bool,
+    /// The conflict-detection filter (Java `conflictDetectionFilter`). When `Some`, only concurrently-added
+    /// files whose metrics COULD match this predicate are conflicts. When `None`, the filter defaults to
+    /// `AlwaysTrue` (any concurrently-added DATA file is a conflict — the most conservative serializable
+    /// check), mirroring Java `BaseOverwriteFiles.dataConflictDetectionFilter()` when no filter and no row
+    /// filter are set.
+    conflict_detection_filter: Option<Predicate>,
+    /// An explicit starting snapshot for conflict validation (Java `validateFromSnapshot`). When `None`, the
+    /// validation uses the transaction's starting snapshot (the table head when the transaction was created).
+    validate_from_snapshot: Option<i64>,
 }
 
 impl OverwriteFilesAction {
@@ -84,6 +111,9 @@ impl OverwriteFilesAction {
             commit_uuid: None,
             key_metadata: None,
             snapshot_properties: HashMap::default(),
+            validate_no_conflicting_data: false,
+            conflict_detection_filter: None,
+            validate_from_snapshot: None,
         }
     }
 
@@ -138,6 +168,41 @@ impl OverwriteFilesAction {
         self.snapshot_properties = snapshot_properties;
         self
     }
+
+    /// ENABLE concurrent-commit conflict validation (Java `OverwriteFiles.validateNoConflictingData`): the
+    /// commit is rejected with a non-retryable `ValidationException` if any DATA file ADDED by a concurrent
+    /// snapshot since the starting snapshot could contain records matching the conflict-detection filter
+    /// (see [`Self::conflict_detection_filter`]). This is the serializable-isolation guard against silently
+    /// overwriting concurrently-appended data.
+    ///
+    /// Default (this method NOT called) = snapshot isolation = no validation (current behavior unchanged).
+    pub fn validate_no_conflicting_data(mut self) -> Self {
+        self.validate_no_conflicting_data = true;
+        self
+    }
+
+    /// Set the conflict-detection filter (Java `OverwriteFiles.conflictDetectionFilter(Expression)`): only a
+    /// concurrently-added DATA file whose metrics COULD contain records matching this predicate is treated as
+    /// a conflict. When no filter is set (the default), the conflict filter is `AlwaysTrue` — ANY
+    /// concurrently-added data file conflicts (the most conservative serializable check), matching Java
+    /// `BaseOverwriteFiles.dataConflictDetectionFilter()` (no filter + no row filter ⇒ `alwaysTrue()`).
+    ///
+    /// On its own this does NOT enable validation — call [`Self::validate_no_conflicting_data`] for that.
+    pub fn conflict_detection_filter(mut self, filter: Predicate) -> Self {
+        self.conflict_detection_filter = Some(filter);
+        self
+    }
+
+    /// Override the snapshot from which concurrent-commit conflict validation starts (Java
+    /// `OverwriteFiles.validateFromSnapshot(long)`). By default the validation uses the transaction's
+    /// starting snapshot (the table head when [`crate::transaction::Transaction::new`] was called); this lets
+    /// the caller pin a specific earlier snapshot id (the snapshot it read when building the overwrite).
+    ///
+    /// On its own this does NOT enable validation — call [`Self::validate_no_conflicting_data`] for that.
+    pub fn validate_from_snapshot(mut self, snapshot_id: i64) -> Self {
+        self.validate_from_snapshot = Some(snapshot_id);
+        self
+    }
 }
 
 #[async_trait]
@@ -169,6 +234,46 @@ impl TransactionAction for OverwriteFilesAction {
                 DefaultManifestProcess,
             )
             .await
+    }
+
+    /// Serializable-isolation conflict validation (Java `BaseOverwriteFiles.validate` →
+    /// `validateNewDataFiles` → `MergingSnapshotProducer.validateAddedDataFiles`, L163-165 / L391-412). Only
+    /// runs when [`Self::validate_no_conflicting_data`] was enabled; otherwise a no-op (snapshot isolation).
+    ///
+    /// When enabled: compute the effective starting snapshot ([`Self::validate_from_snapshot`] if set, else
+    /// the transaction-provided `starting_snapshot_id`) and delegate to the shared
+    /// [`validate_no_conflicting_added_data_files`] helper, which enumerates every DATA file ADDED to the
+    /// refreshed base by snapshots committed since it (Java `addedDataFiles`) and rejects the commit if ANY
+    /// of those files COULD contain records matching the conflict-detection filter (the existing
+    /// `InclusiveMetricsEvaluator` over the file's metrics). The conflict filter is the caller's
+    /// [`Self::conflict_detection_filter`] when set, else `AlwaysTrue` (any concurrently-added data file
+    /// conflicts), mirroring Java `dataConflictDetectionFilter()` (we have no `overwriteByRowFilter`, so the
+    /// row-filter branch never applies). The rejection is a NON-retryable `DataInvalid` (Java's non-retryable
+    /// `ValidationException`), so the commit retry loop stops and the error propagates.
+    ///
+    /// **Case sensitivity:** Java binds the conflict filter with `isCaseSensitive()`. This action has no such
+    /// field, so the filter is bound case-sensitive (`true`) — the Iceberg/Java default for column resolution.
+    async fn validate(
+        self: Arc<Self>,
+        starting_snapshot_id: Option<i64>,
+        current: &Table,
+    ) -> Result<()> {
+        if !self.validate_no_conflicting_data {
+            // Default: snapshot isolation, no conflict check (current behavior unchanged).
+            return Ok(());
+        }
+
+        // Java `BaseOverwriteFiles` uses `startingSnapshotId` (the `validateFromSnapshot` override) when set,
+        // else the operation's starting snapshot. The walk + bind + per-file inclusive-metrics evaluation +
+        // non-retryable-conflict error are the shared helper (also used by `RowDelta`).
+        let effective_start = self.validate_from_snapshot.or(starting_snapshot_id);
+        validate_no_conflicting_added_data_files(
+            current,
+            effective_start,
+            self.conflict_detection_filter.as_ref(),
+            true,
+        )
+        .await
     }
 }
 
@@ -229,11 +334,12 @@ impl SnapshotProduceOperation for OverwriteFilesOperation {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
+    use crate::expr::Reference;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
-        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, ManifestStatus,
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestStatus,
         Operation, Struct,
     };
     use crate::table::Table;
@@ -252,6 +358,30 @@ mod tests {
             .record_count(1)
             .partition_spec_id(0)
             .partition(Struct::from_iter([Some(Literal::long(part_value))]))
+            .build()
+            .unwrap()
+    }
+
+    /// Build a data file routed to partition `x = part_value` whose column `y` (schema field id 2, a `long`)
+    /// carries `[y_lower, y_upper]` value bounds. The bounds let [`InclusiveMetricsEvaluator`] include or
+    /// exclude this file against a conflict-detection filter on `y` — the discriminating input for the
+    /// metrics-MATCH vs metrics-EXCLUDE conflict tests. The minimal V3 schema is `x,y,z: long` (ids 1,2,3).
+    fn data_file_with_y_bounds(
+        path: &str,
+        part_value: i64,
+        y_lower: i64,
+        y_upper: i64,
+    ) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(0)
+            .partition(Struct::from_iter([Some(Literal::long(part_value))]))
+            .lower_bounds(HashMap::from([(2, Datum::long(y_lower))]))
+            .upper_bounds(HashMap::from([(2, Datum::long(y_upper))]))
             .build()
             .unwrap()
     }
@@ -803,5 +933,391 @@ mod tests {
                 .operation,
             Operation::Delete
         );
+    }
+
+    // ============================================================================================
+    // Filter-based concurrent-commit conflict validation (Java `validateNoConflictingData` —
+    // serializable isolation). Java `BaseOverwriteFiles.validate` → `validateNewDataFiles` →
+    // `MergingSnapshotProducer.validateAddedDataFiles` (L163-165 / L391-412): enumerate DATA files added by
+    // concurrent commits since the starting snapshot, and reject the commit if ANY could contain records
+    // matching the conflict-detection filter (via the inclusive metrics evaluator).
+    //
+    // The race these tests simulate: an `overwrite_files` is BUILT against table head S0, but BEFORE it
+    // commits a SEPARATE `fast_append` lands on the catalog (advancing the head to S1). When the overwrite
+    // then commits, `do_commit` refreshes to S1 and runs the action's `validate` against that refreshed base.
+    // With `validate_no_conflicting_data()` enabled, a concurrent append whose file could match the conflict
+    // filter must FAIL the commit (non-retryable). With validation OFF (the default), it does not.
+    // ============================================================================================
+
+    /// Append the given files in a fast-append commit and return the snapshot id that commit produced, plus
+    /// the updated table. Used to capture the starting snapshot id S0 before a concurrent commit.
+    async fn append_and_snapshot_id(
+        catalog: &impl Catalog,
+        table: &Table,
+        files: Vec<DataFile>,
+    ) -> (Table, i64) {
+        let table = append_files(catalog, table, files).await;
+        let id = table.metadata().current_snapshot().unwrap().snapshot_id();
+        (table, id)
+    }
+
+    /// NO CONCURRENT COMMIT. With validation enabled but nothing landing concurrently, the overwrite commits
+    /// normally (the added-files set is empty ⇒ no conflict). Pins that enabling validation does not block a
+    /// race-free commit. Risk: a validation that wrongly fails when there is no concurrent commit at all.
+    #[tokio::test]
+    async fn test_overwrite_validation_no_concurrent_commit_succeeds() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let (table, s0) =
+            append_and_snapshot_id(&catalog, &table, vec![data_file("test/a.parquet", 0)]).await;
+
+        // Overwrite delete A + add B with validation enabled — but NO concurrent commit lands.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite_files()
+            .delete_file("test/a.parquet")
+            .add_file(data_file("test/b.parquet", 0))
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_data();
+        let tx = action.apply(tx).unwrap();
+        let table = tx
+            .commit(&catalog)
+            .await
+            .expect("a race-free overwrite must commit even with validation enabled");
+
+        assert_eq!(
+            live_file_paths(&table).await,
+            HashSet::from(["test/b.parquet".to_string()])
+        );
+    }
+
+    /// THE HEADLINE TEST. Append S0. Build an `overwrite_files` with `.conflict_detection_filter(y >= 50)`
+    /// and `.validate_no_conflicting_data()`. Then a CONCURRENT `fast_append` lands a file whose `y` bounds
+    /// `[60,70]` OVERLAP the filter (could contain `y >= 50`). The overwrite commit must FAIL with a
+    /// NON-retryable `DataInvalid` that NAMES the conflicting file.
+    ///
+    /// Risk pinned: silently overwriting concurrently-appended data that matches the conflict filter = a lost
+    /// write under serializable isolation. Without the check the overwrite would commit and drop S1's file.
+    #[tokio::test]
+    async fn test_overwrite_rejects_concurrent_added_file_matching_filter() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let (table, s0) =
+            append_and_snapshot_id(&catalog, &table, vec![data_file("test/a.parquet", 0)]).await;
+
+        // Overwrite delete A + add B, conflict filter `y >= 50`, validation enabled, pinned to S0.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite_files()
+            .delete_file("test/a.parquet")
+            .add_file(data_file("test/b.parquet", 0))
+            .conflict_detection_filter(
+                Reference::new("y").greater_than_or_equal_to(Datum::long(50)),
+            )
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_data();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a file whose y bounds [60,70] overlap `y >= 50` (could match).
+        let _concurrent = append_files(&catalog, &table, vec![data_file_with_y_bounds(
+            "test/concurrent.parquet",
+            0,
+            60,
+            70,
+        )])
+        .await;
+
+        let err = tx
+            .commit(&catalog)
+            .await
+            .expect_err("overwrite must fail: a concurrent file could match the conflict filter");
+
+        assert_eq!(
+            err.kind(),
+            ErrorKind::DataInvalid,
+            "a conflict is a non-retryable validation failure (DataInvalid), not a commit conflict"
+        );
+        assert!(
+            !err.retryable(),
+            "the validation failure must be NON-retryable so the retry loop stops and it propagates"
+        );
+        assert!(
+            err.message().contains("conflicting files"),
+            "the error must name the conflict, got: {}",
+            err.message()
+        );
+        assert!(
+            err.message().contains("test/concurrent.parquet"),
+            "the error must name the conflicting FILE, got: {}",
+            err.message()
+        );
+
+        // The catalog head is still S1 (the concurrent append) — the overwrite did NOT commit over it.
+        let reloaded = catalog.load_table(table.identifier()).await.unwrap();
+        let live = live_file_paths(&reloaded).await;
+        assert!(
+            live.contains("test/concurrent.parquet"),
+            "the concurrently-added file must survive (the conflicting overwrite was rejected)"
+        );
+        assert!(
+            !live.contains("test/b.parquet"),
+            "the rejected overwrite's added file must NOT be in the table"
+        );
+    }
+
+    /// NO-FALSE-CONFLICT TEST. Same setup as the headline, but the concurrent file's `y` bounds `[10,20]` lie
+    /// ENTIRELY BELOW the filter `y >= 50` — the inclusive evaluator EXCLUDES it. The overwrite must COMMIT.
+    ///
+    /// Risk pinned: an over-eager check that rejects ANY concurrent append (ignoring the metrics) would break
+    /// legitimate concurrent writes whose data cannot match the filter (a false positive).
+    #[tokio::test]
+    async fn test_overwrite_allows_concurrent_added_file_excluded_by_filter() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let (table, s0) =
+            append_and_snapshot_id(&catalog, &table, vec![data_file("test/a.parquet", 0)]).await;
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite_files()
+            .delete_file("test/a.parquet")
+            .add_file(data_file("test/b.parquet", 0))
+            .conflict_detection_filter(
+                Reference::new("y").greater_than_or_equal_to(Datum::long(50)),
+            )
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_data();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a file whose y bounds [10,20] are entirely BELOW `y >= 50` (cannot match).
+        let _concurrent = append_files(&catalog, &table, vec![data_file_with_y_bounds(
+            "test/concurrent.parquet",
+            0,
+            10,
+            20,
+        )])
+        .await;
+
+        // The overwrite must SUCCEED — the concurrent file's metrics exclude the filter.
+        let table = tx
+            .commit(&catalog)
+            .await
+            .expect("overwrite must commit: the concurrent file cannot match the conflict filter");
+
+        let live = live_file_paths(&table).await;
+        assert!(
+            live.contains("test/b.parquet"),
+            "the overwrite's added file must be in the table (commit succeeded)"
+        );
+        // The overwrite re-bases onto S1, so the non-conflicting concurrent file also survives.
+        assert!(
+            live.contains("test/concurrent.parquet"),
+            "the non-conflicting concurrent file survives the re-based overwrite"
+        );
+        assert!(
+            !live.contains("test/a.parquet"),
+            "A was deleted by the overwrite"
+        );
+    }
+
+    /// FLAG-OFF CONTROL. With validation NOT enabled (no `validate_no_conflicting_data()` call), a concurrent
+    /// append of a file that WOULD match the filter does NOT fail the commit — this is snapshot isolation, the
+    /// DEFAULT behavior, unchanged by this increment.
+    ///
+    /// Risk pinned: the conflict validation must be OPT-IN — turning it on for every overwrite by default
+    /// would change existing behavior and break callers relying on snapshot isolation.
+    #[tokio::test]
+    async fn test_overwrite_without_validation_allows_conflicting_concurrent_append() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![data_file("test/a.parquet", 0)]).await;
+
+        // Build an overwrite WITHOUT enabling validation (default = snapshot isolation). A conflict filter is
+        // even provided, to prove it is inert without the flag.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite_files()
+            .delete_file("test/a.parquet")
+            .add_file(data_file("test/b.parquet", 0))
+            .conflict_detection_filter(
+                Reference::new("y").greater_than_or_equal_to(Datum::long(50)),
+            );
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a file whose y bounds [60,70] WOULD match `y >= 50` if validation were on.
+        let _concurrent = append_files(&catalog, &table, vec![data_file_with_y_bounds(
+            "test/concurrent.parquet",
+            0,
+            60,
+            70,
+        )])
+        .await;
+
+        // With validation OFF, the overwrite COMMITS (default behavior unchanged).
+        let table = tx.commit(&catalog).await.expect(
+            "with validation OFF, a conflicting concurrent append must not block the commit",
+        );
+
+        let live = live_file_paths(&table).await;
+        assert!(
+            live.contains("test/b.parquet"),
+            "the overwrite committed (snapshot isolation, no conflict check)"
+        );
+    }
+
+    /// NONE-FILTER DEFAULT TEST. With validation enabled and NO `conflict_detection_filter` set, the conflict
+    /// filter defaults to `AlwaysTrue` (Java `dataConflictDetectionFilter()` → `alwaysTrue()`) — so ANY
+    /// concurrently-added data file is a conflict, even one with no bounds at all.
+    ///
+    /// Risk pinned: a `None` filter silently behaving as "no conflict" (the OPPOSITE of the conservative
+    /// serializable default) would let every concurrent append through — a serializable-isolation hole.
+    #[tokio::test]
+    async fn test_overwrite_none_filter_treats_any_concurrent_add_as_conflict() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let (table, s0) =
+            append_and_snapshot_id(&catalog, &table, vec![data_file("test/a.parquet", 0)]).await;
+
+        // Overwrite with validation enabled but NO conflict_detection_filter ⇒ AlwaysTrue default.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite_files()
+            .delete_file("test/a.parquet")
+            .add_file(data_file("test/b.parquet", 0))
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_data();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a plain file with NO bounds — still a conflict under AlwaysTrue.
+        let _concurrent = append_files(&catalog, &table, vec![data_file(
+            "test/concurrent.parquet",
+            0,
+        )])
+        .await;
+
+        let err = tx
+            .commit(&catalog)
+            .await
+            .expect_err("a None filter defaults to AlwaysTrue: any concurrent add is a conflict");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable());
+        assert!(err.message().contains("test/concurrent.parquet"));
+    }
+
+    /// VALIDATE-FROM-SNAPSHOT OVERRIDE TEST. The `validate_from_snapshot(id)` override changes which commits
+    /// count as concurrent. Append S0, then append S1 (BEFORE the transaction is built), then build the
+    /// overwrite. With `validate_from_snapshot(S1)`, the file added in S1 is NOT concurrent (it is at/at-or-
+    /// before the start) — so a `None`-filter (AlwaysTrue) validation does NOT flag it and the commit
+    /// succeeds. (Without the override, the tx-captured start would be S1's head and the result is the same
+    /// here; the discriminating direction is below.)
+    ///
+    /// The KEY half: build the overwrite when the head is already S1, set `validate_from_snapshot(S0)`
+    /// (an EARLIER snapshot), and confirm S1's file IS now counted as concurrent ⇒ rejected. This proves the
+    /// override widens the concurrent window to include commits between S0 and S1.
+    ///
+    /// Risk pinned: ignoring the `validate_from_snapshot` override (always using the tx start) would miss a
+    /// conflict the caller explicitly asked to guard against by reading from an earlier snapshot.
+    #[tokio::test]
+    async fn test_overwrite_validate_from_snapshot_override_changes_concurrent_window() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // S0: a. Capture S0.
+        let (table, s0) =
+            append_and_snapshot_id(&catalog, &table, vec![data_file("test/a.parquet", 0)]).await;
+        // S1: a file added BEFORE the transaction is built (so it is part of the base, not "concurrent" by
+        // the default tx-captured start).
+        let (table, _s1) =
+            append_and_snapshot_id(&catalog, &table, vec![data_file("test/s1.parquet", 0)]).await;
+
+        // Build the overwrite when the head is S1. Override the start to the EARLIER S0 so S1 counts as
+        // concurrent. None filter ⇒ AlwaysTrue ⇒ S1's added file is a conflict.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite_files()
+            .delete_file("test/a.parquet")
+            .add_file(data_file("test/b.parquet", 0))
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_data();
+        let tx = action.apply(tx).unwrap();
+
+        let err = tx.commit(&catalog).await.expect_err(
+            "validate_from_snapshot(S0) widens the window to include S1's add ⇒ conflict",
+        );
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable());
+        assert!(err.message().contains("test/s1.parquet"));
+    }
+
+    /// NEGATIVE HALF of the override test: with `validate_from_snapshot(S1)` (the CURRENT head when the tx is
+    /// built), S1's file is at the start boundary and is NOT concurrent — so the same overwrite COMMITS. This
+    /// pins that the override genuinely shifts the boundary (the S0 half above rejects the SAME S1 file).
+    #[tokio::test]
+    async fn test_overwrite_validate_from_snapshot_at_head_finds_no_conflict() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let table = append_files(&catalog, &table, vec![data_file("test/a.parquet", 0)]).await;
+        let (table, s1) =
+            append_and_snapshot_id(&catalog, &table, vec![data_file("test/s1.parquet", 0)]).await;
+
+        // Override the start to S1 (the current head) — nothing is concurrent.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite_files()
+            .delete_file("test/a.parquet")
+            .add_file(data_file("test/b.parquet", 0))
+            .validate_from_snapshot(s1)
+            .validate_no_conflicting_data();
+        let tx = action.apply(tx).unwrap();
+        let table = tx
+            .commit(&catalog)
+            .await
+            .expect("with start = current head, nothing is concurrent ⇒ commit succeeds");
+
+        assert!(live_file_paths(&table).await.contains("test/b.parquet"));
+    }
+
+    /// TX-CAPTURED START SURVIVES RE-BASE. The conflict check works WITHOUT an explicit
+    /// `validate_from_snapshot`, relying solely on the transaction-captured starting snapshot id surviving
+    /// `do_commit`'s re-base. The action calls ONLY `.validate_no_conflicting_data()` (None filter ⇒
+    /// AlwaysTrue). The starting snapshot is the one captured in `Transaction::new` (= S0); `do_commit`
+    /// overwrites `self.table` with the refreshed base (S1), but `starting_snapshot_id` must SURVIVE — so the
+    /// concurrent S1 is still enumerated and rejected.
+    ///
+    /// Risk pinned: if the start were re-read from the refreshed head at validation time, start == current
+    /// head ⇒ the concurrent set is empty ⇒ the check silently always passes (a serializable-isolation hole).
+    /// All the other enabled tests pin `validate_from_snapshot`, so this is the only guard that the
+    /// `Transaction::new` capture survives the re-base for OverwriteFiles.
+    #[tokio::test]
+    async fn test_overwrite_rejects_concurrent_using_tx_captured_starting_snapshot() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![data_file("test/a.parquet", 0)]).await;
+
+        // Build the overwrite with validation enabled but WITHOUT validate_from_snapshot — the start is the
+        // tx-captured head (S0).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite_files()
+            .delete_file("test/a.parquet")
+            .add_file(data_file("test/b.parquet", 0))
+            .validate_no_conflicting_data();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1).
+        let _concurrent = append_files(&catalog, &table, vec![data_file(
+            "test/concurrent.parquet",
+            0,
+        )])
+        .await;
+
+        let err = tx
+            .commit(&catalog)
+            .await
+            .expect_err("conflict must be detected via the tx-captured starting snapshot");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable());
+        assert!(err.message().contains("test/concurrent.parquet"));
     }
 }
