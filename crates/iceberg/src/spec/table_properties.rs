@@ -144,6 +144,25 @@ impl TableProperties {
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &str = "write.datafusion.fanout.enabled";
     /// Default value for fanout writer enabled
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool = true;
+
+    /// Target size (bytes) for a manifest produced by a merging append. Manifests are bin-packed into
+    /// bins of this size before deciding which bins to merge (Java `commit.manifest.target-size-bytes`).
+    pub const PROPERTY_MANIFEST_TARGET_SIZE_BYTES: &str = "commit.manifest.target-size-bytes";
+    /// Default manifest target size — 8 MB (Java `MANIFEST_TARGET_SIZE_BYTES_DEFAULT`).
+    pub const PROPERTY_MANIFEST_TARGET_SIZE_BYTES_DEFAULT: u64 = 8 * 1024 * 1024;
+
+    /// Minimum number of manifests in a bin before that bin is merged into a single manifest during a
+    /// merging append (Java `commit.manifest.min-count-to-merge`). A bin with fewer manifests is left as
+    /// separate manifests.
+    pub const PROPERTY_MANIFEST_MIN_MERGE_COUNT: &str = "commit.manifest.min-count-to-merge";
+    /// Default minimum merge count — 100 (Java `MANIFEST_MIN_MERGE_COUNT_DEFAULT`).
+    pub const PROPERTY_MANIFEST_MIN_MERGE_COUNT_DEFAULT: usize = 100;
+
+    /// Whether merging-append manifest merging is enabled (Java `commit.manifest-merge.enabled`). When
+    /// disabled, a merging append behaves like a fast append (no manifest merging).
+    pub const PROPERTY_MANIFEST_MERGE_ENABLED: &str = "commit.manifest-merge.enabled";
+    /// Default merge-enabled — `true` (Java `MANIFEST_MERGE_ENABLED_DEFAULT`).
+    pub const PROPERTY_MANIFEST_MERGE_ENABLED_DEFAULT: bool = true;
 }
 
 impl TryFrom<&HashMap<String, String>> for TableProperties {

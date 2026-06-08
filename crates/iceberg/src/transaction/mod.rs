@@ -57,6 +57,7 @@ mod append;
 mod cherry_pick;
 mod delete_files;
 mod manage_snapshots;
+mod merge_append;
 mod overwrite_files;
 mod replace_partitions;
 mod rewrite_files;
@@ -83,6 +84,7 @@ use crate::transaction::append::FastAppendAction;
 use crate::transaction::cherry_pick::CherryPickAction;
 use crate::transaction::delete_files::DeleteFilesAction;
 use crate::transaction::manage_snapshots::ManageSnapshotsAction;
+use crate::transaction::merge_append::MergeAppendAction;
 use crate::transaction::overwrite_files::OverwriteFilesAction;
 use crate::transaction::replace_partitions::ReplacePartitionsAction;
 use crate::transaction::rewrite_files::RewriteFilesAction;
@@ -166,6 +168,16 @@ impl Transaction {
     /// Creates a fast append action.
     pub fn fast_append(&self) -> FastAppendAction {
         FastAppendAction::new()
+    }
+
+    /// Creates a merging append action (Java `MergeAppend` / `AppendFiles` merge mode): appends data
+    /// files in one `Append` snapshot, but bin-packs the table's manifests per partition spec and merges
+    /// small bins into a single manifest so the manifest count stays bounded (instead of always writing a
+    /// new manifest like [`fast_append`](Self::fast_append)). Merge thresholds are read from the table
+    /// properties (`commit.manifest.target-size-bytes`, `commit.manifest.min-count-to-merge`,
+    /// `commit.manifest-merge.enabled`); with merging disabled it behaves exactly like a fast append.
+    pub fn merge_append(&self) -> MergeAppendAction {
+        MergeAppendAction::new()
     }
 
     /// Creates a delete-files action (remove data files from the table by path / `DataFile`

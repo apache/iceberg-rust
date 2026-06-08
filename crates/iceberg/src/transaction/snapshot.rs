@@ -24,9 +24,10 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, Manifest, ManifestContentType,
-    ManifestEntry, ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder,
-    Operation, Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct,
-    StructType, Summary, TableProperties, update_snapshot_summaries,
+    ManifestEntry, ManifestFile, ManifestListWriter, ManifestStatus, ManifestWriter,
+    ManifestWriterBuilder, Operation, Snapshot, SnapshotReference, SnapshotRetention,
+    SnapshotSummaryCollector, Struct, StructType, Summary, TableProperties,
+    update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -98,24 +99,94 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
     ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
 }
 
+/// Post-processes the manifest list a snapshot is about to commit.
+///
+/// After [`SnapshotProducer::manifest_file`] has assembled the candidate manifests (existing manifests
+/// carried forward, plus any newly-written added-data / added-delete manifest), it hands the full list to
+/// the active `ManifestProcess` for a final transformation. The default
+/// ([`DefaultManifestProcess`]) is a pass-through (fast-append shape); the merging append supplies a
+/// `MergeManifestProcess` that bin-packs and merges small manifests so the manifest count stays bounded.
+///
+/// The method is `async` because merging reads every source manifest's entries and writes new merged
+/// manifests (object-store I/O); it takes `&mut SnapshotProducer` so a merging implementation can use the
+/// producer's manifest writer + name counter. The default impl performs no I/O.
+pub(crate) trait ManifestProcess: Send + Sync {
+    /// Transform the assembled manifest list before it is written to the manifest-list file.
+    fn process_manifests<'a>(
+        &'a self,
+        snapshot_produce: &'a mut SnapshotProducer<'_>,
+        manifests: Vec<ManifestFile>,
+    ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send + 'a;
+}
+
+/// The default, pass-through manifest post-processing used by every add-only / delete action
+/// (fast append, overwrite, delete, replace-partitions, …). It returns the manifest list unchanged and
+/// performs no I/O — behaviorally identical to the previous synchronous pass-through.
 pub(crate) struct DefaultManifestProcess;
 
 impl ManifestProcess for DefaultManifestProcess {
-    fn process_manifests(
+    async fn process_manifests(
         &self,
-        _snapshot_produce: &SnapshotProducer<'_>,
+        _snapshot_produce: &mut SnapshotProducer<'_>,
         manifests: Vec<ManifestFile>,
-    ) -> Vec<ManifestFile> {
-        manifests
+    ) -> Result<Vec<ManifestFile>> {
+        Ok(manifests)
     }
 }
 
-pub(crate) trait ManifestProcess: Send + Sync {
-    fn process_manifests(
+/// The merging-append manifest post-processing (Java `ManifestMergeManager`): bin-pack the candidate
+/// manifests per partition spec and merge bins that exceed a count threshold into a single manifest, so
+/// the table's manifest count stays bounded instead of growing by one on every append.
+///
+/// The config is read from the table properties at construction (Java
+/// `MergingSnapshotProducer`'s `ManifestMergeManager` ctor reads `commit.manifest.target-size-bytes`,
+/// `commit.manifest.min-count-to-merge`, `commit.manifest-merge.enabled`). When merging is disabled this
+/// is a pure pass-through — behaviorally identical to a fast append.
+pub(crate) struct MergeManifestProcess {
+    target_size_bytes: u64,
+    min_count_to_merge: usize,
+    merge_enabled: bool,
+}
+
+impl MergeManifestProcess {
+    /// Read the merge configuration from the table's properties, falling back to the Java defaults
+    /// (8 MB target / min-count 100 / merge enabled) when a property is absent or unparseable.
+    pub(crate) fn new(properties: &HashMap<String, String>) -> Self {
+        let target_size_bytes = properties
+            .get(TableProperties::PROPERTY_MANIFEST_TARGET_SIZE_BYTES)
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(TableProperties::PROPERTY_MANIFEST_TARGET_SIZE_BYTES_DEFAULT);
+        let min_count_to_merge = properties
+            .get(TableProperties::PROPERTY_MANIFEST_MIN_MERGE_COUNT)
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(TableProperties::PROPERTY_MANIFEST_MIN_MERGE_COUNT_DEFAULT);
+        let merge_enabled = properties
+            .get(TableProperties::PROPERTY_MANIFEST_MERGE_ENABLED)
+            .and_then(|value| value.parse::<bool>().ok())
+            .unwrap_or(TableProperties::PROPERTY_MANIFEST_MERGE_ENABLED_DEFAULT);
+        Self {
+            target_size_bytes,
+            min_count_to_merge,
+            merge_enabled,
+        }
+    }
+}
+
+impl ManifestProcess for MergeManifestProcess {
+    async fn process_manifests(
         &self,
-        snapshot_produce: &SnapshotProducer<'_>,
+        snapshot_produce: &mut SnapshotProducer<'_>,
         manifests: Vec<ManifestFile>,
-    ) -> Vec<ManifestFile>;
+    ) -> Result<Vec<ManifestFile>> {
+        snapshot_produce
+            .merge_manifests(
+                manifests,
+                self.target_size_bytes,
+                self.min_count_to_merge,
+                self.merge_enabled,
+            )
+            .await
+    }
 }
 
 pub(crate) struct SnapshotProducer<'a> {
@@ -591,7 +662,9 @@ impl<'a> SnapshotProducer<'a> {
             manifest_files.push(added_delete_manifest);
         }
 
-        let manifest_files = manifest_process.process_manifests(self, manifest_files);
+        let manifest_files = manifest_process
+            .process_manifests(self, manifest_files)
+            .await?;
         Ok(manifest_files)
     }
 
@@ -753,6 +826,148 @@ impl<'a> SnapshotProducer<'a> {
             FormatVersion::V2 => Ok(builder.build_v2_data()),
             FormatVersion::V3 => Ok(builder.build_v3_data()),
         }
+    }
+
+    /// Merge small DATA manifests so the table's manifest count stays bounded (Java
+    /// `ManifestMergeManager.mergeManifests`).
+    ///
+    /// DELETE manifests are passed through untouched (merge append produces none; a separate delete-merge
+    /// manager handles them in Java). DATA manifests are GROUPED by `partition_spec_id`, each group is
+    /// bin-packed by `manifest_length` into bins of `target_size_bytes`, and a bin is MERGED into one new
+    /// manifest only when it has enough manifests to be worth merging — otherwise its manifests are kept
+    /// separate (carried forward unchanged). Merging copies EVERY live entry of every source manifest into
+    /// the merged manifest, preserving each entry's provenance (status / snapshot id / data + file
+    /// sequence numbers) — the data-integrity contract; a dropped or mangled entry is silent data loss or
+    /// duplication.
+    ///
+    /// When `merge_enabled` is false this returns the manifests unchanged (fast-append behavior, Java
+    /// `mergeManifests` early-return on `!mergeEnabled`).
+    async fn merge_manifests(
+        &mut self,
+        manifests: Vec<ManifestFile>,
+        target_size_bytes: u64,
+        min_count_to_merge: usize,
+        merge_enabled: bool,
+    ) -> Result<Vec<ManifestFile>> {
+        if !merge_enabled || manifests.is_empty() {
+            return Ok(manifests);
+        }
+
+        // DELETE manifests are not merged here (Java routes them through a separate delete-merge manager);
+        // keep them verbatim in their original positions.
+        let (data_manifests, mut passthrough): (Vec<ManifestFile>, Vec<ManifestFile>) = manifests
+            .into_iter()
+            .partition(|manifest| manifest.content == ManifestContentType::Data);
+
+        // Group DATA manifests by partition spec id. Manifests of DIFFERENT specs MUST NOT be merged
+        // together (Java `groupBySpec`) — a merged manifest is written with a single spec, so mixing specs
+        // would mis-type the copied partitions. Iteration is over a sorted key set for determinism.
+        let mut groups: HashMap<i32, Vec<ManifestFile>> = HashMap::new();
+        for manifest in data_manifests {
+            groups
+                .entry(manifest.partition_spec_id)
+                .or_default()
+                .push(manifest);
+        }
+        let mut spec_ids: Vec<i32> = groups.keys().copied().collect();
+        spec_ids.sort_unstable();
+
+        let mut merged: Vec<ManifestFile> = Vec::new();
+        for spec_id in spec_ids {
+            let group = groups.remove(&spec_id).expect("spec id was just collected");
+            let group_result = self
+                .merge_group(group, target_size_bytes, min_count_to_merge)
+                .await?;
+            merged.extend(group_result);
+        }
+
+        merged.append(&mut passthrough);
+        Ok(merged)
+    }
+
+    /// Bin-pack one same-spec group and merge the bins that qualify (Java `ManifestMergeManager.mergeGroup`).
+    ///
+    /// Bins are produced by the same greedy, end-anchored packing Java uses (`ListPacker` with a lookback of
+    /// 1, `packEnd`): the under-filled bin lands first so it is the one merged next time. A bin of a single
+    /// manifest is kept as-is. A bin that contains THIS snapshot's newly-written manifest is only merged when
+    /// it reaches `min_count_to_merge` manifests (so a fresh append of a few files does not force a merge);
+    /// any other multi-manifest bin is merged.
+    async fn merge_group(
+        &mut self,
+        group: Vec<ManifestFile>,
+        target_size_bytes: u64,
+        min_count_to_merge: usize,
+    ) -> Result<Vec<ManifestFile>> {
+        let bins = pack_end(group, target_size_bytes);
+
+        let mut result: Vec<ManifestFile> = Vec::new();
+        for bin in bins {
+            if bin.len() == 1 {
+                // A single-manifest bin is never rewritten (Java `bin.size() == 1`).
+                result.extend(bin);
+                continue;
+            }
+
+            // The bin holds THIS snapshot's just-written manifest iff one of its manifests was added by the
+            // new snapshot id (Java `bin.contains(first)`, where `first` is the new in-memory manifest). Such
+            // a bin is only merged once it has enough manifests to be worth it — otherwise leave it split.
+            let contains_new_manifest = bin
+                .iter()
+                .any(|manifest| manifest.added_snapshot_id == self.snapshot_id);
+            if contains_new_manifest && bin.len() < min_count_to_merge {
+                result.extend(bin);
+                continue;
+            }
+
+            let manifest = self.create_merged_manifest(&bin).await?;
+            result.push(manifest);
+        }
+
+        Ok(result)
+    }
+
+    /// Write a single merged manifest from a bin of same-spec source manifests, copying every live entry
+    /// with its provenance preserved (Java `ManifestMergeManager.createManifest`).
+    ///
+    /// For each source manifest entry:
+    /// - a `Deleted` tombstone is carried forward ONLY if it belongs to THIS snapshot (Java suppresses
+    ///   deletes from previous snapshots — they are informational and already accounted for);
+    /// - an `Added` entry that THIS snapshot added stays `Added` (the new data files);
+    /// - every other live entry is written as `Existing`, preserving its original snapshot id and BOTH
+    ///   sequence numbers (the provenance contract — re-stamping would corrupt merge-on-read deletes and
+    ///   incremental scans).
+    ///
+    /// The merged manifest is written with the bin's (shared) partition spec, so the copied partitions keep
+    /// their typing. The bin is guaranteed non-empty and single-spec by the caller.
+    async fn create_merged_manifest(&mut self, bin: &[ManifestFile]) -> Result<ManifestFile> {
+        let representative = bin.first().ok_or_else(|| {
+            Error::new(ErrorKind::Unexpected, "Cannot merge an empty manifest bin")
+        })?;
+        let mut writer = self.new_filtering_manifest_writer(representative)?;
+
+        for manifest_file in bin {
+            let manifest = manifest_file.load_manifest(self.table.file_io()).await?;
+            for entry in manifest.entries() {
+                let entry = entry.as_ref().clone();
+                match entry.status() {
+                    ManifestStatus::Deleted => {
+                        // Suppress deletes from previous snapshots; carry forward only this snapshot's.
+                        if entry.snapshot_id() == Some(self.snapshot_id) {
+                            writer.add_delete_entry(entry)?;
+                        }
+                    }
+                    ManifestStatus::Added if entry.snapshot_id() == Some(self.snapshot_id) => {
+                        writer.add_entry(entry)?;
+                    }
+                    // Everything else alive becomes an Existing entry, preserving provenance.
+                    ManifestStatus::Added | ManifestStatus::Existing => {
+                        writer.add_existing_entry(entry)?;
+                    }
+                }
+            }
+        }
+
+        writer.write_manifest_file().await
     }
 
     // Returns a `Summary` of the current snapshot
@@ -953,6 +1168,51 @@ impl<'a> SnapshotProducer<'a> {
 /// `Delete` / `Replace` snapshot never introduces brand-new conflicting rows.
 fn operation_adds_data_files(operation: &Operation) -> bool {
     matches!(operation, Operation::Append | Operation::Overwrite)
+}
+
+/// Bin-pack `manifests` into bins of `target_size_bytes` by `manifest_length`, reproducing Java's
+/// `BinPacking.ListPacker(target, lookback = 1, largestBinFirst = false).packEnd(manifests, length)` (the
+/// packing the manifest-merge manager uses, [`SnapshotProducer::merge_group`]).
+///
+/// A `lookback` of 1 makes this a simple sequential greedy pack: walk the items and keep adding to the
+/// current open bin while it still fits, otherwise close that bin and open a new one. `packEnd` packs the
+/// REVERSED list and reverses the result, so the under-filled bin ends up FIRST — Java does this so the
+/// under-filled bin is the one merged next time, which keeps file ordering stable and avoids random
+/// deletes as data ages off. A manifest larger than the target lands alone in its own bin (a bin always
+/// accepts at least one item; mirrors Java's `Bin.canAdd` only gating on `binWeight + weight`, applied to
+/// an empty bin which always passes for the first item).
+///
+/// Input order is preserved within and across bins (after the double reverse). The total set of manifests
+/// is exactly partitioned — every input manifest appears in exactly one bin (no loss, no duplication).
+fn pack_end(manifests: Vec<ManifestFile>, target_size_bytes: u64) -> Vec<Vec<ManifestFile>> {
+    // Pack the reversed list greedily, then reverse each bin and the bin list (Java `packEnd`).
+    let mut bins: Vec<Vec<ManifestFile>> = Vec::new();
+    let mut current_bin: Vec<ManifestFile> = Vec::new();
+    let mut current_weight: u64 = 0;
+
+    for manifest in manifests.into_iter().rev() {
+        let weight = manifest.manifest_length.max(0) as u64;
+        // An empty bin always accepts the next item; a non-empty bin accepts it only while it still fits
+        // under the target (Java `Bin.canAdd`: `binWeight + weight <= targetWeight`).
+        let fits =
+            current_bin.is_empty() || current_weight.saturating_add(weight) <= target_size_bytes;
+        if !fits {
+            bins.push(std::mem::take(&mut current_bin));
+            current_weight = 0;
+        }
+        current_weight = current_weight.saturating_add(weight);
+        current_bin.push(manifest);
+    }
+    if !current_bin.is_empty() {
+        bins.push(current_bin);
+    }
+
+    // Undo the `packEnd` reversal: reverse each bin's contents and the order of the bins.
+    for bin in &mut bins {
+        bin.reverse();
+    }
+    bins.reverse();
+    bins
 }
 
 /// Enumerate the DATA files ADDED to `table` by snapshots committed AFTER `starting_snapshot_id` — the

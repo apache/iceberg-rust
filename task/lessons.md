@@ -1451,3 +1451,101 @@ probe), each mutation-verified as load-bearing. Lessons:
   crates.io REGISTRY (no git ref in Cargo.toml/lock). The comment predates this increment (not introduced by
   the diff) and is about `BitmapIter`/`advance_to`, not the DV format. Left untouched (out of this change's
   scope); flagged for a future cleanup pass.
+
+### 2026-06-08 (Phase 2 Increment 9 — merge append, BUILDER Opus)
+- **DO make a producer post-processing trait async via RPITIT (`-> impl Future<Output = Result<...>> + Send`),
+  matching the SIBLING trait already in the file (`SnapshotProduceOperation`), NOT `#[async_trait]`.** *Why:*
+  the existing `SnapshotProduceOperation` methods are `impl Future + Send` (a manual RPITIT, not the macro), so
+  the `ManifestProcess` async change must follow the same convention for consistency and to keep the producer
+  generic (`commit<OP, MP>`) monomorphized without boxing. An `async fn` in the trait works for the IMPLs
+  (Rust 2024 desugars it), but the TRAIT METHOD must spell `impl Future + Send + 'a` with an explicit
+  lifetime tying the borrow of `&'a mut SnapshotProducer` to the returned future — otherwise the `MP:
+  ManifestProcess` bound on `commit` won't prove `Send` and the future captures get tangled. The default impl
+  (`DefaultManifestProcess`) can still be a plain `async fn` body.
+- **DO take `&mut SnapshotProducer` (not `&`) in the manifest post-processor when a future impl writes
+  manifests.** *Why:* the original sync `process_manifests` took `&SnapshotProducer` because the pass-through
+  needs nothing; a MERGING impl must call `new_filtering_manifest_writer` (advances the `manifest_counter` +
+  builds a writer) and `load_manifest`, which need `&mut self`. The `manifest_file()` call site already holds
+  `&mut self`, so widening the trait's receiver to `&mut` is free there. The whole merge body lives as METHODS
+  on `SnapshotProducer` (`merge_manifests`/`merge_group`/`create_merged_manifest`) — the process struct just
+  forwards — so they reuse `new_filtering_manifest_writer` (the same source-spec writer the delete-rewrite uses)
+  unchanged.
+- **DO identify "the new manifest" in the merge by `added_snapshot_id == self.snapshot_id`, NOT by list
+  position.** *Why:* Java `ManifestMergeManager.mergeManifests` takes `first = manifestIter.next()` and gates
+  the threshold on `bin.contains(first)`, where Java's `unmergedManifests = concat(prepareNewDataManifests(),
+  filtered)` puts the NEW manifest FIRST. The Rust seam assembles the candidate list in the OPPOSITE order —
+  existing manifests first (from `process_deletes`), the new added-data manifest PUSHED LAST. So "is this the
+  new manifest?" must be a property test (`m.added_snapshot_id == self.snapshot_id`), not `bin[0]`/`first()`.
+  A position-based port would gate the threshold on the wrong manifest and merge (or refuse to merge) the wrong
+  bin.
+- **DO copy a merged entry by status with `entry.snapshot_id() == Some(self.snapshot_id)` deciding Added-vs-
+  Existing, mirroring Java `createManifest` line-for-line.** *Why:* Java's three arms are: `DELETED` → carry
+  forward ONLY if `entry.snapshotId() == snapshotId()` (suppress prior-snapshot tombstones — informational,
+  already counted); `ADDED && entry.snapshotId() == snapshotId()` → `writer.add` (stays Added — this snapshot's
+  new files); else → `writer.existing` (every prior entry becomes Existing, preserving its snapshot id + BOTH
+  sequence numbers). The Rust `add_existing_entry`/`add_delete_entry`/`add_entry` map exactly. The provenance
+  preservation is the data-integrity contract: re-stamping an Existing entry with the merge snapshot's id/seq
+  silently breaks merge-on-read delete application + incremental scans. Mutation-verified: swapping the Existing
+  arm to `add_entry` (re-stamp) fails the provenance test; the path-set/count tests all PASS under the re-stamp,
+  so ONLY a per-entry `(snapshot_id, sequence_number, file_sequence_number)` assertion catches it.
+- **DO reproduce Java `BinPacking.ListPacker(target, lookback=1, largestBinFirst=false).packEnd` as a simple
+  end-anchored greedy pack, not the full lookback machinery.** *Why:* a lookback of 1 collapses the
+  `PackingIterable` to a sequential greedy pack (open one bin, keep adding while `binWeight + weight <= target`,
+  else close it and open the next); `packEnd` just packs the REVERSED list and reverses the result so the
+  under-filled bin lands FIRST (Java does this so the under-filled bin is merged next time, keeping file order
+  stable as data ages off). The faithful Rust port is: iterate `manifests.rev()`, greedy-pack, then reverse
+  each bin AND the bin list. An empty bin ALWAYS accepts the next item (a manifest larger than the target lands
+  alone) — mirror Java's `Bin.canAdd` only gating a NON-empty bin. Use `saturating_add` on the `u64` weight to
+  be safe against a pathological `manifest_length`.
+- **DO group merge candidates by `partition_spec_id` and NEVER merge across specs — the merged manifest is
+  written with ONE spec, so mixing specs mis-types the copied partition tuples.** *Why:* Java `groupBySpec`
+  partitions the manifests by `partitionSpecId` and merges each group with `spec(specId)`. In Rust the merged
+  writer comes from `new_filtering_manifest_writer(representative)`, which uses the source manifest's spec; if a
+  bin held two specs, the writer's `check_data_file` (partition-type match) would reject the wrong-spec entries.
+  Mutation-verified: grouping by a constant 0 (ignoring `partition_spec_id`) makes the cross-spec test PANIC at
+  write time (`(x)` vs `(x,y)` partition shape mismatch) — the test evolves the spec to id 1 and asserts the
+  spec-0 manifest survives as its own manifest + every manifest is single-spec.
+- **DO duplicate the tiny `Append` `SnapshotProduceOperation` into `merge_append.rs` rather than widen
+  `FastAppendOperation`'s visibility.** *Why:* the merge action's operation is byte-identical to fast-append's
+  (Append, no deletes, carry forward every live manifest) but the merging behavior lives ENTIRELY in the
+  `MergeManifestProcess` post-processor, not the operation. Making `append.rs::FastAppendOperation` `pub(crate)`
+  to share it would be a visibility change NOT forced by the async-seam edit (the increment's scope rule allows
+  touching `append.rs` ONLY if the seam forces a trivial signature change — it doesn't, since `FastAppendAction`
+  already passes `DefaultManifestProcess`). A local `MergeAppendOperation` keeps `append.rs` untouched (Rule of
+  Three: this is the 2nd use of the shape, extract on the 3rd).
+- **DO add a `live_entry_count` (non-deduplicated) assertion alongside `live_file_paths` (a set) to pin the
+  DUPLICATION risk a merge carries.** *Why:* `live_file_paths` is a `HashSet<String>`, so an entry copied TWICE
+  into the merged manifest (e.g. a bin overlap bug) would be INVISIBLE to it — the set still equals the appended
+  paths. Counting live entries (not de-duplicated) and asserting it equals the appended file count catches the
+  double-copy. Data loss is caught by the set; duplication needs the count. Both are required for the
+  data-integrity-critical merge.
+
+### 2026-06-08 (Increment 9 — merge append, REVIEWER Opus)
+- **VERDICT: merge append is CORRECT — no data loss / duplication / provenance / threshold / cross-spec bug
+  found. No production change.** Independently re-ran the FULL mutation matrix against the live tests (each
+  mutation caught by exactly the right test, minimal cross-fire): (1) drop one source manifest's entries → the
+  KEY no-loss test + the exact-union probe FAIL; (2) copy a manifest twice → ONLY the non-dedup
+  `live_entry_count` assertion FAILs (5 vs 4), the `live_file_paths` HashSet stays green — confirming the
+  count detector is the load-bearing duplication guard, exactly as the builder designed; (3) re-stamp the
+  `Existing` arm to `add_entry` → ONLY the provenance test FAILs (path/count tests all pass under a re-stamp);
+  (4) group by a constant spec id → the cross-spec test PANICs at write time (partition-shape mismatch); (5)
+  ignore the `merge_enabled` flag → the merge-disabled test FAILs. The `add_existing_entry` writer preserves
+  `snapshot_id`/`sequence_number`/`file_sequence_number` (only sets status=Existing); `load_manifest` runs
+  `inherit_data` so a carried-forward entry arrives fully provenance-populated. Verified against Java
+  `ManifestMergeManager.createManifest` lines 198-216 + `BinPacking.ListPacker.packEnd` (lookback=1 = greedy)
+  + `TableProperties` (8MB/100/true) line-for-line.
+- **DO close the EXACT-threshold-boundary coverage gap (`bin.size() == min_count`) — the builder's tests only
+  covered `4 ≥ 2` (merges) and `2 < 5` (doesn't), never the `==` boundary where the off-by-one lives.** *Why:*
+  Java's keep-separate condition is `bin.contains(first) && bin.size() < minCountToMerge` (strict `<`), so
+  `size == min_count` MERGES. Added `test_merge_append_at_exact_min_count_boundary_merges` (min-count 3, bin
+  size 3 → merges) + `test_merge_append_one_below_min_count_does_not_merge` (min-count 4, bin size 3 → split).
+  Both confirm the new-manifest-LAST assembly (vs Java new-FIRST) does NOT shift the decision: the
+  `contains_new_manifest` check is `bin.iter().any(added_snapshot_id == self.snapshot_id)` — an
+  order-INDEPENDENT membership test — and `bin.len()` is a count, so candidate ordering cannot move the
+  threshold. (Ordering only affects which manifests share a bin when total size exceeds the 8MB target and
+  bins split — a benign efficiency divergence, never loss/dup.)
+- **BENIGN DIVERGENCE (noted, not fixed): group emission order differs from Java.** Java `groupBySpec` uses a
+  `TreeMap` with `Comparator.reverseOrder()` (higher spec id first); the Rust `merge_manifests` sorts
+  `spec_ids` ASCENDING. This only reorders the manifest-list entries across specs — it changes no entry's
+  content, spec, or liveness, and DELETE manifests are appended after. No correctness impact; both are
+  deterministic. Not worth diverging the Rust toward Java's reverse order.

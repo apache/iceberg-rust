@@ -2188,3 +2188,84 @@ Roadmap, todo, lessons. **NO Cargo.toml/lockfile edits** (roaring present; CRC i
 (flagged):** RowDelta-for-V3 e2e (a V3 DV is a DeleteFile → composes), `BaseDVFileWriter` multi-data-file
 batching, the DV read path wired into `caching_delete_file_loader` (parser now exists), Java interop round-trip
 (→ ✅). Row stays 🟡. An Opus REVIEWER verifies next.
+
+### Phase 2 Increment 9 — merge append (`AppendFiles` in merge mode, BUILDER Opus, 2026-06-08)
+Add a MERGING append: on append, bin-pack manifests per partition spec and merge bins that exceed a
+threshold into one manifest (bounded manifest count), instead of always creating a new one like fast-append.
+DATA-INTEGRITY-CRITICAL: a manifest merge that drops/mangles entries silently loses or duplicates data.
+Mirror Java `MergeAppend` / `ManifestMergeManager` (`/tmp/iceberg-java-ref/core/.../ManifestMergeManager.java`).
+
+**Risk-First (what can go wrong):** (a) DATA LOSS — a live entry in a merged manifest is not copied to the
+merged output; (b) DUPLICATION — an entry copied twice (e.g. a bin overlapping two outputs); (c) PROVENANCE
+CORRUPTION — a copied `Existing` entry re-stamped with a new snapshot id / sequence number (breaks
+merge-on-read delete application + incremental scans); (d) CROSS-SPEC MERGE — manifests of different partition
+specs merged into one manifest (corrupts partition typing). Each risk gets a named test asserting the SCAN
+live set, not just metadata.
+
+**Java logic mirrored (citations):** `ManifestMergeManager.mergeManifests` (line 79): `!mergeEnabled` or empty
+→ return as-is; else `groupBySpec` (line 129, by `partitionSpecId`) then `mergeGroup` per spec.
+`mergeGroup` (line 140): `ListPacker(targetSizeBytes, lookback=1, largestBinFirst=false).packEnd(group,
+ManifestFile::length)` — lookback=1 means a simple greedy pack from the end. Per bin: `size==1` → keep as-is
+(line 164); bin contains the new (first) manifest AND `size < minCountToMerge` → keep all separate (line 175);
+else `createManifest` (merge into one). `createManifest` (line 187): copy each source manifest's entries —
+DELETED from this snapshot → `writer.delete`; ADDED from this snapshot → `writer.add`; else → `writer.existing`
+(lines 202-215), using `spec(specId)` (the source spec). Config: `MANIFEST_TARGET_SIZE_BYTES`
+(`commit.manifest.target-size-bytes`, 8MB), `MANIFEST_MIN_MERGE_COUNT` (`commit.manifest.min-count-to-merge`,
+100), `MANIFEST_MERGE_ENABLED` (`commit.manifest-merge.enabled`, true).
+
+**Note on `first`/`createManifest` ADDED-vs-EXISTING:** in our Rust seam, `process_manifests` runs AFTER the
+added-data manifest is already written and pushed into the candidate list. A merge-append's NEW data manifest
+holds `Added` entries with `snapshot_id == None` (V2/V3 inherited-at-read) — but they have NOT been committed
+yet, so loading that just-written manifest does NOT inherit the new snapshot id (the manifest list entry's
+`added_snapshot_id` is the new snapshot id only because `new_manifest_writer` stamps it). Java's
+`createManifest` keeps an entry `Added` only when `entry.snapshotId() == snapshotId()`. To preserve that, the
+merge copies an entry as `Added` iff its (post-inherit) `snapshot_id` equals the producer's new snapshot id;
+all other live entries become `Existing` (carrying their original snapshot id + both seq numbers); already-
+`Deleted` tombstones are copied only if they belong to the new snapshot, else suppressed (Java lines 203-207).
+
+Plan:
+- [x] A. Async seam: made `ManifestProcess::process_manifests` async (`-> impl Future<Output=Result<...>> +
+      Send`, matching `SnapshotProduceOperation`'s RPITIT convention) taking `&mut SnapshotProducer` (merging
+      needs the writer + counter); `DefaultManifestProcess` is an async pass-through (identical behavior);
+      `manifest_file()` call site `.await?`s it. NO other action file touched — every existing action passes
+      `DefaultManifestProcess` and is behaviorally unchanged (1437 lib tests green incl. fast-append, overwrite,
+      delete, replace-partitions, rewrite, row-delta, cherry-pick).
+- [x] B. `MergeManifestProcess` (async `ManifestProcess`, in snapshot.rs): reads config from table props
+      (defaults 8MB / 100 / true); merge-disabled or empty → pass-through (== fast-append); DELETE manifests
+      pass through untouched; groups DATA manifests by `partition_spec_id`; per group `pack_end` bin-packs by
+      `manifest_length` (greedy, lookback=1, packEnd order — under-filled bin first); a `size==1` bin or a bin
+      containing this snapshot's new manifest below `min-count-to-merge` → kept separate; else merged via
+      `create_merged_manifest` copying all live entries with provenance preserved (`Existing` for prior,
+      `Added` for this-snapshot, `Deleted`-tombstone only for this-snapshot deletes) using the source spec's
+      writer (`new_filtering_manifest_writer`).
+- [x] B. `MergeAppendAction` (`transaction/merge_append.rs`): mirrors `FastAppendAction` (`add_data_files`,
+      validate, dup check) but drives `commit(MergeAppendOperation, MergeManifestProcess::new(props))`.
+      `MergeAppendOperation` is a local `Append` op (duplicated from fast-append's — Rule of Three: 2nd use,
+      keeps the merge action self-contained, avoids widening `FastAppendOperation`'s visibility). Wired
+      `Transaction::merge_append()` + `mod merge_append;` + `use ...MergeAppendAction;`.
+- [x] Tests (MemoryCatalog, assert SCAN live set + manifest count): 6 tests, each named for a risk —
+      reduces-count+no-loss+no-dup (KEY, min-count=2, 3 manifests → 1, live==all, entry-count==path-count);
+      merge-disabled → fast-append; cross-spec NOT merged (evolve spec, spec-0 survives, every manifest
+      single-spec); provenance preserved (merged-forward entries keep snapshot id + both seqs); single-manifest
+      bin untouched; below-min-count not merged. Mutation-verified provenance (re-stamp → fail), cross-spec
+      (group-by-const → panic), merge-disabled (ignore flag → fail).
+- [x] Docs: `commit.manifest.*` consts in `table_properties.rs`; GAP_MATRIX `Write: merge append` ❌→🟡 +
+      headline; Roadmap Phase 2 status + sequencing + headline gaps; this todo; lessons.
+
+**Outcome (2026-06-08, Phase 2 Increment 9, BUILDER Opus):** merge append lands 🟡. **Async seam:**
+`ManifestProcess::process_manifests` is now `async fn(&mut SnapshotProducer, Vec<ManifestFile>) ->
+Result<Vec<ManifestFile>>`; `DefaultManifestProcess` is an unchanged async pass-through. The seam change is
+the ONLY producer change; NO other action file was touched (all pass `DefaultManifestProcess`). **Merge
+logic** mirrors Java `ManifestMergeManager` (group-by-spec / bin-pack `pack_end` / threshold / provenance-
+preserving entry copy) with line-level citations in the doc comments. **`MergeAppendAction` /
+`Transaction::merge_append()`** mirror `FastAppendAction` but drive `MergeManifestProcess`. **Verify (repo
+root, pinned nightly):** build clean; lib ×2 = 1437/0 both runs (was 1431 baseline → +6); interop 4/4 ×3
+(manage_snapshots / update_schema / update_partition_spec); clippy -D warnings clean; fmt --check clean. Files
+touched exactly the allowed set: `transaction/snapshot.rs` (async seam + `MergeManifestProcess` + merge
+methods + `pack_end`), `transaction/merge_append.rs` (new), `transaction/mod.rs` (wiring),
+`spec/table_properties.rs` (the `commit.manifest.*` consts), GAP_MATRIX, Roadmap, todo, lessons. **NOT
+touched: `append.rs`** (the async seam did not force a signature change — `FastAppendAction` already passes
+`DefaultManifestProcess`, whose call site is internal to the producer). No Cargo.toml/lockfile edits. No
+commit. **Deferred (flagged):** Java interop round-trip (→ ✅); the DELETE-manifest merge manager (Java's
+separate `deleteMergeManager` — merge append produces no deletes); `appendManifest(ManifestFile)`; parallel
+bin processing + the merged-manifest reuse cache. An Opus REVIEWER verifies next.
