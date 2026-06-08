@@ -244,7 +244,7 @@ impl ExecutionPlan for IcebergWriteExec {
 
         let file_io = self.table.file_io().clone();
         // todo location_gen and file_name_gen should be configurable
-        let location_generator = DefaultLocationGenerator::new(self.table.metadata().clone())
+        let location_generator = DefaultLocationGenerator::new(self.table.metadata())
             .map_err(to_datafusion_error)?;
         // todo filename prefix/suffix should be configurable
         let file_name_generator =
