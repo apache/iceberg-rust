@@ -193,8 +193,7 @@ pub(crate) mod test {
         );
 
         // test default data location
-        let location_generator =
-            super::DefaultLocationGenerator::new(&table_metadata).unwrap();
+        let location_generator = super::DefaultLocationGenerator::new(&table_metadata).unwrap();
         let location =
             location_generator.generate_location(None, &file_name_generator.generate_file_name());
         assert_eq!(location, "s3://data.db/table/data/part-00000-test.parquet");
@@ -204,8 +203,7 @@ pub(crate) mod test {
             WRITE_FOLDER_STORAGE_LOCATION.to_string(),
             "s3://data.db/table/data_1".to_string(),
         );
-        let location_generator =
-            super::DefaultLocationGenerator::new(&table_metadata).unwrap();
+        let location_generator = super::DefaultLocationGenerator::new(&table_metadata).unwrap();
         let location =
             location_generator.generate_location(None, &file_name_generator.generate_file_name());
         assert_eq!(
@@ -217,8 +215,7 @@ pub(crate) mod test {
             WRITE_DATA_LOCATION.to_string(),
             "s3://data.db/table/data_2".to_string(),
         );
-        let location_generator =
-            super::DefaultLocationGenerator::new(&table_metadata).unwrap();
+        let location_generator = super::DefaultLocationGenerator::new(&table_metadata).unwrap();
         let location =
             location_generator.generate_location(None, &file_name_generator.generate_file_name());
         assert_eq!(
@@ -231,8 +228,7 @@ pub(crate) mod test {
             // invalid table location
             "s3://data.db/data_3".to_string(),
         );
-        let location_generator =
-            super::DefaultLocationGenerator::new(&table_metadata).unwrap();
+        let location_generator = super::DefaultLocationGenerator::new(&table_metadata).unwrap();
         let location =
             location_generator.generate_location(None, &file_name_generator.generate_file_name());
         assert_eq!(location, "s3://data.db/data_3/part-00003-test.parquet");
