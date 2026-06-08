@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ~ Licensed to the Apache Software Foundation (ASF) under one
+  ~ or more contributor license agreements.  See the NOTICE file
+  ~ distributed with this work for additional information
+  ~ regarding copyright ownership.  The ASF licenses this file
+  ~ to you under the Apache License, Version 2.0 (the
+  ~ "License"); you may not use this file except in compliance
+  ~ with the License.  You may obtain a copy of the License at
+  ~
+  ~   http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing,
+  ~ software distributed under the License is distributed on an
+  ~ "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  ~ KIND, either express or implied.  See the License for the
+  ~ specific language governing permissions and limitations
+  ~ under the License.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <!--
+    TEST ORACLE — NOT part of the shipped Rust library.
+
+    This Maven module is a dev-only tool (exactly like dev/spark/) that drives the Java Apache Iceberg
+    `iceberg-core` reference to (a) generate base + Java-evolved table-metadata JSON fixtures for the
+    UpdateSchema interop scenarios, and (b) verify that Java can read the Rust-evolved metadata the Rust
+    test produces. It is NOT a Cargo crate, NOT a Cargo dependency, and `cargo build` / `cargo test`
+    never invoke it. See README.md.
+  -->
+  <groupId>org.apache.iceberg.interop</groupId>
+  <artifactId>iceberg-rust-interop-oracle</artifactId>
+  <version>1.0.0-SNAPSHOT</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <maven.compiler.source>11</maven.compiler.source>
+    <maven.compiler.target>11</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <iceberg.version>1.10.0</iceberg.version>
+    <!-- The Rust crate's testdata dirs, where fixtures are read/written (one per capability). -->
+    <interop.fixtures.dir>${project.basedir}/../../crates/iceberg/testdata/interop/update_schema</interop.fixtures.dir>
+    <interop.partition.fixtures.dir>${project.basedir}/../../crates/iceberg/testdata/interop/update_partition_spec</interop.partition.fixtures.dir>
+    <interop.manage_snapshots.fixtures.dir>${project.basedir}/../../crates/iceberg/testdata/interop/manage_snapshots</interop.manage_snapshots.fixtures.dir>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-core</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-api</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.1.0</version>
+        <configuration>
+          <mainClass>org.apache.iceberg.InteropOracle</mainClass>
+          <!-- The fixtures dir is passed as the first program arg AFTER the mode arg. The runner sets
+               -Dexec.args="generate" / "verify"; the fixtures dir is supplied via this system property
+               so the program can locate the testdata regardless of cwd. -->
+          <systemProperties>
+            <systemProperty>
+              <key>interop.fixtures.dir</key>
+              <value>${interop.fixtures.dir}</value>
+            </systemProperty>
+            <systemProperty>
+              <key>interop.partition.fixtures.dir</key>
+              <value>${interop.partition.fixtures.dir}</value>
+            </systemProperty>
+            <systemProperty>
+              <key>interop.manage_snapshots.fixtures.dir</key>
+              <value>${interop.manage_snapshots.fixtures.dir}</value>
+            </systemProperty>
+          </systemProperties>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

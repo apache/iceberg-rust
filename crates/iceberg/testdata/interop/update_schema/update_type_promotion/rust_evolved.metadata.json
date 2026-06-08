@@ -1,0 +1,84 @@
+{
+  "format-version": 2,
+  "table-uuid": "6245d5c6-f5d1-4f2d-93cf-2563d40c9a0d",
+  "location": "s3://interop-bucket/update_schema/update_type_promotion",
+  "last-sequence-number": 0,
+  "last-updated-ms": 1780864345767,
+  "last-column-id": 3,
+  "schemas": [
+    {
+      "schema-id": 1,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 2,
+          "name": "measure",
+          "required": false,
+          "type": "double"
+        },
+        {
+          "id": 3,
+          "name": "amount",
+          "required": false,
+          "type": "decimal(18,2)"
+        }
+      ]
+    },
+    {
+      "schema-id": 0,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "int"
+        },
+        {
+          "id": 2,
+          "name": "measure",
+          "required": false,
+          "type": "float"
+        },
+        {
+          "id": 3,
+          "name": "amount",
+          "required": false,
+          "type": "decimal(9,2)"
+        }
+      ]
+    }
+  ],
+  "current-schema-id": 1,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": []
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 999,
+  "properties": {
+    "write.parquet.compression-codec": "zstd"
+  },
+  "metadata-log": [
+    {
+      "metadata-file": "/tmp/.tmpthjl7C/update_type_promotion/metadata/00000-00000000-0000-0000-0000-000000000000.metadata.json",
+      "timestamp-ms": 1780864345384
+    }
+  ],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {}
+}

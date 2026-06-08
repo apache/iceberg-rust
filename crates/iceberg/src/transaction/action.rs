@@ -47,6 +47,34 @@ pub(crate) trait TransactionAction: AsAny + Sync + Send {
     /// An `ActionCommit` containing table updates and table requirements,
     /// or an error if the commit fails.
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit>;
+
+    /// Validate this action against the refreshed table base BEFORE its updates are re-applied, rejecting a
+    /// commit that would silently violate serializable isolation (Java `SnapshotProducer.validate` /
+    /// `MergingSnapshotProducer.validate`).
+    ///
+    /// This runs inside [`Transaction::commit`]'s retry loop, AFTER the catalog refresh + re-base and BEFORE
+    /// the re-apply: `current` is the refreshed base, so an implementation can enumerate the snapshots
+    /// `current` has that are NEWER than `starting_snapshot_id` (the concurrent commits that landed while this
+    /// transaction was being built) and reject conflicts. `starting_snapshot_id` is the current snapshot id
+    /// captured when the [`Transaction`] was created (it SURVIVES the re-base — see
+    /// [`Transaction::starting_snapshot_id`]).
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if there is no conflict (the default for every action). A conflict MUST be reported with a
+    /// **non-retryable** error (e.g. [`crate::ErrorKind::DataInvalid`], whose `retryable()` defaults to
+    /// `false`), so the retry loop stops and the validation failure propagates — mirroring Java's
+    /// non-retryable `ValidationException` (a retryable error would loop forever, re-failing the same check).
+    ///
+    /// The default implementation is a no-op, so existing actions need no change.
+    async fn validate(
+        self: Arc<Self>,
+        starting_snapshot_id: Option<i64>,
+        current: &Table,
+    ) -> Result<()> {
+        let _ = (starting_snapshot_id, current);
+        Ok(())
+    }
 }
 
 /// A helper trait for applying a `TransactionAction` to a `Transaction`.

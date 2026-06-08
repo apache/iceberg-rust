@@ -1,0 +1,111 @@
+{
+  "format-version": 2,
+  "table-uuid": "8a740e27-84ed-4ace-9398-9b690ab8ae73",
+  "location": "s3://interop-bucket/manage_snapshots/retention",
+  "last-sequence-number": 3,
+  "last-updated-ms": 1780874755252,
+  "last-column-id": 2,
+  "schemas": [
+    {
+      "schema-id": 0,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 2,
+          "name": "data",
+          "required": false,
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "current-schema-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": []
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 999,
+  "properties": {
+    "write.parquet.compression-codec": "zstd"
+  },
+  "current-snapshot-id": 3055729675574597004,
+  "snapshot-log": [
+    {
+      "snapshot-id": 3055729675574597004,
+      "timestamp-ms": 1555100955770
+    }
+  ],
+  "metadata-log": [
+    {
+      "metadata-file": "/tmp/.tmp8WuAGc/retention/metadata/00000-00000000-0000-0000-0000-000000000000.metadata.json",
+      "timestamp-ms": 1555100955770
+    }
+  ],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {
+    "main": {
+      "snapshot-id": 3055729675574597004,
+      "type": "branch"
+    },
+    "stable": {
+      "snapshot-id": 3051729675574597004,
+      "type": "tag",
+      "max-ref-age-ms": 604800000
+    },
+    "dev": {
+      "snapshot-id": 3055729675574597004,
+      "type": "branch",
+      "min-snapshots-to-keep": 5,
+      "max-snapshot-age-ms": 86400000
+    }
+  },
+  "snapshots": [
+    {
+      "snapshot-id": 3055729675574597004,
+      "parent-snapshot-id": 3051729675574597004,
+      "sequence-number": 2,
+      "timestamp-ms": 1555100955770,
+      "manifest-list": "s3://interop-bucket/manage_snapshots/metadata/snap-3055729675574597004.avro",
+      "summary": {
+        "operation": "append"
+      },
+      "schema-id": 0
+    },
+    {
+      "snapshot-id": 3060729675574597004,
+      "parent-snapshot-id": 3051729675574597004,
+      "sequence-number": 3,
+      "timestamp-ms": 1600000000000,
+      "manifest-list": "s3://interop-bucket/manage_snapshots/metadata/snap-3060729675574597004.avro",
+      "summary": {
+        "operation": "append"
+      },
+      "schema-id": 0
+    },
+    {
+      "snapshot-id": 3051729675574597004,
+      "sequence-number": 1,
+      "timestamp-ms": 1515100955770,
+      "manifest-list": "s3://interop-bucket/manage_snapshots/metadata/snap-3051729675574597004.avro",
+      "summary": {
+        "operation": "append"
+      },
+      "schema-id": 0
+    }
+  ]
+}

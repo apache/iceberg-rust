@@ -29,6 +29,7 @@ use futures::StreamExt;
 use futures::future::try_join_all;
 use iceberg::arrow::arrow_schema_to_schema_auto_assign_ids;
 use iceberg::inspect::MetadataTableType;
+use iceberg::spec::FormatVersion;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableCreation, TableIdent};
 
 use crate::table::IcebergTableProvider;
@@ -163,10 +164,19 @@ impl SchemaProvider for IcebergSchemaProvider {
         let iceberg_schema = arrow_schema_to_schema_auto_assign_ids(df_schema.as_ref())
             .map_err(to_datafusion_error)?;
 
-        // Create the table in the Iceberg catalog
+        // Create the table in the Iceberg catalog. The schema may contain v3-only types (e.g. a
+        // DataFusion `TIMESTAMP` maps to Iceberg `timestamp_ns`), which a v2 table cannot hold, so
+        // pick a format version that accommodates the schema — v2 by default, v3 only when required.
+        let schema_min_format_version = iceberg_schema.min_format_version();
+        let format_version = if schema_min_format_version > FormatVersion::V2 {
+            schema_min_format_version
+        } else {
+            FormatVersion::V2
+        };
         let table_creation = TableCreation::builder()
             .name(name.clone())
             .schema(iceberg_schema)
+            .format_version(format_version)
             .build();
 
         let catalog = self.catalog.clone();

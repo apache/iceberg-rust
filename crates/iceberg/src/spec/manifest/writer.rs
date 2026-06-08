@@ -562,6 +562,93 @@ mod tests {
     use crate::io::FileIO;
     use crate::spec::{DataFileFormat, Manifest, NestedField, PrimitiveType, Schema, Struct, Type};
 
+    /// Risk: failing to read a Java-written V1 manifest because the V1 entry / data-file Avro
+    /// schemas have no `content` / `sequence_number` / `file_sequence_number` columns at all, and a
+    /// strict reader would reject them or leave them unset. The spec (`format/spec.md` 1983-1985)
+    /// mandates manifest-entry `sequence_number` / `file_sequence_number` and data-file `content`
+    /// default to 0 (content=data) when reading a v1 manifest. Round-trips a genuine V1 manifest
+    /// (format-version=1) through `Manifest::parse_avro` and pins the V1→V2 projection in
+    /// `ManifestEntryV1::try_into` (seq/file-seq → Some(0)) and the `DataFileSerde.content` default.
+    #[tokio::test]
+    async fn test_v1_manifest_read_defaults_sequence_numbers_and_content_to_zero() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![Arc::new(NestedField::optional(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Int),
+                ))])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = crate::spec::PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+        let entry = ManifestEntry {
+            status: ManifestStatus::Added,
+            snapshot_id: Some(42),
+            sequence_number: Some(0),
+            file_sequence_number: Some(0),
+            data_file: DataFile {
+                content: DataContentType::Data,
+                file_path: "s3://probe/data/x.parquet".to_string(),
+                file_format: DataFileFormat::Parquet,
+                partition: Struct::empty(),
+                record_count: 1,
+                file_size_in_bytes: 100,
+                column_sizes: HashMap::new(),
+                value_counts: HashMap::new(),
+                null_value_counts: HashMap::new(),
+                nan_value_counts: HashMap::new(),
+                lower_bounds: HashMap::new(),
+                upper_bounds: HashMap::new(),
+                key_metadata: None,
+                split_offsets: None,
+                equality_ids: None,
+                sort_order_id: None,
+                partition_spec_id: 0,
+                first_row_id: None,
+                referenced_data_file: None,
+                content_offset: None,
+                content_size_in_bytes: None,
+            },
+        };
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("v1_manifest.avro");
+        let io = FileIO::new_with_fs();
+        let output_file = io.new_output(path.to_str().unwrap()).unwrap();
+        let mut writer =
+            ManifestWriterBuilder::new(output_file, Some(42), None, schema, partition_spec)
+                .build_v1();
+        writer.add_entry(entry).unwrap();
+        writer.write_manifest_file().await.unwrap();
+
+        let bs = fs::read(&path).expect("read_file must succeed");
+        let manifest = Manifest::parse_avro(&bs).expect("a V1 manifest must be readable");
+        assert_eq!(
+            manifest.metadata().format_version,
+            FormatVersion::V1,
+            "the written manifest must be a genuine V1 manifest"
+        );
+        let parsed = &manifest.entries()[0];
+        assert_eq!(
+            parsed.sequence_number(),
+            Some(0),
+            "absent manifest-entry sequence_number must default to 0 when reading a v1 manifest"
+        );
+        assert_eq!(
+            parsed.file_sequence_number,
+            Some(0),
+            "absent manifest-entry file_sequence_number must default to 0 when reading a v1 manifest"
+        );
+        assert_eq!(
+            parsed.data_file().content_type(),
+            DataContentType::Data,
+            "absent data-file content must default to Data (0) when reading a v1 manifest"
+        );
+    }
+
     #[tokio::test]
     async fn test_add_delete_existing() {
         let schema = Arc::new(

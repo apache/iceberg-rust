@@ -1,0 +1,108 @@
+{
+  "format-version": 1,
+  "table-uuid": "c6bb40bc-7391-4b5c-ba7f-fb7b39dd381b",
+  "location": "s3://interop-bucket/update_partition_spec/remove_field_v1_void",
+  "last-updated-ms": 1780870571590,
+  "last-column-id": 3,
+  "schema": {
+    "schema-id": 0,
+    "type": "struct",
+    "fields": [
+      {
+        "id": 1,
+        "name": "id",
+        "required": true,
+        "type": "long"
+      },
+      {
+        "id": 2,
+        "name": "category",
+        "required": false,
+        "type": "string"
+      },
+      {
+        "id": 3,
+        "name": "event_ts",
+        "required": false,
+        "type": "timestamptz"
+      }
+    ]
+  },
+  "schemas": [
+    {
+      "schema-id": 0,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 2,
+          "name": "category",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "id": 3,
+          "name": "event_ts",
+          "required": false,
+          "type": "timestamptz"
+        }
+      ]
+    }
+  ],
+  "current-schema-id": 0,
+  "partition-spec": [
+    {
+      "source-id": 2,
+      "field-id": 1000,
+      "name": "category",
+      "transform": "void"
+    }
+  ],
+  "partition-specs": [
+    {
+      "spec-id": 1,
+      "fields": [
+        {
+          "source-id": 2,
+          "field-id": 1000,
+          "name": "category",
+          "transform": "void"
+        }
+      ]
+    },
+    {
+      "spec-id": 0,
+      "fields": [
+        {
+          "source-id": 2,
+          "field-id": 1000,
+          "name": "category",
+          "transform": "identity"
+        }
+      ]
+    }
+  ],
+  "default-spec-id": 1,
+  "last-partition-id": 1000,
+  "properties": {
+    "write.parquet.compression-codec": "zstd"
+  },
+  "metadata-log": [
+    {
+      "metadata-file": "/tmp/.tmpkCCf5w/remove_field_v1_void/metadata/00000-00000000-0000-0000-0000-000000000000.metadata.json",
+      "timestamp-ms": 1780870570822
+    }
+  ],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0
+}

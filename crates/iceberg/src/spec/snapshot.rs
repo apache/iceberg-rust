@@ -272,6 +272,14 @@ pub(super) mod _serde {
         pub snapshot_id: i64,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub parent_snapshot_id: Option<i64>,
+        // The Iceberg spec marks `sequence-number` required when WRITING v2/v3 metadata, but
+        // mandates it default to 0 when ABSENT on read (`format/spec.md`: "Snapshot field
+        // `sequence-number` must default to 0" when reading v1 metadata). Java's `SnapshotParser`
+        // omits the field on write when it is <= 0 and reads an absent field as `INITIAL_SEQUENCE_NUMBER`
+        // (0). `#[serde(default)]` mirrors that lenient read so a V1->V2-upgraded table Java wrote
+        // (whose pre-upgrade snapshots carry sequence-number 0, hence omitted) parses in Rust. The
+        // default for `i64` is 0 — exactly `INITIAL_SEQUENCE_NUMBER`.
+        #[serde(default)]
         pub sequence_number: i64,
         pub timestamp_ms: i64,
         pub manifest_list: String,
@@ -293,6 +301,11 @@ pub(super) mod _serde {
         pub snapshot_id: i64,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub parent_snapshot_id: Option<i64>,
+        // See `SnapshotV3.sequence_number`: the spec mandates `sequence-number` default to 0 when
+        // absent on read, and Java's `SnapshotParser` omits it on write when <= 0 / reads absent as 0.
+        // `#[serde(default)]` (i64 default is 0 = `INITIAL_SEQUENCE_NUMBER`) lets Rust read a
+        // V1->V2-upgraded table Java wrote whose carried-over snapshots have sequence-number 0.
+        #[serde(default)]
         pub sequence_number: i64,
         pub timestamp_ms: i64,
         pub manifest_list: String,
@@ -729,5 +742,136 @@ mod tests {
         assert_eq!(v2_snapshot.snapshot_id(), 1111111111);
         assert_eq!(v2_snapshot.parent_snapshot_id(), None);
         assert_eq!(v2_snapshot.schema_id(), None);
+    }
+
+    /// Risk pinned: a Java-written V2 snapshot that OMITS `sequence-number` (because Java's
+    /// `SnapshotParser` omits the field when it equals `INITIAL_SEQUENCE_NUMBER`, i.e. 0) must read
+    /// back with `sequence_number() == 0`, not fail to parse. This is the V1→V2-upgrade carryover
+    /// case: `upgradeFormatVersion` bumps the version without rewriting pre-upgrade snapshot seqs, so
+    /// the emitted V2 metadata has seq-0 snapshots with the field omitted. The spec mandates
+    /// default-to-0 on read (`format/spec.md` lines 1979 & 2002). Without `#[serde(default)]` this
+    /// deserialization fails ("missing field `sequence-number`").
+    #[test]
+    fn test_v2_snapshot_missing_sequence_number_defaults_to_zero() {
+        use crate::spec::snapshot::_serde::SnapshotV2;
+
+        // Kebab-case V2 snapshot JSON with NO `sequence-number` field — exactly what Java emits for a
+        // V1→V2-upgrade carryover snapshot.
+        let record = r#"
+        {
+            "snapshot-id": 3051729675574597004,
+            "timestamp-ms": 1515100955770,
+            "summary": {
+                "operation": "append"
+            },
+            "manifest-list": "s3://b/wh/.../s1.avro",
+            "schema-id": 0
+        }
+        "#;
+
+        let snapshot: Snapshot = serde_json::from_str::<SnapshotV2>(record)
+            .expect(
+                "a V2 snapshot omitting sequence-number must parse (spec: default to 0 on read)",
+            )
+            .into();
+
+        assert_eq!(
+            snapshot.sequence_number(),
+            0,
+            "absent sequence-number must default to 0 (Java INITIAL_SEQUENCE_NUMBER)"
+        );
+        assert_eq!(snapshot.snapshot_id(), 3051729675574597004);
+        assert_eq!(snapshot.manifest_list(), "s3://b/wh/.../s1.avro");
+    }
+
+    /// Negative control for the default-to-0 fix: when `sequence-number` IS present in a V2 snapshot,
+    /// its exact value must be preserved (the `#[serde(default)]` must not clobber a supplied value).
+    #[test]
+    fn test_v2_snapshot_present_sequence_number_is_preserved() {
+        use crate::spec::snapshot::_serde::SnapshotV2;
+
+        let record = r#"
+        {
+            "snapshot-id": 3051729675574597004,
+            "sequence-number": 42,
+            "timestamp-ms": 1515100955770,
+            "summary": {
+                "operation": "append"
+            },
+            "manifest-list": "s3://b/wh/.../s1.avro",
+            "schema-id": 0
+        }
+        "#;
+
+        let snapshot: Snapshot = serde_json::from_str::<SnapshotV2>(record)
+            .expect("a V2 snapshot with sequence-number must parse")
+            .into();
+
+        assert_eq!(
+            snapshot.sequence_number(),
+            42,
+            "a present sequence-number must be read verbatim, not defaulted"
+        );
+    }
+
+    /// Same risk as the V2 case, for the V3 snapshot deserializer: an absent `sequence-number` must
+    /// default to 0 rather than failing to parse (spec-mandated lenient read).
+    #[test]
+    fn test_v3_snapshot_missing_sequence_number_defaults_to_zero() {
+        use crate::spec::snapshot::_serde::SnapshotV3;
+
+        let record = r#"
+        {
+            "snapshot-id": 3051729675574597004,
+            "timestamp-ms": 1515100955770,
+            "summary": {
+                "operation": "append"
+            },
+            "manifest-list": "s3://b/wh/.../s1.avro",
+            "schema-id": 0
+        }
+        "#;
+
+        let snapshot: Snapshot = serde_json::from_str::<SnapshotV3>(record)
+            .expect(
+                "a V3 snapshot omitting sequence-number must parse (spec: default to 0 on read)",
+            )
+            .into();
+
+        assert_eq!(
+            snapshot.sequence_number(),
+            0,
+            "absent sequence-number must default to 0 (Java INITIAL_SEQUENCE_NUMBER)"
+        );
+        assert_eq!(snapshot.snapshot_id(), 3051729675574597004);
+    }
+
+    /// Negative control for the V3 default-to-0 fix: a present `sequence-number` is preserved verbatim.
+    #[test]
+    fn test_v3_snapshot_present_sequence_number_is_preserved() {
+        use crate::spec::snapshot::_serde::SnapshotV3;
+
+        let record = r#"
+        {
+            "snapshot-id": 3051729675574597004,
+            "sequence-number": 7,
+            "timestamp-ms": 1515100955770,
+            "summary": {
+                "operation": "append"
+            },
+            "manifest-list": "s3://b/wh/.../s1.avro",
+            "schema-id": 0
+        }
+        "#;
+
+        let snapshot: Snapshot = serde_json::from_str::<SnapshotV3>(record)
+            .expect("a V3 snapshot with sequence-number must parse")
+            .into();
+
+        assert_eq!(
+            snapshot.sequence_number(),
+            7,
+            "a present sequence-number must be read verbatim, not defaulted"
+        );
     }
 }

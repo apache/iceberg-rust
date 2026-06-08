@@ -1,0 +1,78 @@
+{
+  "format-version": 2,
+  "table-uuid": "350afb36-7f0f-409a-87bf-a17619c08eda",
+  "location": "s3://interop-bucket/update_schema/make_optional_and_delete",
+  "last-sequence-number": 0,
+  "last-updated-ms": 1780864345769,
+  "last-column-id": 3,
+  "schemas": [
+    {
+      "schema-id": 1,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 2,
+          "name": "name",
+          "required": false,
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "schema-id": 0,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 2,
+          "name": "name",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "id": 3,
+          "name": "legacy",
+          "required": false,
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "current-schema-id": 1,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": []
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 999,
+  "properties": {
+    "write.parquet.compression-codec": "zstd"
+  },
+  "metadata-log": [
+    {
+      "metadata-file": "/tmp/.tmpsTSdYo/make_optional_and_delete/metadata/00000-00000000-0000-0000-0000-000000000000.metadata.json",
+      "timestamp-ms": 1780864345386
+    }
+  ],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {}
+}

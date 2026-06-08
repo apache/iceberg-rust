@@ -28,6 +28,7 @@ pub(super) mod _serde;
 mod id_reassigner;
 mod index;
 mod prune_columns;
+mod type_promotion;
 use bimap::BiHashMap;
 use itertools::{Itertools, zip_eq};
 use serde::{Deserialize, Serialize};
@@ -36,6 +37,7 @@ use self::_serde::SchemaEnum;
 use self::id_reassigner::ReassignFieldIds;
 use self::index::{IndexByName, index_by_id, index_parents};
 pub use self::prune_columns::prune_columns;
+pub use self::type_promotion::{ensure_promotion_allowed, is_promotion_allowed};
 use super::NestedField;
 use crate::error::Result;
 use crate::expr::accessor::StructAccessor;
@@ -43,6 +45,7 @@ use crate::spec::datatypes::{
     LIST_FIELD_NAME, ListType, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, MapType, NestedFieldRef,
     PrimitiveType, StructType, Type,
 };
+use crate::spec::table_metadata::FormatVersion;
 use crate::{Error, ErrorKind, ensure_data_valid};
 
 /// Type alias for schema id.
@@ -51,6 +54,12 @@ pub type SchemaId = i32;
 pub type SchemaRef = Arc<Schema>;
 /// Default schema id.
 pub const DEFAULT_SCHEMA_ID: SchemaId = 0;
+
+/// The first table format version that supports non-null column defaults.
+///
+/// Mirrors Java `org.apache.iceberg.Schema.DEFAULT_VALUES_MIN_FORMAT_VERSION`: a non-null
+/// `initial_default` on a field is only valid at format version 3 or later.
+pub const DEFAULT_VALUES_MIN_FORMAT_VERSION: FormatVersion = FormatVersion::V3;
 
 /// Defines schema in iceberg.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -89,6 +98,69 @@ pub struct SchemaBuilder {
     alias_to_id: BiHashMap<String, i32>,
     identifier_field_ids: HashSet<i32>,
     reassign_field_ids_from: Option<i32>,
+}
+
+/// Build the case-insensitive (lower-cased) name → field-id index, rejecting any two distinct columns
+/// whose names differ only by case — the Rust mirror of Java `TypeUtil.indexByLowerCaseName`, which
+/// throws `IllegalArgumentException` rather than silently dropping a collision into a `HashMap`.
+///
+/// `name_to_id` is the case-sensitive index and `id_to_name` its inverse (used only to render the
+/// offending full names in the error). A collision between two fields that share a field id (impossible
+/// in a well-formed schema, but cheap to allow) is not an error. To keep the message deterministic
+/// despite `HashMap` iteration order, the field with the smaller id is reported first — matching Java,
+/// where the first-visited (lower-id) name lands in the map before the colliding one.
+fn build_lowercase_name_index(
+    name_to_id: &HashMap<String, i32>,
+    id_to_name: &HashMap<i32, String>,
+) -> Result<HashMap<String, i32>> {
+    let mut lowercase_name_to_id: HashMap<String, i32> = HashMap::with_capacity(name_to_id.len());
+    for (name, &field_id) in name_to_id {
+        let key = name.to_lowercase();
+        if let Some(&existing_id) = lowercase_name_to_id.get(&key)
+            && existing_id != field_id
+        {
+            // Report the smaller-id field first so the message is order-independent.
+            let (first_id, second_id) = if existing_id <= field_id {
+                (existing_id, field_id)
+            } else {
+                (field_id, existing_id)
+            };
+            let first = id_to_name
+                .get(&first_id)
+                .map(String::as_str)
+                .unwrap_or(name);
+            let second = id_to_name
+                .get(&second_id)
+                .map(String::as_str)
+                .unwrap_or(name);
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Cannot build lower case index: {first} and {second} collide"),
+            ));
+        }
+        lowercase_name_to_id.insert(key, field_id);
+    }
+    Ok(lowercase_name_to_id)
+}
+
+/// The minimum table format version a field's type requires, or `None` if it is valid at every version.
+///
+/// Mirrors Java `org.apache.iceberg.Schema.MIN_FORMAT_VERSIONS` (a `TypeID → minVersion` map): a handful
+/// of types were only introduced in format version 3 and must be rejected on an older table. Only the
+/// nanosecond timestamp types are representable in Rust today; both `timestamp_ns` and `timestamptz_ns`
+/// map to Java's single `TIMESTAMP_NANO` type id and require v3.
+///
+/// Java also gates `variant`, `unknown`, `geometry`, and `geography` at v3 in the same map, but those
+/// types are not yet representable in the Rust `Type`/`PrimitiveType` enums. When they land, add a
+/// one-line `PrimitiveType::Variant => Some(FormatVersion::V3)` arm each here — the helper is shaped so
+/// each new V3-only type is a single addition.
+fn min_format_version(ty: &Type) -> Option<FormatVersion> {
+    match ty {
+        Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs) => {
+            Some(FormatVersion::V3)
+        }
+        _ => None,
+    }
 }
 
 impl SchemaBuilder {
@@ -144,10 +216,7 @@ impl SchemaBuilder {
             index.indexes()
         };
 
-        let lowercase_name_to_id = name_to_id
-            .iter()
-            .map(|(k, v)| (k.to_lowercase(), *v))
-            .collect();
+        let lowercase_name_to_id = build_lowercase_name_index(&name_to_id, &id_to_name)?;
 
         let highest_field_id = id_to_field.keys().max().cloned().unwrap_or(0);
 
@@ -419,6 +488,113 @@ impl Schema {
     pub fn field_id_to_fields(&self) -> &HashMap<i32, NestedFieldRef> {
         &self.id_to_field
     }
+
+    /// Check that this schema is compatible with a table format version.
+    ///
+    /// Mirrors Java `org.apache.iceberg.Schema.checkCompatibility(Schema, int)`: it rejects schema
+    /// features that were only introduced in a later format version. This Rust port enforces both
+    /// rules Java checks, in a single pass over every field:
+    ///
+    /// - **V3-only types** — a field whose type requires a later format version than the table's
+    ///   (see [`min_format_version`]) is rejected. Today that is `timestamp_ns` / `timestamptz_ns`
+    ///   (Java `TIMESTAMP_NANO`), which require v3; Java also gates `variant`/`unknown`/`geometry`/
+    ///   `geography` at v3, but those are not yet representable in Rust.
+    /// - **Column initial-defaults** — a non-null
+    ///   [`initial_default`](NestedField::initial_default) on any field is only valid at format
+    ///   version [`DEFAULT_VALUES_MIN_FORMAT_VERSION`] (v3) or later. Only `initial_default` is gated
+    ///   — `write_default` is intentionally **not** checked, matching Java (a write default only
+    ///   affects future writes, not how existing rows are read).
+    ///
+    /// All fields are reached via [`field_id_to_fields`](Self::field_id_to_fields), the recursive
+    /// id-to-field index (the analogue of Java's `lazyIdToField()`), so a violation buried inside a
+    /// nested struct/list/map is caught exactly like a top-level one. Column names in the error use
+    /// the dotted path from [`field_id_to_name_map`](Self::field_id_to_name_map).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::DataInvalid`] when any field violates either rule. Each offending field
+    /// contributes one line — `"Invalid type for {col}: {type} is not supported until v{min}"` for a
+    /// type violation and/or `"Invalid initial default for {col}: non-null default ({value}) is not
+    /// supported until v3"` for a default violation — accumulated into a single combined error under
+    /// an `"Invalid schema for v{N}:"` header, ordered by field id for determinism (mirroring Java's
+    /// `TreeMap` and its single combined `IllegalStateException`).
+    pub fn check_compatibility(&self, format_version: FormatVersion) -> Result<()> {
+        // Accumulate (field_id, problem-message) for every field that violates a format-version rule,
+        // ordered by field id so the message is deterministic regardless of the index's hash order
+        // (Java accumulates into a TreeMap keyed by field id). A field can contribute both a type
+        // problem and a default problem; both are recorded, matching Java's loop.
+        let mut problems: Vec<(i32, String)> = Vec::new();
+
+        for (field_id, field) in self.field_id_to_fields() {
+            let column_name = self
+                .name_by_field_id(*field_id)
+                .unwrap_or(field.name.as_str());
+
+            // V3-only type gate (mirrors Java `MIN_FORMAT_VERSIONS`).
+            if let Some(min_version) = min_format_version(&field.field_type)
+                && format_version < min_version
+            {
+                problems.push((
+                    *field_id,
+                    format!(
+                        "Invalid type for {column_name}: {} is not supported until {min_version}",
+                        field.field_type
+                    ),
+                ));
+            }
+
+            // Column initial-default gate (mirrors Java `DEFAULT_VALUES_MIN_FORMAT_VERSION`).
+            if let Some(initial_default) = field.initial_default.as_ref()
+                && format_version < DEFAULT_VALUES_MIN_FORMAT_VERSION
+            {
+                problems.push((
+                    *field_id,
+                    format!(
+                        "Invalid initial default for {column_name}: non-null default ({initial_default:?}) is not supported until {}",
+                        DEFAULT_VALUES_MIN_FORMAT_VERSION
+                    ),
+                ));
+            }
+        }
+
+        if problems.is_empty() {
+            return Ok(());
+        }
+
+        problems.sort_by_key(|(field_id, _)| *field_id);
+        let joined = problems
+            .into_iter()
+            .map(|(_, message)| message)
+            .collect::<Vec<_>>()
+            .join("\n- ");
+
+        Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid schema for {format_version}:\n- {joined}"),
+        ))
+    }
+
+    /// The minimum table format version this schema requires.
+    ///
+    /// Returns the highest format version any field demands: `v3` if a field uses a v3-only type
+    /// (`timestamp_ns`/`timestamptz_ns`) or carries a non-null `initial_default`, otherwise `v1`. A
+    /// table whose `format_version` is below this is rejected by
+    /// [`check_compatibility`](Self::check_compatibility), so a caller building a new table from this
+    /// schema can use it to pick a format version that accommodates the schema's types.
+    pub fn min_format_version(&self) -> FormatVersion {
+        let mut min = FormatVersion::V1;
+        for field in self.field_id_to_fields().values() {
+            if let Some(version) = min_format_version(&field.field_type)
+                && version > min
+            {
+                min = version;
+            }
+            if field.initial_default.is_some() && DEFAULT_VALUES_MIN_FORMAT_VERSION > min {
+                min = DEFAULT_VALUES_MIN_FORMAT_VERSION;
+            }
+        }
+        min
+    }
 }
 
 impl Display for Schema {
@@ -464,6 +640,43 @@ mod tests {
         assert_eq!(Some(&field1), schema.field_by_id(1));
         assert_eq!(Some(&field2), schema.field_by_id(2));
         assert_eq!(None, schema.field_by_id(3));
+    }
+
+    // RISK: two columns whose names differ only by case must be rejected at build time with the exact
+    // Java `TypeUtil.indexByLowerCaseName` message — silently collapsing them into one lowercase index
+    // entry (the old `.collect()` behavior) would let a case-insensitive evolution build an ambiguous
+    // schema where "data" and "DATA" both resolve to the same id.
+    #[test]
+    fn test_build_rejects_case_insensitive_name_collision() {
+        let result = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(3, "DATA", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build();
+        let error = result.expect_err("case-colliding column names must fail to build");
+        assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+        assert_eq!(
+            error.message(),
+            "Cannot build lower case index: data and DATA collide",
+            "message must mirror Java TypeUtil.indexByLowerCaseName (smaller field id first)"
+        );
+    }
+
+    // RISK: the collision guard must NOT reject a schema whose names are merely distinct after
+    // lower-casing — a false positive here would block every legal schema with same-prefix columns.
+    #[test]
+    fn test_build_accepts_distinct_lowercase_names() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "Data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "info", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .expect("distinct lowercase names must build");
+        assert!(schema.field_by_name_case_insensitive("DATA").is_some());
+        assert!(schema.field_by_name_case_insensitive("INFO").is_some());
     }
 
     pub fn table_schema_simple<'a>() -> (Schema, &'a str) {
@@ -1226,6 +1439,348 @@ table {
                 ])
                 .build()
                 .is_err()
+        );
+    }
+
+    /// A two-column schema whose second column carries a non-null initial default — the input for the
+    /// `check_compatibility` cases below.
+    fn schema_with_initial_default() -> Schema {
+        Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, "tag", Type::Primitive(PrimitiveType::String))
+                    .with_initial_default(Literal::string("default-tag"))
+                    .into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    // RISK: `check_compatibility` must REJECT a non-null initial default below v3 with the Java-mirrored
+    // message (kind + "not supported until v3" + the offending column name + the `Invalid schema for
+    // v{N}` header). This is the helper-level pin of the rule the builder enforces.
+    #[test]
+    fn test_check_compatibility_rejects_initial_default_below_v3() {
+        use crate::spec::table_metadata::FormatVersion;
+
+        let schema = schema_with_initial_default();
+        for format_version in [FormatVersion::V1, FormatVersion::V2] {
+            let error = schema
+                .check_compatibility(format_version)
+                .expect_err("a non-null initial default must be rejected below v3");
+            assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+            assert!(
+                error.message().contains("is not supported until v3"),
+                "got: {}",
+                error.message()
+            );
+            assert!(
+                error.message().contains("tag"),
+                "message must name the offending column, got: {}",
+                error.message()
+            );
+            assert!(
+                error
+                    .message()
+                    .contains(&format!("Invalid schema for {format_version}")),
+                "message must carry the format-version header, got: {}",
+                error.message()
+            );
+        }
+    }
+
+    // RISK: `check_compatibility` must ACCEPT the same schema at v3 (the feature is legal there) AND must
+    // accept a schema with NO initial default at any version (the common case must not be blocked).
+    #[test]
+    fn test_check_compatibility_allows_default_at_v3_and_no_default_anywhere() {
+        use crate::spec::table_metadata::FormatVersion;
+
+        // Default is legal at v3.
+        assert!(
+            schema_with_initial_default()
+                .check_compatibility(FormatVersion::V3)
+                .is_ok(),
+            "a non-null initial default is allowed at v3",
+        );
+
+        // A schema with no defaults passes at every version (sanity — the guard must not over-fire).
+        let no_default_schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, "tag", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+        for format_version in [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3] {
+            assert!(
+                no_default_schema
+                    .check_compatibility(format_version)
+                    .is_ok(),
+                "a schema with no defaults must pass at {format_version}",
+            );
+        }
+    }
+
+    /// A two-column schema whose second column is the given V3-only type — the input for the
+    /// type-gate `check_compatibility` cases below.
+    fn schema_with_top_level_type(field_name: &str, field_type: Type) -> Schema {
+        Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, field_name, field_type).into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    // RISK: `check_compatibility` must REJECT a `timestamp_ns` column below v3 — the live hole this
+    // increment closes (`add_column(timestamp_ns)` on a V1/V2 table emits metadata Java rejects). The
+    // message must mirror Java: kind `DataInvalid` + "Invalid type for {col}: timestamp_ns is not
+    // supported until v3" under the "Invalid schema for v{N}" header.
+    #[test]
+    fn test_check_compatibility_rejects_timestamp_ns_below_v3() {
+        use crate::spec::table_metadata::FormatVersion;
+
+        let schema =
+            schema_with_top_level_type("event_time", Type::Primitive(PrimitiveType::TimestampNs));
+        for format_version in [FormatVersion::V1, FormatVersion::V2] {
+            let error = schema
+                .check_compatibility(format_version)
+                .expect_err("timestamp_ns must be rejected below v3");
+            assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+            assert!(
+                error.message().contains(
+                    "Invalid type for event_time: timestamp_ns is not supported until v3"
+                ),
+                "got: {}",
+                error.message()
+            );
+            assert!(
+                error
+                    .message()
+                    .contains(&format!("Invalid schema for {format_version}")),
+                "message must carry the format-version header, got: {}",
+                error.message()
+            );
+        }
+    }
+
+    // RISK: the gate must also fire for `timestamptz_ns` (the second Rust type that maps to Java
+    // `TIMESTAMP_NANO`) — not just `timestamp_ns`. A guard that only covered one would let the other
+    // through.
+    #[test]
+    fn test_check_compatibility_rejects_timestamptz_ns_below_v3() {
+        use crate::spec::table_metadata::FormatVersion;
+
+        let schema =
+            schema_with_top_level_type("event_time", Type::Primitive(PrimitiveType::TimestamptzNs));
+        let error = schema
+            .check_compatibility(FormatVersion::V2)
+            .expect_err("timestamptz_ns must be rejected below v3");
+        assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+        assert!(
+            error
+                .message()
+                .contains("Invalid type for event_time: timestamptz_ns is not supported until v3"),
+            "got: {}",
+            error.message()
+        );
+    }
+
+    // RISK: `min_format_version` decides the format version a DataFusion-created table gets — if it
+    // under-reported (missed a v3-only type) the table would be created at v2 and then rejected by
+    // `check_compatibility` (the sqllogictest timestamp regression); a plain schema must stay v1 so
+    // it is not needlessly bumped.
+    #[test]
+    fn test_min_format_version() {
+        use crate::spec::table_metadata::FormatVersion;
+
+        let plain = schema_with_top_level_type("x", Type::Primitive(PrimitiveType::Long));
+        assert_eq!(plain.min_format_version(), FormatVersion::V1);
+
+        let ts_ns = schema_with_top_level_type("ts", Type::Primitive(PrimitiveType::TimestampNs));
+        assert_eq!(ts_ns.min_format_version(), FormatVersion::V3);
+
+        let tstz_ns =
+            schema_with_top_level_type("ts", Type::Primitive(PrimitiveType::TimestamptzNs));
+        assert_eq!(tstz_ns.min_format_version(), FormatVersion::V3);
+    }
+
+    // RISK: the gate must NOT over-fire — a `timestamp_ns` column is legal at v3, where the type was
+    // introduced. Blocking it would make the V3 feature unusable.
+    #[test]
+    fn test_check_compatibility_allows_timestamp_ns_at_v3() {
+        use crate::spec::table_metadata::FormatVersion;
+
+        let schema =
+            schema_with_top_level_type("event_time", Type::Primitive(PrimitiveType::TimestampNs));
+        assert!(
+            schema.check_compatibility(FormatVersion::V3).is_ok(),
+            "timestamp_ns is allowed at v3",
+        );
+    }
+
+    // RISK: the gate must reach NESTED fields, not just top-level columns — Java iterates
+    // `lazyIdToField()` (all fields). A `timestamp_ns` buried in a struct on a V2 table must be
+    // rejected, and the message must carry the dotted path so the operator can find it.
+    #[test]
+    fn test_check_compatibility_rejects_nested_timestamp_ns_below_v3() {
+        use crate::spec::table_metadata::FormatVersion;
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(
+                    2,
+                    "payload",
+                    Type::Struct(StructType::new(vec![
+                        NestedField::optional(
+                            3,
+                            "captured_at",
+                            Type::Primitive(PrimitiveType::TimestampNs),
+                        )
+                        .into(),
+                    ])),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let error = schema
+            .check_compatibility(FormatVersion::V2)
+            .expect_err("a nested timestamp_ns must be rejected below v3");
+        assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+        assert!(
+            error.message().contains(
+                "Invalid type for payload.captured_at: timestamp_ns is not supported until v3"
+            ),
+            "message must carry the dotted path to the nested column, got: {}",
+            error.message()
+        );
+    }
+
+    // RISK: both rules must accumulate into ONE combined error (mirroring Java's TreeMap + single
+    // IllegalStateException). A V2 schema with a `timestamp_ns` column AND a separate column carrying a
+    // non-null initial default must report BOTH problems — proving the type and default checks share
+    // the same accumulator and a single field does not shadow the other's field.
+    #[test]
+    fn test_check_compatibility_accumulates_type_and_default_problems() {
+        use crate::spec::table_metadata::FormatVersion;
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, "event_time", Type::Primitive(PrimitiveType::TimestampNs))
+                    .into(),
+                NestedField::optional(3, "tag", Type::Primitive(PrimitiveType::String))
+                    .with_initial_default(Literal::string("default-tag"))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let error = schema
+            .check_compatibility(FormatVersion::V2)
+            .expect_err("both a V3 type and a V3 default must be rejected on V2");
+        assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+        assert!(
+            error
+                .message()
+                .contains("Invalid type for event_time: timestamp_ns is not supported until v3"),
+            "the type problem must be reported, got: {}",
+            error.message()
+        );
+        // The default-value text is rendered via `Literal`'s `Debug` impl, which differs by language
+        // from Java's `toString()`; assert on the stable structural substrings, not the value text.
+        assert!(
+            error
+                .message()
+                .contains("Invalid initial default for tag: non-null default")
+                && error.message().contains("is not supported until v3"),
+            "the initial-default problem must be reported in the same error, got: {}",
+            error.message()
+        );
+        // Ordered by field id: the type problem (field 2) precedes the default problem (field 3).
+        let type_position = error
+            .message()
+            .find("Invalid type for event_time")
+            .expect("type problem present");
+        let default_position = error
+            .message()
+            .find("Invalid initial default for tag")
+            .expect("default problem present");
+        assert!(
+            type_position < default_position,
+            "problems must be ordered by field id, got: {}",
+            error.message()
+        );
+    }
+
+    // RISK: INTENTIONAL DIVERGENCE FROM JAVA. Java keys `problems` by field id in a `TreeMap`, so when a
+    // SINGLE field is BOTH a V3-only type AND carries a non-null initial default, the second
+    // `problems.put(fieldId, ...)` OVERWRITES the first and only the default message survives for that
+    // field. Rust accumulates into a `Vec<(field_id, message)>`, so the SAME field reports BOTH problems.
+    // This is a benign over-report: accept/reject is identical (both produce a rejection), the extra line
+    // is strictly more informative, and message text already differs by language. This test pins the
+    // both-report so the divergence is intentional and tracked, not an accident — if a future change makes
+    // Rust drop one of the two lines for a single field, this test fails and forces a conscious decision.
+    #[test]
+    fn test_check_compatibility_single_field_both_type_and_default_reports_both_lines() {
+        use crate::spec::table_metadata::FormatVersion;
+
+        // One field (id 2) is simultaneously a V3-only `timestamp_ns` type AND carries a non-null
+        // initial default — the exact case where Java's TreeMap collapses to a single (default) message.
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, "event_time", Type::Primitive(PrimitiveType::TimestampNs))
+                    .with_initial_default(Literal::long(0))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let error = schema
+            .check_compatibility(FormatVersion::V2)
+            .expect_err("a field that is both a V3 type and a V3 default must be rejected on V2");
+        assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+        // Both problem lines are present for the single field (Rust over-reports vs Java's last-wins).
+        assert!(
+            error
+                .message()
+                .contains("Invalid type for event_time: timestamp_ns is not supported until v3"),
+            "the type problem must be reported for the single field, got: {}",
+            error.message()
+        );
+        assert!(
+            error
+                .message()
+                .contains("Invalid initial default for event_time: non-null default")
+                && error.message().contains("is not supported until v3"),
+            "the default problem must ALSO be reported for the same field (intentional divergence from \
+             Java's TreeMap last-wins), got: {}",
+            error.message()
+        );
+        // The type problem precedes the default problem (push order, preserved by the stable sort).
+        let type_position = error
+            .message()
+            .find("Invalid type for event_time")
+            .expect("type problem present");
+        let default_position = error
+            .message()
+            .find("Invalid initial default for event_time")
+            .expect("default problem present");
+        assert!(
+            type_position < default_position,
+            "for a single field the type line must precede the default line, got: {}",
+            error.message()
         );
     }
 }

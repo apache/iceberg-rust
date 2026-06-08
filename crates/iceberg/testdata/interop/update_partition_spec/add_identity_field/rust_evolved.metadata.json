@@ -1,0 +1,71 @@
+{
+  "format-version": 2,
+  "table-uuid": "133bc8e9-c861-46a3-a369-2f58dcd3f07b",
+  "location": "s3://interop-bucket/update_partition_spec/add_identity_field",
+  "last-sequence-number": 0,
+  "last-updated-ms": 1780870571583,
+  "last-column-id": 3,
+  "schemas": [
+    {
+      "schema-id": 0,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 2,
+          "name": "category",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "id": 3,
+          "name": "event_ts",
+          "required": false,
+          "type": "timestamptz"
+        }
+      ]
+    }
+  ],
+  "current-schema-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 1,
+      "fields": [
+        {
+          "source-id": 2,
+          "field-id": 1000,
+          "name": "category",
+          "transform": "identity"
+        }
+      ]
+    },
+    {
+      "spec-id": 0,
+      "fields": []
+    }
+  ],
+  "default-spec-id": 1,
+  "last-partition-id": 1000,
+  "properties": {
+    "write.parquet.compression-codec": "zstd"
+  },
+  "metadata-log": [
+    {
+      "metadata-file": "/tmp/.tmpL7sHTx/add_identity_field/metadata/00000-00000000-0000-0000-0000-000000000000.metadata.json",
+      "timestamp-ms": 1780870570790
+    }
+  ],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {}
+}

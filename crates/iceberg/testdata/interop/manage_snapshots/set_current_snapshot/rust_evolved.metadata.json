@@ -1,0 +1,112 @@
+{
+  "format-version": 2,
+  "table-uuid": "eb1941b4-d4e0-4eed-97f7-19b5b53d30ad",
+  "location": "s3://interop-bucket/manage_snapshots/set_current_snapshot",
+  "last-sequence-number": 3,
+  "last-updated-ms": 1780874755246,
+  "last-column-id": 2,
+  "schemas": [
+    {
+      "schema-id": 0,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 2,
+          "name": "data",
+          "required": false,
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "current-schema-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": []
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 999,
+  "properties": {
+    "write.parquet.compression-codec": "zstd"
+  },
+  "current-snapshot-id": 3051729675574597004,
+  "snapshot-log": [
+    {
+      "snapshot-id": 3055729675574597004,
+      "timestamp-ms": 1555100955770
+    },
+    {
+      "snapshot-id": 3051729675574597004,
+      "timestamp-ms": 1780874755246
+    }
+  ],
+  "metadata-log": [
+    {
+      "metadata-file": "/tmp/.tmpHjAVFr/set_current_snapshot/metadata/00000-00000000-0000-0000-0000-000000000000.metadata.json",
+      "timestamp-ms": 1555100955770
+    }
+  ],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {
+    "dev": {
+      "snapshot-id": 3055729675574597004,
+      "type": "branch"
+    },
+    "main": {
+      "snapshot-id": 3051729675574597004,
+      "type": "branch"
+    },
+    "stable": {
+      "snapshot-id": 3051729675574597004,
+      "type": "tag"
+    }
+  },
+  "snapshots": [
+    {
+      "snapshot-id": 3051729675574597004,
+      "sequence-number": 1,
+      "timestamp-ms": 1515100955770,
+      "manifest-list": "s3://interop-bucket/manage_snapshots/metadata/snap-3051729675574597004.avro",
+      "summary": {
+        "operation": "append"
+      },
+      "schema-id": 0
+    },
+    {
+      "snapshot-id": 3055729675574597004,
+      "parent-snapshot-id": 3051729675574597004,
+      "sequence-number": 2,
+      "timestamp-ms": 1555100955770,
+      "manifest-list": "s3://interop-bucket/manage_snapshots/metadata/snap-3055729675574597004.avro",
+      "summary": {
+        "operation": "append"
+      },
+      "schema-id": 0
+    },
+    {
+      "snapshot-id": 3060729675574597004,
+      "parent-snapshot-id": 3051729675574597004,
+      "sequence-number": 3,
+      "timestamp-ms": 1600000000000,
+      "manifest-list": "s3://interop-bucket/manage_snapshots/metadata/snap-3060729675574597004.avro",
+      "summary": {
+        "operation": "append"
+      },
+      "schema-id": 0
+    }
+  ]
+}

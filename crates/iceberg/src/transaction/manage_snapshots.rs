@@ -59,6 +59,9 @@ enum SnapshotOp {
     SetCurrent { snapshot_id: i64 },
     /// Roll the `main` branch back to an ancestor of its current snapshot.
     RollbackTo { snapshot_id: i64 },
+    /// Roll the `main` branch back to the newest ancestor of its current snapshot whose timestamp is
+    /// strictly older than `timestamp_ms`.
+    RollbackToTime { timestamp_ms: i64 },
     /// Fast-forward branch `from` to the snapshot of branch `to` (requires `from` ⊑ `to`).
     FastForward { from: String, to: String },
     /// Update a retention field on an existing ref.
@@ -66,9 +69,12 @@ enum SnapshotOp {
 }
 
 /// Transaction action for managing snapshot references: branch/tag lifecycle, rollback,
-/// fast-forward, and ref retention — the engine-agnostic subset of Java's `ManageSnapshots`.
+/// rollback-to-time, fast-forward, and ref retention — the engine-agnostic subset of Java's
+/// `ManageSnapshots`.
 ///
-/// `cherrypick` and `rollbackToTime` are intentionally not yet implemented (see `task/todo.md`).
+/// `cherrypick` is intentionally not implemented here: Java's `cherrypick` extends
+/// `MergingSnapshotProducer` and replays data files, which belongs to the Phase-2 write engine
+/// (gated on `MergingSnapshotProducer`), not this metadata-only ref-management surface.
 pub struct ManageSnapshotsAction {
     ops: Vec<SnapshotOp>,
 }
@@ -158,6 +164,14 @@ impl ManageSnapshotsAction {
         self
     }
 
+    /// Roll the `main` branch back to the latest snapshot in its current ancestry whose timestamp is
+    /// strictly older than `timestamp_ms` (Java `SnapshotManager.rollbackToTime` ⇒
+    /// `SetSnapshotOperation.rollbackToTime`). Fails at commit if no ancestor qualifies.
+    pub fn rollback_to_time(mut self, timestamp_ms: i64) -> Self {
+        self.ops.push(SnapshotOp::RollbackToTime { timestamp_ms });
+        self
+    }
+
     /// Fast-forward branch `from` to the snapshot referenced by `to`. `to` may be any ref (branch
     /// or tag). If `from` already exists it must be a branch and its snapshot must be an ancestor of
     /// `to`'s snapshot; if `from` does not exist it is created as a branch at `to`'s snapshot
@@ -217,6 +231,35 @@ fn is_ancestor_of(metadata: &TableMetadata, ancestor_id: i64, descendant_id: i64
             .and_then(|s| s.parent_snapshot_id());
     }
     false
+}
+
+/// Return the snapshot id of the newest ancestor of `from_snapshot_id` (inclusive) whose
+/// `timestamp_ms` is strictly older than `timestamp_ms`, or `None` if no ancestor qualifies.
+///
+/// Mirrors Java `SetSnapshotOperation.findLatestAncestorOlderThan`: it walks the parent chain of the
+/// current snapshot (Java's `SnapshotUtil.ancestorIds(currentSnapshot)`) and keeps the qualifying
+/// snapshot with the maximum timestamp. The comparison is strict (`<`), matching Java — so a timestamp
+/// equal to a snapshot's own timestamp does not select that snapshot.
+fn find_latest_ancestor_older_than(
+    metadata: &TableMetadata,
+    from_snapshot_id: i64,
+    timestamp_ms: i64,
+) -> Option<i64> {
+    let mut best: Option<(i64, i64)> = None; // (snapshot_id, timestamp_ms)
+    let mut current = Some(from_snapshot_id);
+    while let Some(id) = current {
+        let snapshot = metadata.snapshot_by_id(id);
+        if let Some(snapshot) = snapshot {
+            let snapshot_timestamp = snapshot.timestamp_ms();
+            if snapshot_timestamp < timestamp_ms
+                && best.is_none_or(|(_, best_timestamp)| snapshot_timestamp > best_timestamp)
+            {
+                best = Some((id, snapshot_timestamp));
+            }
+        }
+        current = snapshot.and_then(|s| s.parent_snapshot_id());
+    }
+    best.map(|(snapshot_id, _)| snapshot_id)
 }
 
 fn data_invalid(msg: String) -> Error {
@@ -342,6 +385,24 @@ impl TransactionAction for ManageSnapshotsAction {
                     set_main(&mut refs, *snapshot_id);
                     mark_touched(MAIN_BRANCH, &mut touched_order, &mut touched_set);
                 }
+                SnapshotOp::RollbackToTime { timestamp_ms } => {
+                    let current =
+                        refs.get(MAIN_BRANCH)
+                            .map(|r| r.snapshot_id)
+                            .ok_or_else(|| {
+                                data_invalid(
+                                    "Cannot roll back: table has no current snapshot".to_string(),
+                                )
+                            })?;
+                    let target = find_latest_ancestor_older_than(metadata, current, *timestamp_ms)
+                        .ok_or_else(|| {
+                            data_invalid(format!(
+                                "Cannot roll back, no valid snapshot older than: {timestamp_ms}"
+                            ))
+                        })?;
+                    set_main(&mut refs, target);
+                    mark_touched(MAIN_BRANCH, &mut touched_order, &mut touched_set);
+                }
                 SnapshotOp::FastForward { from, to } => {
                     // Matches Java `UpdateSnapshotReferencesOperation.replaceBranch(from, to, true)`:
                     // `to` may be ANY ref (branch or tag) — only its snapshot id matters; and an
@@ -460,12 +521,33 @@ fn check_kind(name: &str, reference: &SnapshotReference, expect_branch: bool) ->
     Ok(())
 }
 
-/// Produce a new retention policy with one field updated. Branch fields are rejected on tags.
+/// Reject a non-positive retention value, matching the `value > 0` `Preconditions.checkArgument`s in
+/// Java's `SnapshotRef.Builder` (`minSnapshotsToKeep` / `maxSnapshotAgeMs` / `maxRefAgeMs`). The Java
+/// messages are reproduced verbatim so error-shape parity holds. (Java also permits `null` to clear a
+/// field, but this builder API always sets a concrete value, so only the `<= 0` case can occur here.)
+fn validate_retention_positive(field: &RetentionField) -> Result<()> {
+    match field {
+        RetentionField::MinSnapshotsToKeep(value) if *value <= 0 => Err(data_invalid(
+            "Min snapshots to keep must be greater than 0".to_string(),
+        )),
+        RetentionField::MaxSnapshotAgeMs(value) if *value <= 0 => Err(data_invalid(
+            "Max snapshot age must be greater than 0 ms".to_string(),
+        )),
+        RetentionField::MaxRefAgeMs(value) if *value <= 0 => Err(data_invalid(
+            "Max reference age must be greater than 0".to_string(),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Produce a new retention policy with one field updated. Branch fields are rejected on tags, and a
+/// non-positive value is rejected (Java `SnapshotRef.Builder`).
 fn apply_retention(
     name: &str,
     current: &SnapshotRetention,
     field: &RetentionField,
 ) -> Result<SnapshotRetention> {
+    validate_retention_positive(field)?;
     match current {
         SnapshotRetention::Branch {
             min_snapshots_to_keep,
@@ -503,7 +585,7 @@ mod tests {
     };
     use crate::table::Table;
     use crate::transaction::{Transaction, TransactionAction};
-    use crate::{TableRequirement, TableUpdate};
+    use crate::{ErrorKind, TableRequirement, TableUpdate};
 
     // From TableMetadataV2Valid.json: main -> 3055..., whose parent is the root 3051....
     const CURRENT: i64 = 3055729675574597004;
@@ -950,6 +1032,210 @@ mod tests {
         let requirements = commit.take_requirements();
         assert!(is_removed(&updates, "dev"));
         assert_eq!(requirement_for(&requirements, "dev"), Some(Some(CURRENT)));
+    }
+
+    // Base-fixture snapshot timestamps (from TableMetadataV2Valid.json), used by the rollback-to-time
+    // tests. main points at CURRENT, whose ancestry is {CURRENT, ROOT}.
+    const ROOT_TIMESTAMP_MS: i64 = 1515100955770; // ROOT
+    const CURRENT_TIMESTAMP_MS: i64 = 1555100955770; // CURRENT (child of ROOT)
+
+    #[tokio::test]
+    async fn test_rollback_to_time_picks_newest_older_ancestor() {
+        // A timestamp strictly between ROOT and CURRENT selects ROOT (the newest ancestor older than
+        // it); CURRENT is too new. Pins: the resolver picks the right ancestor by timestamp.
+        let table = table();
+        let between = ROOT_TIMESTAMP_MS + 1;
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .rollback_to_time(between);
+        let mut commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = commit.take_updates();
+        assert_eq!(find_set(&updates, MAIN_BRANCH).unwrap().snapshot_id, ROOT);
+    }
+
+    #[tokio::test]
+    async fn test_rollback_to_time_strict_less_than_skips_equal_timestamp() {
+        // The comparison is STRICT (`<`): a timestamp exactly equal to CURRENT's own timestamp does
+        // not select CURRENT, so the rollback lands on the next-older ancestor, ROOT. Pins: the strict
+        // `<` boundary (Java `snapshot.timestampMillis() < timestampMillis`).
+        let table = table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .rollback_to_time(CURRENT_TIMESTAMP_MS);
+        let mut commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = commit.take_updates();
+        assert_eq!(find_set(&updates, MAIN_BRANCH).unwrap().snapshot_id, ROOT);
+    }
+
+    #[tokio::test]
+    async fn test_rollback_to_time_before_first_snapshot_fails() {
+        // A timestamp older than every ancestor leaves no valid snapshot to roll back to -> error with
+        // the exact Java message. Pins: the empty-result error path.
+        let table = table();
+        let before_root = ROOT_TIMESTAMP_MS - 1;
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .rollback_to_time(before_root);
+        let error = Arc::new(action)
+            .commit(&table)
+            .await
+            .map(drop)
+            .expect_err("rollback before the first snapshot must fail");
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(
+            error
+                .message()
+                .contains("Cannot roll back, no valid snapshot older than"),
+            "unexpected message: {}",
+            error.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rollback_to_time_after_current_is_noop() {
+        // A timestamp newer than CURRENT selects CURRENT (the newest ancestor older than it), which is
+        // already main's snapshot -> the change is a net no-op and is suppressed at emit. Pins:
+        // "at/after current keeps current".
+        let table = table();
+        let after_current = CURRENT_TIMESTAMP_MS + 1;
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .rollback_to_time(after_current);
+        let mut commit = Arc::new(action).commit(&table).await.unwrap();
+        assert!(
+            commit.take_updates().is_empty(),
+            "rollback-to-time that keeps the current snapshot must emit no updates"
+        );
+        assert!(commit.take_requirements().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_rollback_to_time_never_selects_a_sibling() {
+        // SIBLING (timestamp 1700000000000, child of ROOT) is NOT in main's ancestry. Even with a
+        // timestamp newer than SIBLING, the ancestry walk from CURRENT only sees {CURRENT, ROOT}, so
+        // the target is CURRENT (a no-op), never SIBLING. Pins: non-ancestor snapshots are never chosen.
+        let table = forked_table();
+        let after_sibling = 1800000000000; // > SIBLING's 1700000000000 and > CURRENT
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .rollback_to_time(after_sibling);
+        let mut commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = commit.take_updates();
+        // No SetSnapshotRef pointing main at SIBLING; in fact main is unchanged (CURRENT), so nothing
+        // is emitted at all.
+        assert!(
+            find_set(&updates, MAIN_BRANCH).is_none(),
+            "main must not be moved to a non-ancestor sibling"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_min_snapshots_to_keep_zero_fails() {
+        // Java `SnapshotRef.Builder.minSnapshotsToKeep` rejects `<= 0`. Pins: positivity guard + message.
+        let table = table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .create_branch("b1", ROOT)
+            .set_min_snapshots_to_keep("b1", 0);
+        let error = Arc::new(action)
+            .commit(&table)
+            .await
+            .map(drop)
+            .expect_err("zero min-snapshots-to-keep must fail");
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            error.message(),
+            "Min snapshots to keep must be greater than 0"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_min_snapshots_to_keep_negative_fails() {
+        let table = table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .create_branch("b1", ROOT)
+            .set_min_snapshots_to_keep("b1", -5);
+        let error = Arc::new(action)
+            .commit(&table)
+            .await
+            .map(drop)
+            .expect_err("negative min-snapshots-to-keep must fail");
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            error.message(),
+            "Min snapshots to keep must be greater than 0"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_max_snapshot_age_ms_zero_fails() {
+        let table = table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .create_branch("b1", ROOT)
+            .set_max_snapshot_age_ms("b1", 0);
+        let error = Arc::new(action)
+            .commit(&table)
+            .await
+            .map(drop)
+            .expect_err("zero max-snapshot-age-ms must fail");
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            error.message(),
+            "Max snapshot age must be greater than 0 ms"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_max_snapshot_age_ms_negative_fails() {
+        let table = table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .create_branch("b1", ROOT)
+            .set_max_snapshot_age_ms("b1", -1);
+        let error = Arc::new(action)
+            .commit(&table)
+            .await
+            .map(drop)
+            .expect_err("negative max-snapshot-age-ms must fail");
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            error.message(),
+            "Max snapshot age must be greater than 0 ms"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_max_ref_age_ms_zero_fails() {
+        let table = table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .create_tag("t1", ROOT)
+            .set_max_ref_age_ms("t1", 0);
+        let error = Arc::new(action)
+            .commit(&table)
+            .await
+            .map(drop)
+            .expect_err("zero max-ref-age-ms must fail");
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert_eq!(error.message(), "Max reference age must be greater than 0");
+    }
+
+    #[tokio::test]
+    async fn test_set_max_ref_age_ms_negative_fails() {
+        let table = table();
+        let action = Transaction::new(&table)
+            .manage_snapshots()
+            .create_tag("t1", ROOT)
+            .set_max_ref_age_ms("t1", -100);
+        let error = Arc::new(action)
+            .commit(&table)
+            .await
+            .map(drop)
+            .expect_err("negative max-ref-age-ms must fail");
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert_eq!(error.message(), "Max reference age must be greater than 0");
     }
 
     #[tokio::test]

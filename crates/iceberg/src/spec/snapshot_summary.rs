@@ -335,8 +335,11 @@ pub(crate) fn update_snapshot_summaries(
     previous_summary: Option<&Summary>,
     truncate_full_table: bool,
 ) -> Result<Summary> {
-    // Validate that the operation is supported
+    // Validate that the operation is supported. `Replace` is the data-file rewrite (compaction) operation
+    // (Java `DataOperations.REPLACE`); its totals accumulate the same way (previous + added - removed) as
+    // the other operations — Java's `SnapshotProducer.summary` is operation-agnostic.
     if summary.operation != Operation::Append
+        && summary.operation != Operation::Replace
         && summary.operation != Operation::Overwrite
         && summary.operation != Operation::Delete
     {

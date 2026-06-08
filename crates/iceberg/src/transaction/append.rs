@@ -120,6 +120,13 @@ impl SnapshotProduceOperation for FastAppendOperation {
         Ok(vec![])
     }
 
+    async fn delete_files(
+        &self,
+        _snapshot_produce: &SnapshotProducer<'_>,
+    ) -> Result<Vec<DataFile>> {
+        Ok(vec![])
+    }
+
     async fn existing_manifest(
         &self,
         snapshot_produce: &SnapshotProducer<'_>,

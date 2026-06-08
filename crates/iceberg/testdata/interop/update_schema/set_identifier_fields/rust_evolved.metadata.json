@@ -1,0 +1,88 @@
+{
+  "format-version": 2,
+  "table-uuid": "0955bdb4-b698-401b-bed1-c1a1767b6d2a",
+  "location": "s3://interop-bucket/update_schema/set_identifier_fields",
+  "last-sequence-number": 0,
+  "last-updated-ms": 1780864345771,
+  "last-column-id": 3,
+  "schemas": [
+    {
+      "schema-id": 1,
+      "identifier-field-ids": [
+        2,
+        1
+      ],
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 2,
+          "name": "tenant",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "id": 3,
+          "name": "data",
+          "required": false,
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "schema-id": 0,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 2,
+          "name": "tenant",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "id": 3,
+          "name": "data",
+          "required": false,
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "current-schema-id": 1,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": []
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 999,
+  "properties": {
+    "write.parquet.compression-codec": "zstd"
+  },
+  "metadata-log": [
+    {
+      "metadata-file": "/tmp/.tmpUJsU4x/set_identifier_fields/metadata/00000-00000000-0000-0000-0000-000000000000.metadata.json",
+      "timestamp-ms": 1780864345387
+    }
+  ],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {}
+}

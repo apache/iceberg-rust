@@ -591,15 +591,25 @@ impl PartitionSpecBuilder {
 
     /// Ensure that the partition name is unique among columns in the schema.
     /// Duplicate names are allowed if:
-    /// 1. The column is sourced from the column with the same name.
-    /// 2. AND the transformation is identity
+    /// 1. The partition is sourced from the schema column with that same name (source-id match), AND
+    /// 2. the transform is identity OR void.
+    ///
+    /// The `void` exception mirrors Java's bind path: when a V1 partition field is removed it is
+    /// re-added as `void(name)` under the SAME name (preserving its field id), sourced from its own
+    /// column — Java's `PartitionSpec.Builder.checkAndAddPartitionName(name, sourceId)` permits it
+    /// because the name↔source-id correspondence holds and the transform is not restricted to identity.
+    /// Without the void exception the `UpdatePartitionSpec` V1 void replacement is rejected when its
+    /// emitted spec is bound (surfaced by the interop suite). Non-identity, non-void transforms named
+    /// after a schema column remain rejected (matching Java's strict public builder path).
     fn check_name_does_not_collide_with_schema(
         field: &UnboundPartitionField,
         schema: &Schema,
     ) -> Result<()> {
         match schema.field_by_name(field.name.as_str()) {
             Some(schema_collision) => {
-                if field.transform == Transform::Identity {
+                let is_identity_or_void =
+                    field.transform == Transform::Identity || field.transform == Transform::Void;
+                if is_identity_or_void {
                     if schema_collision.id == field.source_id {
                         Ok(())
                     } else {
@@ -1331,6 +1341,52 @@ mod tests {
                 field_id: None,
                 name: "id".to_string(),
                 transform: Transform::Identity,
+            })
+            .unwrap_err();
+    }
+
+    // RISK (Java-parity, surfaced by the UpdatePartitionSpec interop suite): a `void` partition named
+    // after its OWN source column must be accepted (the V1 removed-field replacement), but a `void`
+    // named after a DIFFERENT schema column must still be rejected. Mirrors Java's bind-path
+    // `checkAndAddPartitionName(name, sourceId)` — the name↔source-id correspondence, not the transform,
+    // is the rule. The earlier identity-only guard rejected the legitimate void replacement.
+    #[test]
+    fn test_builder_collision_is_ok_for_void_named_after_its_own_source() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(crate::spec::PrimitiveType::Int))
+                    .into(),
+                NestedField::required(
+                    2,
+                    "number",
+                    Type::Primitive(crate::spec::PrimitiveType::Int),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        // OK: void("id") sourced from id 1 (== the colliding schema field's id).
+        PartitionSpec::builder(schema.clone())
+            .with_spec_id(1)
+            .add_unbound_field(UnboundPartitionField {
+                source_id: 1,
+                field_id: Some(1000),
+                name: "id".to_string(),
+                transform: Transform::Void,
+            })
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Not OK: void("id") sourced from a DIFFERENT column (id 2).
+        PartitionSpec::builder(schema)
+            .with_spec_id(1)
+            .add_unbound_field(UnboundPartitionField {
+                source_id: 2,
+                field_id: Some(1000),
+                name: "id".to_string(),
+                transform: Transform::Void,
             })
             .unwrap_err();
     }

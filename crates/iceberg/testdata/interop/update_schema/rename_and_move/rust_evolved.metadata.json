@@ -1,0 +1,96 @@
+{
+  "format-version": 2,
+  "table-uuid": "5db15d60-4cd9-41ae-8a0b-69ea3e830530",
+  "location": "s3://interop-bucket/update_schema/rename_and_move",
+  "last-sequence-number": 0,
+  "last-updated-ms": 1780864345765,
+  "last-column-id": 4,
+  "schemas": [
+    {
+      "schema-id": 0,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 2,
+          "name": "first_name",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "id": 3,
+          "name": "last_name",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "id": 4,
+          "name": "email",
+          "required": false,
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "schema-id": 1,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 4,
+          "name": "email_address",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "id": 2,
+          "name": "first_name",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 3,
+          "name": "last_name",
+          "required": false,
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "current-schema-id": 1,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": []
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 999,
+  "properties": {
+    "write.parquet.compression-codec": "zstd"
+  },
+  "metadata-log": [
+    {
+      "metadata-file": "/tmp/.tmpCaZr6Q/rename_and_move/metadata/00000-00000000-0000-0000-0000-000000000000.metadata.json",
+      "timestamp-ms": 1780864345382
+    }
+  ],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {}
+}

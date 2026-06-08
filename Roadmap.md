@@ -62,8 +62,56 @@ layers are removed in Phase 0.
    [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRIX.md) → [docs/testing.md](docs/testing.md).
 2. **Phase 0 is complete (2026-06-07); Phase 1 is in progress.** **`main` is the owned 0.9.1 base** (the
    Phase 0 sync landed on it 2026-06-07) — start from `main`, or a short-lived feature branch off it.
-   Within Phase 1, increment 1 (`ManageSnapshots`) has landed (🟡); **the next move is increment 2 —
-   `UpdatePartitionSpec`**. The live, increment-level plan and checkbox state are in
+   Within Phase 1, increments 1–4 have landed (all 🟡): increments 1–3 (`ManageSnapshots`,
+   `UpdatePartitionSpec`, `UpdateSchema`), and increment 4 (the `ManageSnapshots` tail — `rollbackToTime` +
+   non-positive-retention rejection — plus `UpdateSchema` column initial/write defaults). **`cherrypick` is
+   reclassified as Phase-2-gated** (it extends `MergingSnapshotProducer` / replays data files, so it belongs
+   to the write engine, not this metadata surface). **`UpdateSchema` is now a clean ✅** — the increment-5
+   interop pilot (2026-06-07) landed a bidirectional Java round-trip (`dev/java-interop/` oracle +
+   `crates/iceberg/tests/interop_update_schema.rs`, 7 scenarios, both directions green), and increments 6–7
+   (2026-06-07) closed the last holes by enforcing the V3-only initial-default guard AND the V3-only
+   **type** gate (`Schema::check_compatibility` in `TableMetadataBuilder::add_schema`, mirroring Java
+   `Schema.checkCompatibility` in full — both `DEFAULT_VALUES_MIN_FORMAT_VERSION` and `MIN_FORMAT_VERSIONS`).
+   **`UpdatePartitionSpec` is now ✅ too** (bidirectional interop landed 2026-06-07 via the same
+   `dev/java-interop/` oracle — one `generate`/`verify` pass now covers both schema + partition; the
+   interop surfaced and fixed a real Rust↔Java divergence in the partition-name↔schema collision check —
+   identity-only → identity-OR-void, mirroring Java's bind path). **`ManageSnapshots` (the ref-operation
+   surface) is now ✅ too** (bidirectional interop landed 2026-06-07 via the same `dev/java-interop/`
+   oracle — one `generate`/`verify` pass now covers all THREE capabilities (schema + partition +
+   manage-snapshots), 7 manage-snapshots scenarios both directions green via
+   `crates/iceberg/tests/interop_manage_snapshots.rs`; both the "Snapshot model + refs" and the
+   ref-operation surface of "Snapshot management" flipped to ✅). **`cherrypick` is NOT interop-proven and
+   stays Phase-2-gated** (it extends `MergingSnapshotProducer` / replays data files). The interop surfaced
+   a Rust read divergence (the V2/V3 snapshot reader required `sequence-number` while the spec and Java
+   default an absent value to 0 on read) — **FIXED 2026-06-07** with `#[serde(default)]` on
+   `_serde::SnapshotV2`/`SnapshotV3.sequence_number`, so Rust now reads the seq-0 V1→V2-upgrade-carryover
+   tables Java emits. The sibling spec default-to-0 read fields on the **Avro manifest / manifest-list path**
+   (manifest-list `content`/`sequence-number`/`min-sequence-number`; manifest-entry `sequence_number`/
+   `file_sequence_number`; data-file `content`) were **VERIFIED already-correct and pinned 2026-06-07**
+   (per-field empirical proof + mutation-verified regression tests — no production change needed; the readers
+   were already lenient, the gap was test coverage). The only residual is table-metadata
+   `last-sequence-number`, which Java ALWAYS writes for V2+ — a non-Java/hand-written robustness gap only.
+   **With all three Phase-1 evolution capabilities interop-proven, Phase 2 (write engine) has begun: increment 1
+   — `DeleteFiles` + the foundational manifest-filter / rewrite machinery in `SnapshotProducer` — landed 🟡
+   on 2026-06-07 (delete data files by path/reference; `MemoryCatalog` unit tests; data-level Java interop
+   deferred); increment 2 — `OverwriteFiles` (explicit add + delete in one `Overwrite` snapshot, composing
+   the add + delete paths via the now-shared `SnapshotProducer::{resolve_delete_paths,
+   current_data_manifests}`; summary reflects added + deleted counts) — landed 🟡 the same day; increment 3
+   — `ReplacePartitions` (dynamic partition overwrite; a by-PARTITION sibling resolver
+   `SnapshotProducer::resolve_partition_deletes` feeds the same rewrite path; replaces every partition an
+   added file belongs to, full replace on an unpartitioned table, `replace-partitions` marker) — landed 🟡
+   the same day; increment 4 — `RewriteFiles` (the compaction-commit primitive: atomically replace a set of
+   DATA files with a new set in one `Operation::Replace` snapshot, Java `BaseRewriteFiles`; reuses the
+   by-path `resolve_delete_paths` + `process_deletes` machinery unchanged; delete set must be non-empty) —
+   landed 🟡 the same day. Increment 5a — the `PositionDeleteFileWriter`
+   (`writer/base_writer/position_delete_writer.rs`, first piece of the `RowDelta` merge-on-read write path:
+   writes the Iceberg position-delete file `file_path`/`pos` with `content(PositionDeletes)`, Java-faithful
+   write-as-given) — landed 🟡 on 2026-06-08. Next Phase-2 increments: `RowDelta` action (5b) + producer
+   delete-manifest handling, deletion-vector writer (5c), `RewriteManifests`, merge append. (V3
+   groundwork — row-lineage fields + the remaining `MIN_FORMAT_VERSIONS` types
+   `variant`/`unknown`/`geometry`/`geography` — also remains.)** The live,
+   increment-level plan and checkbox
+   state are in
    [task/todo.md](task/todo.md) — read it (and [task/lessons.md](task/lessons.md) in full) before starting.
 3. Verify the build before and after each change:
    ```bash
@@ -91,10 +139,33 @@ green and the offline lib/unit suite passes (0 failures); service-bound integrat
 (`make test`) and the `sqllogictest` crate needs `protoc`. Roughly: spec types, partition transforms,
 manifest read/write, fast-append, data/equality-delete writers, Parquet→Arrow read **plus merge-on-read
 delete application**, scan planning, the catalog set (REST/Hive/Glue/S3 Tables/SQL/memory), FileIO,
-`timestamp_ns` + column default values are **present**; **snapshot management (`ManageSnapshots`) is
-partial** (Phase 1 increment 1: branch/tag lifecycle, rollback, fast-forward, retention — `cherrypick`/
-`rollbackToTime` and a Java interop test remain); the **write engine beyond fast-append, schema/partition
-evolution (`UpdateSchema`/`UpdatePartitionSpec`), incremental scans, ORC/Avro data files,
+`timestamp_ns` + column default values are **present**; **schema evolution (`UpdateSchema`) is ✅**
+(Phase 1 increments 1–7: full `SchemaUpdate` incl. `UnionByNameVisitor`, level-order field-id assignment,
+column initial/write defaults, the V3-only initial-default AND type gates (`Schema::check_compatibility` in
+`TableMetadataBuilder::add_schema`, fully mirroring Java `Schema.checkCompatibility`), AND a bidirectional
+Java interop round-trip via `dev/java-interop/` + `crates/iceberg/tests/interop_update_schema.rs`);
+**partition evolution (`UpdatePartitionSpec`) is ✅ too** (full `BaseUpdatePartitionSpec` parity + a
+bidirectional Java interop round-trip via the same oracle + `crates/iceberg/tests/interop_update_partition_spec.rs`,
+which surfaced and fixed a real partition-name↔schema collision divergence); **snapshot management
+(`ManageSnapshots`) — the ref-operation surface — is ✅ now too** (branch/tag lifecycle + rollback +
+rollback-to-time + set-current + fast-forward + retention (non-positive rejected), bidirectionally
+interop-proven via the same oracle + `crates/iceberg/tests/interop_manage_snapshots.rs`, 7 scenarios both
+directions; both "Snapshot model + refs" and the ref-op surface of "Snapshot management" flipped to ✅).
+**`cherrypick` is NOT interop-proven and stays Phase-2-gated** (it extends `MergingSnapshotProducer` /
+replays data files). **Phase 2 has started: `DeleteFiles` + the manifest-filter / rewrite machinery is 🟡**
+(`transaction/delete_files.rs` + `SnapshotProducer::process_deletes`, `MemoryCatalog`-tested; data-level
+Java interop deferred); **`OverwriteFiles` is 🟡** (`transaction/overwrite_files.rs` — explicit add + delete
+in one `Overwrite` snapshot, reusing the shared resolve/list helpers; summary reflects added + deleted
+counts; `overwriteByRowFilter` + conflict validation + interop deferred); **`ReplacePartitions` is 🟡**
+(`transaction/replace_partitions.rs` — dynamic partition overwrite via a by-PARTITION sibling resolver
+`SnapshotProducer::resolve_partition_deletes` feeding the same rewrite path; full replace on an
+unpartitioned table; `replace-partitions` marker; static `replaceByRowFilter` + conflict validation +
+interop deferred); **`RewriteFiles` is 🟡** (`transaction/rewrite_files.rs` — the compaction-commit
+primitive: atomically replace a set of DATA files with a new set in one `Operation::Replace` snapshot,
+reusing the by-path `resolve_delete_paths` + `process_deletes` machinery unchanged; delete set must be
+non-empty (`failMissingDeletePaths`); DELETE-file rewrite + `dataSequenceNumber` preservation + conflict
+validation + interop deferred); the rest of the **write engine
+(merge append, `RowDelta`, `RewriteManifests`), incremental scans, ORC/Avro data files,
 variant/geo/unknown types, catalog view ops, and all maintenance actions are missing**. Full row-by-row
 status (re-audited on 0.9.1): [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRIX.md).
 
@@ -140,20 +211,121 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
 ### Phase 1 — Spec & metadata completeness  ·  **Status: 🟡 in progress**
 - **Goal:** the metadata-evolution surface that writes depend on.
 - **Gates on:** Phase 0.
-- **Key deliverables:** `UpdateSchema` (add/drop/rename/reorder/promote, make-optional/required);
-  `UpdatePartitionSpec` (partition evolution); `ManageSnapshots` (branch/tag CRUD, rollback, cherry-pick,
-  set-current, fast-forward); full snapshot-ref handling; V3 groundwork (row-lineage fields). (Column
-  default values already present in the 0.9.1 base — see GAP_MATRIX.)
+- **Key deliverables:** `UpdateSchema` (add/drop/rename/reorder/promote, make-optional/required, column
+  defaults); `UpdatePartitionSpec` (partition evolution); `ManageSnapshots` (branch/tag CRUD, rollback,
+  rollback-to-time, set-current, fast-forward); full snapshot-ref handling; V3 groundwork (row-lineage
+  fields). (`cherrypick` is **Phase-2-gated** — it extends `MergingSnapshotProducer` / replays data files.
+  Column default *values* already present in the 0.9.1 base as spec types; the *builder API* to set them
+  landed in increment 4 — see GAP_MATRIX.)
 - **Progress:** increment 1 — `ManageSnapshots` (branch/tag lifecycle, rollback, fast-forward, retention)
   landed with unit tests (🟡 — `cherrypick` + `rollbackToTime` deferred; Java interop test pending).
-  Next: `UpdatePartitionSpec`, then `UpdateSchema`.
+  Increment 2 — `UpdatePartitionSpec` landed at full `BaseUpdatePartitionSpec` parity (🟡), reviewed against
+  `TestUpdatePartitionSpec.java` (two parity bugs fixed in review: `recycleOrCreatePartitionField` name
+  reuse, and the `addNonDefaultSpec` requirement set; Java interop test pending).
+  Increment 3 — `UpdateSchema` landed at `SchemaUpdate` parity (🟡): add/rename/update-type/doc/
+  make-optional/require/delete/move/set-identifier-fields + `union_by_name_with`. Reviewed by three
+  perspective-diverse critics; the remediation fixed one **blocker** (nested fresh field-id assignment was
+  depth-first; Java `AssignFreshIds`/`CustomOrderSchemaVisitor` is level-order — struct assigns all
+  immediate ids before descending, map assigns key-id then value-id first; pinned by `testAddNestedMapOf
+  Structs`/`testAddNestedListOfStructs` exact-id tests) and several **major** gaps: `union_by_name` now
+  mirrors the full `UnionByNameVisitor` (adds nested under list/map structs, relaxes required→optional,
+  rejects incompatible primitive + complex↔primitive type changes with the Java "Cannot change column
+  type" message, recurses list/map), and `Schema::build` now rejects case-insensitive lowercase-name
+  collisions (`Cannot build lower case index: a and b collide`, Java `TypeUtil.indexByLowerCaseName`).
+  63 update-schema unit tests + 2 schema-build collision tests; key fixes mutation-verified.
+  Increment 4 — the `ManageSnapshots` tail + `UpdateSchema` column defaults (🟡). `ManageSnapshots`:
+  `rollbackToTime` (Java `SetSnapshotOperation.findLatestAncestorOlderThan` — newest ancestor with
+  `timestamp_ms` strictly `<` the arg; errors if none) and non-positive-retention rejection
+  (`SnapshotRef.Builder` `> 0` messages). `UpdateSchema`: column initial/write **defaults** through the
+  builder API (Java `addColumn(..,Literal)` / `addRequiredColumn(..,default)` / `updateColumnDefault`
+  overloads) — add sets both defaults, a required add WITH a default needs no `allow_incompatible_changes`,
+  `update_column_default` sets only the write default; defaults type-validated. `cherrypick` reclassified
+  as **Phase-2-gated** (extends `MergingSnapshotProducer` / replays data files). +22 unit tests
+  (11 manage_snapshots, 11 update_schema — the review added 2 covering the defaulted-add → require
+  interaction, Java `testAddColumnWith[UpdateColumn]DefaultToRequiredColumn`). **Deferred to ✅ (all 🟡
+  rows):** Java interop round-trip.
+  Increment 5 — **`UpdateSchema` interop pilot → row ✅ (2026-06-07).** Built the bidirectional Java
+  interop harness under `dev/java-interop/` (a TEST-ONLY oracle, like `dev/spark/`; not a crate, not in
+  the Cargo graph): a `package org.apache.iceberg` program reaching the package-private
+  `@VisibleForTesting SchemaUpdate(Schema,int)` ctor to (a) `generate` base + Java-evolved metadata JSON
+  and (b) `verify` that Java reads the Rust-evolved metadata. The Rust side is
+  `crates/iceberg/tests/interop_update_schema.rs` over 7 committed scenarios (`add_top_level_columns`,
+  `add_nested_struct_and_map` [the level-order nested-id blocker case], `rename_and_move`,
+  `update_type_promotion`, `make_optional_and_delete`, `set_identifier_fields`,
+  `add_required_with_default_and_update_default`). Direction 1 (Rust reproduces Java's evolution — recursive
+  field-id/name/type/required/doc/default + identifier ids + current-schema-id + last-column-id) runs
+  offline through a real `MemoryCatalog` commit; Direction 2 (`mvn ... verify`) confirms Java reads the
+  Rust output. **7/7 PASS both directions.** The harness is the template for the remaining 🟡 rows.
+  Increment 6 — **V3 initial-default guard → `UpdateSchema` row a clean ✅ (2026-06-07).** Closed the one
+  parity hole the pilot surfaced: Rust had no V3-only guard on column initial defaults, so a defaulted add
+  on a V1/V2 table emitted metadata Java rejects. Added `Schema::check_compatibility(format_version)`
+  (`spec/schema/mod.rs`) mirroring Java `Schema.checkCompatibility` — iterates ALL fields incl. nested (the
+  recursive id→field index = Java's `lazyIdToField()`) and rejects a non-null `initial_default` when
+  `format_version < 3` ("...not supported until v3" / "Invalid schema for v{N}", `ErrorKind::DataInvalid`);
+  gates `initial_default` only, NOT `write_default` (matching Java). Wired into the single choke point
+  `TableMetadataBuilder::add_schema` (Java's `addSchemaInternal`), so it fires for the UpdateSchema action's
+  emitted `AddSchema`, CTAS, and every catalog commit. Reconciled the two tests that pinned the old behavior
+  (V2-default unit test → moved to a V3 base + V2-rejects sibling; the interop divergence test → flipped to
+  assert rejection); +5 `add_schema` guard tests (V2 top-level/nested reject, V3 allow, write-default-only
+  allow, no-default unaffected) + 2 `Schema::check_compatibility` tests, all mutation-verified.
+  Increment 7 — **V3-only TYPE gate → `Schema::check_compatibility` fully mirrors Java (2026-06-07).**
+  Extended the same method with the V3-only type rule (Java `MIN_FORMAT_VERSIONS`): a `min_format_version`
+  helper returns `V3` for `PrimitiveType::{TimestampNs, TimestamptzNs}` (Java `TIMESTAMP_NANO`), and the
+  single field-iteration pass now records a type problem ("Invalid type for {col}: timestamp_ns is not
+  supported until v3") alongside the initial-default problem, accumulated into the one combined "Invalid
+  schema for v{N}:" error ordered by field id (Java's TreeMap). Closes the live `add_column(timestamp_ns)`-
+  on-V2 hole. +5 `check_compatibility` tests (V2 reject `timestamp_ns`/`timestamptz_ns`, V3 allow, nested
+  reject with dotted path, both-problems accumulation), mutation-verified by disabling the type branch.
+  `variant`/`unknown`/`geometry`/`geography` are a one-line `min_format_version` arm each when those types
+  land (tracked in `task/todo.md`).
 - **Exit criteria:** each action matches the Java contract behavior, with unit + interop tests; GAP_MATRIX
-  rows flipped to ✅ (interop proven).
+  rows flipped to ✅ (interop proven). **`UpdateSchema` ✅ (V3 initial-default + type gates enforced) and
+  `UpdatePartitionSpec` ✅ (bidirectional interop landed 2026-06-07, surfacing+fixing the identity-only
+  partition-name collision divergence); `ManageSnapshots` awaits the same interop treatment.**
 
-### Phase 2 — Write engine  ·  **Status: ❌ (largest functional gap)**
+### Phase 2 — Write engine  ·  **Status: 🟡 (in progress — `DeleteFiles` + manifest-filter machinery + `OverwriteFiles` + `ReplacePartitions` + `RewriteFiles` landed 2026-06-07; `PositionDeleteFileWriter` (RowDelta increment 5a) + `RowDelta` action (5b) landed 2026-06-08 — the merge-on-read write→read chain is now end-to-end; the concurrent-commit conflict-validation FOUNDATION + `ReplacePartitions.validateNoConflictingData` (increment 6) landed 2026-06-08 — the serializable-isolation safety layer)**
 - **Goal:** the full commit/write surface beyond fast-append.
 - **Gates on:** Phase 1.
-- **Key deliverables:** merge append, `OverwriteFiles`, `ReplacePartitions`, `DeleteFiles`, `RowDelta`,
+- **Increment sequence (dependency, then value):** **1. `DeleteFiles`** (done 🟡 — delete data files by
+  path/reference; built the foundational manifest-filter / rewrite machinery in `SnapshotProducer` that the
+  rest reuse), **2. `OverwriteFiles`** (done 🟡 — explicit add + delete in one `Overwrite` snapshot,
+  composing the fast-append add path with the `DeleteFiles` filter path via the now-shared
+  `SnapshotProducer::{resolve_delete_paths, current_data_manifests}`; summary reflects added + deleted
+  counts; `overwriteByRowFilter` + conflict validation + interop deferred), **3. `ReplacePartitions`**
+  (done 🟡 — dynamic partition overwrite; a by-PARTITION sibling resolver
+  `SnapshotProducer::resolve_partition_deletes` feeds the same `process_deletes` rewrite path; replaces
+  every partition an added file belongs to, full replace on an unpartitioned table, `replace-partitions`
+  marker; static `replaceByRowFilter` + conflict validation + interop deferred), **4. `RewriteFiles`**
+  (done 🟡 — the compaction-commit primitive: atomically replace a set of DATA files with a new set in one
+  `Operation::Replace` snapshot, Java `BaseRewriteFiles`; reuses the by-path `resolve_delete_paths` +
+  `process_deletes` rewrite machinery unchanged; delete set must be non-empty (`failMissingDeletePaths`);
+  DELETE-file rewrite + `dataSequenceNumber` preservation + conflict validation + interop deferred),
+  5. `RewriteManifests`, 6. merge append, 7. `RowDelta` + position-delete / deletion-vector
+  writers (**increment 5a done 🟡 2026-06-08 — `PositionDeleteFileWriter` in
+  `writer/base_writer/position_delete_writer.rs`: writes the Iceberg position-delete file
+  (`file_path` id 2147483546, `pos` id 2147483545) with `content(PositionDeletes)`, Java-faithful
+  write-as-given; round-trip + field-id tests prove read/Java consumability. Sub-sequence: 5a writer
+  [done], 5b `RowDelta` action + producer delete-manifest handling [**done 🟡 2026-06-08** —
+  `transaction/row_delta.rs`: `RowDeltaAction` adds data files + position/equality DELETE files in one
+  snapshot; `SnapshotProducer` gained delete-manifest support (`with_added_delete_files` +
+  `write_added_delete_manifest`, the `Deletes` writer; empty-commit precondition relaxed); added delete
+  entries inherit the new snapshot's seq so they apply to earlier data; dynamic op (Java
+  `BaseRowDelta.operation()`). THE CROWN-JEWEL test proves a scan drops the deleted rows after the row
+  delta — the full merge-on-read write→read chain], 5c deletion-vector writer**),
+  **6. concurrent-commit conflict-validation FOUNDATION + `ReplacePartitions.validateNoConflictingData`**
+  (**done 🟡 2026-06-08** — the serializable-isolation safety layer: `Transaction` captures
+  `starting_snapshot_id` (surviving the `do_commit` re-base); a default-no-op `TransactionAction::validate`
+  hook runs in `do_commit` against the refreshed base BEFORE re-apply; a conflict is a non-retryable
+  `DataInvalid` (Java's non-retryable `ValidationException`) so the retry loop stops; shared
+  `added_data_files_after` helper enumerates the concurrent commits' added DATA files (Java
+  `MergingSnapshotProducer.addedDataFiles`/`ancestorsBetween`); `ReplacePartitions` gained the opt-in
+  `validate_no_conflicting_data()`/`validate_from_snapshot(id)` rejecting a concurrent append into a
+  replaced partition. **Conflict-validation sub-sequence:** (6) this; then `OverwriteFiles`
+  `validateNoConflictingData`/`...Deletes`; `RowDelta`/`DeleteFiles` `validateDataFilesExist`; `RewriteFiles`
+  `validateNoNewDeletes`),
+  7. `RewriteManifests`, merge append,
+  8. multi-op transaction hardening + optimistic-concurrency retry on the real catalogs.
+- **Key deliverables:** merge append, `OverwriteFiles`, `ReplacePartitions`, `DeleteFiles` (🟡), `RowDelta`,
   `RewriteFiles`, `RewriteManifests`; finalize position-delete + deletion-vector writers; multi-op
   transactions + optimistic-concurrency retry, **validated against Glue + S3 Tables**.
 - **Exit criteria:** each write action commits correctly through the real catalogs with conflict
@@ -228,9 +400,10 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
 
 1. **Write engine** — everything beyond fast-append (`OverwriteFiles`, `ReplacePartitions`, `DeleteFiles`,
    `RowDelta`, `RewriteFiles`, `RewriteManifests`, merge append) + finalized position-delete / DV writers.
-2. **Schema/partition evolution + snapshot management** (`UpdateSchema`, `UpdatePartitionSpec`;
-   `ManageSnapshots` is 🟡 — branch/tag lifecycle/rollback/fast-forward landed, `cherrypick`/`rollbackToTime`
-   remain).
+2. **Schema/partition evolution + snapshot management** (`UpdateSchema`, `UpdatePartitionSpec`,
+   `ManageSnapshots` are all 🟡 — branch/tag lifecycle, rollback, rollback-to-time, fast-forward, retention,
+   and column defaults landed; only the Java interop round-trip remains before ✅. `cherrypick` is
+   Phase-2-gated — it extends `MergingSnapshotProducer` / replays data files).
 3. **Format & type breadth** — ORC + Avro data files; remaining V3 types (variant, geo, `unknown`).
    (`timestamp_ns` and column default values already present — see GAP_MATRIX.)
 4. **Views in catalogs** (`ViewCatalog` + view operations).

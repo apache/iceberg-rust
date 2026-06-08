@@ -1982,6 +1982,84 @@ mod test {
         fields
     }
 
+    /// Write a V1-shaped manifest list whose Avro records OMIT `content`, `sequence_number`, and
+    /// `min_sequence_number` (the way a Java V1 writer emits — the V1 `manifest_file` Avro schema
+    /// has no such fields) and return the raw bytes. Reading these with the V2/V3 reader is the
+    /// "reading v1 manifest lists" case the spec mandates default to 0 / content=data
+    /// (`format/spec.md` 1980-1982).
+    async fn v1_shaped_manifest_list_bytes() -> Vec<u8> {
+        let entry = ManifestFile {
+            manifest_path: "/test/v1-shaped-m0.avro".to_string(),
+            manifest_length: 5806,
+            partition_spec_id: 0,
+            content: ManifestContentType::Data,
+            sequence_number: 0,
+            min_sequence_number: 0,
+            added_snapshot_id: 1646658105718557341,
+            added_files_count: Some(3),
+            existing_files_count: Some(0),
+            deleted_files_count: Some(0),
+            added_rows_count: Some(3),
+            existing_rows_count: Some(0),
+            deleted_rows_count: Some(0),
+            partitions: Some(vec![]),
+            key_metadata: None,
+            first_row_id: None,
+        };
+        let file_io = FileIO::new_with_fs();
+        let tmp_dir = TempDir::new().unwrap();
+        let full_path = format!("{}/v1_shaped.avro", tmp_dir.path().to_str().unwrap());
+        let mut writer = ManifestListWriter::v1(
+            file_io.new_output(full_path.clone()).unwrap(),
+            1646658105718557341,
+            Some(1646658105718557341),
+        );
+        writer.add_manifests([entry].into_iter()).unwrap();
+        writer.close().await.unwrap();
+        fs::read(full_path).expect("read_file must succeed")
+    }
+
+    /// Risk: failing to read a Java-written V1 manifest list because the V2 reader treats
+    /// `content` / `sequence_number` / `min_sequence_number` as strictly required. The spec
+    /// (`format/spec.md` 1980-1982) mandates they default to 0 (content=data) when absent. Pins the
+    /// `#[serde(default = ...)]` on `_serde::ManifestFileV2` (mutation-verified: stripping the
+    /// attributes makes this fail with "missing field `content`").
+    #[tokio::test]
+    async fn test_v1_shaped_manifest_list_read_as_v2_defaults_absent_fields_to_zero() {
+        let bs = v1_shaped_manifest_list_bytes().await;
+
+        let parsed = ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2)
+            .expect("a V1-shaped manifest list must be readable with the V2 reader");
+        let entry = &parsed.entries()[0];
+        assert_eq!(
+            entry.content,
+            ManifestContentType::Data,
+            "absent manifest-list content must default to Data (0) when reading a v1 manifest list"
+        );
+        assert_eq!(
+            entry.sequence_number, 0,
+            "absent manifest-list sequence_number must default to 0 when reading a v1 manifest list"
+        );
+        assert_eq!(
+            entry.min_sequence_number, 0,
+            "absent manifest-list min_sequence_number must default to 0 when reading a v1 manifest list"
+        );
+    }
+
+    /// Same risk as the V2 case, for the V3 reader (the V3 `_serde::ManifestFileV3` carries the
+    /// same `#[serde(default = ...)]` attributes).
+    #[tokio::test]
+    async fn test_v1_shaped_manifest_list_read_as_v3_defaults_absent_fields_to_zero() {
+        let bs = v1_shaped_manifest_list_bytes().await;
+
+        let parsed = ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V3)
+            .expect("a V1-shaped manifest list must be readable with the V3 reader");
+        let entry = &parsed.entries()[0];
+        assert_eq!(entry.content, ManifestContentType::Data);
+        assert_eq!(entry.sequence_number, 0);
+        assert_eq!(entry.min_sequence_number, 0);
+    }
+
     #[test]
     fn test_manifest_content_type_default() {
         assert_eq!(ManifestContentType::default(), ManifestContentType::Data);

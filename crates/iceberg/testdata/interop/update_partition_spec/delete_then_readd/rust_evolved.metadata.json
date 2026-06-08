@@ -1,0 +1,67 @@
+{
+  "format-version": 2,
+  "table-uuid": "6ac65322-6029-4b01-8f49-3152a6af8b5a",
+  "location": "s3://interop-bucket/update_partition_spec/delete_then_readd",
+  "last-sequence-number": 0,
+  "last-updated-ms": 1780870571597,
+  "last-column-id": 3,
+  "schemas": [
+    {
+      "schema-id": 0,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 2,
+          "name": "category",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "id": 3,
+          "name": "event_ts",
+          "required": false,
+          "type": "timestamptz"
+        }
+      ]
+    }
+  ],
+  "current-schema-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": [
+        {
+          "source-id": 2,
+          "field-id": 1000,
+          "name": "category",
+          "transform": "identity"
+        }
+      ]
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 1000,
+  "properties": {
+    "write.parquet.compression-codec": "zstd"
+  },
+  "metadata-log": [
+    {
+      "metadata-file": "/tmp/.tmpMjJBo0/delete_then_readd/metadata/00000-00000000-0000-0000-0000-000000000000.metadata.json",
+      "timestamp-ms": 1780870570826
+    }
+  ],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {}
+}

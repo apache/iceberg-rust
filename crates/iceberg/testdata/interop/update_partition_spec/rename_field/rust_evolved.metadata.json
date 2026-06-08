@@ -1,0 +1,78 @@
+{
+  "format-version": 2,
+  "table-uuid": "6200731d-5b2c-48d8-b7c0-f57cf2a08898",
+  "location": "s3://interop-bucket/update_partition_spec/rename_field",
+  "last-sequence-number": 0,
+  "last-updated-ms": 1780870571592,
+  "last-column-id": 3,
+  "schemas": [
+    {
+      "schema-id": 0,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 2,
+          "name": "category",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "id": 3,
+          "name": "event_ts",
+          "required": false,
+          "type": "timestamptz"
+        }
+      ]
+    }
+  ],
+  "current-schema-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": [
+        {
+          "source-id": 2,
+          "field-id": 1000,
+          "name": "category",
+          "transform": "identity"
+        }
+      ]
+    },
+    {
+      "spec-id": 1,
+      "fields": [
+        {
+          "source-id": 2,
+          "field-id": 1000,
+          "name": "cat",
+          "transform": "identity"
+        }
+      ]
+    }
+  ],
+  "default-spec-id": 1,
+  "last-partition-id": 1000,
+  "properties": {
+    "write.parquet.compression-codec": "zstd"
+  },
+  "metadata-log": [
+    {
+      "metadata-file": "/tmp/.tmpq03vt1/rename_field/metadata/00000-00000000-0000-0000-0000-000000000000.metadata.json",
+      "timestamp-ms": 1780870570823
+    }
+  ],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {}
+}

@@ -1,0 +1,117 @@
+{
+  "format-version": 2,
+  "table-uuid": "4cf63636-9c05-4305-afa8-23f4244e46c2",
+  "location": "s3://interop-bucket/update_schema/add_nested_struct_and_map",
+  "last-sequence-number": 0,
+  "last-updated-ms": 1780864345762,
+  "last-column-id": 10,
+  "schemas": [
+    {
+      "schema-id": 0,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "schema-id": 1,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "int"
+        },
+        {
+          "id": 2,
+          "name": "locations",
+          "required": false,
+          "type": {
+            "type": "map",
+            "key-id": 3,
+            "key": {
+              "type": "struct",
+              "fields": [
+                {
+                  "id": 5,
+                  "name": "address",
+                  "required": true,
+                  "type": "string"
+                },
+                {
+                  "id": 6,
+                  "name": "city",
+                  "required": true,
+                  "type": "string"
+                },
+                {
+                  "id": 7,
+                  "name": "state",
+                  "required": true,
+                  "type": "string"
+                },
+                {
+                  "id": 8,
+                  "name": "zip",
+                  "required": true,
+                  "type": "int"
+                }
+              ]
+            },
+            "value-id": 4,
+            "value-required": false,
+            "value": {
+              "type": "struct",
+              "fields": [
+                {
+                  "id": 9,
+                  "name": "lat",
+                  "required": true,
+                  "type": "int"
+                },
+                {
+                  "id": 10,
+                  "name": "long",
+                  "required": false,
+                  "type": "int"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "current-schema-id": 1,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": []
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 999,
+  "properties": {
+    "write.parquet.compression-codec": "zstd"
+  },
+  "metadata-log": [
+    {
+      "metadata-file": "/tmp/.tmpAoIECw/add_nested_struct_and_map/metadata/00000-00000000-0000-0000-0000-000000000000.metadata.json",
+      "timestamp-ms": 1780864345378
+    }
+  ],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {}
+}

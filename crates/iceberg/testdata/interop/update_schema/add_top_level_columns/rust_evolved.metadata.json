@@ -1,0 +1,94 @@
+{
+  "format-version": 3,
+  "table-uuid": "cba75c74-cf1a-4ada-a413-328c7045fc43",
+  "location": "s3://interop-bucket/update_schema/add_top_level_columns",
+  "last-sequence-number": 0,
+  "last-updated-ms": 1780864345759,
+  "last-column-id": 5,
+  "schemas": [
+    {
+      "schema-id": 1,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 2,
+          "name": "data",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "id": 3,
+          "name": "count",
+          "required": false,
+          "type": "int"
+        },
+        {
+          "id": 4,
+          "name": "note",
+          "required": false,
+          "type": "string",
+          "doc": "a free-text note"
+        },
+        {
+          "id": 5,
+          "name": "category",
+          "required": true,
+          "type": "string",
+          "initial-default": "uncategorized",
+          "write-default": "uncategorized"
+        }
+      ]
+    },
+    {
+      "schema-id": 0,
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 2,
+          "name": "data",
+          "required": false,
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "current-schema-id": 1,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": []
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 999,
+  "properties": {
+    "write.parquet.compression-codec": "zstd"
+  },
+  "metadata-log": [
+    {
+      "metadata-file": "/tmp/.tmplJq68U/add_top_level_columns/metadata/00000-00000000-0000-0000-0000-000000000000.metadata.json",
+      "timestamp-ms": 1780864345233
+    }
+  ],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {},
+  "next-row-id": 0
+}

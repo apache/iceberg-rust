@@ -54,11 +54,18 @@ mod action;
 
 pub use action::*;
 mod append;
+mod delete_files;
 mod manage_snapshots;
+mod overwrite_files;
+mod replace_partitions;
+mod rewrite_files;
+mod row_delta;
 mod snapshot;
 mod sort_order;
 mod update_location;
+mod update_partition_spec;
 mod update_properties;
+mod update_schema;
 mod update_statistics;
 mod upgrade_format_version;
 
@@ -72,10 +79,17 @@ use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
+use crate::transaction::delete_files::DeleteFilesAction;
 use crate::transaction::manage_snapshots::ManageSnapshotsAction;
+use crate::transaction::overwrite_files::OverwriteFilesAction;
+use crate::transaction::replace_partitions::ReplacePartitionsAction;
+use crate::transaction::rewrite_files::RewriteFilesAction;
+use crate::transaction::row_delta::RowDeltaAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
+use crate::transaction::update_partition_spec::UpdatePartitionSpecAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
+use crate::transaction::update_schema::UpdateSchemaAction;
 use crate::transaction::update_statistics::UpdateStatisticsAction;
 use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
 use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
@@ -84,6 +98,14 @@ use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
 #[derive(Clone)]
 pub struct Transaction {
     table: Table,
+    /// The id of the table's current snapshot when this transaction was created (Java
+    /// `SnapshotProducer.base.currentSnapshot()` captured at construction). This is the starting point for
+    /// serializable-isolation conflict validation: an action's [`TransactionAction::validate`] enumerates the
+    /// snapshots the refreshed base has that are NEWER than this id (the concurrent commits). It is captured
+    /// ONCE in [`Transaction::new`] and is its OWN field precisely so it SURVIVES the staleness re-base in
+    /// [`Transaction::do_commit`] (which overwrites `self.table` with the refreshed base, losing the original
+    /// head). `None` means the table had no snapshots yet at transaction start.
+    starting_snapshot_id: Option<i64>,
     actions: Vec<BoxedTransactionAction>,
 }
 
@@ -92,6 +114,7 @@ impl Transaction {
     pub fn new(table: &Table) -> Self {
         Self {
             table: table.clone(),
+            starting_snapshot_id: table.metadata().current_snapshot_id(),
             actions: vec![],
         }
     }
@@ -143,6 +166,58 @@ impl Transaction {
         FastAppendAction::new()
     }
 
+    /// Creates a delete-files action (remove data files from the table by path / `DataFile`
+    /// reference). Delete-by-row-filter / partition-predicate is not yet supported.
+    pub fn delete_files(&self) -> DeleteFilesAction {
+        DeleteFilesAction::new()
+    }
+
+    /// Creates an overwrite-files action (add data files AND remove data files in one snapshot). The
+    /// recorded operation is dynamic, matching Java `BaseOverwriteFiles`: add-only → `Append`,
+    /// delete-only → `Delete`, both → `Overwrite`. Overwrite-by-row-filter and concurrent-commit
+    /// conflict validation are not yet supported.
+    pub fn overwrite_files(&self) -> OverwriteFilesAction {
+        OverwriteFilesAction::new()
+    }
+
+    /// Creates a replace-partitions action (dynamic partition overwrite). For every partition an added
+    /// file belongs to, the action replaces all existing live data files in that same partition, then
+    /// adds the new files, in one `Overwrite` snapshot (Java `BaseReplacePartitions`). On an unpartitioned
+    /// table this is a full-table replace. Static `replaceByRowFilter` and concurrent-commit conflict
+    /// validation are not yet supported.
+    pub fn replace_partitions(&self) -> ReplacePartitionsAction {
+        ReplacePartitionsAction::new()
+    }
+
+    /// Creates a rewrite-files action (the compaction-commit primitive): atomically replace a set of
+    /// data files with a new set in one `Replace` snapshot (Java `BaseRewriteFiles`). The files to delete
+    /// must be non-empty and present in the current snapshot. Rewriting DELETE files,
+    /// `dataSequenceNumber` preservation, and concurrent-commit conflict validation are not yet supported.
+    ///
+    /// **Precondition:** the table must NOT carry outstanding row-level (merge-on-read) delete files —
+    /// the commit is rejected if its current snapshot references any delete manifest. Without
+    /// `dataSequenceNumber` preservation, rewriting deleted-from data into fresh higher-sequence files
+    /// would make those deletes stop applying and resurrect deleted rows. This guard is lifted once
+    /// `dataSequenceNumber` preservation lands.
+    pub fn rewrite_files(
+        &self,
+        files_to_delete: impl IntoIterator<Item = crate::spec::DataFile>,
+        files_to_add: impl IntoIterator<Item = crate::spec::DataFile>,
+    ) -> RewriteFilesAction {
+        RewriteFilesAction::new().rewrite_files(files_to_delete, files_to_add)
+    }
+
+    /// Creates a row-delta action (the merge-on-read write commit): add data files AND add row-level
+    /// DELETE files (position / equality) in ONE snapshot (Java `BaseRowDelta`). The added delete
+    /// files are written into a DELETE manifest alongside the DATA manifest, and inherit the new
+    /// snapshot's sequence number so they apply to data from earlier snapshots. The recorded operation
+    /// is dynamic, matching Java `BaseRowDelta`: adds-data-only → `Append`, adds-deletes-only →
+    /// `Delete`, both → `Overwrite`. Concurrent-commit conflict validation and the deletion-vector
+    /// write path are not yet supported.
+    pub fn row_delta(&self) -> RowDeltaAction {
+        RowDeltaAction::new()
+    }
+
     /// Creates replace sort order action.
     pub fn replace_sort_order(&self) -> ReplaceSortOrderAction {
         ReplaceSortOrderAction::new()
@@ -151,6 +226,17 @@ impl Transaction {
     /// Creates a manage-snapshots action (branch/tag lifecycle, rollback, fast-forward, retention).
     pub fn manage_snapshots(&self) -> ManageSnapshotsAction {
         ManageSnapshotsAction::new()
+    }
+
+    /// Creates an update-partition-spec action (partition evolution: add/remove/rename fields).
+    pub fn update_partition_spec(&self) -> UpdatePartitionSpecAction {
+        UpdatePartitionSpecAction::new()
+    }
+
+    /// Creates an update-schema action (schema evolution: add/rename/update/delete/move columns,
+    /// identifier fields, union-by-name).
+    pub fn update_schema(&self) -> UpdateSchemaAction {
+        UpdateSchemaAction::new()
     }
 
     /// Set the location of table
@@ -212,6 +298,18 @@ impl Transaction {
         let mut current_table = self.table.clone();
         let mut existing_updates: Vec<TableUpdate> = vec![];
         let mut existing_requirements: Vec<TableRequirement> = vec![];
+
+        // Serializable-isolation conflict validation (Java `SnapshotProducer.validate`): run each action's
+        // `validate` against the REFRESHED base BEFORE re-applying any updates. `current_table` here is the
+        // refreshed base, so an action can enumerate the snapshots it has that are newer than
+        // `starting_snapshot_id` (the concurrent commits) and reject conflicts. A validation failure is
+        // non-retryable, so it propagates out of the retry loop instead of looping (Java's
+        // non-retryable `ValidationException`). The default `validate` is a no-op, so opt-out actions skip it.
+        for action in &self.actions {
+            Arc::clone(action)
+                .validate(self.starting_snapshot_id, &current_table)
+                .await?;
+        }
 
         for action in &self.actions {
             let action_commit = Arc::clone(action).commit(&current_table).await?;
