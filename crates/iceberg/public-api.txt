@@ -3142,7 +3142,7 @@ impl iceberg::writer::file_writer::location_generator::FileNameGenerator for ice
 pub fn iceberg::writer::file_writer::location_generator::DefaultFileNameGenerator::generate_file_name(&self) -> alloc::string::String
 pub struct iceberg::writer::file_writer::location_generator::DefaultLocationGenerator
 impl iceberg::writer::file_writer::location_generator::DefaultLocationGenerator
-pub fn iceberg::writer::file_writer::location_generator::DefaultLocationGenerator::new(table_metadata: iceberg::spec::TableMetadata) -> iceberg::Result<Self>
+pub fn iceberg::writer::file_writer::location_generator::DefaultLocationGenerator::new(table_metadata: &iceberg::spec::TableMetadata) -> iceberg::Result<Self>
 pub fn iceberg::writer::file_writer::location_generator::DefaultLocationGenerator::with_data_location(data_location: alloc::string::String) -> Self
 impl core::clone::Clone for iceberg::writer::file_writer::location_generator::DefaultLocationGenerator
 pub fn iceberg::writer::file_writer::location_generator::DefaultLocationGenerator::clone(&self) -> iceberg::writer::file_writer::location_generator::DefaultLocationGenerator
