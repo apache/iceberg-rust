@@ -17,32 +17,29 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 
-use http::StatusCode;
 use iceberg::{Error, ErrorKind, Result};
 use reqwest::header::HeaderMap;
 use reqwest::{Client, IntoUrl, Method, Request, RequestBuilder, Response};
 use serde::de::DeserializeOwned;
-use tokio::sync::Mutex;
 
-use crate::RestCatalogConfig;
-use crate::types::{ErrorResponse, TokenResponse};
+use crate::token::RequestAuthenticator;
+use crate::{AuthenticatorConfig, RestCatalogConfig};
 
 pub(crate) struct HttpClient {
     client: Client,
 
-    /// The token to be used for authentication.
-    ///
-    /// It's possible to fetch the token from the server while needed.
-    token: Mutex<Option<String>>,
-    /// The token endpoint to be used for authentication.
-    token_endpoint: String,
-    /// The credential to be used for authentication.
-    credential: Option<(Option<String>, String)>,
+    /// Invoked before each request. Mutates the request to add authentication
+    /// (e.g. inserting an Authorization header, signing with SigV4, etc).
+    authenticator: Option<Arc<dyn RequestAuthenticator>>,
+
+    /// This generated the current `authenticator`. When we receive overrides,
+    /// we apply them to this config and generate a new `authenticator`.
+    token_provider_cfg: AuthenticatorConfig,
+
     /// Extra headers to be added to each request.
     extra_headers: HeaderMap,
-    /// Extra oauth parameters to be added to each authentication request.
-    extra_oauth_params: HashMap<String, String>,
     /// Whether to disable header redaction in error logs (defaults to false for security).
     disable_header_redaction: bool,
 }
@@ -60,13 +57,13 @@ impl HttpClient {
     /// Create a new http client.
     pub fn new(cfg: &RestCatalogConfig) -> Result<Self> {
         let extra_headers = cfg.extra_headers()?;
+        let token_provider_cfg = cfg.authenticator_cfg();
+        let client = cfg.client().unwrap_or_default();
         Ok(HttpClient {
-            client: cfg.client().unwrap_or_default(),
-            token: Mutex::new(cfg.token()),
-            token_endpoint: cfg.get_token_endpoint(),
-            credential: cfg.credential(),
+            client: client.clone(),
+            authenticator: token_provider_cfg.authenticator(client, extra_headers.clone()),
+            token_provider_cfg,
             extra_headers,
-            extra_oauth_params: cfg.extra_oauth_params(),
             disable_header_redaction: cfg.disable_header_redaction(),
         })
     }
@@ -80,109 +77,33 @@ impl HttpClient {
             .then(|| cfg.extra_headers())
             .transpose()?
             .unwrap_or(self.extra_headers);
+        let client = cfg.client().unwrap_or(self.client);
+
+        let (token_provider_cfg, should_regenerate) =
+            self.token_provider_cfg.merge(cfg.authenticator_cfg());
+        let authenticator = if should_regenerate {
+            token_provider_cfg.authenticator(client.clone(), extra_headers.clone())
+        } else {
+            self.authenticator
+        };
+
         Ok(HttpClient {
-            client: cfg.client().unwrap_or(self.client),
-            token: Mutex::new(cfg.token().or_else(|| self.token.into_inner())),
-            token_endpoint: if !cfg.get_token_endpoint().is_empty() {
-                cfg.get_token_endpoint()
-            } else {
-                self.token_endpoint
-            },
-            credential: cfg.credential().or(self.credential),
+            client,
+            authenticator,
+            token_provider_cfg,
             extra_headers,
-            extra_oauth_params: if !cfg.extra_oauth_params().is_empty() {
-                cfg.extra_oauth_params()
-            } else {
-                self.extra_oauth_params
-            },
             disable_header_redaction: cfg.disable_header_redaction(),
         })
     }
 
-    /// This API is testing only to assert the token.
-    #[cfg(test)]
-    pub(crate) async fn token(&self) -> Option<String> {
-        let mut req = self
-            .request(Method::GET, &self.token_endpoint)
-            .build()
-            .unwrap();
-        self.authenticate(&mut req).await.ok();
-        self.token.lock().await.clone()
-    }
-
-    async fn exchange_credential_for_token(&self) -> Result<String> {
-        // Credential must exist here.
-        let (client_id, client_secret) = self.credential.as_ref().ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Credential must be provided for authentication",
-            )
-        })?;
-
-        let mut params = HashMap::with_capacity(4);
-        params.insert("grant_type", "client_credentials");
-        if let Some(client_id) = client_id {
-            params.insert("client_id", client_id);
-        }
-        params.insert("client_secret", client_secret);
-        params.extend(
-            self.extra_oauth_params
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str())),
-        );
-
-        let mut auth_req = self
-            .request(Method::POST, &self.token_endpoint)
-            .form(&params)
-            .build()?;
-        // extra headers add content-type application/json header it's necessary to override it with proper type
-        // note that form call doesn't add content-type header if already present
-        auth_req.headers_mut().insert(
-            http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/x-www-form-urlencoded"),
-        );
-        let auth_url = auth_req.url().clone();
-        let auth_resp = self.client.execute(auth_req).await?;
-
-        let auth_res: TokenResponse = if auth_resp.status() == StatusCode::OK {
-            let text = auth_resp
-                .bytes()
-                .await
-                .map_err(|err| err.with_url(auth_url.clone()))?;
-            Ok(serde_json::from_slice(&text).map_err(|e| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "Failed to parse response from rest catalog server!",
-                )
-                .with_context("operation", "auth")
-                .with_context("url", auth_url.to_string())
-                .with_context("json", String::from_utf8_lossy(&text))
-                .with_source(e)
-            })?)
-        } else {
-            let code = auth_resp.status();
-            let text = auth_resp
-                .bytes()
-                .await
-                .map_err(|err| err.with_url(auth_url.clone()))?;
-            let e: ErrorResponse = serde_json::from_slice(&text).map_err(|e| {
-                Error::new(ErrorKind::Unexpected, "Received unexpected response")
-                    .with_context("code", code.to_string())
-                    .with_context("operation", "auth")
-                    .with_context("url", auth_url.to_string())
-                    .with_context("json", String::from_utf8_lossy(&text))
-                    .with_source(e)
-            })?;
-            Err(Error::from(e))
-        }?;
-        Ok(auth_res.access_token)
-    }
-
     /// Invalidate the current token without generating a new one. On the next request, the client
     /// will attempt to generate a new token.
+    /// (For alternative auth mechanisms, perform the analogous operation.)
     pub(crate) async fn invalidate_token(&self) -> Result<()> {
-        *self.token.lock().await = None;
-        Ok(())
+        match self.authenticator.as_ref() {
+            None => Ok(()),
+            Some(authenticator) => authenticator.invalidate_cache().await,
+        }
     }
 
     /// Invalidate the current token and set a new one. Generates a new token before invalidating
@@ -191,56 +112,13 @@ impl HttpClient {
     ///
     /// If credential is invalid, or the request fails, this method will return an error and leave
     /// the current token unchanged.
+    ///
+    /// (For alternative auth mechanisms, perform the analogous operation.)
     pub(crate) async fn regenerate_token(&self) -> Result<()> {
-        let new_token = self.exchange_credential_for_token().await?;
-        *self.token.lock().await = Some(new_token.clone());
-        Ok(())
-    }
-
-    /// Authenticates the request by adding a bearer token to the authorization header.
-    ///
-    /// This method supports three authentication modes:
-    ///
-    /// 1. **No authentication** - Skip authentication when both `credential` and `token` are missing.
-    /// 2. **Token authentication** - Use the provided `token` directly for authentication.
-    /// 3. **OAuth authentication** - Exchange `credential` for a token, cache it, then use it for authentication.
-    ///
-    /// When both `credential` and `token` are present, `token` takes precedence.
-    ///
-    /// # TODO: Support automatic token refreshing.
-    async fn authenticate(&self, req: &mut Request) -> Result<()> {
-        // Clone the token from lock without holding the lock for entire function.
-        let token = self.token.lock().await.clone();
-
-        if self.credential.is_none() && token.is_none() {
-            return Ok(());
+        match self.authenticator.as_ref() {
+            None => Ok(()),
+            Some(authenticator) => authenticator.regenerate_cache().await,
         }
-
-        // Either use the provided token or exchange credential for token, cache and use that
-        let token = match token {
-            Some(token) => token,
-            None => {
-                let token = self.exchange_credential_for_token().await?;
-                // Update token so that we use it for next request instead of
-                // exchanging credential for token from the server again
-                *self.token.lock().await = Some(token.clone());
-                token
-            }
-        };
-
-        // Insert token in request.
-        req.headers_mut().insert(
-            http::header::AUTHORIZATION,
-            format!("Bearer {token}").parse().map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Invalid token received from catalog server!",
-                )
-                .with_source(e)
-            })?,
-        );
-
-        Ok(())
     }
 
     #[inline]
@@ -259,7 +137,9 @@ impl HttpClient {
     // Queries the Iceberg REST catalog after authentication with the given `Request` and
     // returns a `Response`.
     pub async fn query_catalog(&self, mut request: Request) -> Result<Response> {
-        self.authenticate(&mut request).await?;
+        if let Some(auth) = &self.authenticator {
+            auth.authenticate_request(&mut request).await?;
+        }
         self.execute(request).await
     }
 

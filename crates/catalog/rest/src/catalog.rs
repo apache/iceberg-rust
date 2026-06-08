@@ -40,6 +40,9 @@ use typed_builder::TypedBuilder;
 use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
+use crate::token::{
+    BearerTokenAuthenticator, OAuth2TokenProvider, RequestAuthenticator, StaticTokenProvider,
+};
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
     CreateTableRequest, ListNamespaceResponse, ListTablesResponse, LoadTableResult,
@@ -74,6 +77,7 @@ impl Default for RestCatalogBuilder {
                 warehouse: None,
                 props: HashMap::new(),
                 client: None,
+                authenticator: None,
             },
             storage_factory: None,
             runtime: None,
@@ -129,6 +133,8 @@ impl CatalogBuilder for RestCatalogBuilder {
                     ErrorKind::DataInvalid,
                     "Catalog uri is required",
                 ))
+            } else if let Err(error) = self.config.authenticator_cfg().strict_validate() {
+                Err(error)
             } else {
                 let runtime = self.runtime.unwrap_or_else(Runtime::current);
                 Ok(RestCatalog::new(self.config, self.storage_factory, runtime))
@@ -144,6 +150,129 @@ impl RestCatalogBuilder {
     pub fn with_client(mut self, client: Client) -> Self {
         self.config.client = Some(client);
         self
+    }
+
+    /// Configures the catalog with a custom request authenticator, in place
+    /// of the `token` / `credential` props.
+    ///
+    /// For bearer-token flows, wrap a `TokenProvider` in `BearerTokenAuthenticator`.
+    /// For auth that needs to see the outgoing request (e.g. AWS SigV4),
+    /// implement `RequestAuthenticator` directly.
+    pub fn with_authenticator(mut self, authenticator: Arc<dyn RequestAuthenticator>) -> Self {
+        self.config.authenticator = Some(authenticator);
+        self
+    }
+}
+
+/// There are multiple ways to configure the auth mechanism used by the catalog client.
+/// On our side, we attempt to enforce that only one mechanism is used (see `strict_validate`).
+/// But the catalog server can supply arbitrary overrides, so we must implement semantics
+/// for multiple options being specified at once.
+///
+/// Option 0: No auth.
+pub struct AuthenticatorConfig {
+    /// Option 1: Custom request authenticator.
+    pub custom_authenticator: Option<Arc<dyn RequestAuthenticator>>,
+
+    /// Option 2: Default OAuth flow.
+    /// OAuth endpoint.
+    pub token_endpoint: String,
+    /// OAuth credentials.
+    pub credential: Option<(Option<String>, String)>,
+    /// OAuth params.
+    pub extra_oauth_params: HashMap<String, String>,
+
+    /// Option 3: Static auth token.
+    pub token: Option<String>,
+}
+
+impl AuthenticatorConfig {
+    /// Someone (e.g. the catalog server's "config" endpoint) gave us overrides to apply to our config.
+    /// N.B. `Some(_)` means override existing value. `None` or empty means no-op.
+    ///
+    /// Returns `true` if we should generate a new authenticator from the merged config.
+    pub(crate) fn merge(mut self, overrides: Self) -> (Self, bool) {
+        let mut should_regenerate = false;
+
+        if overrides.custom_authenticator.is_some() {
+            self.custom_authenticator = overrides.custom_authenticator;
+            should_regenerate = true;
+        }
+
+        if !overrides.token_endpoint.is_empty() && self.token_endpoint != overrides.token_endpoint {
+            self.token_endpoint = overrides.token_endpoint;
+            should_regenerate = true;
+        }
+
+        if overrides.credential.is_some() && self.credential != overrides.credential {
+            self.credential = overrides.credential;
+            should_regenerate = true;
+        }
+
+        if !overrides.extra_oauth_params.is_empty()
+            && self.extra_oauth_params != overrides.extra_oauth_params
+        {
+            self.extra_oauth_params = overrides.extra_oauth_params;
+            should_regenerate = true;
+        }
+
+        if overrides.token.is_some() && self.token != overrides.token {
+            self.token = overrides.token;
+            should_regenerate = true;
+        }
+
+        (self, should_regenerate)
+    }
+
+    /// Build a new authenticator.
+    pub(crate) fn authenticator(
+        &self,
+        client: Client,
+        extra_headers: HeaderMap,
+    ) -> Option<Arc<dyn RequestAuthenticator>> {
+        // If the user specified a custom authenticator, never override it.
+        if self.custom_authenticator.is_some() {
+            return self.custom_authenticator.clone();
+        }
+
+        // If there are OAuth credentials, use them.
+        if let Some((client_id, client_secret)) = &self.credential {
+            let provider = Arc::new(OAuth2TokenProvider::new(
+                client,
+                client_id.clone(),
+                client_secret.clone(),
+                self.token_endpoint.clone(),
+                extra_headers,
+                self.extra_oauth_params.clone(),
+                // If there's a preexisting token, seed the cache with that token.
+                self.token.clone(),
+            ));
+            return Some(Arc::new(BearerTokenAuthenticator::new(provider)));
+        }
+
+        // If there's only a token, use that.
+        if let Some(token) = &self.token {
+            let provider = Arc::new(StaticTokenProvider::new(token));
+            return Some(Arc::new(BearerTokenAuthenticator::new(provider)));
+        }
+
+        // There's no auth configured.
+        None
+    }
+
+    /// We expect our users to configure only one auth mechanism.
+    /// (These rules do not apply to server-supplied overrides, hence the "strict".)
+    fn strict_validate(&self) -> Result<()> {
+        if self.custom_authenticator.is_some()
+            && (self.token.is_some() || self.credential.is_some())
+        {
+            Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Custom authenticator is not compatible with `token` or `credential` props.",
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -163,6 +292,10 @@ pub(crate) struct RestCatalogConfig {
 
     #[builder(default)]
     client: Option<Client>,
+
+    /// A custom request authenticator, as an alternative to the auth configuration props.
+    #[builder(default, setter(strip_option))]
+    authenticator: Option<Arc<dyn RequestAuthenticator>>,
 }
 
 impl RestCatalogConfig {
@@ -178,7 +311,8 @@ impl RestCatalogConfig {
         [&self.uri, PATH_V1, "config"].join("/")
     }
 
-    pub(crate) fn get_token_endpoint(&self) -> String {
+    /// Helper for [`authenticator_cfg`].
+    fn get_token_endpoint(&self) -> String {
         if let Some(oauth2_uri) = self.props.get("oauth2-server-uri") {
             oauth2_uri.to_string()
         } else {
@@ -220,13 +354,30 @@ impl RestCatalogConfig {
         self.client.clone()
     }
 
+    // Depends on some combination of:
+    // - explicit `authenticator` field
+    // - `credential` + `get_token_endpoint` + `extra_oauth_params`
+    // - `token`
+    // Or no auth.
+    pub(crate) fn authenticator_cfg(&self) -> AuthenticatorConfig {
+        AuthenticatorConfig {
+            custom_authenticator: self.authenticator.clone(),
+            token_endpoint: self.get_token_endpoint(),
+            credential: self.credential(),
+            extra_oauth_params: self.extra_oauth_params(),
+            token: self.token(),
+        }
+    }
+
+    /// Helper for [`authenticator_cfg`]:
     /// Get the token from the config.
     ///
     /// The client can use this token to send requests.
-    pub(crate) fn token(&self) -> Option<String> {
+    fn token(&self) -> Option<String> {
         self.props.get("token").cloned()
     }
 
+    /// Helper for [`authenticator_cfg`]:
     /// Get the credentials from the config. The client can use these credentials to fetch a new
     /// token.
     ///
@@ -235,7 +386,7 @@ impl RestCatalogConfig {
     /// - `None`: No credential is set.
     /// - `Some(None, client_secret)`: No client_id is set, use client_secret directly.
     /// - `Some(Some(client_id), client_secret)`: Both client_id and client_secret are set.
-    pub(crate) fn credential(&self) -> Option<(Option<String>, String)> {
+    fn credential(&self) -> Option<(Option<String>, String)> {
         let cred = self.props.get("credential")?;
 
         match cred.split_once(':') {
@@ -294,8 +445,9 @@ impl RestCatalogConfig {
         Ok(headers)
     }
 
+    /// Helper for [`authenticator_cfg`]:
     /// Get the optional OAuth headers from the config.
-    pub(crate) fn extra_oauth_params(&self) -> HashMap<String, String> {
+    fn extra_oauth_params(&self) -> HashMap<String, String> {
         let mut params = HashMap::new();
 
         if let Some(scope) = self.props.get("scope") {
@@ -490,6 +642,7 @@ impl RestCatalog {
 
     /// Invalidate the current token without generating a new one. On the next request, the client
     /// will attempt to generate a new token.
+    /// (For alternative auth mechanisms, perform the analogous operation.)
     pub async fn invalidate_token(&self) -> Result<()> {
         self.context().await?.client.invalidate_token().await
     }
@@ -500,6 +653,8 @@ impl RestCatalog {
     ///
     /// If credential is invalid, or the request fails, this method will return an error and leave
     /// the current token unchanged.
+    ///
+    /// (For alternative auth mechanisms, perform the analogous operation.)
     pub async fn regenerate_token(&self) -> Result<()> {
         self.context().await?.client.regenerate_token().await
     }
@@ -1178,11 +1333,24 @@ mod tests {
             .await
     }
 
+    /// We use this mock to inspect the bearer tokens we get from the `TokenProvider`.
+    async fn create_authed_list_ns_mock(server: &mut ServerGuard, token: &str) -> Mock {
+        server
+            .mock("GET", "/v1/namespaces")
+            .match_header("authorization", format!("Bearer {token}").as_str())
+            .with_status(200)
+            .with_body(r#"{"namespaces": []}"#)
+            .expect(1)
+            .create_async()
+            .await
+    }
+
     #[tokio::test]
     async fn test_oauth() {
         let mut server = Server::new_async().await;
         let oauth_mock = create_oauth_mock(&mut server).await;
         let config_mock = create_config_mock(&mut server).await;
+        let list_ns_mock = create_authed_list_ns_mock(&mut server, "ey000000000000").await;
 
         let mut props = HashMap::new();
         props.insert("credential".to_string(), "client1:secret1".to_string());
@@ -1196,10 +1364,11 @@ mod tests {
             Runtime::current(),
         );
 
-        let token = catalog.context().await.unwrap().client.token().await;
-        oauth_mock.assert_async().await;
+        // Check that "list namespaces" actually retrieves the token and attaches it to our request.
+        catalog.list_namespaces(None).await.unwrap();
+        oauth_mock.assert_async().await; // Fetched the token.
         config_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000000".to_string()));
+        list_ns_mock.assert_async().await; // Made a request with the token attached.
     }
 
     #[tokio::test]
@@ -1234,6 +1403,7 @@ mod tests {
             .await;
 
         let config_mock = create_config_mock(&mut server).await;
+        let list_ns_mock = create_authed_list_ns_mock(&mut server, "ey000000000000").await;
 
         let catalog = RestCatalog::new(
             RestCatalogConfig::builder()
@@ -1244,11 +1414,11 @@ mod tests {
             Runtime::current(),
         );
 
-        let token = catalog.context().await.unwrap().client.token().await;
-
-        oauth_mock.assert_async().await;
+        // Check that "list namespaces" actually retrieves the token and attaches it to our request.
+        catalog.list_namespaces(None).await.unwrap();
+        oauth_mock.assert_async().await; // Fetched the token.
         config_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000000".to_string()));
+        list_ns_mock.assert_async().await; // Made a request with the token attached.
     }
 
     #[tokio::test]
@@ -1256,6 +1426,7 @@ mod tests {
         let mut server = Server::new_async().await;
         let oauth_mock = create_oauth_mock(&mut server).await;
         let config_mock = create_config_mock(&mut server).await;
+        let list_ns_mock = create_authed_list_ns_mock(&mut server, "ey000000000000").await;
 
         let mut props = HashMap::new();
         props.insert("credential".to_string(), "client1:secret1".to_string());
@@ -1269,18 +1440,24 @@ mod tests {
             Runtime::current(),
         );
 
-        let token = catalog.context().await.unwrap().client.token().await;
+        // Make a request and check that we have an auth token.
+        catalog.list_namespaces(None).await.unwrap();
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000000".to_string()));
+        list_ns_mock.assert_async().await;
 
+        // Invalidate any cached token.
+        catalog.invalidate_token().await.unwrap();
+
+        // Make a request and check that we retrieve a new token and attach it to our request.
+        // Note: The new token ends with '1' instead of '0'.
         let oauth_mock =
             create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 200)
                 .await;
-        catalog.invalidate_token().await.unwrap();
-        let token = catalog.context().await.unwrap().client.token().await;
-        oauth_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000001".to_string()));
+        let list_ns_mock = create_authed_list_ns_mock(&mut server, "ey000000000001").await;
+        catalog.list_namespaces(None).await.unwrap();
+        oauth_mock.assert_async().await; // Fetched a new token.
+        list_ns_mock.assert_async().await; // Made a request with the new token attached.
     }
 
     #[tokio::test]
@@ -1288,6 +1465,7 @@ mod tests {
         let mut server = Server::new_async().await;
         let oauth_mock = create_oauth_mock(&mut server).await;
         let config_mock = create_config_mock(&mut server).await;
+        let list_ns_mock = create_authed_list_ns_mock(&mut server, "ey000000000000").await;
 
         let mut props = HashMap::new();
         props.insert("credential".to_string(), "client1:secret1".to_string());
@@ -1301,18 +1479,32 @@ mod tests {
             Runtime::current(),
         );
 
-        let token = catalog.context().await.unwrap().client.token().await;
+        // Make a request and check that we have an auth token.
+        catalog.list_namespaces(None).await.unwrap();
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000000".to_string()));
+        list_ns_mock.assert_async().await;
 
-        let oauth_mock =
-            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 500)
-                .await;
+        // Invalidate any cached token.
         catalog.invalidate_token().await.unwrap();
-        let token = catalog.context().await.unwrap().client.token().await;
-        oauth_mock.assert_async().await;
-        assert_eq!(token, None);
+
+        // The OAuth server is broken, so we can't get a new token.
+        // Check that we can't make authenticated "list namespaces" requests.
+        let oauth_mock =
+            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000000", 500)
+                .await;
+        assert!(catalog.list_namespaces(None).await.is_err()); // Request failed.
+        oauth_mock.assert_async().await; // Tried fetching a new token.
+
+        // The OAuth server works again.
+        // Check that we can make authenticated "list namespaces" requests.
+        let oauth_mock =
+            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000000", 200)
+                .await;
+        let list_ns_mock = create_authed_list_ns_mock(&mut server, "ey000000000000").await;
+        catalog.list_namespaces(None).await.unwrap();
+        oauth_mock.assert_async().await; // Fetched a new token.
+        list_ns_mock.assert_async().await; // Made a request with the new token attached.
     }
 
     #[tokio::test]
@@ -1320,6 +1512,7 @@ mod tests {
         let mut server = Server::new_async().await;
         let oauth_mock = create_oauth_mock(&mut server).await;
         let config_mock = create_config_mock(&mut server).await;
+        let list_ns_mock = create_authed_list_ns_mock(&mut server, "ey000000000000").await;
 
         let mut props = HashMap::new();
         props.insert("credential".to_string(), "client1:secret1".to_string());
@@ -1333,18 +1526,23 @@ mod tests {
             Runtime::current(),
         );
 
-        let token = catalog.context().await.unwrap().client.token().await;
+        // Make a request and check that we have an auth token.
+        catalog.list_namespaces(None).await.unwrap();
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000000".to_string()));
+        list_ns_mock.assert_async().await;
 
+        // Regenerate the token.
         let oauth_mock =
             create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 200)
                 .await;
         catalog.regenerate_token().await.unwrap();
-        oauth_mock.assert_async().await;
-        let token = catalog.context().await.unwrap().client.token().await;
-        assert_eq!(token, Some("ey000000000001".to_string()));
+        oauth_mock.assert_async().await; // Fetched a new token.
+
+        // Check that we use the new token.
+        let list_ns_mock = create_authed_list_ns_mock(&mut server, "ey000000000001").await;
+        catalog.list_namespaces(None).await.unwrap();
+        list_ns_mock.assert_async().await; // Made a request with the new token.
     }
 
     #[tokio::test]
@@ -1352,6 +1550,7 @@ mod tests {
         let mut server = Server::new_async().await;
         let oauth_mock = create_oauth_mock(&mut server).await;
         let config_mock = create_config_mock(&mut server).await;
+        let list_ns_mock = create_authed_list_ns_mock(&mut server, "ey000000000000").await;
 
         let mut props = HashMap::new();
         props.insert("credential".to_string(), "client1:secret1".to_string());
@@ -1365,21 +1564,116 @@ mod tests {
             Runtime::current(),
         );
 
-        let token = catalog.context().await.unwrap().client.token().await;
+        // Make a request and check that we have an auth token.
+        catalog.list_namespaces(None).await.unwrap();
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000000".to_string()));
+        list_ns_mock.assert_async().await;
 
+        // Fail to generate a new token.
         let oauth_mock =
             create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 500)
                 .await;
-        let invalidate_result = catalog.regenerate_token().await;
-        assert!(invalidate_result.is_err());
+        let regenerate_result = catalog.regenerate_token().await;
+        assert!(regenerate_result.is_err());
         oauth_mock.assert_async().await;
-        let token = catalog.context().await.unwrap().client.token().await;
 
-        // original token is left intact
-        assert_eq!(token, Some("ey000000000000".to_string()));
+        // Make a request and check that we're reusing the old token.
+        let list_ns_mock = create_authed_list_ns_mock(&mut server, "ey000000000000").await;
+        catalog.list_namespaces(None).await.unwrap();
+        list_ns_mock.assert_async().await;
+    }
+
+    // Demonstrate that a `RequestAuthenticator` can add whatever headers it wants.
+    // (For example, AWS SigV4 needs `Authorization: AWS4-HMAC-SHA256 ...` and `X-Amz-Date`.)
+    #[tokio::test]
+    async fn test_custom_authenticator() {
+        use async_trait::async_trait;
+        use reqwest::Request;
+
+        #[derive(Debug)]
+        struct TwoHeaderAuth;
+
+        #[async_trait]
+        impl RequestAuthenticator for TwoHeaderAuth {
+            async fn authenticate_request(&self, req: &mut Request) -> Result<()> {
+                req.headers_mut()
+                    .insert("x-custom-auth", "sig-abc".parse().unwrap());
+                req.headers_mut()
+                    .insert("x-auth-date", "20260512T000000Z".parse().unwrap());
+                Ok(())
+            }
+
+            async fn invalidate_cache(&self) -> Result<()> {
+                Ok(())
+            }
+
+            async fn regenerate_cache(&self) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut server = Server::new_async().await;
+
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .match_header("x-custom-auth", "sig-abc")
+            .match_header("x-auth-date", "20260512T000000Z")
+            .with_status(200)
+            .with_body(r#"{"overrides": {}, "defaults": {}}"#)
+            .create_async()
+            .await;
+        let list_ns_mock = server
+            .mock("GET", "/v1/namespaces")
+            .match_header("x-custom-auth", "sig-abc")
+            .match_header("x-auth-date", "20260512T000000Z")
+            .with_status(200)
+            .with_body(r#"{"namespaces": []}"#)
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .authenticator(Arc::new(TwoHeaderAuth))
+                .build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+        );
+
+        catalog.list_namespaces(None).await.unwrap();
+        config_mock.assert_async().await;
+        list_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_strict_validate_rejects_authenticator_with_token() {
+        let cfg = AuthenticatorConfig {
+            custom_authenticator: Some(Arc::new(BearerTokenAuthenticator::new(Arc::new(
+                StaticTokenProvider::new("t"),
+            )))),
+            token_endpoint: String::new(),
+            credential: None,
+            extra_oauth_params: HashMap::new(),
+            token: Some("t".into()),
+        };
+        let err = cfg.strict_validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[tokio::test]
+    async fn test_strict_validate_rejects_authenticator_with_credential() {
+        let cfg = AuthenticatorConfig {
+            custom_authenticator: Some(Arc::new(BearerTokenAuthenticator::new(Arc::new(
+                StaticTokenProvider::new("t"),
+            )))),
+            token_endpoint: String::new(),
+            credential: Some((Some("id".into()), "sec".into())),
+            extra_oauth_params: HashMap::new(),
+            token: None,
+        };
+        let err = cfg.strict_validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
     #[tokio::test]
@@ -1452,10 +1746,12 @@ mod tests {
         assert_eq!(headers, expected_headers);
     }
 
+    // The `oauth2-server-uri` prop overrides the default OAuth endpoint.
     #[tokio::test]
     async fn test_oauth_with_oauth2_server_uri() {
         let mut server = Server::new_async().await;
         let config_mock = create_config_mock(&mut server).await;
+        let list_ns_mock = create_authed_list_ns_mock(&mut server, "ey000000000000").await;
 
         let mut auth_server = Server::new_async().await;
         let auth_server_path = "/some/path";
@@ -1479,11 +1775,11 @@ mod tests {
             Runtime::current(),
         );
 
-        let token = catalog.context().await.unwrap().client.token().await;
-
-        oauth_mock.assert_async().await;
+        // Make a request and check that we fetch and use the OAuth2 server's token.
+        catalog.list_namespaces(None).await.unwrap();
+        oauth_mock.assert_async().await; // Fetched a token from the OAuth2 server.
         config_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000000".to_string()));
+        list_ns_mock.assert_async().await; // Made a request with the token attached.
     }
 
     #[tokio::test]

@@ -53,7 +53,9 @@
 
 mod catalog;
 mod client;
+mod token;
 mod types;
 
 pub use catalog::*;
+pub use token::*;
 pub use types::*;
