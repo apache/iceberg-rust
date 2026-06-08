@@ -2269,3 +2269,130 @@ touched: `append.rs`** (the async seam did not force a signature change — `Fas
 commit. **Deferred (flagged):** Java interop round-trip (→ ✅); the DELETE-manifest merge manager (Java's
 separate `deleteMergeManager` — merge append produces no deletes); `appendManifest(ManifestFile)`; parallel
 bin processing + the merged-manifest reuse cache. An Opus REVIEWER verifies next.
+
+### Phase 2 Increment 10 — RewriteManifests (reorganize manifests, no data change) (IN PROGRESS, 2026-06-08, BUILDER Opus)
+New file `crates/iceberg/src/transaction/rewrite_manifests.rs`; producer precondition relax in
+`transaction/snapshot.rs`; wired into `transaction/mod.rs`. Mirror Java `BaseRewriteManifests` (REPLACE op).
+Reorganize the table's live DATA manifests into new manifests with the SAME data files, regrouped — no data
+added or removed. Data-integrity-critical: a reorg that drops/duplicates/re-stamps an entry corrupts the table.
+
+**Java logic mirrored (cite each, `core/BaseRewriteManifests.java`):**
+- `operation()` == `DataOperations.REPLACE` (L87-89) → `Operation::Replace`.
+- Default cluster = by PARTITION: Java `clusterByFunc.apply(entry.file())` (L265) with the maintenance/Spark
+  default of `file.partition()` (`RewriteManifestsSparkAction` L83-85 "co-locates metadata for partitions").
+  Group live entries by `(partition_spec_id, partition Struct)`.
+- `performRewrite` (L239-276): for each current manifest, if it is a DELETE manifest (`containsDeletes`, L278)
+  OR does NOT match the predicate (`!matchesPredicate`, L282) → KEEP as-is (`keptManifests`); else read its
+  LIVE entries and `appendEntry(entry, clusterKey, specId)` into a per-`(key, specId)` writer that rolls to a
+  new manifest when `writer.length() >= manifestTargetSizeBytes` (L368, bin-pack by size). Each entry copied
+  via `writer.existing(entry)` (L372) — provenance preserved.
+- `apply()` (L170-195): result = new clustered manifests ++ keptManifests.
+- `validateFilesCounts` (L300-314): created active files == replaced active files (the data-integrity check).
+- Target size from `commit.manifest.target-size-bytes` (`MANIFEST_TARGET_SIZE_BYTES`, L21-22) — Rust
+  `TableProperties::PROPERTY_MANIFEST_TARGET_SIZE_BYTES` (default 8MB).
+
+**Design (fits the producer like merge_append's sibling):**
+- `RewriteManifestProcess` (async `ManifestProcess` in snapshot.rs, sibling of `MergeManifestProcess`):
+  takes the live data manifests, partitions DELETE manifests + predicate-non-matching DATA manifests as
+  KEPT (carried forward verbatim), reclusters the matching DATA manifests' live entries by
+  `(spec_id, partition)`, bin-packs each group's entries by accumulated `manifest_length`-proxy into target
+  size, writes new manifests via `new_filtering_manifest_writer` (source spec), copying each entry with
+  `add_existing_entry` (provenance-preserved). Validates created-active == replaced-active count.
+- `RewriteManifestsOperation` (`SnapshotProduceOperation`): `operation()`==`Replace`; `delete_files`/
+  `delete_entries`==empty; `existing_manifest` returns ALL current live manifests (DATA candidates + DELETE
+  pass-through) — the process reclusters.
+- Precondition relax in `manifest_file()`: a reorg-only commit has no added data/delete files, no removed
+  files, no props. Add an `is_manifest_reorg` flag on `SnapshotProducer` (set via a builder), and let the
+  empty-commit guard pass when it is set (the manifest list still changes).
+- `RewriteManifestsAction` (`TransactionAction`): `rewrite_if(predicate)` (default all DATA manifests);
+  drives `commit(RewriteManifestsOperation, RewriteManifestProcess::new(...))` with the reorg flag set.
+
+Plan:
+- [x] Precondition relax: add `manifest_reorg` flag to `SnapshotProducer` + `with_manifest_reorg()` setter;
+      empty-commit guard in `manifest_file()` passes when the flag is set.
+- [x] `RewriteManifestProcess` + `rewrite_manifests`/`bin_pack_entries`/`write_clustered_manifest` methods
+      on `SnapshotProducer` (reuse the source-spec writer via a refactored `new_spec_data_manifest_writer`
+      core + `add_existing_entry`; `validateFilesCounts` created==replaced guard).
+- [x] `RewriteManifestsAction` + `RewriteManifestsOperation`; wire `Transaction::rewrite_manifests()` + mod/use.
+- [x] 4 tests (MemoryCatalog; assert SCAN live set IDENTICAL + exact live-entry union + provenance +
+      partition-locality + Replace op), each named for its risk:
+      KEY identical-scan-after-reorg (2 partitions scattered across 3 manifests → each new manifest one
+      partition; live set byte-identical; entry count == path count; op Replace; provenance preserved; all
+      Existing); rewrite_if subset leaves unselected manifest untouched (same path); reorg-only commit
+      allowed; already-clustered = sane no-op-ish reorg. Mutation-verified all four risks (re-stamp →
+      provenance test; constant cluster → partition-locality test; entry drop → validateFilesCounts +
+      live-set; precondition disabled → all four fail "no added data files").
+- [x] Docs: GAP_MATRIX RewriteManifests ❌→🟡 + headline; Roadmap Phase 2 status + headline; this todo; lessons.
+- [x] Verify from repo root (pinned nightly): build clean; lib ×2 = 1444/0 (was 1440 baseline → +4);
+      interop_manage_snapshots/update_schema/update_partition_spec 4/4 each; clippy -D warnings clean;
+      fmt --check clean.
+
+**Outcome (2026-06-08, Phase 2 Increment 10, BUILDER Opus):** `RewriteManifests` lands 🟡 — the last
+tractable Phase-2 write-engine piece. **Design (sibling of merge append):** a `RewriteManifestsAction` /
+`Transaction::rewrite_manifests()` drives `commit(RewriteManifestsOperation, RewriteManifestProcess)` with
+`SnapshotProducer::with_manifest_reorg(true)`. The op records `Operation::Replace`, empty `delete_files`,
+no added data; its `existing_manifest` exposes every live manifest. The `RewriteManifestProcess` (async
+`ManifestProcess`, like `MergeManifestProcess`) does the keep/recluster split: DELETE manifests + non-target
+DATA manifests are carried forward verbatim; target DATA manifests' live entries are grouped by
+`(spec_id, partition)`, bin-packed by an estimated entry size into `commit.manifest.target-size-bytes`, and
+written via the SOURCE-spec writer copying each entry `add_existing_entry` (provenance preserved). The
+`validateFilesCounts` data-integrity check rejects a created!=replaced count. **Producer precondition
+relaxed** so a reorg-only commit (no add/remove/props) is allowed. **Shared-helper extraction:**
+`new_filtering_manifest_writer` now delegates to a new `new_spec_data_manifest_writer(spec_id)` core (the
+spec-id-only path), which the reorg writer reuses — no duplication. **Java logic mirrored with citations:**
+`operation()`==REPLACE (`BaseRewriteManifests` L87-89), partition-cluster default (`clusterByFunc` default +
+`RewriteManifestsSparkAction`), `performRewrite`/`keepActiveManifests` (L221-276), `writer.existing(entry)`
+(L372), `apply` order new-then-kept (L170-195), `validateFilesCounts` (L300-314). **Verify (repo root,
+pinned nightly):** build clean; lib ×2 = 1444/0 both runs (was 1440 → +4); interop 4/4 ×3; clippy -D warnings
+clean; fmt --check clean. Files touched exactly the allowed set: `transaction/rewrite_manifests.rs` (new),
+`transaction/snapshot.rs` (precondition relax + flag + `RewriteManifestProcess` + reorg methods + the
+`new_spec_data_manifest_writer` extraction), `transaction/mod.rs` (wiring), GAP_MATRIX, Roadmap, todo,
+lessons. NO Cargo.toml/lockfile edits. NO commit. Nothing touched outside the allowed set (`append.rs`,
+`merge_append.rs` NOT touched — the extraction stayed in `snapshot.rs`; `snapshot_summary.rs` NOT touched —
+`Operation::Replace` was already in its allowlist from RewriteFiles). **Deferred (flagged):** custom
+`clusterBy(Function<DataFile,Object>)` (this action does the partition default); explicit
+`addManifest`/`deleteManifest`; DELETE-manifest reclustering (carried forward unchanged); the
+`manifests-created`/`-replaced`/`-kept` summary fields (Java `SnapshotSummary.{CREATED,KEPT,REPLACED}_
+MANIFESTS_COUNT` — the Rust summary infra does NOT carry them, a noted gap); data-level Java interop
+round-trip (the gate to ✅). An Opus REVIEWER verifies next.
+
+#### Phase 2 Increment 10 — REVIEW (2026-06-08, Opus REVIEWER, DELEGATED)
+Adversarially verified points 1–7 against `core/BaseRewriteManifests.java` + the Rust source, mutation-testing
+each data-integrity risk. **All 7 points PASS; row stays 🟡 (data-level interop is the only ✅ gate).**
+- [x] **Pt 1 (no loss / no dup): CONFIRMED + STRENGTHENED.** Exact live-PATH set + non-deduplicated
+      live-ENTRY count both byte-identical before/after. `validateFilesCounts` (created-read == replaced-read)
+      is real and load-bearing: mutation-dropping a group fires "3 (new) != 6 (old)" BEFORE commit; a
+      duplicate-bin-counted-once bypasses the guard and is caught by the `live_entry_count` assertion (12 vs 6
+      — the path SET de-dups and hides it). Java `validateFilesCounts` mirrored.
+- [x] **Pt 2 (provenance + SEQ NUMBERS — PARAMOUNT): CONFIRMED, empirically + by mutation.** Three V3 appends
+      yield DISTINCT NON-ZERO data/file seqs 1/2/3 + distinct snapshot ids; reorg is seq 4. After the reorg
+      every entry keeps its EXACT original snapshot id + data seq + file seq (NOT 4). `add_existing_entry`
+      sets ONLY `status = Existing` (writer.rs:337). Mutation `add_existing_entry`→`add_entry` clobbers
+      file_seq→4 and snapshot_id→reorg id → caught. **A reorg that re-stamps a data file's seq (resurrecting
+      deleted rows via `data_seq <= delete_seq`) is the worst possible bug here and it provably does NOT
+      occur.** Added `test_rewrite_manifests_preserves_distinct_nonzero_sequence_numbers` (durable).
+- [x] **Pt 3 (partition clustering): CONFIRMED.** Cluster key `(spec_id, partition Struct)`. Mutation to a
+      constant key collapses 2 partitions → 1 manifest → partition-locality assertion fires (live-set / count
+      / provenance still pass — orthogonal risk on a separate test).
+- [x] **Pt 4 (rewrite_if + carry-forward): CONFIRMED + TEST ADDED.** Non-matching DATA + ALL DELETE manifests
+      carried forward verbatim (same path). The original 4 tests had NO DELETE manifest — added
+      `test_rewrite_manifests_carries_delete_manifests_forward_unchanged` (row_delta a position-delete → reorg
+      → DELETE manifest survives with original path + delete entry provenance). DELETE carry-forward is TRIPLY
+      protected (paths excluded from targets + `is_data` split + writer content-type check; the last fires on
+      mutation: "should have DataContentType Data, but has PositionDeletes").
+- [x] **Pt 5 (precondition relax sound): CONFIRMED.** `with_manifest_reorg(true)` called from exactly ONE
+      place (the action); flag defaults `false` so every other action keeps the strict guard. Mutation
+      removing `!self.manifest_reorg` is load-bearing (all reorg commits fail PreconditionFailed). An
+      empty-table reorg commits an empty Replace (benign, matches Java — noted in lessons, not a bug).
+- [x] **Pt 6 (Replace + async-seam reuse + summary gap): CONFIRMED.** op == Replace (tested); reuses the
+      verified `ManifestProcess` seam (full suite green, no regression); the `manifests-created/-replaced/-kept`
+      summary gap is HONEST — `snapshot_summary.rs` genuinely has none of the three fields Java's
+      `SnapshotSummary` defines (verified by grep), tracked in GAP_MATRIX/Roadmap, row 🟡 not ✅.
+- [x] **Pt 7 (no regression + scope): CONFIRMED.** Only the named files changed (`rewrite_manifests.rs` new,
+      `snapshot.rs`, `mod.rs`, docs, task/*). `merge_append.rs`/`append.rs`/`snapshot_summary.rs` UNTOUCHED.
+      No Cargo edits. No bare `.unwrap()` in production. lib 1446/0 ×2 (was 1444 → +2 my tests); interop 4/4 ×3;
+      clippy -D warnings clean; fmt clean. NO commit.
+
+**Review outcome:** RewriteManifests is data-integrity-sound. +2 durable tests (DELETE-manifest carry-forward;
+distinct-non-zero seq preservation); all builder mutation claims independently reproduced. Files touched:
+`transaction/rewrite_manifests.rs` (+2 tests, fmt reflow), todo, lessons. Row stays 🟡.

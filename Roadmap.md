@@ -114,8 +114,14 @@ layers are removed in Phase 0.
    `writer/base_writer/deletion_vector_writer.rs`) — landed 🟡 on 2026-06-08, completing the merge-on-read
    WRITE story. Increment 9 — merge append (`MergeAppend` / `AppendFiles` merge mode: the `async`
    `ManifestProcess` seam + `MergeAppendAction` / `Transaction::merge_append()` bin-packing + merging small
-   manifests per spec, Java `ManifestMergeManager`) — landed 🟡 on 2026-06-08. Next Phase-2 increments: wire
-   the DV writer into RowDelta-for-V3 end-to-end, `RewriteManifests`. (V3 groundwork — row-lineage fields + the remaining `MIN_FORMAT_VERSIONS` types
+   manifests per spec, Java `ManifestMergeManager`) — landed 🟡 on 2026-06-08. Increment 10 —
+   `RewriteManifests` (`Transaction::rewrite_manifests()`: reorganize the table's manifests by partition
+   without changing any data, Java `BaseRewriteManifests` REPLACE; a sibling `RewriteManifestProcess` reuses
+   the merge-append bin-pack + provenance-preserving entry copy, the producer's empty-commit precondition
+   relaxed for a reorg-only commit, plus the `validateFilesCounts` data-integrity check) — landed 🟡 on
+   2026-06-08, completing the tractable Phase-2 write-engine surface. Next Phase-2 increments: wire
+   the DV writer into RowDelta-for-V3 end-to-end; concurrent-commit conflict validation across the write
+   actions; data-level Java interop round-trips (the gate to ✅). (V3 groundwork — row-lineage fields + the remaining `MIN_FORMAT_VERSIONS` types
    `variant`/`unknown`/`geometry`/`geography` — also remains.)** The live,
    increment-level plan and checkbox
    state are in
@@ -177,8 +183,13 @@ validation + interop deferred); **merge append is 🟡** (`transaction/merge_app
 `AppendFiles` merge mode: the `async` `ManifestProcess` producer seam + `MergeAppendAction` /
 `Transaction::merge_append()` bin-pack + merge small manifests per partition spec, Java
 `ManifestMergeManager`, with provenance-preserving entry copy; interop + delete-manifest merge deferred);
-the rest of the **write engine (`RewriteManifests`), incremental scans, ORC/Avro data files,
-variant/geo/unknown types, catalog view ops, and all maintenance actions are missing**. Full row-by-row
+**`RewriteManifests` is 🟡** (`transaction/rewrite_manifests.rs` — `Transaction::rewrite_manifests()`:
+reorganize the table's manifests by partition without changing any data, Java `BaseRewriteManifests`
+REPLACE; a sibling `RewriteManifestProcess` reuses the merge-append bin-pack + provenance-preserving
+entry copy, the empty-commit precondition relaxed for a reorg-only commit, plus the `validateFilesCounts`
+data-integrity check; custom `clusterBy` / `addManifest`/`deleteManifest` / DELETE-manifest reclustering +
+interop deferred); the rest — **incremental scans, ORC/Avro data files,
+variant/geo/unknown types, catalog view ops, and all maintenance actions — are missing**. Full row-by-row
 status (re-audited on 0.9.1): [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRIX.md).
 
 ---

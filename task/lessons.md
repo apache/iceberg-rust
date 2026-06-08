@@ -1549,3 +1549,99 @@ probe), each mutation-verified as load-bearing. Lessons:
   `spec_ids` ASCENDING. This only reorders the manifest-list entries across specs — it changes no entry's
   content, spec, or liveness, and DELETE manifests are appended after. No correctness impact; both are
   deterministic. Not worth diverging the Rust toward Java's reverse order.
+
+### 2026-06-08 (Phase 2 Increment 10 — RewriteManifests, BUILDER Opus)
+- **DO put a manifest-WRITING reorg in the async `ManifestProcess` seam (a sibling of `MergeManifestProcess`),
+  NOT in `SnapshotProduceOperation::existing_manifest`.** *Why:* the brief suggested "an async
+  `existing_manifest` returns the reclustered new manifests," but `existing_manifest` takes `&SnapshotProducer`
+  (immutable) and CANNOT write manifests — writing needs the producer's `manifest_counter` + writer, i.e.
+  `&mut self`. The merge-append increment already established that manifest post-processing that WRITES belongs
+  in `ManifestProcess::process_manifests(&mut SnapshotProducer, ...)`. So the reorg shape is: `existing_manifest`
+  returns EVERY live manifest (DATA candidates + DELETE pass-through, the `has_added_files() || has_existing_
+  files()` live filter), and a `RewriteManifestProcess` (built with the `rewrite_targets` path set) does the
+  keep/recluster split and writes the new manifests. The `RewriteManifestsOperation` is otherwise trivial
+  (Replace op, empty deletes, no adds).
+- **DO relax the producer empty-commit precondition with an explicit `manifest_reorg` flag, not by special-casing
+  the operation.** *Why:* `manifest_file()` rejects a commit with no added data files, no added delete files, no
+  removed files, and no properties — which a manifest reorganization legitimately is (it only regroups existing
+  entries). A `SnapshotProducer::with_manifest_reorg(true)` flag that the guard checks (`if !self.manifest_reorg
+  && added.is_empty() && ...`) is the minimal, self-documenting relax. Mutation-verified load-bearing: disabling
+  the relax (`if added.is_empty() && ...` without the flag) makes ALL FOUR reorg tests fail with "No added data
+  files... found" — and `test_reorg_only_commit_is_allowed` is the test that uniquely pins it.
+- **DO cluster RewriteManifests by `(partition_spec_id, partition Struct)` — the Java `clusterByFunc` DEFAULT is
+  partition, even though the API field itself defaults to `null`.** *Why:* `BaseRewriteManifests.clusterByFunc`
+  is `null` by default and when null `requiresRewrite` returns FALSE (no rewrite — only the explicit
+  `addManifest`/`deleteManifest` path runs). The "default reclustering = by partition" the task asks for is what
+  the MAINTENANCE surface supplies: `RewriteManifestsSparkAction` ("co-locates metadata for partitions",
+  L83-85) calls `clusterBy(file -> file.partition())`. So implement `entry.data_file().partition()` keyed by
+  `(spec_id, partition)` as the action's behavior; the arbitrary `clusterBy(Function)` is the deferred surface.
+- **DO carry the Java `validateFilesCounts` (created-active == replaced-active) check — it is the cheap, decisive
+  data-integrity guard for a reorg.** *Why:* a reorg that drops or duplicates an entry is silent corruption. Java
+  `BaseRewriteManifests.validateFilesCounts` (L300-314) throws when the new manifests' active-file count differs
+  from the replaced manifests'. The Rust analogue counts live entries read (`replaced_active_count`) vs live
+  entries written (`created_active_count`) and errors on mismatch. Mutation-verified: dropping entries during the
+  read fires it ("3 (new) != 6 (old)") BEFORE the commit lands, so a data-loss reorg cannot commit at all — a
+  second line of defense beyond the live-set + entry-count test assertions.
+- **DO extract the spec-id-only core of `new_filtering_manifest_writer` into `new_spec_data_manifest_writer(spec_id)`
+  rather than fabricate a placeholder `ManifestFile` to pass it.** *Why:* the reorg writer holds a bare
+  `partition_spec_id` (from the group key), not a source `ManifestFile`. The first cut built a full placeholder
+  `ManifestFile { manifest_path: String::new(), ... 16 fields }` just to call `new_filtering_manifest_writer` —
+  fragile (breaks when the struct gains a field) and opaque. Since that helper only READS
+  `source_manifest.partition_spec_id`, splitting out a `new_spec_data_manifest_writer(spec_id: i32)` core (which
+  `new_filtering_manifest_writer` now delegates to) is the clean shared helper — zero placeholder, and the
+  delete-rewrite/merge paths are unchanged.
+- **DO mutation-verify a reorg's FOUR distinct risks land on FOUR distinct tests (the path-set/count tests do NOT
+  pin clustering OR provenance).** *Why:* the data-integrity-critical reorg has orthogonal failure modes. (1)
+  re-stamp (`add_existing_entry` → `add_entry`): ONLY the provenance assertion fails (snapshot id becomes the
+  reorg id); the live-set + count + clustering tests all PASS under a re-stamp. (2) constant cluster key (ignore
+  partition): ONLY the partition-locality assertion fails (1 manifest with `{0,1}` vs 2 single-partition
+  manifests); live-set + count + provenance PASS. (3) drop an entry: the `validateFilesCounts` guard + the
+  live-set + count fail. (4) precondition disabled: all four fail at commit. A single "scan looks right" test
+  cannot distinguish these — assert the live-PATH set (loss/spurious), the live-ENTRY COUNT (duplication a set
+  hides), per-entry PROVENANCE (re-stamp), and per-manifest PARTITION-LOCALITY (clustering) separately.
+
+### 2026-06-08 (Phase 2 Increment 10 — RewriteManifests, REVIEWER Opus)
+- **DO add a DELETE-manifest carry-forward test for any reorg/merge action — the original 4 tests had ZERO
+  tables with a DELETE manifest, so point-4 ("DELETE manifests carried forward unchanged") was verified by
+  reading only.** *Why:* the reorg's worst silent failure is re-stamping/dropping a DELETE manifest, which
+  stops an existing position-delete from applying (`data_seq <= delete_seq`) → deleted rows resurrect. Added
+  `test_rewrite_manifests_carries_delete_manifests_forward_unchanged`: append a data file, `row_delta()` a
+  synthetic position-delete (this writes a real DELETE manifest), reorg, then assert the DELETE manifest
+  survives with its ORIGINAL path AND the delete entry keeps its snapshot id + both sequence numbers.
+  Mutation-verified: forcing the keep/rewrite split to rewrite ALL manifests (ignore `is_data` +
+  `rewrite_targets`) makes the writer's `check_data_file` reject writing a `PositionDeletes` file into a DATA
+  manifest ("should have DataContentType `Data`, but has `PositionDeletes`") — so a DELETE manifest is
+  TRIPLY protected: (1) DELETE paths never enter `rewrite_targets` (`resolve_rewrite_targets` filters to
+  `ManifestContentType::Data`), (2) the split requires `is_data`, (3) the data-manifest writer rejects a
+  non-data content file. The carry-forward cannot silently corrupt.
+- **DO assert the reorg preserves DISTINCT, NON-ZERO sequence numbers — the existing provenance test compared
+  before==after, which would pass even if both sides were `None`/`Some(0)`.** *Why:* the paramount reorg risk
+  (point 2) is a seq RE-STAMP; an equality-only assertion does not prove the seq was meaningful. Empirically
+  confirmed (throwaway probe, now a durable test): three sequential V3 fast-appends yield data/file seqs 1,
+  2, 3 (distinct, non-zero) and distinct snapshot ids; the reorg snapshot is seq 4. Added
+  `test_rewrite_manifests_preserves_distinct_nonzero_sequence_numbers` pinning data seq == 1/2/3 (NOT 4) and
+  file seq == 1/2/3 after the reorg. Mutation-verified: `add_existing_entry` → `add_entry` in
+  `write_clustered_manifest` clobbers `file_sequence_number` to the reorg seq (`Some(4)`) and `snapshot_id`
+  to the reorg id (all entries collapse to ONE snapshot id) — caught by this test + the original provenance
+  asserts. `add_existing_entry` is the load-bearing call: it sets ONLY `status = Existing` and leaves
+  snapshot_id / sequence_number / file_sequence_number untouched (`spec/manifest/writer.rs:337`).
+- **DO trust the read-side inheritance for provenance: a V2/V3 added entry is written with seq=None and
+  inherits its data+file seq from the manifest-list entry at `load_manifest` time (`entry.inherit_data`,
+  `spec/manifest/entry.rs:107`).** *Why:* the reorg reads entries via `load_manifest` (which runs
+  `inherit_data` → seqs populated to the ORIGINAL append's seq), then `add_existing_entry` preserves them and
+  the `add_entry_inner` guard (`writer.rs:367`) REQUIRES an Existing entry to carry both seqs (errors
+  otherwise). So a reorg physically cannot write a seq-less Existing entry — the spec invariant is enforced
+  at the writer, not just hoped for.
+- **DECISION: the Rust `validateFilesCounts` counts live entries READ vs WRITTEN, Java counts manifest-metadata
+  `addedFilesCount + existingFilesCount` — KEEP the Rust form (it is at-least-as-strong).** *Why:* both detect
+  drop/dup via the created==replaced equality. The Rust form counts what it physically read/wrote, which also
+  catches a metadata-vs-actual divergence Java's metadata-count form would miss. Mutation-verified load-bearing:
+  dropping a group fires "changed the live-entry count: 3 (new) != 6 (old)" BEFORE the commit; duplicating a
+  bin while counting once bypasses the guard and is caught instead by the non-deduplicated `live_entry_count`
+  test assertion (12 vs 6) — the path SET de-dups to 6 and hides it, exactly why the entry-count assertion is
+  mandatory alongside the guard.
+- **NOTE (benign, shared with Java): a reorg on a table with NO current snapshot commits an empty `Replace`
+  snapshot, not an error.** *Why:* `existing_manifest` returns `[]`, the rewrite produces `[]`, `validateFilesCounts`
+  passes 0==0, and the `manifest_reorg` flag lets the empty commit through. Java's maintenance action behaves
+  the same (`keepActiveManifests` empty → snapshot created). No data-integrity consequence (no data exists);
+  a spurious-empty-snapshot quirk only. Not fixed — matches Java.

@@ -35,6 +35,15 @@ use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
 
+/// An estimate of a single serialized manifest entry's size in bytes, used to bin-pack a partition
+/// group's entries across new manifests during a manifest reorganization (Java rolls a writer to a new
+/// manifest when its actual byte length reaches the target; the Rust [`ManifestWriter`] does not expose a
+/// streaming length, so the reorg estimates each entry's contribution). A manifest entry (status + ids +
+/// the `DataFile` struct) serializes to a few hundred bytes; this is a conservative round figure. With the
+/// default 8 MB target the rollover never fires (everything in a group fits one manifest), so this only
+/// governs the split when a caller sets a small `commit.manifest.target-size-bytes`.
+const ESTIMATED_MANIFEST_ENTRY_SIZE_BYTES: u64 = 512;
+
 /// A trait that defines how different table operations produce new snapshots.
 ///
 /// `SnapshotProduceOperation` is used by [`SnapshotProducer`] to customize snapshot creation
@@ -189,6 +198,55 @@ impl ManifestProcess for MergeManifestProcess {
     }
 }
 
+/// The manifest-reorganization post-processing (Java `BaseRewriteManifests.performRewrite` + `apply`):
+/// regroup the table's live DATA manifest entries into NEW manifests clustered by partition, WITHOUT
+/// changing any data file.
+///
+/// For each candidate manifest the process either KEEPS it verbatim (a DELETE manifest, or a DATA
+/// manifest whose path is not in `rewrite_targets` — Java `keepActiveManifests` / the `containsDeletes ||
+/// !matchesPredicate` branch) or REWRITES it: every live entry is grouped by `(partition_spec_id,
+/// partition Struct)` (the default cluster key — Java's `clusterByFunc` defaults to partition), each group
+/// is bin-packed into manifests of `target_size_bytes` and written with the SOURCE spec's writer, copying
+/// every entry PROVENANCE-PRESERVED (`Existing`, keeping its original snapshot id + both sequence numbers
+/// — Java `writer.existing(entry)`). No data file is added or removed, so the post-rewrite live set is
+/// identical to the pre-rewrite live set.
+pub(crate) struct RewriteManifestProcess {
+    target_size_bytes: u64,
+    /// The paths of the current DATA manifests selected for rewrite (Java `rewriteIf` predicate match).
+    /// A DATA manifest not in this set, and every DELETE manifest, is carried forward unchanged.
+    rewrite_targets: HashSet<String>,
+}
+
+impl RewriteManifestProcess {
+    /// Build the reorg process from the table's `commit.manifest.target-size-bytes` property (falling back
+    /// to the 8 MB default) and the set of DATA-manifest paths chosen for rewrite.
+    pub(crate) fn new(
+        properties: &HashMap<String, String>,
+        rewrite_targets: HashSet<String>,
+    ) -> Self {
+        let target_size_bytes = properties
+            .get(TableProperties::PROPERTY_MANIFEST_TARGET_SIZE_BYTES)
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(TableProperties::PROPERTY_MANIFEST_TARGET_SIZE_BYTES_DEFAULT);
+        Self {
+            target_size_bytes,
+            rewrite_targets,
+        }
+    }
+}
+
+impl ManifestProcess for RewriteManifestProcess {
+    async fn process_manifests(
+        &self,
+        snapshot_produce: &mut SnapshotProducer<'_>,
+        manifests: Vec<ManifestFile>,
+    ) -> Result<Vec<ManifestFile>> {
+        snapshot_produce
+            .rewrite_manifests(manifests, self.target_size_bytes, &self.rewrite_targets)
+            .await
+    }
+}
+
 pub(crate) struct SnapshotProducer<'a> {
     pub(crate) table: &'a Table,
     snapshot_id: i64,
@@ -206,6 +264,12 @@ pub(crate) struct SnapshotProducer<'a> {
     // so the snapshot summary can reflect the deleted file/record counts (Java overwrite/delete summary).
     // Empty for add-only operations such as fast append.
     removed_data_files: Vec<DataFile>,
+    // True when this snapshot is a manifest-ONLY reorganization (Java `BaseRewriteManifests`): it adds and
+    // removes NO data files and sets no properties, yet still commits a new manifest list (the same live
+    // entries regrouped into different manifests). Without this flag the empty-commit precondition in
+    // `manifest_file()` would (correctly) reject such a commit; with it set, an add/remove/property-empty
+    // commit is allowed because the `ManifestProcess` rewrites the manifest list.
+    manifest_reorg: bool,
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
@@ -229,6 +293,7 @@ impl<'a> SnapshotProducer<'a> {
             added_data_files,
             added_delete_files: vec![],
             removed_data_files: vec![],
+            manifest_reorg: false,
             manifest_counter: (0..),
         }
     }
@@ -238,6 +303,14 @@ impl<'a> SnapshotProducer<'a> {
     /// `MergingSnapshotProducer.add(DeleteFile)`). Used by the merge-on-read write path (`RowDelta`).
     pub(crate) fn with_added_delete_files(mut self, added_delete_files: Vec<DataFile>) -> Self {
         self.added_delete_files = added_delete_files;
+        self
+    }
+
+    /// Mark this snapshot as a manifest-ONLY reorganization (Java `BaseRewriteManifests`): it adds and
+    /// removes no data files but still commits a regrouped manifest list. This relaxes the empty-commit
+    /// precondition in [`manifest_file`](Self::manifest_file) so the reorg-only commit is allowed.
+    pub(crate) fn with_manifest_reorg(mut self, manifest_reorg: bool) -> Self {
+        self.manifest_reorg = manifest_reorg;
         self
     }
 
@@ -623,14 +696,17 @@ impl<'a> SnapshotProducer<'a> {
         let delete_files = std::mem::take(&mut self.removed_data_files);
 
         // Assert the new snapshot contributes content: added data files, added DELETE files, removed
-        // (deleted) data files, or added snapshot properties. An add-deletes-only commit (delete files,
-        // no data files) is allowed (the merge-on-read `RowDelta` path); a delete-only data commit
-        // (rewrite data manifests, no adds) is allowed; a truly-empty commit is not.
+        // (deleted) data files, added snapshot properties, or a manifest-only reorganization. An
+        // add-deletes-only commit (delete files, no data files) is allowed (the merge-on-read `RowDelta`
+        // path); a delete-only data commit (rewrite data manifests, no adds) is allowed; a manifest
+        // reorganization (Java `BaseRewriteManifests` — regroup the same live entries into new manifests,
+        // no data added or removed) is allowed via the `manifest_reorg` flag; a truly-empty commit is not.
         //
         // TODO: Allowing snapshot property setup with no added data files is a workaround.
         // We should clean it up after all necessary actions are supported.
         // For details, please refer to https://github.com/apache/iceberg-rust/issues/1548
-        if self.added_data_files.is_empty()
+        if !self.manifest_reorg
+            && self.added_data_files.is_empty()
             && self.added_delete_files.is_empty()
             && delete_files.is_empty()
             && self.snapshot_properties.is_empty()
@@ -784,17 +860,22 @@ impl<'a> SnapshotProducer<'a> {
         &mut self,
         source_manifest: &ManifestFile,
     ) -> Result<ManifestWriter> {
+        self.new_spec_data_manifest_writer(source_manifest.partition_spec_id)
+    }
+
+    /// Build a DATA manifest writer for the partition spec `spec_id`, so entries written through it keep
+    /// `spec_id` and that spec's partition type. The shared core of
+    /// [`new_filtering_manifest_writer`](Self::new_filtering_manifest_writer) (which resolves the spec id
+    /// from a source manifest) and the manifest-reorg writer (which already holds the spec id).
+    fn new_spec_data_manifest_writer(&mut self, spec_id: i32) -> Result<ManifestWriter> {
         let partition_spec = self
             .table
             .metadata()
-            .partition_spec_by_id(source_manifest.partition_spec_id)
+            .partition_spec_by_id(spec_id)
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot rewrite manifest: unknown partition spec id {}",
-                        source_manifest.partition_spec_id
-                    ),
+                    format!("Cannot rewrite manifest: unknown partition spec id {spec_id}"),
                 )
             })?
             .as_ref()
@@ -967,6 +1048,144 @@ impl<'a> SnapshotProducer<'a> {
             }
         }
 
+        writer.write_manifest_file().await
+    }
+
+    /// Reorganize the table's current manifests into new manifests clustered by partition, WITHOUT
+    /// changing any data file (Java `BaseRewriteManifests.performRewrite` + `apply`).
+    ///
+    /// `manifests` is every current live manifest (the candidates), `rewrite_targets` is the set of DATA
+    /// manifest paths chosen for rewrite (Java `rewriteIf` predicate match). The method:
+    /// - KEEPS verbatim every DELETE manifest and every DATA manifest whose path is NOT in
+    ///   `rewrite_targets` (Java `containsDeletes || !matchesPredicate` → `keptManifests`);
+    /// - REWRITES the rest: reads their live entries, groups them by `(partition_spec_id, partition
+    ///   Struct)` (the default partition cluster key), bin-packs each group into manifests of
+    ///   `target_size_bytes`, and writes them with the source spec's writer, copying every entry as
+    ///   `Existing` with its provenance preserved (Java `writer.existing(entry)`);
+    /// - validates the created live-entry count equals the replaced live-entry count (Java
+    ///   `validateFilesCounts` — the data-integrity check that no entry was dropped or duplicated).
+    ///
+    /// The result is `new clustered manifests ++ kept manifests` (Java puts the new manifests first). No
+    /// data file is added or removed, so the post-rewrite live set is byte-identical to the pre-rewrite
+    /// live set.
+    async fn rewrite_manifests(
+        &mut self,
+        manifests: Vec<ManifestFile>,
+        target_size_bytes: u64,
+        rewrite_targets: &HashSet<String>,
+    ) -> Result<Vec<ManifestFile>> {
+        // Partition the candidates into KEEP (DELETE manifests + non-selected DATA manifests) and REWRITE
+        // (selected DATA manifests). A DELETE manifest is never rewritten here (Java `containsDeletes`).
+        let mut kept_manifests: Vec<ManifestFile> = Vec::new();
+        let mut to_rewrite: Vec<ManifestFile> = Vec::new();
+        for manifest in manifests {
+            let is_data = manifest.content == ManifestContentType::Data;
+            if is_data && rewrite_targets.contains(&manifest.manifest_path) {
+                to_rewrite.push(manifest);
+            } else {
+                kept_manifests.push(manifest);
+            }
+        }
+
+        // Read every live entry of the to-rewrite manifests, grouping by `(spec_id, partition)`. The group
+        // order is deterministic (first-seen) so the produced manifest list is stable across runs.
+        let mut group_order: Vec<(i32, Struct)> = Vec::new();
+        let mut groups: HashMap<(i32, Struct), Vec<ManifestEntry>> = HashMap::new();
+        let mut replaced_active_count: u64 = 0;
+        for manifest_file in &to_rewrite {
+            let manifest = manifest_file.load_manifest(self.table.file_io()).await?;
+            for entry in manifest.entries() {
+                if !entry.is_alive() {
+                    continue;
+                }
+                replaced_active_count += 1;
+                let entry = entry.as_ref().clone();
+                let key = (
+                    manifest_file.partition_spec_id,
+                    entry.data_file().partition().clone(),
+                );
+                let bucket = groups.entry(key.clone()).or_insert_with(|| {
+                    group_order.push(key.clone());
+                    Vec::new()
+                });
+                bucket.push(entry);
+            }
+        }
+
+        // Bin-pack each group into one-or-more new manifests (split only when a group exceeds the target
+        // size) and write them with the source spec's writer, preserving every entry's provenance.
+        let mut new_manifests: Vec<ManifestFile> = Vec::new();
+        let mut created_active_count: u64 = 0;
+        for key in &group_order {
+            let (spec_id, _partition) = key;
+            let entries = groups.remove(key).expect("group key was just collected");
+            for bin in Self::bin_pack_entries(entries, target_size_bytes) {
+                created_active_count += bin.len() as u64;
+                let manifest = self.write_clustered_manifest(*spec_id, bin).await?;
+                new_manifests.push(manifest);
+            }
+        }
+
+        // Data-integrity check (Java `validateFilesCounts`): the reorg must neither drop nor duplicate any
+        // live entry. Equivalent to "the set of live files is identical before and after."
+        if created_active_count != replaced_active_count {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                format!(
+                    "Manifest reorganization changed the live-entry count: {created_active_count} (new) != {replaced_active_count} (old)"
+                ),
+            ));
+        }
+
+        // New clustered manifests first, then the carried-forward kept manifests (Java `apply` order).
+        new_manifests.extend(kept_manifests);
+        Ok(new_manifests)
+    }
+
+    /// Bin-pack a single partition group's entries into bins that each stay under `target_size_bytes`
+    /// (mirroring Java `WriterWrapper.addEntry`, which rolls to a new manifest when the writer's length
+    /// reaches the target). A bin always accepts at least one entry, so a single oversized entry lands
+    /// alone. Entry order is preserved.
+    fn bin_pack_entries(
+        entries: Vec<ManifestEntry>,
+        target_size_bytes: u64,
+    ) -> Vec<Vec<ManifestEntry>> {
+        let mut bins: Vec<Vec<ManifestEntry>> = Vec::new();
+        let mut current_bin: Vec<ManifestEntry> = Vec::new();
+        let mut current_weight: u64 = 0;
+
+        for entry in entries {
+            // An empty bin always accepts the next entry; a non-empty bin accepts it only while the bin's
+            // estimated serialized size stays under the target.
+            let would_exceed = !current_bin.is_empty()
+                && current_weight.saturating_add(ESTIMATED_MANIFEST_ENTRY_SIZE_BYTES)
+                    > target_size_bytes;
+            if would_exceed {
+                bins.push(std::mem::take(&mut current_bin));
+                current_weight = 0;
+            }
+            current_weight = current_weight.saturating_add(ESTIMATED_MANIFEST_ENTRY_SIZE_BYTES);
+            current_bin.push(entry);
+        }
+        if !current_bin.is_empty() {
+            bins.push(current_bin);
+        }
+        bins
+    }
+
+    /// Write one clustered manifest holding `entries` (all of the same `partition_spec_id`), copying every
+    /// entry as an `Existing` entry — its original snapshot id and both sequence numbers preserved (Java
+    /// `WriterWrapper.addEntry` → `writer.existing(entry)`). The manifest is written with the source spec's
+    /// writer so the partition tuple keeps its typing.
+    async fn write_clustered_manifest(
+        &mut self,
+        spec_id: i32,
+        entries: Vec<ManifestEntry>,
+    ) -> Result<ManifestFile> {
+        let mut writer = self.new_spec_data_manifest_writer(spec_id)?;
+        for entry in entries {
+            writer.add_existing_entry(entry)?;
+        }
         writer.write_manifest_file().await
     }
 

@@ -61,6 +61,7 @@ mod merge_append;
 mod overwrite_files;
 mod replace_partitions;
 mod rewrite_files;
+mod rewrite_manifests;
 mod row_delta;
 mod snapshot;
 mod sort_order;
@@ -88,6 +89,7 @@ use crate::transaction::merge_append::MergeAppendAction;
 use crate::transaction::overwrite_files::OverwriteFilesAction;
 use crate::transaction::replace_partitions::ReplacePartitionsAction;
 use crate::transaction::rewrite_files::RewriteFilesAction;
+use crate::transaction::rewrite_manifests::RewriteManifestsAction;
 use crate::transaction::row_delta::RowDeltaAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
@@ -219,6 +221,18 @@ impl Transaction {
         files_to_add: impl IntoIterator<Item = crate::spec::DataFile>,
     ) -> RewriteFilesAction {
         RewriteFilesAction::new().rewrite_files(files_to_delete, files_to_add)
+    }
+
+    /// Creates a rewrite-manifests action (reorganize the table's manifests without changing any data):
+    /// produce a new `Replace` snapshot whose DATA manifests recluster the existing live DATA manifests'
+    /// entries by PARTITION — the SAME data files, regrouped (Java `RewriteManifests` /
+    /// `BaseRewriteManifests`). The live (scannable) file set is byte-identical before and after; only the
+    /// manifest organization changes. DELETE manifests are carried forward unchanged.
+    /// [`rewrite_if`](rewrite_manifests::RewriteManifestsAction::rewrite_if) restricts the rewrite to the
+    /// matching DATA manifests. Custom `clusterBy`, explicit `addManifest`/`deleteManifest`, and
+    /// DELETE-manifest reclustering are not yet supported.
+    pub fn rewrite_manifests(&self) -> RewriteManifestsAction {
+        RewriteManifestsAction::new()
     }
 
     /// Creates a row-delta action (the merge-on-read write commit): add data files AND add row-level
