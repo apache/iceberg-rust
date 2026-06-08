@@ -3274,3 +3274,115 @@ shared helper so the two checks cannot drift.
   for the data-file block, the only block we implement. (3) The non-ancestor `validate_from_snapshot` over-scan
   divergence (Rust over-scans to root where Java throws) is inherited UNCHANGED from `added_data_files_after`
   (Increment-6-flagged, Rust-STRICTER, over-reject-only) — not re-introduced here.
+
+---
+
+## SEQUENCE: RowDelta delete-file conflict validation (Phase 3, started 2026-06-08)
+Branch `phase3-rowdelta-delete-conflicts` (off merged `main` `063b7153`). Completes the RowDelta serializable-
+isolation surface beyond the data-file conflict check (which landed in the residual sequence Inc 4).
+
+### Increment — RowDelta validateNoConflictingDeleteFiles (THIS increment)
+Java `BaseRowDelta.validate` → `validateNewDeleteFiles` → `validateNoNewDeleteFiles(base, startingSnapshotId,
+conflictDetectionFilter, parent)` (`MergingSnapshotProducer.java:562-570`): enumerate DELETE files ADDED by
+concurrent commits since the starting snapshot, and reject if ANY could apply to records matching the conflict
+filter. The error: "Found new conflicting delete files that can apply to records matching %s: %s".
+
+**Building blocks + Java authority (CONFIRMED):**
+- `addedDeleteFiles` (`MergingSnapshotProducer.java:601-625`): V2-ONLY (`base.formatVersion() < 2` ⇒ empty —
+  delete files don't exist in V1); `validationHistory(..., VALIDATE_ADDED_DELETE_FILES_OPERATIONS,
+  ManifestContent.DELETES, ...)` then a `DeleteFileIndex` filtered by the dataFilter + startingSequenceNumber.
+  `VALIDATE_ADDED_DELETE_FILES_OPERATIONS = {OVERWRITE, DELETE}` (vs `{APPEND, OVERWRITE}` for data).
+- Rust model: `added_data_files_after` (`transaction/snapshot.rs:980`) is the data-file analogue — same walk,
+  EXCLUSIVE of start, only manifests the snapshot itself added, only `Added` entries. The delete version
+  differs ONLY in the manifest content filter (`Deletes`) + the operation set (`Overwrite | Delete`) + the V2
+  guard. **Generalize the walk** into a private `added_files_after(table, start, content, op_predicate)`;
+  `added_data_files_after` + new `added_delete_files_after` both call it (Rule-of-Three on the walk).
+- Conflict TEST = the SAME `InclusiveMetricsEvaluator` per file used by the data check; extract a shared
+  `first_conflicting_file(files, current, conflict_filter, case_sensitive) -> Result<Option<DataFile>>` and
+  have the existing `validate_no_conflicting_added_data_files` (refactor, behavior-preserving — Inc-4
+  OverwriteFiles + RowDelta data tests stay green) AND a new `validate_no_conflicting_added_delete_files` (with
+  the DELETE error message) use it.
+
+Plan:
+- [x] `transaction/snapshot.rs`: generalize the walk → `added_files_after`; add `added_delete_files_after`
+      (content=Deletes, ops=Overwrite|Delete, V2 guard `format_version() < FormatVersion::V2 ⇒ empty`); extract
+      `first_conflicting_file` (the inclusive-metrics test); add `validate_no_conflicting_added_delete_files`
+      using it + the delete message; refactor `validate_no_conflicting_added_data_files` onto the shared test
+      (no behavior change). `added_data_files_after` enumeration semantics unchanged.
+- [x] `transaction/row_delta.rs`: add `validate_no_conflicting_delete_files: bool` field + builder; extend
+      `validate` — after the data check, if enabled run the delete check (same `effective_start`,
+      `conflict_detection_filter`, case-sensitive true). Module doc: drop `validateNoConflictingDeleteFiles`
+      from deferred (note `validateDataFilesExist` + `validateNoNewDeletesForDataFiles` + V3 `validateAddedDVs`
+      still deferred — they need `referenced_data_files`/`removed_data_files` on the action, which it lacks).
+- [x] Tests (MemoryCatalog + a real concurrent commit that ADDS a delete file via a RowDelta/overwrite path):
+      no-concurrent-delete → OK; concurrent commit adds a DELETE file whose metrics MATCH the filter → rejected
+      non-retryable `DataInvalid` (names the file, delete-specific message); metrics-EXCLUDE → OK; flag OFF →
+      no delete check; None filter → any concurrent delete conflicts; V1 table → no delete check (guard);
+      data-check and delete-check independent (enabling one doesn't enable the other). Mutation-pin: the
+      content filter (Data vs Deletes in the walk), the metrics decision, the non-retryable kind. Keep Inc-4
+      data tests green (shared-test refactor proof).
+- [x] Docs: GAP_MATRIX (RowDelta validateNoConflictingDeleteFiles 🟡 + the seq-number/DeleteFileIndex precision
+      deferral), Roadmap, todo, lessons.
+- [x] Verify from repo root: build -p iceberg + workspace; lib ×2; transaction::; datafusion tests; 3 interop;
+      clippy (workspace); fmt.
+
+**Outcome (2026-06-08, BUILDER Opus):** RowDelta `validateNoConflictingDeleteFiles` landed 🟡.
+- **Generalized walk.** Factored the data-file walk into a private `async fn added_files_after(table,
+  starting_snapshot_id, content: ManifestContentType, operation_adds: fn(&Operation)->bool) ->
+  Result<Vec<DataFile>>` (Java `validationHistory`). `added_data_files_after` is now a thin call
+  `(Data, operation_adds_data_files)`; its observable behavior is unchanged — the existing OverwriteFiles /
+  ReplacePartitions / RowDelta data conflict tests (241 transaction:: tests) stayed green unchanged. Added
+  `pub(crate) added_delete_files_after` = `(Deletes, operation_adds_delete_files)` with the V2 guard
+  (`format_version() < FormatVersion::V2 ⇒ Ok(vec![])`, Java `addedDeleteFiles` L608). New
+  `operation_adds_delete_files = matches!(op, Overwrite | Delete)` (Java `VALIDATE_ADDED_DELETE_FILES_OPERATIONS`,
+  distinct from data's `{Append, Overwrite}`).
+- **Shared per-file test extraction.** Extracted `fn first_conflicting_file(files: &[DataFile], current:
+  &Table, conflict_filter: Option<&Predicate>, case_sensitive) -> Result<Option<DataFile>>` (bind None⇒AlwaysTrue
+  once, per-file `InclusiveMetricsEvaluator::eval`, return first match). Refactored
+  `validate_no_conflicting_added_data_files` onto it (DATA message unchanged) and added
+  `validate_no_conflicting_added_delete_files` onto it (DELETE message "Found new conflicting delete files that
+  can apply to records matching {filter}: {path}"). Behavior-preservation proof: the data path's tests pass
+  unchanged.
+- **RowDelta wiring.** Added `validate_no_conflicting_delete_files: bool` + builder
+  `validate_no_conflicting_delete_files()`. The `validate` override now runs the data check (if its flag) THEN
+  the delete check (if ITS flag), sharing `effective_start = validate_from_snapshot.or(starting)` +
+  `conflict_detection_filter`; either failing rejects. The two flags are independent.
+- **V2 guard finding (honest):** the V1 end-to-end test STILL passes with the guard dropped — the concurrent
+  commit on V1 is an `Append` (excluded by `{Overwrite,Delete}`) and no DELETE manifests can exist on V1, so the
+  walk naturally yields nothing. The guard is a Java-faithful short-circuit (avoids a needless walk), NOT
+  behavior-changing for this scenario. Documented as such; the V1 test also asserts `added_delete_files_after`
+  directly returns empty.
+- **Over-scan (documented):** the port omits Java's `DeleteFileIndex` `startingSequenceNumber` refinement —
+  conservative (over-reject only), same class as Inc-3's manifest-summary pre-filter deferral.
+- **Java lines verified:** `BaseRowDelta.validate` L131-174 (the `validateNewDeleteFiles` branch L159-167; the
+  `!removedDataFiles.isEmpty()` sub-branch L161-164 is unreachable here — the action has no `removeRows` — so it
+  is correctly out of scope); `MergingSnapshotProducer.validateNoNewDeleteFiles` L562-570 (the error message);
+  `addedDeleteFiles` L601-625 (V2 guard L608, `VALIDATE_ADDED_DELETE_FILES_OPERATIONS` + `ManifestContent.DELETES`
+  L614-620); the op sets L73-85 (`{OVERWRITE, DELETE}` for deletes vs `{APPEND, OVERWRITE}` for data).
+- **Tests (8 new delete-conflict, each risk-named):** `..._delete_validation_no_concurrent_commit_succeeds`
+  (race-free → OK); `..._rejects_concurrent_added_delete_file_matching_filter` (HEADLINE — non-retryable +
+  names the file + DELETE-specific message asserted distinct from the data message); `..._allows_concurrent_added_delete_file_excluded_by_filter`
+  (EXCLUDE → OK); `..._without_delete_validation_allows_conflicting_concurrent_delete` (flag OFF → snapshot
+  isolation); `..._delete_none_filter_treats_any_concurrent_delete_as_conflict` (None⇒AlwaysTrue);
+  `..._delete_check_is_noop_on_v1_table` (V2 guard, + direct `added_delete_files_after` assertion);
+  `..._delete_check_does_not_run_data_check` + `..._data_check_does_not_run_delete_check` (independence both
+  ways). 27 row_delta tests total (was 19).
+- **Mutations run + caught:** (a) `added_delete_files_after` walks Data not Deletes → the headline delete test
+  fails (content filter load-bearing); (b) invert `first_conflicting_file` decision → the EXCLUDE test fails for
+  BOTH overwrite_files (data) AND row_delta (delete) — shared test load-bearing for both; (c) delete error made
+  retryable → `!retryable()` assertion fails + the retry loop spins (0.07s→1.55s); (d) drop the V2 guard → the
+  V1 test STILL passes (walk yields nothing — guard is a faithful short-circuit, documented).
+- **Gate (all 8 green):** (1) build -p iceberg OK; (2) build --workspace --exclude iceberg-sqllogictest
+  --all-targets OK; (3) `cargo test -p iceberg --lib` ×2 = **1524 passed, 0 failed** both runs (new lib total
+  1524; was 1516); (4) `transaction::` = 241 passed (Inc-3 OverwriteFiles + Inc-4 RowDelta data tests
+  UNCHANGED-green); (5) iceberg-datafusion lib 80 + integration 9 pass; the ONE failing doctest
+  (`table_provider_factory.rs` line 41, `rt-multi-thread` disabled under `#[tokio::main]`) is PRE-EXISTING +
+  environmental — fails identically with my changes git-stashed; (6) interop_manage_snapshots / interop_update_schema
+  / interop_update_partition_spec = 4/4 each; (7) clippy --workspace --exclude iceberg-sqllogictest --all-targets
+  -D warnings clean; (8) fmt --check clean. No commit, no branch switch, edits only in snapshot.rs / row_delta.rs +
+  docs (GAP_MATRIX, Roadmap, todo, lessons).
+
+**Note (over-scan, document):** Java's `addedDeleteFiles` additionally filters the DeleteFileIndex by
+`startingSequenceNumber`; this port enumerates concurrent-added delete files by the snapshot walk + inclusive
+metrics only (no seq-number refinement) — a conservative over-scan (can only over-reject, never under-reject),
+same class as Inc-3's manifest-summary pre-filter deferral.

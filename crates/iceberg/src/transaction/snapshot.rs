@@ -957,29 +957,39 @@ fn operation_adds_data_files(operation: &Operation) -> bool {
     matches!(operation, Operation::Append | Operation::Overwrite)
 }
 
-/// Enumerate the DATA files ADDED to `table` by snapshots committed AFTER `starting_snapshot_id` — the
-/// concurrent commits a serializable-isolation conflict check must inspect.
+/// Operations whose snapshots can ADD delete files — the only ones a "no conflicting delete" validation
+/// needs to inspect (Java `MergingSnapshotProducer.VALIDATE_ADDED_DELETE_FILES_OPERATIONS = {OVERWRITE,
+/// DELETE}`). Note this differs from [`operation_adds_data_files`] (`{APPEND, OVERWRITE}`): an `Append`
+/// snapshot never adds delete files, while a `Delete` snapshot (a pure merge-on-read delete commit) does.
+fn operation_adds_delete_files(operation: &Operation) -> bool {
+    matches!(operation, Operation::Overwrite | Operation::Delete)
+}
+
+/// Enumerate the files of a given manifest `content` ADDED to `table` by snapshots committed AFTER
+/// `starting_snapshot_id` — the shared walk behind both [`added_data_files_after`] (DATA manifests) and
+/// [`added_delete_files_after`] (DELETE manifests).
 ///
-/// This is the Rust port of Java `MergingSnapshotProducer.addedDataFiles` + `validationHistory`
+/// This is the Rust port of Java `MergingSnapshotProducer.validationHistory`
 /// (`core/MergingSnapshotProducer.java`): it walks the parent chain of `table`'s current snapshot (the
 /// refreshed base / Java `parent`) back via `parent_snapshot_id`, INCLUSIVE of the current snapshot and
 /// EXCLUSIVE of `starting_snapshot_id` (Java `SnapshotUtil.ancestorsBetween(parent.snapshotId(),
-/// startingSnapshotId)`). For each visited snapshot whose operation can add data
-/// ([`operation_adds_data_files`] = Java `VALIDATE_ADDED_FILES_OPERATIONS`), it loads that snapshot's
-/// manifest list, keeps the DATA manifests it ADDED (`manifest.added_snapshot_id == snapshot.snapshot_id()`,
-/// Java `manifest.snapshotId() == currentSnapshot.snapshotId()`), and collects every `Added`-status entry's
-/// [`DataFile`] (Java `ignoreDeleted().ignoreExisting()` + `entry.snapshotId() ∈ newSnapshots`).
+/// startingSnapshotId)`). For each visited snapshot whose operation passes `operation_adds` (Java's
+/// per-validation operation set — `VALIDATE_ADDED_FILES_OPERATIONS` for data,
+/// `VALIDATE_ADDED_DELETE_FILES_OPERATIONS` for deletes), it loads that snapshot's manifest list, keeps the
+/// manifests of `content` that it ADDED (`manifest.added_snapshot_id == snapshot.snapshot_id()`, Java
+/// `manifest.snapshotId() == currentSnapshot.snapshotId()`), and collects every `Added`-status entry's
+/// [`DataFile`] (Java `ignoreDeleted().ignoreExisting()`). Both DATA and DELETE files are carried in
+/// manifest entries as [`DataFile`]s, distinguished by their content type.
 ///
 /// `starting_snapshot_id == None` means "validate from the beginning of history" — every ancestor of the
 /// current snapshot is inspected (Java passes a null starting id to `ancestorsBetween`, which walks to the
 /// root). When the current snapshot already IS `starting_snapshot_id` (no concurrent commit landed), the walk
 /// yields nothing. A table with no current snapshot likewise yields nothing.
-///
-/// This is the shared foundation the per-action conflict validations (`ReplacePartitions`
-/// `validateNoConflictingData`, and the future `OverwriteFiles` / `RowDelta` / `DeleteFiles` checks) build on.
-pub(crate) async fn added_data_files_after(
+async fn added_files_after(
     table: &Table,
     starting_snapshot_id: Option<i64>,
+    content: ManifestContentType,
+    operation_adds: fn(&Operation) -> bool,
 ) -> Result<Vec<DataFile>> {
     let metadata = table.metadata();
 
@@ -999,15 +1009,15 @@ pub(crate) async fn added_data_files_after(
             break;
         }
 
-        if operation_adds_data_files(&current.summary().operation) {
+        if operation_adds(&current.summary().operation) {
             let manifest_list = current
                 .load_manifest_list(table.file_io(), metadata)
                 .await?;
             for manifest_file in manifest_list.entries() {
-                // Only DATA manifests that THIS snapshot added (Java `manifest.snapshotId() ==
-                // currentSnapshot.snapshotId()`) — carried-forward manifests belong to older snapshots and
-                // their files are not "added since the starting snapshot".
-                if manifest_file.content != ManifestContentType::Data
+                // Only manifests of the requested `content` that THIS snapshot added (Java
+                // `manifest.snapshotId() == currentSnapshot.snapshotId()`) — carried-forward manifests
+                // belong to older snapshots and their files are not "added since the starting snapshot".
+                if manifest_file.content != content
                     || manifest_file.added_snapshot_id != current.snapshot_id()
                 {
                     continue;
@@ -1035,6 +1045,68 @@ pub(crate) async fn added_data_files_after(
     }
 
     Ok(added)
+}
+
+/// Enumerate the DATA files ADDED to `table` by snapshots committed AFTER `starting_snapshot_id` — the
+/// concurrent commits a serializable-isolation conflict check must inspect.
+///
+/// This is the Rust port of Java `MergingSnapshotProducer.addedDataFiles` + `validationHistory`
+/// (`core/MergingSnapshotProducer.java`): the shared [`added_files_after`] walk over DATA manifests, gated
+/// to the operations that can add data ([`operation_adds_data_files`] = Java
+/// `VALIDATE_ADDED_FILES_OPERATIONS = {APPEND, OVERWRITE}`). See [`added_files_after`] for the walk
+/// semantics (inclusive of the current snapshot, exclusive of the starting snapshot, only manifests the
+/// snapshot itself added, only `Added`-status entries).
+///
+/// This is the shared foundation the per-action data-file conflict validations (`ReplacePartitions`
+/// `validateNoConflictingData`, `OverwriteFiles` / `RowDelta` `validateNoConflictingDataFiles`) build on.
+pub(crate) async fn added_data_files_after(
+    table: &Table,
+    starting_snapshot_id: Option<i64>,
+) -> Result<Vec<DataFile>> {
+    added_files_after(
+        table,
+        starting_snapshot_id,
+        ManifestContentType::Data,
+        operation_adds_data_files,
+    )
+    .await
+}
+
+/// Enumerate the DELETE files (position / equality deletes) ADDED to `table` by snapshots committed AFTER
+/// `starting_snapshot_id` — the concurrent commits a `validateNoConflictingDeleteFiles` check must inspect.
+///
+/// This is the Rust port of Java `MergingSnapshotProducer.addedDeleteFiles`
+/// (`core/MergingSnapshotProducer.java` L601-625): the shared [`added_files_after`] walk over DELETE
+/// manifests, gated to the operations that can add delete files ([`operation_adds_delete_files`] = Java
+/// `VALIDATE_ADDED_DELETE_FILES_OPERATIONS = {OVERWRITE, DELETE}`).
+///
+/// **V2 guard (Java `base.formatVersion() < 2` ⇒ empty `DeleteFileIndex`):** delete files do not exist
+/// before format version 2, so on a V1 table this returns an empty set without walking the history.
+///
+/// **Over-scan vs Java (documented):** Java's `addedDeleteFiles` additionally builds a `DeleteFileIndex`
+/// filtered by the operation's `startingSequenceNumber` (a delete file with `sequence_number <
+/// startingSequenceNumber` cannot apply to the rows being committed). This port enumerates the
+/// concurrently-added delete files by the snapshot walk alone; the per-file inclusive-metrics filter is
+/// applied later in [`validate_no_conflicting_added_delete_files`]. Omitting the sequence-number refinement
+/// is a CONSERVATIVE over-scan — it can only consider MORE delete files (over-reject), never fewer
+/// (under-reject) — the same class as the manifest-summary pre-filter deferral elsewhere.
+pub(crate) async fn added_delete_files_after(
+    table: &Table,
+    starting_snapshot_id: Option<i64>,
+) -> Result<Vec<DataFile>> {
+    // V2 guard (Java `addedDeleteFiles`: `base.formatVersion() < 2` ⇒ empty). Delete files don't exist in
+    // V1, so there is nothing to enumerate and no history to walk.
+    if table.metadata().format_version() < FormatVersion::V2 {
+        return Ok(vec![]);
+    }
+
+    added_files_after(
+        table,
+        starting_snapshot_id,
+        ManifestContentType::Deletes,
+        operation_adds_delete_files,
+    )
+    .await
 }
 
 /// Reject the commit if any DATA file ADDED by a concurrent commit since `effective_start` COULD contain
@@ -1074,38 +1146,94 @@ pub(crate) async fn validate_no_conflicting_added_data_files(
     case_sensitive: bool,
 ) -> Result<()> {
     let added = added_data_files_after(current, effective_start).await?;
-    if added.is_empty() {
-        // No concurrent commit added data — nothing can conflict.
-        return Ok(());
+    if let Some(file) = first_conflicting_file(&added, current, conflict_filter, case_sensitive)? {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Found conflicting files that can contain records matching {}: {}",
+                conflict_filter.map_or_else(|| "true".to_string(), |filter| format!("{filter}")),
+                file.file_path()
+            ),
+        ));
     }
 
-    // Build the conflict filter as a `BoundPredicate` against the table's current schema (Java
-    // `dataConflictDetectionFilter()`): the caller's filter when set, else `AlwaysTrue` = any
-    // concurrently-added data file conflicts (the most conservative serializable check). Bind ONCE,
-    // not per file.
+    Ok(())
+}
+
+/// Reject the commit if any DELETE file ADDED by a concurrent commit since `effective_start` COULD apply to
+/// records matching `conflict_filter` — the filter-based serializable-isolation conflict check for the
+/// merge-on-read delete path, mirroring Java `MergingSnapshotProducer.validateNoNewDeleteFiles`.
+///
+/// This is the Rust port of Java `MergingSnapshotProducer.validateNoNewDeleteFiles`
+/// (`core/MergingSnapshotProducer.java` L562-570): it enumerates the concurrently-added DELETE files via the
+/// shared [`added_delete_files_after`] walk (which applies the V2 guard) and throws a non-retryable
+/// `ValidationException` ("Found new conflicting delete files that can apply to records matching %s: %s") on
+/// the FIRST file whose metrics permit a match. The per-file "could this added delete file apply to records
+/// matching the filter?" test is the SAME [`first_conflicting_file`] (the existing
+/// [`InclusiveMetricsEvaluator`]) the data-file check uses.
+///
+/// Arguments mirror [`validate_no_conflicting_added_data_files`]. The only differences from the data-file
+/// check are (1) the DELETE-manifest walk + V2 guard (in [`added_delete_files_after`]) and (2) the
+/// DELETE-specific error message — the per-file conflict test is shared.
+///
+/// **Over-scan vs Java (documented):** see [`added_delete_files_after`] — this port omits Java's
+/// `DeleteFileIndex` `startingSequenceNumber` refinement, a conservative over-scan (can only over-reject).
+pub(crate) async fn validate_no_conflicting_added_delete_files(
+    current: &Table,
+    effective_start: Option<i64>,
+    conflict_filter: Option<&Predicate>,
+    case_sensitive: bool,
+) -> Result<()> {
+    let added = added_delete_files_after(current, effective_start).await?;
+    if let Some(file) = first_conflicting_file(&added, current, conflict_filter, case_sensitive)? {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Found new conflicting delete files that can apply to records matching {}: {}",
+                conflict_filter.map_or_else(|| "true".to_string(), |filter| format!("{filter}")),
+                file.file_path()
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Return the first file in `files` that COULD contain records matching `conflict_filter` — the shared
+/// per-file conflict test behind both [`validate_no_conflicting_added_data_files`] and
+/// [`validate_no_conflicting_added_delete_files`].
+///
+/// Binds `conflict_filter` to `current`'s current schema ONCE (the caller's filter when `Some`, else
+/// `AlwaysTrue` = any file conflicts — the most conservative serializable check, Java
+/// `dataConflictDetectionFilter()` returning `alwaysTrue()` when no filter is set), then tests each file
+/// with the existing [`InclusiveMetricsEvaluator`] (Java `ManifestGroup.filterData` = inclusive-metrics
+/// evaluation over the file's bounds / null / nan stats). Returns the FIRST matching file (Java throws on
+/// the first conflict entry), or `None` when nothing can match (including an empty `files`).
+///
+/// `include_empty_files = true` keeps a zero-record file's evaluation conservative (it never excludes on
+/// emptiness alone). The bind happens once for the whole set, not per file.
+fn first_conflicting_file(
+    files: &[DataFile],
+    current: &Table,
+    conflict_filter: Option<&Predicate>,
+    case_sensitive: bool,
+) -> Result<Option<DataFile>> {
+    if files.is_empty() {
+        // No concurrently-added file of the relevant content — nothing can conflict.
+        return Ok(None);
+    }
+
     let schema = current.metadata().current_schema().clone();
     let bound_filter: BoundPredicate = conflict_filter
         .cloned()
         .unwrap_or(Predicate::AlwaysTrue)
         .bind(schema, case_sensitive)?;
 
-    // Find the first concurrently-added file that COULD contain records matching the filter (Java throws
-    // on the first conflict entry). `InclusiveMetricsEvaluator::eval` returns whether the file's metrics
-    // permit a match; `include_empty_files = true` keeps a zero-record file's evaluation conservative
-    // (it never excludes on emptiness alone).
-    for file in &added {
+    for file in files {
         if InclusiveMetricsEvaluator::eval(&bound_filter, file, true)? {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Found conflicting files that can contain records matching {}: {}",
-                    conflict_filter
-                        .map_or_else(|| "true".to_string(), |filter| format!("{filter}")),
-                    file.file_path()
-                ),
-            ));
+            return Ok(Some(file.clone()));
         }
     }
 
-    Ok(())
+    Ok(None)
 }

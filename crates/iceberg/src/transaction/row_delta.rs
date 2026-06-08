@@ -35,23 +35,38 @@
 //! both → [`Operation::Overwrite`]. The snapshot summary carries the added data-file / delete-file and
 //! position/equality-delete counts in every case.
 //!
-//! **Concurrent-commit conflict validation (`validateNoConflictingDataFiles`, OPT-IN):** when enabled
-//! via [`RowDeltaAction::validate_no_conflicting_data_files`], the commit is rejected (a non-retryable
-//! `ValidationException` in Java terms) if any DATA file ADDED by a concurrent commit since the
-//! operation's starting snapshot COULD contain records matching the conflict-detection filter. This is
-//! the serializable-isolation safety layer for the merge-on-read write path (Java `BaseRowDelta.validate`
-//! → `validateNewDataFiles` → `MergingSnapshotProducer.validateAddedDataFiles`). It delegates to the
-//! SHARED [`validate_no_conflicting_added_data_files`] helper — the SAME filter-based added-data-file
-//! check `OverwriteFiles` uses — so the two checks cannot drift. Default (this not enabled) = snapshot
-//! isolation, behavior unchanged.
+//! **Concurrent-commit conflict validation (OPT-IN, two independent checks):** the serializable-isolation
+//! safety layer for the merge-on-read write path (Java `BaseRowDelta.validate`). Each is opt-in and a
+//! failure of either rejects the commit (a non-retryable `ValidationException` in Java terms). Default
+//! (neither enabled) = snapshot isolation, behavior unchanged.
+//! - **`validateNoConflictingDataFiles`** — when enabled via
+//!   [`RowDeltaAction::validate_no_conflicting_data_files`], the commit is rejected if any DATA file ADDED
+//!   by a concurrent commit since the operation's starting snapshot COULD CONTAIN records matching the
+//!   conflict-detection filter (Java `validateNewDataFiles` → `validateAddedDataFiles`). Delegates to the
+//!   SHARED [`validate_no_conflicting_added_data_files`] helper — the SAME check `OverwriteFiles` uses.
+//! - **`validateNoConflictingDeleteFiles`** — when enabled via
+//!   [`RowDeltaAction::validate_no_conflicting_delete_files`], the commit is rejected if any DELETE file
+//!   (position / equality delete) ADDED by a concurrent commit since the operation's starting snapshot
+//!   COULD APPLY to records matching the conflict-detection filter (Java `validateNewDeleteFiles` →
+//!   `validateNoNewDeleteFiles`, `MergingSnapshotProducer.java` L562-570). Delegates to
+//!   [`validate_no_conflicting_added_delete_files`], which enumerates the concurrently-added DELETE files
+//!   (DELETE-manifest walk + the V2 guard — Java `addedDeleteFiles` L601-625 is V2-only and gated to the
+//!   `{OVERWRITE, DELETE}` operation set) and tests each with the SAME inclusive-metrics evaluator. A no-op
+//!   on a V1 table.
+//!
+//!   **Over-scan (documented):** Java's `addedDeleteFiles` additionally filters its `DeleteFileIndex` by
+//!   the operation's `startingSequenceNumber`; this port enumerates concurrently-added delete files by the
+//!   snapshot walk + inclusive-metrics filter only (no sequence-number refinement) — a CONSERVATIVE
+//!   over-scan that can only over-reject, never under-reject (the same class as the manifest-summary
+//!   pre-filter deferral elsewhere in the conflict-validation sub-sequence).
 //!
 //! **Out of scope (deferred):**
 //! - Equality-delete WRITER end-to-end (the writer exists; the RowDelta-with-equality-deletes scan
 //!   application may have gaps — the end-to-end test focuses on POSITION deletes).
-//! - The DELETE-file conflict blocks of Java `BaseRowDelta.validate` — `validateNoConflictingDeleteFiles`
-//!   (`validateNoNewDeleteFiles` / `validateNoNewDeletesForDataFiles`), `validateDeletedFiles` /
-//!   `validateDataFilesExist`, and `validateAddedDVs`. These need a concurrent-DELETE-file enumeration
-//!   helper (the sibling of `added_data_files_after` for delete manifests) that does not exist yet —
+//! - The remaining DELETE-file conflict blocks of Java `BaseRowDelta.validate` —
+//!   `validateNoNewDeletesForDataFiles` (the `!removedDataFiles.isEmpty()` sub-branch of
+//!   `validateNewDeleteFiles`), `validateDataFilesExist`, and the V3 `validateAddedDVs`. Each needs
+//!   `referenced_data_files` / `removed_data_files` on the action, which it does not yet carry —
 //!   each is its own follow-up.
 //! - `removeRows` / `removeDeletes` (removing existing data / delete files) — RowDelta the ADD-commit
 //!   primitive is this increment's deliverable.
@@ -69,7 +84,7 @@ use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
 use crate::table::Table;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
-    validate_no_conflicting_added_data_files,
+    validate_no_conflicting_added_data_files, validate_no_conflicting_added_delete_files,
 };
 use crate::transaction::{ActionCommit, TransactionAction};
 
@@ -90,11 +105,18 @@ pub struct RowDeltaAction {
     commit_uuid: Option<Uuid>,
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
-    /// Whether concurrent-commit conflict validation is enabled (Java
+    /// Whether concurrent-commit DATA-file conflict validation is enabled (Java
     /// `RowDelta.validateNoConflictingDataFiles`). OFF by default = snapshot isolation (no validation,
     /// current behavior). When ON, the commit is rejected if a concurrent snapshot added a DATA file that
     /// could contain records matching the conflict filter.
     validate_no_conflicting_data_files: bool,
+    /// Whether concurrent-commit DELETE-file conflict validation is enabled (Java
+    /// `RowDelta.validateNoConflictingDeleteFiles`). OFF by default = snapshot isolation (no validation,
+    /// current behavior). When ON, the commit is rejected if a concurrent snapshot added a DELETE file
+    /// (position / equality delete) that could apply to records matching the conflict filter. Independent
+    /// of [`Self::validate_no_conflicting_data_files`] — enabling one does not enable the other (Java's two
+    /// `validateNoConflicting*` methods set two separate flags).
+    validate_no_conflicting_delete_files: bool,
     /// The conflict-detection filter (Java `RowDelta.conflictDetectionFilter`). When `Some`, only
     /// concurrently-added files whose metrics COULD match this predicate are conflicts. When `None`, the
     /// filter defaults to `AlwaysTrue` (any concurrently-added DATA file is a conflict — the most
@@ -115,6 +137,7 @@ impl RowDeltaAction {
             key_metadata: None,
             snapshot_properties: HashMap::default(),
             validate_no_conflicting_data_files: false,
+            validate_no_conflicting_delete_files: false,
             conflict_detection_filter: None,
             validate_from_snapshot: None,
         }
@@ -163,6 +186,26 @@ impl RowDeltaAction {
     /// Default (this method NOT called) = snapshot isolation = no validation (current behavior unchanged).
     pub fn validate_no_conflicting_data_files(mut self) -> Self {
         self.validate_no_conflicting_data_files = true;
+        self
+    }
+
+    /// ENABLE concurrent-commit DELETE-file conflict validation (Java
+    /// `RowDelta.validateNoConflictingDeleteFiles`): the commit is rejected with a non-retryable
+    /// `ValidationException` if any DELETE file (position / equality delete) ADDED by a concurrent snapshot
+    /// since the starting snapshot could apply to records matching the conflict-detection filter (see
+    /// [`Self::conflict_detection_filter`]). This guards against a concurrent merge-on-read delete landing
+    /// on the same rows this row delta touches.
+    ///
+    /// This is INDEPENDENT of [`Self::validate_no_conflicting_data_files`] — enabling one does not enable
+    /// the other (Java exposes them as two separate methods setting two separate flags). When both are
+    /// enabled, both checks run and EITHER failing rejects the commit.
+    ///
+    /// On a V1 table this is a no-op (delete files do not exist before format version 2 — Java's
+    /// `addedDeleteFiles` V2 guard).
+    ///
+    /// Default (this method NOT called) = snapshot isolation = no validation (current behavior unchanged).
+    pub fn validate_no_conflicting_delete_files(mut self) -> Self {
+        self.validate_no_conflicting_delete_files = true;
         self
     }
 
@@ -222,24 +265,38 @@ impl TransactionAction for RowDeltaAction {
             .await
     }
 
-    /// Serializable-isolation conflict validation (Java `BaseRowDelta.validate` → `validateNewDataFiles` →
-    /// `MergingSnapshotProducer.validateAddedDataFiles`, L155-157 / L391-412). Only runs when
-    /// [`Self::validate_no_conflicting_data_files`] was enabled; otherwise a no-op (snapshot isolation).
+    /// Serializable-isolation conflict validation (Java `BaseRowDelta.validate`,
+    /// `core/BaseRowDelta.java` L131-174). Runs the opt-in checks; with neither enabled it is a no-op
+    /// (snapshot isolation, current behavior unchanged).
     ///
-    /// When enabled: compute the effective starting snapshot ([`Self::validate_from_snapshot`] if set, else
-    /// the transaction-provided `starting_snapshot_id`) and delegate to the SHARED
-    /// [`validate_no_conflicting_added_data_files`] helper — the SAME filter-based added-data-file check
-    /// `OverwriteFiles` uses (enumerate the DATA files added by concurrent commits, reject if ANY could
-    /// contain records matching the conflict-detection filter via the inclusive metrics evaluator). The
-    /// conflict filter is the caller's [`Self::conflict_detection_filter`] when set, else `AlwaysTrue` (any
-    /// concurrently-added data file conflicts), mirroring Java `BaseRowDelta`'s default
-    /// `conflictDetectionFilter` of `Expressions.alwaysTrue()`. The rejection is a NON-retryable
-    /// `DataInvalid` (Java's non-retryable `ValidationException`), so the commit retry loop stops.
+    /// Both enabled checks share the same effective starting snapshot ([`Self::validate_from_snapshot`] if
+    /// set, else the transaction-provided `starting_snapshot_id`) and the same conflict filter (the caller's
+    /// [`Self::conflict_detection_filter`] when set, else `AlwaysTrue` — any concurrently-added file
+    /// conflicts, mirroring Java `BaseRowDelta`'s default `conflictDetectionFilter` of
+    /// `Expressions.alwaysTrue()`). A failure of EITHER rejects the commit with a NON-retryable `DataInvalid`
+    /// (Java's non-retryable `ValidationException`), so the commit retry loop stops.
     ///
-    /// This covers ONLY the `validateNoConflictingDataFiles` branch of Java `BaseRowDelta.validate`. The
-    /// DELETE-file conflict blocks (`validateNoConflictingDeleteFiles`, `validateDeletedFiles` /
-    /// `validateDataFilesExist`, `validateAddedDVs`) remain deferred — they need a concurrent-DELETE-file
-    /// enumeration helper that does not exist yet.
+    /// 1. **`validateNoConflictingDataFiles`** (Java L155-157 → `validateAddedDataFiles`, when
+    ///    [`Self::validate_no_conflicting_data_files`] is enabled): enumerate the DATA files added by
+    ///    concurrent commits and reject if ANY could CONTAIN records matching the filter. Delegates to the
+    ///    SHARED [`validate_no_conflicting_added_data_files`] helper — the SAME check `OverwriteFiles` uses.
+    /// 2. **`validateNoConflictingDeleteFiles`** (Java L159-167 → `validateNoNewDeleteFiles`, when
+    ///    [`Self::validate_no_conflicting_delete_files`] is enabled): enumerate the DELETE files
+    ///    (position / equality deletes) added by concurrent commits and reject if ANY could APPLY to records
+    ///    matching the filter. Delegates to [`validate_no_conflicting_added_delete_files`] (DELETE-manifest
+    ///    walk + the V2 guard + the SAME per-file inclusive-metrics test). A no-op on a V1 table.
+    ///
+    /// The two checks are INDEPENDENT (enabling one does not run the other), mirroring Java's two separate
+    /// `validateNew*` flags.
+    ///
+    /// **Still deferred from Java `BaseRowDelta.validate`** (each needs `referenced_data_files` /
+    /// `removed_data_files` on the action, which it does not yet carry): `validateDataFilesExist`
+    /// (L141-149), `validateNoNewDeletesForDataFiles` (the `!removedDataFiles.isEmpty()` sub-branch of
+    /// `validateNewDeleteFiles`, L161-164), and the V3 `validateAddedDVs` (L172).
+    ///
+    /// **Over-scan vs Java (documented):** the delete-file check omits Java's `DeleteFileIndex`
+    /// `startingSequenceNumber` refinement (see [`validate_no_conflicting_added_delete_files`]) — a
+    /// conservative over-scan that can only over-reject, never under-reject.
     ///
     /// **Case sensitivity:** Java binds the conflict filter with `isCaseSensitive()`. This action has no such
     /// field, so the filter is bound case-sensitive (`true`) — the Iceberg/Java default for column resolution.
@@ -248,22 +305,38 @@ impl TransactionAction for RowDeltaAction {
         starting_snapshot_id: Option<i64>,
         current: &Table,
     ) -> Result<()> {
-        if !self.validate_no_conflicting_data_files {
-            // Default: snapshot isolation, no conflict check (current behavior unchanged).
-            return Ok(());
+        // Java `BaseRowDelta.validate` uses `startingSnapshotId` (the `validateFromSnapshot` override) when
+        // set, else the operation's starting snapshot. Both checks share this start + the conflict filter.
+        let effective_start = self.validate_from_snapshot.or(starting_snapshot_id);
+        let conflict_filter = self.conflict_detection_filter.as_ref();
+
+        // 1. Concurrent-added DATA-file conflict (Java `validateNewDataFiles` branch). The walk + bind +
+        //    per-file inclusive-metrics evaluation + non-retryable-conflict error are the shared helper
+        //    (also used by `OverwriteFiles`).
+        if self.validate_no_conflicting_data_files {
+            validate_no_conflicting_added_data_files(
+                current,
+                effective_start,
+                conflict_filter,
+                true,
+            )
+            .await?;
         }
 
-        // Java `BaseRowDelta.validate` uses `startingSnapshotId` (the `validateFromSnapshot` override) when
-        // set, else the operation's starting snapshot. The walk + bind + per-file inclusive-metrics
-        // evaluation + non-retryable-conflict error are the shared helper (also used by `OverwriteFiles`).
-        let effective_start = self.validate_from_snapshot.or(starting_snapshot_id);
-        validate_no_conflicting_added_data_files(
-            current,
-            effective_start,
-            self.conflict_detection_filter.as_ref(),
-            true,
-        )
-        .await
+        // 2. Concurrent-added DELETE-file conflict (Java `validateNewDeleteFiles` branch →
+        //    `validateNoNewDeleteFiles`). The DELETE-manifest walk + V2 guard live in the delete helper; the
+        //    per-file test is the SAME inclusive-metrics check as the data-file branch.
+        if self.validate_no_conflicting_delete_files {
+            validate_no_conflicting_added_delete_files(
+                current,
+                effective_start,
+                conflict_filter,
+                true,
+            )
+            .await?;
+        }
+
+        Ok(())
     }
 }
 
@@ -1585,5 +1658,558 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(!err.retryable());
         assert!(err.message().contains("test/concurrent.parquet"));
+    }
+
+    // ============================================================================================
+    // Filter-based concurrent-commit DELETE-FILE conflict validation (Java
+    // `validateNoConflictingDeleteFiles`). Java `BaseRowDelta.validate` → `validateNewDeleteFiles` →
+    // `MergingSnapshotProducer.validateNoNewDeleteFiles` (L159-167 / L562-570) → `addedDeleteFiles`
+    // (L601-625): enumerate DELETE files (position / equality) added by concurrent commits since the
+    // starting snapshot, and reject the commit if ANY could APPLY to records matching the conflict filter
+    // (via the inclusive metrics evaluator). `addedDeleteFiles` is V2-ONLY and gated to the
+    // `{OVERWRITE, DELETE}` operation set. RowDelta reuses the SHARED `first_conflicting_file` test that the
+    // data-file check uses, via the new `validate_no_conflicting_added_delete_files` helper.
+    //
+    // The race these tests simulate: a `row_delta` is BUILT against table head S0, but BEFORE it commits a
+    // SEPARATE `row_delta().add_deletes(...)` lands on the catalog (advancing the head to S1 with a DELETE
+    // manifest). When the first row delta then commits, `do_commit` refreshes to S1 and runs the action's
+    // `validate` against that refreshed base. With `validate_no_conflicting_delete_files()` enabled, a
+    // concurrent delete file whose metrics could match the conflict filter must FAIL the commit
+    // (non-retryable). With validation OFF (the default), it does not. The V2 guard makes it a no-op on V1.
+    // ============================================================================================
+
+    /// A position-delete file routed to partition `x = part_value` carrying `[y_lower, y_upper]` value
+    /// bounds on column `y` (schema field id 2, a `long`). The bounds let the `InclusiveMetricsEvaluator`
+    /// include or exclude this DELETE file against a conflict-detection filter on `y` — the discriminating
+    /// input for the metrics-MATCH vs metrics-EXCLUDE delete-conflict tests. (The evaluator is
+    /// content-agnostic: it reads the file's `lower_bounds`/`upper_bounds` regardless of content type.)
+    fn delete_file_with_y_bounds(
+        path: &str,
+        part_value: i64,
+        y_lower: i64,
+        y_upper: i64,
+    ) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::PositionDeletes)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(0)
+            .partition(Struct::from_iter([Some(Literal::long(part_value))]))
+            .lower_bounds(HashMap::from([(2, Datum::long(y_lower))]))
+            .upper_bounds(HashMap::from([(2, Datum::long(y_upper))]))
+            .build()
+            .unwrap()
+    }
+
+    /// Commit a CONCURRENT row delta that ADDS the given DELETE files (no data) in its own snapshot, via the
+    /// catalog — the merge-on-read counterpart of `append_files`. The resulting snapshot's operation is
+    /// `Delete` (add-deletes-only, Java `BaseRowDelta.operation()`), which is in
+    /// `VALIDATE_ADDED_DELETE_FILES_OPERATIONS = {OVERWRITE, DELETE}` so the delete walk enumerates it.
+    async fn commit_concurrent_deletes(
+        catalog: &impl Catalog,
+        table: &Table,
+        delete_files: Vec<DataFile>,
+    ) -> Table {
+        let tx = Transaction::new(table);
+        let action = tx.row_delta().add_deletes(delete_files);
+        let tx = action.apply(tx).unwrap();
+        tx.commit(catalog).await.unwrap()
+    }
+
+    /// Create a V1 minimal table (schema `x,y,z: long`, identity-partitioned by `x`) registered in the
+    /// catalog — mirroring `make_v3_minimal_table_in_catalog`'s shape but at format version 1, to exercise
+    /// the V2 guard on the delete-conflict check. The schema is hand-built with NO column defaults (the V3
+    /// minimal fixture carries a V3-only `initial-default` on `x` that the V3 schema guard rejects on V1).
+    async fn make_v1_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
+        use crate::spec::{
+            NestedField, PartitionSpec, PrimitiveType, Schema, Transform, Type,
+            UnboundPartitionField,
+        };
+        use crate::{TableCreation, TableIdent};
+
+        let table_ident =
+            TableIdent::from_strs([format!("ns1-{}", uuid::Uuid::new_v4()), "test1".to_string()])
+                .unwrap();
+        catalog
+            .create_namespace(table_ident.namespace(), HashMap::new())
+            .await
+            .unwrap();
+
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(3, "z", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_id(1)
+                    .name("x".to_string())
+                    .transform(Transform::Identity)
+                    .build(),
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let table_creation = TableCreation::builder()
+            .schema(schema)
+            .partition_spec(partition_spec)
+            .name(table_ident.name().to_string())
+            .format_version(crate::spec::FormatVersion::V1)
+            .build();
+
+        catalog
+            .create_table(table_ident.namespace(), table_creation)
+            .await
+            .unwrap()
+    }
+
+    /// NO CONCURRENT DELETE. With the delete check enabled but nothing landing concurrently, the row delta
+    /// commits normally (the concurrent-added delete set is empty ⇒ no conflict). Pins that enabling the
+    /// delete check does not block a race-free commit. Risk: a delete check that wrongly fails with no
+    /// concurrent delete commit.
+    #[tokio::test]
+    async fn test_row_delta_delete_validation_no_concurrent_commit_succeeds() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/a-pos-del.parquet", 0)])
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_delete_files();
+        let tx = action.apply(tx).unwrap();
+        let table = tx
+            .commit(&catalog)
+            .await
+            .expect("a race-free row delta must commit even with the delete check enabled");
+
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        assert!(
+            manifest_list
+                .entries()
+                .iter()
+                .any(|m| m.content == ManifestContentType::Deletes),
+            "the row delta committed: a DELETE manifest is present"
+        );
+    }
+
+    /// THE HEADLINE DELETE TEST. Append S0. Build a `row_delta` with `.conflict_detection_filter(y >= 50)`
+    /// and `.validate_no_conflicting_delete_files()`. Then a CONCURRENT `row_delta().add_deletes(...)` lands
+    /// a DELETE file whose `y` bounds `[60,70]` OVERLAP the filter (could apply to `y >= 50`). The row-delta
+    /// commit must FAIL with a NON-retryable `DataInvalid` whose message NAMES the conflicting DELETE file
+    /// AND uses the DELETE-SPECIFIC wording ("conflicting delete files") — distinguishing it from the
+    /// data-file message ("conflicting files that can contain records").
+    ///
+    /// Risk pinned: silently committing a row delta while a concurrent commit added a delete that applies to
+    /// the same rows = a lost/incorrect merge-on-read result under serializable isolation. The DELETE-message
+    /// assertion is what proves the delete branch (not the data branch) fired.
+    #[tokio::test]
+    async fn test_row_delta_rejects_concurrent_added_delete_file_matching_filter() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/my-del.parquet", 0)])
+            .conflict_detection_filter(
+                Reference::new("y").greater_than_or_equal_to(Datum::long(50)),
+            )
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_delete_files();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a row delta adding a DELETE file whose y bounds [60,70] overlap `y >= 50`.
+        let _concurrent =
+            commit_concurrent_deletes(&catalog, &table, vec![delete_file_with_y_bounds(
+                "test/concurrent-del.parquet",
+                0,
+                60,
+                70,
+            )])
+            .await;
+
+        let err = tx.commit(&catalog).await.expect_err(
+            "row delta must fail: a concurrent delete file could apply to the conflict filter",
+        );
+
+        assert_eq!(
+            err.kind(),
+            ErrorKind::DataInvalid,
+            "a conflict is a non-retryable validation failure (DataInvalid), not a commit conflict"
+        );
+        assert!(
+            !err.retryable(),
+            "the validation failure must be NON-retryable so the retry loop stops and it propagates"
+        );
+        // The DELETE-specific message — NOT the data-file message — must fire.
+        assert!(
+            err.message().contains("conflicting delete files"),
+            "the error must use the DELETE-specific message, got: {}",
+            err.message()
+        );
+        assert!(
+            !err.message().contains("can contain records"),
+            "the DELETE message must NOT be the data-file message, got: {}",
+            err.message()
+        );
+        assert!(
+            err.message().contains("test/concurrent-del.parquet"),
+            "the error must name the conflicting DELETE file, got: {}",
+            err.message()
+        );
+    }
+
+    /// NO-FALSE-CONFLICT DELETE TEST. Same setup as the headline, but the concurrent DELETE file's `y` bounds
+    /// `[10,20]` lie ENTIRELY BELOW the filter `y >= 50` — the inclusive evaluator EXCLUDES it. The row delta
+    /// must COMMIT.
+    ///
+    /// Risk pinned: an over-eager delete check that rejects ANY concurrent delete (ignoring the metrics) would
+    /// break legitimate concurrent deletes that cannot apply to the filtered rows (a false positive). This is
+    /// the test that fails if the SHARED `first_conflicting_file` metrics decision is inverted (it fails for
+    /// the data check too — the cross-action mutation).
+    #[tokio::test]
+    async fn test_row_delta_allows_concurrent_added_delete_file_excluded_by_filter() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/my-del.parquet", 0)])
+            .conflict_detection_filter(
+                Reference::new("y").greater_than_or_equal_to(Datum::long(50)),
+            )
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_delete_files();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a delete file whose y bounds [10,20] are entirely BELOW `y >= 50`.
+        let _concurrent =
+            commit_concurrent_deletes(&catalog, &table, vec![delete_file_with_y_bounds(
+                "test/concurrent-del.parquet",
+                0,
+                10,
+                20,
+            )])
+            .await;
+
+        let table = tx.commit(&catalog).await.expect(
+            "row delta must commit: the concurrent delete file cannot apply to the conflict filter",
+        );
+
+        // The row delta committed: a DELETE manifest landed (its own added delete file).
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        assert!(
+            manifest_list
+                .entries()
+                .iter()
+                .any(|m| m.content == ManifestContentType::Deletes),
+            "the row delta committed: a DELETE manifest is present"
+        );
+    }
+
+    /// FLAG-OFF CONTROL (delete check). With the delete check NOT enabled, a concurrent delete file that
+    /// WOULD match the filter does NOT fail the commit — snapshot isolation, the DEFAULT, unchanged.
+    ///
+    /// Risk pinned: the delete-conflict validation must be OPT-IN — turning it on for every row delta would
+    /// change existing behavior.
+    #[tokio::test]
+    async fn test_row_delta_without_delete_validation_allows_conflicting_concurrent_delete() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        // Build a row delta WITHOUT enabling the delete check. A conflict filter is supplied to prove it is
+        // inert without the flag.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/my-del.parquet", 0)])
+            .conflict_detection_filter(
+                Reference::new("y").greater_than_or_equal_to(Datum::long(50)),
+            );
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a delete file whose y bounds [60,70] WOULD match if the check were on.
+        let _concurrent =
+            commit_concurrent_deletes(&catalog, &table, vec![delete_file_with_y_bounds(
+                "test/concurrent-del.parquet",
+                0,
+                60,
+                70,
+            )])
+            .await;
+
+        let table = tx.commit(&catalog).await.expect(
+            "with the delete check OFF, a conflicting concurrent delete must not block the commit",
+        );
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        assert!(
+            manifest_list
+                .entries()
+                .iter()
+                .any(|m| m.content == ManifestContentType::Deletes),
+            "the row delta committed (snapshot isolation, no delete-conflict check)"
+        );
+    }
+
+    /// NONE-FILTER DEFAULT (delete check). With the delete check enabled and NO conflict filter, the filter
+    /// defaults to `AlwaysTrue` (Java `BaseRowDelta`'s default `conflictDetectionFilter` = `alwaysTrue()`) —
+    /// so ANY concurrently-added delete file is a conflict, even one with no bounds.
+    ///
+    /// Risk pinned: a `None` filter silently behaving as "no conflict" would let every concurrent delete
+    /// through — a serializable-isolation hole.
+    #[tokio::test]
+    async fn test_row_delta_delete_none_filter_treats_any_concurrent_delete_as_conflict() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/my-del.parquet", 0)])
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_delete_files();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a plain delete file with NO bounds — still a conflict under AlwaysTrue.
+        let _concurrent = commit_concurrent_deletes(&catalog, &table, vec![synthetic_delete_file(
+            "test/concurrent-del.parquet",
+            0,
+        )])
+        .await;
+
+        let err = tx.commit(&catalog).await.expect_err(
+            "a None filter defaults to AlwaysTrue: any concurrent delete is a conflict",
+        );
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable());
+        assert!(err.message().contains("conflicting delete files"));
+        assert!(err.message().contains("test/concurrent-del.parquet"));
+    }
+
+    /// V2-GUARD TEST. On a V1 table, delete files do not exist (Java `addedDeleteFiles`:
+    /// `base.formatVersion() < 2` ⇒ empty). With the delete check enabled, a concurrent commit lands and the
+    /// row delta still COMMITS (the delete check is a guarded no-op — no walk, no panic). The row delta adds
+    /// DATA only (V1-legal). This proves the V2 guard is genuinely exercised: without it, the walk would run
+    /// on a V1 table.
+    ///
+    /// Risk pinned: the delete check running on a V1 table (where delete manifests can't exist) — a needless
+    /// walk at best, a panic / spurious rejection at worst. With the guard, V1 is a clean no-op.
+    #[tokio::test]
+    async fn test_row_delta_delete_check_is_noop_on_v1_table() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v1_minimal_table_in_catalog(&catalog).await;
+        assert_eq!(
+            table.metadata().format_version(),
+            crate::spec::FormatVersion::V1,
+            "the table must be V1 for the guard to be under test"
+        );
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        // Row delta adds DATA only (V1 has no delete files), with the delete check enabled.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_data_files(vec![synthetic_data_file("test/b.parquet", 0)])
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_delete_files();
+        let tx = action.apply(tx).unwrap();
+
+        // A concurrent DATA append lands (V1 can't add delete files). The V2 guard makes the delete check a
+        // no-op, so the row delta commits regardless.
+        let _concurrent = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/concurrent.parquet",
+            0,
+        )])
+        .await;
+
+        let table = tx
+            .commit(&catalog)
+            .await
+            .expect("the delete check is a no-op on a V1 table (V2 guard) — the row delta commits");
+
+        let live = live_data_file_paths(&table).await;
+        assert!(
+            live.contains("test/b.parquet"),
+            "the row delta's added data file landed on V1 (delete check no-op)"
+        );
+
+        // Direct helper-level assertion: the V2 guard short-circuits the delete-file walk on a V1 table —
+        // `added_delete_files_after` returns empty regardless of the starting snapshot (delete files /
+        // delete manifests cannot exist on V1, mirroring Java `addedDeleteFiles`' `formatVersion() < 2`
+        // early return). This makes the guard's contribution concrete: it returns empty WITHOUT walking.
+        let reloaded = catalog.load_table(table.identifier()).await.unwrap();
+        let added_deletes = crate::transaction::snapshot::added_delete_files_after(&reloaded, None)
+            .await
+            .unwrap();
+        assert!(
+            added_deletes.is_empty(),
+            "the V2 guard returns an empty added-delete set on a V1 table"
+        );
+    }
+
+    /// INDEPENDENCE TEST (delete enabled ⇏ data checked). Enabling ONLY the DELETE check must NOT run the
+    /// DATA check: a concurrent DATA append that WOULD match the filter is allowed through, while a
+    /// concurrent DELETE that matches is rejected. This proves the two flags are independent (Java's two
+    /// separate `validateNew*` flags).
+    ///
+    /// Risk pinned: the two checks being accidentally coupled (one flag enabling both) — which would either
+    /// over-reject (delete flag spuriously running the data check) or under-protect.
+    #[tokio::test]
+    async fn test_row_delta_delete_check_does_not_run_data_check() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        // Only the DELETE check is enabled (no data check), filter `y >= 50`.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/my-del.parquet", 0)])
+            .conflict_detection_filter(
+                Reference::new("y").greater_than_or_equal_to(Datum::long(50)),
+            )
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_delete_files();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a DATA file whose y bounds [60,70] WOULD match the filter IF the data check
+        // ran. Because only the DELETE check is enabled, the data check does not run and this is allowed.
+        let _concurrent = append_files(&catalog, &table, vec![data_file_with_y_bounds(
+            "test/concurrent-data.parquet",
+            0,
+            60,
+            70,
+        )])
+        .await;
+
+        let table = tx.commit(&catalog).await.expect(
+            "enabling only the DELETE check must not run the DATA check: a matching concurrent DATA append is allowed",
+        );
+        let live = live_data_file_paths(&table).await;
+        assert!(
+            live.contains("test/concurrent-data.parquet"),
+            "the concurrent DATA file survives — the delete flag did not run the data check"
+        );
+    }
+
+    /// INDEPENDENCE TEST (data enabled ⇏ delete checked). The mirror of the above: enabling ONLY the DATA
+    /// check must NOT run the DELETE check — a concurrent DELETE file that WOULD match the filter is allowed
+    /// through. Together the two independence tests pin that neither flag implies the other.
+    #[tokio::test]
+    async fn test_row_delta_data_check_does_not_run_delete_check() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        // Only the DATA check is enabled (no delete check), filter `y >= 50`.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/my-del.parquet", 0)])
+            .conflict_detection_filter(
+                Reference::new("y").greater_than_or_equal_to(Datum::long(50)),
+            )
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_data_files();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a DELETE file whose y bounds [60,70] WOULD match the filter IF the delete
+        // check ran. Because only the DATA check is enabled, the delete check does not run and this is allowed.
+        let _concurrent =
+            commit_concurrent_deletes(&catalog, &table, vec![delete_file_with_y_bounds(
+                "test/concurrent-del.parquet",
+                0,
+                60,
+                70,
+            )])
+            .await;
+
+        let table = tx.commit(&catalog).await.expect(
+            "enabling only the DATA check must not run the DELETE check: a matching concurrent delete is allowed",
+        );
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        // The concurrent delete file survives among the delete manifests (the data flag did not run the
+        // delete check, so the commit went through and re-based onto S1).
+        let mut concurrent_delete_present = false;
+        for manifest_file in manifest_list.entries() {
+            if manifest_file.content != ManifestContentType::Deletes {
+                continue;
+            }
+            let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
+            for entry in manifest.entries() {
+                if entry.is_alive() && entry.file_path() == "test/concurrent-del.parquet" {
+                    concurrent_delete_present = true;
+                }
+            }
+        }
+        assert!(
+            concurrent_delete_present,
+            "the concurrent DELETE file survives — the data flag did not run the delete check"
+        );
     }
 }
