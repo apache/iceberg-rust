@@ -54,6 +54,7 @@ mod action;
 
 pub use action::*;
 mod append;
+mod cherry_pick;
 mod delete_files;
 mod manage_snapshots;
 mod overwrite_files;
@@ -79,6 +80,7 @@ use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
+use crate::transaction::cherry_pick::CherryPickAction;
 use crate::transaction::delete_files::DeleteFilesAction;
 use crate::transaction::manage_snapshots::ManageSnapshotsAction;
 use crate::transaction::overwrite_files::OverwriteFilesAction;
@@ -226,6 +228,20 @@ impl Transaction {
     /// Creates a manage-snapshots action (branch/tag lifecycle, rollback, fast-forward, retention).
     pub fn manage_snapshots(&self) -> ManageSnapshotsAction {
         ManageSnapshotsAction::new()
+    }
+
+    /// Creates a cherry-pick action: replay the snapshot `snapshot_id` (one the table already knows about,
+    /// typically off the current branch) onto `main` (Java `ManageSnapshots.cherrypick` /
+    /// `CherryPickOperation`). At commit the source is resolved and replayed per its mode: a fast-forward
+    /// (source's parent IS the current head) moves `main` to the source with NO new snapshot; an `Append`
+    /// source produces a new snapshot re-adding the source's added data files; a dynamic-overwrite
+    /// (`replace-partitions`) source produces a new `Overwrite` snapshot re-adding the source's added files
+    /// and re-deleting its removed files. The published snapshot carries `source-snapshot-id` (and
+    /// `published-wap-id` when the source is a staged WAP snapshot). An unknown id, an already-applied
+    /// snapshot, or an unsupported source operation is rejected. `validateReplacedPartitions` (the
+    /// concurrent-change partition scan) is not yet implemented.
+    pub fn cherry_pick(&self, snapshot_id: i64) -> CherryPickAction {
+        CherryPickAction::new(snapshot_id)
     }
 
     /// Creates an update-partition-spec action (partition evolution: add/remove/rename fields).

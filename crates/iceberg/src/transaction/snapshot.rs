@@ -1034,3 +1034,87 @@ pub(crate) async fn added_data_files_after(
 
     Ok(added)
 }
+
+/// Enumerate the DATA files a SINGLE snapshot `source_snapshot_id` ADDED — the files a cherry-pick of that
+/// snapshot must re-add onto the current branch.
+///
+/// This is the per-single-snapshot analogue of [`added_data_files_after`] (which walks a chain). It mirrors
+/// Java `CherryPickOperation`'s `SnapshotChanges.addedDataFiles()` (`manifestsCreatedBy(snap)` +
+/// `addedDataFiles(manifest)`): load the source snapshot's manifest list, keep the DATA manifests THAT
+/// SNAPSHOT created (`manifest.added_snapshot_id == source_snapshot_id`, Java `manifest.snapshotId() ==
+/// snapshot.snapshotId()`), and collect every `Added`-status entry's [`DataFile`] (Java
+/// `e.status() == ADDED`). Carried-forward manifests (added by an older snapshot) and `Existing`/`Deleted`
+/// entries are excluded — they are not files THIS snapshot added.
+///
+/// Errors if the snapshot id is not in `table.metadata()` (the caller validates this first, but the helper is
+/// defensive). The source is read from the current table metadata — cherry-pick replays a snapshot the table
+/// already knows about (one off the current branch, e.g. a staged/forked snapshot).
+pub(crate) async fn added_data_files_by_snapshot(
+    table: &Table,
+    source_snapshot_id: i64,
+) -> Result<Vec<DataFile>> {
+    snapshot_changed_data_files(
+        table,
+        source_snapshot_id,
+        crate::spec::ManifestStatus::Added,
+    )
+    .await
+}
+
+/// Enumerate the DATA files a SINGLE snapshot `source_snapshot_id` REMOVED (marked `Deleted`) — the files a
+/// dynamic-overwrite cherry-pick of that snapshot must re-delete from the current branch.
+///
+/// The removal sibling of [`added_data_files_by_snapshot`], mirroring Java `CherryPickOperation`'s
+/// `SnapshotChanges.removedDataFiles()` for the dynamic-overwrite (`replace-partitions`) replay path
+/// (`for (DataFile deletedFile : changes.removedDataFiles()) delete(deletedFile)`). A snapshot's removed data
+/// files are the `Deleted`-status entries in the DATA manifests THAT SNAPSHOT created (an overwrite/delete
+/// snapshot rewrites a manifest with its `added_snapshot_id`, marking the removed entries `Deleted`).
+pub(crate) async fn removed_data_files_by_snapshot(
+    table: &Table,
+    source_snapshot_id: i64,
+) -> Result<Vec<DataFile>> {
+    snapshot_changed_data_files(
+        table,
+        source_snapshot_id,
+        crate::spec::ManifestStatus::Deleted,
+    )
+    .await
+}
+
+/// Shared body for [`added_data_files_by_snapshot`] / [`removed_data_files_by_snapshot`]: collect the
+/// DATA-file entries with `status == wanted_status` from the manifests `source_snapshot_id` created.
+async fn snapshot_changed_data_files(
+    table: &Table,
+    source_snapshot_id: i64,
+    wanted_status: crate::spec::ManifestStatus,
+) -> Result<Vec<DataFile>> {
+    let metadata = table.metadata();
+    let Some(source) = metadata.snapshot_by_id(source_snapshot_id) else {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Cannot read changes of unknown snapshot ID: {source_snapshot_id}"),
+        ));
+    };
+
+    let manifest_list = source.load_manifest_list(table.file_io(), metadata).await?;
+
+    let mut files = Vec::new();
+    for manifest_file in manifest_list.entries() {
+        // Only DATA manifests that THIS snapshot created (Java `manifestsCreatedBy`:
+        // `manifest.snapshotId() == snapshot.snapshotId()`). A carried-forward manifest belongs to an older
+        // snapshot, so its entries are not changes introduced by this snapshot.
+        if manifest_file.content != ManifestContentType::Data
+            || manifest_file.added_snapshot_id != source_snapshot_id
+        {
+            continue;
+        }
+        let manifest = manifest_file.load_manifest(table.file_io()).await?;
+        for entry in manifest.entries() {
+            if entry.status() == wanted_status {
+                files.push(entry.data_file().clone());
+            }
+        }
+    }
+
+    Ok(files)
+}

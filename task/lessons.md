@@ -1233,3 +1233,121 @@ How to use it (see the manuals' §2):
   (`test_added_data_files_after_nonancestor_start_overscans_does_not_panic`) rather than fixed. Tracked as a
   parity follow-up (add the `lastSnapshot.parentId() == start` guard when the conflict-validation sub-sequence
   is hardened).
+
+### 2026-06-08 (Phase 2 Increment 7 — cherrypick / snapshot replay, BUILDER Opus)
+- **DO decide fast-forward FIRST, then skip validateNonAncestor for it — mirror Java's `validate`
+  control-flow, not just its predicates.** *Why:* Java `CherryPickOperation.validate` is
+  `if (!isFastForward(base)) { validateNonAncestor(...); validateReplacedPartitions(...);
+  WapUtil.validateWapPublish(...); }` (L165-170) — the non-ancestor check is GATED on not-fast-forward. A
+  fast-forward source's parent IS the current head, so it is trivially NOT an ancestor of current and would
+  pass anyway, but the ordering matters for the OTHER branches: classify FF (source.parent == current OR both
+  null, Java `isFastForward` L173-182) BEFORE running validateNonAncestor / the op classification, because the
+  fast-forward path produces NO snapshot and must not run the producer at all (it just emits
+  `SetSnapshotRef(main → source)`).
+- **DO write a per-SINGLE-snapshot "files added/removed by snapshot X" helper, distinct from the
+  per-CHAIN `added_data_files_after`.** *Why:* the conflict-validation `added_data_files_after` WALKS the parent
+  chain (inclusive of current, exclusive of a starting id) — that is the wrong shape for cherry-pick, which
+  needs exactly ONE snapshot's changes (Java `SnapshotChanges.builderFor(cherrypickSnapshot)`). The two share
+  the manifest-reading idea (`added_snapshot_id == snapshot_id` filter + status filter on the manifests THAT
+  snapshot created) but differ in traversal. Added `added_data_files_by_snapshot`/`removed_data_files_by_snapshot`
+  (shared body `snapshot_changed_data_files(table, id, wanted_status)`): load the SOURCE snapshot's manifest
+  list, keep DATA manifests where `added_snapshot_id == source_id`, collect entries with `status ==
+  Added`/`Deleted`. Carried-forward manifests (older `added_snapshot_id`) and `Existing` entries are excluded —
+  they are not changes THIS snapshot introduced.
+- **DO mutation-verify the replay helper is load-bearing by flipping the status filter Added→Existing.** *Why:*
+  a cherry-pick test could pass tautologically if the picked data happened to already be reachable. Flipping
+  `added_data_files_by_snapshot` to collect `Existing` instead of `Added` (sed on the one line) makes it
+  return nothing for a fresh-append source → the crown-jewel append-replay test, the WAP test, AND the
+  dynamic-overwrite test all FAIL (left `{d}` vs right `{a2, d}` etc.), and ONLY those three (the 5 validation/
+  fast-forward tests stay green). That precisely localizes which tests pin the data replay vs. the control flow.
+- **DO build the crown-jewel "data not on main" fixture with append→append→append + a rollback, and pick the
+  snapshot whose PARENT is the intermediate (not the rollback target) so it is genuinely non-fast-forward.**
+  *Why:* the obvious "append A→S1, append B→S2, roll main to S1, cherry_pick(S2)" is a FAST-FORWARD (S2.parent
+  == S1 == current), so it tests the wrong mode. For a NON-fast-forward append replay you need source.parent ≠
+  current: append A→S1, X→S2, C→S3, roll main to S1, cherry_pick(S3) — S3.parent == S2 ≠ S1 → append replay,
+  and the scan asserts {A, C} (C picked, X NOT — S3 only added C). The same trap bites the WAP and
+  dynamic-overwrite tests: stage the WAP/overwrite source behind an intermediate snapshot so the pick is
+  non-FF (FF never runs `validate_wap_publish` / the producer).
+- **DO build the dynamic-overwrite cherry-pick fixture so source.parent is an ancestor of current but ≠
+  current.** *Why:* the overwrite branch requires `parentId == null || isCurrentAncestor(parentId)` (Java
+  L101-105) AND not-fast-forward. Append A@x0→S1; `replace_partitions` A2@x0→S2 (Overwrite, parent S1,
+  removes A); roll main back to S1; append D@x2→Q (child of S1). Now cherry_pick(S2): S2.parent == S1, current
+  == Q ≠ S2 (not FF), S1 is an ancestor of Q (parent precondition holds) → dynamic replay re-adds A2 + re-deletes
+  A → scan {A2, D}. Rolling main back to S2 itself would make it fast-forward; rolling to a NON-descendant of
+  S1 would fail the parent-ancestor precondition — the sibling-via-rollback-then-append is the shape that lands
+  in the replay branch.
+- **DO route a non-fast-forward replay through `SnapshotProducer` with the source's op as the DYNAMIC
+  `operation()` and the source's removed files via the `delete_files` seam.** *Why:* the producer already
+  composes "write an added manifest from `added_data_files`" + "rewrite current manifests to delete
+  `delete_files`" in one snapshot and stamps `source-snapshot-id`/`published-wap-id` via `snapshot_properties`
+  — exactly Java `CherryPickOperation`'s `add(addedFile)` + `delete(deletedFile)` + `set(...)`. The
+  `CherryPickOperation` impl records `operation()` = the SOURCE's operation (Java `operation()` returns
+  `cherrypickSnapshot.operation()`) so an append-replay is an `Append` snapshot and an overwrite-replay an
+  `Overwrite` snapshot. No new producer machinery — the increment-1/2 add+delete seam IS the
+  MergingSnapshotProducer-equivalent the cherry-pick commit was gated on.
+- **DO use `let Err(err) = result else { panic!(...) }` for a `commit()` whose `Ok` is `Table` (not just
+  `ActionCommit`).** *Why:* clippy `err_expect` forbids `result.err().expect(...)`, but its suggested
+  `expect_err` requires `T: Debug` and neither `Table` nor `ActionCommit` is `Debug`, so `expect_err` won't
+  compile. The `let Err(...) else { panic! }` form extracts the error without a `Debug` bound and satisfies
+  clippy. (Generalizes the earlier `ActionCommit`-not-`Debug` lesson to any non-`Debug` `Ok` type.)
+
+### 2026-06-08 (Phase 2 Increment 7 — cherrypick REVIEW, Opus REVIEWER, DELEGATED)
+Adversarially verified points 1–6 of the cherry-pick brief against the Java source
+(`/tmp/iceberg-java-ref/core/.../CherryPickOperation.java`, `util/WapUtil.java`, `SnapshotSummary.java`) +
+mutation tests. **No production bug found** — the builder's impl is Java-faithful across all three modes,
+both validateNonAncestor legs, the WAP publish-once check, and the duplicate-file interaction. Added 3
+isolation tests (replay-exactness helper probe, source-snapshot-id ancestry leg, overwrite removed-helper
+probe), each mutation-verified as load-bearing. Lessons:
+- **DO write a DIRECT helper-level probe of `added_data_files_by_snapshot` / `removed_data_files_by_snapshot`
+  (replay exactness), not only the end-to-end crown jewel.** *Why:* the crown jewel proves the right final
+  live set but cannot distinguish "the helper returned exactly the source's added files" from "it returned
+  more, but the producer's dedup/carry-forward happened to mask it." A fast-append carries prior snapshots'
+  manifests forward with their entries STILL `Added`-status (a fast append does NOT rewrite them to
+  `Existing`), so the ONLY thing excluding A/B from S3's "added files" is the `added_snapshot_id ==
+  source_id` manifest filter. Probed directly: `added_data_files_by_snapshot(table, S3) == {C}` (not
+  {A,B,C}). Mutation-verified BOTH filters: dropping the `added_snapshot_id` filter returns {A,B,C} (fails
+  the probe + crown jewel + WAP); flipping the status filter `Added`→`Existing` returns {} (fails all data-
+  replay tests). The probe localizes the carried-forward-exclusion guarantee that the crown jewel only
+  proves indirectly.
+- **DO add an isolation test for the SECOND `validateNonAncestor` leg (`lookupAncestorBySourceSnapshot`),
+  which the direct-ancestor test does NOT exercise.** *Why:* a non-fast-forward pick produces a NEW snapshot
+  P (P != source S), so the source itself is NEVER an ancestor of main — the `is_ancestor_of(source,
+  current)` leg stays false on a re-pick. ONLY the `source-snapshot-id == source` ancestry walk catches "an
+  ancestor already published this source"; without it the SAME off-branch source replays twice (double-apply
+  of data). Built: pick S3 → P (P.source-snapshot-id == S3); re-pick S3 → rejected. Mutation-verified:
+  neutralizing the source-snapshot-id walk fails EXACTLY the new test while the direct-ancestor test stays
+  green — proving they pin different legs. LESSON (generalizes increment 6's "override-vs-default-source"):
+  when a guard has TWO independent rejection paths, a test hitting only the first cannot pin the second;
+  write one whose ONLY reachable rejection is the second leg.
+- **Fast-forward branch (point 4): the Rust `is_fast_forward` matches Java `isFastForward` incl. the
+  both-null and parent-null-but-current-present edges.** Java: current!=null ⇒ `parentId != null &&
+  current == parentId`; current==null ⇒ `parentId == null`. Rust: `Some(c) => source_parent == Some(c)`
+  (a `None` source-parent → `None == Some(c)` = false, matching Java's `parentId != null` requirement);
+  `None => source_parent.is_none()`. FF correctly SKIPS validateNonAncestor (`if !is_fast_forward {
+  validate_non_ancestor() }`, gating on `!isFastForward` like Java L165) and produces NO snapshot (a single
+  `SetSnapshotRef(main → source)`), pinned by `test_cherry_pick_fast_forward_moves_main_without_new_snapshot`
+  (main == source, no `source-snapshot-id`). The FF path preserves main's EXISTING retention (reads
+  `metadata.refs[main].retention`) rather than the producer's `branch(None,None,None)` reset — closer to
+  Java, not a bug.
+- **Duplicate-file interaction (point 5): cherry-pick does NOT call `validate_duplicate_files` (only
+  `FastAppendAction` does, grep-confirmed), so re-adding a physically-existing off-branch file is NOT
+  wrongly duplicate-rejected — correct.** A file already LIVE on main would be double-referenced if its
+  source snapshot were picked, but that is prevented at SNAPSHOT granularity by validateNonAncestor (re-
+  picking an applied/published snapshot errors), exactly as Java relies on it — Java's
+  `MergingSnapshotProducer.add()` likewise has no per-file live-dup guard on the cherry-pick add path. The
+  dynamic-overwrite re-delete routes through the producer's `process_deletes`, which fails loud if a
+  removed path is no longer live (Java `failMissingDeletePaths`, L117) — Java-faithful.
+- **WAP + property names (point 6): all four summary strings match Java `SnapshotSummary` exactly**
+  (`wap.id` / `published-wap-id` / `source-snapshot-id` / `replace-partitions`). `validate_wap_publish`
+  mirrors `WapUtil.validateWapPublish` + `isWapIdPublished` (walks current ancestry, rejects if any ancestor
+  carries the id as STAGED or PUBLISHED). Both APPEND and dynamic-OVERWRITE replays set `published-wap-id`
+  (one shared call site), matching Java setting it in both branches. Publish-once is pinned by
+  `test_cherry_pick_rejects_already_published_wap_id`.
+- **DEFERRED, correctly scoped (flagged not fixed):** (a) `validateReplacedPartitions` — the dynamic-
+  overwrite concurrent-change partition scan (Java L218-252) — needs the conflict-validation-history replay;
+  the increment ships the parent-is-ancestor precondition (L101-105) but not the between-snapshots scan.
+  (b) The second commit-time `WapUtil.validateWapPublish(base)` re-check (Java validate() L169) against a
+  concurrently-refreshed base is folded into the single commit-time call (no concurrent re-validation hook
+  wired for cherry-pick yet — same sub-sequence as `validateReplacedPartitions`). (c) Data-level Java
+  interop. All three are the documented gate to ✅; row stays 🟡. None is a correctness bug in the
+  single-writer surface the increment claims.

@@ -80,8 +80,10 @@ layers are removed in Phase 0.
    oracle — one `generate`/`verify` pass now covers all THREE capabilities (schema + partition +
    manage-snapshots), 7 manage-snapshots scenarios both directions green via
    `crates/iceberg/tests/interop_manage_snapshots.rs`; both the "Snapshot model + refs" and the
-   ref-operation surface of "Snapshot management" flipped to ✅). **`cherrypick` is NOT interop-proven and
-   stays Phase-2-gated** (it extends `MergingSnapshotProducer` / replays data files). The interop surfaced
+   ref-operation surface of "Snapshot management" flipped to ✅). **`cherrypick` landed 🟡 in Phase-2
+   increment 7 (2026-06-08)** — `transaction/cherry_pick.rs` replays a snapshot onto `main` via the
+   `SnapshotProducer` write engine (it does extend the Java `MergingSnapshotProducer` analogue, which now
+   exists); data-level Java interop is the only remaining gate to ✅. The interop surfaced
    a Rust read divergence (the V2/V3 snapshot reader required `sequence-number` while the spec and Java
    default an absent value to 0 on read) — **FIXED 2026-06-07** with `#[serde(default)]` on
    `_serde::SnapshotV2`/`SnapshotV3.sequence_number`, so Rust now reads the seq-0 V1→V2-upgrade-carryover
@@ -151,8 +153,10 @@ which surfaced and fixed a real partition-name↔schema collision divergence); *
 rollback-to-time + set-current + fast-forward + retention (non-positive rejected), bidirectionally
 interop-proven via the same oracle + `crates/iceberg/tests/interop_manage_snapshots.rs`, 7 scenarios both
 directions; both "Snapshot model + refs" and the ref-op surface of "Snapshot management" flipped to ✅).
-**`cherrypick` is NOT interop-proven and stays Phase-2-gated** (it extends `MergingSnapshotProducer` /
-replays data files). **Phase 2 has started: `DeleteFiles` + the manifest-filter / rewrite machinery is 🟡**
+**`cherrypick` landed 🟡 as Phase-2 increment 7 (2026-06-08)** — `transaction/cherry_pick.rs` replays a
+snapshot onto `main` (fast-forward / append-replay / dynamic-overwrite) via the `SnapshotProducer` write
+engine, mirroring Java `CherryPickOperation`; 8 `MemoryCatalog` unit tests; data-level Java interop is the
+only remaining gate to ✅. **Phase 2 has started: `DeleteFiles` + the manifest-filter / rewrite machinery is 🟡**
 (`transaction/delete_files.rs` + `SnapshotProducer::process_deletes`, `MemoryCatalog`-tested; data-level
 Java interop deferred); **`OverwriteFiles` is 🟡** (`transaction/overwrite_files.rs` — explicit add + delete
 in one `Overwrite` snapshot, reusing the shared resolve/list helpers; summary reflects added + deleted
@@ -283,7 +287,7 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
   `UpdatePartitionSpec` ✅ (bidirectional interop landed 2026-06-07, surfacing+fixing the identity-only
   partition-name collision divergence); `ManageSnapshots` awaits the same interop treatment.**
 
-### Phase 2 — Write engine  ·  **Status: 🟡 (in progress — `DeleteFiles` + manifest-filter machinery + `OverwriteFiles` + `ReplacePartitions` + `RewriteFiles` landed 2026-06-07; `PositionDeleteFileWriter` (RowDelta increment 5a) + `RowDelta` action (5b) landed 2026-06-08 — the merge-on-read write→read chain is now end-to-end; the concurrent-commit conflict-validation FOUNDATION + `ReplacePartitions.validateNoConflictingData` (increment 6) landed 2026-06-08 — the serializable-isolation safety layer)**
+### Phase 2 — Write engine  ·  **Status: 🟡 (in progress — `DeleteFiles` + manifest-filter machinery + `OverwriteFiles` + `ReplacePartitions` + `RewriteFiles` landed 2026-06-07; `PositionDeleteFileWriter` (RowDelta increment 5a) + `RowDelta` action (5b) landed 2026-06-08 — the merge-on-read write→read chain is now end-to-end; the concurrent-commit conflict-validation FOUNDATION + `ReplacePartitions.validateNoConflictingData` (increment 6) landed 2026-06-08 — the serializable-isolation safety layer; `cherrypick` (snapshot replay onto `main`: fast-forward / append-replay / dynamic-overwrite) landed 2026-06-08 as increment 7 — no longer Phase-2-gated)**
 - **Goal:** the full commit/write surface beyond fast-append.
 - **Gates on:** Phase 1.
 - **Increment sequence (dependency, then value):** **1. `DeleteFiles`** (done 🟡 — delete data files by
@@ -323,8 +327,19 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
   replaced partition. **Conflict-validation sub-sequence:** (6) this; then `OverwriteFiles`
   `validateNoConflictingData`/`...Deletes`; `RowDelta`/`DeleteFiles` `validateDataFilesExist`; `RewriteFiles`
   `validateNoNewDeletes`),
-  7. `RewriteManifests`, merge append,
-  8. multi-op transaction hardening + optimistic-concurrency retry on the real catalogs.
+  **7. `cherrypick`** (**done 🟡 2026-06-08** — snapshot replay onto `main`, the freshly-unblocked commit
+  that needed the `MergingSnapshotProducer`-equivalent (the `SnapshotProducer` add+delete seam):
+  `transaction/cherry_pick.rs` `CherryPickAction` / `Transaction::cherry_pick(snapshot_id)` mirrors Java
+  `CherryPickOperation.cherrypick` across all three modes — **fast-forward** (source's parent IS the current
+  head → move `main`, NO new snapshot), **APPEND replay** (re-add the source's added data files in a new
+  `Append` snapshot, set `source-snapshot-id` + `published-wap-id`), **dynamic-OVERWRITE replay**
+  (`replace-partitions` source → re-add added + re-delete removed files in a new `Overwrite` snapshot);
+  `validateNonAncestor` + `WapUtil.validateWapPublish` enforced; new `snapshot.rs` helpers
+  `added_data_files_by_snapshot`/`removed_data_files_by_snapshot`. 8 `MemoryCatalog` unit tests assert the
+  post-commit scan shows the picked data. `validateReplacedPartitions` (the dynamic-overwrite concurrent-change
+  partition scan) + data-level Java interop deferred),
+  8. `RewriteManifests`, merge append,
+  9. multi-op transaction hardening + optimistic-concurrency retry on the real catalogs.
 - **Key deliverables:** merge append, `OverwriteFiles`, `ReplacePartitions`, `DeleteFiles` (🟡), `RowDelta`,
   `RewriteFiles`, `RewriteManifests`; finalize position-delete + deletion-vector writers; multi-op
   transactions + optimistic-concurrency retry, **validated against Glue + S3 Tables**.
@@ -402,8 +417,8 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
    `RowDelta`, `RewriteFiles`, `RewriteManifests`, merge append) + finalized position-delete / DV writers.
 2. **Schema/partition evolution + snapshot management** (`UpdateSchema`, `UpdatePartitionSpec`,
    `ManageSnapshots` are all 🟡 — branch/tag lifecycle, rollback, rollback-to-time, fast-forward, retention,
-   and column defaults landed; only the Java interop round-trip remains before ✅. `cherrypick` is
-   Phase-2-gated — it extends `MergingSnapshotProducer` / replays data files).
+   and column defaults landed; only the Java interop round-trip remains before ✅. `cherrypick` landed 🟡 as
+   Phase-2 increment 7 — `transaction/cherry_pick.rs` replays a snapshot onto `main` via the write engine).
 3. **Format & type breadth** — ORC + Avro data files; remaining V3 types (variant, geo, `unknown`).
    (`timestamp_ns` and column default values already present — see GAP_MATRIX.)
 4. **Views in catalogs** (`ViewCatalog` + view operations).
