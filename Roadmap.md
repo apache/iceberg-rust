@@ -292,7 +292,7 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
   `UpdatePartitionSpec` ✅ (bidirectional interop landed 2026-06-07, surfacing+fixing the identity-only
   partition-name collision divergence); `ManageSnapshots` awaits the same interop treatment.**
 
-### Phase 2 — Write engine  ·  **Status: 🟡 (in progress — `DeleteFiles` + manifest-filter machinery + `OverwriteFiles` + `ReplacePartitions` + `RewriteFiles` landed 2026-06-07; `PositionDeleteFileWriter` (RowDelta increment 5a) + `RowDelta` action (5b) landed 2026-06-08 — the merge-on-read write→read chain is now end-to-end; the concurrent-commit conflict-validation FOUNDATION + `ReplacePartitions.validateNoConflictingData` (increment 6) landed 2026-06-08 — the serializable-isolation safety layer; filter-based `OverwriteFiles.validateNoConflictingData` landed 2026-06-08 (Phase 3 Increment 3) reusing the `InclusiveMetricsEvaluator`; `RowDelta.validateNoConflictingDataFiles` landed 2026-06-08 (Phase 3 Increment 4) via the shared `validate_no_conflicting_added_data_files` helper now used by BOTH OverwriteFiles + RowDelta — the 2nd-use → shared-helper extraction, behavior-preserving for OverwriteFiles)**
+### Phase 2 — Write engine  ·  **Status: 🟡 (in progress — `DeleteFiles` + manifest-filter machinery + `OverwriteFiles` + `ReplacePartitions` + `RewriteFiles` landed 2026-06-07; `PositionDeleteFileWriter` (RowDelta increment 5a) + `RowDelta` action (5b) landed 2026-06-08 — the merge-on-read write→read chain is now end-to-end; the concurrent-commit conflict-validation FOUNDATION + `ReplacePartitions.validateNoConflictingData` (increment 6) landed 2026-06-08 — the serializable-isolation safety layer; filter-based `OverwriteFiles.validateNoConflictingData` landed 2026-06-08 (Phase 3 Increment 3) reusing the `InclusiveMetricsEvaluator`; `RowDelta.validateNoConflictingDataFiles` landed 2026-06-08 (Phase 3 Increment 4) via the shared `validate_no_conflicting_added_data_files` helper now used by BOTH OverwriteFiles + RowDelta — the 2nd-use → shared-helper extraction, behavior-preserving for OverwriteFiles; `RowDelta.validateNoConflictingDeleteFiles` landed 2026-06-08 via a generalized walk `added_files_after` + new `added_delete_files_after` (V2-guarded) + a shared per-file test `first_conflicting_file` — the data + delete checks now share the per-file metrics test, behavior-preserving for the data path)**
 - **Goal:** the full commit/write surface beyond fast-append.
 - **Gates on:** Phase 1.
 - **Increment sequence (dependency, then value):** **1. `DeleteFiles`** (done 🟡 — delete data files by
@@ -388,10 +388,26 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
   conflict tests stayed green unchanged), and `RowDelta` gained `validate_no_conflicting_data_files()` +
   `conflict_detection_filter(Predicate)` + `validate_from_snapshot(id)` calling the same helper. 8 RowDelta
   conflict tests (real concurrent `fast_append`); 3 mutations caught incl. the CROSS-ACTION one (invert the
-  helper's metrics decision → the EXCLUDE test fails for BOTH actions). **Still deferred (separate
-  follow-ups):** `OverwriteFiles.validateAddedFilesMatchOverwriteFilter` (block 1) + `validateNoConflictingDeletes`
-  (block 3); the RowDelta DELETE-file blocks (`validateNoConflictingDeleteFiles`, `validateDataFilesExist`,
-  `validateAddedDVs` — need a concurrent-delete-file enumeration helper); `RewriteFiles` `validateNoNewDeletes`.
+  helper's metrics decision → the EXCLUDE test fails for BOTH actions). **`RowDelta.validateNoConflictingDeleteFiles`
+  (DELETE-file) landed 🟡 (2026-06-08, `transaction/row_delta.rs` + `transaction/snapshot.rs`):** the
+  delete-file counterpart of the data-file check (Java `BaseRowDelta.validate` L159-167 → `validateNewDeleteFiles`
+  → `MergingSnapshotProducer.validateNoNewDeleteFiles` L562-570 → `addedDeleteFiles` L601-625). The data-file
+  walk was GENERALIZED into a private `added_files_after(table, start, content, op_adds)`, so `added_data_files_after`
+  (unchanged behavior) and the new `pub(crate) added_delete_files_after` (V2-guarded — Java `base.formatVersion() < 2`
+  ⇒ empty — over `ManifestContent::Deletes` + the `{OVERWRITE,DELETE}` op set) are both thin calls; the per-file
+  inclusive-metrics test was EXTRACTED into a shared `first_conflicting_file`, used by both
+  `validate_no_conflicting_added_data_files` (refactored, behavior-preserving) and the new
+  `validate_no_conflicting_added_delete_files` (DELETE-specific message). `RowDelta` gained
+  `validate_no_conflicting_delete_files()`, INDEPENDENT of the data flag. 8 delete-conflict tests (real concurrent
+  `row_delta().add_deletes`); 4 mutations caught (content filter Data-vs-Deletes; the shared metrics decision —
+  fails BOTH data + delete EXCLUDE tests; retryable kind; the V2 guard documented as a Java-faithful short-circuit
+  the walk renders redundant on V1). **Over-scan (documented, conservative):** Java's `addedDeleteFiles` also
+  filters its `DeleteFileIndex` by `startingSequenceNumber`; this port uses the snapshot walk + inclusive-metrics
+  filter only (can only over-reject). **Still deferred (separate follow-ups):**
+  `OverwriteFiles.validateAddedFilesMatchOverwriteFilter` (block 1) + `validateNoConflictingDeletes` (block 3); the
+  remaining RowDelta DELETE-file blocks (`validateNoNewDeletesForDataFiles`, `validateDataFilesExist`,
+  `validateAddedDVs` — need `referenced_data_files`/`removed_data_files` on the action); `RewriteFiles`
+  `validateNoNewDeletes`.
 - **Inspection-table sub-sequence (dependency, then value):**
   1. **`files` family** (`files` / `data_files` / `delete_files`) — **DONE 🟡 (2026-06-08, Increment 1,
      `inspect/files.rs`).** Reads the current snapshot's manifest list → manifests → live entries →

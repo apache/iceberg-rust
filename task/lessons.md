@@ -1850,3 +1850,52 @@ How to use it (see the manuals' §2):
   default, not the metrics path. A file with `y∈[60,70]` overlaps `y>=50` (match) and `y∈[10,20]` is below it
   (exclude) — the two halves of the metrics decision. The bounds must be on the schema field id (here `y`=id 2),
   and they survive the manifest round-trip into `added_data_files_after`.
+
+### 2026-06-08 (Phase 3 — RowDelta validateNoConflictingDeleteFiles, BUILDER Opus)
+- **DO parameterize the "added files since a starting snapshot" walk by `(content, op_predicate)` once a SECOND
+  content type needs it — `added_files_after(table, start, content: ManifestContentType, op_adds: fn(&Operation)->
+  bool)`.** *Why:* the data-file walk and the delete-file walk differ ONLY in the manifest-content filter
+  (`Data` vs `Deletes`) and the operation set (`{Append,Overwrite}` vs `{Overwrite,Delete}` — Java's
+  `VALIDATE_ADDED_FILES_OPERATIONS` vs `VALIDATE_ADDED_DELETE_FILES_OPERATIONS`). Everything else (the
+  parent-chain walk, exclusive-of-start, manifest-added-by-this-snapshot, `Added`-only) is identical. Both
+  `added_data_files_after` (`(Data, operation_adds_data_files)`) and the new `added_delete_files_after`
+  (`(Deletes, operation_adds_delete_files)`) become thin calls; the data enumerator's observable behavior is
+  unchanged (the 241 `transaction::` tests stay green = the proof). Note the op sets are NOT the same: an
+  `Append` snapshot adds data but NEVER delete files; a `Delete` snapshot adds delete files but never data — so
+  the delete enumerator MUST use `{Overwrite, Delete}`, not reuse the data predicate (a real, mutation-pinnable
+  divergence).
+- **DO put the V2 guard in `added_delete_files_after` itself (`format_version() < FormatVersion::V2 ⇒ Ok(vec![])`),
+  mirroring Java `addedDeleteFiles`'s `base.formatVersion() < 2` early return.** *Why:* delete files don't exist
+  before format version 2, so the guard belongs at the enumeration door, not in each caller. `FormatVersion`
+  derives `Ord` (`V1=1 < V2=2 < V3=3`), so the `<` comparison is direct. CAVEAT — the guard is a Java-FAITHFUL
+  SHORT-CIRCUIT, not behavior-changing: a V1 table cannot have DELETE manifests AND a concurrent V1 commit is an
+  `Append` (excluded by the `{Overwrite,Delete}` op set), so the walk yields nothing even with the guard removed.
+  The mutation "drop the guard" leaves the V1 test GREEN — which is the honest finding, NOT a missing guard.
+  Document it as such; pin the guard's contribution by asserting `added_delete_files_after(v1_table, None)` returns
+  empty directly (the only assertion that names the guard's effect, since no end-to-end V1 scenario can
+  distinguish guard-present from guard-absent).
+- **DO extract the per-file conflict test (`first_conflicting_file`) on the SECOND filter-based check and prove
+  it load-bearing for BOTH consumers with a SINGLE cross-consumer mutation.** *Why:* the data-file and delete-file
+  conflict checks share the exact "bind None⇒AlwaysTrue once → per-file `InclusiveMetricsEvaluator::eval` → first
+  match" logic; only the enumeration (`added_data_files_after` vs `added_delete_files_after`) and the error message
+  differ. Extracting `first_conflicting_file(files, current, filter, case_sensitive) -> Result<Option<DataFile>>`
+  and having both `validate_no_conflicting_added_data_files` and `validate_no_conflicting_added_delete_files` call
+  it means inverting its metrics decision (`if !eval`) fails the EXCLUDE test in BOTH `transaction::overwrite_files`
+  (data) AND `transaction::row_delta` (delete) at once — one mutation, two failures, is the proof the shared test
+  protects every caller. The DELETE message ("Found new conflicting delete files that can apply to records
+  matching %s: %s", Java `validateNoNewDeleteFiles` L562-570) must DIFFER from the data message ("...can contain
+  records...") so a test can assert the delete branch (not the data branch) fired — assert the DELETE substring is
+  present AND the data substring is absent.
+- **DO simulate the concurrent DELETE commit with a real `row_delta().add_deletes(...)` through the catalog**
+  (the merge-on-read counterpart of `append_files`), committed between txn-build and txn-commit. *Why:* it produces
+  a real `Operation::Delete` snapshot with a real DELETE manifest — exactly what `added_delete_files_after` must
+  enumerate (and `Delete` is in `{Overwrite,Delete}`). A position-delete `DataFile` carrying `y` bounds (field id 2)
+  drives the include/exclude metrics decision (the evaluator is content-agnostic — it reads the file's
+  `lower_bounds`/`upper_bounds` regardless of content type), reusing the `data_file_with_y_bounds` shape.
+- **DO keep the data + delete conflict checks INDEPENDENT (two flags, two `if` branches in `validate`), mirroring
+  Java's two `validateNew*` booleans, and pin the independence BOTH ways.** *Why:* Java exposes
+  `validateNoConflictingDataFiles()` and `validateNoConflictingDeleteFiles()` as separate methods setting separate
+  flags; enabling one must NOT run the other. Two tests pin it: delete-flag-only must allow a matching concurrent
+  DATA append (the data check did not run), and data-flag-only must allow a matching concurrent DELETE (the delete
+  check did not run). A single "both off / both on" pair cannot catch an accidental coupling where one flag enables
+  both checks.
