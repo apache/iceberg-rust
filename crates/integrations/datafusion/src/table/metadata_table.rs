@@ -54,6 +54,19 @@ impl TableProvider for IcebergMetadataTableProvider {
         let schema = match self.r#type {
             MetadataTableType::Snapshots => metadata_table.snapshots().schema(),
             MetadataTableType::Manifests => metadata_table.manifests().schema(),
+            MetadataTableType::Files => metadata_table.files().schema(),
+            MetadataTableType::DataFiles => metadata_table.data_files().schema(),
+            MetadataTableType::DeleteFiles => metadata_table.delete_files().schema(),
+            MetadataTableType::Entries => metadata_table.entries().schema(),
+            MetadataTableType::AllFiles => metadata_table.all_files().schema(),
+            MetadataTableType::AllDataFiles => metadata_table.all_data_files().schema(),
+            MetadataTableType::AllDeleteFiles => metadata_table.all_delete_files().schema(),
+            MetadataTableType::AllEntries => metadata_table.all_entries().schema(),
+            MetadataTableType::History => metadata_table.history().schema(),
+            MetadataTableType::Refs => metadata_table.refs().schema(),
+            MetadataTableType::MetadataLogEntries => metadata_table.metadata_log_entries().schema(),
+            MetadataTableType::Partitions => metadata_table.partitions().schema(),
+            MetadataTableType::AllManifests => metadata_table.all_manifests().schema(),
         };
         schema_to_arrow_schema(&schema).unwrap().into()
     }
@@ -79,6 +92,21 @@ impl IcebergMetadataTableProvider {
         let stream = match self.r#type {
             MetadataTableType::Snapshots => metadata_table.snapshots().scan().await,
             MetadataTableType::Manifests => metadata_table.manifests().scan().await,
+            MetadataTableType::Files => metadata_table.files().scan().await,
+            MetadataTableType::DataFiles => metadata_table.data_files().scan().await,
+            MetadataTableType::DeleteFiles => metadata_table.delete_files().scan().await,
+            MetadataTableType::Entries => metadata_table.entries().scan().await,
+            MetadataTableType::AllFiles => metadata_table.all_files().scan().await,
+            MetadataTableType::AllDataFiles => metadata_table.all_data_files().scan().await,
+            MetadataTableType::AllDeleteFiles => metadata_table.all_delete_files().scan().await,
+            MetadataTableType::AllEntries => metadata_table.all_entries().scan().await,
+            MetadataTableType::History => metadata_table.history().scan().await,
+            MetadataTableType::Refs => metadata_table.refs().scan().await,
+            MetadataTableType::MetadataLogEntries => {
+                metadata_table.metadata_log_entries().scan().await
+            }
+            MetadataTableType::Partitions => metadata_table.partitions().scan().await,
+            MetadataTableType::AllManifests => metadata_table.all_manifests().scan().await,
         }
         .map_err(to_datafusion_error)?;
         let stream = stream.map_err(to_datafusion_error);

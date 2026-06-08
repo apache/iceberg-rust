@@ -15,21 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
-use arrow_array::builder::{
-    BooleanBuilder, GenericListBuilder, ListBuilder, PrimitiveBuilder, StringBuilder, StructBuilder,
-};
+use arrow_array::builder::{PrimitiveBuilder, StringBuilder};
 use arrow_array::types::{Int32Type, Int64Type};
-use arrow_schema::{DataType, Field, Fields};
 use futures::{StreamExt, stream};
 
+use super::partition_summary::{append_partition_summaries, partition_summary_builder};
 use crate::Result;
 use crate::arrow::schema_to_arrow_schema;
 use crate::scan::ArrowRecordBatchStream;
-use crate::spec::{Datum, FieldSummary, ListType, NestedField, PrimitiveType, StructType, Type};
+use crate::spec::{ListType, ManifestContentType, NestedField, PrimitiveType, StructType, Type};
 use crate::table::Table;
 
 /// Manifests table.
@@ -140,7 +137,7 @@ impl<'a> ManifestsTable<'a> {
         crate::spec::Schema::builder()
             .with_fields(fields.into_iter().map(|f| f.into()))
             .build()
-            .unwrap()
+            .expect("manifests metadata table schema is statically valid")
     }
 
     /// Scans the manifests table.
@@ -158,7 +155,7 @@ impl<'a> ManifestsTable<'a> {
         let mut added_delete_files_count = PrimitiveBuilder::<Int32Type>::new();
         let mut existing_delete_files_count = PrimitiveBuilder::<Int32Type>::new();
         let mut deleted_delete_files_count = PrimitiveBuilder::<Int32Type>::new();
-        let mut partition_summaries = self.partition_summary_builder()?;
+        let mut partition_summaries = partition_summary_builder(&self.schema())?;
 
         if let Some(snapshot) = self.table.metadata().current_snapshot() {
             let manifest_list = snapshot
@@ -170,31 +167,40 @@ impl<'a> ManifestsTable<'a> {
                 length.append_value(manifest.manifest_length);
                 partition_spec_id.append_value(manifest.partition_spec_id);
                 added_snapshot_id.append_value(manifest.added_snapshot_id);
-                added_data_files_count.append_value(manifest.added_files_count.unwrap_or(0) as i32);
-                existing_data_files_count
-                    .append_value(manifest.existing_files_count.unwrap_or(0) as i32);
-                deleted_data_files_count
-                    .append_value(manifest.deleted_files_count.unwrap_or(0) as i32);
-                added_delete_files_count
-                    .append_value(manifest.added_files_count.unwrap_or(0) as i32);
-                existing_delete_files_count
-                    .append_value(manifest.existing_files_count.unwrap_or(0) as i32);
-                deleted_delete_files_count
-                    .append_value(manifest.deleted_files_count.unwrap_or(0) as i32);
+
+                // Counts are CONTENT-GATED, mirroring Java `ManifestsTable.manifestFileToRow`: a DATA
+                // manifest carries its added/existing/deleted counts in the *_data_files_count columns
+                // (the *_delete_files_count columns are 0), and a DELETE manifest the reverse.
+                let added = manifest.added_files_count.unwrap_or(0) as i32;
+                let existing = manifest.existing_files_count.unwrap_or(0) as i32;
+                let deleted = manifest.deleted_files_count.unwrap_or(0) as i32;
+                let is_data = manifest.content == ManifestContentType::Data;
+                added_data_files_count.append_value(if is_data { added } else { 0 });
+                existing_data_files_count.append_value(if is_data { existing } else { 0 });
+                deleted_data_files_count.append_value(if is_data { deleted } else { 0 });
+                added_delete_files_count.append_value(if is_data { 0 } else { added });
+                existing_delete_files_count.append_value(if is_data { 0 } else { existing });
+                deleted_delete_files_count.append_value(if is_data { 0 } else { deleted });
 
                 let spec = self
                     .table
                     .metadata()
                     .partition_spec_by_id(manifest.partition_spec_id)
-                    .unwrap();
-                let spec_struct = spec
-                    .partition_type(self.table.metadata().current_schema())
-                    .unwrap();
-                self.append_partition_summaries(
+                    .ok_or_else(|| {
+                        crate::Error::new(
+                            crate::ErrorKind::DataInvalid,
+                            format!(
+                                "partition spec id {} referenced by manifest {} not found",
+                                manifest.partition_spec_id, manifest.manifest_path
+                            ),
+                        )
+                    })?;
+                let spec_struct = spec.partition_type(self.table.metadata().current_schema())?;
+                append_partition_summaries(
                     &mut partition_summaries,
-                    &manifest.partitions.clone().unwrap_or_else(Vec::new),
-                    spec_struct,
-                );
+                    manifest.partitions.as_deref().unwrap_or(&[]),
+                    &spec_struct,
+                )?;
             }
         }
 
@@ -213,68 +219,6 @@ impl<'a> ManifestsTable<'a> {
             Arc::new(partition_summaries.finish()),
         ])?;
         Ok(stream::iter(vec![Ok(batch)]).boxed())
-    }
-
-    fn partition_summary_builder(&self) -> Result<GenericListBuilder<i32, StructBuilder>> {
-        let schema = schema_to_arrow_schema(&self.schema())?;
-        let partition_summary_fields =
-            match schema.field_with_name("partition_summaries")?.data_type() {
-                DataType::List(list_type) => match list_type.data_type() {
-                    DataType::Struct(fields) => fields.to_vec(),
-                    _ => unreachable!(),
-                },
-                _ => unreachable!(),
-            };
-
-        let partition_summaries = ListBuilder::new(StructBuilder::from_fields(
-            Fields::from(partition_summary_fields.clone()),
-            0,
-        ))
-        .with_field(Arc::new(
-            Field::new_struct("item", partition_summary_fields, false).with_metadata(
-                HashMap::from([("PARQUET:field_id".to_string(), "9".to_string())]),
-            ),
-        ));
-
-        Ok(partition_summaries)
-    }
-
-    fn append_partition_summaries(
-        &self,
-        builder: &mut GenericListBuilder<i32, StructBuilder>,
-        partitions: &[FieldSummary],
-        partition_struct: StructType,
-    ) {
-        let partition_summaries_builder = builder.values();
-        for (summary, field) in partitions.iter().zip(partition_struct.fields()) {
-            partition_summaries_builder
-                .field_builder::<BooleanBuilder>(0)
-                .unwrap()
-                .append_value(summary.contains_null);
-            partition_summaries_builder
-                .field_builder::<BooleanBuilder>(1)
-                .unwrap()
-                .append_option(summary.contains_nan);
-
-            partition_summaries_builder
-                .field_builder::<StringBuilder>(2)
-                .unwrap()
-                .append_option(summary.lower_bound.as_ref().map(|v| {
-                    Datum::try_from_bytes(v, field.field_type.as_primitive_type().unwrap().clone())
-                        .unwrap()
-                        .to_string()
-                }));
-            partition_summaries_builder
-                .field_builder::<StringBuilder>(3)
-                .unwrap()
-                .append_option(summary.upper_bound.as_ref().map(|v| {
-                    Datum::try_from_bytes(v, field.field_type.as_primitive_type().unwrap().clone())
-                        .unwrap()
-                        .to_string()
-                }));
-            partition_summaries_builder.append(true);
-        }
-        builder.append(true);
     }
 }
 
@@ -337,15 +281,15 @@ mod tests {
                 ],
                 added_delete_files_count: PrimitiveArray<Int32>
                 [
-                  1,
+                  0,
                 ],
                 existing_delete_files_count: PrimitiveArray<Int32>
                 [
-                  1,
+                  0,
                 ],
                 deleted_delete_files_count: PrimitiveArray<Int32>
                 [
-                  1,
+                  0,
                 ],
                 partition_summaries: ListArray
                 [

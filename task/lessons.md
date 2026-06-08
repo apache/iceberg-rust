@@ -1233,3 +1233,364 @@ How to use it (see the manuals' §2):
   (`test_added_data_files_after_nonancestor_start_overscans_does_not_panic`) rather than fixed. Tracked as a
   parity follow-up (add the `lastSnapshot.parentId() == start` guard when the conflict-validation sub-sequence
   is hardened).
+
+### 2026-06-08 (Phase 3 Increment 1 — `files`/`data_files`/`delete_files` inspection tables, BUILDER Opus)
+- **DO put the files-table content filter at the MANIFEST level, then `entry.is_alive()` — NOT on the
+  entry's `DataFile.content`.** *Why:* Java `BaseFilesTable` selects which MANIFESTS to read per concrete
+  table (`FilesTable` → `allManifests`, `DataFilesTable` → `dataManifests`/content==DATA, `DeleteFilesTable`
+  → `deleteManifests`/content==DELETES); within a manifest it then takes every LIVE entry. So the Rust mirror
+  filters `ManifestFile.content` (`ManifestContentType::{Data,Deletes}`) per table and within each manifest
+  keeps `entry.is_alive()` (Added/Existing) — it does NOT inspect `DataFile.content_type()` to decide
+  membership. A DATA manifest holds only DATA files and a DELETE manifest only delete files, so the two
+  filters agree on the membership set, but filtering at the manifest level is the Java-faithful structure
+  (and is what `dataManifests()`/`deleteManifests()` do). Both filters are load-bearing and must be
+  mutation-pinned independently: mutating the manifest-content filter makes `data_files` swallow the delete
+  file; mutating `is_alive()` makes `files` surface the Deleted tombstone.
+- **DO build the inspection-table partition column with a `StructBuilder::from_fields(partition_arrow_fields)`
+  and per-field `PrimitiveType` dispatch, NOT `get_arrow_datum`/`Datum::new`.** *Why:* there is NO
+  Iceberg-`Struct`-value → Arrow-array helper in the crate (`arrow/value.rs` only goes Arrow→Iceberg);
+  `get_arrow_datum` returns a single-element `Scalar`, awkward to accumulate into a column. Iterating the
+  default partition type's fields and appending each per-row `Option<&Literal>` (extracting the inner
+  `PrimitiveLiteral` into a typed Arrow builder reached via `StructBuilder::field_builder::<T>(index)`) is
+  the direct, robust path. Align the per-row value by index with `partition_type.fields()` —
+  `Struct::fields()[i]` is the i-th partition value as `Option<Literal>`.
+- **DO return `FeatureUnsupported` for timezone-tagged partition types (`timestamptz`/`timestamptz_ns`) in a
+  `StructBuilder`-based column rather than silently using a plain micro/nano builder.** *Why:*
+  `schema_to_arrow_schema` produces `Timestamp(unit, Some("+00:00"))` for tz-tagged types, but
+  `StructBuilder::from_fields` creates a plain (no-tz) `TimestampMicrosecondBuilder`/…Nanosecond for that
+  child; `StructBuilder::finish` reconciles children against the declared tz-tagged `Fields` and the type
+  mismatch would surface late. A plain partition-on-timestamptz is rare; an explicit `FeatureUnsupported`
+  with the type in the message beats a confusing downstream Arrow error. Flag it as a deferred edge.
+- **DO make the metric-map VALUE field non-nullable (`Field::new("value", ty, false)`) when building a
+  `MapBuilder` to match `schema_to_arrow_schema`.** *Why:* Java `DataFile`'s metric maps use
+  `MapType.ofRequired`, so `schema_to_arrow_schema` emits `value: non-null`. A `MapBuilder` value field built
+  with `nullable=true` makes `RecordBatch::try_new` fail with "column types must match schema types, expected
+  ... non-null Int64 but found ... Int64". Carry the canonical Iceberg key/value field ids
+  (`PARQUET:field_id`) on the map's key/value `Field`s too, or the produced Arrow schema won't match.
+- **DO write a self-contained inspection-table test fixture from the scan `TableTestFixture`'s PUBLIC fields
+  (`table`, `table_location`) + public crate writer APIs, NOT its private helpers.** *Why:* `setup_manifest_
+  files`/`next_manifest_file`/`write_parquet_data_files` are private to `scan::tests` and `scan/mod.rs` was
+  out of this increment's edit scope. The metadata table reads ONLY manifest metadata (never the parquet
+  data), so a test can skip real parquet entirely: use a fixed fake `file_size_in_bytes`, write a DATA
+  manifest (`build_v2_data`) + a DELETE manifest (`build_v2_deletes`) via `ManifestWriterBuilder` over
+  `fixture.table.file_io().new_output(...)`, and stitch them into the current snapshot's manifest list with
+  `ManifestListWriter::v2`. `add_delete_entry`/`add_existing_entry` are `pub(crate)`, reachable from an
+  in-crate `#[cfg(test)]` module.
+
+### 2026-06-08 (Phase 3 Increment 1 — `files`/`data_files`/`delete_files`, REVIEWER Opus)
+- **DO mirror Java `BaseFilesTable.schema()`'s empty-partition special-case when porting a files-table:
+  drop the `partition` column entirely for an UNPARTITIONED table.** *Why:* Java (lines 50-54)
+  `if (partitionType.fields().isEmpty()) schema = TypeUtil.selectNot(schema, PARTITION_ID)` — "avoid
+  returning an empty struct, which is not always supported. instead, drop the partition field." A naive
+  port that always emits the `partition` NestedField produces a `Struct([])` column for unpartitioned
+  tables — non-corrupting (the rows are right, no panic) but a schema-shape divergence that breaks
+  column-set parity for interop. Increment 1 left this unhandled; the REVIEWER pinned it with
+  `test_files_table_unpartitioned_keeps_empty_partition_struct_known_divergence` (asserts the current
+  empty-struct column; flips to assert-absent when fixed) and tracked it as a GAP_MATRIX deferral rather
+  than do the invasive conditional-column fix through the fixed 21-column row builder. *Apply:* when a
+  metadata-table schema embeds the partition struct, branch on `default_partition_type().fields().is_empty()`.
+- **DO mutation-pin BOTH the manifest-content filter AND `is_alive()` independently when reviewing a
+  files-table — they are separately load-bearing.** *Why:* the manifest-content filter (`data_files`=DATA
+  manifests, `delete_files`=DELETE manifests) and the `entry.is_alive()` live-entry filter guard different
+  bugs. Verified by three throwaway mutations (deleted after): `Data => true` leaks the delete file into
+  `data_files` (fails `test_data_files_table_excludes_delete_files`); `Deletes => true` leaks data files
+  into `delete_files`; `if true` instead of `is_alive()` resurrects the Deleted tombstone (fails 4 tests).
+  A green suite after a single mutation = an un-pinned filter.
+- **DO verify inspection-table Arrow field ids by DUMPING them from the produced
+  `schema_to_arrow_schema` output and diffing against the Java `*.getType()` ids one-by-one — don't eyeball
+  the source `NestedField` ids.** *Why:* field ids are the interop contract; a transposed id is invisible in
+  a passing value test. A 6-line probe (`for field in arrow.fields() { field.metadata()["PARQUET:field_id"] }`)
+  confirmed all 21 `files`-table ids equal Java `DataFile.getType` in order, including the nested map
+  key/value (117/118…) and list element (133, 136) ids. Also pin the partition value PER row-key (file_path),
+  not just the multiset — a multiset assertion passes even if partitions are shuffled across rows.
+
+### 2026-06-08 (Phase 3 Increment 2 — `entries` inspection table, BUILDER Opus)
+- **DO trust the Java SOURCE field ids over the brief's paraphrase, and flag the divergence.** *Why:* the
+  brief said `entries` data_file projection ids 0/1/2/3/4; `ManifestEntry.java:51-55` actually assigns
+  `status`=0, `snapshot_id`=1, `sequence_number`=**3**, `file_sequence_number`=**4**, `data_file`=**2**
+  (`DATA_FILE_ID = 2`). CLAUDE.md makes the Java source the spec-by-example; implementing 0/1/2/3/4 would
+  break interop. The Rust `ManifestEntry` doc comments already carry the real ids (1/3/4/2), so they were the
+  cross-check. Read `getSchema`/`wrapFileSchema` for the actual `Schema(...)` field order + ids, never infer.
+- **DO read that Java `entries` reads `snapshot().allManifests` with NO `isLive()` filter — the Deleted
+  tombstones ARE rows.** *Why:* this is the ONE behavioral difference from the `files` family (which filters
+  `is_alive()`). `BaseEntriesTable.planFiles` filters manifests by the row-filter/content evaluator only, and
+  `ManifestReadTask` yields every entry; `ManifestEntriesTable`'s javadoc: "exposes internal details, like
+  files that have been deleted." A port that reuses the files-table `is_alive()` filter silently drops the
+  status-2 tombstone and the entries table is wrong. Pin it with a test that asserts the Deleted file IS a
+  present row with `status == 2` — the headline risk.
+- **GOTCHA: `StructBuilder::from_fields` builds Map/List children as BOXED builders
+  (`MapBuilder<Box<dyn ArrayBuilder>, Box<dyn ArrayBuilder>>` / `ListBuilder<Box<dyn ArrayBuilder>>`), NOT the
+  typed `MapBuilder<Int32Builder, Int64Builder>`.** *Why it bites:* the old flat `FilesRowBuilder`
+  constructed each `MapBuilder<Int32Builder, Int64Builder>` by hand with `.with_keys_field`/`.with_values_field`
+  to carry field ids. When the `data_file` projection became a single `StructBuilder` (so `entries` can nest
+  it AND `files` can flatten its `.columns()`), arrow's `make_builder` produces the BOXED map/list shapes for
+  the `DataType::Map`/`DataType::List` children — so `field_builder::<MapBuilder<Int32Builder, Int64Builder>>(i)`
+  returns `None` → "child builder at index N has an unexpected type" at runtime. Fix: fetch the children as
+  `MapBuilder<Box<dyn ArrayBuilder>, Box<dyn ArrayBuilder>>` / `ListBuilder<Box<dyn ArrayBuilder>>` and
+  `downcast_mut` the inner key/value/element builders. `make_builder` PRESERVES the keys/values/element field
+  metadata (`.with_keys_field`/`.with_field`), so field ids survive automatically — the hand-rolled
+  `metrics_map_fields` helper is then dead and was deleted. The build COMPILES with the wrong typed builder
+  (it's just a `field_builder::<T>` generic) and only fails at the first append — a `RecordBatch::try_new`
+  schema-validation or a `field_builder` `None` is the tell, so run the tests, don't trust a green build.
+- **DO factor a shared Arrow row-builder as a single `StructBuilder` when one consumer needs the nested
+  struct and the other the flat columns.** *Why:* `entries` needs `data_file` as ONE struct column; `files`
+  needs the SAME 21 fields as top-level columns. A single `DataFileStructBuilder` (a `StructBuilder` over the
+  `data_file_fields`) serves BOTH: `entries` appends it as the `data_file` column; `files` calls
+  `.finish()` → `StructArray` and emits `.columns().to_vec()` as the top-level columns (the flattened
+  Arrow schema IS the struct's child fields, so `RecordBatch::try_new(flat_schema, struct.columns())`
+  type-checks). One projection, two shapes, no drift — the Rule-of-Three extraction. The `files` tests
+  (unchanged) staying green after the refactor is the behavior-preservation proof.
+- **DO assert inspection rows against the GENUINELY committed values, including writer-side overrides — not
+  an idealized model.** *Why:* `ManifestWriter::add_delete_entry` STAMPS `entry.snapshot_id = self.snapshot_id`
+  (the manifest's snapshot id) but PRESERVES the data/file sequence numbers; `add_existing_entry` preserves
+  everything; an Added entry with no id/seq INHERITS the manifest-list entry's `added_snapshot_id`/seq at read
+  time. So a Deleted entry written with an explicit `.snapshot_id(parent)` comes back carrying CURRENT's id,
+  seq=parent's. The first cut of the test asserted "Deleted = parent id" and FAILED — the code was right, the
+  expectation was wrong. Read the writer's `add_*_entry` contract before asserting; the test that compares to
+  the real committed shape (incl. the stamp + the inheritance) is the one that pins read correctness.
+
+### 2026-06-08 (Phase 3 Increment 2 — `entries` + shared `DataFileStructBuilder`, REVIEWER Opus)
+- **DO confirm a builder-claimed field-id "correction" against the Java SOURCE line, not the brief.** *Why:*
+  the brief said the entries top-level ids were `0/1/2/3/4`; the BUILDER overrode to `0/1/3/4/2`. Verified
+  against `core/.../ManifestEntry.java:51-56` — `STATUS=0`, `SNAPSHOT_ID=1`, `SEQUENCE_NUMBER=3`,
+  `FILE_SEQUENCE_NUMBER=4`, `DATA_FILE_ID=2` (data_file is **2**, the seq fields are **3/4**). The correction
+  is RIGHT; the brief was wrong. Per CLAUDE.md (Java source is the spec-by-example), the source line wins over
+  the prose brief every time — and the Arrow-schema test pins these exact ids so a regression can't slip.
+- **DO mutation-test a SHARED projection from BOTH consumer shapes, not just one.** *Why:* `DataFileStructBuilder`
+  feeds `files` (flattened `.columns()`) AND `entries` (nested `data_file` struct). Corrupting `record_count`
+  (index 5) failed a test in BOTH (`test_files_table_record_count_...` + `test_entries_table_data_file_struct_...`);
+  corrupting the boxed map VALUE failed BOTH (`test_files_table_partition_struct_and_metrics_map_present` +
+  the entries struct test). A mutation that only broke one shape would mean the other shape's coverage was a
+  gap. Both-shapes mutation is the discipline a Rule-of-Three extraction demands.
+- **DO probe the boxed BINARY map path specifically — a typed-vs-boxed downcast bug hides until the bytes are
+  read.** *Why:* `StructBuilder::from_fields` boxes the `lower_bounds`/`upper_bounds` map's `LargeBinary` value
+  builder; the append path downcasts to `LargeBinaryBuilder`. The existing tests assert the int-value maps
+  (`column_sizes`) and the map TYPE but never read the bound-map BYTES. A throwaway probe confirmed
+  `lower_bounds {1: long(1)}` round-trips to `[1,0,0,0,0,0,0,0]` (LE) and the nested map key/value field ids
+  survive the boxing (column_sizes k117/v118, lower_bounds k126/v127, upper_bounds k129/v130 — exactly Java
+  `DataFile.java`). `PrimitiveType::Binary` maps to Arrow `LargeBinary` (`arrow/schema.rs:691`), so the
+  `LargeBinaryBuilder` downcast for both `key_metadata` and the bound-map values is correct. (Verdict: no bug
+  — the boxed metrics maps are correctly populated in both shapes.)
+
+### 2026-06-08 (Phase 3 Increment 3 — `history` / `refs` / `metadata_log_entries`, BUILDER Opus)
+- **DO commit a non-current-ancestor history fixture in TWO transactions, not one.** *Why:* a single
+  `into_builder().add_snapshot(SIBLING).set_ref("main", SIBLING).set_ref("main", CURRENT).build()` makes
+  SIBLING an *intermediate* snapshot (made current then superseded WITHIN one changeset) — and
+  `TableMetadataBuilder::update_snapshot_log` (mirroring Java `TableMetadata.Builder`) DROPS intermediate
+  snapshots from the snapshot log, so SIBLING never appears as a `history` row and the only non-trivial
+  column (`is_current_ancestor`) can't be exercised. Split it: commit 1 grafts SIBLING and makes it current
+  (it persists in the log), commit 2 rolls `main` back to CURRENT. SIBLING is now a historical log entry
+  (not intermediate) whose `is_current_ancestor` is correctly false. The final snapshot log is
+  [ROOT, CURRENT, SIBLING, CURRENT] (the rollback re-stamps CURRENT) — assert ≥1 row per id, not a fixed
+  count, and that duplicate rows for the same id agree.
+- **DO read the Java row-builder for `parent_id` semantics: it is the SNAPSHOT's parent, not the previous
+  log entry.** *Why:* `HistoryTable.convertHistoryEntryFunc` looks up `snapshots.get(snapshotId).parentId()`
+  per history entry — so `history.parent_id` = `snapshot_by_id(entry.snapshot_id).parent_snapshot_id()`,
+  nullable, NOT the snapshot id of the preceding snapshot-log row. Easy to get subtly wrong because in a
+  straight-line history they coincide; a forked/rolled-back history is where they diverge.
+- **DO implement `metadata_log_entries.latest_*` fully — it is tractable from Rust metadata, no deferral.**
+  *Why:* Java derives them via `SnapshotUtil.snapshotIdAsOfTime(ts)` = the LAST `table.history()` (snapshot
+  log) entry whose `timestampMillis <= ts`, then that snapshot's `schemaId`/`sequenceNumber`; NULL when no
+  snapshot is at/older than the timestamp (a creation-time metadata file). Rust's `metadata.history()` +
+  `snapshot_by_id().{schema_id,sequence_number}` give exactly this — a 6-line `snapshot_id_as_of_time` walk.
+  Don't reach for the brief's "or NULL with a precise note if unresolvable" escape hatch when the data is
+  right there. The synthetic final log row is `(last_updated_ms, metadata_location)` — Java appends the
+  CURRENT metadata file as the last `MetadataLogEntry`; an empty `metadata_log()` therefore still yields ONE
+  row (the current file), and `metadata_location()` being `Option` → use `unwrap_or("")` defensively.
+- **DO cast an Arrow timestamp column to its `TimestampMicrosecondType`, never `Int64Type`, in tests.** *Why:*
+  `as_primitive::<Int64Type>()` on a `Timestamp(µs, "+00:00")` array PANICS at runtime ("primitive array"
+  type mismatch) even though the physical storage is i64 — `as_primitive` checks the Arrow DataType, not the
+  physical width. Cast to `TimestampMicrosecondType`; `.value(i)` then returns the i64 micros directly
+  (= log millis × 1000), so the millis→micros conversion is still assertable.
+- **DO copy a private cross-module test fixture locally rather than widen its visibility.** *Why:*
+  `transaction::tests::make_v2_table` is `mod tests` (private to `transaction/`), unreachable from
+  `inspect/`'s `#[cfg(test)]`. Re-reading the same committed `TableMetadataV2Valid.json` into a 15-line local
+  `make_v2_table` in each inspect test module is the in-scope path; making `transaction::tests` public to
+  share one helper would touch an out-of-scope file for a test-only convenience. (The `scan::tests` module IS
+  `pub` and is what `snapshots.rs`/`entries.rs` reuse — but its `TableTestFixture` has a different history
+  shape; the JSON-fixture path is cleaner for the pure-metadata tables.)
+- **DO reach `metadata.refs` directly in-crate (`pub(crate)`), no new accessor needed.** *Why:* the brief
+  flagged "if you need to ADD a public accessor, STOP and report." None needed: `TableMetadata.refs` is
+  `pub(crate)` and `inspect/` is in the same crate, and every other field (`history()`, `metadata_log()`,
+  `current_snapshot_id()`, `last_updated_ms()`, `snapshot_by_id()`) plus `Snapshot::{parent_snapshot_id,
+  schema_id, sequence_number, timestamp_ms}` is already public. Confirm visibility before reporting a blocker.
+
+### 2026-06-08 (Phase 3 Increment 3 — `history` / `refs` / `metadata_log_entries`, REVIEWER Opus)
+- **DO pin the `<=` (inclusive) boundary in `snapshot_id_as_of_time` with a metadata-log entry whose
+  timestamp EXACTLY EQUALS a snapshot-log timestamp — offsetting every test entry off the snapshot
+  timestamps leaves the boundary unpinned and a `<`-vs-`<=` mutation SURVIVES.** *Why:* Java
+  `nullableSnapshotIdAsOfTime` keeps the LAST snapshot-log entry with `timestampMillis <= ts`; the only
+  case that distinguishes `<=` from a strict `<` is `ts == a snapshot-log timestamp` (the metadata file
+  written by the very commit that created the snapshot, whose `lastUpdatedMillis == snapshot.timestampMillis`).
+  The builder's `latest_*` test used `ROOT_TS-1000` / `ROOT_TS+1000` / `last_updated_ms` (= `1602…`, well
+  past `CURRENT_TS`) — none landing ON a snapshot timestamp — so I mutation-tested `<=`→`<` and the test
+  still PASSED. Added `test_…_inclusive_of_exact_snapshot_timestamp` (entries at exactly `ROOT_TS` and
+  `CURRENT_TS` → resolve to ROOT and CURRENT, not NULL/ROOT); mutation-verified it now FAILS under `<` (entry
+  at `ROOT_TS` resolved to 0 instead of ROOT). A wrong as-of-time = wrong `latest_snapshot_id`/`schema_id`/
+  `sequence_number` per row, so the boundary is load-bearing, not cosmetic.
+- **DO replace a bare `.unwrap()` on a statically-valid `Schema::builder().build()` with
+  `.expect("<table> metadata table schema is statically valid")`, matching the in-scope sibling
+  precedent.** *Why:* CLAUDE.md Non-Negotiable #3 / Opus §Rust forbid bare `.unwrap()` in production paths.
+  The Increment-3 `schema()` methods copied the bare `.unwrap()` from the OLDER `snapshots.rs` template, but
+  the immediately-preceding Increment-1/2 siblings (`files.rs`/`entries.rs`) had already adopted
+  `.expect("… statically valid")` — so the bare `.unwrap()` was both a non-negotiable miss and inconsistent
+  with the freshest precedent. When two precedents disagree, follow the one that satisfies the engineering
+  floor. (The `is_current_ancestor` always-true mutation and the field-id Arrow probes were already
+  correctly pinned by the builder — those needed no change.)
+
+### 2026-06-08 (Phase 3 Increment 4 — `partitions` aggregating table, BUILDER Opus)
+- **DO write a "committed by the OLDER snapshot" test entry via `ManifestWriter::add_existing_entry`, NOT
+  `add_entry` — `add_entry` RESTAMPS `entry.snapshot_id = self.snapshot_id` (the manifest's snapshot) and
+  forces `status = Added`, silently discarding a `.snapshot_id(parent)` you set on the builder.** *Why it
+  un-pins a tie-break test:* the `partitions` `last_updated_*` logic picks the file whose COMMITTING
+  snapshot has the max commit time (Java `Partition.update`, strict `>`). To pin the `>` (vs `<`/min-wins)
+  I needed two files committed by DIFFERENT snapshots in the same partition. My first cut built both via a
+  `write_data_manifest` helper that used `add_entry` for every entry — so BOTH files got stamped with the
+  CURRENT snapshot id, the parent never participated, and mutating `>`→`<` left the test GREEN (only one
+  distinct commit time existed). Fix: write the older file with `add_existing_entry` (status Existing,
+  PRESERVES the parent snapshot id + seqs) and the newer with `add_entry` (Added, inherits current). Then
+  `>`→`<` flips the answer to the parent and the test FAILS. `add_existing_entry`/`add_delete_entry` are
+  `pub(crate)`, reachable from an in-crate `#[cfg(test)]`. *General rule:* before asserting a
+  most-recent/oldest tie-break, verify the writer actually PRESERVES the per-entry snapshot id you depend on
+  — a restamping add path collapses your distinct-commit-time setup to one value and the mutation survives.
+- **DO confirm a strict `>`/`<` comparison test produces a DIFFERENT, asserted result under the mutation —
+  a min-vs-max comparison needs two entries with DISTINCT commit times that genuinely both reach the
+  comparator.** *Why:* same root cause as the snapshot-id restamp above. The `is_none_or(|cur| t > cur)`
+  fold is "max-time-wins, first-writer wins a tie"; `<` makes it "min-time-wins." Only a test where the
+  oldest and newest snapshots BOTH contribute a file to the same partition distinguishes them. Assert both
+  the winning time AND that it is `assert_ne!` the losing snapshot's id, so a min-wins regression can't pass.
+- **DO key an aggregating inspection table by the file's OWN partition `Struct` and use
+  `default_partition_type` for the column schema — there is NO cross-spec partition-type unifier in Rust.**
+  *Why:* Java `PartitionsTable` unifies ALL of a table's specs into one partition type via
+  `Partitioning.partitionType(table)` and coerces each file's partition into it (`PartitionUtil.coerce
+  Partition`). A grep of `spec/`/`transform/` for any analogue found only `PartitionSpec::partition_type
+  (schema)` (SINGLE spec) and `TableMetadata::default_partition_type` — no union/coerce. So the
+  single-spec-correct path (`Struct` derives `Hash`+`Eq` → direct `HashMap` key; schema = default partition
+  type) is the right scope; cross-spec UNIFICATION (partition evolution → differently shaped tuples) is a
+  documented DEFERRAL, not silently misaggregated. Still report the per-file `spec_id` so nothing is
+  misattributed within a single spec. Do NOT invent a unifier in an inspection-table increment — flag it.
+- **DO reuse the `files`-family unpartitioned-column decision for module consistency: keep the empty-struct
+  `partition` column rather than dropping it (Java drops it).** *Why:* `inspect/files.rs` already KEPT an
+  empty-struct `partition` column for unpartitioned tables as a documented divergence (Java
+  `BaseFilesTable.schema()` drops it). Matching that in `partitions` gives the `inspect` module ONE
+  consistent unpartitioned-column behavior (and one future fix site) instead of two. Pin it with the same
+  `..._unpartitioned_keeps_empty_partition_struct_known_divergence` shape that flips to assert-absent when
+  the module-wide drop-empty rule lands. A new divergence direction in a sibling table is worse than
+  mirroring an existing, tested one.
+- **DO collapse `if let A && let B` with let-chains when clippy's `collapsible_if` fires on the pinned
+  nightly — nested `if let Some(x) { if let Some(y) { … } }` is now a `-D warnings` error.** *Why:* the
+  most-recent-commit lookup naturally reads as `if let Some(id) = entry.snapshot_id() { if let
+  Some(snap) = metadata.snapshot_by_id(id) { … } }`; clippy on `nightly-2025-10-27` rejects it. Rewrite as
+  `if let Some(id) = entry.snapshot_id() && let Some(snap) = metadata.snapshot_by_id(id) { … }` (let-chains
+  are stable on this toolchain). Run clippy `--all-targets -- -D warnings` from the repo root (pinned
+  nightly) before declaring done — a plain `cargo build` does NOT surface it.
+
+### 2026-06-08 (Phase 3 Increment 5a — `all_*` cross-snapshot file/entry tables, BUILDER Opus)
+- **DO stamp a SHARED manifest's `sequence_number`/`min_sequence_number` explicitly before referencing it in
+  a SECOND snapshot's manifest list in a multi-snapshot fixture.** *Why:* `ManifestListWriter::assign_sequence
+  _numbers` (`spec/manifest_list.rs:274`) only ASSIGNS a seq to a manifest the list ADDED — i.e. one whose
+  `added_snapshot_id == list.snapshot_id`. A manifest written under the PARENT snapshot but also referenced
+  in the CURRENT snapshot's list (the dedup-test setup: one `ManifestFile` in both lists by the same path)
+  reaches the current list with `added_snapshot_id != current_id` AND an UNASSIGNED seq (-1), so the writer
+  errors `DataInvalid "Found unassigned sequence number for a manifest from snapshot N"`. Fix: after
+  `write_manifest_file()`, set `manifest.sequence_number = parent.sequence_number()` and `.min_sequence_number`
+  likewise (both public fields) — exactly the seq a real commit would have stamped when the parent first
+  wrote it. A manifest carried forward into a later snapshot's list MUST already carry an assigned seq; only
+  the list that ADDED it assigns one. (This is the manifest-list analogue of the entry-level "Existing entry
+  must have a populated seq" rule.)
+- **DO use `TableTestFixture::new()`'s EXISTING parent+current snapshot pair for a multi-snapshot inspection
+  fixture — but WRITE BOTH manifest lists.** *Why:* `example_table_metadata_v2.json` already has two snapshots
+  (parent `3051…`/seq 0 → `manifest_list_1`, current `3055…`/seq 1 → `manifest_list_2`), reachable via
+  `current_snapshot.parent_snapshot(&metadata)` (`pub(crate)`). The current-snapshot tables (`files`/`entries`)
+  only read `current_snapshot.manifest_list()`, so the Increment-1/2 fixtures leave the PARENT list
+  (`manifest_list_1`) UNWRITTEN — but the `all_*` tables read it via `metadata.snapshots()`. The fixture must
+  write BOTH lists (a `write_manifest_list(fixture, snapshot, manifests)` helper at `snapshot.manifest_list()`),
+  or `load_manifest_list` on the parent fails (file absent). No new public accessor needed; everything
+  (`snapshots()`, `parent_snapshot`, `manifest_list()`, the `ManifestFile` fields) is `pub`/`pub(crate)`.
+- **DO preserve FIRST-SEEN order when porting Java's `Sets.newHashSet(reachableManifests)` dedup, even though
+  Java's `HashSet` is unordered.** *Why:* Java `BaseAllMetadataTableScan.reachableManifests` (L80-82) returns a
+  `HashSet<ManifestFile>` (equality by path) — UNORDERED. A faithful port could use any order, but a `HashSet`
+  +`Vec` seen-set that pushes on first sight gives DETERMINISTIC output (a strict superset of Java's contract)
+  and makes the row-order tests reproducible without sorting in production. Dedup the MANIFESTS only; the FILES
+  inside are NOT deduplicated (javadoc "may return duplicate rows") — a shared manifest's file appears once
+  because the manifest is read once, NOT because files are deduped. Return ALL-content manifests from the
+  shared helper and let each table content-filter (`FilesTableKind`): dedup-by-path then filter == filter then
+  dedup (content is intrinsic to a manifest), so one all-content source == Java's per-content
+  `reachableManifests(dataManifests|deleteManifests|allManifests)`.
+- **FIXED (2026-06-08, orchestrator, post-5a): `iceberg-datafusion` non-exhaustive `MetadataTableType` match
+  → workspace build restored + all inspection tables now SQL-queryable.** *Why:* the builder correctly flagged
+  that `crates/integrations/datafusion/src/table/metadata_table.rs` matched `MetadataTableType` for
+  `schema()`/`scan()` but only handled `Snapshots`/`Manifests` — already non-exhaustive (E0004) over the
+  `Files`/`DataFiles`/`DeleteFiles`/`Entries`/`History`/`Refs`/`MetadataLogEntries`/`Partitions` variants
+  Increments 1-4 added; 5a's 4 `all_*` variants extended the already-broken match. *Fix:* wired ALL 14
+  variants into BOTH match blocks (`.schema()` + `.scan().await`) mapping each to its `MetadataTable` accessor
+  — so the crate compiles AND every inspection table is queryable as `tbl$<name>` via DataFusion SQL (real
+  parity value, mirroring Spark's `tbl.metadata_table` surface). Also bumped the `test_provider_list_table_names`
+  `expect_test` block (2 → 14 names, regenerated via `UPDATE_EXPECT=1`, diff inspected — enum order). Verified:
+  `cargo build -p iceberg-datafusion` clean, lib 80/0 + integration 9/0, clippy + fmt clean.
+- **PROCESS: the per-increment gate MUST include the consumers of any enum/trait you extend, not just
+  `-p iceberg`.** *Why:* the `-p iceberg` fast gate never builds `iceberg-datafusion`, so a non-exhaustive-match
+  break sat latent across FOUR committed increments (1-4) before 5a's builder caught it by chance. Adding a
+  public enum variant is a CROSS-CRATE change. The gate now adds `cargo build --workspace --exclude
+  iceberg-sqllogictest --all-targets` (sqllogictest needs `protoc`) — the same build CI runs — to catch
+  downstream non-exhaustiveness before commit. (One residual quirk: `cargo test -p iceberg-datafusion --doc`
+  in ISOLATION fails the pre-existing `table_provider_factory` `#[tokio::main]` doctest because tokio's
+  `rt-multi-thread` feature isn't unified in; at `--workspace` doc scope — how CI runs — it passes. Not a
+  regression; run doctests workspace-wide.)
+
+### 2026-06-08 (Phase 3 Increment 5b — `all_manifests`, BUILDER Opus)
+- **DO content-gate the manifest count columns in BOTH `all_manifests` AND the regular `manifests` table —
+  Java content-gates in BOTH.** *Why:* `AllManifestsTable.manifestFileToRow` (core L286-303) AND
+  `ManifestsTable.manifestFileToRow` (core L108-113) use the IDENTICAL gate
+  (`manifest.content() == DATA ? count : 0` for the *_data_files_count columns, `== DELETES ? count : 0` for
+  the *_delete_files_count columns). The Rust `inspect/manifests.rs` scan appended each manifest's
+  added/existing/deleted counts to BOTH families unconditionally — a real bug (a DATA manifest reported its
+  data counts in the delete columns too, and vice-versa). The fix is a one-line `is_data` gate shared with
+  `all_manifests`; it ships with the regenerated `manifests` `expect_test` block (the fixture's DATA
+  manifest's delete columns flip 1/1/1 → 0/0/0) and is mutation-pinned. Do NOT let `all_manifests` match the
+  buggy non-gated behavior "for consistency" — fix the buggy one instead.
+- **DO build `all_manifests` by iterating `metadata.snapshots()` DIRECTLY, NOT via the 5a
+  `manifest_source::collect_manifest_files` helper.** *Why:* `all_manifests` is the ONE inspection table that
+  must NOT dedup — Java `AllManifestsTable` javadoc "may return duplicate rows", one row per (manifest ×
+  referencing snapshot). The 5a helper dedups manifests by `manifest_path` AND drops the snapshot identity,
+  so it is fundamentally wrong here (it would collapse a shared manifest to one row and lose the
+  `reference_snapshot_id`). Per-snapshot iteration + `snapshot.snapshot_id()` as `reference_snapshot_id` is
+  the distinct machinery. This is the key distinction from the 5a file/entry `all_*` tables, which DO dedup
+  manifests (but not the files inside them).
+- **DO make the `reference_snapshot_id`-vs-`added_snapshot_id` distinction TESTABLE by giving the shared
+  manifest an `added_snapshot_id` that differs from the referencing snapshot's id.** *Why:* a manifest's
+  `added_snapshot_id` (the snapshot that committed it) and `reference_snapshot_id` (the snapshot whose list
+  this row came from) are EQUAL for the snapshot that added it but DIFFER for any later snapshot that carries
+  it forward. Write the shared manifest with `Some(PARENT)` (→ `added_snapshot_id = PARENT`) and list it in
+  BOTH the parent's and the current's manifest lists; the current-snapshot row then has
+  `reference_snapshot_id = CURRENT != added_snapshot_id = PARENT`, so a mutation that emits
+  `added_snapshot_id` where `reference_snapshot_id` belongs is caught. If both ids were the same the swap
+  mutation would survive.
+- **DO note the schema NULLABILITY differs between `manifests` and `all_manifests` — copy from the Java
+  source, not the sibling Rust table.** *Why:* Java `AllManifestsTable.MANIFEST_FILE_SCHEMA` (L57-81) makes
+  the three `*_delete_files_count` columns (15/16/17) REQUIRED, whereas `ManifestsTable.SNAPSHOT_SCHEMA`
+  (in the Rust port) makes the delete counts nullable. Blindly copying `manifests.rs`'s
+  `NestedField::new(.., false/true)` flags would produce the wrong nullability. The Arrow-schema test pins
+  all 14 columns' ids AND nullability so this can't drift. _(Re: `contains_nan`/11 — superseded 2026-06-08,
+  see next entry: Java marks it `required` but that flag is NOMINAL; the Rust port must make it OPTIONAL.)_
+- **DO NOT copy a Java metadata-table field's `required` flag verbatim into an Arrow builder when the Java
+  ROW VALUE for that field can be null — Arrow enforces non-nullability, Java's `StaticDataTask.Row` does
+  not.** *Why (2026-06-08, `all_manifests` review):* Java `AllManifestsTable.MANIFEST_FILE_SCHEMA` declares
+  `contains_nan`/11 `required`, but `PartitionFieldSummary.containsNaN()` returns a nullable `Boolean` that
+  is `null` for manifests with no NaN info (V1, or V2 without it — `contains_nan`/518 is OPTIONAL in the
+  on-disk manifest-list spec). Java's loosely-typed `Object[]` row emits that null into the nominally-required
+  cell with NO check, so Java "works." Arrow's `StructArray::try_new` REJECTS a null in a non-nullable child
+  → the Rust scan PANICS (`"Found unmasked nulls for non-nullable StructArray field \"contains_nan\""`) on the
+  common `contains_nan == None` case. Fix: mark the field OPTIONAL in the Rust Arrow schema (carries Java's
+  emitted null faithfully). General rule: when porting a Java metadata table, check whether the field's
+  PRODUCER can return null (boxed `Boolean`/`Integer`, `@Nullable`, a default-null getter) independently of
+  the schema's `required` flag; if so, the Arrow field MUST be nullable regardless of the Java schema. Pin it
+  with a test that drives a real null value through `scan()` (not just `Some(false)` from the writer default,
+  which dodges the path entirely).
+- **DO factor a shared Arrow builder into a `pub(super)` module on the SECOND real use (Rule of Three is a
+  ceiling, not a floor, when the duplication is verbatim and the divergence is implausible).** *Why:* the
+  `partition_summaries` list builder + `FieldSummary`→string-bound conversion is byte-identical between
+  `manifests` and `all_manifests` (same element id 9, same struct, same `Datum::try_from_bytes` render). I
+  pulled it into `inspect/partition_summary.rs` (`pub(super)` free fns) rather than duplicate it; this also
+  let me drop the old `manifests.rs` bare `.unwrap()`s (propagate errors / `.expect` only the statically-valid
+  schema build) in one place. The shared module means the two tables physically cannot drift.
