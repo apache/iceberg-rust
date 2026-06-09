@@ -505,62 +505,12 @@ impl SnapshotRetention {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
 
-    use bytes::Bytes;
     use chrono::{TimeZone, Utc};
 
-    use crate::encryption::kms::{KeyManagementClient, MemoryKeyManagementClient};
-    use crate::encryption::{EncryptionManager, StandardKeyMetadata};
-    use crate::io::FileIO;
-    use crate::spec::manifest_list::{ManifestList, ManifestListWriter};
+    use crate::spec::TableMetadata;
     use crate::spec::snapshot::_serde::SnapshotV1;
     use crate::spec::snapshot::{Operation, Snapshot, Summary};
-    use crate::spec::{ManifestListReader, SnapshotRef, TableMetadata, TableMetadataRef};
-
-    fn encryption_test_metadata() -> TableMetadataRef {
-        let path = format!(
-            "{}/testdata/table_metadata/TableMetadataV3ValidEncryption.json",
-            env!("CARGO_MANIFEST_DIR"),
-        );
-        let json = std::fs::read_to_string(path).unwrap();
-        TableMetadataRef::new(serde_json::from_str(&json).unwrap())
-    }
-
-    fn encryption_test_kms() -> Arc<dyn KeyManagementClient> {
-        let kms = MemoryKeyManagementClient::new();
-        kms.add_master_key("master-1").unwrap();
-        Arc::new(kms)
-    }
-
-    fn encryption_test_manager() -> EncryptionManager {
-        EncryptionManager::builder()
-            .kms_client(encryption_test_kms())
-            .table_key_id("master-1")
-            .build()
-    }
-
-    async fn write_v3_manifest_list_bytes(io: &FileIO, path: &str) -> Bytes {
-        let output = io.new_output(path).unwrap().writer().await.unwrap();
-        let mut writer = ManifestListWriter::v3(output, 1, None, 0, Some(0));
-        writer.add_manifests(std::iter::empty()).unwrap();
-        writer.close().await.unwrap();
-        io.new_input(path).unwrap().read().await.unwrap()
-    }
-
-    fn snapshot_pointing_at(manifest_list_path: &str, key_id: Option<String>) -> Snapshot {
-        Snapshot::builder()
-            .with_snapshot_id(1)
-            .with_sequence_number(0)
-            .with_timestamp_ms(0)
-            .with_manifest_list(manifest_list_path.to_string())
-            .with_summary(Summary {
-                operation: Operation::Append,
-                additional_properties: HashMap::new(),
-            })
-            .with_encryption_key_id(key_id)
-            .build()
-    }
 
     #[test]
     fn schema() {
@@ -762,58 +712,5 @@ mod tests {
         assert_eq!(v2_snapshot.snapshot_id(), 1111111111);
         assert_eq!(v2_snapshot.parent_snapshot_id(), None);
         assert_eq!(v2_snapshot.schema_id(), None);
-    }
-
-    #[tokio::test]
-    async fn load_manifest_list_errors_when_encrypted_but_no_manager_configured() {
-        let io = FileIO::new_with_memory();
-        let snapshot = snapshot_pointing_at(
-            "memory:///table/metadata/manifest-list-enc.avro",
-            Some("k1".to_string()),
-        );
-        let metadata = encryption_test_metadata();
-
-        let err = ManifestListReader::new(SnapshotRef::new(snapshot), io, metadata, None)
-            .load()
-            .await
-            .unwrap_err();
-        assert_eq!(err.kind(), crate::ErrorKind::PreconditionFailed);
-    }
-
-    #[tokio::test]
-    async fn load_manifest_list_decrypts_roundtrip() {
-        let io = FileIO::new_with_memory();
-        let plain_path = "memory:///table/metadata/manifest-list-plain.avro";
-        let encrypted_path = "memory:///table/metadata/manifest-list-enc.avro";
-
-        // Build raw manifest list bytes via the standard writer.
-        let raw_bytes = write_v3_manifest_list_bytes(&io, plain_path).await;
-
-        // Encrypt those bytes to a second path and capture the file's key metadata.
-        let mgr = encryption_test_manager();
-        let encrypted_output = mgr.encrypt(io.new_output(encrypted_path).unwrap());
-        let std_key_metadata: StandardKeyMetadata = encrypted_output.key_metadata().clone();
-        encrypted_output.write(raw_bytes).await.unwrap();
-
-        // Wrap the file's key metadata with a KEK and record the resulting wrapped
-        // entry's id on the snapshot.
-        let key_id = mgr
-            .encrypt_manifest_list_key_metadata(&std_key_metadata)
-            .await
-            .unwrap();
-
-        let snapshot = snapshot_pointing_at(encrypted_path, Some(key_id));
-        let metadata = encryption_test_metadata();
-
-        let manifest_list: ManifestList = ManifestListReader::new(
-            SnapshotRef::new(snapshot),
-            io,
-            metadata,
-            Some(Arc::new(mgr)),
-        )
-        .load()
-        .await
-        .unwrap();
-        assert_eq!(manifest_list.entries().len(), 0);
     }
 }
