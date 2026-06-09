@@ -1518,6 +1518,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_query_catalog_retries_once_on_401() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        // First exchange (during the /v1/config bootstrap) mints token ...0000.
+        // Its expires_in is large, so the proactive refresh stays out of the way
+        // and the 401 below is what drives the reactive refresh.
+        let oauth_mock_first =
+            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000000", 200)
+                .await;
+
+        let mut props = HashMap::new();
+        props.insert("credential".to_string(), "client1:secret1".to_string());
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+        );
+
+        // Materialize the context so the bootstrap exchange is accounted for
+        // separately from the retry path under test.
+        catalog.context().await.unwrap();
+        oauth_mock_first.assert_async().await;
+
+        // Second exchange — triggered by the 401 — mints the fresh token ...0001.
+        let oauth_mock_refresh =
+            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 200)
+                .await;
+        // The stale token is rejected once; the replay with the fresh token wins.
+        let ns_unauthorized = server
+            .mock("GET", "/v1/namespaces")
+            .match_header("authorization", "Bearer ey000000000000")
+            .with_status(401)
+            .with_body(r#"{"error":{"message":"token expired","type":"Unauthorized","code":401}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let ns_ok = server
+            .mock("GET", "/v1/namespaces")
+            .match_header("authorization", "Bearer ey000000000001")
+            .with_status(200)
+            .with_body(r#"{"namespaces":[["ns1"]]}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        // Succeeds despite the initial 401 because the client refreshes and replays.
+        catalog.list_namespaces(None).await.unwrap();
+
+        config_mock.assert_async().await;
+        oauth_mock_refresh.assert_async().await;
+        ns_unauthorized.assert_async().await;
+        ns_ok.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_query_catalog_does_not_retry_static_token_on_401() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        // A static token has no credential to refresh with, so a 401 must NOT
+        // trigger an OAuth exchange or a replay.
+        let oauth_mock = server
+            .mock("POST", "/v1/oauth/tokens")
+            .with_status(200)
+            .expect(0)
+            .create_async()
+            .await;
+        let ns_mock = server
+            .mock("GET", "/v1/namespaces")
+            .with_status(401)
+            .with_body(r#"{"error":{"message":"nope","type":"Unauthorized","code":401}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut props = HashMap::new();
+        props.insert("token".to_string(), "static-token".to_string());
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+        );
+
+        // The 401 surfaces as an error rather than being silently retried away.
+        assert!(catalog.list_namespaces(None).await.is_err());
+
+        config_mock.assert_async().await;
+        oauth_mock.assert_async().await;
+        ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn test_http_headers() {
         let server = Server::new_async().await;
         let mut props = HashMap::new();

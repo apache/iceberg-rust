@@ -239,6 +239,40 @@ impl HttpClient {
         Ok(())
     }
 
+    /// Force-refreshes the OAuth token after a request came back `401 Unauthorized`.
+    ///
+    /// Proactive, deadline-based refresh in [`authenticate`] handles tokens that
+    /// expire on schedule, but the server can reject a token we still believe is
+    /// valid — e.g. clock skew, or a Polaris restart that wiped its session state.
+    /// This is the reactive safety net: mint a fresh token and report it so the
+    /// caller can replay the failed request once.
+    ///
+    /// `stale_token` is the bearer that just failed. Concurrent 401s coalesce
+    /// through the token mutex: the first holder regenerates, and any task that
+    /// finds the cache already advanced past its own stale token reuses the new
+    /// one instead of triggering another exchange.
+    ///
+    /// Returns `Ok(None)` when there is no credential to refresh with (static
+    /// token or unauthenticated client), leaving the original 401 to propagate.
+    async fn refresh_after_unauthorized(&self, stale_token: Option<&str>) -> Result<Option<String>> {
+        if self.credential.is_none() {
+            return Ok(None);
+        }
+
+        let mut guard = self.token.lock().await;
+        if let (Some(cached), Some(stale)) = (guard.as_ref(), stale_token)
+            && cached.token != stale
+        {
+            // Another task already refreshed while we waited on the lock.
+            return Ok(Some(cached.token.clone()));
+        }
+
+        let new = self.exchange_credential_for_token().await?;
+        let token = new.token.clone();
+        *guard = Some(new);
+        Ok(Some(token))
+    }
+
     /// Authenticates the request by adding a bearer token to the authorization header.
     ///
     /// This method supports three authentication modes:
@@ -313,9 +347,58 @@ impl HttpClient {
 
     // Queries the Iceberg REST catalog after authentication with the given `Request` and
     // returns a `Response`.
+    //
+    // On `401 Unauthorized` the token we used is force-refreshed and the request
+    // is re-issued exactly once with fresh credentials. This recovers from a
+    // server-side token invalidation (clock skew, Polaris restart) that the
+    // proactive expiry refresh in `authenticate` can't anticipate, so callers
+    // no longer have to restart the process to recover.
     pub async fn query_catalog(&self, mut request: Request) -> Result<Response> {
         self.authenticate(&mut request).await?;
-        self.execute(request).await
+
+        // Snapshot the authenticated request before `execute` consumes it, so we
+        // can replay it on a 401. Streaming bodies can't be cloned; when that
+        // happens we simply forgo the retry and surface the original response.
+        let retry_request = request.try_clone();
+
+        let response = self.execute(request).await?;
+        if response.status() != StatusCode::UNAUTHORIZED {
+            return Ok(response);
+        }
+
+        let Some(mut retry_request) = retry_request else {
+            return Ok(response);
+        };
+
+        // Recover the bearer we just sent so concurrent 401s coalesce onto a
+        // single refresh.
+        let stale_token = retry_request
+            .headers()
+            .get(http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(str::to_string);
+
+        let Some(fresh_token) = self
+            .refresh_after_unauthorized(stale_token.as_deref())
+            .await?
+        else {
+            // No credential to refresh with — nothing more we can do.
+            return Ok(response);
+        };
+
+        retry_request.headers_mut().insert(
+            http::header::AUTHORIZATION,
+            format!("Bearer {fresh_token}").parse().map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Invalid token received from catalog server!",
+                )
+                .with_source(e)
+            })?,
+        );
+
+        self.execute(retry_request).await
     }
 
     /// Returns whether header redaction is disabled for this client.
