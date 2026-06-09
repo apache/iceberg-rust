@@ -45,13 +45,18 @@
 //! and `update_totals` yields the right post-replace totals (e.g. an unpartitioned full replace of N files
 //! adding M: `N + M - N = M`, no underflow). `replace-partitions=true` is just a summary property.
 //!
+//! **Concurrent-commit conflict validation (serializable isolation):** opt-in, mirroring Java
+//! `BaseReplacePartitions.validate`. Two INDEPENDENT flags, both PARTITION-SET-based over the replaced
+//! `(spec_id, partition)` tuples (unlike OverwriteFiles/RowDelta's per-data-file checks):
+//! - [`ReplacePartitionsAction::validate_no_conflicting_data`] (Java `validateNoConflictingData`) rejects
+//!   when a concurrent snapshot ADDED DATA to a replaced partition.
+//! - [`ReplacePartitionsAction::validate_no_conflicting_deletes`] (Java `validateNoConflictingDeletes`)
+//!   rejects when, in a replaced partition, a concurrent snapshot either DELETED a data file
+//!   (`validateDeletedDataFiles`) or ADDED a delete file (`validateNoNewDeleteFiles`).
+//!
 //! **Out of scope (deferred):**
 //! - static `replaceByRowFilter` / explicit-partition overwrite APIs — need inclusive/strict metrics
 //!   evaluators to select files by row predicate.
-//! - concurrent-commit conflict validation (`validateNoConflictingData` / `validateNoConflictingDeletes` /
-//!   `validateFromSnapshot`) — serializable isolation, needs ancestor-chain validation-history replay.
-//!
-//! This increment is the dynamic-by-added-files core.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -64,6 +69,7 @@ use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation, Struct};
 use crate::table::Table;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer, added_data_files_after,
+    added_delete_files_after, deleted_data_files_after,
 };
 use crate::transaction::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind};
@@ -95,6 +101,11 @@ pub struct ReplacePartitionsAction {
     /// default = snapshot isolation (no validation, current behavior). When ON, the commit is rejected if a
     /// concurrent snapshot added data to any partition this action replaces.
     validate_no_conflicting_data: bool,
+    /// Whether concurrent-commit conflicting-delete validation is enabled (Java
+    /// `validateNoConflictingDeletes`). INDEPENDENT of [`Self::validate_no_conflicting_data`] (neither flag
+    /// enables the other). OFF by default. When ON, the commit is rejected if, in any partition this action
+    /// replaces, a concurrent snapshot DELETED a data file or ADDED a delete file.
+    validate_no_conflicting_deletes: bool,
     /// An explicit starting snapshot for conflict validation (Java `validateFromSnapshot`). When `None`, the
     /// validation uses the transaction's starting snapshot (the table head when the transaction was created).
     validate_from_snapshot: Option<i64>,
@@ -108,6 +119,7 @@ impl ReplacePartitionsAction {
             key_metadata: None,
             snapshot_properties: HashMap::default(),
             validate_no_conflicting_data: false,
+            validate_no_conflicting_deletes: false,
             validate_from_snapshot: None,
         }
     }
@@ -150,7 +162,8 @@ impl ReplacePartitionsAction {
     /// starting snapshot (the table head when [`crate::transaction::Transaction::new`] was called); this lets
     /// the caller pin a specific earlier snapshot id (the snapshot it read when building the replacement).
     ///
-    /// On its own this does NOT enable validation — call [`Self::validate_no_conflicting_data`] for that.
+    /// On its own this does NOT enable validation — call [`Self::validate_no_conflicting_data`] and/or
+    /// [`Self::validate_no_conflicting_deletes`] for that.
     pub fn validate_from_snapshot(mut self, snapshot_id: i64) -> Self {
         self.validate_from_snapshot = Some(snapshot_id);
         self
@@ -167,6 +180,23 @@ impl ReplacePartitionsAction {
         self
     }
 
+    /// ENABLE concurrent-commit conflicting-DELETE validation (Java
+    /// `ReplacePartitions.validateNoConflictingDeletes`): the commit is rejected with a non-retryable
+    /// `ValidationException` if, in any partition this action replaces, a snapshot committed since the
+    /// starting snapshot either DELETED a data file (Java `validateDeletedDataFiles` — you cannot dynamically
+    /// replace a partition whose data a concurrent commit removed) or ADDED a delete file (Java
+    /// `validateNoNewDeleteFiles` — a concurrent row-delete in a partition you are about to replace).
+    ///
+    /// INDEPENDENT of [`Self::validate_no_conflicting_data`]: enabling one does NOT enable the other (Java's
+    /// `validateConflictingData` / `validateConflictingDeletes` are separate flags branched separately in
+    /// `BaseReplacePartitions.validate`).
+    ///
+    /// Default (this method NOT called) = snapshot isolation = no validation (current behavior unchanged).
+    pub fn validate_no_conflicting_deletes(mut self) -> Self {
+        self.validate_no_conflicting_deletes = true;
+        self
+    }
+
     /// Collect the set of `(partition_spec_id, partition)` tuples the added files belong to — the
     /// partitions to replace (Java `replacedPartitions` / the per-file `dropPartition`).
     fn drop_partitions(&self) -> HashSet<(i32, Struct)> {
@@ -175,6 +205,15 @@ impl ReplacePartitionsAction {
             .map(|data_file| (data_file.partition_spec_id, data_file.partition().clone()))
             .collect()
     }
+}
+
+/// Whether `file`'s `(partition_spec_id, partition)` is in the replaced-partition set `drop_partitions` —
+/// the single partition-membership predicate ReplacePartitions' conflict checks share (Java
+/// `partitionSet.contains(file.specId(), file.partition())`). Used by BOTH the conflicting-DATA check
+/// ([`ReplacePartitionsAction::validate_no_conflicting_data`]) and the two conflicting-DELETE checks
+/// ([`ReplacePartitionsAction::validate_no_conflicting_deletes`]); there is exactly ONE such predicate.
+fn file_in_replaced_partition(drop_partitions: &HashSet<(i32, Struct)>, file: &DataFile) -> bool {
+    drop_partitions.contains(&(file.partition_spec_id, file.partition().clone()))
 }
 
 #[async_trait]
@@ -208,24 +247,27 @@ impl TransactionAction for ReplacePartitionsAction {
             .await
     }
 
-    /// Serializable-isolation conflict validation (Java `BaseReplacePartitions.validate` →
-    /// `MergingSnapshotProducer.validateAddedDataFiles`). Only runs when
-    /// [`Self::validate_no_conflicting_data`] was enabled; otherwise a no-op (snapshot isolation).
+    /// Serializable-isolation conflict validation (Java `BaseReplacePartitions.validate`). Two INDEPENDENT,
+    /// opt-in checks, both PARTITION-SET-based over the replaced `(spec_id, partition)` tuples:
+    /// - [`Self::validate_no_conflicting_data`] (Java `validateConflictingData` branch →
+    ///   `validateAddedDataFiles`): reject if a concurrent snapshot ADDED DATA to a replaced partition.
+    /// - [`Self::validate_no_conflicting_deletes`] (Java `validateConflictingDeletes` branch →
+    ///   `validateDeletedDataFiles` + `validateNoNewDeleteFiles`): reject if, in a replaced partition, a
+    ///   concurrent snapshot DELETED a data file or ADDED a delete file.
     ///
-    /// When enabled: compute the effective starting snapshot ([`Self::validate_from_snapshot`] if set, else
-    /// the transaction-provided `starting_snapshot_id`), enumerate every DATA file ADDED to the refreshed
-    /// base by snapshots committed since it (the shared [`added_data_files_after`] helper = Java
-    /// `addedDataFiles`), and reject the commit if ANY of those files falls in a partition this action
-    /// replaces (`(spec_id, partition)` ∈ the drop-partition set, Java
-    /// `partitionSet.contains(file.specId(), file.partition())`). The rejection is a NON-retryable
-    /// [`ErrorKind::DataInvalid`] (Java's non-retryable `ValidationException`), so the commit retry loop stops
-    /// and the error propagates rather than looping.
+    /// Neither flag enables the other (Java branches them separately). When neither is set this is a no-op
+    /// (snapshot isolation, current behavior unchanged).
+    ///
+    /// The effective starting snapshot ([`Self::validate_from_snapshot`] if set, else the transaction-captured
+    /// `starting_snapshot_id`) and the replaced-partition set are computed ONCE and shared by all enabled
+    /// checks. Every rejection is a NON-retryable [`ErrorKind::DataInvalid`] (Java's non-retryable
+    /// `ValidationException`), so the commit retry loop stops and the error propagates rather than looping.
     async fn validate(
         self: Arc<Self>,
         starting_snapshot_id: Option<i64>,
         current: &Table,
     ) -> Result<()> {
-        if !self.validate_no_conflicting_data {
+        if !self.validate_no_conflicting_data && !self.validate_no_conflicting_deletes {
             // Default: snapshot isolation, no conflict check (current behavior unchanged).
             return Ok(());
         }
@@ -235,24 +277,131 @@ impl TransactionAction for ReplacePartitionsAction {
         let effective_start = self.validate_from_snapshot.or(starting_snapshot_id);
 
         let drop_partitions = self.drop_partitions();
-        // An empty replace touches no partitions, so nothing can conflict — skip the manifest walk.
+        // An empty replace touches no partitions, so nothing can conflict — skip every manifest walk.
         if drop_partitions.is_empty() {
             return Ok(());
         }
 
+        // Java `validateConflictingData` branch → `validateAddedDataFiles(partitionSet)`.
+        if self.validate_no_conflicting_data {
+            self.validate_added_data_files(current, effective_start, &drop_partitions)
+                .await?;
+        }
+
+        // Java `validateConflictingDeletes` branch → `validateDeletedDataFiles(partitionSet)` THEN
+        // `validateNoNewDeleteFiles(partitionSet)` (same order as Java).
+        if self.validate_no_conflicting_deletes {
+            self.validate_deleted_data_files(current, effective_start, &drop_partitions)
+                .await?;
+            self.validate_no_new_delete_files(current, effective_start, &drop_partitions)
+                .await?;
+        }
+
+        Ok(())
+    }
+}
+
+impl ReplacePartitionsAction {
+    /// Java `validateConflictingData` branch (partition-set) → `MergingSnapshotProducer.validateAddedDataFiles(
+    /// base, startingSnapshotId, replacedPartitions, parent)`. Enumerate every DATA file ADDED to the refreshed
+    /// base by snapshots committed since `effective_start` (the shared [`added_data_files_after`] = Java
+    /// `addedDataFiles`, gated to `VALIDATE_ADDED_FILES_OPERATIONS = {APPEND, OVERWRITE}`) and reject on the
+    /// FIRST whose partition is replaced ([`file_in_replaced_partition`] = Java `partitionSet.contains(...)`).
+    async fn validate_added_data_files(
+        &self,
+        current: &Table,
+        effective_start: Option<i64>,
+        drop_partitions: &HashSet<(i32, Struct)>,
+    ) -> Result<()> {
         let added = added_data_files_after(current, effective_start).await?;
 
-        // Find the first added file whose partition this action replaces (Java throws on the first conflict
-        // entry). Naming the conflicting partition + file mirrors Java's
+        // Naming the conflicting partition + file mirrors Java's
         // "Found conflicting files that can contain records matching partitions %s: %s".
-        if let Some(conflict) = added.iter().find(|file| {
-            drop_partitions.contains(&(file.partition_spec_id, file.partition().clone()))
-        }) {
+        if let Some(conflict) = added
+            .iter()
+            .find(|file| file_in_replaced_partition(drop_partitions, file))
+        {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!(
                     "Found conflicting files that can contain records matching replaced partition \
                      (spec {}, partition {:?}): {}",
+                    conflict.partition_spec_id,
+                    conflict.partition(),
+                    conflict.file_path()
+                ),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Java `validateConflictingDeletes` branch (partition-set) → `MergingSnapshotProducer.validateDeletedDataFiles(
+    /// base, startingSnapshotId, replacedPartitions, parent)`. Enumerate every DATA file DELETED from the
+    /// refreshed base by snapshots committed since `effective_start` (the shared [`deleted_data_files_after`]
+    /// with `skip_deletes == false` = Java `deletedDataFiles` gated to `VALIDATE_DATA_FILES_EXIST_OPERATIONS =
+    /// {OVERWRITE, REPLACE, DELETE}`; `skip_deletes == false` keeps concurrent DELETE-op snapshots in scope,
+    /// matching Java's op-set which INCLUDES `DELETE`) and reject on the FIRST whose partition is replaced
+    /// ([`file_in_replaced_partition`] = Java `partitionSet.contains(...)`). You cannot dynamically replace a
+    /// partition whose data a concurrent commit removed.
+    async fn validate_deleted_data_files(
+        &self,
+        current: &Table,
+        effective_start: Option<i64>,
+        drop_partitions: &HashSet<(i32, Struct)>,
+    ) -> Result<()> {
+        // `skip_deletes == false`: Java's `validateDeletedDataFiles` uses `VALIDATE_DATA_FILES_EXIST_OPERATIONS`
+        // (the full `{OVERWRITE, REPLACE, DELETE}` set), NOT the skip-delete subset — so a concurrent DELETE-op
+        // snapshot that removed data from a replaced partition IS a conflict.
+        let deleted = deleted_data_files_after(current, effective_start, false).await?;
+
+        // Java throws on the first matching entry:
+        // "Found conflicting deleted files that can apply to records matching %s: %s".
+        if let Some(conflict) = deleted
+            .iter()
+            .find(|file| file_in_replaced_partition(drop_partitions, file))
+        {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Found conflicting deleted files that can apply to records matching replaced \
+                     partition (spec {}, partition {:?}): {}",
+                    conflict.partition_spec_id,
+                    conflict.partition(),
+                    conflict.file_path()
+                ),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Java `validateConflictingDeletes` branch (partition-set) → `MergingSnapshotProducer.validateNoNewDeleteFiles(
+    /// base, startingSnapshotId, replacedPartitions, parent)`. Enumerate every DELETE file ADDED to the
+    /// refreshed base by snapshots committed since `effective_start` (the shared [`added_delete_files_after`] =
+    /// Java `addedDeleteFiles` gated to `VALIDATE_ADDED_DELETE_FILES_OPERATIONS = {OVERWRITE, DELETE}`,
+    /// V2-guarded so a V1 table walks nothing) and reject on the FIRST whose partition is replaced
+    /// ([`file_in_replaced_partition`] = Java `partitionSet.contains(...)`). A concurrent row-delete in a
+    /// partition you are about to replace is a conflict.
+    async fn validate_no_new_delete_files(
+        &self,
+        current: &Table,
+        effective_start: Option<i64>,
+        drop_partitions: &HashSet<(i32, Struct)>,
+    ) -> Result<()> {
+        let added_deletes = added_delete_files_after(current, effective_start).await?;
+
+        // Java throws on the first matching entry:
+        // "Found new conflicting delete files that can apply to records matching %s: %s".
+        if let Some(conflict) = added_deletes
+            .iter()
+            .find(|file| file_in_replaced_partition(drop_partitions, file))
+        {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Found new conflicting delete files that can apply to records matching replaced \
+                     partition (spec {}, partition {:?}): {}",
                     conflict.partition_spec_id,
                     conflict.partition(),
                     conflict.file_path()
@@ -330,6 +479,22 @@ mod tests {
     fn data_file(path: &str, part_value: i64) -> DataFile {
         DataFileBuilder::default()
             .content(DataContentType::Data)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(0)
+            .partition(Struct::from_iter([Some(Literal::long(part_value))]))
+            .build()
+            .unwrap()
+    }
+
+    /// Build a position-delete file routed to partition `x = part_value` (the V3 minimal table is
+    /// partitioned by identity(x), spec id 0). Used by the conflicting-delete validation tests to add a
+    /// concurrent row-delete in a given partition (NOT a real parquet file — manifest-only).
+    fn position_delete_file(path: &str, part_value: i64) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::PositionDeletes)
             .file_path(path.to_string())
             .file_format(DataFileFormat::Parquet)
             .file_size_in_bytes(100)
@@ -1145,5 +1310,369 @@ mod tests {
             added2.is_empty(),
             "no current snapshot ⇒ empty even with a start"
         );
+    }
+
+    // ============================================================================================
+    // Concurrent-commit CONFLICTING-DELETE validation (Java `validateNoConflictingDeletes` /
+    // serializable isolation).
+    //
+    // INDEPENDENT of `validateNoConflictingData` (above): this is PARTITION-SET-based over the replaced
+    // `(spec_id, partition)` tuples and rejects when, in a replaced partition, a concurrent commit either
+    //   (a) DELETED a data file (Java `validateDeletedDataFiles` — you cannot dynamically replace a
+    //       partition whose data a concurrent commit removed), or
+    //   (b) ADDED a delete file (Java `validateNoNewDeleteFiles` — a concurrent row-delete in a partition
+    //       you are about to replace).
+    // The race mirrors the data tests: the replace is BUILT against head S0; BEFORE it commits a separate
+    // commit lands (advancing the head); the replace's `do_commit` refreshes and runs `validate` against
+    // that refreshed base.
+    // ============================================================================================
+
+    /// REJECT — a concurrent commit ADDS a DELETE file in a partition this replace REPLACES.
+    /// Append S0 (x=0, x=1). Build `replace_partitions(x=0).validate_from_snapshot(S0)
+    /// .validate_no_conflicting_deletes()`. A concurrent `row_delta` adds a position-delete in **x=0** (S1).
+    /// Committing the replace must FAIL non-retryably (Java `validateNoNewDeleteFiles`).
+    #[tokio::test]
+    async fn test_replace_partitions_rejects_concurrent_added_delete_in_replaced_partition() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // S0: x=0 (a), x=1 (b).
+        let table = append_files(&catalog, &table, vec![
+            data_file("test/a.parquet", 0),
+            data_file("test/b.parquet", 1),
+        ])
+        .await;
+        let s0 = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        // Build the replace on x=0 with conflicting-delete validation enabled, pinned to start at S0.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .replace_partitions()
+            .add_file(data_file("test/a2.parquet", 0))
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_deletes();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a separate row_delta adds a position-delete in the replaced partition x=0.
+        let concurrent_tx = Transaction::new(&table);
+        let concurrent = concurrent_tx
+            .row_delta()
+            .add_deletes(vec![position_delete_file("test/del_x0.parquet", 0)]);
+        let concurrent_tx = concurrent.apply(concurrent_tx).unwrap();
+        concurrent_tx.commit(&catalog).await.unwrap();
+
+        // Committing the replace must FAIL: S1 added a delete file in the replaced partition x=0.
+        let err = tx.commit(&catalog).await.expect_err(
+            "replace must fail: a concurrent delete file landed in the replaced partition x=0",
+        );
+        assert_eq!(
+            err.kind(),
+            ErrorKind::DataInvalid,
+            "a conflict is a non-retryable validation failure (DataInvalid)"
+        );
+        assert!(
+            !err.retryable(),
+            "the validation failure must be NON-retryable so the retry loop stops and it propagates"
+        );
+        assert!(
+            err.message().contains("new conflicting delete files"),
+            "the error must name the new-delete-file conflict, got: {}",
+            err.message()
+        );
+    }
+
+    /// REJECT — a concurrent commit DELETES a DATA file in a partition this replace REPLACES.
+    /// Append S0 (x=0 has a + a_old, x=1 has b). Build `replace_partitions(x=0)
+    /// .validate_from_snapshot(S0).validate_no_conflicting_deletes()`. A concurrent `delete_files` removes
+    /// `a_old.parquet` (in x=0) (S1). Committing the replace must FAIL (Java `validateDeletedDataFiles`).
+    #[tokio::test]
+    async fn test_replace_partitions_rejects_concurrent_deleted_data_in_replaced_partition() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // S0: x=0 (a, a_old), x=1 (b).
+        let table = append_files(&catalog, &table, vec![
+            data_file("test/a.parquet", 0),
+            data_file("test/a_old.parquet", 0),
+            data_file("test/b.parquet", 1),
+        ])
+        .await;
+        let s0 = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .replace_partitions()
+            .add_file(data_file("test/a2.parquet", 0))
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_deletes();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a separate delete_files removes a_old (a data file in replaced x=0).
+        let concurrent_tx = Transaction::new(&table);
+        let concurrent = concurrent_tx
+            .delete_files()
+            .delete_file("test/a_old.parquet");
+        let concurrent_tx = concurrent.apply(concurrent_tx).unwrap();
+        concurrent_tx.commit(&catalog).await.unwrap();
+
+        let err = tx.commit(&catalog).await.expect_err(
+            "replace must fail: a concurrent commit deleted data in the replaced partition x=0",
+        );
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable());
+        assert!(
+            err.message().contains("conflicting deleted files"),
+            "the error must name the deleted-data conflict, got: {}",
+            err.message()
+        );
+    }
+
+    /// NEGATIVE CONTROL (added delete) — the concurrent delete file lands in the UNTOUCHED partition x=1.
+    /// `replace_partitions(x=0).validate_no_conflicting_deletes()` must COMMIT: partition-set membership is
+    /// load-bearing, so a row-delete in a non-replaced partition is not a conflict.
+    #[tokio::test]
+    async fn test_replace_partitions_allows_concurrent_added_delete_in_other_partition() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let table = append_files(&catalog, &table, vec![
+            data_file("test/a.parquet", 0),
+            data_file("test/b.parquet", 1),
+        ])
+        .await;
+        let s0 = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .replace_partitions()
+            .add_file(data_file("test/a2.parquet", 0))
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_deletes();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a position-delete in the UNTOUCHED partition x=1.
+        let concurrent_tx = Transaction::new(&table);
+        let concurrent = concurrent_tx
+            .row_delta()
+            .add_deletes(vec![position_delete_file("test/del_x1.parquet", 1)]);
+        let concurrent_tx = concurrent.apply(concurrent_tx).unwrap();
+        concurrent_tx.commit(&catalog).await.unwrap();
+
+        // The replace must SUCCEED — x=1 is not replaced, so the concurrent delete file does not conflict.
+        let table = tx.commit(&catalog).await.expect(
+            "replace must succeed: the concurrent delete file was in the untouched partition x=1",
+        );
+        let live = live_file_paths(&table).await;
+        assert!(live.contains("test/a2.parquet"), "x=0 replaced (a2 added)");
+        assert!(
+            live.contains("test/b.parquet"),
+            "x=1 (b) untouched and survives"
+        );
+    }
+
+    /// NEGATIVE CONTROL (deleted data) — the concurrent data deletion lands in the UNTOUCHED partition x=1.
+    /// `replace_partitions(x=0).validate_no_conflicting_deletes()` must COMMIT (partition-set membership is
+    /// load-bearing).
+    #[tokio::test]
+    async fn test_replace_partitions_allows_concurrent_deleted_data_in_other_partition() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // x=1 has both b and b_old so b_old can be concurrently deleted without emptying the partition.
+        let table = append_files(&catalog, &table, vec![
+            data_file("test/a.parquet", 0),
+            data_file("test/b.parquet", 1),
+            data_file("test/b_old.parquet", 1),
+        ])
+        .await;
+        let s0 = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .replace_partitions()
+            .add_file(data_file("test/a2.parquet", 0))
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_deletes();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): delete b_old (a data file in the UNTOUCHED partition x=1).
+        let concurrent_tx = Transaction::new(&table);
+        let concurrent = concurrent_tx
+            .delete_files()
+            .delete_file("test/b_old.parquet");
+        let concurrent_tx = concurrent.apply(concurrent_tx).unwrap();
+        concurrent_tx.commit(&catalog).await.unwrap();
+
+        let table = tx.commit(&catalog).await.expect(
+            "replace must succeed: the concurrent data deletion was in the untouched partition x=1",
+        );
+        let live = live_file_paths(&table).await;
+        assert!(live.contains("test/a2.parquet"), "x=0 replaced (a2 added)");
+    }
+
+    /// OFF CONTROL — with conflicting-delete validation NOT enabled (no `validate_no_conflicting_deletes()`),
+    /// a concurrent delete file in the replaced partition x=0 does NOT fail the commit (snapshot isolation,
+    /// the DEFAULT). Pins that the new check is OPT-IN.
+    #[tokio::test]
+    async fn test_replace_partitions_without_delete_validation_allows_concurrent_delete_default() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let table = append_files(&catalog, &table, vec![
+            data_file("test/a.parquet", 0),
+            data_file("test/b.parquet", 1),
+        ])
+        .await;
+
+        // Build the replace on x=0 WITHOUT enabling delete validation (default = snapshot isolation).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .replace_partitions()
+            .add_file(data_file("test/a2.parquet", 0));
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a position-delete in the replaced partition x=0.
+        let concurrent_tx = Transaction::new(&table);
+        let concurrent = concurrent_tx
+            .row_delta()
+            .add_deletes(vec![position_delete_file("test/del_x0.parquet", 0)]);
+        let concurrent_tx = concurrent.apply(concurrent_tx).unwrap();
+        concurrent_tx.commit(&catalog).await.unwrap();
+
+        // With delete validation OFF, the replace COMMITS (default behavior unchanged).
+        let table = tx
+            .commit(&catalog)
+            .await
+            .expect("with delete validation OFF, a concurrent delete must not block the commit");
+        assert!(
+            live_file_paths(&table).await.contains("test/a2.parquet"),
+            "x=0 replaced (a2 added) — snapshot isolation"
+        );
+    }
+
+    /// TX-CAPTURED-START PIN (conflicting deletes) — the conflicting-delete check works WITHOUT an explicit
+    /// `validate_from_snapshot`, relying solely on the transaction-captured starting snapshot id surviving
+    /// `do_commit`'s re-base. Same race as the REJECT test, but the action calls ONLY
+    /// `.validate_no_conflicting_deletes()`. If the start were (re-)read from the refreshed head at
+    /// validation time, start == current head ⇒ the concurrent delete set would be empty ⇒ the check would
+    /// silently always pass (a serializable-isolation hole). This is the only guard for the tx-captured
+    /// field on the delete path.
+    #[tokio::test]
+    async fn test_replace_partitions_rejects_concurrent_added_delete_using_tx_captured_start() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // S0: x=0 (a), x=1 (b) — the head when the transaction is created below.
+        let table = append_files(&catalog, &table, vec![
+            data_file("test/a.parquet", 0),
+            data_file("test/b.parquet", 1),
+        ])
+        .await;
+
+        // Build the replace on x=0 with delete validation enabled but WITHOUT validate_from_snapshot — the
+        // starting snapshot is the tx-captured head (S0).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .replace_partitions()
+            .add_file(data_file("test/a2.parquet", 0))
+            .validate_no_conflicting_deletes();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a position-delete in the replaced partition x=0.
+        let concurrent_tx = Transaction::new(&table);
+        let concurrent = concurrent_tx
+            .row_delta()
+            .add_deletes(vec![position_delete_file("test/del_x0.parquet", 0)]);
+        let concurrent_tx = concurrent.apply(concurrent_tx).unwrap();
+        concurrent_tx.commit(&catalog).await.unwrap();
+
+        let err = tx
+            .commit(&catalog)
+            .await
+            .expect_err("conflict must be detected via the tx-captured starting snapshot");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable());
+        assert!(err.message().contains("new conflicting delete files"));
+    }
+
+    /// FLAG INDEPENDENCE (deletes ⇏ data) — enabling ONLY `validate_no_conflicting_deletes()` must NOT
+    /// activate the conflicting-DATA check. A concurrent APPEND (added DATA, not a delete) into the replaced
+    /// partition x=0 must COMMIT: the data check is OFF, and an append adds no delete file, so the delete
+    /// check finds nothing.
+    #[tokio::test]
+    async fn test_replace_partitions_delete_validation_does_not_enable_data_validation() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let table = append_files(&catalog, &table, vec![
+            data_file("test/a.parquet", 0),
+            data_file("test/b.parquet", 1),
+        ])
+        .await;
+        let s0 = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        // ONLY delete validation enabled (NOT data validation).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .replace_partitions()
+            .add_file(data_file("test/a2.parquet", 0))
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_deletes();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a fast_append adds DATA to the replaced partition x=0.
+        let _ = append_files(&catalog, &table, vec![data_file(
+            "test/a_concurrent.parquet",
+            0,
+        )])
+        .await;
+
+        // Must COMMIT: the conflicting-DATA check is OFF (only deletes enabled), and an append adds no delete.
+        let table = tx.commit(&catalog).await.expect(
+            "delete validation alone must not reject a concurrent DATA append (data check stays off)",
+        );
+        assert!(live_file_paths(&table).await.contains("test/a2.parquet"));
+    }
+
+    /// FLAG INDEPENDENCE (data ⇏ deletes) — enabling ONLY `validate_no_conflicting_data()` must NOT activate
+    /// the conflicting-DELETE check. A concurrent ADDED DELETE in the replaced partition x=0 must COMMIT: the
+    /// delete check is OFF, and an added delete file adds no DATA, so the data check finds nothing. (This is
+    /// the dual of the prior test and also confirms `validate_no_conflicting_data` is behavior-preserving:
+    /// it ignores concurrent deletes exactly as before this increment.)
+    #[tokio::test]
+    async fn test_replace_partitions_data_validation_does_not_enable_delete_validation() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let table = append_files(&catalog, &table, vec![
+            data_file("test/a.parquet", 0),
+            data_file("test/b.parquet", 1),
+        ])
+        .await;
+        let s0 = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        // ONLY data validation enabled (NOT delete validation).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .replace_partitions()
+            .add_file(data_file("test/a2.parquet", 0))
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_data();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a row_delta adds a DELETE file in the replaced partition x=0.
+        let concurrent_tx = Transaction::new(&table);
+        let concurrent = concurrent_tx
+            .row_delta()
+            .add_deletes(vec![position_delete_file("test/del_x0.parquet", 0)]);
+        let concurrent_tx = concurrent.apply(concurrent_tx).unwrap();
+        concurrent_tx.commit(&catalog).await.unwrap();
+
+        // Must COMMIT: the conflicting-DELETE check is OFF (only data enabled), and the added delete adds no
+        // DATA — so `validate_no_conflicting_data` (unchanged) finds nothing to conflict with.
+        let table = tx.commit(&catalog).await.expect(
+            "data validation alone must not reject a concurrent ADDED DELETE (delete check stays off)",
+        );
+        assert!(live_file_paths(&table).await.contains("test/a2.parquet"));
     }
 }

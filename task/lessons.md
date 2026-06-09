@@ -2495,3 +2495,70 @@ How to use it (see the manuals' §2):
   covering sequence number — not just the file it "came from". The cat=a delete associated with BOTH F1 and
   F3; Rust matched. Let the bulk per-file delete-set comparison (not a single hand-picked file) prove this, so
   you assert Java's REAL association rather than an assumed one.
+
+### 2026-06-09 (OverwriteFiles.validateNoConflictingDeletes + shared validate_no_new_deletes_for_data_files — ORCHESTRATOR + REVIEWER Opus)
+- **The delete-applies-to-data-file sequence boundary is INCLUSIVE `>=`, not `>`.** Java
+  `DeleteFileIndex.forDataFile` → `*.filter` → `findStartIndex` keeps deletes with `data_seq >=
+  startingSequenceNumber`. My builder PROMPT loosely paraphrased it as `>`; the builder correctly followed the
+  REAL Java source (`delete_seq < starting_sequence_number => not applicable`, i.e. `>=`) — a good instance of
+  the builder trusting the cited source over the orchestrator's loose wording. LESSON (orchestrator): cite the
+  exact Java method + boundary; don't paraphrase comparisons. LESSON (reviewer): re-derive the boundary from
+  the Java source, not the prompt.
+- **A conservative OVER-approximation is a legitimate, safe divergence for a REJECT check.** The equality-delete
+  applicability omits Java `EqualityDeletes.filter`'s per-file `canContainEqDeletesForFile` bounds check, so it
+  may flag MORE conflicts than Java, never fewer. For a serializable-isolation validation that REJECTS on
+  conflict, over-rejecting is safe (never lets a real conflict through); under-rejecting would be the bug.
+  Document it in code as the contract (same shape as the `InclusiveMetricsEvaluator` "file-level only, never
+  under-rejects" note on `validate_no_conflicting_data`).
+- **Add a focused seq-PRESERVING sibling walk rather than refactoring the shared one.** The sequence number
+  lives on `ManifestEntry`; the heavily-documented shared `added_delete_files_after` returns bare
+  `Vec<DataFile>` (drops it). `forDataFile` needs the entry seq, so the builder added
+  `added_delete_files_with_seq_after` (→ `Vec<(DataFile, Option<i64>)>`) alongside it — least churn to the
+  proven shared walk, and the seq is exactly the extra datum this check needs.
+- **The tx-captured-start pin remains the recurring must-have** on EVERY concurrent-commit validation: a test
+  that OMITS `validate_from_snapshot` and still rejects (relying solely on the `Transaction::new` capture),
+  mutation-checked by making the code read the refreshed head and confirming that one test fails.
+
+### 2026-06-09 (RowDelta.validateNoNewDeletesForDataFiles — ORCHESTRATOR + REVIEWER Opus)
+- **A VALIDATION-ONLY partial port of a mutating API must be UNMISTAKABLY documented at EVERY surface.**
+  Java `RowDelta.removeRows` both records the file for validation AND removes it from the table in apply; the
+  Rust `RowDeltaOperation` is add-only, so the port lands the safety VALIDATION but defers the apply-side
+  removal. That's a faithful-but-minimal scope — but a public `remove_data_files` that doesn't remove is a
+  footgun unless the deferral is stated in the MODULE doc, the FIELD doc, AND the METHOD doc, each pointing to
+  the real removal path (`overwrite_files().delete_data_files`). Mirror an existing validation-only precedent
+  (`referenced_data_files`) so the pattern is consistent.
+- **When two sub-checks share ONE opt-in flag (Java faithfulness), isolate the one under test by making the
+  OTHER quiet.** RowDelta's `validate_no_conflicting_delete_files()` gates BOTH the new partition-scoped
+  removed-data-file check (2a) AND the pre-existing filter-based check (2b, partition-blind inclusive-metrics).
+  A "should-commit" negative for 2a must give the concurrent deletes metric bounds the conflict filter
+  EXCLUDES, or 2b (which is at least as strict) fires and masks 2a's logic. Document this in the test. Order
+  matters for the asserted message (2a runs first → its message, not 2b's).
+- **Reuse the shared helper UNCHANGED across the second caller.** Increment 2 wired Increment 1's
+  `validate_no_new_deletes_for_data_files` into RowDelta with ZERO edits to the helper — the reviewer confirms
+  the first caller's (OverwriteFiles') tests stay green as the behavior-preservation proof. If the second
+  caller needs a tweak, that's a signal to re-scope, not to fork the logic.
+
+### 2026-06-09 (OverwriteFiles.overwriteByRowFilter — ORCHESTRATOR + REVIEWER Opus)
+- **Delete-by-row-filter evaluates metrics on the per-file RESIDUAL, NOT the full predicate.** Java
+  `ManifestFilterManager.PartitionAndMetricsEvaluator` does `residual = residualEvaluator.residualFor(partition)`
+  THEN strict/inclusive metrics on the residual. My builder prompt WRONGLY suggested an inclusive-partition
+  pre-filter + metrics on the full predicate — which spuriously partial-errors on a partition-column predicate
+  (`x==0` on a file in partition `x=0` that has no `x` metrics column: strict=false/inclusive=true → false
+  PARTIAL). The residual folds the partition tuple (`x=0` ⇒ residual `alwaysTrue` ⇒ strict-match ⇒ DELETE). The
+  builder caught + corrected this by reading the REAL Java source. LESSON (orchestrator): for predicate-vs-file
+  logic, cite the exact Java evaluator (here `PartitionAndMetricsEvaluator` + `residualFor`) and don't invent a
+  composition; Rust already has `ResidualEvaluator` (it internally does the strict/project + ExpressionEvaluator).
+- **The delete-by-filter decision tree is KEEP / DELETE / PARTIAL-ERROR.** `!Inclusive` ⇒ keep (no rows match);
+  `Strict` ⇒ delete (all rows match); else (might-but-not-all) ⇒ non-retryable error "Cannot delete file where
+  some, but not all, rows match filter". The partial-error is the SUBTLE correctness point — without it a
+  row-filter overwrite silently drops non-matching rows. Pin it with a straddling-bounds test; mutation-check by
+  flipping the DELETE decision strict→inclusive (the partial file then deletes silently → the test must fail).
+- **Implementing a write MODE shifts a downstream DEFAULT.** Adding `overwrite_by_row_filter` made the obsolete
+  GAP_MATRIX note "the row-filter branch never applies" WRONG: Java `dataConflictDetectionFilter()` now routes
+  the row filter as `validate_no_conflicting_data`'s default conflict filter (when set + no explicit deletes).
+  When you land a deferred mode, GREP the docs/code for "deferred"/"never applies" notes that referenced it and
+  fix them — a new capability can silently change a default elsewhere.
+- **Document the non-ported nuances as conservative postures.** `ManifestFilterManager` has delete-manifest-
+  specific branches (`failAnyDelete`, duplicate-path warning, `isDelete`/`isDanglingDV`/`minSequenceNumber`)
+  irrelevant to the data-file row-filter case; not porting them is fine IF named explicitly in the report +
+  module doc so a future reader knows the boundary.

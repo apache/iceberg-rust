@@ -4164,3 +4164,65 @@ residual-always-true} match EXACTLY. Purely additive — NO production change.
 
 ### NEXT: squash `phase2-3-remnants` + open PR (awaiting user go-ahead on squash-vs-keep + confirm base = the origin fork, NEVER apache upstream)
 Branch = ~10 commits off main `ccfcb062` (3 Phase-2/3 remnants + 4 pure-metadata/manifest-A1 interop + file_format fix + A2 + A3 + A4). All LOCAL-only, not pushed. Deferred beyond this PR: `readable_metrics` interop; A5 scan EXECUTION (parquet deps + approval); other Phase 2/3 remnants (overwriteByRowFilter, RowDelta validateNoNewDeletesForDataFiles, BatchScan, CDC-merge).
+
+**STATUS (2026-06-09): squashed + merged as `5f32b10d` "Phase2 3 remnants (#8)". Local main fast-forwarded.**
+
+---
+
+## Active (2026-06-09): Phase 2 WRITE-VALIDATION remnants cluster (branch `phase2-write-validation` off main `5f32b10d`)
+
+User chose "write-validation remnants" as next. Sequence (each = builder→reviewer Workflow; orchestrator
+independently re-runs the gate + commits; production, unit-tested via MemoryCatalog concurrent-commit tests,
+NO interop needed):
+
+- [x] **Increment 1: `OverwriteFiles.validateNoConflictingDeletes` + shared `validate_no_new_deletes_for_data_files`**
+  (snapshot.rs) — the genuinely-missing core (per-removed-data-file delete-applicability, Java
+  `MergingSnapshotProducer.validateNoNewDeletesForDataFiles`). NEW seq-preserving walk
+  `added_delete_files_with_seq_after` + `starting_sequence_number` + `delete_applies_to_data_file` (ports Java
+  `DeleteFileIndex.forDataFile`; INCLUSIVE `>=` boundary; one documented conservative equality-delete
+  over-approximation). 8 MemoryCatalog tests incl. the tx-captured-start pin; mutation-verified. Gate green
+  (lib 1603, transaction:: 261, datafusion 80+9, clippy/fmt/typos). `validate_no_conflicting_data`
+  behavior-preserving + independent flag.
+- [x] **Increment 2: `RowDelta.validateNoNewDeletesForDataFiles`** — added `remove_data_files`/`remove_rows`
+  (VALIDATION-ONLY removal — apply-side drop deferred + documented; callers → `overwrite_files().delete_data_files`)
+  + wired the shared helper under the existing `validate_no_conflicting_delete_files()` flag, 2a before 2b
+  (Java order). 9 MemoryCatalog tests incl. the tx-captured-start pin; helper reused UNCHANGED; gate green
+  (lib 1612, transaction:: 270). `validateAddedDVs` SPLIT OUT → Increment 2b below.
+- [ ] **Increment 2b: `RowDelta.validateAddedDVs`** (V3 deletion-vector conflict) — identify added DVs
+  (position-delete files with `referenced_data_file` + content_offset = puffin DV), index by referenced file,
+  reject a concurrently-added DV for the same referenced data file. Java `MergingSnapshotProducer.validateAddedDVs`
+  (L825-895).
+- [ ] **Increment 3: `OverwriteFiles.overwriteByRowFilter` + `validateAddedFilesMatchOverwriteFilter`** — the
+  row-filter overwrite mode (delete-by-row-filter) + strict/inclusive/metrics validation of added files
+  (StrictMetricsEvaluator + inclusive/strict partition Projections).
+- [x] **Increment 3: `ReplacePartitions.validateNoConflictingDeletes`** (completes the validateNoConflictingDeletes
+  pair) — PARTITION-SET-based (NOT the per-data-file helper): `validateNoNewDeleteFiles(replacedPartitions)` +
+  `validateDeletedDataFiles(replacedPartitions)` reusing `added_delete_files_after` + `deleted_data_files_after`
+  + the SINGLE existing replaced-partition predicate (`file_in_replaced_partition`). op-sets read from the Java
+  constants; skip_deletes=false. 8 MemoryCatalog tests incl. tx-captured pin + non-replaced-partition controls;
+  mutation-verified. Gate green (lib 1620, transaction:: 278). NO snapshot.rs churn.
+
+Remaining in the cluster:
+- [ ] **Increment 4: `OverwriteFiles.overwriteByRowFilter` + `validateAddedFilesMatchOverwriteFilter`** — the
+  row-filter overwrite mode (delete-by-row-filter at commit) + strict/inclusive/metrics validation of added
+  files (StrictMetricsEvaluator + inclusive/strict partition Projections). The meatiest one (a new mode).
+- [x] **Increment 4: `RowDelta.validateAddedDVs`** (V3 deletion-vector conflict) — ALWAYS-ON (self-skips when
+  no DVs added); DV = Puffin-format delete file (Java `ContentFileUtil.isDV`), indexed by `referenced_data_file`;
+  rejects a concurrently-added DV for the same referenced file. Reuses `added_delete_files_after` filtered to
+  Puffin DVs. Behavior-preserving (48 row_delta tests green; non-DV no-op pinned). 6 tests + tx-captured pin;
+  mutation-verified. Gate green (lib 1626, transaction:: 284). Cosmetic: dvDesc Option Debug-format (noted).
+
+- [x] **Increment 5: `OverwriteFiles.overwriteByRowFilter` + `validateAddedFilesMatchOverwriteFilter`** (the
+  meatiest) — NEW delete-by-EXPRESSION overwrite mode via `resolve_filter_deletes` (snapshot.rs) feeding
+  `process_deletes`; ports Java `ManifestFilterManager`/`PartitionAndMetricsEvaluator` by composing the REAL
+  `ResidualEvaluator` + `Strict`/`InclusiveMetricsEvaluator` on the per-file RESIDUAL (the builder CORRECTED my
+  prompt's full-predicate suggestion — residual is what Java does + avoids spurious partial-errors). KEEP /
+  DELETE / PARTIAL-error decision tree. `validate_added_files_match_overwrite_filter()` (block 1) +
+  conflict-filter default now follows the row filter (Java `dataConflictDetectionFilter`). 11 tests incl. the
+  partial-match error + the row-filter-conflict-default pair; mutation-verified. Gate green (lib 1636,
+  transaction:: 294). Conservative postures documented (failAnyDelete / duplicate-path / DV-manifest branches
+  not ported — delete-manifest-specific). Deferred: the rowFilter branch of validateNoConflictingDeletes.
+
+**CLUSTER COMPLETE (5 increments). NEXT: PR `phase2-write-validation` (5 commits) to the origin fork (NEVER apache).**
+
+Then: PR the cluster to the origin fork (NEVER apache).
