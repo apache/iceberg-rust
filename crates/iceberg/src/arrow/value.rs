@@ -21,7 +21,7 @@ use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, FixedSizeBinaryArray,
     FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array, LargeBinaryArray,
     LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StructArray,
-    Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
+    Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray, new_null_array,
 };
 use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, FieldRef, TimeUnit};
@@ -966,6 +966,13 @@ pub(crate) fn create_primitive_array_repeated(
             ))
         }
         (DataType::Null, _) => Arc::new(arrow_array::NullArray::new(num_rows)),
+        (
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::Map(_, _)
+            | DataType::FixedSizeList(_, _),
+            None,
+        ) => new_null_array(data_type, num_rows),
         (dt, _) => {
             return Err(Error::new(
                 ErrorKind::Unexpected,
@@ -991,6 +998,78 @@ mod test {
 
     use super::*;
     use crate::spec::{ListType, Literal, MapType, NestedField, PrimitiveType, StructType, Type};
+
+    fn field_with_id(name: &str, dt: DataType, nullable: bool, id: i32) -> Field {
+        Field::new(name, dt, nullable).with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            id.to_string(),
+        )]))
+    }
+
+    fn assert_absent_column_all_null(target: DataType, num_rows: usize) {
+        let arr = create_primitive_array_repeated(&target, &None, num_rows).unwrap();
+        assert_eq!(arr.len(), num_rows);
+        assert_eq!(arr.null_count(), num_rows);
+        assert_eq!(arr.data_type(), &target);
+    }
+
+    #[test]
+    fn absent_list_column_materializes_as_all_null() {
+        let target = DataType::List(Arc::new(Field::new("element", DataType::Int32, true)));
+        assert_absent_column_all_null(target, 4);
+    }
+
+    #[test]
+    fn absent_large_list_column_materializes_as_all_null() {
+        let target = DataType::LargeList(Arc::new(Field::new("element", DataType::Int32, true)));
+        assert_absent_column_all_null(target, 4);
+    }
+
+    #[test]
+    fn absent_fixed_size_list_column_materializes_as_all_null() {
+        let target =
+            DataType::FixedSizeList(Arc::new(Field::new("element", DataType::Int32, true)), 2);
+        assert_absent_column_all_null(target, 4);
+    }
+
+    #[test]
+    fn absent_map_column_materializes_as_all_null() {
+        let entries = Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("keys", DataType::Utf8, false),
+                Field::new("values", DataType::Float64, true),
+            ])),
+            false,
+        );
+        assert_absent_column_all_null(DataType::Map(Arc::new(entries), false), 5);
+    }
+
+    #[test]
+    fn absent_list_of_struct_preserves_nested_field_ids() {
+        let element = Field::new(
+            "element",
+            DataType::Struct(Fields::from(vec![
+                field_with_id("key", DataType::Utf8, false, 101),
+                field_with_id("value", DataType::Float64, true, 102),
+            ])),
+            true,
+        );
+        assert_absent_column_all_null(DataType::List(Arc::new(element)), 4);
+    }
+
+    #[test]
+    fn absent_struct_containing_collection_recurses() {
+        let target = DataType::Struct(Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new(
+                "m",
+                DataType::List(Arc::new(Field::new("element", DataType::Int32, true))),
+                true,
+            ),
+        ]));
+        assert_absent_column_all_null(target, 3);
+    }
 
     #[test]
     fn test_arrow_struct_to_iceberg_struct() {
