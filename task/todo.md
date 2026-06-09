@@ -3277,6 +3277,488 @@ shared helper so the two checks cannot drift.
 
 ---
 
+## OVERNIGHT AUTONOMOUS RUN (2026-06-08/09) — branch `phase3-conflict-and-scan` (off `phase3-rowdelta-delete-conflicts` d327e80d)
+User asleep; run via actor-critic, COMMIT LOCALLY ONLY (no push). User approved "all 5". RECON FOUND 2 of the
+planned items are COUPLED (not clean reuses), so ADAPTED to clean additive items (documented for the morning):
+- OverwriteFiles `validateNoConflictingDeletes` block 3 is GATED on `rowFilter() != alwaysFalse()` → needs
+  `overwriteByRowFilter` (not built). DROPPED.
+- `StreamingDelete` (DeleteFiles) only has `validateFilesExist` → needs a *deleted*-data-file enumeration +
+  resolved removed files, NOT the existing helpers. DEFERRED.
+The clean conflict-validation reuses are ALREADY done (RowDelta data+delete, OverwriteFiles data,
+ReplacePartitions). So the overnight run pivots to clean, additive, locally-verifiable scan/inspection items.
+
+ADAPTED SEQUENCE (each: builder → adversarial reviewer → independent widened gate → local commit):
+1. **`readable_metrics`** inspection column (Java `MetricsUtil.readableMetricsStruct`) — read-only/additive.
+2. **`IncrementalAppendScan`** (Java `BaseIncrementalAppendScan`/`appendsBetween`) — new scan entry, additive.
+3. **`ScanReport` / `MetricsReporter`** (Java `metrics/ScanReport.java`) — self-contained observability.
+4. **DeleteFiles `validateFilesExist` + `deleted_data_files_after`** (verify clean when reached; the deleted-
+   data-file enumeration is parallel to `added_data_files_after`, DeleteFiles has `delete_paths`). Substitute
+   the `position_deletes` metadata table if coupled.
+5. **`position_deletes` metadata table** (Java `PositionDeletesTable`) OR `IncrementalChangelogScan` — pick when
+   reached. (Not yet built; a real inspection/scan gap.)
+Widened gate for ALL: workspace build + iceberg lib ×2 + transaction:: + iceberg-datafusion tests + 3 interop +
+workspace clippy + fmt + typos.
+
+### Increment 1 — readable_metrics (DETAIL)
+Java `MetricsUtil` (`core/.../MetricsUtil.java`): `READABLE_METRIC_COLS` (L140-193) = the 6 per-column metrics
+(`column_size`/`value_count`/`null_value_count`/`nan_value_count` = long, from the file's metric maps by field
+id; `lower_bound`/`upper_bound` = the COLUMN's type, decoded via `Conversions.fromByteBuffer` — NOT raw bytes);
+`readableMetricsSchema(dataTableSchema, metadataTableSchema)` (L356) builds a `readable_metrics` STRUCT with one
+sub-field PER leaf column of the data table (named by column path), each = a struct of the 6; `READABLE_METRICS
+= "readable_metrics"` (L195). `BaseFilesTable`/`BaseEntriesTable` APPEND it (`TypeUtil.join(schema,
+readableMetricsSchema(...))`). Rust: add to the `files` family + `entries` (the shared `inspect/data_file.rs`
+projection, or appended as a top-level/nested column matching Java); the per-column bound decode reuses
+`Datum::try_from_bytes`/typed conversion. Was DEFERRED across the inspection set.
+
+#### Increment 1 — BUILD PLAN (Opus builder, 2026-06-08)
+- [x] New module `inspect/readable_metrics.rs` — ONE source of truth used by `files` + `entries`:
+      builds the `readable_metrics` STRUCT field (one sub-field per LEAF/primitive column of the data
+      table's CURRENT schema, named by dotted path; type = a 6-field struct: column_size/value_count/
+      null_value_count/nan_value_count long opt; lower_bound/upper_bound = the COLUMN's own type, opt).
+      Ports Java `readableMetricsSchema` id scheme (nextId = metadata-table highest id; pre-increment per
+      col-struct then its 6 sub-fields, then the top-level readable_metrics field). ONE documented
+      divergence: Java assigns ids in `idToName.keySet()` = Java-HashMap (arbitrary) order; we use ASCENDING
+      data-table-field-id order (deterministic) then sort emitted sub-fields by name (Java sorts after id
+      assignment). Row builder fills 4 counts from the file's maps by field id (null when absent) and decodes
+      lower/upper bound to the COLUMN's typed value via `Datum::try_from_bytes(stored.to_bytes(), col_type)`
+      (inverse of the raw map's `to_bytes`; mirrors Java `Conversions.fromByteBuffer(field.type(), bytes)`).
+- [x] Append `readable_metrics` to `files` family schema+scan (flat last column) AND `entries` schema+scan
+      (last top-level column after `data_file`), matching Java APPEND order; `all_*` inherit it.
+- [x] Tests: schema present (files/data_files/delete_files/entries + an all_*), one sub-field per leaf each a
+      6-field struct, bound sub-fields carry the COLUMN type, field ids match the ported scheme; values
+      (counts + DECODED typed bounds + nulls); backward-compat (raw maps still present, unchanged).
+- [x] Mutations: (a) swap lower<->upper decode -> value test fails; (b) wrong field id for a count -> value
+      test fails; (c) raw bytes instead of typed bound -> type/value test fails.
+- [x] Docs (GAP_MATRIX, Roadmap, todo Outcome, lessons) + gate (all 8) + new lib total x2.
+
+Outcome (2026-06-08, BUILDER Opus): `readable_metrics` landed on the `files` family + `entries` (+ `all_*`
+inherit it through the shared schema/projection). NEW module `inspect/readable_metrics.rs` is the single
+source of truth: `readable_metrics_field(data_schema, host_highest_field_id)` builds the virtual STRUCT (one
+sub-field per LEAF/primitive data column, dotted-named via `Schema::field_id_to_name_map`, each a 6-field
+struct: `column_size`/`value_count`/`null_value_count`/`nan_value_count` long opt + `lower_bound`/
+`upper_bound` typed as the COLUMN's own type, opt); `ReadableMetricsBuilder` fills the row per `DataFile`.
+**Field-id scheme** (Java `MetricsUtil.readableMetricsSchema`, `MetricsUtil.java:356-393`): pre-increment
+counter seeded at the HOST metadata-table schema's `highest_field_id()` (= the data_file projection's 145 for
+both tables), per leaf column assigns col-struct id then its 6 sub-field ids, then the top-level
+`readable_metrics` id (8-column fixture → readable_metrics = 202). **ONE documented divergence:** Java's
+`idToName()` HashMap iteration order (arbitrary, non-portable — `IndexByName.byId()` over a `HashMap`) is
+replaced by deterministic ASCENDING data-table-field-id assignment; sub-fields still sorted by name (so the
+column ORDER matches Java; exact interior ids match only when Java's HashMap order happens to coincide). Full
+byte-level id parity with a JVM is the residual Java/Spark interop concern. **Typed bound decode:** the stored
+`Datum` is re-serialized (`to_bytes`) and re-decoded against the COLUMN's primitive type
+(`Datum::try_from_bytes`) — the inverse of the raw `lower_bounds`/`upper_bounds` map columns, mirroring Java
+`Conversions.fromByteBuffer(field.type(), buffer)`; widens an evolved field's bound to the column's current
+type. Raw metrics-map columns UNCHANGED (additive). **Java lines verified:** `READABLE_METRIC_COLS` L140-193
+(the 6 metrics; counts by field id nullable; bounds via `Conversions.fromByteBuffer(field.type(), …)`),
+`READABLE_METRICS` L195, `readableMetricsSchema` L356-393 (id scheme + sort-by-name + per-column doc),
+`readableMetricsStruct` L403-429, `IndexByName.byId()` L78-80 (the HashMap-order source). Provider untouched
+(it delegates to `.schema()`/`.scan()` — `test_metadata_table` green). **Files modified:** new
+`crates/iceberg/src/inspect/readable_metrics.rs`; `inspect/mod.rs` (+`mod readable_metrics`); `inspect/files.rs`
+(schema+scan append + 4 tests + 2 existing schema assertions updated); `inspect/entries.rs` (schema+scan
+append + 2 tests + 1 existing schema assertion updated); `inspect/data_file.rs` (module doc — readable_metrics
+no longer "deferred"). **Tests (12 new):** readable_metrics.rs ×6 — one-struct-per-leaf sorted-by-name;
+6-field metric struct; bounds carry the COLUMN type (long/string/double, counts always long); the exact
+pre-increment id scheme (101/108/115 column structs, 102-107 + 116-121 sub-ids, 122 top-level); primitives
+nested in struct/list included by dotted path; complex-only (map) columns excluded. files.rs ×4 — schema
+present with per-column bound type (x→Int64, a→Utf8); counts + DECODED typed bounds + nulls (x.column_size=42,
+x.lower_bound=1 long, absent metrics null, y all null, i32 bound Int32-typed null); distinct lower=10/upper=99
+both typed longs; raw maps unchanged regression guard. entries.rs ×2 — readable_metrics present with decoded
+bound (entries x.column_size=42, x.lower_bound=1); `all_entries` schema inherits readable_metrics.
+**Mutations (all caught, re-run by injection):** (a) swap lower↔upper source maps → distinct-bounds test
+fails (reads 99 where 10 expected); (b) read column_size from `field_id+1` → counts test fails (x.column_size
+null); (c) declare bounds as raw `Binary` → bound-type schema test + the column-type unit test + 4 builder
+dispatch tests fail. **Gate (all 8, pinned nightly):** (1) `cargo build -p iceberg` OK; (2)
+`cargo build --workspace --exclude iceberg-sqllogictest --all-targets` OK; (3) `cargo test -p iceberg --lib`
+×2 = **1528 passed / 0 failed** both runs (was 1516 → +12); (4) `cargo test -p iceberg-datafusion --lib
+--tests` 9/9 integration green incl. `test_metadata_table` (the all-targets DOCTEST run fails ONLY the
+pre-existing `table_provider_factory.rs` `tokio::main`/rt-multi-thread environmental artifact documented in
+lessons 2026-06-07 Increment-7 REVIEWER — a file this change never touched); (5) interop_manage_snapshots /
+interop_update_schema / interop_update_partition_spec = 4/4 each; (6) `cargo clippy --workspace --exclude
+iceberg-sqllogictest --all-targets -- -D warnings` clean; (7) `cargo fmt --all -- --check` clean; (8) `typos`
+repo-wide exit 0. No commit, no branch switch, no edits outside `inspect/` + docs.
+
+### OVERNIGHT branch correction + Increment 2
+NOTE: a stray git op during Increment 1's builder left the tree on `main`; since the overnight scan/inspection
+items are INDEPENDENT of the rowdelta-delete helper, the overnight work is on branch **`phase3-overnight` off
+`main` (063b7153)** — NOT stacked on rowdelta-delete (simpler; no rebase needed). Increment 1 (readable_metrics)
+committed `31595dd4`. After EACH agent: re-verify `git branch --show-current == phase3-overnight`.
+
+### Increment 2 — IncrementalAppendScan (DETAIL)
+Java `BaseIncrementalAppendScan` (`core/.../BaseIncrementalAppendScan.java`): `doPlanFiles(fromExclusive,
+toInclusive)` → `appendsBetween(table, fromExclusive, toInclusive)` = the APPEND-operation snapshots in
+`(from, to]` (via `SnapshotUtil.ancestorsBetween` filtered to `operation == DataOperations.APPEND` — L111),
+then `appendFilesFromSnapshots(snapshots)` plans FileScanTasks for the data files those append snapshots ADDED
+(only Added entries from the manifests each snapshot itself added). Append-only: OVERWRITE/DELETE snapshots in
+the range are EXCLUDED. The API (`IncrementalAppendScan` interface): `fromSnapshotInclusive`/
+`fromSnapshotExclusive` + `toSnapshot` (default to = current).
+
+Rust approach (LOWEST-RISK — additive, do NOT refactor the existing single-snapshot `plan_files`): a SEPARATE
+planner. `Table::incremental_append_scan()` → a builder with `from_snapshot_id` (exclusive) + optional
+`to_snapshot_id` (default current) + `with_filter`/`select` (mirror `TableScanBuilder`). Planning: compute the
+append snapshots in `(from, to]` (mirror the `added_data_files_after` ancestor walk in `transaction/snapshot.rs`,
+but filtered to `Operation::Append` and bounded by both ends); for each, read the DATA manifests it ADDED
+(`added_snapshot_id == snapshot_id`), and for each `Added` entry build a `ManifestEntryContext` (reuse the
+existing `scan/context.rs` struct + `into_file_scan_task`, with an EMPTY delete index — an append scan applies
+no deletes) and stream `FileScanTask`s. Reuse the residual evaluator + the bound-filter machinery exactly as
+the normal scan does. Must NOT change existing `TableScan`/`plan_files` behavior.
+
+Tests (MemoryCatalog/TableTestFixture): multi-snapshot fixture with ≥2 appends; `incremental_append_scan`
+from=S0(excl) to=S2(incl) returns ONLY the files appended in S1+S2 (not S0's); from==to → empty; an OVERWRITE
+snapshot in the range is EXCLUDED; a filter prunes appended files by partition; default to=current. Mutation-
+pin: the exclusive-from boundary, the append-only op filter, the added-manifest filter. Confirm the normal
+`table.scan()` is unchanged. Widened gate (incl. datafusion tests).
+
+#### BUILDER plan (Opus, 2026-06-08)
+- [x] Add `scan/incremental.rs`: `IncrementalAppendScanBuilder` (`from_snapshot_id_exclusive`,
+      `from_snapshot_id_inclusive`, `to_snapshot_id`, `with_filter`, `select`/`select_all`/`select_empty`,
+      concurrency limits) → `build()` → `IncrementalAppendScan`. Validate snapshots exist + `to` descends `from`.
+- [x] `IncrementalAppendScan::plan_files()`: bounded ancestor walk of `(from, to]` filtered to
+      `Operation::Append`; for each, keep DATA manifests it ADDED (`added_snapshot_id == snapshot_id`); stream
+      `Added`-entry `FileScanTask`s reusing `PlanContext`/`ManifestEntryContext`/`into_file_scan_task` + EMPTY
+      delete index + residual evaluator.
+- [x] Seam in `scan/context.rs`: factor `build_manifest_file_contexts` to also accept an explicit
+      `Vec<ManifestFile>` (behavior-preserving for the normal scan) so the incremental planner reuses the
+      partition-pruning + residual machinery; add an `Added`-only entry filter for the incremental path.
+- [x] `Table::incremental_append_scan()` entry point in `table.rs`.
+- [x] Tests in `incremental.rs` (multi-append fixture): core multi-append set; from==to (rejected, Java-faithful);
+      OVERWRITE-in-range excluded; with_filter partition prune; default to=current; exclusive-from boundary.
+      Mutation-pin from-exclusive, append-only op filter, added-manifest filter.
+- [x] Regression: normal `table.scan().plan_files()` unchanged. Docs: GAP_MATRIX row 94 / Roadmap / lessons.
+
+#### Outcome (BUILDER, Opus, 2026-06-08)
+**API.** `Table::incremental_append_scan() -> IncrementalAppendScanBuilder` (mirrors `Table::scan()`). Builder:
+`from_snapshot_id_exclusive(i64)` (Java `fromSnapshotExclusive`), `from_snapshot_id_inclusive(i64)`
+(Java `fromSnapshotInclusive` — resolved to the parent as the exclusive bound at `build()`), `to_snapshot_id(i64)`
+(Java `toSnapshot`, defaults to the current snapshot), `with_filter`/`select`/`select_all`/`select_empty`/
+`with_case_sensitive`/`with_batch_size`/`with_concurrency_limit`. `build()` validates the `to`/`from` snapshots
+exist and the Java preconditions (inclusive `from` is an ancestor of `to`; exclusive `from` is a *parent
+ancestor* of `to`), then resolves schema/field-ids/bound-filter exactly as `TableScanBuilder::build`.
+**Planner design.** `IncrementalAppendScan::plan_files()` is a SEPARATE planner — the single-snapshot
+`TableScan::plan_files` is byte-unchanged. (1) `appends_between` does a bounded parent-chain walk from `to` back,
+stopping BEFORE the exclusive `from`, keeping only `Operation::Append` snapshots (Java `appendsBetween` /
+`SnapshotUtil.ancestorsBetween` filtered to APPEND; `from==to` short-circuits to empty inside the walk, but the
+exclusive `isParentAncestorOf` precondition gates it first). (2) For each append snapshot it loads the manifest
+list and keeps the DATA manifests THAT snapshot itself added (`added_snapshot_id == snapshot_id`, Java
+`manifest.snapshotId() == snapshot.snapshotId()`). (3) Those manifests are driven through the REUSED
+`PlanContext::build_manifest_file_contexts_from_files` (the additive seam) → the SAME partition-filter pruning +
+residual-evaluator construction as the normal scan, with an EMPTY `DeleteFileIndex` (drop the sender so it
+resolves to no-deletes). (4) `process_append_manifest_entry` keeps only `Added`-status entries (Java
+`filterManifestEntries(status==ADDED)`), runs the partition-expression + inclusive-metrics filters, and
+`into_file_scan_task` builds each `FileScanTask` (residual predicate, EMPTY deletes).
+**Range/append-only semantics.** `(from exclusive, to inclusive]`, APPEND-only — overwrites/deletes in the range
+are excluded entirely (snapshot-level op filter); no delete files applied (empty delete index).
+**Java lines verified.** `BaseIncrementalAppendScan.doPlanFiles` L46-57 → `appendsBetween` L105-117 (the
+`operation == DataOperations.APPEND` filter) → `appendFilesFromSnapshots` L68-99 (the
+`snapshotIds.contains(manifest.snapshotId())` manifest filter + `manifestEntry.status() == ADDED` entry filter).
+`BaseIncrementalScan` L159-187 (`fromSnapshotIdExclusive`: inclusive ⇒ `isAncestorOf` + parent bound;
+exclusive ⇒ `isParentAncestorOf`) + L133-157 (`toSnapshotIdInclusive` defaults to current). `SnapshotUtil`
+L211-229 (`ancestorsBetween` equal-from/to ⇒ empty) + L46-86 (`isAncestorOf`/`isParentAncestorOf`).
+**Tests (12, `scan/incremental.rs`).** core range S1+S2-not-S0 (the planner includes both later appends, excludes
+`from`'s files); exclusive-from boundary (S1's own files excluded); inclusive-from includes `from`'s files;
+`from==to` exclusive REJECTED (Java precondition; a snapshot is not its own parent ancestor); range with only an
+OVERWRITE → zero tasks (append-only filter); `with_filter(x==10)` prunes the x=20 appended file; default
+to=current; no-from whole-lineage; empty table → zero; non-ancestor `from` rejected; own-added-manifest-only
+count (carried-forward manifests don't re-surface files).
+**Mutations caught (edit+revert).** (a) inclusive from boundary (process `from` before breaking) → exclusive-from
++ core + 5 others fail; (b) drop the `Operation::Append` filter (`|| true`) → overwrite-excluded + no-append-range
+fail; (c) read all manifests not just the snapshot's own added (`|| true`) → own-added-manifest count + core +
+others fail. Each reverted after; full lib suite re-run green.
+**Gate (all 8, pinned nightly).** (1) `cargo build -p iceberg` OK; (2) `cargo build --workspace --exclude
+iceberg-sqllogictest --all-targets` OK; (3) `cargo test -p iceberg --lib` ×2 = **1542 passed / 0 failed** both
+runs (+12 new, was 1530); (4) `cargo test -p iceberg --lib scan::` = 55 passed (existing scan tests unchanged +
+12 new); (5) `cargo test -p iceberg-datafusion --lib --tests` = 80 + 9 passed; (6) interop_manage_snapshots /
+interop_update_schema / interop_update_partition_spec = 4/4 each; (7) `cargo clippy --workspace --exclude
+iceberg-sqllogictest --all-targets -- -D warnings` clean; (8) `cargo fmt --all -- --check` clean · `typos`
+exit 0. The normal `TableScan`/`plan_files` is UNCHANGED (the only `scan/mod.rs` edit is `mod incremental;` +
+`pub use`; the `context.rs` edit is the additive `_from_files` delegation). Stayed on `phase3-overnight`; no
+commit, no push; edits only in `scan/{mod,context,incremental}.rs` + `table.rs` + docs.
+
+#### REVIEW (2026-06-08, Opus REVIEWER, DELEGATED) — VERDICT: CHANGES-MADE (1 test added), PASS 🟡
+Verified independently: (1) the `context.rs` seam is behavior-preserving — read the delegation line-by-line:
+the loop body is byte-identical, only `manifest_list.entries().iter().collect()`→`.to_vec()` (owned clones,
+no semantic change) and `for x in manifest_files`→`for x in &manifest_files`; inside the loop `x` is
+`&ManifestFile` in BOTH versions, so `get_partition_filter`/`create_manifest_file_context` see identical
+types. (2) Range/append-only/own-manifest semantics match Java line-for-line (`appendsBetween` L105-117,
+`ancestorsBetween`/`isAncestorOf`/`isParentAncestorOf` L46-86/L211-229, the inclusive→parent + exclusive→
+parent-ancestor preconditions L159-187). (3) Java's entry-level `snapshotIds.contains(entry.snapshotId())`
+filter is REDUNDANT in Rust given manifest-selection + `status==Added` (not a missing check) — documented in
+lessons. **MUTATIONS run (edit+revert):** (a) inclusive-from CAUGHT, (b) drop append-only filter CAUGHT,
+(c) read-all-manifests CAUGHT, (d) exclude-`to` (start at to's parent) CAUGHT — all by existing tests; **(e)
+drop the `status==Added` entry filter SURVIVED** (the builder's noted gap — fast-append fixtures hold only
+Added entries). **Closed (e)** by adding `test_incremental_append_keeps_only_added_entries_of_own_manifest`,
+reusing `scan::tests::TableTestFixture::setup_manifest_files` (an APPEND snapshot whose own manifest carries
+Added+Existing+Deleted) — incremental scan returns ONLY the Added file; mutation-verified it fails iff the
+filter is dropped and nothing else. lib 1542→**1543**, scan:: 55→**56**. All 8 gates green; clippy/fmt/typos
+clean; no bare unwrap/expect in production; scope intact (no Cargo/spec/transaction/arrow/datafusion edits);
+docs reconciled to 13 tests / 4 mutations. NOTE: `git checkout -- context.rs` to revert a mutation wiped the
+uncommitted seam (tracked file → reverts to HEAD); restored byte-exact from the read diff and re-verified.
+Stayed on `phase3-overnight`; no commit, no push.
+
+### Increment 3 — ScanReport / MetricsReporter data model + reporter API (DETAIL)
+Increment 2 (IncrementalAppendScan) committed `bdb02365`. The Java `metrics/` package is LARGE (~30 files);
+the SCAN-EMISSION wiring needs instrumenting the concurrent/lazy `plan_files` stream (fiddly — DEFER to a
+supervised increment). This increment = the SELF-CONTAINED data model + reporter trait (also the REST catalog's
+metrics-report JSON contract), low-risk + high-value.
+
+Java authority: `api/.../metrics/{MetricsReport,ScanReport,ScanMetricsResult,CounterResult,TimerResult,
+MetricsReporter}.java` + `core/.../metrics/{LoggingMetricsReporter,InMemoryMetricsReporter}.java` +
+`ScanReportParser.java` (the REST JSON). Build:
+- `MetricsReport` (marker trait/enum), `ScanReport` (table_name, snapshot_id, schema_id, projected_field_ids,
+  projected_field_names, filter [the bound/unbound expression as a string or Predicate], metrics:
+  ScanMetricsResult).
+- `ScanMetricsResult` — the ~14 counters/timers (`total_planning_duration` Timer; `result_data_files`,
+  `result_delete_files`, `total_data_manifests`, `total_delete_manifests`, `scanned_data_manifests`,
+  `skipped_data_manifests`, `total_file_size_in_bytes`, `total_delete_file_size_in_bytes`, `skipped_data_files`,
+  `skipped_delete_files`, `indexed_delete_files`, `equality_delete_files`, `positional_delete_files` Counters).
+- `CounterResult { unit, value }` + `TimerResult { time_unit, total_duration, count }` (or Option-typed
+  fields). `MetricsReporter` trait (`report(&self, report: …)`). `LoggingMetricsReporter` (tracing) +
+  `InMemoryMetricsReporter` (stores last report, test-friendly).
+- serde JSON matching `ScanReportParser` (the REST `report-metrics` payload) — include if clean.
+DEFER (documented): wiring into `TableScan`/`plan_files` to actually collect + emit (concurrent/lazy-stream
+instrumentation) — its own supervised increment. Self-contained module `metrics/` (new). Tests: construct +
+report to both reporters + JSON round-trip. Widened gate.
+
+#### Increment 3 — BUILD PLAN (BUILDER Opus, 2026-06-08)
+- [x] New self-contained module `crates/iceberg/src/metrics/mod.rs` (mirrors Java `metrics/` package);
+      `pub mod metrics;` in `lib.rs`.
+- [x] `MetricUnit` enum (`Undefined`/`Bytes`/`Count` = Java `MetricsContext.Unit`, serde by displayName
+      `undefined`/`bytes`/`count`); `TimeUnit` enum (Java `java.util.concurrent.TimeUnit`, serde lowercase).
+- [x] `CounterResult { unit: MetricUnit, value: i64 }`, `TimerResult { time_unit, total_duration: Duration,
+      count: i64 }`. `ScanMetricsResult` — every Java metric as `Option<CounterResult>` / `Option<TimerResult>`
+      (Java optionality: a never-incremented counter is absent). Full counter set incl. the `dvs`,
+      `scanned_delete_manifests`, `skipped_delete_manifests` ones the brief's short list omitted.
+- [x] `ScanReport { table_name, snapshot_id, schema_id, projected_field_ids, projected_field_names, filter:
+      Predicate, scan_metrics, metadata: HashMap }`. `MetricsReport` ENUM (`Scan(ScanReport)`) — dispatch
+      choice = enum over `dyn` (avoids downcasting, illegal states unrepresentable, idiomatic Rust).
+- [x] `MetricsReporter` trait `fn report(&self, report: MetricsReport)`. `LoggingMetricsReporter` (tracing
+      structured event). `InMemoryMetricsReporter` (Mutex-held last report + `last_report()` / `last_scan_report()`).
+- [x] serde: counter/timer shapes + dashed metric names (skip-if-none) match Java `ScanReportParser`/
+      `ScanMetricsResultParser`/`CounterResultParser`/`TimerResultParser`. Timer JSON = `{count, time-unit
+      (lowercase), total-duration (in unit)}`; counter = `{unit (displayName), value}`. Top-level field names
+      `table-name`/`snapshot-id`/`schema-id`/`projected-field-ids`/`projected-field-names`/`filter`/`metrics`.
+      DECISION: `filter` serialized via Rust `Predicate`'s OWN serde (NOT Java `ExpressionParser` JSON) — that
+      port is large + separate; documented as a deferred divergence. Everything else matches Java.
+- [x] Tests: construct+accessor round-trip (Java names); absent counter = None; both reporters; JSON
+      round-trip + pinned field/metric names vs hand-written expected JSON. Mutations: drop a counter; rename a
+      JSON field; InMemory keep-first.
+- DEFER: scan-emission wiring into `plan_files`/`TableScan` (separate supervised increment).
+
+**Outcome (BUILDER Opus, 2026-06-08).** Landed the self-contained scan metrics-report data model + reporter
+API in ONE new cohesive module `crates/iceberg/src/metrics/mod.rs` (`pub mod metrics;` in `lib.rs`) — no edits
+to `scan/`, `transaction/`, `spec/`, `arrow/`, or datafusion. **Module layout:** metric-name constants (private
+`metric_names` submodule, Java `ScanMetrics` strings) → `MetricUnit` + `TimeUnit` enums → `CounterResult` /
+`TimerResult` (with a hand-written `Serialize`/`Deserialize` for `TimerResult` so `total-duration` is expressed
+in the timer's own unit via a truncating convert, exactly Java `TimerResultParser.fromDuration`/`toDuration`) →
+`ScanMetricsResult` (all 17 Java metrics as `Option`, `skip_serializing_if`+`default`, dashed `rename`s) → a
+compile-time `const` block asserting the name constants == the serde renames → `ScanReport` → `MetricsReport`
+enum → `MetricsReporter` trait + the two reporters. **Dispatch choice:** `MetricsReport` is a closed
+`#[non_exhaustive] enum` with a single `Scan(ScanReport)` variant (not a `dyn MetricsReport` trait object) —
+mirrors Java's marker interface while avoiding downcasting and making an unknown report kind unrepresentable;
+`last_scan_report()` matches exhaustively (no wildcard) so a future variant forces an update. **serde decision:**
+the metrics object + counter/timer shapes + all dashed top-level field names match Java's parsers faithfully;
+the ONE divergence is the `filter` field — serialized via the Rust `Predicate`'s own serde derive, NOT Java
+`ExpressionParser` JSON (a large separate port, documented in the module docs + GAP_MATRIX + Roadmap as a
+tracked follow-up). **Java field names verified** against `/tmp/iceberg-java-ref` `metrics/`: `MetricsReport`
+(empty marker iface), `MetricsReporter.report(MetricsReport)`, `ScanReport` (table_name/snapshot_id/filter/
+schema_id/projectedFieldIds/projectedFieldNames/scanMetrics/metadata), `ScanMetricsResult` (the 17 `@Nullable`
+accessors — the brief's short list omitted `scanned_delete_manifests`/`skipped_delete_manifests`/`dvs`, all
+included here), `CounterResult` (unit+value), `TimerResult` (timeUnit/totalDuration/count), `ScanMetrics` (the
+17 string constants), `MetricsContext.Unit` (undefined/bytes/count), and the four `*Parser`s for the JSON shape.
+**Tests (9, each risk-named):** `test_scan_report_fields_round_trip_through_accessors` (Java-named fields),
+`test_absent_counter_is_none` (Java optionality), `test_logging_reporter_does_not_panic` +
+`test_logging_reporter_emits_a_tracing_event` (captured custom subscriber counts exactly 1 event),
+`test_in_memory_reporter_stores_the_report` + `test_in_memory_reporter_keeps_the_last_report`,
+`test_scan_report_json_round_trips_and_matches_java_shape` (round-trip + pinned NAMES + counter/timer shapes vs
+hand-written expected JSON + absent-omitted), `test_timer_total_duration_is_expressed_in_its_time_unit`,
+`test_non_empty_metadata_round_trips`. **Mutations caught (Edit + revert, NOT git checkout):** (a) `#[serde(skip)]`
+on `result_data_files` (drop a counter) → JSON round-trip test fails; (b) `rename = "tableName"` (rename a JSON
+field) → JSON-shape test fails at the `table-name present` assertion; (c) `InMemoryMetricsReporter::report`
+keep-first (`if guard.is_none()`) → keeps-last test fails while stores test stays green. **Gate (all 7, on
+`phase3-overnight`):** (1) `cargo build -p iceberg` clean; (2) workspace build (excl. sqllogictest) clean; (3)
+`cargo test -p iceberg --lib` TWICE = **1552 passed / 0 failed** both runs (was 1543; +9 metrics tests); (4)
+`iceberg-datafusion --lib --tests` 80 + 9 passed; (5) interop manage_snapshots/update_schema/update_partition_spec
+4/4 each; (6) clippy `-D warnings` clean (fixed one `manual_map` by matching on `last_report()?`); (7) `fmt
+--check` clean + `typos` exit 0. **Scan-wiring is DEFERRED** (no `plan_files`/`TableScan` instrumentation).
+**DEVIATION flagged:** added `tracing = { workspace = true }` to `crates/iceberg/Cargo.toml` (the crate had no
+logging facade and the brief mandated `tracing`-based logging) — a one-line `Cargo.lock` add (tracing was already
+a resolved workspace dep). This touches a dependency file, which the scope rules flag for sign-off; surfaced here
++ in the final report.
+
+**Orchestrator surgery (2026-06-08):** the unapproved dep edit was REJECTED. `LoggingMetricsReporter` + its 2
+tests (`test_logging_reporter_does_not_panic`, `test_logging_reporter_emits_a_tracing_event`) were REMOVED
+(replaced by a NOTE comment deferring it pending dep approval), and `crates/iceberg/Cargo.toml`/`Cargo.lock`
+were reverted to NO `tracing` dep. The increment is now the dependency-free model + `MetricsReporter` trait +
+`InMemoryMetricsReporter` + serde. Test count: 7 metrics tests (was 9); `iceberg --lib` = **1550** (was 1552).
+
+**REVIEW (2026-06-08, Opus REVIEWER) — VERDICT 🟡 PASS (docs corrected).** Verified vs `/tmp/iceberg-java-ref`:
+all 17 `ScanMetricsResult` metrics present with the right names + counter-vs-timer kind (cross-checked
+`ScanMetrics.java` constants + `ScanMetricsResult.java` `@Nullable` accessors); serde JSON shape matches all 4
+parsers — top-level field names (`ScanReportParser`), counter `{unit (displayName), value}`
+(`CounterResultParser`), timer `{count, time-unit (lowercase), total-duration (in-unit truncating convert)}`
+(`TimerResultParser`), dashed metric keys + absent-omitted (`ScanMetricsResultParser`); field types
+(`snapshot-id` i64, `schema-id` i32) match Java `long`/`int`. The `filter`-via-`Predicate`-serde divergence is
+honestly documented (module docs + GAP_MATRIX + Roadmap) and acceptable for a model-only increment. Dep-removal
+is CLEAN: no `tracing::` code (only doc/comment mentions), `git diff HEAD -- Cargo.toml Cargo.lock` EMPTY,
+`tracing` not a dep of the `iceberg` crate. `InMemoryMetricsReporter` Mutex-poison handled WITHOUT bare
+`.unwrap()` (`unwrap_or_else(|p| p.into_inner())` on both lock sites); `MetricsReport` `#[non_exhaustive]` enum
+matched without a wildcard. Ran all 4 mutations (Edit+revert): (a) drop a counter → 2 JSON tests fail; (b)
+rename `table-name`→`tableName` → JSON-shape test fails; (c) InMemory keep-first → keeps-last test fails; (d)
+drop a `None`-counter's `skip_serializing_if` → absent-omitted assertion fails — ALL 4 caught, no test added.
+Gate (on `phase3-overnight`): build `-p iceberg` + workspace (excl. sqllogictest) clean; `--lib` ×2 = 1550/0;
+`iceberg-datafusion --lib --tests` 80 + 9; interop manage_snapshots/update_schema/update_partition_spec 4/4 each;
+clippy `-D warnings` clean; fmt clean; typos 0; `Cargo.toml`/`Cargo.lock` diff EMPTY. **CHANGES MADE:** corrected
+stale post-surgery docs in `GAP_MATRIX.md` + `Roadmap.md` (they still claimed `LoggingMetricsReporter`/`tracing`
+landed, 9 tests, and a flagged dep add) to reflect the dependency-free reality (7 tests, 4 mutations, no dep
+change, Logging deferred). No source/test change needed. Residual risk: the deferred `filter` JSON (won't
+byte-match Java REST until `ExpressionParser` is ported) + the deferred scan-emission (no metrics are COLLECTED
+yet — the model is inert until `plan_files` is instrumented).
+
+### Increment 4 — IncrementalChangelogScan (DETAIL)
+Increment 3 (ScanReport model) committed (commit hash `0xba590e64`). Java `BaseIncrementalChangelogScan`
+(`core/.../BaseIncrementalChangelogScan.java`, 183 lines) — builds on IncrementalAppendScan (Inc 2):
+- `orderedChangelogSnapshots(from excl, to incl)` (L103-118): the `ancestorsBetween` range snapshots EXCLUDING
+  `Operation::Replace`, oldest-first; **throws UnsupportedOperationException if any has DELETE manifests**
+  (L108-111 — current Java scope is data-file changes only; port as `ErrorKind::FeatureUnsupported`).
+- change ordinals: oldest snapshot = 0, incrementing (L124-134).
+- For each changelog snapshot's DATA manifests IT added (`manifest.snapshotId() ∈ changelogSnapshotIds`),
+  `ignoreExisting()`, filter entries to those snapshots, apply the row filter: ADDED entry →
+  `AddedRowsScanTask` (INSERT), DELETED entry → `DeletedDataFileScanTask` (DELETE), each carrying
+  (changeOrdinal, commitSnapshotId, dataFile, schema, spec, residual) (L136-182).
+
+Rust: new types — `ChangelogOperation { Insert, Delete }` + `ChangelogScanTask { change_ordinal: i32,
+commit_snapshot_id: i64, operation: ChangelogOperation, <the data file + schema + project_field_ids +
+predicate, reusing FileScanTask fields or embedding a FileScanTask> }`. `Table::incremental_changelog_scan()`
+→ builder mirroring `IncrementalAppendScanBuilder` (from excl/incl + to + with_filter + select). Planner mirrors
+`scan/incremental.rs` (the range walk + own-added-data-manifest reading) but: includes BOTH Added (→Insert) and
+Deleted (→Delete) entries (NOT just Added), excludes Replace snapshots, computes ordinals, guards delete
+manifests. Put it in `scan/incremental.rs` (alongside the append scan) — reuse its helpers.
+
+Tests (multi-snapshot fixture): a 2-append range → Insert tasks with correct ordinals (oldest=0); a snapshot
+that DELETED a data file (an overwrite/delete that removes a file, no delete-MANIFEST) → a Delete task; Replace
+snapshot excluded; a range containing a DELETE-manifest snapshot → FeatureUnsupported error; filter prunes;
+from==to empty. Mutation-pin: the ordinal order (oldest=0), the Added→Insert/Deleted→Delete mapping, the
+Replace exclusion, the delete-manifest guard. Confirm normal scan + IncrementalAppendScan unchanged. Widened gate.
+
+
+#### Working plan (BUILDER Opus, 2026-06-08)
+- [x] Verify the load-bearing question against Rust writers: a snapshot's OWN added DATA manifest carries the
+      `Deleted` tombstones for the files it removed. CONFIRMED via `transaction/snapshot.rs`:
+      `rewrite_manifest_with_deletes` writes the rewritten manifest through `new_filtering_manifest_writer`
+      with `Some(self.snapshot_id)` (the NEW snapshot id) -> `ManifestFile.added_snapshot_id == new snapshot id`
+      (writer.rs:477), and `add_delete_entry` stamps `entry.snapshot_id = self.snapshot_id` (writer.rs:305).
+      So `manifest.added_snapshot_id == snapshot.snapshot_id()` selects the deleting snapshot's rewritten
+      manifest, and a `Deleted` entry's `snapshot_id()` == the commit snapshot id. Mirrors Java exactly.
+- [x] New types in `scan/task.rs`: `ChangelogOperation { Insert, Delete }`, `ChangelogScanTask` (embed a
+      `FileScanTask` + change_ordinal/commit_snapshot_id/operation), `ChangelogScanTaskStream` alias.
+- [x] `IncrementalChangelogScanBuilder` + `IncrementalChangelogScan` in `scan/incremental.rs`;
+      `Table::incremental_changelog_scan()` entry point in `table.rs`.
+- [x] Planner: `ordered_changelog_snapshots` (async; Replace-exclusion + delete-manifest guard); ordinals
+      oldest->0; per snapshot, build manifest contexts for its OWN added DATA manifests, tag each task with that
+      snapshot's ordinal + commit_snapshot_id = entry.snapshot_id(); Added->Insert, Deleted->Delete.
+- [x] Tests + 4 mutation checks; confirm normal scan + IncrementalAppendScan unchanged; run the widened gate.
+
+**Outcome (BUILDER Opus, 2026-06-08):** `IncrementalChangelogScan` LANDED 🟡. **Types** (`scan/task.rs`, pub):
+`ChangelogOperation { Insert, Delete }` (ports Java `ChangelogOperation`; the CDC-merge `UPDATE_BEFORE`/
+`UPDATE_AFTER` variants are intentionally OMITTED + documented), `ChangelogScanTask` (embeds a `FileScanTask`
++ `change_ordinal: i32` + `commit_snapshot_id: i64` + `operation`, with accessors), `ChangelogScanTaskStream`.
+**Builder/planner** (`scan/incremental.rs`): `IncrementalChangelogScanBuilder` DELEGATES range resolution +
+`PlanContext` construction to `IncrementalAppendScanBuilder` (so the two scans share, and cannot drift, the
+non-trivial range/projection logic; a small `pub(crate) plan_context()` accessor was opened on
+`IncrementalAppendScan`). `IncrementalChangelogScan::plan_files`: (1) `ordered_changelog_snapshots` walks the
+range parent-chain newest-first, EXCLUDES `Operation::Replace`, REJECTS the range with
+`FeatureUnsupported("Delete files are currently not supported in changelog scans")` if any kept snapshot's
+manifest list carries a `ManifestContentType::Deletes` manifest, then reverses to oldest-first; (2) ordinals
+oldest→0; (3) per snapshot, reads the DATA manifests it itself added (`added_snapshot_id == snapshot_id`) via
+the REUSED `build_manifest_file_contexts_from_files` (same partition-filter pruning + residual, empty delete
+index), and converts `Added`→Insert / `Deleted`→Delete (skip `Existing`), tagging each task with the
+snapshot's ordinal + `commit_snapshot_id = entry.snapshot_id()` (fallback the snapshot id). `Table::
+incremental_changelog_scan()` is the entry point. **Java lines verified** against
+`/tmp/iceberg-java-ref/.../BaseIncrementalChangelogScan.java`: `doPlanFiles` L56-93, `orderedChangelogSnapshots`
+L103-118 (ancestorsBetween range, Replace-exclusion, delete-manifest throw L108-111), `computeSnapshotOrdinals`
+L124-134, `CreateDataFileChangeTasks` L136-182 (Added→AddedRowsScanTask=INSERT, Deleted→DeletedDataFileScanTask
+=DELETE, `commitSnapshotId = entry.snapshotId()`). **Load-bearing question RESOLVED:** a snapshot's OWN added
+DATA manifest DOES carry the `Deleted` tombstones for files it removed — `rewrite_manifest_with_deletes` writes
+the rewritten manifest through a writer stamped with the new snapshot id (`added_snapshot_id == snapshot_id`,
+`writer.rs:477`) and `add_delete_entry` stamps the `Deleted` entry's `snapshot_id` = that snapshot
+(`writer.rs:305`); confirmed by `test_changelog_overwrite_emits_delete_for_removed_file` passing. **Tests (8,
+risk-named):** ordinal scheme oldest=0 + commit-id; overwrite emits DELETE(removed)+INSERT(added); Replace
+excluded; delete-manifest range → FeatureUnsupported; with_filter partition prune; inclusive from==to = only that
+change; exclusive from==to rejected; carried-forward only-own-added. **Mutations (Edit+revert, all caught):**
+(a) newest=0 ordinal → ordinal test fails; (b) Deleted→Insert → delete test fails; (c) include Replace →
+Replace-excluded test fails; (d) drop delete-manifest guard → FeatureUnsupported test fails. **Normal scan +
+IncrementalAppendScan UNCHANGED** (the 13 append-scan + the regular scan tests stay green; only an additive
+`pub(crate)` accessor was added). **Gate (on `phase3-overnight`):** `build -p iceberg` clean; workspace
+all-targets (excl. sqllogictest) clean; `--lib` ×2 = 1558/0 (1550 prior + 8); `scan::` 64/0; datafusion
+`--lib --tests` 80 + 9; interop manage_snapshots/update_schema/update_partition_spec 4/4/4; clippy `-D warnings`
+clean; fmt clean; typos 0. **NO Cargo edits.**
+
+### Increment 5 — TableScan use_ref (scan a branch/tag by name) (DETAIL)
+Increment 4 (IncrementalChangelogScan) committed `4a772640`. Java `TableScan.useRef(String ref)`
+(`api/.../TableScan.java:48`, impl in `BaseTableScan`/`SnapshotScan.useRef`): select the snapshot a
+branch/tag reference points to. Rust `TableScanBuilder` has `snapshot_id(i64)` but NO ref-based selector;
+`TableMetadata::snapshot_for_ref(name) -> Option<&SnapshotRef>` already exists. Bounded, self-contained,
+low-risk, valuable (branch/tag reads).
+
+Build: add `snapshot_ref: Option<String>` to `TableScanBuilder` + `use_ref(impl Into<String>)`; in `build()`
+resolve the ref via `metadata.snapshot_for_ref(&name)` → its snapshot (error `DataInvalid`/`Unexpected` if the
+ref doesn't exist). Java rejects combining `useRef` with `useSnapshot`/`asOfTime` — reject `use_ref` + 
+`snapshot_id` both set (a clear error). Otherwise scan the resolved snapshot exactly like `snapshot_id`.
+Tests: `use_ref("main")` scans the current snapshot; a tag/branch ref scans its snapshot; unknown ref → error;
+`use_ref` + `snapshot_id` both set → error; default (neither) unchanged. Mutation-pin the ref resolution + the
+both-set rejection. Confirm existing scans unchanged. Widened gate. ONLY `scan/mod.rs` + docs.
+
+Plan (BUILDER Opus, 2026-06-08):
+- [x] Read Java `SnapshotScan.useRef` (L116-128): MAIN_BRANCH ⇒ table default; else reject if snapshot id
+      already set ("Cannot override ref…"); resolve `table().snapshot(name)`; reject null ("Cannot find ref %s").
+- [x] Add `snapshot_ref: Option<String>` field (init `None`) + `pub fn use_ref(impl Into<String>)`.
+- [x] In `build()`: both-set ⇒ `DataInvalid`; ref-set ⇒ `snapshot_for_ref` (unknown ⇒ `DataInvalid` with name);
+      else unchanged `snapshot_id`-or-current logic.
+- [x] Tests against the existing `example_table_metadata_v2.json` fixture: `test` tag → older snapshot
+      `3051729675574597004`; `main` → current; unknown ref → err; both-set → err; default unchanged; plus a
+      result-equivalence read through `use_ref("main")`.
+- [x] Mutations (Edit+revert): ignore `snapshot_ref`; drop both-set rejection; drop unknown-ref error.
+- [x] Docs: GAP_MATRIX, Roadmap, todo Outcome, lessons (if non-obvious).
+
+**Outcome (2026-06-08, Increment 5 — TableScan use_ref, BUILDER Opus):** `TableScanBuilder::use_ref(impl
+Into<String>)` lands in `crates/iceberg/src/scan/mod.rs`, mirroring Java `SnapshotScan.useRef`
+(`core/SnapshotScan.java` L116-128). A new `snapshot_ref: Option<String>` field (init `None`) records the
+intent; `build()` resolves BOTH selectors up front via a `match (self.snapshot_id, self.snapshot_ref)`:
+ref+snapshot-id ⇒ `DataInvalid` ("Cannot scan using both a ref … and a snapshot id", Java "Cannot override
+ref"); ref-only ⇒ `TableMetadata::snapshot_for_ref(name)` (the EXISTING accessor — no `spec/` change), unknown
+⇒ `DataInvalid` ("snapshot ref '…' not found", Java "Cannot find ref %s"); else the ORIGINAL `snapshot_id`-or-
+current logic flows unchanged (including the no-current-snapshot empty-scan early return). `"main"` resolves to
+the current snapshot because the parse path auto-injects a `main` ref at the current snapshot id
+(`table_metadata.rs` `TryFrom`), matching Java `useRef(MAIN_BRANCH)` returning the table default — so no special
+`MAIN_BRANCH` arm is needed. 6 unit tests over the shared `example_table_metadata_v2.json` fixture (which
+already carries two snapshots + a `test` TAG pointing at the OLDER one): `main`→current, `test`→older snapshot
+(asserts ≠ current — the core branch/tag-read behavior), unknown→err+names-ref, ref+id→err (order-independent),
+default-unchanged, and a planning result-equivalence read (`use_ref("main")` plans the same 2 files as a plain
+`.build()`). Mutations (Edit+revert): (a) ignore `snapshot_ref` (always current) → tag test fails 3055…≠3051…;
+(b) drop the both-set rejection (id wins) → both-set test fails; (c) drop the unknown-ref error (fall back to
+current) → unknown-ref test fails — all caught. Existing scans UNCHANGED: the full `scan::` suite stayed green
+(70 tests, 64 prior + 6 new). Gate green on `phase3-overnight`. ONLY `scan/mod.rs` + docs touched; NO Cargo
+edits, NO `spec/` change.
+
+#### Increment 5 — REVIEW (2026-06-08, Opus REVIEWER, DELEGATED) — CHANGES-MADE (PASS 🟡)
+Verdict: PASS 🟡 with one test added. Resolution logic confirmed faithful to Java `SnapshotScan.useRef`
+L116-128 (both-set→reject, unknown→reject, `"main"`/ref→correct snapshot via the auto-injected main ref); the
+default no-`use_ref` path is byte-unchanged (the new pre-resolution `match` only computes a `snapshot_id`, then
+the ORIGINAL `match snapshot_id` block — incl. the empty-table early return — is untouched bar `self.snapshot_id`
+→ `snapshot_id`). Test-strength: the core different-ref test pins the resolved snapshot id (the load-bearing
+logic), and full planning is separately proven via `use_ref("main")` — judged acceptable, and STRENGTHENED with
+`test_plan_files_use_non_main_ref_plans_referenced_snapshot` (adds a non-main tag at the current snapshot via
+`set_ref`, then plans through it = the default file set), guarding against any future special-casing of `"main"`
+in planning. Re-ran all 3 builder mutations + a 4th (swap both-set to silently resolve the ref instead of
+erroring) — all 4 caught. The `use_ref("main")`-on-an-empty-table divergence (Java returns an empty-default;
+Rust errors `DataInvalid` because no `main` ref is injected without a current snapshot) is narrow, documented,
+and a LOUD error (no silent corruption) — judged acceptable. Engineering floor: no bare `.unwrap()` in
+production (resolution uses `.ok_or_else`/`?`); test `.unwrap()` matches the local module convention; error
+kinds/messages name the ref. Scope clean: `scan/mod.rs` + the 4 docs only; no `spec/`/Cargo edits. Lib total now
+1565/0 (×2 stable), `scan::` 71/0, interop 4+4+4, clippy/fmt/typos clean. Stayed on `phase3-overnight`; no
+commit/push.
+
+---
+
 ## SEQUENCE: RowDelta delete-file conflict validation (Phase 3, started 2026-06-08)
 Branch `phase3-rowdelta-delete-conflicts` (off merged `main` `063b7153`). Completes the RowDelta serializable-
 isolation surface beyond the data-file conflict check (which landed in the residual sequence Inc 4).

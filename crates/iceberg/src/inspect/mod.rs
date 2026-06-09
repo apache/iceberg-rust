@@ -28,6 +28,7 @@ mod metadata_log_entries;
 mod metadata_table;
 mod partition_summary;
 mod partitions;
+mod readable_metrics;
 mod refs;
 mod snapshots;
 

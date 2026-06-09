@@ -1851,6 +1851,240 @@ How to use it (see the manuals' §2):
   (exclude) — the two halves of the metrics decision. The bounds must be on the schema field id (here `y`=id 2),
   and they survive the manifest round-trip into `added_data_files_after`.
 
+### 2026-06-08 (Increment 1 — readable_metrics inspection column, BUILDER Opus)
+- **DO seed the `readable_metrics` field-id counter at the HOST metadata table's `highest_field_id()`,
+  NOT the data table's, and pre-increment** (Java `MetricsUtil.readableMetricsSchema`,
+  `MetricsUtil.java:356-393`: `AtomicInteger(metadataTableSchema.highestFieldId())` then `incrementAndGet()`
+  per col-struct, then its 6 sub-fields, then the top-level `readable_metrics` field). For the `files`/
+  `entries` tables the host is the data_file projection (highest id 145), so the FIRST id is 146 and the
+  top-level lands at 146 + 7*(num leaf columns) + 1. *Why it's easy to get wrong:* seeding at the DATA
+  schema's highest id (8 here) collides with the data_file projection's ids (100-145); the seed MUST be the
+  metadata table the column is being appended to.
+- **DO assign ids in deterministic ASCENDING data-table-field-id order and document the Java divergence —
+  do NOT try to reproduce Java's `idToName().keySet()` order.** Java's `Schema.idToName()` is backed by
+  `IndexByName.byId()` building an `ImmutableMap` from a `Maps.newHashMap()` (`IndexByName.java:78-80`), so
+  the iteration order is Java-HashMap bucket order: arbitrary, JVM-dependent, NOT portable. Reproducing it
+  byte-for-byte is impossible without replicating HotSpot's HashMap. Pick ascending-field-id (deterministic),
+  sort the EMITTED sub-fields by name (Java sorts by name AFTER id assignment, so the column ORDER matches),
+  and flag full byte-level id parity as a residual Java/Spark-interop concern. Same shape as the `all_*`
+  HashSet-vs-ordered divergence note.
+- **DO decode the readable_metrics lower/upper bound by re-serializing the stored `Datum` and re-decoding it
+  against the COLUMN's primitive type (`Datum::try_from_bytes(stored.to_bytes(), col_type)`), NOT by reading
+  the stored `Datum`'s own type.** Java reads the raw `ByteBuffer` and decodes via
+  `Conversions.fromByteBuffer(field.type(), buffer)` — i.e. the COLUMN type, not the bound's stored type. In
+  Rust the `DataFile`'s `lower_bounds`/`upper_bounds` are already `HashMap<i32, Datum>` (the raw map column
+  re-serializes them with `to_bytes`), so the readable_metrics decode is the exact inverse: `to_bytes` then
+  `try_from_bytes(_, column_primitive)`. This widens an evolved field's bound (e.g. an int-encoded bound on a
+  promoted-to-long column) to the column's CURRENT type — `try_from_bytes` already handles the 4-byte→i64
+  widening. Mutation-pin it with a Binary-typed-bound mutation (the bound must be the column type, not raw
+  binary) so a "just emit the raw bytes" regression fails a type test.
+- **DO build a `readable_metrics`-aware test fixture with DISTINCT lower & upper bounds** (e.g.
+  `lower_bounds {1: long(10)}` + `upper_bounds {1: long(99)}`) so the lower↔upper swap mutation is
+  observable — a fixture that sets only `lower_bounds` (like the existing files/entries fixtures) cannot
+  catch the swap because the missing upper is null in both directions.
+- **Leaf = ANY primitive-typed field id, incl. primitives nested in struct/list/map (keyed by dotted path).**
+  Java `readableMetricsSchema` iterates `idToName().keySet()` (which includes `<col>.element`/`<col>.key`/
+  `<col>.value` ids) filtered by `findField(id).type().isPrimitiveType()`. Rust `Schema::field_id_to_name_map`
+  + `field_by_id` give the identical dotted-name index, so filter on `field.field_type.is_primitive()` — a
+  top-level-only or struct-only filter silently drops `list<int>` elements and nested struct primitives.
+
+### 2026-06-08 (Increment 1 — readable_metrics, REVIEWER Opus)
+- **DO pin EACH of the six metric SOURCES with a DISTINCT non-null value in one builder test — count
+  swaps between two metrics that are both NULL in the fixture survive otherwise.** The builder's
+  files/entries value tests leave `value_count`/`null_value_count`/`nan_value_count` null on the populated
+  column, so swapping the `null_value_count`↔`nan_value_count` (or any two all-null) source maps produced
+  ZERO failures (a silent cross-wiring of a real NaN/null count into the wrong column would ship). Fixed by
+  adding `test_readable_metrics_builder_routes_each_metric_to_its_own_sub_field`: a `DataFile` carrying
+  `column_sizes 11 / value_counts 22 / null_value_counts 33 / nan_value_counts 44 / lower 55 / upper 66`
+  on one long column, asserting each sub-field reports exactly its own source value. Re-verified it catches
+  both the null↔nan swap and the column_size↔value_count swap. General rule: when N sources feed N output
+  slots and the happy-path fixture only populates a couple, one test must give all N distinct values.
+
+### 2026-06-08 (Phase 3 overnight Increment 2 — IncrementalAppendScan, BUILDER Opus)
+- **DO build a SEPARATE incremental planner that REUSES `PlanContext` + `ManifestEntryContext` +
+  `into_file_scan_task`, driving the manifest SELECTION itself rather than calling `PlanContext::
+  get_manifest_list`.** *Why:* the normal scan's `plan_files` reads ONE snapshot's manifest list; the
+  incremental scan must gather manifests across the APPEND snapshots in `(from, to]` and keep only the DATA
+  manifests each snapshot itself added (`added_snapshot_id == snapshot_id`). The clean seam is an additive
+  `PlanContext::build_manifest_file_contexts_from_files(Vec<ManifestFile>, …)` that takes an explicit,
+  pre-filtered manifest set; the existing `build_manifest_file_contexts` delegates to it (behavior-preserving —
+  the normal scan is byte-unchanged), so the incremental planner inherits the partition-filter pruning +
+  residual-evaluator construction for free and only re-implements the `Added`-status entry filter + the
+  append-only snapshot walk. The `PlanContext.snapshot` is set to the `to` snapshot purely as the schema +
+  metadata anchor — the incremental planner never calls `get_manifest_list` on it.
+- **DO take the `_from_files` seam by OWNED `Vec<ManifestFile>`, not `Vec<&ManifestFile>`.** *Why:* the
+  function returns a `Box<impl Iterator + 'static>` (built from an eagerly-collected `Vec`, every `ManifestFile`
+  cloned inside `create_manifest_file_context`). A `Vec<&ManifestFile>` input ties the borrow to the caller's
+  `Arc<ManifestList>` and the borrow checker conservatively requires that `Arc` to outlive the `'static` return
+  (`E0597: manifest_list does not live long enough` in the delegating wrapper, where the list drops at scope
+  end). Owned input sidesteps it; the wrapper clones via `manifest_list.entries().to_vec()` — the entries were
+  cloned per-manifest anyway, so it is not extra cost on the hot path.
+- **DO read the Java `BaseIncrementalScan.fromSnapshotIdExclusive` preconditions — `from == to` EXCLUSIVE is
+  REJECTED, not an empty range.** *Why:* the brief listed "`from == to` (empty range) → zero tasks," but the
+  exclusive path validates `SnapshotUtil.isParentAncestorOf(table, to, from)` FIRST (in `planFiles`), and a
+  snapshot is never a parent ancestor of itself → Java throws "Starting snapshot (exclusive) … is not a parent
+  ancestor of end snapshot …". The `ancestorsBetween` `latestSnapshotId == oldestSnapshotId ⇒ empty`
+  short-circuit is unreachable for the exclusive case (precondition fails before it). The reachable
+  "empty range → zero tasks" case is a non-empty range whose ONLY snapshot is an OVERWRITE — the append-only
+  op filter drops it. Pinned `from==to` as a rejection (Java-faithful) AND the overwrite-only range as empty;
+  do NOT "fix" the brief's wording by returning empty for `from==to` exclusive (it would diverge from Java).
+- **DO keep BOTH the manifest-level `added_snapshot_id == snapshot_id` filter AND the `status == Added` entry
+  filter even though, for fast-append snapshots, the manifest filter already implies Added-only entries.** *Why:*
+  they guard the same invariant from two angles and BOTH mirror Java (`snapshotIds.contains(manifest.snapshotId())`
+  + `manifestEntry.status() == ADDED`). The manifest filter is the load-bearing one (mutation `|| true` →
+  carried-forward manifests re-surface their `Added` entries from an OLDER snapshot's own manifest, double-counting
+  files — caught by the own-added-manifest count test). The `Added`-entry filter is defense-in-depth for this
+  increment (a fast-append snapshot's own data manifest has only `Added` entries), load-bearing if a future
+  merge-append writes `Existing` entries into a snapshot's own added manifest — keep it, it is Java-faithful and
+  free. Verified the manifest mutation fails 6 tests; the entry-status filter has no isolated failure here (noted,
+  not forced into an artificial test).
+- **DO copy the 15-line `make_v3_minimal_table_in_catalog` locally into the scan test module rather than widen
+  `transaction::tests` visibility.** *Why:* `transaction::tests` is a private `mod tests` (NOT `pub(crate)`), so
+  `scan::incremental::tests` cannot `use crate::transaction::tests::…` (E0603 private module) — unlike the
+  replace_partitions tests which sit INSIDE `transaction/` and reach it via `super::tests`. Re-reading the same
+  `TableMetadataV3ValidMinimal.json` into a local helper keeps visibility narrow (same lesson as Increment 3's
+  inspect-module `make_v2_table` copies). A `MemoryCatalog` (default in-memory storage) is fine for `plan_files()`
+  path assertions — it reads manifest metadata, never the parquet data — so no real-FS storage factory is needed
+  unless a test calls `.to_arrow()`.
+
+### 2026-06-08 (Increment 2 — IncrementalAppendScan, REVIEWER Opus)
+- **DO pin a "no isolated failure" filter with a REAL mixed-status fixture rather than leaving it noted.** *Why:*
+  the IncrementalAppendScan builder correctly observed the `status == Added` entry filter had no failing test
+  (the fast-append fixtures produce own-added manifests holding ONLY `Added` entries, so dropping the filter
+  changed nothing — mutation (e) SURVIVED). But "the Rust write engine can't currently produce the violating
+  shape" is a write-engine property that a future `MergeAppend` will break; an unpinned filter is then a silent
+  regression. The fix did NOT need an artificial hand-built manifest: `scan::tests::TableTestFixture::
+  setup_manifest_files` already writes a single manifest — added by the CURRENT (APPEND) snapshot — holding
+  `1.parquet`(Added)/`2.parquet`(Deleted)/`3.parquet`(Existing), and its `example_table_metadata_v2.json`
+  current snapshot is an `append` whose parent is the exclusive `from`. An incremental scan `(parent, current]`
+  over it must return ONLY `1.parquet`; the NORMAL scan over the same fixture returns BOTH `1.parquet` and
+  `3.parquet` (it keeps Existing) — that divergence IS the `Added`-filter contract. Added
+  `test_incremental_append_keeps_only_added_entries_of_own_manifest`; mutation-verified it fails iff the filter
+  is dropped, and NOTHING else fails (precise pin). Reuse an existing mixed-status fixture before hand-rolling one.
+- **DO NOT `git checkout -- <file>` to revert a mutation on a TRACKED file whose increment changes are still
+  UNCOMMITTED — it reverts to HEAD and WIPES the uncommitted work.** *Why:* `scan/context.rs` is git-tracked and
+  the builder's additive seam (`build_manifest_file_contexts_from_files`) was uncommitted; `git checkout --
+  context.rs` to undo a routing mutation silently discarded the entire seam (grep confirmed the fn was gone),
+  which would have broken the build (`incremental.rs` calls it). Restored it by re-applying the exact two edits
+  from the `git diff` I had read. For an in-place mutation+revert on a tracked-but-dirty file, revert with a
+  surgical Edit (or stash-free manual undo), NEVER `git checkout`. (Untracked files like `incremental.rs` can't
+  be `git checkout`-ed at all — `pathspec did not match` — so they already force the manual-revert discipline.)
+- **DO verify the entry-level `snapshotIds.contains(entry.snapshotId())` filter Java applies is REDUNDANT in the
+  Rust port, not missing.** *Why:* Java `appendFilesFromSnapshots` filters entries by BOTH
+  `snapshotIds.contains(entry.snapshotId())` AND `status == ADDED`; Rust only checks `status == Added`. This is
+  safe because a manifest is selected only when `added_snapshot_id == an APPEND-snapshot-id in range`, and within
+  such a manifest every `Added`-status entry carries that snapshot's id (Iceberg stamps the adding snapshot id on
+  Added entries; carried-forward entries are `Existing`/`Deleted`, not `Added`). So `status == Added` ⇒
+  `entry.snapshot_id ∈ snapshotIds` already holds — the entry-level id check cannot admit an extra file. The
+  omission is a benign simplification, NOT a missing-files / extra-files bug.
+
+### 2026-06-08 (Phase 3 Increment 3 — ScanReport / MetricsReporter data model, BUILDER Opus)
+- **DO model Java's `MetricsReport` marker interface as a closed `#[non_exhaustive] enum`, not a `dyn` trait
+  object.** *Why:* Java's `MetricsReport` is an empty marker and reporters downcast (`instanceof ScanReport`);
+  `InMemoryMetricsReporter.scanReport()` even THROWS on a kind mismatch. A Rust `enum MetricsReport {
+  Scan(ScanReport) }` makes the kind part of the type — `last_scan_report()` matches exhaustively (no wildcard)
+  so a future `Commit(CommitReport)` variant forces every consumer to update, and there is no downcast to get
+  wrong. `#[non_exhaustive]` keeps adding a variant non-breaking. Reporters take `MetricsReport` by value (the
+  trait is `Send + Sync` so reporters can be shared).
+- **DO carry Java's `@Nullable` metric optionality as `Option<_>` per field with `skip_serializing_if =
+  "Option::is_none"` + `default`, NOT a zero default.** *Why:* Java's `ScanMetricsResult` accessors are all
+  `@Nullable` and `ScanMetricsResultParser` OMITS a null counter/timer from the JSON (and `CounterResult.
+  fromCounter` returns null for a no-op counter). A never-incremented counter must be ABSENT, not `{"value":0}`
+  — both for byte-parity with the REST `report-metrics` payload and to distinguish "not measured" from
+  "measured zero". `..Default::default()` on the struct + `Default` on the field gives the absent state for free.
+- **DO hand-write `Serialize`/`Deserialize` for the timer so `total-duration` is expressed in the timer's OWN
+  unit, not nanoseconds.** *Why:* Java `TimerResultParser` writes `total-duration` as `unit.convert(duration.
+  toNanos(), NANOSECONDS)` (a TRUNCATING integer convert into the reported `time-unit`) and reads it back with
+  `Duration.of(val, chronoUnit(unit))`. A naive `#[derive(Serialize)]` over a `Duration` would emit a
+  `{secs,nanos}` struct (wrong shape) — and emitting raw nanos under a `milliseconds` time-unit is wrong by 10^6.
+  The `Duration` is kept exact in memory; convert ONLY at the serde boundary via a `nanos_per_unit()` table.
+  Pin it with a non-nanosecond unit (250ms → `total-duration: 250`, not 250_000_000).
+- **DO pin the JSON shape against a HAND-WRITTEN expected `serde_json::json!` for the top-level field names AND
+  a couple of metric/counter/timer names, not just a serialize→deserialize round-trip.** *Why:* a round-trip
+  (`to_value` → `from_value` → `==`) is TAUTOLOGICAL on field names — rename `table-name`→`tableName` on the
+  struct and the round-trip still passes (both directions use the same rename). Only an explicit
+  `json.get("table-name").is_some()` / `json["metrics"]["result-data-files"] == {"unit":"count","value":5}`
+  assertion catches a drifted wire name. Mutation-verified: the rename mutation fails ONLY the shape assertion,
+  not the round-trip.
+- **DO scope the `filter` serde to the Rust `Predicate`'s own derive and DOCUMENT the divergence from Java's
+  `ExpressionParser` JSON — do not silently imply parity.** *Why:* Java's `ScanReportParser` emits `filter` via
+  `ExpressionParser.toJson` (a structured expression-tree JSON); the Rust `Predicate` serde is a different
+  shape. Porting `ExpressionParser` is a large separate effort; the metric data is the high-value part of the
+  contract. State the gap in the module docs + GAP_MATRIX so a future REST-interop increment knows the `filter`
+  sub-document is the one unfaithful field.
+- **CONSTRAINT HIT: the `iceberg` crate had NO logging facade (`tracing`/`log` are not direct deps), but the
+  brief mandated `tracing`-based logging.** Added `tracing = { workspace = true }` to `crates/iceberg/Cargo.toml`
+  (already a resolved workspace dep, so the `Cargo.lock` delta is a single `tracing` line under the iceberg
+  crate's dep list). This edits a dependency file — an Absolute Prohibition / scope-flag — so it is surfaced for
+  orchestrator sign-off rather than done silently. *Lesson for the next agent:* the core crate logs NOWHERE
+  today; any first `tracing` use forces this same one-line dep add. If sign-off is withheld, the fallback is a
+  caller-injected log sink (over-engineered for one reporter) — the workspace-dep add is the clean path.
+### 2026-06-08 (Phase 3 Increment 4 — IncrementalChangelogScan, BUILDER Opus)
+- **DO source a changelog DELETE from the deleting snapshot's OWN rewritten data manifest, not a separate
+  tombstone store.** *Why:* the load-bearing question for the changelog scan was "does a snapshot's own added
+  DATA manifest carry the `Deleted` tombstones for files it removed?" — YES. When an OVERWRITE/DELETE removes a
+  live data file, `transaction/snapshot.rs::rewrite_manifest_with_deletes` writes the rewritten manifest through
+  `new_filtering_manifest_writer`, which stamps the writer's `snapshot_id` = the NEW snapshot id, so the
+  rewritten `ManifestFile.added_snapshot_id == new snapshot id` (`writer.rs:477`) AND `add_delete_entry` stamps
+  the `Deleted` entry's `snapshot_id` = that snapshot (`writer.rs:305`). So the SAME selection rule the append
+  scan uses (DATA manifests where `added_snapshot_id == snapshot_id`) surfaces the `Added` AND `Deleted` entries
+  of a snapshot, and `entry.snapshot_id()` IS the `commit_snapshot_id`. Mirrors Java
+  `BaseIncrementalChangelogScan` exactly (read the file: `CreateDataFileChangeTasks` L136-182 keys off
+  `entry.snapshotId()` and `entry.status()`). Verify the writer stamping against the source before trusting it —
+  a separate-tombstone assumption would have missed every delete.
+- **DO assign change ordinals OLDEST→0 by reversing a newest-first parent-chain walk, mirroring Java
+  `orderedChangelogSnapshots`'s `deque.addFirst`.** *Why:* the natural parent-chain walk visits newest-first;
+  Java prepends each to a deque (→ oldest-first) then `computeSnapshotOrdinals` numbers them 0,1,2… A
+  `last_column_id`-style single-number check can't catch a reversed ordinal — pin it with a 2-append range and
+  assert the OLDER snapshot's file is ordinal 0 AND its `commit_snapshot_id` is the older snapshot. Mutation
+  (skip the reverse → newest=0) flips both and fails.
+- **DO delegate a sibling scan's range-resolution + `PlanContext` to the existing builder instead of copying
+  it.** *Why:* `IncrementalChangelogScanBuilder` shares EVERY field + the (non-trivial) inclusive/exclusive
+  `from` resolution, projection, and bound-filter construction with `IncrementalAppendScanBuilder`. Building an
+  inner `IncrementalAppendScan` and reading its resolved `plan_context()` + range accessors (one additive
+  `pub(crate)` accessor) means the two scans can't drift and the changelog builder is ~15 lines of forwarding,
+  not a 160-line copy. The ONLY changelog-specific code is `plan_files` (Replace-exclusion + delete-manifest
+  guard + Added/Deleted→Insert/Delete + ordinals) — keep the divergence surface minimal.
+- **DO interleave the per-snapshot manifest producer + the task consumer on spawned tasks with a `Result`-
+  carrying output channel.** *Why:* a single manifest can hold more entries than the entry channel's capacity,
+  so a producer's `send` blocks until the consumer drains — fetching all manifests THEN draining deadlocks.
+  Spawn the producers (`try_for_each_concurrent` of `fetch_manifest_and_stream_manifest_entries`) and the
+  consumer, and forward a producer's manifest-fetch error into the same `channel::<Result<ChangelogScanTask>>`
+  so it isn't silently dropped when the producer task ends (a bare `let _ =` on the producer result loses the
+  error). The append scan's `file_scan_task_tx` carries `Result` for the same reason.
+- **DO reword a bare git short-hash in a docs/todo prose line that `typos` flags.** *Why:* the `typos` gate
+  treats a hex hash whose leading two chars are a dictionary-adjacent prefix (e.g. a hash beginning `b`+`a`) as
+  a typo; wrapping it (`0x…` / "commit hash") clears the gate without an out-of-scope `.typos.toml` edit. Same
+  class as an uppercase-plural acronym in a doc comment (e.g. "inserts"/"deletes" written in caps with a
+  trailing `s`) — write the lowercase singular-rooted form rather than fight the dictionary.
+
+### 2026-06-08 (Increment 5 — TableScan use_ref, BUILDER Opus)
+- **DO let `TableMetadata::snapshot_for_ref("main")` cover Java's `useRef(MAIN_BRANCH)` default case — no
+  special `MAIN_BRANCH` arm needed.** *Why:* Java early-returns the table default for `MAIN_BRANCH`
+  (`SnapshotScan.useRef` L117-119) BEFORE the ref lookup, because its `table().snapshot(name)` does not resolve
+  `"main"`. But the Rust parse path (`table_metadata.rs` `TryFrom`/`try_normalize`) AUTO-INJECTS a `main` ref at
+  `current_snapshot_id` whenever a current snapshot exists, so `snapshot_for_ref("main")` already returns the
+  current snapshot — identical result. Routing `"main"` through the same `snapshot_for_ref` path as any other
+  ref is simpler and stays faithful. (Narrow divergence: on an EMPTY table with no current snapshot, Java's
+  `useRef("main")` returns the empty table default while Rust's `snapshot_for_ref("main")` is `None` → unknown-
+  ref error; not exercised by the brief's tests, acceptable, flagged here.)
+- **DO reuse the shared `example_table_metadata_v2.json` scan fixture for branch/tag-read tests — it already
+  carries the needed shape.** *Why:* it has two snapshots AND a `refs: {"test": {tag → the OLDER snapshot}}`
+  entry, so `use_ref("test")` resolves to a snapshot that is provably ≠ the current one with ZERO fixture
+  setup. The core "a ref scans a DIFFERENT snapshot" test asserts on `table_scan.snapshot().snapshot_id()` (the
+  pattern of the existing `test_table_scan_with_snapshot_id`), which sidesteps the fact that `setup_manifest_
+  files` only writes the CURRENT snapshot's manifest list (the older snapshot's `manifest_list_1` file is never
+  written, so planning files from it would fail) — the resolved-snapshot-id IS the load-bearing behavior the
+  mutations pin. Prove the full planning pipeline still flows through `use_ref` with a separate result-
+  equivalence read against `use_ref("main")` (= the current snapshot, whose manifest list IS written).
+- **DO resolve BOTH scan selectors in one `match (snapshot_id, snapshot_ref)` up front, then feed the result
+  into the UNCHANGED snapshot-id-or-current logic.** *Why:* it keeps the both-set rejection and the unknown-ref
+  error in one obvious place, reuses the existing snapshot-by-id load + the no-current-snapshot empty-scan early
+  return verbatim (so the default path is byte-unchanged and the existing 64 scan tests stay green), and the
+  ref resolution collapses to producing an `Option<i64>` snapshot id. Mutating any one arm (ignore the ref;
+  let the id win on both-set; swallow the unknown-ref `None`) flips exactly one test — the precise Java
+  contract, not "errors sometimes."
+
 ### 2026-06-08 (Phase 3 — RowDelta validateNoConflictingDeleteFiles, BUILDER Opus)
 - **DO parameterize the "added files since a starting snapshot" walk by `(content, op_predicate)` once a SECOND
   content type needs it — `added_files_after(table, start, content: ManifestContentType, op_adds: fn(&Operation)->

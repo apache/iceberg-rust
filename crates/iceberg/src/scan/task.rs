@@ -30,6 +30,84 @@ use crate::spec::{
 /// A stream of [`FileScanTask`].
 pub type FileScanTaskStream = BoxStream<'static, Result<FileScanTask>>;
 
+/// A stream of [`ChangelogScanTask`].
+pub type ChangelogScanTaskStream = BoxStream<'static, Result<ChangelogScanTask>>;
+
+/// The kind of row-level change a [`ChangelogScanTask`] produces.
+///
+/// Ports Java `org.apache.iceberg.ChangelogOperation`. Java's enum also declares
+/// `UPDATE_BEFORE` / `UPDATE_AFTER` for change-data-capture *merging* (collapsing a
+/// delete+insert at the same row key into an update pair) — those are produced by a
+/// higher-level CDC merge step, NOT by the data-file changelog scan, which only
+/// distinguishes whole-file additions from whole-file removals. This scan therefore
+/// models only the two operations it can emit; the update variants are intentionally
+/// omitted until a CDC-merge layer that needs them lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChangelogOperation {
+    /// Rows were INSERTED — the task's data file was ADDED by its commit snapshot.
+    Insert,
+    /// Rows were DELETED — the task's data file was REMOVED by its commit snapshot.
+    Delete,
+}
+
+/// A changelog scan task: the row-level changes (all inserts or all deletes) carried by
+/// a single data file that one snapshot in the changelog range added or removed.
+///
+/// Ports Java `ChangelogScanTask` + its `BaseAddedRowsScanTask` /
+/// `BaseDeletedDataFileScanTask` implementations. A task embeds the [`FileScanTask`]
+/// that reads the underlying data file (path, schema, projection, residual predicate)
+/// and tags it with the change metadata: the [`operation`](Self::operation) (insert vs
+/// delete), the [`change_ordinal`](Self::change_ordinal) (0 for the oldest snapshot in
+/// the range, incrementing — changes with a lower ordinal must be applied first), and
+/// the [`commit_snapshot_id`](Self::commit_snapshot_id) (the snapshot that committed the
+/// change).
+///
+/// Like Java's current data-file changelog, a task carries NO delete files — the scan
+/// rejects a range that contains row-level delete manifests (see
+/// [`IncrementalChangelogScan`](super::IncrementalChangelogScan)).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChangelogScanTask {
+    /// The change ordinal: `0` for the oldest snapshot in the range, incrementing for
+    /// each newer snapshot. Changes with a lower ordinal must be applied first (Java
+    /// `ChangelogScanTask.changeOrdinal()`).
+    pub change_ordinal: i32,
+    /// The id of the snapshot that committed this change (Java
+    /// `ChangelogScanTask.commitSnapshotId()`).
+    pub commit_snapshot_id: i64,
+    /// Whether this task's rows are insertions or deletions (Java
+    /// `ChangelogScanTask.operation()`).
+    pub operation: ChangelogOperation,
+    /// The underlying file scan task that reads the data file whose rows changed.
+    pub file_scan_task: FileScanTask,
+}
+
+impl ChangelogScanTask {
+    /// Returns the kind of change (insert / delete) this task produces.
+    pub fn operation(&self) -> ChangelogOperation {
+        self.operation
+    }
+
+    /// Returns the change ordinal — changes with a lower ordinal must be applied first.
+    pub fn change_ordinal(&self) -> i32 {
+        self.change_ordinal
+    }
+
+    /// Returns the id of the snapshot that committed this change.
+    pub fn commit_snapshot_id(&self) -> i64 {
+        self.commit_snapshot_id
+    }
+
+    /// Returns the underlying [`FileScanTask`] that reads the changed data file.
+    pub fn file_scan_task(&self) -> &FileScanTask {
+        &self.file_scan_task
+    }
+
+    /// Returns the data file path of the changed file.
+    pub fn data_file_path(&self) -> &str {
+        &self.file_scan_task.data_file_path
+    }
+}
+
 /// Serialization helper that always returns NotImplementedError.
 /// Used for fields that should not be serialized but we want to be explicit about it.
 fn serialize_not_implemented<S, T>(_: &T, _: S) -> std::result::Result<S::Ok, S::Error>

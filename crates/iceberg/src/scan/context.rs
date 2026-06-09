@@ -247,7 +247,7 @@ impl PlanContext {
         delete_file_idx: DeleteFileIndex,
         delete_file_tx: Sender<ManifestEntryContext>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
-        let mut manifest_files = manifest_list.entries().iter().collect::<Vec<_>>();
+        let mut manifest_files = manifest_list.entries().to_vec();
         // Sort manifest files to process delete manifests first.
         // This avoids a deadlock where the producer blocks on sending data manifest entries
         // (because the data channel is full) while the delete manifest consumer is waiting
@@ -259,9 +259,34 @@ impl PlanContext {
             ManifestContentType::Data => 1,
         });
 
+        self.build_manifest_file_contexts_from_files(
+            manifest_files,
+            tx_data,
+            delete_file_idx,
+            delete_file_tx,
+        )
+    }
+
+    /// Builds [`ManifestFileContext`]s for an explicit, caller-selected set of
+    /// [`ManifestFile`]s, reusing the same partition-filter pruning and residual-evaluator
+    /// construction as the full-snapshot scan.
+    ///
+    /// The normal scan calls this with every manifest in a single snapshot's manifest list
+    /// (via [`Self::build_manifest_file_contexts`]). The incremental-append scan calls it
+    /// with the DATA manifests a chosen append snapshot itself added — across several
+    /// snapshots — so the two planners share the per-manifest filtering and residual logic
+    /// without the incremental planner re-implementing it. A data-vs-delete manifest is
+    /// routed to `tx_data` / `delete_file_tx` exactly as before.
+    pub(crate) fn build_manifest_file_contexts_from_files(
+        &self,
+        manifest_files: Vec<ManifestFile>,
+        tx_data: Sender<ManifestEntryContext>,
+        delete_file_idx: DeleteFileIndex,
+        delete_file_tx: Sender<ManifestEntryContext>,
+    ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
-        for manifest_file in manifest_files {
+        for manifest_file in &manifest_files {
             let tx = if manifest_file.content == ManifestContentType::Deletes {
                 delete_file_tx.clone()
             } else {

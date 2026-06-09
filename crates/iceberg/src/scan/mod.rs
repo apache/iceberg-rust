@@ -21,6 +21,8 @@ mod cache;
 use cache::*;
 mod context;
 use context::*;
+mod incremental;
+pub use incremental::*;
 mod task;
 
 use std::sync::Arc;
@@ -52,6 +54,7 @@ pub struct TableScanBuilder<'a> {
     // Defaults to none which means select all columns
     column_names: Option<Vec<String>>,
     snapshot_id: Option<i64>,
+    snapshot_ref: Option<String>,
     batch_size: Option<usize>,
     case_sensitive: bool,
     filter: Option<Predicate>,
@@ -70,6 +73,7 @@ impl<'a> TableScanBuilder<'a> {
             table,
             column_names: None,
             snapshot_id: None,
+            snapshot_ref: None,
             batch_size: None,
             case_sensitive: true,
             filter: None,
@@ -131,6 +135,26 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
+    /// Scan the snapshot that a branch or tag reference points to.
+    ///
+    /// Mirrors Java `TableScan.useRef(String ref)`: the named reference is
+    /// resolved to its snapshot at [`build`](Self::build) time. The `"main"`
+    /// branch resolves to the table's current snapshot, matching Java's
+    /// `useRef(MAIN_BRANCH)` returning the table default.
+    ///
+    /// Combining `use_ref` with [`snapshot_id`](Self::snapshot_id) is rejected
+    /// at `build` time — a reference and an explicit snapshot id are
+    /// contradictory selectors (Java "Cannot override ref, already set snapshot
+    /// id"). An unknown reference name is also rejected at `build` time.
+    ///
+    /// # Arguments
+    ///
+    /// * `ref_name` - the branch or tag name to resolve.
+    pub fn use_ref(mut self, ref_name: impl Into<String>) -> Self {
+        self.snapshot_ref = Some(ref_name.into());
+        self
+    }
+
     /// Sets the concurrency limit for both manifest files and manifest
     /// entries for this scan
     pub fn with_concurrency_limit(mut self, limit: usize) -> Self {
@@ -186,7 +210,39 @@ impl<'a> TableScanBuilder<'a> {
 
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
-        let snapshot = match self.snapshot_id {
+        // Resolve a branch/tag reference (`use_ref`) to a concrete snapshot id,
+        // honoring BOTH selectors (Java `SnapshotScan.useRef` L116-128):
+        //   - a ref AND an explicit snapshot id are contradictory selectors
+        //     (Java "Cannot override ref, already set snapshot id");
+        //   - an unknown ref name is rejected (Java "Cannot find ref %s").
+        // `snapshot_for_ref("main")` resolves to the current snapshot, matching
+        // Java's `useRef(MAIN_BRANCH)` returning the table default.
+        let snapshot_id = match (self.snapshot_id, self.snapshot_ref.as_ref()) {
+            (Some(_), Some(ref_name)) => {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Cannot scan using both a ref ('{ref_name}') and a snapshot id at the same time"
+                    ),
+                ));
+            }
+            (None, Some(ref_name)) => {
+                let snapshot = self
+                    .table
+                    .metadata()
+                    .snapshot_for_ref(ref_name)
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("snapshot ref '{ref_name}' not found"),
+                        )
+                    })?;
+                Some(snapshot.snapshot_id())
+            }
+            (snapshot_id, None) => snapshot_id,
+        };
+
+        let snapshot = match snapshot_id {
             Some(snapshot_id) => self
                 .table
                 .metadata()
@@ -593,8 +649,8 @@ pub mod tests {
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestEntry,
         ManifestListWriter, ManifestStatus, ManifestWriterBuilder, NestedField, PartitionSpec,
-        PrimitiveType, Schema, Struct, StructType, TableMetadata, Transform, Type,
-        UnboundPartitionField,
+        PrimitiveType, Schema, SnapshotReference, SnapshotRetention, Struct, StructType,
+        TableMetadata, Transform, Type, UnboundPartitionField,
     };
     use crate::table::Table;
 
@@ -1497,6 +1553,199 @@ pub mod tests {
             table_scan.snapshot().unwrap().snapshot_id(),
             3051729675574597004
         );
+    }
+
+    // The shared `example_table_metadata_v2.json` fixture carries two snapshots
+    // and a `test` TAG pointing at the OLDER one — exactly the setup needed to
+    // prove `use_ref` resolves a reference to a specific (non-current) snapshot.
+    /// Current snapshot id (also what the auto-injected `main` ref points at).
+    const CURRENT_SNAPSHOT_ID: i64 = 3055729675574597004;
+    /// Older snapshot id the `test` tag references.
+    const TAG_TEST_SNAPSHOT_ID: i64 = 3051729675574597004;
+
+    #[test]
+    fn test_table_scan_use_ref_main_resolves_to_current_snapshot() {
+        // RISK: `use_ref("main")` must resolve to the table default (current
+        // snapshot), matching Java `useRef(MAIN_BRANCH)` — same as a plain build.
+        let table = TableTestFixture::new().table;
+
+        let table_scan = table.scan().use_ref("main").build().unwrap();
+        assert_eq!(
+            table_scan.snapshot().unwrap().snapshot_id(),
+            CURRENT_SNAPSHOT_ID
+        );
+        assert_eq!(
+            table_scan.snapshot().unwrap().snapshot_id(),
+            table.metadata().current_snapshot().unwrap().snapshot_id()
+        );
+    }
+
+    #[test]
+    fn test_table_scan_use_ref_tag_resolves_to_referenced_snapshot() {
+        // RISK (CORE): a ref pointing at a DIFFERENT snapshot must scan THAT
+        // snapshot, not the current one. The `test` tag points at the older
+        // snapshot; resolving it must NOT fall back to the current snapshot.
+        let table = TableTestFixture::new().table;
+
+        let table_scan = table.scan().use_ref("test").build().unwrap();
+        assert_eq!(
+            table_scan.snapshot().unwrap().snapshot_id(),
+            TAG_TEST_SNAPSHOT_ID
+        );
+        assert_ne!(
+            table_scan.snapshot().unwrap().snapshot_id(),
+            table.metadata().current_snapshot().unwrap().snapshot_id()
+        );
+    }
+
+    #[test]
+    fn test_table_scan_use_ref_unknown_ref_errors() {
+        // RISK: an unknown ref name must error (Java "Cannot find ref %s"), NOT
+        // silently fall back to the current snapshot. The name appears in the
+        // message.
+        let table = TableTestFixture::new().table;
+
+        let result = table.scan().use_ref("does_not_exist").build();
+        let error = result.expect_err("unknown ref should error");
+        assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+        assert!(
+            error.message().contains("does_not_exist"),
+            "error should name the missing ref, got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_table_scan_use_ref_and_snapshot_id_both_set_errors() {
+        // RISK: a ref AND an explicit snapshot id are contradictory selectors
+        // (Java "Cannot override ref, already set snapshot id") — reject, do not
+        // silently let one win.
+        let table = TableTestFixture::new().table;
+
+        let result = table
+            .scan()
+            .use_ref("test")
+            .snapshot_id(CURRENT_SNAPSHOT_ID)
+            .build();
+        let error = result.expect_err("ref + snapshot id should error");
+        assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+
+        // Order-independent: setting the snapshot id first must reject too.
+        let result = table
+            .scan()
+            .snapshot_id(CURRENT_SNAPSHOT_ID)
+            .use_ref("test")
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_table_scan_default_without_use_ref_unchanged() {
+        // RISK: not calling `use_ref` must leave the default (current snapshot)
+        // resolution completely unchanged.
+        let table = TableTestFixture::new().table;
+
+        let table_scan = table.scan().build().unwrap();
+        assert_eq!(
+            table_scan.snapshot().unwrap().snapshot_id(),
+            table.metadata().current_snapshot().unwrap().snapshot_id()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_use_ref_main_equivalent_to_default_scan() {
+        // RISK: `use_ref("main")` must plan the SAME file set as a plain default
+        // scan (the current snapshot) — proving the resolved snapshot flows
+        // through the full planning pipeline identically.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        async fn collect_sorted_paths(scan: super::TableScan) -> Vec<String> {
+            let tasks: Vec<FileScanTask> = scan
+                .plan_files()
+                .await
+                .unwrap()
+                .try_collect()
+                .await
+                .unwrap();
+            let mut paths: Vec<String> =
+                tasks.into_iter().map(|task| task.data_file_path).collect();
+            paths.sort();
+            paths
+        }
+
+        let default_paths = collect_sorted_paths(fixture.table.scan().build().unwrap()).await;
+        let use_ref_paths =
+            collect_sorted_paths(fixture.table.scan().use_ref("main").build().unwrap()).await;
+
+        assert_eq!(default_paths, use_ref_paths);
+        assert_eq!(use_ref_paths.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_use_non_main_ref_plans_referenced_snapshot() {
+        // RISK: a NON-main ref's resolved snapshot must flow through the FULL
+        // planning pipeline, not just snapshot-id resolution. Guards against any
+        // future special-casing of "main" in build()/planning — a custom `tag`
+        // pointing at the current snapshot must plan the same files as the
+        // default scan. (The fixture's `test` tag points at the OLDER snapshot,
+        // whose manifest list isn't written, so it can't be planned directly;
+        // here we add a tag at the CURRENT snapshot, whose manifest list IS
+        // written by `setup_manifest_files`.)
+        let mut fixture = TableTestFixture::new();
+
+        // Add a non-main tag pointing at the current snapshot, then rebuild the
+        // table so the fixture's planning setup runs against the augmented refs.
+        let current_snapshot_id = fixture
+            .table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .snapshot_id();
+        let metadata_with_tag = fixture
+            .table
+            .metadata()
+            .clone()
+            .into_builder(Some("metadata/v1.json".to_string()))
+            .set_ref("at_current", SnapshotReference {
+                snapshot_id: current_snapshot_id,
+                retention: SnapshotRetention::Tag {
+                    max_ref_age_ms: None,
+                },
+            })
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        fixture.table = Table::builder()
+            .metadata(metadata_with_tag)
+            .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
+            .file_io(fixture.table.file_io().clone())
+            .metadata_location(format!("{}/metadata/v1.json", &fixture.table_location))
+            .build()
+            .unwrap();
+
+        fixture.setup_manifest_files().await;
+
+        async fn collect_sorted_paths(scan: super::TableScan) -> Vec<String> {
+            let tasks: Vec<FileScanTask> = scan
+                .plan_files()
+                .await
+                .unwrap()
+                .try_collect()
+                .await
+                .unwrap();
+            let mut paths: Vec<String> =
+                tasks.into_iter().map(|task| task.data_file_path).collect();
+            paths.sort();
+            paths
+        }
+
+        let default_paths = collect_sorted_paths(fixture.table.scan().build().unwrap()).await;
+        let use_ref_paths =
+            collect_sorted_paths(fixture.table.scan().use_ref("at_current").build().unwrap()).await;
+
+        assert_eq!(default_paths, use_ref_paths);
+        assert_eq!(use_ref_paths.len(), 2);
     }
 
     #[tokio::test]

@@ -50,8 +50,9 @@
 //! - <https://github.com/apache/iceberg/blob/main/core/src/main/java/org/apache/iceberg/AllEntriesTable.java>
 //! - <https://github.com/apache/iceberg/blob/main/core/src/main/java/org/apache/iceberg/ManifestEntry.java>
 //!
-//! Deferred column: `readable_metrics` (Java `MetricsUtil.readableMetricsStruct`), exactly as the `files`
-//! table defers it.
+//! The `readable_metrics` virtual STRUCT column (Java `MetricsUtil.readableMetricsStruct`) is APPENDED as
+//! the last top-level column, exactly as the `files` table appends it. See
+//! [`crate::inspect::readable_metrics`].
 
 use std::sync::Arc;
 
@@ -62,6 +63,9 @@ use futures::{StreamExt, stream};
 
 use super::data_file::{DataFileStructBuilder, data_file_fields};
 use super::manifest_source::{MetadataScope, collect_manifest_files};
+use super::readable_metrics::{
+    ReadableMetricsBuilder, readable_metrics_field, readable_metrics_struct_fields,
+};
 use crate::arrow::schema_to_arrow_schema;
 use crate::scan::ArrowRecordBatchStream;
 use crate::spec::{NestedField, PrimitiveType, Schema, Type};
@@ -97,25 +101,49 @@ impl<'a> EntriesTable<'a> {
     ///
     /// Mirrors Java `ManifestEntry.getSchema(partitionType)`: `status`(0), `snapshot_id`(1),
     /// `sequence_number`(3), `file_sequence_number`(4), `data_file`(2, struct = the shared `data_file`
-    /// projection over the table's DEFAULT partition type). `readable_metrics` is deferred.
+    /// projection over the table's DEFAULT partition type), then the appended `readable_metrics` struct.
     pub fn schema(&self) -> Schema {
         let partition_type = self.table.metadata().default_partition_type();
         let data_file_type = Type::Struct(crate::spec::StructType::new(data_file_fields(
             partition_type,
         )));
-        let fields = vec![
-            NestedField::required(0, "status", Type::Primitive(PrimitiveType::Int)),
-            NestedField::optional(1, "snapshot_id", Type::Primitive(PrimitiveType::Long)),
-            NestedField::optional(3, "sequence_number", Type::Primitive(PrimitiveType::Long)),
-            NestedField::optional(
+        let mut fields = vec![
+            Arc::new(NestedField::required(
+                0,
+                "status",
+                Type::Primitive(PrimitiveType::Int),
+            )),
+            Arc::new(NestedField::optional(
+                1,
+                "snapshot_id",
+                Type::Primitive(PrimitiveType::Long),
+            )),
+            Arc::new(NestedField::optional(
+                3,
+                "sequence_number",
+                Type::Primitive(PrimitiveType::Long),
+            )),
+            Arc::new(NestedField::optional(
                 4,
                 "file_sequence_number",
                 Type::Primitive(PrimitiveType::Long),
-            ),
-            NestedField::required(2, "data_file", data_file_type),
+            )),
+            Arc::new(NestedField::required(2, "data_file", data_file_type)),
         ];
+
+        // Append `readable_metrics` (Java `BaseEntriesTable` joins it via `TypeUtil.join(...)`), its id
+        // counter seeded at the entries schema's highest field id (Java `metadataTableSchema.highestFieldId()`).
+        let base_schema = Schema::builder()
+            .with_fields(fields.clone())
+            .build()
+            .expect("entries metadata table base schema is statically valid");
+        fields.push(readable_metrics_field(
+            self.table.metadata().current_schema(),
+            base_schema.highest_field_id(),
+        ));
+
         Schema::builder()
-            .with_fields(fields.into_iter().map(Arc::new))
+            .with_fields(fields)
             .build()
             .expect("entries metadata table schema is statically valid")
     }
@@ -130,13 +158,17 @@ impl<'a> EntriesTable<'a> {
     pub async fn scan(&self) -> Result<ArrowRecordBatchStream> {
         let arrow_schema = Arc::new(schema_to_arrow_schema(&self.schema())?);
         let partition_type = self.table.metadata().default_partition_type().clone();
+        let data_schema = self.table.metadata().current_schema().clone();
         let data_file_arrow_fields = data_file_struct_fields(&arrow_schema)?;
+        let readable_metrics_arrow_fields = readable_metrics_struct_fields(&arrow_schema)?;
 
         let mut status = Int32Builder::new();
         let mut snapshot_id = Int64Builder::new();
         let mut sequence_number = Int64Builder::new();
         let mut file_sequence_number = Int64Builder::new();
         let mut data_file = DataFileStructBuilder::new(&data_file_arrow_fields, &partition_type);
+        let mut readable_metrics =
+            ReadableMetricsBuilder::try_new(&readable_metrics_arrow_fields, &data_schema)?;
 
         let manifest_files = collect_manifest_files(self.table, self.scope).await?;
         for manifest_file in &manifest_files {
@@ -150,6 +182,7 @@ impl<'a> EntriesTable<'a> {
                 // `ManifestEntry` exposes `file_sequence_number` as a public field, not a method.
                 file_sequence_number.append_option(entry.file_sequence_number);
                 data_file.append(entry.data_file())?;
+                readable_metrics.append(entry.data_file())?;
             }
         }
 
@@ -159,6 +192,7 @@ impl<'a> EntriesTable<'a> {
             Arc::new(sequence_number.finish()),
             Arc::new(file_sequence_number.finish()),
             Arc::new(data_file.finish()),
+            Arc::new(readable_metrics.finish()),
         ];
         let batch = RecordBatch::try_new(arrow_schema, columns)?;
         Ok(stream::iter(vec![Ok(batch)]).boxed())
@@ -729,6 +763,7 @@ mod tests {
             "sequence_number",
             "file_sequence_number",
             "data_file",
+            "readable_metrics",
         ]);
 
         let field_id = |name: &str| -> &str {
@@ -919,5 +954,77 @@ mod tests {
             .unwrap();
         let total: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total, 0);
+    }
+
+    #[tokio::test]
+    async fn test_entries_readable_metrics_present_with_decoded_typed_bound() {
+        // RISK: `entries` must ALSO carry the appended `readable_metrics` column (one struct per leaf data
+        // column), and its values must match the entry's data_file. The fixture's Added 1.parquet sets
+        // column_sizes {1:42} and lower_bounds {1: Datum::long(1)} on column id 1 = `x` (long), so x's
+        // readable_metrics reports column_size=42 and lower_bound=1 DECODED to a typed long.
+        use arrow_array::types::Int64Type;
+        let fixture = TableTestFixture::new();
+        setup_mixed_status_manifests(&fixture).await;
+        let batch =
+            scan_single_batch(fixture.table.inspect().entries().scan().await.unwrap()).await;
+
+        // Locate the 1.parquet row by the nested data_file.file_path leaf.
+        let data_file = batch
+            .column_by_name("data_file")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let file_path = data_file
+            .column_by_name("file_path")
+            .unwrap()
+            .as_string::<i32>();
+        let row = (0..file_path.len())
+            .find(|index| file_path.value(*index).ends_with("1.parquet"))
+            .unwrap();
+
+        let readable_metrics = batch
+            .column_by_name("readable_metrics")
+            .unwrap()
+            .as_struct();
+        let x_metrics = readable_metrics.column_by_name("x").unwrap().as_struct();
+        let column_size = x_metrics
+            .column_by_name("column_size")
+            .unwrap()
+            .as_primitive::<Int64Type>();
+        assert_eq!(column_size.value(row), 42, "entries x.column_size == 42");
+        let lower = x_metrics
+            .column_by_name("lower_bound")
+            .unwrap()
+            .as_primitive::<Int64Type>();
+        assert_eq!(
+            lower.value(row),
+            1,
+            "entries x.lower_bound decoded to long 1"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_all_entries_schema_includes_readable_metrics_like_entries() {
+        // RISK: schema inheritance — `all_entries` must carry the SAME appended `readable_metrics` column
+        // as `entries` (the schema flows through identically). This pins that the `all_*` variant inherits
+        // readable_metrics for free.
+        use arrow_schema::DataType;
+        let fixture = TableTestFixture::new();
+        let entries_schema =
+            crate::arrow::schema_to_arrow_schema(&fixture.table.inspect().entries().schema())
+                .unwrap();
+        let all_entries_schema =
+            crate::arrow::schema_to_arrow_schema(&fixture.table.inspect().all_entries().schema())
+                .unwrap();
+        // Identical schemas (already asserted elsewhere) AND readable_metrics is present as a struct.
+        assert_eq!(entries_schema, all_entries_schema);
+        assert!(matches!(
+            all_entries_schema
+                .field_with_name("readable_metrics")
+                .unwrap()
+                .data_type(),
+            DataType::Struct(_)
+        ));
     }
 }

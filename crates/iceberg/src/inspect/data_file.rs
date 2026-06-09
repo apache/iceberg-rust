@@ -30,8 +30,10 @@
 //! This module is the single source of truth for the field list ([`data_file_fields`]) and the row
 //! builder ([`DataFileStructBuilder`]) so the two tables cannot drift — the Rule of Three (2nd use).
 //!
-//! Deferred column: `readable_metrics` (Java `MetricsUtil.readableMetricsStruct`). All raw columns,
-//! including the metrics maps, are present.
+//! The raw metrics maps (`column_sizes`/`value_counts`/…/`lower_bounds`/`upper_bounds`) are part of this
+//! projection. The separate `readable_metrics` virtual STRUCT column (Java
+//! `MetricsUtil.readableMetricsStruct` — the per-column typed/human-readable view of those metrics) is
+//! built by [`crate::inspect::readable_metrics`] and appended alongside this projection by both tables.
 
 use std::collections::HashMap;
 use std::sync::Arc;

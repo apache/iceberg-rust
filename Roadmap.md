@@ -172,8 +172,10 @@ the three pure-metadata tables `history` / `refs` / `metadata_log_entries` (Incr
 `inspect/partitions.rs`) are all 🟡** (alongside the pre-existing `snapshots` +
 `manifests`); the four cross-snapshot `all_*` file/entry tables (`all_data_files` / `all_delete_files` /
 `all_files` / `all_entries`, Increment 5a, `inspect/{files,entries}.rs` + shared `inspect/manifest_source.rs`)
-and the final `all_manifests` table (Increment 5b, `inspect/all_manifests.rs`) are now 🟡 too — the
-inspection-table set is COMPLETE; only inspection interop + `readable_metrics` remain. The rest of the **write engine
+and the final `all_manifests` table (Increment 5b, `inspect/all_manifests.rs`) are now 🟡 too, and the LAST
+deferred inspection COLUMN `readable_metrics` (overnight Increment 1, `inspect/readable_metrics.rs`, the
+per-leaf-column typed-metrics struct on the `files` family + `entries` + `all_*`) has landed 🟡 — the
+inspection-table set AND its columns are COMPLETE; only inspection interop remains. The rest of the **write engine
 (merge append, `RowDelta`, `RewriteManifests`), incremental scans, ORC/Avro data files,
 variant/geo/unknown types, catalog view ops, and all maintenance actions are missing**. Full row-by-row
 status (re-audited on 0.9.1): [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRIX.md).
@@ -408,6 +410,20 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
   remaining RowDelta DELETE-file blocks (`validateNoNewDeletesForDataFiles`, `validateDataFilesExist`,
   `validateAddedDVs` — need `referenced_data_files`/`removed_data_files` on the action); `RewriteFiles`
   `validateNoNewDeletes`.
+- **Scan metrics-report model + `MetricsReporter` API (started 2026-06-08):** the self-contained metrics
+  DATA MODEL + reporter API landed 🟡 (Increment 3, new `metrics/mod.rs`, Java `org.apache.iceberg.metrics`).
+  `MetricsReport` (closed `#[non_exhaustive] enum`, `Scan(ScanReport)` — enum dispatch over `dyn`+downcast);
+  `ScanReport`; `ScanMetricsResult` (all 17 Java metrics as `Option`, names = Java `ScanMetrics` constants);
+  `CounterResult`/`TimerResult` + `MetricUnit`/`TimeUnit`; the `MetricsReporter` trait +
+  `InMemoryMetricsReporter` (last-report, test-friendly). serde JSON matches Java
+  `ScanReportParser`/`ScanMetricsResultParser`/`Counter`/`TimerResultParser` (dashed names, counter/timer
+  shapes), with ONE documented divergence — the `filter` field uses the Rust `Predicate`'s own serde, NOT
+  Java's `ExpressionParser` JSON (a large separate port, tracked). 7 unit tests; 4 mutations caught (drop a
+  counter / rename a JSON field / InMemory keep-first / drop a `None`-counter's skip-if-none). **DEFERRED:**
+  (1) wiring the model into `TableScan`/`plan_files` to COLLECT + EMIT (the concurrent/lazy-stream
+  instrumentation) — its own supervised increment; (2) Java's `tracing`-based `LoggingMetricsReporter` —
+  needs a logging-facade dependency not yet approved for the `iceberg` crate. **NO dependency change:** the
+  increment is dependency-free (`Cargo.toml`/`Cargo.lock` unchanged from `HEAD`).
 - **Inspection-table sub-sequence (dependency, then value):**
   1. **`files` family** (`files` / `data_files` / `delete_files`) — **DONE 🟡 (2026-06-08, Increment 1,
      `inspect/files.rs`).** Reads the current snapshot's manifest list → manifests → live entries →
@@ -463,6 +479,67 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
      unconditionally — Java `ManifestsTable.manifestFileToRow` content-gates there too); the shared
      partition-summary builder/conversion was factored into `inspect/partition_summary.rs`. The
      inspection-table SET IS NOW COMPLETE; remaining inspection work is `readable_metrics` + interop.
+  6. **`readable_metrics` virtual column** — **DONE 🟡 (2026-06-08, overnight-run Increment 1,
+     `inspect/readable_metrics.rs`, Java `MetricsUtil.readableMetricsStruct`).** The LAST deferred
+     inspection-table COLUMN: a virtual STRUCT appended last on the `files` family + `entries` (+ `all_*`
+     automatically) with ONE sub-field per LEAF (primitive) data column (dotted-named), each a struct of the
+     6 metrics — the 4 counts read from the file's metric maps by field id (null when absent), and
+     `lower_bound`/`upper_bound` typed as the COLUMN's own type and DECODED via `Datum::try_from_bytes`
+     (the inverse of the raw map's `to_bytes`; Java `Conversions.fromByteBuffer(field.type(), buffer)`). The
+     field-id scheme ports Java `readableMetricsSchema`'s pre-increment counter seeded at the host table's
+     `highestFieldId()`; ONE documented divergence — Java's `idToName()` HashMap iteration order is replaced
+     by deterministic ascending-field-id order (sub-fields still sorted by name). The raw metrics maps are
+     unchanged (additive). 12 unit tests; mutations (swap lower↔upper, wrong-field-id count, raw-bytes bound)
+     each caught. **The inspection-table COLUMN set is now COMPLETE; only Java/Spark inspection interop
+     remains.**
+  7. **`IncrementalAppendScan`** — **DONE 🟡 (2026-06-08, overnight-run Increment 2,
+     `scan/incremental.rs`, Java `BaseIncrementalAppendScan` + `BaseIncrementalScan`).** The incremental/CDC
+     read primitive: `Table::incremental_append_scan()` plans the data files APPENDED in the range
+     `(from_snapshot_id exclusive, to_snapshot_id inclusive]`, considering ONLY `Operation::Append` snapshots
+     (overwrites/deletes in the range excluded; no delete files applied). A SEPARATE planner that does NOT
+     touch the single-snapshot `TableScan::plan_files`: a bounded ancestor walk computes the APPEND snapshots
+     in the range (Java `appendsBetween`), keeps the DATA manifests each snapshot itself ADDED
+     (`added_snapshot_id == snapshot_id`), and streams the `Added`-entry `FileScanTask`s REUSING the existing
+     `PlanContext`/`ManifestEntryContext` + `into_file_scan_task` machinery (same partition-filter pruning +
+     residual evaluator) with an EMPTY delete index. The only seam in `scan/context.rs` is an additive
+     `build_manifest_file_contexts_from_files` that the existing `build_manifest_file_contexts` delegates to —
+     the normal scan is byte-unchanged. Builder mirrors Java's API
+     (`from_snapshot_id_exclusive`/`from_snapshot_id_inclusive`/`to_snapshot_id` defaulting to current +
+     `with_filter`/`select`). 13 unit tests; all four mutations (inclusive boundary, drop append-only filter,
+     read all manifests, drop the `status == Added` entry filter) caught — the last pinned by a reviewer-added
+     mixed-status-own-manifest test (the fast-append fixtures alone could not exercise the `Added` filter).
+     Validation + interop deferred → 🟡; `IncrementalChangelogScan`/`BatchScan` still pending.
+  8. **`IncrementalChangelogScan`** — **DONE 🟡 (2026-06-08, `scan/incremental.rs`, Java
+     `BaseIncrementalChangelogScan`).** `Table::incremental_changelog_scan()` plans row-level CHANGE tasks
+     (`ChangelogScanTask`) for the data files ADDED (INSERT) / REMOVED (DELETE) by the snapshots in
+     `(from excl, to incl]`, each tagged with a change ordinal (oldest snapshot → 0, Java
+     `computeSnapshotOrdinals`) and `commit_snapshot_id`. New public types in `scan/task.rs`:
+     `ChangelogOperation { Insert, Delete }` (the CDC-merge `UPDATE_BEFORE`/`UPDATE_AFTER` Java variants are
+     omitted + documented until a merge layer needs them), `ChangelogScanTask` (embeds a `FileScanTask`),
+     `ChangelogScanTaskStream`. Builds DIRECTLY on the increment-7 `IncrementalAppendScan` — the builder
+     delegates range resolution + `PlanContext` to the append-scan builder, and `plan_files` reuses
+     `build_manifest_file_contexts_from_files` (same partition-filter + residual). The changelog-specific
+     logic: `ordered_changelog_snapshots` (oldest-first, EXCLUDING `Operation::Replace`; rejects a range with
+     a row-level DELETE manifest as `FeatureUnsupported`, matching Java's current data-file-changelog limit),
+     and per snapshot emit `Added`→Insert / `Deleted`→Delete (skip `Existing`, Java `ignoreExisting`) from the
+     DATA manifests it itself added — the DELETE tombstones live in the deleting snapshot's OWN rewritten
+     manifest (`added_snapshot_id == snapshot_id`), verified against the producer's `rewrite_manifest_with_
+     deletes` writer stamping. The normal scan AND `IncrementalAppendScan` are byte-unchanged. 8 unit tests;
+     all 4 mutations (reverse ordinals, Deleted→Insert, include Replace, drop the delete-manifest guard)
+     caught. Validation + interop deferred → 🟡; `BatchScan` + CDC-merge (`UPDATE_BEFORE`/`UPDATE_AFTER`) still
+     pending.
+  9. **`TableScan.useRef` (branch/tag scanning)** — **DONE 2026-06-08 (`scan/mod.rs`, Java
+     `SnapshotScan.useRef` `core/SnapshotScan.java` L116-128).** `TableScanBuilder::use_ref(impl
+     Into<String>)` selects the snapshot a branch/tag reference points to; `build()` resolves it via the
+     existing `TableMetadata::snapshot_for_ref(name)` (`"main"` ⇒ the current snapshot, matching Java
+     `useRef(MAIN_BRANCH)` returning the table default), errors `DataInvalid` on an unknown ref ("snapshot
+     ref '…' not found", Java "Cannot find ref %s") and on `use_ref` + `snapshot_id` set together (Java
+     "Cannot override ref, already set snapshot id"). The default (no `use_ref`) snapshot resolution is
+     byte-unchanged. 7 unit tests (`main`→current, `test` tag→older snapshot ≠ current, unknown→err,
+     both-set→err, default-unchanged, `use_ref("main")` planning result-equivalence, and a NON-main tag at
+     the current snapshot planning the same files — reviewer-added, guarding any "main" special-casing); all
+     4 mutations (ignore the ref, drop the both-set rejection, drop the unknown-ref error, swap both-set to
+     silently use the ref) caught. Scope: `scan/mod.rs` + docs only.
 - **Exit criteria:** scans match Java planning/results incl. residuals; inspection tables present; reports
   emitted.
 

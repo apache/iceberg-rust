@@ -48,8 +48,9 @@
 //! - <https://github.com/apache/iceberg/blob/main/core/src/main/java/org/apache/iceberg/AllFilesTable.java>
 //! - <https://github.com/apache/iceberg/blob/main/api/src/main/java/org/apache/iceberg/DataFile.java>
 //!
-//! Deferred column: `readable_metrics` (Java `MetricsUtil.readableMetricsStruct` — a virtual per-data-column
-//! struct of human-readable min/max/counts). All raw columns, including the metrics maps, are present.
+//! The `readable_metrics` virtual STRUCT column (Java `MetricsUtil.readableMetricsStruct` — one sub-field
+//! per leaf DATA column, each a struct of human-readable min/max/counts) is APPENDED last, alongside the
+//! raw `data_file` columns. See [`crate::inspect::readable_metrics`].
 
 use std::sync::Arc;
 
@@ -58,6 +59,9 @@ use futures::{StreamExt, stream};
 
 use super::data_file::{DataFileStructBuilder, data_file_fields};
 use super::manifest_source::{MetadataScope, collect_manifest_files};
+use super::readable_metrics::{
+    ReadableMetricsBuilder, readable_metrics_field, readable_metrics_struct_fields,
+};
 use crate::Result;
 use crate::arrow::schema_to_arrow_schema;
 use crate::scan::ArrowRecordBatchStream;
@@ -144,11 +148,26 @@ impl<'a> FilesTable<'a> {
     /// Mirrors Java `DataFile.getType(partitionType).fields()` — the field ids are the canonical
     /// `DataFile` ids from `api/DataFile.java`, built from the shared [`data_file_fields`] projection (the
     /// `files` family exposes them FLAT as the table's top-level columns). The partition column carries the
-    /// table's DEFAULT partition type. `readable_metrics` is deferred.
+    /// table's DEFAULT partition type. The `readable_metrics` virtual STRUCT column is APPENDED last (Java
+    /// `BaseFilesTable` joins it via `TypeUtil.join(schema, readableMetricsSchema(...))`) — one sub-field per
+    /// leaf column of the DATA table, each a struct of human-readable per-column metrics.
     pub fn schema(&self) -> Schema {
         let partition_type = self.table.metadata().default_partition_type();
+        let mut fields = data_file_fields(partition_type);
+
+        // Append `readable_metrics`, its id counter seeded at the data_file projection's highest field id
+        // (Java `metadataTableSchema.highestFieldId()`), over the DATA table's current schema.
+        let data_file_schema = Schema::builder()
+            .with_fields(fields.clone())
+            .build()
+            .expect("files metadata table data_file schema is statically valid");
+        fields.push(readable_metrics_field(
+            self.table.metadata().current_schema(),
+            data_file_schema.highest_field_id(),
+        ));
+
         Schema::builder()
-            .with_fields(data_file_fields(partition_type))
+            .with_fields(fields)
             .build()
             .expect("files metadata table schema is statically valid")
     }
@@ -162,14 +181,25 @@ impl<'a> FilesTable<'a> {
     /// [`crate::spec::DataFile`]. An empty table (no current snapshot / no snapshots) yields a single
     /// empty batch.
     pub async fn scan(&self) -> Result<ArrowRecordBatchStream> {
-        // The flattened files-table Arrow schema IS the `data_file` struct's child fields (top-level), so
-        // the same `DataFileStructBuilder` that builds the `entries` nested column builds these rows; we
-        // then split its `StructArray` into the top-level columns.
+        // The flattened files-table Arrow schema is the `data_file` struct's child fields (top-level)
+        // FOLLOWED BY the appended `readable_metrics` struct column. The same `DataFileStructBuilder` that
+        // builds the `entries` nested column builds the data_file rows (we then split its `StructArray`
+        // into the top-level columns); `readable_metrics` is built alongside and appended as the last
+        // column.
         let arrow_schema = Arc::new(schema_to_arrow_schema(&self.schema())?);
         let partition_type = self.table.metadata().default_partition_type().clone();
-        let data_file_arrow_fields = arrow_schema.fields().clone();
+        let data_schema = self.table.metadata().current_schema().clone();
 
-        let mut builder = DataFileStructBuilder::new(&data_file_arrow_fields, &partition_type);
+        // The leading top-level columns are the data_file projection; the trailing one is readable_metrics.
+        let column_count = arrow_schema.fields().len();
+        let data_file_arrow_fields: arrow_schema::Fields =
+            arrow_schema.fields()[..column_count - 1].into();
+        let readable_metrics_arrow_fields = readable_metrics_struct_fields(&arrow_schema)?;
+
+        let mut data_file_builder =
+            DataFileStructBuilder::new(&data_file_arrow_fields, &partition_type);
+        let mut readable_metrics_builder =
+            ReadableMetricsBuilder::try_new(&readable_metrics_arrow_fields, &data_schema)?;
 
         let manifest_files = collect_manifest_files(self.table, self.scope).await?;
         for manifest_file in &manifest_files {
@@ -179,13 +209,16 @@ impl<'a> FilesTable<'a> {
             let manifest = manifest_file.load_manifest(self.table.file_io()).await?;
             for entry in manifest.entries() {
                 if entry.is_alive() {
-                    builder.append(entry.data_file())?;
+                    data_file_builder.append(entry.data_file())?;
+                    readable_metrics_builder.append(entry.data_file())?;
                 }
             }
         }
 
-        let data_file_struct = builder.finish();
-        let batch = RecordBatch::try_new(arrow_schema, data_file_struct.columns().to_vec())?;
+        let data_file_struct = data_file_builder.finish();
+        let mut columns = data_file_struct.columns().to_vec();
+        columns.push(Arc::new(readable_metrics_builder.finish()));
+        let batch = RecordBatch::try_new(arrow_schema, columns)?;
         Ok(stream::iter(vec![Ok(batch)]).boxed())
     }
 }
@@ -195,8 +228,8 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use arrow_array::Array;
     use arrow_array::cast::AsArray;
+    use arrow_array::{Array, StructArray};
     use futures::TryStreamExt;
 
     use crate::scan::tests::TableTestFixture;
@@ -765,6 +798,7 @@ mod tests {
             "referenced_data_file",
             "content_offset",
             "content_size_in_bytes",
+            "readable_metrics",
         ]);
 
         use arrow_schema::DataType;
@@ -772,6 +806,14 @@ mod tests {
             arrow.field_with_name("content").unwrap().data_type(),
             &DataType::Int32
         );
+        // `readable_metrics` is the appended virtual STRUCT column (one sub-field per leaf data column).
+        assert!(matches!(
+            arrow
+                .field_with_name("readable_metrics")
+                .unwrap()
+                .data_type(),
+            DataType::Struct(_)
+        ));
         assert_eq!(
             arrow.field_with_name("file_path").unwrap().data_type(),
             &DataType::Utf8
@@ -1181,6 +1223,308 @@ mod tests {
             all.contains(&fork_path),
             "`all_files` must include a file reachable only from a tracked NON-ANCESTOR (forked) snapshot \
              — Java unions over ALL `table().snapshots()`, not just the current ancestry"
+        );
+    }
+
+    /// Looks up the per-column metric sub-struct for `column` within the `readable_metrics` struct column,
+    /// for the row whose `file_path` ends in `file_suffix`. Returns the `(row_index, column_struct)`.
+    fn readable_metrics_column(
+        batch: &arrow_array::RecordBatch,
+        file_suffix: &str,
+        column: &str,
+    ) -> (usize, StructArray) {
+        let file_path = batch
+            .column_by_name("file_path")
+            .unwrap()
+            .as_string::<i32>();
+        let row = (0..file_path.len())
+            .find(|index| {
+                file_path
+                    .value(*index)
+                    .rsplit('/')
+                    .next()
+                    .map(|leaf| leaf == file_suffix)
+                    .unwrap_or(false)
+            })
+            .unwrap_or_else(|| panic!("row for {file_suffix} not found"));
+        let readable_metrics = batch
+            .column_by_name("readable_metrics")
+            .unwrap()
+            .as_struct();
+        let column_struct = readable_metrics
+            .column_by_name(column)
+            .unwrap_or_else(|| panic!("readable_metrics has no column {column}"))
+            .as_struct()
+            .clone();
+        (row, column_struct)
+    }
+
+    #[tokio::test]
+    async fn test_files_readable_metrics_schema_present_with_one_struct_per_leaf_column() {
+        // RISK: the `readable_metrics` virtual column must exist on `files` with one sub-field per LEAF
+        // data column (the fixture schema has 8 primitive columns: a, bool, dbl, i32, i64, x, y, z), each
+        // a 6-field metric struct, and the lower/upper bounds carry the COLUMN's type (NOT binary).
+        use arrow_schema::DataType;
+        let fixture = TableTestFixture::new();
+        let arrow = crate::arrow::schema_to_arrow_schema(&fixture.table.inspect().files().schema())
+            .unwrap();
+
+        let readable_metrics = arrow.field_with_name("readable_metrics").unwrap();
+        let DataType::Struct(columns) = readable_metrics.data_type() else {
+            panic!("readable_metrics must be a struct");
+        };
+        let column_names: Vec<&str> = columns.iter().map(|f| f.name().as_str()).collect();
+        // Sorted by name (Java sorts the per-column sub-fields by name).
+        assert_eq!(column_names, vec![
+            "a", "bool", "dbl", "i32", "i64", "x", "y", "z",
+        ]);
+
+        // Each per-column sub-field is a 6-field metric struct.
+        let x_field = columns.iter().find(|f| f.name() == "x").unwrap();
+        let DataType::Struct(x_metrics) = x_field.data_type() else {
+            panic!("per-column metric must be a struct");
+        };
+        let metric_names: Vec<&str> = x_metrics.iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(metric_names, vec![
+            "column_size",
+            "value_count",
+            "null_value_count",
+            "nan_value_count",
+            "lower_bound",
+            "upper_bound",
+        ]);
+
+        // `x` is a LONG column → its bound sub-fields are Int64 (the COLUMN type), the counts are Int64.
+        let lower = x_metrics
+            .iter()
+            .find(|f| f.name() == "lower_bound")
+            .unwrap();
+        assert_eq!(lower.data_type(), &DataType::Int64);
+        // `a` is a STRING column → its bound sub-fields are Utf8 (proves the bound carries the column type,
+        // not a single binary type for every column).
+        let a_field = columns.iter().find(|f| f.name() == "a").unwrap();
+        let DataType::Struct(a_metrics) = a_field.data_type() else {
+            panic!("struct");
+        };
+        let a_lower = a_metrics
+            .iter()
+            .find(|f| f.name() == "lower_bound")
+            .unwrap();
+        assert_eq!(a_lower.data_type(), &DataType::Utf8);
+    }
+
+    #[tokio::test]
+    async fn test_files_readable_metrics_reports_counts_and_decoded_typed_bounds() {
+        // RISK (the load-bearing value test): for the Added file (1.parquet) the fixture sets
+        // column_sizes {1:42} and lower_bounds {1: Datum::long(1)} on column id 1 = `x` (long). So x's
+        // readable_metrics must report column_size=42 and lower_bound=1 DECODED to a typed long (not raw
+        // bytes), while value_count / null_value_count / nan_value_count / upper_bound are NULL (the file
+        // carries none), and a DIFFERENT column (`y`, id 2) has ALL metrics NULL.
+        use arrow_array::types::{Int32Type, Int64Type};
+        let fixture = TableTestFixture::new();
+        setup_data_and_delete_manifests(&fixture).await;
+        let batch = scan_single_batch(fixture.table.inspect().files().scan().await.unwrap()).await;
+
+        // Column `x` (the column the fixture populated) on the Added file 1.parquet.
+        let (row, x_metrics) = readable_metrics_column(&batch, "1.parquet", "x");
+        let column_size = x_metrics
+            .column_by_name("column_size")
+            .unwrap()
+            .as_primitive::<Int64Type>();
+        assert!(!column_size.is_null(row), "x.column_size must be present");
+        assert_eq!(column_size.value(row), 42, "x.column_size == 42");
+
+        // lower_bound DECODED to a typed LONG value (== the integer 1), NOT raw bytes.
+        let lower = x_metrics
+            .column_by_name("lower_bound")
+            .unwrap()
+            .as_primitive::<Int64Type>();
+        assert!(!lower.is_null(row), "x.lower_bound must be present");
+        assert_eq!(lower.value(row), 1, "x.lower_bound decoded to the long 1");
+
+        // The metrics the file does NOT carry are NULL.
+        for absent in ["value_count", "null_value_count", "nan_value_count"] {
+            let array = x_metrics
+                .column_by_name(absent)
+                .unwrap()
+                .as_primitive::<Int64Type>();
+            assert!(
+                array.is_null(row),
+                "x.{absent} must be NULL (file carries none)"
+            );
+        }
+        let upper = x_metrics
+            .column_by_name("upper_bound")
+            .unwrap()
+            .as_primitive::<Int64Type>();
+        assert!(
+            upper.is_null(row),
+            "x.upper_bound must be NULL (file carries none)"
+        );
+
+        // A column the file carries NO metric for (`y`, id 2) → every metric NULL.
+        let (row_y, y_metrics) = readable_metrics_column(&batch, "1.parquet", "y");
+        let y_column_size = y_metrics
+            .column_by_name("column_size")
+            .unwrap()
+            .as_primitive::<Int64Type>();
+        assert!(y_column_size.is_null(row_y), "y.column_size must be NULL");
+        let y_lower = y_metrics
+            .column_by_name("lower_bound")
+            .unwrap()
+            .as_primitive::<Int64Type>();
+        assert!(y_lower.is_null(row_y), "y.lower_bound must be NULL");
+
+        // The integer column `i32` (id 6) carries no metric here → its (Int32-typed) bound is NULL, which
+        // also pins that the bound sub-field is the column's OWN type (Int32), not Int64.
+        let (row_i32, i32_metrics) = readable_metrics_column(&batch, "1.parquet", "i32");
+        let i32_lower = i32_metrics
+            .column_by_name("lower_bound")
+            .unwrap()
+            .as_primitive::<Int32Type>();
+        assert!(
+            i32_lower.is_null(row_i32),
+            "i32.lower_bound must be NULL and Int32-typed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_files_raw_bound_and_count_maps_unchanged_alongside_readable_metrics() {
+        // RISK (backward-compat regression guard): adding `readable_metrics` must NOT alter the existing
+        // raw columns. The raw `lower_bounds`/`upper_bounds`/count-map columns must still be present as
+        // map<int,*> and still carry the committed values (column_sizes {1: 42}).
+        use arrow_schema::DataType;
+        let fixture = TableTestFixture::new();
+        setup_data_and_delete_manifests(&fixture).await;
+        let batch = scan_single_batch(fixture.table.inspect().files().scan().await.unwrap()).await;
+
+        // The raw map columns are still present and still Map-typed (unchanged from before).
+        for raw in [
+            "column_sizes",
+            "value_counts",
+            "null_value_counts",
+            "nan_value_counts",
+            "lower_bounds",
+            "upper_bounds",
+        ] {
+            assert!(
+                matches!(
+                    batch.column_by_name(raw).unwrap().data_type(),
+                    DataType::Map(_, _)
+                ),
+                "raw column {raw} must still be a Map"
+            );
+        }
+
+        // The raw `column_sizes` map still carries the committed {1: 42} on the Added file.
+        let column_sizes = batch.column_by_name("column_sizes").unwrap().as_map();
+        let mut found = false;
+        for index in 0..column_sizes.len() {
+            let entries = column_sizes.value(index);
+            let keys = entries
+                .column(0)
+                .as_primitive::<arrow_array::types::Int32Type>();
+            let values = entries
+                .column(1)
+                .as_primitive::<arrow_array::types::Int64Type>();
+            if keys.len() == 1 && keys.value(0) == 1 && values.value(0) == 42 {
+                found = true;
+            }
+        }
+        assert!(found, "the raw column_sizes map must still carry {{1: 42}}");
+    }
+
+    /// Writes a single DATA manifest with one Added file carrying DISTINCT lower/upper bounds on column
+    /// `x` (id 1): lower=10, upper=99 — so the lower↔upper decode is observable (the swap mutation fails).
+    async fn setup_distinct_bounds_manifest(fixture: &TableTestFixture) {
+        let metadata = fixture.table.metadata().clone();
+        let current_snapshot = metadata.current_snapshot().unwrap();
+        let current_schema = current_snapshot.schema(&metadata).unwrap();
+        let current_partition_spec = metadata.default_partition_spec();
+
+        let output = fixture
+            .table
+            .file_io()
+            .new_output(format!(
+                "{}/metadata/manifest_bounds_{}.avro",
+                fixture.table_location,
+                uuid::Uuid::new_v4()
+            ))
+            .unwrap();
+        let mut data_writer = ManifestWriterBuilder::new(
+            output,
+            Some(current_snapshot.snapshot_id()),
+            None,
+            current_schema.clone(),
+            current_partition_spec.as_ref().clone(),
+        )
+        .build_v2_data();
+        data_writer
+            .add_entry(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .data_file(
+                        DataFileBuilder::default()
+                            .partition_spec_id(0)
+                            .content(DataContentType::Data)
+                            .file_path(format!("{}/bounds.parquet", &fixture.table_location))
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(FILE_SIZE)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::long(100))]))
+                            .lower_bounds(HashMap::from([(1, Datum::long(10))]))
+                            .upper_bounds(HashMap::from([(1, Datum::long(99))]))
+                            .build()
+                            .unwrap(),
+                    )
+                    .build(),
+            )
+            .unwrap();
+        let data_manifest = data_writer.write_manifest_file().await.unwrap();
+
+        let mut manifest_list_write = ManifestListWriter::v2(
+            fixture
+                .table
+                .file_io()
+                .new_output(current_snapshot.manifest_list())
+                .unwrap(),
+            current_snapshot.snapshot_id(),
+            current_snapshot.parent_snapshot_id(),
+            current_snapshot.sequence_number(),
+        );
+        manifest_list_write
+            .add_manifests(vec![data_manifest].into_iter())
+            .unwrap();
+        manifest_list_write.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_files_readable_metrics_lower_and_upper_bound_are_distinct_and_typed() {
+        // RISK (mutation-pin for swapping lower↔upper, AND for emitting raw bytes): with distinct bounds
+        // lower=10, upper=99 on column `x` (long), readable_metrics must report x.lower_bound==10 and
+        // x.upper_bound==99 as TYPED longs. A lower↔upper swap fails this; emitting the raw `to_bytes`
+        // value (8 LE bytes) instead of the decoded long would not even be Int64-typed (the cast panics or
+        // the value differs).
+        use arrow_array::types::Int64Type;
+        let fixture = TableTestFixture::new();
+        setup_distinct_bounds_manifest(&fixture).await;
+        let batch = scan_single_batch(fixture.table.inspect().files().scan().await.unwrap()).await;
+
+        let (row, x_metrics) = readable_metrics_column(&batch, "bounds.parquet", "x");
+        let lower = x_metrics
+            .column_by_name("lower_bound")
+            .unwrap()
+            .as_primitive::<Int64Type>();
+        let upper = x_metrics
+            .column_by_name("upper_bound")
+            .unwrap()
+            .as_primitive::<Int64Type>();
+        assert_eq!(lower.value(row), 10, "x.lower_bound must decode to 10");
+        assert_eq!(upper.value(row), 99, "x.upper_bound must decode to 99");
+        assert_ne!(
+            lower.value(row),
+            upper.value(row),
+            "lower and upper bounds must be distinct (pins the lower↔upper swap mutation)"
         );
     }
 }
