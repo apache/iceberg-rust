@@ -97,6 +97,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Free disk space (Linux runners)
+        if: runner.os == 'Linux'
+        run: |
+          # Reclaim ~25GB of preinstalled toolchains this build never uses so the large
+          # --all-features --all-targets workspace build does not exhaust the runner SSD.
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+                      /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          df -h
+
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
 
@@ -147,6 +156,17 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
+
+      - name: Free disk space (Linux runners)
+        if: runner.os == 'Linux'
+        run: |
+          # Reclaim ~25GB of preinstalled toolchains this build never uses, so the large
+          # --all-features --all-targets workspace + Docker images don't exhaust the runner's
+          # ~14GB free SSD (which surfaced as "No space left on device" and a fail-fast cancel).
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+                      /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+          df -h
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
