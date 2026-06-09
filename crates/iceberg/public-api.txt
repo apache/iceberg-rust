@@ -2420,7 +2420,7 @@ pub struct iceberg::spec::SnapshotSummaryCollector
 impl iceberg::spec::SnapshotSummaryCollector
 pub fn iceberg::spec::SnapshotSummaryCollector::add_file(&mut self, data_file: &iceberg::spec::DataFile, schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpecRef)
 pub fn iceberg::spec::SnapshotSummaryCollector::add_manifest(&mut self, manifest: &iceberg::spec::ManifestFile)
-pub fn iceberg::spec::SnapshotSummaryCollector::build(&self, prev_summary: core::option::Option<&iceberg::spec::Summary>) -> std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub fn iceberg::spec::SnapshotSummaryCollector::build(&self) -> std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
 pub fn iceberg::spec::SnapshotSummaryCollector::merge(&mut self, summary: iceberg::spec::SnapshotSummaryCollector)
 pub fn iceberg::spec::SnapshotSummaryCollector::remove_file(&mut self, data_file: &iceberg::spec::DataFile, schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpecRef)
 pub fn iceberg::spec::SnapshotSummaryCollector::set(&mut self, key: &str, value: &str)
