@@ -502,23 +502,26 @@ mod tests {
         Arc::new(kms)
     }
 
-    async fn write_empty_manifest_list_bytes(io: &FileIO, path: &str) -> bytes::Bytes {
-        let output = io.new_output(path).unwrap().writer().await.unwrap();
-        let mut writer = ManifestListWriter::v3(output, 1, None, 0, Some(0));
-        writer.add_manifests(std::iter::empty()).unwrap();
-        writer.close().await.unwrap();
-        io.new_input(path).unwrap().read().await.unwrap()
-    }
-
-    #[tokio::test]
-    async fn table_decrypts_manifest_list_via_object_cache() {
+    async fn encrypted_table_metadata() -> (
+        TableMetadata,
+        FileIO,
+        Arc<dyn KeyManagementClient>,
+    ) {
         let io = FileIO::new_with_memory();
         let plain_path = "memory:///table/metadata/manifest-list-plain.avro";
         let encrypted_path = "memory:///table/metadata/manifest-list-enc.avro";
 
-        // Encrypt a real manifest list onto the encrypted path.
-        let raw = write_empty_manifest_list_bytes(&io, plain_path).await;
-        let kms = make_kms();
+        let output = io.new_output(plain_path).unwrap().writer().await.unwrap();
+        let mut writer = ManifestListWriter::v3(output, 1, None, 0, Some(0));
+        writer.add_manifests(std::iter::empty()).unwrap();
+        writer.close().await.unwrap();
+        let raw = io.new_input(plain_path).unwrap().read().await.unwrap();
+
+        let kms: Arc<dyn KeyManagementClient> = {
+            let k = MemoryKeyManagementClient::new();
+            k.add_master_key("master-1").unwrap();
+            Arc::new(k)
+        };
         let mgr = EncryptionManager::builder()
             .kms_client(Arc::clone(&kms))
             .table_key_id("master-1")
@@ -531,33 +534,35 @@ mod tests {
             .await
             .unwrap();
 
-        // Snapshot the wrapped keys (manifest-list entry + KEK) the manager produced.
-        let encryption_keys = mgr.with_encryption_keys(|keys| keys.clone());
-
-        // Build a TableMetadata with those keys and a snapshot whose
-        // encryption_key_id points at the wrapped entry.
         let mut metadata: TableMetadata = load_test_metadata("TableMetadataV3ValidEncryption.json");
-        metadata.encryption_keys = encryption_keys;
+        metadata.encryption_keys = mgr.with_encryption_keys(|keys| keys.clone());
 
-        let snapshot = Snapshot::builder()
-            .with_snapshot_id(1)
-            .with_sequence_number(0)
-            .with_timestamp_ms(0)
-            .with_manifest_list(encrypted_path.to_string())
-            .with_summary(Summary {
-                operation: Operation::Append,
-                additional_properties: HashMap::new(),
-            })
-            .with_schema_id(0)
-            .with_encryption_key_id(Some(key_id))
-            .build();
-        let snapshot_ref = Arc::new(snapshot);
+        let snapshot = Arc::new(
+            Snapshot::builder()
+                .with_snapshot_id(1)
+                .with_sequence_number(0)
+                .with_timestamp_ms(0)
+                .with_manifest_list(encrypted_path.to_string())
+                .with_summary(Summary {
+                    operation: Operation::Append,
+                    additional_properties: HashMap::new(),
+                })
+                .with_schema_id(0)
+                .with_encryption_key_id(Some(key_id))
+                .build(),
+        );
         metadata
             .snapshots
-            .insert(snapshot_ref.snapshot_id(), snapshot_ref.clone());
-        metadata.current_snapshot_id = Some(snapshot_ref.snapshot_id());
+            .insert(snapshot.snapshot_id(), snapshot.clone());
+        metadata.current_snapshot_id = Some(snapshot.snapshot_id());
 
-        // Build the table with the KMS client, then read via the object cache.
+        (metadata, io, kms)
+    }
+
+    #[tokio::test]
+    async fn table_decrypts_manifest_list_via_object_cache() {
+        let (metadata, io, kms) = encrypted_table_metadata().await;
+
         let table = Table::builder()
             .file_io(io)
             .metadata(metadata)
@@ -566,11 +571,11 @@ mod tests {
             .runtime(Runtime::try_current().unwrap())
             .build()
             .unwrap();
-        assert!(table.encryption_manager().is_some());
 
+        let snapshot_ref = table.metadata().current_snapshot().unwrap();
         let manifest_list = table
             .object_cache()
-            .get_manifest_list(&snapshot_ref, &table.metadata_ref())
+            .get_manifest_list(snapshot_ref, &table.metadata_ref())
             .await
             .unwrap();
         assert_eq!(manifest_list.entries().len(), 0);
