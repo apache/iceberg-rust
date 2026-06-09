@@ -4165,11 +4165,59 @@ residual-always-true} match EXACTLY. Purely additive — NO production change.
 ### NEXT: squash `phase2-3-remnants` + open PR (awaiting user go-ahead on squash-vs-keep + confirm base = the origin fork, NEVER apache upstream)
 Branch = ~10 commits off main `ccfcb062` (3 Phase-2/3 remnants + 4 pure-metadata/manifest-A1 interop + file_format fix + A2 + A3 + A4). All LOCAL-only, not pushed. Deferred beyond this PR: `readable_metrics` interop; A5 scan EXECUTION (parquet deps + approval); other Phase 2/3 remnants (overwriteByRowFilter, RowDelta validateNoNewDeletesForDataFiles, BatchScan, CDC-merge).
 
-**STATUS (2026-06-09): squashed + merged as `5f32b10d` "Phase2 3 remnants (#8)". Local main fast-forwarded.**
+**MERGED: `5f32b10d` "Phase2 3 remnants (#8)" → `5ed1582b` "Phase2 write validation (#9)" → `6c07ea18` "ci: free disk space (#10)". `main` now at `6c07ea18`. The write-validation cluster (#9) and the CI free-disk-space fix (#10) are MERGED; the data-level interop capstone (below) is pushed (branch `phase3-scan-exec-interop`, 4 commits) + PR-ready.**
 
 ---
 
-## Active (2026-06-09): Phase 2 WRITE-VALIDATION remnants cluster (branch `phase2-write-validation` off main `5f32b10d`)
+## Active (2026-06-09): DATA-LEVEL write/scan interop capstone (branch `phase3-scan-exec-interop` off main `5f32b10d`)
+
+User chose this as the highest-value next sequence (flips write actions + Phase-3 scan-execution toward ✅ via
+real-row interop). Run.sh-driven, env-gated. The Java oracle now writes REAL parquet data + delete files
+(approved deps in the oracle pom: `iceberg-data` + `iceberg-parquet` + `hadoop-client-runtime`; Rust Cargo
+FROZEN, 0-diff).
+
+- [x] **Increment 1: scan-execution merge-on-read interop (position deletes)** — `ScanExecOracle` /
+  `generate-interop-scan-exec` writes a real table (5-row parquet data file + a real position-delete deleting
+  {1,3}=ids 20/40), commits append→rowDelta, emits Java's OWN `IcebergGenerics` read ({10,30,50}). Rust
+  `interop_scan_exec.rs` loads it, `scan().to_arrow()`, asserts rows == Java's read (20/40 absent). NO Rust
+  production change. Reviewer mutation-pinned 2 ways (poison expected; pre-delete snapshot). Gate green (offline
+  no-op + run.sh round-trip). **This is the A5 scan-execution proof + the read-side write-action interop.**
+- [ ] **Increment 2: equality deletes** + multi-data-file + schema/type variety.
+- [x] **Increment 2: Direction-2 — Rust WRITES a real table → Java reads it** (the write-action ✅ flip) —
+  env-gated GEN path (`ICEBERG_INTEROP_SCAN_GEN_DIR`) writes a real table via the PUBLIC write path
+  (MemoryCatalog+LocalFsStorageFactory, real parquet data + a real PositionDeleteFileWriter delete, fast_append
+  → row_delta, `TableMetadata::write_to` → final.metadata.json); the oracle's `verify-interop-scan-exec` reads
+  it via `IcebergGenerics` + verifies {10,30,50}. **Java reads Rust's output byte-for-byte, NO massaging, NO
+  Rust production change, no new deps (Cargo 0-diff).** Reviewer mutated the WRITTEN artifacts (rm delete
+  parquet → Java NotFoundException; truncate avro manifest → Java RuntimeIOException). Gate green (offline no-op
+  + D2 round-trip). Fixed an abbreviation typos slip in the Increment-1 lesson (+ permanently re-internalized
+  the chain-the-gate-to-the-commit rule).
+- [x] **Increment 3: equality deletes, BOTH directions** — D1 (Java writes eq-delete → Rust reads) + D2 (Rust
+  writes eq-delete via `EqualityDeleteFileWriter` → Java reads), `equality_ids=[1]`, delete id ∈ {20,40},
+  sequence-ordered (data seq 1 < eq-delete seq 2). Both = {10,30,50}. NO Rust production change, Cargo 0-diff.
+  Reviewer decoded the avro manifests with the production reader + mutated both ways. **Run-script hardening:**
+  the D2 scripts now grep the Java verify for `: 0 failures` (mvn exec:java swallows System.exit) — applied to
+  BOTH the eq-delete-d2 and the Increment-2 scan-exec-d2 scripts.
+- [x] **Increment 4: partitioned tables, BOTH directions** — `identity(category)` table (spec id 0), one real
+  parquet data file PER PARTITION (cat=a: 10/20/30, cat=b: 40/50) + a PARTITION-SCOPED position-delete in
+  partition a (position 1 = id=20), committed at seq 2 (data first at seq 1). Live set {10,30,40,50}: only id=20
+  deleted, cat=b untouched (the partition-scoping correctness point — the cat=a delete must NOT reach cat=b).
+  **D1:** Java writes (`GenericAppenderFactory` + `PartitionData`) → Rust `scan().to_arrow()` applies it
+  partition-aware (`delete_file_index` keys by partition + spec id). **D2:** Rust WRITES via the production path
+  (`DataFileWriter` built with a `PartitionKey` that auto-stamps the partition Struct + spec id AND routes the
+  parquet under the partition path; `PositionDeleteFileWriter` with the cat=a `PartitionKey` row_delta'd at seq
+  2) → Java reads. Both = {10,30,40,50}. NO Rust production change, Cargo 0-diff. Reviewer mutation-pinned both
+  directions (poison expected; rm/truncate the Rust-written partition artifacts → Java NotFound/RuntimeIO;
+  confirm cat=a delete does NOT drop cat=b). Gate green (offline no-op `interop_scan_exec` 6 passed + both
+  round-trips exit 0). **Capstone COMPLETE** (position + equality deletes, both directions, unpartitioned +
+  partitioned). PR next. Deferred within partitioning: multi-file-per-partition + non-identity transforms
+  (bucket/truncate); more column types.
+
+Deferred elsewhere: `readable_metrics` interop; ORC/Avro data; V3 types (Phase 4); BatchScan; CDC-merge.
+
+---
+
+## DONE (2026-06-09): Phase 2 WRITE-VALIDATION remnants cluster — MERGED as `5ed1582b` (#9) (branch `phase2-write-validation` off main `5f32b10d`)
 
 User chose "write-validation remnants" as next. Sequence (each = builder→reviewer Workflow; orchestrator
 independently re-runs the gate + commits; production, unit-tested via MemoryCatalog concurrent-commit tests,
@@ -4223,6 +4271,4 @@ Remaining in the cluster:
   transaction:: 294). Conservative postures documented (failAnyDelete / duplicate-path / DV-manifest branches
   not ported — delete-manifest-specific). Deferred: the rowFilter branch of validateNoConflictingDeletes.
 
-**CLUSTER COMPLETE (5 increments). NEXT: PR `phase2-write-validation` (5 commits) to the origin fork (NEVER apache).**
-
-Then: PR the cluster to the origin fork (NEVER apache).
+**CLUSTER COMPLETE (5 increments). MERGED as `5ed1582b` "Phase2 write validation (#9)".**

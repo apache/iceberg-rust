@@ -2496,6 +2496,92 @@ How to use it (see the manuals' §2):
   F3; Rust matched. Let the bulk per-file delete-set comparison (not a single hand-picked file) prove this, so
   you assert Java's REAL association rather than an assumed one.
 
+### 2026-06-09 (DATA-LEVEL scan-execution interop — real parquet + merge-on-read — ORCHESTRATOR + REVIEWER Opus)
+- **The A1-A4 manifest harness extends to REAL parquet data with `iceberg-data` + `iceberg-parquet`.**
+  `GenericAppenderFactory(schema, spec).newDataWriter(localOutput, PARQUET)` writes a real parquet data file +
+  builds the `DataFile` from its real metrics (the `data/.../FileHelpers.java` template); `newPosDeleteWriter`
+  writes a real position-delete (`PositionDelete.set(path, pos, null)`). It writes to an iceberg `OutputFile`
+  (`Files.localOutput`), so NO Hadoop FileSystem — but the parquet-hadoop classes need a runtime jar, so the
+  oracle pom also needs `org.apache.hadoop:hadoop-client-runtime`. The first `mvn` run must be ONLINE to fetch
+  the new deps; `-o` works after.
+- **Java emitting its OWN read is the ground truth, not a hand-coded expected set.** `IcebergGenerics.read(table)`
+  applies the deletes; emit the rows it returns (`java_scan_rows.json`). Then "Rust scan == Java read" is a true
+  1:1 (Rust's `to_arrow()` merge-on-read vs Java's reader), not "Rust matches my guess".
+- **DATA-LEVEL interop deps go in the TEST-ORACLE pom ONLY; the Rust `Cargo.toml`/`Cargo.lock` stay 0-diff.**
+  The reviewer's #1 check is `git diff Cargo.toml Cargo.lock crates/*/Cargo.toml` == EMPTY. The shipped library's
+  dependency surface is frozen; only the dev oracle (a tool like `dev/spark/`) gains parquet/hadoop.
+- **Mutation-prove a merge-on-read read TWO ways:** (1) poison the expected-rows JSON (resurrect a deleted row)
+  → the value comparison fails; (2) point the env dir at the PRE-delete snapshot (the data-only commit) → Rust
+  scans all rows → fails. Both confirm the delete is genuinely applied + the comparison is non-vacuous, on the
+  gitignored temp dir (restore by re-running the run script).
+- **Env-gate edge case:** `std::env::var_os` treats set-but-EMPTY as present, so `VAR=""` would proceed +
+  panic instead of skip. Harmless (the offline gate runs the var UNSET; run.sh passes an ABSOLUTE path), but
+  treating empty-as-unset is the more robust gate. Also: `cargo test` sets CWD to the crate dir, so the env
+  path must be ABSOLUTE (run.sh derives it from `SCRIPT_DIR`).
+- **Direction-2 ("Java reads what RUST writes") is the write-action ✅ flip — and the PUBLIC API suffices.** An
+  integration test can't see the `pub(crate)` row_delta crown-jewel helpers, so it RE-builds the write path from
+  the public surface only: `iceberg::memory::MemoryCatalogBuilder` + `iceberg::io::LocalFsStorageFactory` (real
+  on-disk warehouse), `iceberg::writer::*` (`ParquetWriterBuilder`/`FileWriter` for a real parquet data file,
+  `PositionDeleteFileWriter` for a real position-delete), `tx.fast_append()`/`tx.row_delta()`, and
+  `TableMetadata::write_to(file_io, "<dir>/.../final.metadata.json")` for a deterministic load path. Java's
+  `IcebergGenerics.read` then reads it. **No Rust production change, no new deps** (the write path already
+  exists). That this public-only path produces a Java-readable merge-on-read table is itself a parity result.
+- **Make the cross-impl read NON-VACUOUS by mutating the WRITTEN ARTIFACTS, not just the expected rows.** The
+  reviewer deleted Rust's delete-parquet (→ Java `NotFoundException` on the exact path Rust's manifest
+  references) and truncated Rust's avro manifest (→ Java `RuntimeIOException`) — proving Java genuinely opens
+  Rust's on-disk files, not a re-derivation. A green Direction-2 with these mutations failing = real byte-level
+  write parity.
+
+### 2026-06-09 (COMMIT-HYGIENE — REPEAT OFFENDER, now permanently internalized)
+- **CHAIN the gate to the commit with `&&` on ONE logical line; NEVER put `git commit` on a separate line from
+  the gate.** I hit this TWICE: a separate-line `typos . && echo OK` followed by a newline + `git add && git
+  commit` lets a FAILED gate (no "OK" printed) still commit (the git line is a separate statement). It bit the
+  write-validation fork-org-name typo (caught by CI) AND a capstone Increment-1 abbreviation typo in this very
+  file (caught only by a later local `typos`). THE RULE: `typos . && cargo fmt --all -- --check && git add -A &&
+  git commit …` — all one `&&` chain, output NOT suppressed, so a failure aborts BEFORE the commit. (And short
+  all-caps abbreviations + the fork's org name both trip typos → spell things out; keep org names out of
+  committed docs.)
+
+### 2026-06-09 (Equality-delete interop + run-script exit-code hardening — ORCHESTRATOR + REVIEWER Opus)
+- **An equality delete only applies to data with a STRICTLY LOWER data-sequence-number.** The interop fixture
+  must commit the DATA first (seq 1) and the equality-delete SECOND (seq 2, a later `rowDelta`/`row_delta`); if
+  they shared one commit the delete would NOT apply and the "deletes work" test would be vacuously green. Pin
+  the ordering. (The delete carries `equality_ids` = the keyed field ids + the delete-value rows; Java
+  `GenericAppenderFactory.newEqDeleteWriter`, Rust `EqualityDeleteFileWriter`.)
+- **`mvn -q exec:java` does NOT propagate the program's `System.exit(1)` to the shell exit code.** A
+  run.sh-driven Java VERIFY step (Java reads what Rust wrote) therefore needs an explicit OUTPUT-SENTINEL
+  check, not reliance on `$?`: capture the mvn output and assert `: 0 failures` is present with no `^FAIL `
+  line, else `exit 1`. Without it, a future write-incompatibility would print FAIL but the script would
+  falsely report DONE (a vacuous gate). Applied to every Direction-2 (Rust-writes→Java-reads) run script.
+- **The reviewer decoded the Rust-written avro MANIFESTS with the production Rust reader to confirm the
+  delete's content-type + `equality_ids` + sequence** — not just "the rows came out right". For a delete-type
+  interop, verify the on-disk delete file is the RIGHT KIND (EqualityDeletes vs PositionDeletes) carrying the
+  right metadata, so a position-delete masquerading as the fixture can't pass.
+- **Workflow scripts are PLAIN JS, not TS:** an inline template-literal prompt containing angle-bracket tokens
+  (Java generics like `List<Record>`, or `<->`) can trip the script parser ("Unexpected token … TypeScript
+  syntax"). Build long prompts as `[ '...', '...' ].join('\n')` arrays of plain strings to avoid stray `<`/`>`
+  and backtick-escaping hazards.
+
+### 2026-06-09 (Partitioned merge-on-read interop, both directions — capstone Increment 4 — ORCHESTRATOR + REVIEWER Opus)
+- **A partition-scoped delete is only correct if it does NOT cross partitions — pin BOTH the deleted row's
+  absence AND a sibling partition's survival.** The fixture partitions by `identity(category)` with a data file
+  PER partition (cat=a: 10/20/30, cat=b: 40/50) and a position-delete in cat=a only (position 1 = id=20). The
+  load-bearing assertions are (1) id=20 ABSENT and (2) cat=b's 40/50 ALL present — a bug that applied the cat=a
+  delete to cat=b, or dropped a whole partition, fails (2), not (1). Rust's `delete_file_index` keys deletes by
+  partition + spec id, so the cat=a delete reaches only the cat=a data file; that's the behavior under test.
+- **Direction-2 partitioned write needs a `PartitionKey`, and it does double duty.** Building the production
+  `DataFileWriter`/`PositionDeleteFileWriter` with a `PartitionKey::new(spec, schema, Struct::from_iter([Some(
+  Literal::string("a"))]))` both (a) auto-stamps the partition `Struct` + spec id onto the written `DataFile`
+  (so the manifest entry's partition matches) AND (b) routes the parquet under the partition path via the
+  location generator. One data file per partition fast_appended at seq 1, then the cat=a partition-scoped
+  position-delete row_delta'd at seq 2 — Java's `IcebergGenerics` reads it back to {10,30,40,50}. Still NO Rust
+  production change, Cargo still 0-diff (the partitioned write + partition-aware read already exist).
+- **The capstone is the cross-product, not a single axis.** Done = {position, equality} deletes × {Java-writes-
+  Rust-reads, Rust-writes-Java-reads} × {unpartitioned, partitioned} — each cell a real-row round-trip with the
+  reviewer mutating the written artifacts. Partitioning was the last axis; with it the data-level interop suite
+  is complete (4 commits). Deferred within partitioning (its own future increment): multi-file-per-partition +
+  non-identity transforms (bucket/truncate) + more column types.
+
 ### 2026-06-09 (OverwriteFiles.validateNoConflictingDeletes + shared validate_no_new_deletes_for_data_files — ORCHESTRATOR + REVIEWER Opus)
 - **The delete-applies-to-data-file sequence boundary is INCLUSIVE `>=`, not `>`.** Java
   `DeleteFileIndex.forDataFile` → `*.filter` → `findStartIndex` keeps deletes with `data_seq >=

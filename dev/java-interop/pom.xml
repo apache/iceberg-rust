@@ -58,6 +58,31 @@
       <artifactId>iceberg-api</artifactId>
       <version>${iceberg.version}</version>
     </dependency>
+    <!--
+      The DATA-LEVEL scan-execution interop capstone needs a REAL parquet record appender + a REAL
+      position-delete writer so the Java oracle can write a table containing genuine parquet data and a
+      genuine position-delete file (the merge-on-read fixture the Rust scan reads back). `iceberg-data`
+      provides `GenericAppenderFactory` / `GenericRecord` / `IcebergGenerics` (the generic record read);
+      `iceberg-parquet` provides the parquet writer those route to (`Parquet.write(...)` /
+      `GenericParquetWriter`). `hadoop-client-runtime` supplies the minimal Hadoop classes the
+      `iceberg-parquet` path touches at runtime (e.g. `org.apache.hadoop.conf.Configuration`). These are
+      TEST-ORACLE deps ONLY — the Rust crate's Cargo files are untouched; this is a dev tool like dev/spark/.
+    -->
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-data</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-parquet</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-client-runtime</artifactId>
+      <version>3.3.6</version>
+    </dependency>
   </dependencies>
 
   <build>
