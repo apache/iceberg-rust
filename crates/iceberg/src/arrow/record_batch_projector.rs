@@ -20,9 +20,8 @@ use std::sync::Arc;
 use arrow_array::{ArrayRef, RecordBatch, StructArray, make_array};
 use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
-use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
-use crate::arrow::schema::schema_to_arrow_schema;
+use crate::arrow::schema::{schema_to_arrow_schema, try_get_field_id_from_metadata};
 use crate::error::Result;
 use crate::spec::Schema as IcebergSchema;
 use crate::{Error, ErrorKind};
@@ -95,19 +94,7 @@ impl RecordBatchProjector {
         let arrow_schema_with_ids = Arc::new(schema_to_arrow_schema(&iceberg_schema)?);
 
         let field_id_fetch_func = |field: &Field| -> Result<Option<i64>> {
-            if let Some(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
-                let field_id = value.parse::<i32>().map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Failed to parse field id".to_string(),
-                    )
-                    .with_context("value", value)
-                    .with_source(e)
-                })?;
-                Ok(Some(field_id as i64))
-            } else {
-                Ok(None)
-            }
+            Ok(try_get_field_id_from_metadata(field)?.map(|id| id as i64))
         };
 
         let searchable_field_func = |_field: &Field| -> bool { true };

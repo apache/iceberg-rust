@@ -18,15 +18,19 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow_array::cast::AsArray;
 use arrow_array::{
-    Array as ArrowArray, ArrayRef, Int32Array, RecordBatch, RecordBatchOptions, RunArray,
+    Array as ArrowArray, ArrayRef, GenericListArray, Int32Array, MapArray, OffsetSizeTrait,
+    RecordBatch, RecordBatchOptions, RunArray, StructArray, new_null_array,
 };
 use arrow_cast::cast;
 use arrow_schema::{
-    DataType, Field, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef, SchemaRef,
+    DataType, Field, FieldRef, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+    SchemaRef,
 };
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
+use crate::arrow::schema::try_get_field_id_from_metadata;
 use crate::arrow::value::{create_primitive_array_repeated, create_primitive_array_single_element};
 use crate::arrow::{datum_to_arrow_type_with_ree, schema_to_arrow_schema, type_to_arrow_type};
 use crate::metadata_columns::get_metadata_field;
@@ -121,9 +125,9 @@ pub(crate) enum ColumnSource {
 
     // signifies that a column from the file's RecordBatch has undergone
     // type promotion so the source column with the given index needs
-    // to be promoted to the specified type
+    // to be promoted according to the given plan
     Promote {
-        target_type: DataType,
+        plan: PromotePlan,
         source_index: usize,
     },
 
@@ -148,6 +152,272 @@ pub(crate) enum ColumnSource {
     // be re-used and no per-column actions are required.
     // Deletion and Reorder can be achieved without needing this
     // post-processing step by using the projection mask.
+}
+
+/// Reconciles a source array to the target type by matching nested fields on
+/// field id rather than position, mirroring iceberg-java's nested readers.
+///
+/// The plan is resolved once per file, when the `BatchTransform` is built, so
+/// applying it per batch is just index lookups and array assembly.
+#[derive(Debug)]
+pub(crate) enum PromotePlan {
+    PassThrough,
+    Cast(DataType),
+    Struct {
+        fields: Fields,
+        children: Vec<ChildPlan>,
+    },
+    List {
+        field: FieldRef,
+        element: Box<PromotePlan>,
+    },
+    LargeList {
+        field: FieldRef,
+        element: Box<PromotePlan>,
+    },
+    Map {
+        field: FieldRef,
+        entry_fields: Fields,
+        entries: Vec<ChildPlan>,
+        sorted: bool,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum ChildPlan {
+    FromSource {
+        source_index: usize,
+        plan: PromotePlan,
+    },
+    Null {
+        target_type: DataType,
+    },
+}
+
+impl PromotePlan {
+    fn build(
+        source: &DataType,
+        target: &DataType,
+        snapshot_schema: &IcebergSchema,
+    ) -> Result<Self> {
+        if source == target {
+            return Ok(PromotePlan::PassThrough);
+        }
+        match (source, target) {
+            (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
+                Ok(PromotePlan::Struct {
+                    children: Self::build_struct_children(
+                        source_fields,
+                        target_fields,
+                        snapshot_schema,
+                    )?,
+                    fields: target_fields.clone(),
+                })
+            }
+            (DataType::List(source_field), DataType::List(target_field)) => Ok(PromotePlan::List {
+                element: Box::new(Self::build(
+                    source_field.data_type(),
+                    target_field.data_type(),
+                    snapshot_schema,
+                )?),
+                field: target_field.clone(),
+            }),
+            (DataType::LargeList(source_field), DataType::LargeList(target_field)) => {
+                Ok(PromotePlan::LargeList {
+                    element: Box::new(Self::build(
+                        source_field.data_type(),
+                        target_field.data_type(),
+                        snapshot_schema,
+                    )?),
+                    field: target_field.clone(),
+                })
+            }
+            (DataType::Map(source_entries, _), DataType::Map(target_entries, sorted)) => {
+                match (source_entries.data_type(), target_entries.data_type()) {
+                    (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
+                        Ok(PromotePlan::Map {
+                            entries: Self::build_struct_children(
+                                source_fields,
+                                target_fields,
+                                snapshot_schema,
+                            )?,
+                            entry_fields: target_fields.clone(),
+                            field: target_entries.clone(),
+                            sorted: *sorted,
+                        })
+                    }
+                    _ => Err(Error::new(
+                        ErrorKind::Unexpected,
+                        format!(
+                            "expected struct-typed map entries, got {source_entries:?} and {target_entries:?}"
+                        ),
+                    )),
+                }
+            }
+            (_, DataType::Struct(_) | DataType::List(_) | DataType::LargeList(_))
+            | (_, DataType::Map(_, _)) => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("cannot promote {source:?} to {target:?}"),
+            )),
+            _ => Ok(PromotePlan::Cast(target.clone())),
+        }
+    }
+
+    fn build_struct_children(
+        source_fields: &Fields,
+        target_fields: &Fields,
+        snapshot_schema: &IcebergSchema,
+    ) -> Result<Vec<ChildPlan>> {
+        let mut source_by_id = HashMap::with_capacity(source_fields.len());
+        for (idx, field) in source_fields.iter().enumerate() {
+            if let Some(id) = try_get_field_id_from_metadata(field)? {
+                source_by_id.insert(id, idx);
+            }
+        }
+        // Reachable for id-less files with nested types because the reader only
+        // applies name mapping to top-level fields; error rather than silently
+        // nulling every child.
+        if !source_fields.is_empty() && source_by_id.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "cannot reconcile struct fields by id: no source field carries a field id",
+            ));
+        }
+
+        target_fields
+            .iter()
+            .map(|target_field| {
+                let field_id = try_get_field_id_from_metadata(target_field)?;
+                match field_id.and_then(|id| source_by_id.get(&id).copied()) {
+                    Some(source_index) => Ok(ChildPlan::FromSource {
+                        plan: Self::build(
+                            source_fields[source_index].data_type(),
+                            target_field.data_type(),
+                            snapshot_schema,
+                        )?,
+                        source_index,
+                    }),
+                    None => {
+                        // Nested fields absent from the file only support rule #4
+                        // (null) of the spec's Column Projection rules; rule #3
+                        // (initial-default) is only wired up for top-level columns
+                        // via ColumnSource::Add.
+                        let iceberg_field =
+                            field_id.and_then(|id| snapshot_schema.field_by_id(id));
+                        if iceberg_field.is_some_and(|f| f.initial_default.is_some()) {
+                            return Err(Error::new(
+                                ErrorKind::FeatureUnsupported,
+                                format!(
+                                    "initial-default of nested field {} is not supported",
+                                    target_field.name()
+                                ),
+                            ));
+                        }
+                        if iceberg_field.map_or(!target_field.is_nullable(), |f| f.required) {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "required nested field {} is absent from the data file and has no initial-default",
+                                    target_field.name()
+                                ),
+                            ));
+                        }
+                        Ok(ChildPlan::Null {
+                            target_type: target_field.data_type().clone(),
+                        })
+                    }
+                }
+            })
+            .collect()
+    }
+
+    fn apply(&self, array: &ArrayRef) -> Result<ArrayRef> {
+        match self {
+            PromotePlan::PassThrough => Ok(Arc::clone(array)),
+            PromotePlan::Cast(target_type) => Ok(cast(array.as_ref(), target_type)?),
+            PromotePlan::Struct { fields, children } => {
+                let source = array
+                    .as_struct_opt()
+                    .ok_or_else(|| promote_err(array, "struct"))?;
+                Ok(Arc::new(Self::apply_struct(source, fields, children)?))
+            }
+            PromotePlan::List { field, element } => {
+                let source = array
+                    .as_list_opt::<i32>()
+                    .ok_or_else(|| promote_err(array, "list"))?;
+                Self::apply_list(source, field, element)
+            }
+            PromotePlan::LargeList { field, element } => {
+                let source = array
+                    .as_list_opt::<i64>()
+                    .ok_or_else(|| promote_err(array, "large list"))?;
+                Self::apply_list(source, field, element)
+            }
+            PromotePlan::Map {
+                field,
+                entry_fields,
+                entries,
+                sorted,
+            } => {
+                let source = array
+                    .as_map_opt()
+                    .ok_or_else(|| promote_err(array, "map"))?;
+                let entries = Self::apply_struct(source.entries(), entry_fields, entries)?;
+                Ok(Arc::new(MapArray::try_new(
+                    field.clone(),
+                    source.offsets().clone(),
+                    entries,
+                    source.nulls().cloned(),
+                    *sorted,
+                )?))
+            }
+        }
+    }
+
+    fn apply_struct(
+        source: &StructArray,
+        fields: &Fields,
+        children: &[ChildPlan],
+    ) -> Result<StructArray> {
+        let columns = children
+            .iter()
+            .map(|child| match child {
+                ChildPlan::FromSource { source_index, plan } => {
+                    plan.apply(source.column(*source_index))
+                }
+                ChildPlan::Null { target_type } => Ok(new_null_array(target_type, source.len())),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(StructArray::try_new(
+            fields.clone(),
+            columns,
+            source.nulls().cloned(),
+        )?)
+    }
+
+    fn apply_list<O: OffsetSizeTrait>(
+        source: &GenericListArray<O>,
+        field: &FieldRef,
+        element: &PromotePlan,
+    ) -> Result<ArrayRef> {
+        let values = element.apply(source.values())?;
+        Ok(Arc::new(GenericListArray::<O>::try_new(
+            field.clone(),
+            source.offsets().clone(),
+            values,
+            source.nulls().cloned(),
+        )?))
+    }
+}
+
+fn promote_err(array: &ArrayRef, expected: &str) -> Error {
+    Error::new(
+        ErrorKind::Unexpected,
+        format!(
+            "expected a {expected} array to promote, got {:?}",
+            array.data_type()
+        ),
+    )
 }
 
 #[derive(Debug)]
@@ -578,25 +848,26 @@ impl RecordBatchTransformer {
                 //
                 // At this point, all field IDs in the source schema are trustworthy.
                 // No conflict detection needed - schema resolution happened in reader.rs.
-                let field_by_id = field_id_to_source_schema_map.get(field_id).map(
-                    |(source_field, source_index)| {
-                        if source_field.data_type().equals_datatype(target_type) {
-                            ColumnSource::PassThrough {
-                                source_index: *source_index,
-                            }
-                        } else {
-                            ColumnSource::Promote {
-                                target_type: target_type.clone(),
-                                source_index: *source_index,
-                            }
-                        }
-                    },
-                );
-
+                //
                 // Apply spec's fallback steps for "not present" fields.
                 // Rule #1 (constants) is handled at the beginning of this function
-                let column_source = if let Some(source) = field_by_id {
-                    source
+                let column_source = if let Some((source_field, source_index)) =
+                    field_id_to_source_schema_map.get(field_id)
+                {
+                    if source_field.data_type().equals_datatype(target_type) {
+                        ColumnSource::PassThrough {
+                            source_index: *source_index,
+                        }
+                    } else {
+                        ColumnSource::Promote {
+                            plan: PromotePlan::build(
+                                source_field.data_type(),
+                                target_type,
+                                snapshot_schema,
+                            )?,
+                            source_index: *source_index,
+                        }
+                    }
                 } else {
                     // Rules #2, #3 and #4:
                     // Rule #2 (name mapping) was already applied in reader.rs if needed.
@@ -640,15 +911,7 @@ impl RecordBatchTransformer {
     ) -> Result<HashMap<i32, (FieldRef, usize)>> {
         let mut field_id_to_source_schema = HashMap::new();
         for (source_field_idx, source_field) in source_schema.fields.iter().enumerate() {
-            // Check if field has a field ID in metadata
-            if let Some(field_id_str) = source_field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
-                let this_field_id = field_id_str.parse().map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("field id not parseable as an i32: {e}"),
-                    )
-                })?;
-
+            if let Some(this_field_id) = try_get_field_id_from_metadata(source_field)? {
                 field_id_to_source_schema
                     .insert(this_field_id, (source_field.clone(), source_field_idx));
             }
@@ -674,10 +937,9 @@ impl RecordBatchTransformer {
                 Ok(match op {
                     ColumnSource::PassThrough { source_index } => columns[*source_index].clone(),
 
-                    ColumnSource::Promote {
-                        target_type,
-                        source_index,
-                    } => cast(&*columns[*source_index], target_type)?,
+                    ColumnSource::Promote { plan, source_index } => {
+                        plan.apply(&columns[*source_index])?
+                    }
 
                     ColumnSource::Add { target_type, value } => {
                         Self::create_column(target_type, value, num_rows)?
@@ -730,17 +992,379 @@ mod test {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::{Int32Type, Int64Type};
     use arrow_array::{
-        Array, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
-        StringArray,
+        Array, ArrayRef, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
+        LargeListArray, ListArray, MapArray, RecordBatch, StringArray, StructArray,
     };
-    use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+    use arrow_buffer::{NullBuffer, OffsetBuffer};
+    use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
     use crate::arrow::record_batch_transformer::{
-        RecordBatchTransformer, RecordBatchTransformerBuilder,
+        PromotePlan, RecordBatchTransformer, RecordBatchTransformerBuilder,
     };
     use crate::spec::{Literal, NestedField, PrimitiveType, Schema, Struct, Type};
+
+    fn promote(source: &ArrayRef, target: &DataType, schema: &Schema) -> crate::Result<ArrayRef> {
+        PromotePlan::build(source.data_type(), target, schema)?.apply(source)
+    }
+
+    fn empty_schema() -> Schema {
+        Schema::builder().build().unwrap()
+    }
+
+    fn unevolved_struct_type() -> DataType {
+        DataType::Struct(Fields::from(vec![simple_field(
+            "x",
+            DataType::Int32,
+            true,
+            "5",
+        )]))
+    }
+
+    fn evolved_struct_type() -> DataType {
+        DataType::Struct(Fields::from(vec![
+            simple_field("x", DataType::Int32, true, "5"),
+            simple_field("y", DataType::Int32, true, "6"),
+        ]))
+    }
+
+    fn unevolved_struct_data(x_values: Vec<i32>) -> Arc<StructArray> {
+        Arc::new(StructArray::new(
+            Fields::from(vec![simple_field("x", DataType::Int32, true, "5")]),
+            vec![Arc::new(Int32Array::from(x_values)) as ArrayRef],
+            None,
+        ))
+    }
+
+    fn assert_existing_field_kept(s: &StructArray, expected_existing: &[i32]) {
+        assert_eq!(
+            s.column(0).as_primitive::<Int32Type>().values(),
+            expected_existing
+        );
+    }
+
+    fn assert_added_field_null(s: &StructArray) {
+        assert_eq!(s.column(1).null_count(), s.len());
+    }
+
+    #[test]
+    fn promote_struct_fills_added_middle_field_by_id() {
+        let source = Arc::new(StructArray::new(
+            Fields::from(vec![
+                simple_field("a", DataType::Int32, true, "1"),
+                simple_field("c", DataType::Utf8, true, "3"),
+            ]),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["x", "y"])) as ArrayRef,
+            ],
+            None,
+        )) as ArrayRef;
+        let target = DataType::Struct(Fields::from(vec![
+            simple_field("a", DataType::Int32, true, "1"),
+            simple_field("b", DataType::Int32, true, "2"),
+            simple_field("c", DataType::Utf8, true, "3"),
+        ]));
+
+        let out = promote(&source, &target, &empty_schema()).unwrap();
+        let s = out.as_struct();
+        assert_eq!(s.num_columns(), 3);
+        assert_eq!(s.column(0).as_primitive::<Int32Type>().values(), &[1, 2]);
+        assert_eq!(s.column(1).null_count(), 2);
+        let cc = s.column(2).as_string::<i32>();
+        assert_eq!((cc.value(0), cc.value(1)), ("x", "y"));
+    }
+
+    #[test]
+    fn promote_struct_missing_field_before_nested_list_struct() {
+        let elem_field = Arc::new(simple_field("element", unevolved_struct_type(), true, "4"));
+        let list = Arc::new(ListArray::new(
+            elem_field.clone(),
+            OffsetBuffer::new(vec![0, 1, 2].into()),
+            unevolved_struct_data(vec![10, 20]),
+            None,
+        )) as ArrayRef;
+        let source = Arc::new(StructArray::new(
+            Fields::from(vec![
+                simple_field("s", DataType::Utf8, true, "1"),
+                simple_field("ev", DataType::List(elem_field.clone()), true, "3"),
+            ]),
+            vec![
+                Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef,
+                list,
+            ],
+            None,
+        )) as ArrayRef;
+        let target = DataType::Struct(Fields::from(vec![
+            simple_field("s", DataType::Utf8, true, "1"),
+            simple_field("gap", DataType::Int32, true, "2"),
+            simple_field("ev", DataType::List(elem_field), true, "3"),
+        ]));
+
+        let out = promote(&source, &target, &empty_schema()).unwrap();
+        let st = out.as_struct();
+        assert_eq!(st.num_columns(), 3);
+        assert_eq!(st.column(1).null_count(), 2);
+        let ev = st.column(2).as_list::<i32>();
+        assert_eq!(ev.len(), 2);
+        assert_eq!(
+            ev.value(0)
+                .as_struct()
+                .column(0)
+                .as_primitive::<Int32Type>()
+                .value(0),
+            10
+        );
+    }
+
+    #[test]
+    fn promote_list_element_struct_fills_added_field_by_id() {
+        let source = Arc::new(ListArray::new(
+            Arc::new(simple_field("element", unevolved_struct_type(), true, "4")),
+            OffsetBuffer::new(vec![0, 1, 2].into()),
+            unevolved_struct_data(vec![10, 20]),
+            None,
+        )) as ArrayRef;
+        let target = DataType::List(Arc::new(simple_field(
+            "element",
+            evolved_struct_type(),
+            true,
+            "4",
+        )));
+
+        let out = promote(&source, &target, &empty_schema()).unwrap();
+        let lst = out.as_list::<i32>();
+        assert_eq!(lst.len(), 2);
+        let elements = lst.values().as_struct();
+        assert_existing_field_kept(elements, &[10, 20]);
+        assert_added_field_null(elements);
+    }
+
+    #[test]
+    fn promote_map_value_struct_fills_added_field_by_id() {
+        let entries = StructArray::new(
+            Fields::from(vec![
+                simple_field("key", DataType::Utf8, false, "7"),
+                simple_field("value", unevolved_struct_type(), true, "8"),
+            ]),
+            vec![
+                Arc::new(StringArray::from(vec!["k1", "k2"])) as ArrayRef,
+                unevolved_struct_data(vec![100, 200]),
+            ],
+            None,
+        );
+        let source = Arc::new(MapArray::new(
+            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            OffsetBuffer::new(vec![0, 1, 2].into()),
+            entries,
+            None,
+            false,
+        )) as ArrayRef;
+        let target_entries = DataType::Struct(Fields::from(vec![
+            simple_field("key", DataType::Utf8, false, "7"),
+            simple_field("value", evolved_struct_type(), true, "8"),
+        ]));
+        let target = DataType::Map(
+            Arc::new(Field::new("entries", target_entries, false)),
+            false,
+        );
+
+        let out = promote(&source, &target, &empty_schema()).unwrap();
+        let m = out.as_map();
+        assert_eq!(m.len(), 2);
+        let entries = m.entries();
+        let ks = entries.column(0).as_string::<i32>();
+        assert_eq!((ks.value(0), ks.value(1)), ("k1", "k2"));
+        let values = entries.column(1).as_struct();
+        assert_existing_field_kept(values, &[100, 200]);
+        assert_added_field_null(values);
+    }
+
+    #[test]
+    fn promote_large_list_element_struct_fills_added_field_by_id() {
+        let source = Arc::new(LargeListArray::new(
+            Arc::new(simple_field("element", unevolved_struct_type(), true, "4")),
+            OffsetBuffer::new(vec![0i64, 1, 2].into()),
+            unevolved_struct_data(vec![7, 8]),
+            None,
+        )) as ArrayRef;
+        let target = DataType::LargeList(Arc::new(simple_field(
+            "element",
+            evolved_struct_type(),
+            true,
+            "4",
+        )));
+
+        let out = promote(&source, &target, &empty_schema()).unwrap();
+        let lst = out.as_list::<i64>();
+        assert_eq!(lst.len(), 2);
+        let elements = lst.values().as_struct();
+        assert_existing_field_kept(elements, &[7, 8]);
+        assert_added_field_null(elements);
+    }
+
+    #[test]
+    fn promote_struct_renames_field_by_id() {
+        let source = Arc::new(StructArray::new(
+            Fields::from(vec![simple_field("x_old", DataType::Int32, true, "5")]),
+            vec![Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef],
+            None,
+        )) as ArrayRef;
+        let target = DataType::Struct(Fields::from(vec![simple_field(
+            "x",
+            DataType::Int32,
+            true,
+            "5",
+        )]));
+
+        let out = promote(&source, &target, &empty_schema()).unwrap();
+        let s = out.as_struct();
+        assert_eq!(s.fields()[0].name(), "x");
+        assert_eq!(s.column(0).as_primitive::<Int32Type>().values(), &[1, 2]);
+    }
+
+    #[test]
+    fn promote_struct_promotes_child_primitive() {
+        let source = Arc::new(StructArray::new(
+            Fields::from(vec![simple_field("x", DataType::Int32, true, "5")]),
+            vec![Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef],
+            None,
+        )) as ArrayRef;
+        let target = DataType::Struct(Fields::from(vec![simple_field(
+            "x",
+            DataType::Int64,
+            true,
+            "5",
+        )]));
+
+        let out = promote(&source, &target, &empty_schema()).unwrap();
+        let s = out.as_struct();
+        assert_eq!(s.column(0).as_primitive::<Int64Type>().values(), &[1, 2]);
+    }
+
+    #[test]
+    fn promote_struct_preserves_null_parent_rows() {
+        let source = Arc::new(StructArray::new(
+            Fields::from(vec![simple_field("x", DataType::Int32, true, "5")]),
+            vec![Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef],
+            Some(NullBuffer::from(vec![true, false])),
+        )) as ArrayRef;
+
+        let out = promote(&source, &evolved_struct_type(), &empty_schema()).unwrap();
+        let s = out.as_struct();
+        assert!(!s.is_null(0));
+        assert!(s.is_null(1));
+        assert_eq!(s.column(0).as_primitive::<Int32Type>().value(0), 10);
+        assert_added_field_null(s);
+    }
+
+    #[test]
+    fn promote_struct_without_source_field_ids_errors() {
+        let source = Arc::new(StructArray::new(
+            Fields::from(vec![Field::new("x", DataType::Int32, true)]),
+            vec![Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef],
+            None,
+        )) as ArrayRef;
+
+        let err = promote(&source, &evolved_struct_type(), &empty_schema()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("no source field carries a field id")
+        );
+    }
+
+    #[test]
+    fn promote_required_nested_field_absent_without_default_errors() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(6, "y", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+        let source = unevolved_struct_data(vec![1, 2]) as ArrayRef;
+
+        let err = promote(&source, &evolved_struct_type(), &schema).unwrap_err();
+        assert!(err.to_string().contains("required nested field"));
+    }
+
+    #[test]
+    fn promote_nested_field_with_initial_default_errors() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(6, "y", Type::Primitive(PrimitiveType::Int))
+                    .with_initial_default(Literal::int(42))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+        let source = unevolved_struct_data(vec![1, 2]) as ArrayRef;
+
+        let err = promote(&source, &evolved_struct_type(), &schema).unwrap_err();
+        assert!(err.to_string().contains("initial-default"));
+    }
+
+    #[test]
+    fn promote_evolved_nested_struct_via_process_record_batch() {
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(
+                        2,
+                        "s",
+                        Type::Struct(crate::spec::StructType::new(vec![
+                            NestedField::optional(5, "x", Type::Primitive(PrimitiveType::Long))
+                                .into(),
+                            NestedField::optional(6, "y", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let mut transformer = RecordBatchTransformerBuilder::new(snapshot_schema, &[1, 2]).build();
+
+        // The file was written before x was promoted to long and renamed from
+        // x_old, and before y was added.
+        let file_struct_type = DataType::Struct(Fields::from(vec![simple_field(
+            "x_old",
+            DataType::Int32,
+            true,
+            "5",
+        )]));
+        let file_schema = Arc::new(ArrowSchema::new(vec![
+            simple_field("id", DataType::Int32, false, "1"),
+            simple_field("s", file_struct_type.clone(), true, "2"),
+        ]));
+        let file_batch = RecordBatch::try_new(file_schema, vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StructArray::new(
+                Fields::from(vec![simple_field("x_old", DataType::Int32, true, "5")]),
+                vec![Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef],
+                Some(NullBuffer::from(vec![true, true, false])),
+            )),
+        ])
+        .unwrap();
+
+        let result = transformer.process_record_batch(file_batch).unwrap();
+
+        assert_eq!(result.num_columns(), 2);
+        assert_eq!(result.num_rows(), 3);
+        let s = result.column(1).as_struct();
+        assert_eq!(s.fields()[0].name(), "x");
+        assert_eq!(s.column(0).as_primitive::<Int64Type>().values(), &[
+            10, 20, 30
+        ]);
+        assert!(s.is_null(2));
+        assert_eq!(s.column(1).null_count(), 3);
+    }
 
     /// Helper to extract string values from either StringArray or RunEndEncoded<StringArray>
     /// Returns empty string for null values
@@ -753,7 +1377,7 @@ mod test {
             }
         } else if let Some(run_array) = array
             .as_any()
-            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
+            .downcast_ref::<arrow_array::RunArray<Int32Type>>()
         {
             let values = run_array.values();
             let string_values = values
@@ -777,7 +1401,7 @@ mod test {
             int_array.value(index)
         } else if let Some(run_array) = array
             .as_any()
-            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
+            .downcast_ref::<arrow_array::RunArray<Int32Type>>()
         {
             let values = run_array.values();
             let int_values = values
@@ -1022,7 +1646,7 @@ mod test {
         let struct_column = result
             .column(2)
             .as_any()
-            .downcast_ref::<arrow_array::StructArray>()
+            .downcast_ref::<StructArray>()
             .unwrap();
         assert!(struct_column.is_null(0));
         assert!(struct_column.is_null(1));
