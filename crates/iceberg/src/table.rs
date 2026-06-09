@@ -502,11 +502,7 @@ mod tests {
         Arc::new(kms)
     }
 
-    async fn encrypted_table_metadata() -> (
-        TableMetadata,
-        FileIO,
-        Arc<dyn KeyManagementClient>,
-    ) {
+    async fn encrypted_table_metadata() -> (TableMetadata, FileIO, Arc<dyn KeyManagementClient>) {
         let io = FileIO::new_with_memory();
         let plain_path = "memory:///table/metadata/manifest-list-plain.avro";
         let encrypted_path = "memory:///table/metadata/manifest-list-enc.avro";
