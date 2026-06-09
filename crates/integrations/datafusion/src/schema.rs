@@ -31,8 +31,25 @@ use iceberg::arrow::arrow_schema_to_schema_auto_assign_ids;
 use iceberg::inspect::MetadataTableType;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableCreation, TableIdent};
 
+use crate::IcebergCatalogConfig;
 use crate::table::IcebergTableProvider;
 use crate::to_datafusion_error;
+
+/// Builds a table provider, threading the catalog config through when present so
+/// the provider (and the plan nodes it produces) can be distributed.
+async fn build_table_provider(
+    catalog: Arc<dyn Catalog>,
+    config: Option<IcebergCatalogConfig>,
+    namespace: NamespaceIdent,
+    name: impl Into<String>,
+) -> Result<IcebergTableProvider> {
+    match config {
+        Some(config) => {
+            IcebergTableProvider::try_new_with_config(catalog, config, namespace, name).await
+        }
+        None => IcebergTableProvider::try_new(catalog, namespace, name).await,
+    }
+}
 
 /// Represents a [`SchemaProvider`] for the Iceberg [`Catalog`], managing
 /// access to table providers within a specific namespace.
@@ -42,6 +59,10 @@ pub(crate) struct IcebergSchemaProvider {
     catalog: Arc<dyn Catalog>,
     /// The namespace this schema represents
     namespace: NamespaceIdent,
+    /// Optional serializable catalog/storage config. When present, every table
+    /// provider this schema creates carries it, so catalog-registered tables can
+    /// be queried by a distributed engine.
+    config: Option<IcebergCatalogConfig>,
     /// A concurrent map where keys are table names
     /// and values are dynamic references to objects implementing the
     /// [`TableProvider`] trait.
@@ -61,6 +82,25 @@ impl IcebergSchemaProvider {
         client: Arc<dyn Catalog>,
         namespace: NamespaceIdent,
     ) -> Result<Self> {
+        Self::try_new_impl(client, None, namespace).await
+    }
+
+    /// Like [`try_new`](Self::try_new), but threads a serializable
+    /// [`IcebergCatalogConfig`] into every table provider it creates, so the
+    /// tables in this schema can be queried by a distributed engine.
+    pub(crate) async fn try_new_with_config(
+        client: Arc<dyn Catalog>,
+        config: IcebergCatalogConfig,
+        namespace: NamespaceIdent,
+    ) -> Result<Self> {
+        Self::try_new_impl(client, Some(config), namespace).await
+    }
+
+    async fn try_new_impl(
+        client: Arc<dyn Catalog>,
+        config: Option<IcebergCatalogConfig>,
+        namespace: NamespaceIdent,
+    ) -> Result<Self> {
         // TODO:
         // Tables and providers should be cached based on table_name
         // if we have a cache miss; we update our internal cache & check again
@@ -75,7 +115,14 @@ impl IcebergSchemaProvider {
         let providers = try_join_all(
             table_names
                 .iter()
-                .map(|name| IcebergTableProvider::try_new(client.clone(), namespace.clone(), name))
+                .map(|name| {
+                    build_table_provider(
+                        client.clone(),
+                        config.clone(),
+                        namespace.clone(),
+                        name.clone(),
+                    )
+                })
                 .collect::<Vec<_>>(),
         )
         .await?;
@@ -88,6 +135,7 @@ impl IcebergSchemaProvider {
         Ok(IcebergSchemaProvider {
             catalog: client,
             namespace,
+            config,
             tables,
         })
     }
@@ -171,6 +219,7 @@ impl SchemaProvider for IcebergSchemaProvider {
 
         let catalog = self.catalog.clone();
         let namespace = self.namespace.clone();
+        let config = self.config.clone();
         let tables = self.tables.clone();
         let name_clone = name.clone();
 
@@ -189,9 +238,11 @@ impl SchemaProvider for IcebergSchemaProvider {
                     .await
                     .map_err(to_datafusion_error)?;
 
-                // Create a new table provider using the catalog reference
-                let table_provider = IcebergTableProvider::try_new(
+                // Create a new table provider using the catalog reference,
+                // carrying the config so it stays distributable.
+                let table_provider = build_table_provider(
                     catalog.clone(),
+                    config.clone(),
                     namespace.clone(),
                     name_clone.clone(),
                 )
@@ -320,6 +371,81 @@ mod tests {
             .unwrap();
 
         (provider, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn test_schema_provider_with_config_propagates_to_tables() {
+        use iceberg::TableCreation;
+        use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+
+        let temp_dir = TempDir::new().unwrap();
+        let warehouse_path = temp_dir.path().to_str().unwrap().to_string();
+        let catalog = Arc::new(
+            MemoryCatalogBuilder::default()
+                .load(
+                    "memory",
+                    HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse_path.clone())]),
+                )
+                .await
+                .unwrap(),
+        );
+
+        let namespace = NamespaceIdent::new("test_ns".to_string());
+        catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await
+            .unwrap();
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+        catalog
+            .create_table(
+                &namespace,
+                TableCreation::builder()
+                    .name("t".to_string())
+                    .location(format!("{warehouse_path}/t"))
+                    .schema(schema)
+                    .properties(HashMap::new())
+                    .build(),
+            )
+            .await
+            .unwrap();
+
+        // With config: the table provider carries it (and is therefore distributable).
+        let config = crate::IcebergCatalogConfig::new("memory", "memory", HashMap::new());
+        let with_config =
+            IcebergSchemaProvider::try_new_with_config(catalog.clone(), config, namespace.clone())
+                .await
+                .unwrap();
+        let provider = with_config.table("t").await.unwrap().expect("table provider");
+        let iceberg = provider
+            .as_any()
+            .downcast_ref::<IcebergTableProvider>()
+            .expect("IcebergTableProvider");
+        assert!(
+            iceberg.config().is_some(),
+            "try_new_with_config should propagate the config to its tables"
+        );
+
+        // Without config: providers stay config-less (legacy behavior).
+        let without_config = IcebergSchemaProvider::try_new(catalog.clone(), namespace.clone())
+            .await
+            .unwrap();
+        let provider = without_config
+            .table("t")
+            .await
+            .unwrap()
+            .expect("table provider");
+        let iceberg = provider
+            .as_any()
+            .downcast_ref::<IcebergTableProvider>()
+            .expect("IcebergTableProvider");
+        assert!(iceberg.config().is_none());
     }
 
     #[tokio::test]

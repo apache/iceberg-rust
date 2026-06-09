@@ -1,0 +1,107 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! # Ballista Iceberg driver
+//!
+//! Adds distributed Apache Iceberg reads and writes to Ballista.
+//!
+//! Iceberg's DataFusion integration already produces a complete physical write
+//! plan (`IcebergCommitExec -> CoalescePartitionsExec -> IcebergWriteExec ->
+//! input`). The only thing missing for Ballista is serialization: Ballista
+//! ships logical and physical plans to remote nodes, and the Iceberg plan nodes
+//! hold live catalog/storage handles that cannot be serialized. This crate
+//! provides the logical and physical extension codecs that serialize the
+//! minimal config needed to rebuild those handles on each node.
+//!
+//! ## Usage (standalone)
+//!
+//! ```ignore
+//! use std::collections::HashMap;
+//! use std::sync::Arc;
+//!
+//! use iceberg_ballista::{register_iceberg_codecs, register_iceberg_table, IcebergCatalogConfig};
+//! use ballista_core::extension::SessionConfigExt;
+//! use datafusion::prelude::{SessionConfig, SessionContext};
+//! use iceberg::NamespaceIdent;
+//!
+//! # async fn run() -> datafusion::error::Result<()> {
+//! // 1. Register the Iceberg codecs on the session config, then start standalone Ballista.
+//! let config = register_iceberg_codecs(SessionConfig::new_with_ballista());
+//! let ctx = SessionContext::standalone_with_config(config).await?;
+//!
+//! // 2. Register a catalog-backed Iceberg table for reads and writes.
+//! let props = HashMap::from([("uri".to_string(), "http://localhost:8181".to_string())]);
+//! let cfg = IcebergCatalogConfig::new("rest", "rest", props);
+//! register_iceberg_table(&ctx, "t", cfg, NamespaceIdent::new("ns".into()), "tbl").await?;
+//!
+//! // 3. INSERT runs distributed across the cluster.
+//! ctx.sql("INSERT INTO t SELECT * FROM source").await?.collect().await?;
+//! # Ok(())
+//! # }
+//! ```
+
+mod logical_codec;
+mod physical_codec;
+mod serde;
+
+use std::sync::Arc;
+
+use ballista_core::extension::SessionConfigExt;
+use datafusion::common::DataFusionError;
+use datafusion::prelude::{SessionConfig, SessionContext};
+use iceberg::NamespaceIdent;
+
+pub use crate::logical_codec::IcebergLogicalCodec;
+pub use crate::physical_codec::IcebergPhysicalCodec;
+// Re-export the config type users need from the iceberg integration crate.
+pub use iceberg_datafusion::IcebergCatalogConfig;
+
+/// Installs the Iceberg logical and physical extension codecs onto a
+/// [`SessionConfig`].
+///
+/// In a standalone Ballista cluster the scheduler and executor both derive
+/// their codecs from this session config, so this single call is enough for an
+/// end-to-end distributed Iceberg query. For a separately deployed scheduler and
+/// executor, set the same codecs on their process configs
+/// (`override_logical_codec` / `override_physical_codec`).
+pub fn register_iceberg_codecs(config: SessionConfig) -> SessionConfig {
+    config
+        .with_ballista_logical_extension_codec(Arc::new(IcebergLogicalCodec::default()))
+        .with_ballista_physical_extension_codec(Arc::new(IcebergPhysicalCodec::default()))
+}
+
+/// Builds a catalog-backed [`IcebergTableProvider`](iceberg_datafusion::IcebergTableProvider)
+/// from `config` and registers it on `ctx` under `register_name`.
+///
+/// The provider carries the `config` so that the plan nodes it produces can be
+/// serialized and reconstructed on remote Ballista nodes.
+pub async fn register_iceberg_table(
+    ctx: &SessionContext,
+    register_name: &str,
+    config: IcebergCatalogConfig,
+    namespace: NamespaceIdent,
+    table: impl Into<String>,
+) -> Result<(), DataFusionError> {
+    let catalog = serde::build_catalog(&config).await?;
+    let provider = iceberg_datafusion::IcebergTableProvider::try_new_with_config(
+        catalog, config, namespace, table,
+    )
+    .await
+    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    ctx.register_table(register_name, Arc::new(provider))?;
+    Ok(())
+}
