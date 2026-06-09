@@ -2133,3 +2133,365 @@ How to use it (see the manuals' §2):
   DATA append (the data check did not run), and data-flag-only must allow a matching concurrent DELETE (the delete
   check did not run). A single "both off / both on" pair cannot catch an accidental coupling where one flag enables
   both checks.
+
+### 2026-06-09 (DeleteFiles validateFilesExist — status axis on the validation walk, BUILDER Opus)
+- **DO add a STATUS AXIS to the shared `files_after` walk (was `added_files_after`) — parameterize
+  `status_to_keep: ManifestStatus` — rather than fork a second near-identical walk.** *Why:* Java's
+  `validationHistory` is one walk; the per-check `ManifestGroup` entry filter differs only in the status it
+  keeps (`Added` for the conflict checks via `ignoreDeleted().ignoreExisting()`; `Deleted` for
+  `validateDataFilesExist`/`deletedDataFiles` via `entry.status() == DELETED` + `ignoreExisting()`). The two
+  existing callers (`added_data_files_after`, `added_delete_files_after`) pass `ManifestStatus::Added` and are
+  BEHAVIOR-PRESERVING — proven by the ReplacePartitions/RowDelta/OverwriteFiles conflict tests staying green.
+  The new `deleted_data_files_after` passes `ManifestStatus::Deleted`. One walk, one axis, no drift.
+- **DO confirm the Deleted-tombstone SOURCING before trusting the `added_snapshot_id == snapshot_id` manifest
+  filter for a concurrent deletion.** *Why:* the load-bearing question is "does a concurrently-deleted file's
+  `Deleted` tombstone live in a manifest the concurrent snapshot ITSELF wrote?" It does:
+  `rewrite_manifest_with_deletes` (snapshot.rs) writes the removed entry via `add_delete_entry` into a NEW
+  manifest whose `added_snapshot_id` is the committing snapshot id. So the SAME `added_snapshot_id ==
+  snapshot.snapshot_id()` filter that finds a snapshot's `Added` entries also finds its `Deleted` tombstones —
+  exactly Java's `manifest.snapshotId() == currentSnapshot.snapshotId()`. Mutation-verified end-to-end (the
+  headline test fails the instant the status axis keeps `Added`), so the sourcing claim is pinned, not assumed.
+- **DO model `VALIDATE_DATA_FILES_EXIST_OPERATIONS = {OVERWRITE, REPLACE, DELETE}` as `{Overwrite, Delete}` in
+  Rust and SAY WHY.** *Why:* the Rust `Operation` enum has no `Replace` variant (a `ReplacePartitions` commit
+  records `Operation::Overwrite`; a rewrite is not yet a distinct op). Dropping the unrepresentable `REPLACE` is
+  faithful — Rust never records a `REPLACE` snapshot to miss — NOT a gap. Document it on the predicate so a
+  future agent adding a `Replace` op extends the set.
+- **DO recognize the flag-OFF control yields a DIFFERENT error than the validation path, and assert on the
+  DISTINCTION.** *Why:* with `validate_files_exist()` OFF, the re-based delete still cannot resolve the
+  concurrently-vanished file, so `resolve_delete_paths` fails with the GENERIC "Missing required files to delete"
+  — NOT the validateDataFilesExist "Cannot commit, missing data files". Asserting the OFF test gets the generic
+  message AND does NOT get the validation message proves the validation path is the genuinely OPT-IN one (a
+  weaker `is_err()` assertion would pass even if validation always ran). The two messages must stay textually
+  distinct for this to hold.
+- **DO note the `StreamingDelete.validate()` wiring nuance honestly.** *Why:* Java `StreamingDelete.validate()`
+  calls `failMissingDeletePaths()` (the filter-manager required-deletes mechanism), NOT `validateDataFilesExist`
+  directly — `validateDataFilesExist` is the method the brief targets for the Rust delete path
+  (requiredDataFiles = the files being deleted), modeled on RowDelta/ReplacePartitions' `validate` seam. The
+  Rust port is faithful to `validateDataFilesExist`'s CONTRACT; flag the wiring difference rather than imply
+  `StreamingDelete` calls it.
+
+### 2026-06-09 (Phase 2 — DeleteFiles `validateFilesExist`, REVIEWER Opus)
+- **DO add the no-override tx-captured-start test for EVERY new conflict-validation action — it is the SAME
+  gap the Increment-6 reviewer already caught for OverwriteFiles/RowDelta/ReplacePartitions, and it recurs.**
+  *Why:* the DeleteFiles builder's 5 files-exist tests ALL passed `.validate_from_snapshot(...)`, which
+  short-circuits `effective_start = validate_from_snapshot.or(starting_snapshot_id)` and NEVER reads the
+  tx-captured `starting_snapshot_id` field. Mutation-verified the gap was REAL: rewriting the fallback to read
+  the REFRESHED head (`current.metadata().current_snapshot_id()`) instead of the tx-captured start passed ALL
+  16 delete_files tests — the brief's #1 danger (start re-read at validation time ⇒ start == current head ⇒
+  empty concurrent window ⇒ the files-exist check silently ALWAYS PASSES) was completely unpinned. Added
+  `test_delete_files_exist_rejects_concurrent_using_tx_captured_starting_snapshot` (validate enabled, NO
+  override, concurrent same-file delete): the refreshed-head mutation now fails EXACTLY this one test (16
+  passed / 1 failed), proving it uniquely pins the `Transaction::new` capture surviving `do_commit`'s re-base.
+  When porting a validation that has BOTH an explicit `validate_from_snapshot` override AND an implicit
+  tx-captured default, a test that always sets the override cannot pin the default source — write one that omits it.
+- **DO mutation-test the content-type axis AND the intersection direction separately, not just the status/op
+  axes.** *Why:* beyond the four mutations the builder ran, two more axes are independently load-bearing and
+  were each pinned by a DISTINCT test: (1) `deleted_data_files_after` using `ManifestContentType::Deletes`
+  instead of `Data` misses the data-file tombstone (tombstones live in DATA manifests) → headline fails;
+  (2) the `validate` intersection ignoring `delete_paths` (matching ANY concurrently-deleted file) rejects a
+  disjoint concurrent delete → the different-file negative control fails. The negative control is what makes
+  `requiredDataFiles = delete_paths` load-bearing rather than "any concurrent deletion rejects." A mutation
+  that survives every existing test = an unpinned axis; run the content-type and intersection mutations, not
+  only the status/op/retryable ones.
+- **CONFIRMED behavior-preserving (status-axis generalization): inverting the shared `added_snapshot_id ==
+  snapshot_id` manifest filter fails 17 transaction tests across BOTH axes** — the DeleteFiles headline/override
+  (Deleted-tombstone sourcing) AND the OverwriteFiles/RowDelta/ReplacePartitions conflict tests (Added-entry
+  sourcing). One mutation failing both families is the proof the `files_after` generalization kept the
+  manifest-sourcing semantics identical for the two `ManifestStatus::Added` callers while extending it to the
+  `Deleted` caller — the status axis is the ONLY behavioral change, and it is parameterized, not hard-coded.
+
+### 2026-06-09 (RowDelta validateDataFilesExist + the skip-deletes op-set variant, BUILDER Opus)
+- **DO add the `skipDeletes` op-set axis as a `skip_deletes: bool` PARAM on `deleted_data_files_after`, not a
+  sibling fn, and make the EXISTING DeleteFiles caller pass `false` explicitly.** *Why:* Java's two op sets
+  differ by exactly one member — `VALIDATE_DATA_FILES_EXIST_OPERATIONS = {OVERWRITE, REPLACE, DELETE}` vs
+  `VALIDATE_DATA_FILES_EXIST_SKIP_DELETE_OPERATIONS = {OVERWRITE, REPLACE}` (drops DELETE). A bool param selecting
+  between `operation_removes_data_files` (`{Overwrite, Delete}`) and a new
+  `operation_removes_data_files_skip_deletes` (`{Overwrite}`) keeps ONE walk and one call site per caller.
+  Behavior-preservation of the DeleteFiles path is PROVEN by a mutation: forcing the DeleteFiles caller to
+  `skip_deletes = true` fails 3 DeleteFiles files-exist tests (their concurrent deletion is a `Delete`-op
+  `delete_files` snapshot, excluded by `{Overwrite}`) — so `false` is both load-bearing AND the value that keeps
+  the existing tests green. `REPLACE` is unrepresentable in the Rust `Operation` enum in BOTH sets, so it is
+  absent either way — faithful, not a gap.
+- **DO get the skip-deletes DEFAULT right: RowDelta passes `skip_deletes = !validate_deleted_files`, and
+  `validate_deleted_files` is `false` by default ⇒ `skipDeletes = true` ⇒ `{OVERWRITE}` BY DEFAULT.** *Why:* Java
+  `BaseRowDelta.validate` (L146) calls `validateDataFilesExist(..., !validateDeletes, ...)` and `validateDeletes`
+  starts `false` (set only by `validateDeletedFiles()`). The intuitive-but-WRONG default is to include DELETE-op
+  snapshots (`skip_deletes = false`); that would reject a legitimate concurrent merge-on-read DELETE the default
+  is meant to tolerate. The ONLY test that distinguishes the two op sets is a two-half test: a concurrent
+  DELETE-op (`delete_files`) deletion of the referenced file COMMITS by default (excluded) and is REJECTED after
+  `validate_deleted_files()` (included). A concurrent OVERWRITE-op deletion (`overwrite_files().add+delete`) is in
+  BOTH sets, so use it for the headline (rejects WITHOUT needing `validate_deleted_files()`).
+- **DO keep `referenced_data_files` CALLER-PROVIDED, mirroring Java's `CharSequenceSet referencedDataFiles`
+  populated by `validateDataFilesExist(referencedFiles)` — do NOT derive it from the added delete files.** *Why:*
+  Java `BaseRowDelta.referencedDataFiles` is a field the engine fills by passing the position deletes' referenced
+  data-file paths into `validateDataFilesExist(Iterable<CharSequence>)`; the action never inspects the delete
+  files to compute it. The Rust `validate_data_files_exist(impl IntoIterator<Item = impl Into<String>>)` takes the
+  caller's set the same way; non-empty ENABLES the check (Java's `if (!referencedDataFiles.isEmpty())` guard).
+  Deriving it would be a different (and unfaithful) contract — the position-delete `DataFile` in this Rust model
+  does not even carry the referenced data-file path as a first-class field. The different-file negative control
+  (concurrent deletion of a NON-referenced file → OK) is what makes the referenced-set intersection load-bearing
+  rather than "any concurrent deletion rejects."
+- **DO simulate the concurrent deletion that the skip-deletes-DEFAULT check must still see with an OVERWRITE,
+  and the one it must IGNORE with a `delete_files` DELETE.** *Why:* `overwrite_files().add_file(g).delete_file(f)`
+  records `Operation::Overwrite` (Java `BaseOverwriteFiles.operation()` when it both adds and deletes) and writes
+  `f`'s `Deleted` tombstone on a DATA manifest the new snapshot owns — in BOTH op sets. `delete_files().delete_
+  file(f)` records `Operation::Delete` — only in the non-skip set. Pairing them across the 6 tests exercises both
+  op-set branches with REAL concurrent commits through the catalog (no hand-built tombstones).
+
+### 2026-06-09 (Scan metrics EMISSION wiring — TableScan → MetricsReporter, BUILDER Opus)
+- **DO make a lazy/concurrent stream the EMISSION point by counting per-task in `poll_next` and reporting
+  ONCE on the `Ready(None)` exhaustion transition — the faithful analogue of Java
+  `CloseableIterable.whenComplete(doPlanFiles(), closeHook)`.** *Why:* Java `SnapshotScan.planFiles` starts the
+  timer, builds the plan, and on the iterable's CLOSE (after full consumption) builds the `ScanReport` and calls
+  `metricsReporter().report(...)`. A custom `Stream` adapter (`MetricsReportingFileScanTaskStream`) that (a)
+  calls `record_file_task` on each `Ready(Some(Ok(task)))` (mirroring the lazy `createFileScanTasks` transform /
+  `ScanMetricsUtil.fileTask`) and (b) emits the report on the FIRST `Ready(None)` behind a `reported: bool` guard
+  gives "per-task accounting + exactly-once on completion" deterministically. Do NOT emit in `Drop` (fires on
+  early drop with partial counts) and do NOT emit per-task. Pin "exactly once" with a task-by-task drain
+  asserting report count stays 0 mid-stream, ==1 after exhaustion, ==1 after re-polling the exhausted stream —
+  mutation-verified by moving the emit into the `Some(Ok(task))` arm (the mid-stream==0 assertion fails after
+  the 1st task).
+- **DO enforce OPT-IN at the TYPE level: thread `Option<Arc<ScanMetricsCollector>>` and gate every increment on
+  `Some` — when `None` there is no collector, no `Instant`, no stream wrapper, so the un-instrumented
+  `plan_files` is byte-for-byte unchanged.** *Why:* the brief's paramount property. A task-set regression test
+  (no reporter ⇒ same tasks) CANNOT catch a broken opt-in (counting does not change which tasks are planned), so
+  add a STRUCTURAL test that asserts `scan.plan_context.metrics_collector.is_none()` with no reporter and
+  `.is_some()` with one. Mutation-verified: forcing `metrics_collector: Some(...)` unconditionally in `build()`
+  fails EXACTLY the structural test and nothing else. (`scan::tests` is a child module, so it reads the private
+  `TableScan.plan_context` + `pub(crate)` `PlanContext.metrics_collector` directly — no production-visibility
+  widening.)
+- **DO read the Java COUNTER semantics per-metric from the source, not by name-intuition — `result-delete-files`
+  is per-TASK delete REFERENCES, not distinct delete files/manifests.** *Why:* `ScanMetricsUtil.fileTask` runs
+  once per produced `FileScanTask` and does `resultDeleteFiles().increment(deleteFiles.length)` — a delete file
+  applying to N data files counts N times. `total-data-manifests` = the manifest-LIST entries by content
+  (`DataTableScan.doPlanFiles` `dataManifests.size()`), NOT the scanned subset; `scanned`+`skipped` == `total`
+  only WITH a filter (no filter ⇒ all scanned, skipped 0). The delete-manifest fixture test asserts
+  `result_delete_files == Σ task.deletes.len()` (10 here: one position-delete in the shared partition attaches to
+  all 10 data files) and `result_data_files == 10` (excludes the delete file) — mutation-verified by folding the
+  delete count into `result_data_files`.
+- **DO count `scanned`/`skipped` manifests at the partition-filter prune point in `context.rs`
+  (`build_manifest_file_contexts_from_files`), per the manifest's `content`, and the manifest-LIST totals in
+  `plan_files` right after `get_manifest_list` — two different Java sites (`ManifestGroup`'s
+  `CloseableIterable.filter/count` vs `DataTableScan.doPlanFiles`).** *Why:* a pruned manifest
+  (`manifest_evaluator.eval(...) == false` → `continue`) is SKIPPED; a survivor is SCANNED. The prune point is
+  the only place the data-vs-delete content + the prune decision are both in hand. Mutation-verified: swapping
+  the skipped increment to scanned fails the prune test (`skipped >= 1` + `scanned+skipped==total`).
+- **DO capture the `ScanReport` identity (table name / snapshot id / schema id / projected ids+names / filter)
+  ONCE at `build()` time, before the scan's `filter`/`field_ids`/`schema` are moved into `PlanContext`.** *Why:*
+  Java reads exactly these to build `ImmutableScanReport`. In Rust the filter is consumed by
+  `predicate: self.filter.map(Arc::new)` and `field_ids` by `Arc::new(field_ids)`, so the report inputs must be
+  cloned into a `ScanMetricsContext` BEFORE those moves. Projected field NAMES come from
+  `Schema::name_by_field_id(id)` per projected id (Java `schema().findColumnName(id)`), NOT the raw
+  `column_names` (a metadata column has no schema name). The report `filter` defaults to `Predicate::AlwaysTrue`
+  when the scan has no filter (Java `BaseScan.filter()`).
+- **DO leave a metric `None` (not `Some(0)`) when the planner cannot collect it cleanly, and DOCUMENT which +
+  why.** *Why:* Java's `@Nullable` "never incremented ⇒ absent" shape. The Rust planner cleanly collects 8
+  manifest/file counters + 2 byte sizes + the timer; `skipped_data_files`/`skipped_delete_files`/
+  `indexed_delete_files`/`equality_delete_files`/`positional_delete_files`/`dvs` count delete-index internals +
+  per-file metrics pruning the planner doesn't expose at a single accumulation point — left `None`, documented
+  in the collector module. A fabricated 0 would diverge from Java's optionality AND imply fidelity the planner
+  lacks.
+- **DO use `Ordering::Relaxed` for the `AtomicI64` scan counters shared across the spawned manifest/entry
+  tasks.** *Why:* the increments are commutative + order-independent and no counter value gates another thread's
+  control flow; the happens-before barrier that matters is the stream draining to completion (the wrapper's
+  `Ready(None)`) before `snapshot()` reads them, which the await chain provides. `SeqCst` would be unjustified
+  overhead. (`dyn MetricsReporter` is not `Debug`, so `ScanMetricsContext` needs a MANUAL `Debug` eliding the
+  reporter — `TableScan` derives `Debug`; do NOT add `Debug` to the `MetricsReporter` trait, that would touch
+  the out-of-scope `metrics/mod.rs` and change a public trait.)
+
+### 2026-06-09 (Scan metrics EMISSION wiring — REVIEWER Opus)
+- **DO add a test that pins "no report on PARTIAL-consume-then-drop," separately from the "exactly once on
+  full consumption" test — the two are NOT redundant.** *Why:* the exactly-once test fully drains the stream,
+  so a `Drop`-based emit fires AFTER the `Ready(None)` emit and the `reported` guard makes it a silent no-op —
+  the exactly-once test stays GREEN under a `Drop`-emit mutation. The builder correctly *chose* emit-on-
+  `Ready(None)` (not on `Drop`) to avoid partial-count reports, and documented it, but left the property
+  UNPINNED. Added `test_partial_consume_then_drop_emits_no_report` (pull 3 of 10 tasks, `drop(stream)`, assert
+  `last_report().is_none()`); mutation-verified by adding a `Drop` impl that emits — the new test FAILS, the
+  exactly-once test PASSES, proving the new test is the only guard for the early-drop contract. The 60s test
+  timeout also confirms `drop`-before-exhaust does NOT deadlock the spawned producers (the dropped mpsc
+  receiver lets the senders error out, same as the un-instrumented path).
+- **DO verify the default (no-reporter) `plan_files` return is the LITERAL pre-change expression, not just
+  "tests pass."** *Why:* the byte-unchanged guarantee is the #1 regression risk. Confirmed `git show
+  HEAD:scan/mod.rs` ended `plan_files` with `Ok(file_scan_task_rx.boxed())`, and the None-metrics match arm
+  (`_ => Ok(file_scan_task_rx.boxed())`) returns exactly that — same boxed stream, same producers, same
+  channel, same order; `planning_started_at`/the manifest-list fold/the wrapper are all gated on
+  `self.metrics.is_some()`. The `field_ids` hoist (`Arc::new` moved one statement earlier) is behavior-
+  identical (same value, just named before two consumers use it). Mutation-verified the opt-in with a
+  structural test (collector `Some` only with a reporter).
+- **DO confirm the report build never `.unwrap()`s a poisoned lock.** *Why:* brief concern #4. The collector
+  is atomics-only (no `Mutex`); `emit_report` clones captured fields + reads atomics; the only lock is inside
+  `InMemoryMetricsReporter::report`, which uses `unwrap_or_else(|p| p.into_inner())` (poison-safe) and lives in
+  the out-of-scope `metrics/mod.rs` (unchanged). No bare `.unwrap()`/`.expect()`/`println!` in any production
+  region of the three scan files.
+
+### 2026-06-09 (Inspection-table interop — `snapshots` + `refs` — ORCHESTRATOR + REVIEWER Opus)
+- **DO verify a suspected parity divergence against the LIVE Java source BEFORE instructing a "fix".** *Why:*
+  Java `SnapshotsTable.snapshotToRow` passes `snap.summary()` (the WHOLE map) into the summary column, which
+  *looked* like Rust diverges (Rust emits only `additional_properties`, dropping `operation`). Reading
+  `/tmp/iceberg-java-ref` `SnapshotParser.fromJson` (1.10.0, ~L153–156) showed the on-disk round-trip SPLITS
+  `operation` OUT of the summary map — so a re-parsed snapshot's `summary()` is `additional_properties`-only,
+  exactly matching Rust. The "divergence" was an artifact of the in-memory-CONSTRUCTED snapshot (our oracle's
+  `snapshot()` helper puts `operation` in the map), NOT the canonical path. Had I trusted the first read and
+  "fixed" Rust to inject `operation`, I'd have BROKEN parity. Captured in memory `reference_java_snapshot_summary_operation.md`.
+- **DO materialize an inspection-table interop oracle from a `TableMetadataParser.fromJson`-RE-PARSED base —
+  the same bytes the Rust reader consumes — not the freshly-built in-memory `TableMetadata`.** *Why:* the two
+  diverge on `summary` (operation-in-map vs split-out) AND the re-parse is what gives a non-null
+  `metadataFileLocation()` that `SnapshotsTable.task`/`RefsTable.task` hand to `io().newInputFile(...)`. Build
+  the base, write it, re-parse from disk, THEN scan.
+- **GOTCHA: Java `StaticDataTask.rows()` is a LAZY `Iterables.transform` over a SINGLE mutable
+  `StructProjection` that re-`wrap`s each row.** Accumulating the `StructLike` references into a `List` and
+  reading them AFTER the loop yields the LAST row N times (the builder's first run emitted three identical
+  snapshot rows). *Fix:* consume each row EAGERLY inside the iteration (serialize to JSON per-row while the
+  projection still points at it). Any metadata-table row reader must not stash `StructLike`s for later.
+- **DO drive inspection-table interop as Direction-1-ONLY.** Metadata tables are READ-ONLY virtual projections
+  of `TableMetadata`; there is nothing of Rust's for Java to read back (no Direction 2). The equality of the
+  projected rows IS the round-trip proof. Compare ALL columns ORDER-INDEPENDENTLY (sort both sides; compare a
+  map column as a `HashMap`, not by key order) so JVM/serde map-ordering never makes the test flaky.
+- **Cheap fixture richness pays off:** one snapshot with a MULTI-KEY summary + one with an operation-only
+  (→ empty-map) summary, and refs covering branch-full-retention / tag-only-max-ref-age / branch-no-retention,
+  exercise every non-trivial projection (map column, retention NULL-per-kind) in a 3-row/3-ref fixture.
+
+### 2026-06-09 (Inspection-table interop — `history` + `metadata_log_entries` — ORCHESTRATOR + REVIEWER Opus)
+- **A FORKED snapshot-log (needed for `is_current_ancestor=false`) must be built across SEPARATE commits,
+  re-parsing between each.** *Why:* Java `TableMetadata.Builder.intermediateSnapshotIdSet` (and the Rust
+  `update_snapshot_log` mirror) prunes from the snapshot-LOG any snapshot that, WITHIN ONE build's
+  `changes`, is both AddSnapshot'd AND set-as-main AND no-longer-current. Doing
+  `addSnapshot(A)+setMain(A)+addSnapshot(B)+setMain(B)` in one build drops A as "intermediate" → log=[B]
+  only. Re-parsing (`fromJson(toJson(..))`) clears `changes`, so a prior snapshot counts as
+  already-persisted and survives the next commit's pruning. Recipe: B0 addSnapshot(ROOT)+setMain(ROOT) →
+  reparse → B1 add(SIBLING)+setMain(SIBLING) → reparse → B2 add(CURRENT)+setMain(CURRENT) → log
+  [ROOT,SIBLING,CURRENT]; with CURRENT.parent=ROOT, SIBLING is off the current ancestry.
+- **Because each snapshot is added in the SAME build it becomes main, the snapshot-LOG entry timestamp is
+  the snapshot's OWN `timestampMillis` (Java `isAddedSnapshot ? snapshot.timestampMillis() :
+  lastUpdatedMillis`).** So a no-rollback forked log is FULLY deterministic — and Java `addSnapshot` also
+  sets `lastUpdatedMillis = snapshot.timestampMillis()`, so the `metadata_log_entries` SYNTHETIC current
+  entry (at `lastUpdatedMillis`) lands on EXACTLY the last snapshot's ts — which BONUS-pins the `<=`
+  inclusive boundary of `snapshotIdAsOfTime` (an entry exactly on a snapshot-log ts must resolve TO that
+  snapshot, not the previous one). Keep the three snapshot timestamps ASCENDING (ROOT<SIBLING<CURRENT) or
+  the "before last snapshot-log entry" guard trips and `snapshotIdAsOfTime` (which assumes ascending) misreads.
+- **The `metadata-log` must be INJECTED (not driven by real commits) for deterministic `latest_*`
+  resolution.** *Why:* real commits stamp metadata-log timestamps with `base.lastUpdatedMillis()` (≈ now),
+  which sit far AFTER the 2018–2020 snapshot timestamps, so every entry collapses to the latest snapshot —
+  the NULL/middle cases are never exercised. Inject via `JsonUtil.mapper().readTree(json)` → set a
+  `metadata-log` ArrayNode (keys EXACTLY `timestamp-ms`/`metadata-file`) → re-serialize. This is the Java
+  analog of the Rust unit test's `meta.metadata_log = vec![...]`; Java's REAL `MetadataLogEntriesTable`
+  still computes `latest_*` over it, so it stays a genuine oracle. Straddle the snapshot-log timestamps to
+  hit NULL (before first) / a-middle-snapshot / current.
+- **Pin `metadata_location` to a STABLE LOGICAL URI on BOTH sides.** The `metadata_log_entries` synthetic
+  current entry's `file` column = `metadataFileLocation()` (Java) / `metadata_location()` (Rust). Re-parse
+  the Java base with a fixed logical URI (`fromJson(STABLE_URI, json)`, NOT the on-disk path) and set the
+  Rust test's `.metadata_location(STABLE_URI)` to the same literal, or that one row mismatches
+  non-portably. (Snapshots/refs don't surface the location, so the prior increment didn't need this.)
+- **A log can carry DUPLICATE snapshot ids (rollbacks re-stamp), so sort history rows by the COMPOSITE
+  `(made_current_at, snapshot_id)`, not by snapshot_id alone**, for order-independent comparison.
+- **The validation-first reviewer ran its OWN mutations** (flip SIBLING `is_current_ancestor`; flip the
+  creation row's NULL `latest_snapshot_id`), each failing the matching interop test, then restored
+  byte-clean — confirming the derived columns are load-bearing in the comparison, not just decorative
+  asserts. Good pattern when "validation is key": the critic mutation-probes the FIXTURE/test, not just
+  the prose.
+
+### 2026-06-09 (Manifest-reading interop A1 — `files`/`data_files`/`delete_files` — ORCHESTRATOR + REVIEWER Opus)
+- **Java can write a REAL on-disk table (metadata + avro manifest-list + manifests) with NO parquet/hadoop
+  deps.** Replicate Java's own test infra: a `LocalFileIO` (`org.apache.iceberg.Files.localOutput/localInput`
+  for newOutputFile/newInputFile; `java.io` delete) + a minimal `LocalTableOperations` (commit writes
+  `vN.metadata.json` to disk via the FileIO; `metadataFileLocation`=`<dir>/metadata/<name>`;
+  `locationProvider`=`LocationProviders.locationsFor(location,props)`; `newSnapshotId`=counter). Then
+  `new BaseTable(ops,name).newAppend().appendFile(df).commit()` / `.newRowDelta().addDeletes(del).commit()`
+  write genuine avro manifests + manifest-list. The `DataFile`/`DeleteFile` are pure metadata
+  (`DataFiles.builder(spec).withPath/withRecordCount/withFileSizeInBytes/withMetrics/withPartitionPath`,
+  `FileMetadata.deleteFileBuilder(spec).ofPositionDeletes()...`) — their .parquet paths NEED NOT EXIST
+  because the `files`/`entries`/`manifests`/`partitions` tables read only the manifest. The metadata-table
+  rows materialize the SAME way as the pure-metadata tables (`MetadataTableUtils` + `planFiles()` +
+  `asDataTask().rows()`) because `BaseFilesTable.ManifestReadTask implements DataTask`.
+- **Manifest interop is run.sh-driven (regenerate-and-compare), NOT offline-committed.** Avro manifests +
+  manifest-list bake in ABSOLUTE paths, so committed binary fixtures aren't portable. So: a new run script
+  regenerates the table into a gitignored `dev/java-interop/target/` temp dir each run; the Rust test is
+  ENV-GATED (`ICEBERG_INTEROP_MANIFEST_DIR`) and does a runtime EARLY-RETURN (a clean no-op, NOT `#[ignore]`)
+  when the var is unset, so the offline `cargo test` gate stays green. The orchestrator verifies by running
+  BOTH the offline gate AND the run script. (Pure-metadata interop stays offline-committed JSON.)
+- **VERIFY an on-disk representation against the actual bytes before calling it a divergence.** The `files`
+  table's `file_format` looked like a write divergence (Java row `PARQUET`, Rust `parquet`). Reading the
+  Java-written avro manifest DATA BLOCK showed the on-disk value is LOWERCASE `parquet` on BOTH sides — Java
+  reads it via `FileFormat.fromString` (`toUpperCase`→`valueOf`) and its `FilesTable` row re-emits the enum's
+  uppercase NAME, while Rust surfaces the on-disk string via `DataFileFormat`'s lowercase `Display`. So it is
+  a COSMETIC inspection-table-only difference (NO on-disk / Direction-2 divergence). A small follow-up can
+  upper-case the `files`/`entries`/`all_*` `file_format` column to match Java. (Don't "fix" the on-disk
+  `Display`/serde — that's correct.)
+- **Rust `spec::DataFile` models the metric maps (column_sizes/value_counts/null/nan/bounds) as
+  NON-optional `HashMap`**, so an absent map projects to an EMPTY `{}` whereas Java emits `null`. A
+  model-level (not rendering) divergence — to match exactly would need optional maps. Documented; canonicalize
+  `None`≡`Some(empty)` in the interop comparison.
+- **A foundation increment should SURFACE divergences, not hide them.** A1 canonicalized the two presentation
+  divergences for the BULK equality but RAW-pinned both in focused asserts so neither can silently drift, and
+  documented each — the right move (mirrors the existing GAP_MATRIX "known divergence" pattern for the
+  unpartitioned-partition column). The reviewer mutation-probed the comparison (corrupt a `record_count` and a
+  single lower-bound hex byte → both FAIL) to prove it's byte/value-level, not a false-pass.
+
+### 2026-06-09 (Manifest-reading interop A2 — `entries`/`manifests`/`partitions` — ORCHESTRATOR + REVIEWER Opus)
+- **Interop surfaced a REAL production parity bug — and the FIX was a verified one-liner.** Rust
+  `inspect/partition_summary.rs::bound_to_string` rendered a STRING partition bound JSON-QUOTED (`"a"`) via
+  `Datum::to_string`, whereas Java `ManifestsTable.partitionSummariesToRows` (core L117–144) renders each
+  bound via `Transform.toHumanString(type, value)` → bare `a` for a string. Fix: `Datum::to_string` →
+  `Datum::to_human_string` (datum.rs:1195 — raw for `PrimitiveLiteral::String`, delegates to `to_string` for
+  EVERY other primitive). Because non-string bounds are byte-identical, no int/long-partition unit test broke;
+  the new A2 `manifests` test pins the bare-string case. **Verify BOTH halves before accepting a parity fix:**
+  (a) the Rust method's exact semantics (here: only strings change), (b) the Java call-site
+  (`grep ManifestsTable` → `toHumanString`). This is the payoff of interop testing on partitioned tables (the
+  pure-metadata + int-partitioned unit fixtures never exercised a string partition bound).
+- **Don't predict the exact metadata-table rows — let Java materialize them and assert Rust==Java.** The A2
+  prompt guessed surviving data files would be status 1 (ADDED); Java's `newDelete` REWRITES the DATA manifest,
+  so survivors are carried as status 0 (EXISTING) and only the position-delete is status 1. The builder
+  asserted against Java's REAL rows (oracle wins) and still hit the required headline (a status==2 tombstone).
+  Build a table RICH enough to hit the cases (tombstone, content-gated manifests, multi-partition + deletes);
+  the values are whatever Java produces.
+- **A `newDelete(file)` removes that partition's only live data → the partition VANISHES from `partitions`.**
+  Keep a SURVIVING data file in a partition you want to remain a row, while still deleting another file to
+  create the `entries` DELETED tombstone (A2 added D=cat=b so cat=b stays a live partition after deleting B).
+- **Reuse the nested-struct extraction across tables via a small trait, not a copy.** `entries.data_file` is
+  the SAME 21-field DataFile projection as `files`; the builder added a `ColumnSource` trait so A1's `FileRow`
+  extraction runs over a `StructArray` (nested) as well as a `RecordBatch` (flat) — no duplicate extractor.
+- **Keep increments isolated by writing a SEPARATE table per increment** (`<dir>/table` for A1,
+  `<dir>/table_a2` for A2) under the same run script + test file, so a richer A2 table (with a tombstone that
+  changes the live-file set) does NOT churn A1's committed-behavior assertions. Both are regenerated; the
+  reviewer confirmed A1 stayed green throughout.
+
+### 2026-06-09 (Manifest-reading interop A3 — the cross-snapshot `all_*` tables — ORCHESTRATOR + REVIEWER Opus)
+- **The `all_*` tables "may return duplicate rows" (Java javadoc) — compare as an order-independent MULTISET,
+  never a set.** A `HashSet`/`dedup` comparison would hide a missing OR extra duplicate. Pattern: sort BOTH
+  sides by a TOTAL key (the row's `Debug` repr works for derive-`PartialEq`+`Debug` rows, since two rows are
+  `==` iff their `Debug` strings match) and `assert_eq!` the equal-length vectors element-by-element — no
+  dedup. (A3's `all_files` = 8 rows / 5 distinct paths: A/C/D carried in both the original and the rewritten
+  manifest appear twice; the comparison must KEEP them.)
+- **Pin the cross-snapshot reach with a present-in-all / absent-in-current pair.** The whole point of `all_*`
+  is the dedup-by-path union of manifests reachable from ALL snapshots (Java `reachableManifests`), so assert a
+  file deleted at the current snapshot (live in an OLDER reachable manifest) IS in `all_data_files` AND is NOT
+  in a fresh `inspect().data_files()` scan over the same table — that assertion FAILS if the impl read only the
+  current snapshot, which a pass-by-coincidence test would miss.
+- **One richer table can serve multiple increments read-only.** A3 reused A2's `table_a2` (3 snapshots, a
+  carried/shared manifest, a rewrite) verbatim — it already exercised cross-snapshot reach + a shared manifest
+  (for `all_manifests`' per-(manifest×snapshot) non-dedup) + content-gating. A3 only ADDED the `all_*`
+  materialization + tests; A2's table/JSONs/tests stayed byte-identical. **With A3, manifest-reading interop is
+  COMPLETE for every inspection table** (pure-metadata done earlier); only the `readable_metrics` virtual
+  column + scan interop (A4/A5) remain.
+
+### 2026-06-09 (Scan-PLANNING interop A4 — ORCHESTRATOR + REVIEWER Opus)
+- **Scan PLANNING interop needs NO parquet** — `table.newScan().filter(expr).planFiles()` (Java) /
+  `table.scan().with_filter(pred).plan_files()` (Rust) read MANIFESTS + apply partition/metric pruning +
+  associate deletes; they never open the data files. So A4 rides the same run.sh-driven no-parquet harness.
+  (Only scan EXECUTION = reading rows → Arrow needs parquet — that's A5.)
+- **Compare what's robustly comparable cross-language; DEFER what isn't, explicitly.** A4 compares the
+  {planned data-file SET (by path), per-file sorted delete-file paths, a `residual_always_true` boolean}.
+  The full residual EXPRESSION string differs by language syntax (Java `Expression.toString()` vs Rust
+  `Predicate` Display), so string-comparing it would be fragile or vacuous — DEFERRED with a doc note (Rust
+  residuals are unit-tested in `scan/mod.rs`). The boolean `residual fully covered by partitioning` (Java
+  `residual().op()==Expression.Operation.TRUE` ↔ Rust predicate `None`/`AlwaysTrue`) IS a robust, non-vacuous
+  parity signal — it varies across scenarios (true for pure-partition filters, false where a data-column
+  predicate remains) and proves the partition-filter-removal split matches.
+- **Make a fixture that exercises the SUBTLE pruning path: COLUMN-METRIC pruning.** Give the data files
+  DISJOINT `id` bounds ([1,10]/[11,20]/[21,30]) so a filter like `id>15` MUST drop the [1,10] file via its
+  upper bound — partition pruning alone wouldn't catch a regressed metric evaluator. (Partition pruning is the
+  easy case; metric pruning is where planners diverge.)
+- **Java attaches a partition-scoped position-delete to EVERY live data file in that partition** with a
+  covering sequence number — not just the file it "came from". The cat=a delete associated with BOTH F1 and
+  F3; Rust matched. Let the bulk per-file delete-set comparison (not a single hand-picked file) prove this, so
+  you assert Java's REAL association rather than an assumed one.

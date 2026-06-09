@@ -23,9 +23,12 @@ mod context;
 use context::*;
 mod incremental;
 pub use incremental::*;
+mod metrics_collector;
 mod task;
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Sender, channel};
@@ -39,8 +42,10 @@ use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluato
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::metadata_columns::{get_metadata_field_id, is_metadata_column_name};
+use crate::metrics::{MetricsReport, MetricsReporter, ScanReport, TimeUnit, TimerResult};
 use crate::runtime::spawn;
-use crate::spec::{DataContentType, SnapshotRef};
+use crate::scan::metrics_collector::ScanMetricsCollector;
+use crate::spec::{DataContentType, ManifestContentType, SnapshotRef};
 use crate::table::Table;
 use crate::utils::available_parallelism;
 use crate::{Error, ErrorKind, Result};
@@ -63,6 +68,7 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    metrics_reporter: Option<Arc<dyn MetricsReporter>>,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -82,6 +88,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            metrics_reporter: None,
         }
     }
 
@@ -208,6 +215,24 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
+    /// Configures a [`MetricsReporter`] to receive a [`ScanReport`] once the scan's
+    /// [`FileScanTask`] stream has been fully consumed.
+    ///
+    /// Mirrors Java `TableScanContext.metricsReporter` (set via `Catalog`/`TableScan`
+    /// configuration). When set, [`plan_files`](TableScan::plan_files) collects the
+    /// scan-planning metrics — manifest-list totals, scanned/skipped manifests, produced
+    /// data/delete file counts and sizes, and the total planning duration — and reports a
+    /// single [`MetricsReport::Scan`] when the returned stream completes (the analogue of
+    /// Java's `CloseableIterable.whenComplete(...)` close hook).
+    ///
+    /// **Opt-in.** When this is not called, planning installs no collector, no timer, and
+    /// no stream wrapper: the scan path is byte-for-byte the un-instrumented path (Java's
+    /// `ScanMetrics.noop()` when no reporter is configured).
+    pub fn with_metrics_reporter(mut self, reporter: Arc<dyn MetricsReporter>) -> Self {
+        self.metrics_reporter = Some(reporter);
+        self
+    }
+
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
         // Resolve a branch/tag reference (`use_ref`) to a concrete snapshot id,
@@ -256,6 +281,10 @@ impl<'a> TableScanBuilder<'a> {
                 .clone(),
             None => {
                 let Some(current_snapshot_id) = self.table.metadata().current_snapshot() else {
+                    // No snapshot ⇒ an empty scan with no rows. Java
+                    // `SnapshotScan.planFiles` returns `CloseableIterable.empty()` BEFORE
+                    // the timer/report block, so NO `ScanReport` is emitted for a
+                    // snapshotless table — match that by leaving `metrics: None`.
                     return Ok(TableScan {
                         batch_size: self.batch_size,
                         column_names: self.column_names,
@@ -266,6 +295,7 @@ impl<'a> TableScanBuilder<'a> {
                         concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
                         row_group_filtering_enabled: self.row_group_filtering_enabled,
                         row_selection_enabled: self.row_selection_enabled,
+                        metrics: None,
                     });
                 };
                 current_snapshot_id.clone()
@@ -335,6 +365,36 @@ impl<'a> TableScanBuilder<'a> {
             None
         };
 
+        // Build the opt-in metrics context (collector + report inputs) ONLY when a
+        // reporter was configured. When `None`, no collector is threaded into planning, so
+        // the scan path is byte-for-byte unchanged. The report inputs mirror exactly what
+        // Java `SnapshotScan.planFiles` reads to build its `ImmutableScanReport`:
+        // schema id, projected field ids + their column names, table name, snapshot id,
+        // and the filter (defaulting to `alwaysTrue` when the scan has no filter, like
+        // Java `BaseScan.filter()`).
+        let field_ids = Arc::new(field_ids);
+        let metrics = self.metrics_reporter.clone().map(|reporter| {
+            let projected_field_names = field_ids
+                .iter()
+                .map(|field_id| {
+                    schema
+                        .name_by_field_id(*field_id)
+                        .unwrap_or_default()
+                        .to_string()
+                })
+                .collect();
+            ScanMetricsContext {
+                reporter,
+                collector: Arc::new(ScanMetricsCollector::new()),
+                table_name: self.table.identifier().to_string(),
+                snapshot_id: snapshot.snapshot_id(),
+                schema_id: schema.schema_id(),
+                projected_field_ids: field_ids.to_vec(),
+                projected_field_names,
+                filter: self.filter.clone().unwrap_or(Predicate::AlwaysTrue),
+            }
+        });
+
         let plan_context = PlanContext {
             snapshot,
             table_metadata: self.table.metadata_ref(),
@@ -343,10 +403,11 @@ impl<'a> TableScanBuilder<'a> {
             predicate: self.filter.map(Arc::new),
             snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
             object_cache: self.table.object_cache(),
-            field_ids: Arc::new(field_ids),
+            field_ids,
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
+            metrics_collector: metrics.as_ref().map(|context| context.collector.clone()),
         };
 
         Ok(TableScan {
@@ -359,6 +420,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            metrics,
         })
     }
 }
@@ -387,6 +449,48 @@ pub struct TableScan {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+
+    /// Everything needed to collect and emit a [`ScanReport`], present only when the scan
+    /// opted in via [`TableScanBuilder::with_metrics_reporter`] AND the table has a
+    /// snapshot to scan. `None` ⇒ no metrics are collected and `plan_files` is unchanged.
+    metrics: Option<ScanMetricsContext>,
+}
+
+/// The reporter, the shared counter collector, and the immutable inputs needed to build a
+/// [`ScanReport`] at stream-completion time.
+///
+/// Bundled so the opt-in is a single `Option` on [`TableScan`]: when it is `None`,
+/// [`TableScan::plan_files`] installs no collector, no timer, and no stream wrapper, and
+/// the planning path is byte-for-byte the un-instrumented path. The report metadata
+/// (table name / snapshot id / schema id / projected ids+names / filter) is captured once
+/// at [`build`](TableScanBuilder::build) time — exactly the values Java's
+/// `SnapshotScan.planFiles` reads to build its `ImmutableScanReport`.
+#[derive(Clone)]
+struct ScanMetricsContext {
+    reporter: Arc<dyn MetricsReporter>,
+    collector: Arc<ScanMetricsCollector>,
+    table_name: String,
+    snapshot_id: i64,
+    schema_id: i32,
+    projected_field_ids: Vec<i32>,
+    projected_field_names: Vec<String>,
+    filter: Predicate,
+}
+
+// `dyn MetricsReporter` is not `Debug`, so derive cannot apply to `ScanMetricsContext`
+// (and `TableScan` derives `Debug`). Render the report inputs and elide the reporter +
+// the live collector.
+impl std::fmt::Debug for ScanMetricsContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScanMetricsContext")
+            .field("table_name", &self.table_name)
+            .field("snapshot_id", &self.snapshot_id)
+            .field("schema_id", &self.schema_id)
+            .field("projected_field_ids", &self.projected_field_ids)
+            .field("projected_field_names", &self.projected_field_names)
+            .field("filter", &self.filter)
+            .finish_non_exhaustive()
+    }
 }
 
 impl TableScan {
@@ -395,6 +499,12 @@ impl TableScan {
         let Some(plan_context) = self.plan_context.as_ref() else {
             return Ok(Box::pin(futures::stream::empty()));
         };
+
+        // Start the planning timer when (and only when) metrics are enabled — Java
+        // `SnapshotScan.planFiles` starts `scanMetrics().totalPlanningDuration()` before
+        // `doPlanFiles()`. When `self.metrics` is `None` this stays `None` and nothing
+        // below is instrumented (the opt-in / byte-unchanged path).
+        let planning_started_at = self.metrics.as_ref().map(|_| Instant::now());
 
         let concurrency_limit_manifest_files = self.concurrency_limit_manifest_files;
         let concurrency_limit_manifest_entries = self.concurrency_limit_manifest_entries;
@@ -411,6 +521,24 @@ impl TableScan {
         let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new();
 
         let manifest_list = plan_context.get_manifest_list().await?;
+
+        // Count the manifest-list entries by content type — Java
+        // `DataTableScan.doPlanFiles` increments `totalDataManifests`/`totalDeleteManifests`
+        // by `dataManifests.size()`/`deleteManifests.size()` of the snapshot's list. A
+        // no-op when no collector is configured.
+        if let Some(metrics) = self.metrics.as_ref() {
+            let (data_manifests, delete_manifests) =
+                manifest_list
+                    .entries()
+                    .iter()
+                    .fold((0i64, 0i64), |(data, deletes), entry| match entry.content {
+                        ManifestContentType::Data => (data + 1, deletes),
+                        ManifestContentType::Deletes => (data, deletes + 1),
+                    });
+            metrics
+                .collector
+                .add_total_manifests(data_manifests, delete_manifests);
+        }
 
         // get the [`ManifestFile`]s from the [`ManifestList`], filtering out any
         // whose partitions cannot match this
@@ -483,7 +611,21 @@ impl TableScan {
             }
         });
 
-        Ok(file_scan_task_rx.boxed())
+        // When metrics are enabled, wrap the result stream so each produced task is counted
+        // as it is yielded (Java `ScanMetricsUtil.fileTask` in the lazy `createFileScanTasks`
+        // transform) and a single `ScanReport` is emitted when the stream is fully consumed
+        // (Java's `CloseableIterable.whenComplete` close hook). When `self.metrics` is
+        // `None`, return the inner stream verbatim — byte-for-byte the un-instrumented path.
+        match (self.metrics.clone(), planning_started_at) {
+            (Some(metrics), Some(planning_started_at)) => {
+                Ok(Box::pin(MetricsReportingFileScanTaskStream::new(
+                    file_scan_task_rx,
+                    metrics,
+                    planning_started_at,
+                )))
+            }
+            _ => Ok(file_scan_task_rx.boxed()),
+        }
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -611,6 +753,114 @@ impl TableScan {
     }
 }
 
+impl ScanMetricsContext {
+    /// Records a single produced [`FileScanTask`] in the collector, mirroring Java
+    /// `ScanMetricsUtil.fileTask`: bump `result_data_files`, accumulate the data file's
+    /// size, count the task's attached delete files, and accumulate their sizes.
+    fn record_task(&self, task: &FileScanTask) {
+        let delete_file_size_in_bytes: u64 = task
+            .deletes
+            .iter()
+            .map(|delete| delete.file_size_in_bytes)
+            .sum();
+        self.collector.record_file_task(
+            task.file_size_in_bytes as i64,
+            task.deletes.len() as i64,
+            delete_file_size_in_bytes as i64,
+        );
+    }
+
+    /// Snapshots the collector, stamps the planning duration, builds the [`ScanReport`],
+    /// and reports it to the configured [`MetricsReporter`] exactly once.
+    ///
+    /// Mirrors the close hook of Java `SnapshotScan.planFiles`: stop the planning timer,
+    /// build an `ImmutableScanReport` from the captured table name / snapshot id / schema
+    /// id / projected ids+names / filter and the collected `ScanMetricsResult`, then call
+    /// `metricsReporter().report(scanReport)`.
+    fn emit_report(&self, planning_started_at: Instant) {
+        let elapsed = planning_started_at.elapsed();
+        let mut scan_metrics = self.collector.snapshot();
+        // The timer is reported in nanoseconds with a single timed event, matching Java's
+        // `totalPlanningDuration` (a `Timer` declared with `TimeUnit.NANOSECONDS`, one
+        // `start()`/`stop()` per scan).
+        scan_metrics.total_planning_duration =
+            Some(TimerResult::new(TimeUnit::Nanoseconds, elapsed, 1));
+
+        let report = ScanReport {
+            table_name: self.table_name.clone(),
+            snapshot_id: self.snapshot_id,
+            filter: self.filter.clone(),
+            schema_id: self.schema_id,
+            projected_field_ids: self.projected_field_ids.clone(),
+            projected_field_names: self.projected_field_names.clone(),
+            scan_metrics,
+            metadata: HashMap::new(),
+        };
+
+        self.reporter.report(MetricsReport::Scan(report));
+    }
+}
+
+/// A [`FileScanTaskStream`] that records each yielded task in its collector and reports a
+/// single [`ScanReport`] when the inner stream is fully consumed.
+///
+/// This is the Rust analogue of Java's `CloseableIterable.whenComplete(doPlanFiles(), ...)`
+/// in `SnapshotScan.planFiles`: per-task accounting happens lazily as each task is pulled
+/// (Java's `createFileScanTasks` transform), and the report is emitted exactly ONCE, on the
+/// transition to stream exhaustion (Java's close hook). It is only ever constructed when a
+/// reporter was configured, so it adds no overhead to the un-instrumented scan path.
+struct MetricsReportingFileScanTaskStream {
+    inner: futures::channel::mpsc::Receiver<Result<FileScanTask>>,
+    metrics: ScanMetricsContext,
+    planning_started_at: Instant,
+    /// `true` once the report has been emitted, so exhaustion (or a re-poll after `None`)
+    /// reports at most once.
+    reported: bool,
+}
+
+impl MetricsReportingFileScanTaskStream {
+    fn new(
+        inner: futures::channel::mpsc::Receiver<Result<FileScanTask>>,
+        metrics: ScanMetricsContext,
+        planning_started_at: Instant,
+    ) -> Self {
+        Self {
+            inner,
+            metrics,
+            planning_started_at,
+            reported: false,
+        }
+    }
+}
+
+impl futures::Stream for MetricsReportingFileScanTaskStream {
+    type Item = Result<FileScanTask>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+
+        match self.inner.poll_next_unpin(cx) {
+            Poll::Ready(Some(Ok(task))) => {
+                self.metrics.record_task(&task);
+                Poll::Ready(Some(Ok(task)))
+            }
+            Poll::Ready(Some(Err(error))) => Poll::Ready(Some(Err(error))),
+            Poll::Ready(None) => {
+                // Stream fully consumed — emit the single scan report (once).
+                if !self.reported {
+                    self.reported = true;
+                    self.metrics.emit_report(self.planning_started_at);
+                }
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 pub(crate) struct BoundPredicates {
     partition_bound_predicate: BoundPredicate,
     snapshot_bound_predicate: BoundPredicate,
@@ -645,7 +895,8 @@ pub mod tests {
     use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
     use crate::io::{FileIO, OutputFile};
     use crate::metadata_columns::RESERVED_COL_NAME_FILE;
-    use crate::scan::FileScanTask;
+    use crate::metrics::{InMemoryMetricsReporter, MetricUnit, MetricsReport};
+    use crate::scan::{FileScanTask, FileScanTaskStream};
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestEntry,
         ManifestListWriter, ManifestStatus, ManifestWriterBuilder, NestedField, PartitionSpec,
@@ -1483,6 +1734,84 @@ pub mod tests {
                 .unwrap();
             manifest_list_write.close().await.unwrap();
         }
+
+        /// Writes TWO data manifests in DISTINCT identity(x) partitions — one file in
+        /// partition `x == 1` (`p1.parquet`) and one in partition `x == 2` (`p2.parquet`),
+        /// each in its own manifest with a distinct, asserted file size. A scan filtered to
+        /// `x == 1` PRUNES the `x == 2` manifest (its file must not appear in the result),
+        /// which is exactly the `skipped_data_manifests` path. The parquet files are never
+        /// read by `plan_files`, so only the manifest metadata matters here.
+        ///
+        /// Returns `(size_partition_one, size_partition_two)` — the per-manifest data file
+        /// sizes, so a test can assert `total_file_size_in_bytes` exactly.
+        pub async fn setup_two_data_manifests_distinct_partitions(&mut self) -> (u64, u64) {
+            let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+            let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+            let current_partition_spec = self.table.metadata().default_partition_spec();
+
+            let size_partition_one = 111u64;
+            let size_partition_two = 222u64;
+
+            let write_single_file_manifest =
+                |partition_value: i64, file_name: &'static str, file_size: u64| {
+                    let writer = ManifestWriterBuilder::new(
+                        self.next_manifest_file(),
+                        Some(current_snapshot.snapshot_id()),
+                        None,
+                        current_schema.clone(),
+                        current_partition_spec.as_ref().clone(),
+                    )
+                    .build_v2_data();
+                    let path = format!("{}/{}", &self.table_location, file_name);
+                    (writer, partition_value, path, file_size)
+                };
+
+            let mut manifests = vec![];
+            for (mut writer, partition_value, path, file_size) in [
+                write_single_file_manifest(1, "p1.parquet", size_partition_one),
+                write_single_file_manifest(2, "p2.parquet", size_partition_two),
+            ] {
+                writer
+                    .add_entry(
+                        ManifestEntry::builder()
+                            .status(ManifestStatus::Added)
+                            .data_file(
+                                DataFileBuilder::default()
+                                    .partition_spec_id(0)
+                                    .content(DataContentType::Data)
+                                    .file_path(path)
+                                    .file_format(DataFileFormat::Parquet)
+                                    .file_size_in_bytes(file_size)
+                                    .record_count(1)
+                                    .partition(Struct::from_iter([Some(Literal::long(
+                                        partition_value,
+                                    ))]))
+                                    .key_metadata(None)
+                                    .build()
+                                    .unwrap(),
+                            )
+                            .build(),
+                    )
+                    .unwrap();
+                manifests.push(writer.write_manifest_file().await.unwrap());
+            }
+
+            let mut manifest_list_write = ManifestListWriter::v2(
+                self.table
+                    .file_io()
+                    .new_output(current_snapshot.manifest_list())
+                    .unwrap(),
+                current_snapshot.snapshot_id(),
+                current_snapshot.parent_snapshot_id(),
+                current_snapshot.sequence_number(),
+            );
+            manifest_list_write
+                .add_manifests(manifests.into_iter())
+                .unwrap();
+            manifest_list_write.close().await.unwrap();
+
+            (size_partition_one, size_partition_two)
+        }
     }
 
     #[test]
@@ -1794,6 +2123,399 @@ pub mod tests {
         assert_eq!(
             tasks[1].data_file_path,
             format!("{}/3.parquet", &fixture.table_location)
+        );
+    }
+
+    /// Drains a `FileScanTask` stream into a path-sorted `Vec`, asserting every item is
+    /// `Ok`. Used by the metrics-emission tests so they consume the WHOLE stream (the
+    /// trigger for a `ScanReport`).
+    async fn drain_sorted(stream: FileScanTaskStream) -> Vec<FileScanTask> {
+        let mut tasks: Vec<FileScanTask> = stream.try_collect().await.unwrap();
+        tasks.sort_by_key(|task| task.data_file_path.to_string());
+        tasks
+    }
+
+    /// Extracts the single `i64` counter value for a metric, panicking if the metric is
+    /// absent — a sharp failure when an expected counter was left `None`.
+    fn counter(value: Option<crate::metrics::CounterResult>, metric: &str) -> i64 {
+        value
+            .unwrap_or_else(|| panic!("metric {metric} should be present"))
+            .value
+    }
+
+    /// Risk (TEST 1 / mutation d): installing the metrics machinery silently changes the
+    /// planned task set even when NO reporter is configured. Pins the default (opt-in-OFF)
+    /// scan plans EXACTLY the same tasks as before — the byte-unchanged guarantee.
+    #[tokio::test]
+    async fn test_plan_files_without_reporter_is_unchanged() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let table_scan = fixture.table.scan().build().unwrap();
+        let tasks = drain_sorted(table_scan.plan_files().await.unwrap()).await;
+
+        // Identical to `test_plan_files_no_deletions`: 1.parquet (Added) + 3.parquet
+        // (Existing); the 2.parquet Deleted tombstone is filtered out.
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(
+            tasks[0].data_file_path,
+            format!("{}/1.parquet", &fixture.table_location)
+        );
+        assert_eq!(
+            tasks[1].data_file_path,
+            format!("{}/3.parquet", &fixture.table_location)
+        );
+    }
+
+    /// Risk (TEST 1 / mutation d, STRUCTURAL): the opt-in is broken — a collector (and its
+    /// per-manifest/per-task counting overhead) is installed even when NO reporter is
+    /// configured. Pins that a default scan threads `None` into the plan context (no
+    /// collector) and `Some` only when a reporter is set. This is the perf/scope guard the
+    /// task-set test alone cannot catch (counting does not change which tasks are planned).
+    #[tokio::test]
+    async fn test_no_reporter_means_no_collector_installed() {
+        let fixture = TableTestFixture::new();
+
+        let scan_without_reporter = fixture.table.scan().build().unwrap();
+        assert!(
+            scan_without_reporter.metrics.is_none(),
+            "no reporter ⇒ no metrics context on the scan"
+        );
+        assert!(
+            scan_without_reporter
+                .plan_context
+                .as_ref()
+                .unwrap()
+                .metrics_collector
+                .is_none(),
+            "no reporter ⇒ no collector threaded into planning (opt-in)"
+        );
+
+        let reporter = Arc::new(InMemoryMetricsReporter::new());
+        let scan_with_reporter = fixture
+            .table
+            .scan()
+            .with_metrics_reporter(reporter)
+            .build()
+            .unwrap();
+        assert!(
+            scan_with_reporter
+                .plan_context
+                .as_ref()
+                .unwrap()
+                .metrics_collector
+                .is_some(),
+            "a reporter ⇒ a collector is installed"
+        );
+    }
+
+    /// Risk (TEST 2): the emitted report carries the wrong table / snapshot / filter /
+    /// projection, or inaccurate counters (data-file count, manifest totals, summed bytes).
+    /// Pins ONE report with the right identity AND every cleanly-collected counter exact.
+    #[tokio::test]
+    async fn test_scan_report_emitted_with_accurate_counters_on_full_consumption() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let parquet_file_size = std::fs::metadata(format!("{}/1.parquet", &fixture.table_location))
+            .unwrap()
+            .len() as i64;
+        let snapshot_id = fixture
+            .table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .snapshot_id();
+
+        let reporter = Arc::new(InMemoryMetricsReporter::new());
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_metrics_reporter(reporter.clone())
+            .build()
+            .unwrap();
+
+        // No report until the stream is consumed.
+        assert!(reporter.last_report().is_none(), "no report before consume");
+
+        let tasks = drain_sorted(table_scan.plan_files().await.unwrap()).await;
+        assert_eq!(tasks.len(), 2, "1.parquet + 3.parquet, tombstone dropped");
+
+        let report = reporter
+            .last_scan_report()
+            .expect("a scan report after full consumption");
+
+        // Report identity.
+        assert_eq!(report.table_name, "db.table1");
+        assert_eq!(report.snapshot_id, snapshot_id);
+        // No scan filter ⇒ the report's filter is `alwaysTrue` (Java `BaseScan.filter()`).
+        assert_eq!(report.filter, Predicate::AlwaysTrue);
+        // The default projection is all 8 columns of the fixture schema.
+        assert_eq!(report.projected_field_ids.len(), 8);
+        assert!(report.projected_field_names.contains(&"x".to_string()));
+
+        let metrics = &report.scan_metrics;
+        // 1 data manifest, 0 delete manifests in the fixture's list.
+        assert_eq!(
+            counter(metrics.total_data_manifests.clone(), "total-data"),
+            1
+        );
+        assert_eq!(
+            counter(metrics.total_delete_manifests.clone(), "total-delete"),
+            0
+        );
+        // No filter ⇒ the single data manifest is scanned, none skipped.
+        assert_eq!(
+            counter(metrics.scanned_data_manifests.clone(), "scanned"),
+            1
+        );
+        assert_eq!(
+            counter(metrics.skipped_data_manifests.clone(), "skipped"),
+            0
+        );
+        // result-data-files == # tasks; no deletes attached.
+        assert_eq!(counter(metrics.result_data_files.clone(), "result-data"), 2);
+        assert_eq!(
+            counter(metrics.result_delete_files.clone(), "result-delete"),
+            0
+        );
+        // total bytes == sum of the two produced data files' sizes.
+        assert_eq!(
+            counter(metrics.total_file_size_in_bytes.clone(), "total-bytes"),
+            2 * parquet_file_size
+        );
+        // The planning timer is populated (1 timed event).
+        let timer = metrics
+            .total_planning_duration
+            .clone()
+            .expect("planning duration present");
+        assert_eq!(timer.count, 1);
+    }
+
+    /// Risk (TEST 3 / mutation a): a pruned manifest is miscounted (as scanned instead of
+    /// skipped), or its file leaks into the result. Pins a filtered scan that PRUNES the
+    /// `x == 2` manifest: `skipped_data_manifests >= 1`, the pruned file is absent, and the
+    /// surviving file's bytes are the ONLY bytes summed.
+    #[tokio::test]
+    async fn test_filtered_scan_reports_pruned_manifest_as_skipped() {
+        let mut fixture = TableTestFixture::new();
+        let (size_partition_one, _size_partition_two) =
+            fixture.setup_two_data_manifests_distinct_partitions().await;
+
+        let reporter = Arc::new(InMemoryMetricsReporter::new());
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_filter(Reference::new("x").equal_to(Datum::long(1)))
+            .with_metrics_reporter(reporter.clone())
+            .build()
+            .unwrap();
+
+        let tasks = drain_sorted(table_scan.plan_files().await.unwrap()).await;
+
+        // Only the `x == 1` file survives; the `x == 2` file's manifest was pruned.
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(
+            tasks[0].data_file_path,
+            format!("{}/p1.parquet", &fixture.table_location)
+        );
+        assert!(
+            !tasks
+                .iter()
+                .any(|task| task.data_file_path.ends_with("p2.parquet")),
+            "the pruned x==2 file must not appear in the result"
+        );
+
+        let report = reporter.last_scan_report().expect("a scan report");
+        let metrics = &report.scan_metrics;
+
+        assert_eq!(counter(metrics.total_data_manifests.clone(), "total"), 2);
+        assert_eq!(
+            counter(metrics.scanned_data_manifests.clone(), "scanned"),
+            1
+        );
+        assert_eq!(
+            counter(metrics.skipped_data_manifests.clone(), "skipped"),
+            1,
+            "the x==2 manifest is pruned"
+        );
+        // scanned + skipped == total.
+        assert_eq!(
+            counter(metrics.scanned_data_manifests.clone(), "s")
+                + counter(metrics.skipped_data_manifests.clone(), "k"),
+            counter(metrics.total_data_manifests.clone(), "t"),
+        );
+        assert_eq!(counter(metrics.result_data_files.clone(), "result"), 1);
+        // Only the surviving file's bytes are summed (the pruned file's are not).
+        assert_eq!(
+            counter(metrics.total_file_size_in_bytes.clone(), "bytes"),
+            size_partition_one as i64,
+        );
+    }
+
+    /// Risk (TEST 4 / mutation b): delete manifests and delete-file references are
+    /// miscounted (e.g. delete files folded into `result_data_files`, or the delete
+    /// manifest not counted). Pins a fixture with a DELETE manifest: `total_delete_manifests`
+    /// and `result_delete_files` are counted, and `result_data_files` excludes them.
+    #[tokio::test]
+    async fn test_delete_manifest_fixture_counts_delete_files_separately() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_deadlock_manifests().await;
+
+        let reporter = Arc::new(InMemoryMetricsReporter::new());
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_metrics_reporter(reporter.clone())
+            .build()
+            .unwrap();
+
+        let tasks = drain_sorted(table_scan.plan_files().await.unwrap()).await;
+        // 10 data files, each picking up the single position-delete in their shared
+        // partition (x == 100).
+        assert_eq!(tasks.len(), 10);
+        let total_delete_refs: usize = tasks.iter().map(|task| task.deletes.len()).sum();
+
+        let report = reporter.last_scan_report().expect("a scan report");
+        let metrics = &report.scan_metrics;
+
+        assert_eq!(counter(metrics.total_data_manifests.clone(), "data"), 1);
+        assert_eq!(
+            counter(metrics.total_delete_manifests.clone(), "delete-manifests"),
+            1,
+            "the one delete manifest is counted"
+        );
+        // result_data_files counts ONLY the 10 data tasks, not the delete file.
+        assert_eq!(
+            counter(metrics.result_data_files.clone(), "result-data"),
+            10
+        );
+        // result_delete_files == total delete-file references across the tasks.
+        assert_eq!(
+            counter(metrics.result_delete_files.clone(), "result-delete"),
+            total_delete_refs as i64,
+        );
+        assert!(
+            total_delete_refs >= 1,
+            "the delete file must attach to at least one data task"
+        );
+    }
+
+    /// Risk (TEST 5 / mutation c): the report is emitted PER-TASK (or never). Pins that
+    /// fully consuming the stream produces EXACTLY ONE report — by snapshotting the last
+    /// report, then confirming a fresh reporter observes the same single emission and that
+    /// re-polling the exhausted stream does not re-report.
+    #[tokio::test]
+    async fn test_scan_report_emitted_exactly_once() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // A counting reporter that records HOW MANY times `report` was called.
+        #[derive(Debug, Default)]
+        struct CountingReporter {
+            count: std::sync::atomic::AtomicUsize,
+        }
+        impl crate::metrics::MetricsReporter for CountingReporter {
+            fn report(&self, _report: MetricsReport) {
+                self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
+        let reporter = Arc::new(CountingReporter::default());
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_metrics_reporter(reporter.clone())
+            .build()
+            .unwrap();
+
+        let mut stream = table_scan.plan_files().await.unwrap();
+        // Drain task-by-task; the report must NOT fire per task.
+        let mut seen = 0;
+        while let Some(task) = stream.try_next().await.unwrap() {
+            let _ = task;
+            seen += 1;
+            assert_eq!(
+                reporter.count.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "no report should be emitted mid-stream (after {seen} tasks)"
+            );
+        }
+
+        assert_eq!(seen, 2);
+        assert_eq!(
+            reporter.count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "exactly one report on full consumption"
+        );
+
+        // Re-polling the exhausted stream does not re-report.
+        assert!(stream.try_next().await.unwrap().is_none());
+        assert_eq!(
+            reporter.count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "re-polling an exhausted stream does not re-report"
+        );
+    }
+
+    /// Risk (EMISSION / early-drop): the report fires with PARTIAL counts when the consumer
+    /// abandons the stream before exhausting it — Java only reports on the iterable's CLOSE
+    /// after full consumption, and this wrapper emits ONLY on the `Ready(None)` transition.
+    /// Pins that pulling a few tasks and then DROPPING the stream emits NO report (the
+    /// `Ready(None)` arm is never reached) and does not hang — the spawned planning tasks
+    /// must not deadlock when the receiver is dropped early.
+    #[tokio::test]
+    async fn test_partial_consume_then_drop_emits_no_report() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_deadlock_manifests().await;
+
+        let reporter = Arc::new(InMemoryMetricsReporter::new());
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_metrics_reporter(reporter.clone())
+            .build()
+            .unwrap();
+
+        let mut stream = table_scan.plan_files().await.unwrap();
+        // Pull only 3 of the fixture's 10 tasks, then abandon the stream.
+        for _ in 0..3 {
+            stream
+                .try_next()
+                .await
+                .unwrap()
+                .expect("a task should be produced");
+        }
+        drop(stream);
+
+        // No `Ready(None)` was observed, so no report should have been emitted — a
+        // partial-count report would be wrong. (Drop must not hang on the producers.)
+        assert!(
+            reporter.last_report().is_none(),
+            "dropping the stream before exhaustion must NOT emit a (partial) report"
+        );
+    }
+
+    /// Risk: the byte counters are reported with the wrong unit. Pins the bytes counter on
+    /// an emitted report carries `MetricUnit::Bytes` (end-to-end, not just at the collector).
+    #[tokio::test]
+    async fn test_emitted_byte_counter_carries_bytes_unit() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let reporter = Arc::new(InMemoryMetricsReporter::new());
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_metrics_reporter(reporter.clone())
+            .build()
+            .unwrap();
+
+        let _ = drain_sorted(table_scan.plan_files().await.unwrap()).await;
+        let report = reporter.last_scan_report().expect("a scan report");
+        assert_eq!(
+            report.scan_metrics.total_file_size_in_bytes.unwrap().unit,
+            MetricUnit::Bytes
         );
     }
 

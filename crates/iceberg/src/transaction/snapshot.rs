@@ -26,9 +26,10 @@ use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluato
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, Manifest, ManifestContentType,
-    ManifestEntry, ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder,
-    Operation, Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct,
-    StructType, Summary, TableProperties, update_snapshot_summaries,
+    ManifestEntry, ManifestFile, ManifestListWriter, ManifestStatus, ManifestWriter,
+    ManifestWriterBuilder, Operation, Snapshot, SnapshotReference, SnapshotRetention,
+    SnapshotSummaryCollector, Struct, StructType, Summary, TableProperties,
+    update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -965,31 +966,75 @@ fn operation_adds_delete_files(operation: &Operation) -> bool {
     matches!(operation, Operation::Overwrite | Operation::Delete)
 }
 
-/// Enumerate the files of a given manifest `content` ADDED to `table` by snapshots committed AFTER
-/// `starting_snapshot_id` — the shared walk behind both [`added_data_files_after`] (DATA manifests) and
-/// [`added_delete_files_after`] (DELETE manifests).
+/// Operations whose snapshots can REMOVE data files — the only ones a "data files still exist" validation
+/// needs to inspect (Java `MergingSnapshotProducer.VALIDATE_DATA_FILES_EXIST_OPERATIONS = {OVERWRITE,
+/// REPLACE, DELETE}`). An `Append` snapshot never removes a live data file, so it is not inspected.
 ///
-/// This is the Rust port of Java `MergingSnapshotProducer.validationHistory`
-/// (`core/MergingSnapshotProducer.java`): it walks the parent chain of `table`'s current snapshot (the
-/// refreshed base / Java `parent`) back via `parent_snapshot_id`, INCLUSIVE of the current snapshot and
-/// EXCLUSIVE of `starting_snapshot_id` (Java `SnapshotUtil.ancestorsBetween(parent.snapshotId(),
-/// startingSnapshotId)`). For each visited snapshot whose operation passes `operation_adds` (Java's
-/// per-validation operation set — `VALIDATE_ADDED_FILES_OPERATIONS` for data,
-/// `VALIDATE_ADDED_DELETE_FILES_OPERATIONS` for deletes), it loads that snapshot's manifest list, keeps the
-/// manifests of `content` that it ADDED (`manifest.added_snapshot_id == snapshot.snapshot_id()`, Java
-/// `manifest.snapshotId() == currentSnapshot.snapshotId()`), and collects every `Added`-status entry's
-/// [`DataFile`] (Java `ignoreDeleted().ignoreExisting()`). Both DATA and DELETE files are carried in
-/// manifest entries as [`DataFile`]s, distinguished by their content type.
+/// Java's set has THREE members; the Rust [`Operation`] enum has no `Replace` variant (a `ReplacePartitions`
+/// commit records `Operation::Overwrite`, and a rewrite/compaction is not yet a distinct operation here), so
+/// only `{Overwrite, Delete}` are representable. This is faithful to every operation Rust can currently
+/// produce — Rust never records a `REPLACE` snapshot, so there is nothing of that operation to miss.
+///
+/// This is the `skipDeletes == false` variant; see [`operation_removes_data_files_skip_deletes`] for the
+/// `skipDeletes == true` variant Java's `RowDelta` uses by default.
+fn operation_removes_data_files(operation: &Operation) -> bool {
+    matches!(operation, Operation::Overwrite | Operation::Delete)
+}
+
+/// The `skipDeletes == true` variant of [`operation_removes_data_files`] — the operations whose snapshots can
+/// remove data files when DELETE-op snapshots are EXCLUDED (Java
+/// `MergingSnapshotProducer.VALIDATE_DATA_FILES_EXIST_SKIP_DELETE_OPERATIONS = {OVERWRITE, REPLACE}`).
+///
+/// Java drops `DELETE` from the set so that a concurrent merge-on-read DELETE-op snapshot (which produces
+/// `Deleted` tombstones for the files it removed) does NOT trip the files-exist check — this is what
+/// `BaseRowDelta` uses by DEFAULT (its `validateDeletes` flag is `false` unless `validateDeletedFiles()` is
+/// called, and it passes `skipDeletes = !validateDeletes = true`). With `REPLACE` unrepresentable in the Rust
+/// [`Operation`] enum (a rewrite is not yet a distinct op), only `{Overwrite}` is representable here — faithful
+/// to every operation Rust can produce.
+fn operation_removes_data_files_skip_deletes(operation: &Operation) -> bool {
+    matches!(operation, Operation::Overwrite)
+}
+
+/// Enumerate the files of a given manifest `content` that snapshots committed AFTER `starting_snapshot_id`
+/// recorded with status `status_to_keep` — the shared walk behind [`added_data_files_after`] /
+/// [`added_delete_files_after`] (DATA / DELETE manifests, `ManifestStatus::Added` entries) and
+/// [`deleted_data_files_after`] (DATA manifests, `ManifestStatus::Deleted` tombstones).
+///
+/// This is the Rust port of Java `MergingSnapshotProducer.validationHistory` + the per-check `ManifestGroup`
+/// entry filter (`core/MergingSnapshotProducer.java`): it walks the parent chain of `table`'s current
+/// snapshot (the refreshed base / Java `parent`) back via `parent_snapshot_id`, INCLUSIVE of the current
+/// snapshot and EXCLUSIVE of `starting_snapshot_id` (Java `SnapshotUtil.ancestorsBetween(parent.snapshotId(),
+/// startingSnapshotId)`). For each visited snapshot whose operation passes `operation_filter` (Java's
+/// per-validation operation set — `VALIDATE_ADDED_FILES_OPERATIONS` for added data,
+/// `VALIDATE_ADDED_DELETE_FILES_OPERATIONS` for added deletes, `VALIDATE_DATA_FILES_EXIST_OPERATIONS` for
+/// removed data), it loads that snapshot's manifest list, keeps the manifests of `content` that it WROTE
+/// (`manifest.added_snapshot_id == snapshot.snapshot_id()`, Java `manifest.snapshotId() ==
+/// currentSnapshot.snapshotId()`), and collects every entry whose status equals `status_to_keep`.
+///
+/// The `status_to_keep` axis selects the per-check entry filter:
+/// - `ManifestStatus::Added` ⇒ files ADDED by the concurrent snapshots (Java `ignoreDeleted().ignoreExisting()`
+///   keeping `Status.ADDED`) — the data/delete *conflict* checks.
+/// - `ManifestStatus::Deleted` ⇒ files DELETED by the concurrent snapshots (Java `deletedDataFiles` keeps
+///   `entry.status() == DELETED`, with `ignoreExisting()`) — the `validateDataFilesExist` check.
+///
+/// A concurrent delete/overwrite records its removals as `Deleted` tombstones in a manifest it itself wrote
+/// (`rewrite_manifest_with_deletes` stamps the new snapshot id as `added_snapshot_id`), so the
+/// `added_snapshot_id == snapshot_id` manifest filter finds those tombstones — exactly as it finds a
+/// snapshot's `Added` entries.
+///
+/// Both DATA and DELETE files are carried in manifest entries as [`DataFile`]s, distinguished by their
+/// content type.
 ///
 /// `starting_snapshot_id == None` means "validate from the beginning of history" — every ancestor of the
 /// current snapshot is inspected (Java passes a null starting id to `ancestorsBetween`, which walks to the
 /// root). When the current snapshot already IS `starting_snapshot_id` (no concurrent commit landed), the walk
 /// yields nothing. A table with no current snapshot likewise yields nothing.
-async fn added_files_after(
+async fn files_after(
     table: &Table,
     starting_snapshot_id: Option<i64>,
     content: ManifestContentType,
-    operation_adds: fn(&Operation) -> bool,
+    operation_filter: fn(&Operation) -> bool,
+    status_to_keep: ManifestStatus,
 ) -> Result<Vec<DataFile>> {
     let metadata = table.metadata();
 
@@ -999,7 +1044,7 @@ async fn added_files_after(
         return Ok(vec![]);
     };
 
-    let mut added = Vec::new();
+    let mut collected = Vec::new();
 
     loop {
         // Java `ancestorsBetween` is EXCLUSIVE of the starting snapshot: stop before re-visiting it (and
@@ -1009,14 +1054,16 @@ async fn added_files_after(
             break;
         }
 
-        if operation_adds(&current.summary().operation) {
+        if operation_filter(&current.summary().operation) {
             let manifest_list = current
                 .load_manifest_list(table.file_io(), metadata)
                 .await?;
             for manifest_file in manifest_list.entries() {
-                // Only manifests of the requested `content` that THIS snapshot added (Java
+                // Only manifests of the requested `content` that THIS snapshot wrote (Java
                 // `manifest.snapshotId() == currentSnapshot.snapshotId()`) — carried-forward manifests
-                // belong to older snapshots and their files are not "added since the starting snapshot".
+                // belong to older snapshots and their files were not added/removed since the starting
+                // snapshot. A delete/overwrite's rewritten manifest (carrying its `Deleted` tombstones)
+                // also has `added_snapshot_id == snapshot.snapshot_id()`, so it is included here.
                 if manifest_file.content != content
                     || manifest_file.added_snapshot_id != current.snapshot_id()
                 {
@@ -1024,10 +1071,13 @@ async fn added_files_after(
                 }
                 let manifest = manifest_file.load_manifest(table.file_io()).await?;
                 for entry in manifest.entries() {
-                    // Only ADDED entries (Java `ignoreDeleted().ignoreExisting()`) — an `Existing` entry was
-                    // added by an earlier snapshot and copied forward, a `Deleted` tombstone is a removal.
-                    if entry.status() == crate::spec::ManifestStatus::Added {
-                        added.push(entry.data_file().clone());
+                    // Keep only entries of the requested status (the per-check axis): `Added` for the
+                    // conflict checks (Java `ignoreDeleted().ignoreExisting()` keeping `Status.ADDED`) or
+                    // `Deleted` for the files-exist check (Java `deletedDataFiles` keeping `Status.DELETED`,
+                    // with `ignoreExisting()`). An `Existing` entry was added by an earlier snapshot and
+                    // copied forward, so it is never the relevant status here.
+                    if entry.status() == status_to_keep {
+                        collected.push(entry.data_file().clone());
                     }
                 }
             }
@@ -1044,18 +1094,18 @@ async fn added_files_after(
         }
     }
 
-    Ok(added)
+    Ok(collected)
 }
 
 /// Enumerate the DATA files ADDED to `table` by snapshots committed AFTER `starting_snapshot_id` — the
 /// concurrent commits a serializable-isolation conflict check must inspect.
 ///
 /// This is the Rust port of Java `MergingSnapshotProducer.addedDataFiles` + `validationHistory`
-/// (`core/MergingSnapshotProducer.java`): the shared [`added_files_after`] walk over DATA manifests, gated
+/// (`core/MergingSnapshotProducer.java`): the shared [`files_after`] walk over DATA manifests, gated
 /// to the operations that can add data ([`operation_adds_data_files`] = Java
-/// `VALIDATE_ADDED_FILES_OPERATIONS = {APPEND, OVERWRITE}`). See [`added_files_after`] for the walk
-/// semantics (inclusive of the current snapshot, exclusive of the starting snapshot, only manifests the
-/// snapshot itself added, only `Added`-status entries).
+/// `VALIDATE_ADDED_FILES_OPERATIONS = {APPEND, OVERWRITE}`), keeping `ManifestStatus::Added` entries. See
+/// [`files_after`] for the walk semantics (inclusive of the current snapshot, exclusive of the starting
+/// snapshot, only manifests the snapshot itself wrote, only entries of the requested status).
 ///
 /// This is the shared foundation the per-action data-file conflict validations (`ReplacePartitions`
 /// `validateNoConflictingData`, `OverwriteFiles` / `RowDelta` `validateNoConflictingDataFiles`) build on.
@@ -1063,11 +1113,12 @@ pub(crate) async fn added_data_files_after(
     table: &Table,
     starting_snapshot_id: Option<i64>,
 ) -> Result<Vec<DataFile>> {
-    added_files_after(
+    files_after(
         table,
         starting_snapshot_id,
         ManifestContentType::Data,
         operation_adds_data_files,
+        ManifestStatus::Added,
     )
     .await
 }
@@ -1076,9 +1127,9 @@ pub(crate) async fn added_data_files_after(
 /// `starting_snapshot_id` — the concurrent commits a `validateNoConflictingDeleteFiles` check must inspect.
 ///
 /// This is the Rust port of Java `MergingSnapshotProducer.addedDeleteFiles`
-/// (`core/MergingSnapshotProducer.java` L601-625): the shared [`added_files_after`] walk over DELETE
+/// (`core/MergingSnapshotProducer.java` L601-625): the shared [`files_after`] walk over DELETE
 /// manifests, gated to the operations that can add delete files ([`operation_adds_delete_files`] = Java
-/// `VALIDATE_ADDED_DELETE_FILES_OPERATIONS = {OVERWRITE, DELETE}`).
+/// `VALIDATE_ADDED_DELETE_FILES_OPERATIONS = {OVERWRITE, DELETE}`), keeping `ManifestStatus::Added` entries.
 ///
 /// **V2 guard (Java `base.formatVersion() < 2` ⇒ empty `DeleteFileIndex`):** delete files do not exist
 /// before format version 2, so on a V1 table this returns an empty set without walking the history.
@@ -1100,11 +1151,63 @@ pub(crate) async fn added_delete_files_after(
         return Ok(vec![]);
     }
 
-    added_files_after(
+    files_after(
         table,
         starting_snapshot_id,
         ManifestContentType::Deletes,
         operation_adds_delete_files,
+        ManifestStatus::Added,
+    )
+    .await
+}
+
+/// Enumerate the DATA files DELETED from `table` by snapshots committed AFTER `starting_snapshot_id` — the
+/// concurrent removals a `validateDataFilesExist` check must inspect to detect that a file this operation
+/// also needs to delete was already removed by a concurrent commit.
+///
+/// This is the Rust port of Java `MergingSnapshotProducer.validateDataFilesExist` /  `deletedDataFiles`
+/// (`core/MergingSnapshotProducer.java` L695-735, L773-822): the shared [`files_after`] walk over DATA
+/// manifests, keeping `ManifestStatus::Deleted` tombstone entries (Java `entry.status() == DELETED` with
+/// `ignoreExisting()`). See [`files_after`] for the walk semantics.
+///
+/// The `skip_deletes` flag selects the operation set, mirroring Java's two `validateDataFilesExist` op sets:
+/// - `skip_deletes == false` ⇒ [`operation_removes_data_files`] = Java
+///   `VALIDATE_DATA_FILES_EXIST_OPERATIONS = {OVERWRITE, REPLACE, DELETE}` (`{Overwrite, Delete}` in Rust).
+///   `DeleteFiles` uses this (its `validate` always includes DELETE-op snapshots).
+/// - `skip_deletes == true` ⇒ [`operation_removes_data_files_skip_deletes`] = Java
+///   `VALIDATE_DATA_FILES_EXIST_SKIP_DELETE_OPERATIONS = {OVERWRITE, REPLACE}` (`{Overwrite}` in Rust).
+///   `RowDelta` uses this by DEFAULT (Java `BaseRowDelta` passes `skipDeletes = !validateDeletes`, and
+///   `validateDeletes` is `false` unless `validateDeletedFiles()` was called) so that a concurrent
+///   merge-on-read DELETE-op snapshot does not trip the referenced-files check.
+///
+/// In BOTH cases the unrepresentable Java `REPLACE` operation is absent (Rust never records a `REPLACE`
+/// snapshot) — faithful, not a gap.
+///
+/// A concurrent delete/overwrite writes the file it removes as a `Deleted` tombstone in a manifest IT wrote
+/// (`rewrite_manifest_with_deletes` stamps the committing snapshot id as the manifest's `added_snapshot_id`),
+/// so the `added_snapshot_id == snapshot_id` manifest filter finds those tombstones — exactly the way Java's
+/// `manifest.snapshotId() == currentSnapshot.snapshotId()` filter does.
+///
+/// The caller intersects these deleted-file paths with the set it requires (the files it is deleting, or the
+/// files its added delete files reference) to decide whether to reject the commit (Java
+/// `requiredDataFiles.contains(entry.file().location())`).
+pub(crate) async fn deleted_data_files_after(
+    table: &Table,
+    starting_snapshot_id: Option<i64>,
+    skip_deletes: bool,
+) -> Result<Vec<DataFile>> {
+    let operation_filter = if skip_deletes {
+        operation_removes_data_files_skip_deletes
+    } else {
+        operation_removes_data_files
+    };
+
+    files_after(
+        table,
+        starting_snapshot_id,
+        ManifestContentType::Data,
+        operation_filter,
+        ManifestStatus::Deleted,
     )
     .await
 }

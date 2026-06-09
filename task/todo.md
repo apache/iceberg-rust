@@ -31,6 +31,29 @@ How to use it (see the manuals' §1):
 
 ---
 
+## Active: Scan metrics emission wiring (TableScan → MetricsReporter) — BUILDER Opus, 2026-06-09
+
+Completes the DEFERRED scan-emission wiring from the metrics data-model increment (GAP_MATRIX row 97).
+OPT-IN: when no reporter is set, the `plan_files` path is BYTE-UNCHANGED. Java authority:
+`SnapshotScan.planFiles` (timer start → `doPlanFiles()` → `whenComplete` report on close) + `ManifestGroup`
+/`ScanMetricsUtil.fileTask` (per-task counters) + `DataTableScan` (manifest-list totals).
+
+- [x] Add `scan/metrics_collector.rs`: `ScanMetricsCollector` (Arc'd `AtomicI64` counters) + `snapshot()`
+      → `ScanMetricsResult`. Only the cleanly-collectable counters + the planning timer are populated;
+      indexed/equality/positional/dvs/skipped-files left `None` (documented not-yet-populated).
+- [x] `TableScanBuilder::with_metrics_reporter(Arc<dyn MetricsReporter>)` (Option, default None) →
+      `TableScan.metrics_reporter`.
+- [x] Thread `Option<Arc<ScanMetricsCollector>>` through `PlanContext` → `ManifestFileContext` /
+      `ManifestEntryContext` (None when no reporter). Manifest-list totals counted in `plan_files`;
+      scanned/skipped at the `context.rs` prune point; per-task result_*/size in the stream wrapper.
+- [x] Emission: wrap the `FileScanTaskStream` so that on FULL consumption (stream returns `None`) the
+      collector is snapshotted, the timer stopped, a `ScanReport` is built (table name / snapshot id /
+      schema id / projected field ids+names / filter), and `reporter.report(Scan(report))` is called ONCE.
+      When `metrics_reporter` is None: no collector, no timer, no wrapper — byte-unchanged.
+- [x] Tests (5) + mutation checks (a–d). Docs: GAP_MATRIX row 97 / Roadmap / lessons / todo.
+
+Outcome: see final report. Stayed on `phase2-3-remnants`; no commit/push; no Cargo edits.
+
 ## Active: Phase 1 — Spec & metadata completeness
 
 Parity target: Java `iceberg-core` evolution APIs. Authoritative plan: [Roadmap.md](../Roadmap.md)
@@ -3868,3 +3891,276 @@ Plan:
 `startingSequenceNumber`; this port enumerates concurrent-added delete files by the snapshot walk + inclusive
 metrics only (no seq-number refinement) — a conservative over-scan (can only over-reject, never under-reject),
 same class as Inc-3's manifest-summary pre-filter deferral.
+
+---
+
+## Active (2026-06-09): DeleteFiles validateFilesExist (validateDataFilesExist for the delete path)
+
+Increment: Java `MergingSnapshotProducer.validateDataFilesExist` semantics for the DeleteFiles action —
+reject the commit if any data file this op is deleting was DELETED by a concurrent commit since the start.
+
+- [x] **snapshot.rs status axis** — generalize `added_files_after`'s hard `status() == Added` filter into a
+  `status_to_keep: ManifestStatus` parameter. The two existing callers (`added_data_files_after`,
+  `added_delete_files_after`) pass `ManifestStatus::Added` (BEHAVIOR-PRESERVING — their tests stay green).
+- [x] **snapshot.rs `operation_removes_data_files`** — `{Overwrite, Replace, Delete}` (Java
+  `VALIDATE_DATA_FILES_EXIST_OPERATIONS`). Note: Rust `Operation` has no `Replace` variant → only
+  `{Overwrite, Delete}` are representable; document.
+- [x] **snapshot.rs `deleted_data_files_after(table, start) -> Vec<DataFile>`** — DATA content,
+  `operation_removes_data_files`, `ManifestStatus::Deleted`. The concurrent delete's rewritten manifest
+  carries the Deleted tombstone with `added_snapshot_id == that snapshot` (verified in
+  `rewrite_manifest_with_deletes`), so the existing manifest filter finds it.
+- [x] **delete_files.rs** — add `validate_files_exist: bool` + `validate_from_snapshot: Option<i64>` fields +
+  `validate_files_exist()` / `validate_from_snapshot(i64)` builders + a `validate` override (mirror
+  ReplacePartitions): if OFF ⇒ Ok; effective_start = override.or(start); enumerate
+  `deleted_data_files_after`; if any deleted file's path ∈ self.delete_paths ⇒ non-retryable
+  `Error::new(DataInvalid, "Cannot commit, missing data files: <path>")`.
+- [x] **Tests (5)** + mutation checks (a–d) + behavior-preservation of the two Added callers.
+- [x] **Docs** — GAP_MATRIX, Roadmap, lessons; note skip-deletes op-set variant + RowDelta
+  validateDataFilesExist deferred.
+
+**Java divergence flagged up front:** `StreamingDelete.validate()` actually calls `failMissingDeletePaths()`
+(the filter-manager required-deletes check), NOT `validateDataFilesExist`. The brief directs the
+`validateDataFilesExist`-semantics port for the delete path (requiredDataFiles = the files being deleted),
+modeled on RowDelta/ReplacePartitions. Faithful to `validateDataFilesExist`'s contract; report the
+StreamingDelete wiring nuance.
+
+**Outcome (2026-06-09):** Landed. `transaction/snapshot.rs` (status axis `files_after` +
+`operation_removes_data_files` + `deleted_data_files_after`) + `transaction/delete_files.rs`
+(`validate_files_exist()` / `validate_from_snapshot()` + `validate` override + 5 tests). Lib total
+1573 → 1578. transaction:: 246 green (the two Added callers behavior-preserving). 4 mutations caught.
+Docs updated (GAP_MATRIX, Roadmap, lessons). Deferred: skip-deletes op-set variant + RowDelta
+validateDataFilesExist.
+
+**REVIEW (2026-06-09, Opus):** Verified behavior-preservation (inverting the shared manifest filter fails 17
+tests across BOTH the Deleted and Added axes), the deleted-file enumeration vs Java (content DATA, op
+`{Overwrite, Delete}`, status Deleted — op set PINNED by a real `Delete`-op concurrent deletion), end-to-end
+through `tx.commit` + non-retryable. Ran 8 mutations (the builder's 4 + content-type/manifest-filter/intersection/
+tx-captured-fallback); ALL caught after a fix. **Found + fixed 1 SURVIVING mutation:** the tx-captured
+`starting_snapshot_id` fallback (no `validate_from_snapshot`) was unpinned (the recurring Increment-6 gap — all
+5 builder tests set the override). Added `test_delete_files_exist_rejects_concurrent_using_tx_captured_starting_snapshot`
+(reviewer); the refreshed-head mutation now fails exactly it. Lib total 1578 → **1579**. Docs reconciled (test
+count 5→6, mutation list 4→8).
+
+---
+
+## Active (2026-06-09): RowDelta validateDataFilesExist + the skip-deletes op-set variant
+
+Increment: Java `BaseRowDelta.validateDataFilesExist(referencedFiles)` — RowDelta gains a builder providing
+the data files its added position-deletes REFERENCE, and at commit rejects if any referenced data file was
+DELETED by a concurrent commit since the start. Reuses `deleted_data_files_after`; ADDS the skip-deletes
+op-set variant (Java `VALIDATE_DATA_FILES_EXIST_SKIP_DELETE_OPERATIONS = {OVERWRITE, REPLACE}`).
+
+- [x] **snapshot.rs `skip_deletes` op-set variant** — `deleted_data_files_after(table, start, skip_deletes:
+  bool)`: `skip_deletes=true` ⇒ `{Overwrite}` (new `operation_removes_data_files_skip_deletes`; Java drops
+  DELETE; REPLACE unrepresentable); `skip_deletes=false` ⇒ `{Overwrite, Delete}`. The existing DeleteFiles
+  caller passes `false` (BEHAVIOR-PRESERVING — proven: forcing it to `true` fails 3 DeleteFiles tests).
+- [x] **row_delta.rs** — added `referenced_data_files: HashSet<String>` + `validate_deleted_files: bool`
+  fields + `validate_data_files_exist(...)` + `validate_deleted_files()` builders + the `validate`-override
+  branch (`skip_deletes = !validate_deleted_files`; intersection of `deleted_data_files_after` paths ∩
+  `referenced_data_files` ⇒ non-retryable `DataInvalid` "Cannot commit, missing data files: <path>").
+- [x] **Tests (6)** + mutation checks (a–d, all caught) + the DeleteFiles behavior-preservation mutation.
+- [x] **Docs** — GAP_MATRIX, Roadmap, lessons updated.
+
+**Faithfulness note:** Java `referencedDataFiles` is CALLER-PROVIDED (`CharSequenceSet`, populated by
+`validateDataFilesExist(referencedFiles)`), NOT derived from the added delete files. The Rust port mirrors
+this — `validate_data_files_exist([paths])` takes the caller's set.
+
+**Outcome (2026-06-09):** Landed. `transaction/snapshot.rs` (skip-deletes op-set axis on
+`deleted_data_files_after` + `operation_removes_data_files_skip_deletes`) +
+`transaction/row_delta.rs` (`validate_data_files_exist` / `validate_deleted_files` + the `validate` branch +
+6 tests) + `transaction/delete_files.rs` (caller passes `skip_deletes = false`). transaction:: 247 → 253
+green (the DeleteFiles increment-1 + data/delete conflict tests behavior-preserving). 4 mutations (a–d)
+caught + the DeleteFiles `skip_deletes=true` mutation caught. Deferred: `validateNoNewDeletesForDataFiles`,
+`validateAddedDVs` (need `removed_data_files`), `OverwriteFiles.validateDataFilesExist`.
+
+---
+
+## Active (2026-06-09): Inspection-table interop — `snapshots` + `refs` (Phase 3 interop Increment 1)
+
+Increment: the FIRST byte/field-level "read a table Java wrote" evidence for the inspection tables — flips the
+`snapshots` + `refs` inspection rows to interop-✅ (the rest of the inspection set stays 🟡). Builder→reviewer
+actor-critic via Workflow; orchestrator independently re-ran the full gate + committed. **Purely additive — NO
+production-code change.**
+
+- [x] **Java oracle** (`dev/java-interop/.../InteropOracle.java`) — new `generate-inspection` exec mode +
+  nested `InspectionOracle` + dedicated `InMemoryInspectionOperations` (its `io()` returns a real
+  `InMemoryFileIO` with the metadata file pre-`addFile`d). Builds a purpose-rich V2 base (3 snapshots
+  ROOT/CURRENT/SIBLING — CURRENT carries a MULTI-KEY summary, ROOT operation-only → empty map; refs main
+  branch-no-retention / dev branch-full-retention / stable tag-only-max-ref-age), writes `base.metadata.json`,
+  RE-PARSES it (`TableMetadataParser.fromJson`), then materializes Java's REAL `SnapshotsTable`/`RefsTable`
+  rows via `MetadataTableUtils.createMetadataTableInstance` + `mt.newScan().planFiles()` +
+  `task.asDataTask().rows()`, serialized by `JsonUtil`/`JsonGenerator` to `java_{snapshots,refs}.json`. No
+  Maven deps added; pom untouched.
+- [x] **Rust test** (`crates/iceberg/tests/interop_inspection.rs`, 2 tests) — loads the same
+  `base.metadata.json`, runs `inspect().snapshots()/.refs().scan()`, extracts every Arrow column, asserts
+  field-for-field equality vs the Java rows ORDER-INDEPENDENTLY (snapshots by id, refs by name; summary as a
+  `HashMap`) + focused named assertions (committed_at micros, empty-vs-multi-key summary, operation-not-in-map,
+  retention NULL-per-kind).
+- [x] **Gate (orchestrator-rerun, all green):** iceberg lib 1595, interop_inspection 2/2, the other 3 interop
+  suites 4/4/4, datafusion 80+9, clippy/fmt/typos clean; `git status` = only InteropOracle.java +
+  testdata/interop/inspection/ + the new test (no existing fixtures changed).
+- [x] **Docs** — GAP_MATRIX (interop note on the inspection row), lessons, todo.
+
+**Key finding (memory `reference_java_snapshot_summary_operation.md`):** Java `SnapshotParser.fromJson` splits
+`operation` OUT of the summary map on the on-disk round-trip ⇒ Rust's `additional_properties`-only summary
+column already matches Java's RE-PARSED `summary()` — NO Rust change. Verified against `/tmp/iceberg-java-ref`
+1.10.0 before any edit (averted a wrong "fix"). **Gotcha:** Java `StaticDataTask.rows()` is a lazy transform
+over ONE mutable projection — serialize each row eagerly, never stash `StructLike`s.
+
+**Deferred (next interop increments):** `history` + `metadata_log_entries` (need a multi-entry snapshot-log +
+metadata-log fixture so `is_current_ancestor=false` and the `latest_*` as-of-time columns are exercised); then
+the manifest-reading tables `files`/`entries`/`manifests`/`partitions`/`all_*` + scan interop (need real
+on-disk manifests + parquet, a bigger harness step).
+
+---
+
+## Active (2026-06-09): Inspection-table interop — `history` + `metadata_log_entries` (Phase 3 interop Increment 2)
+
+Increment: interop evidence for the two DERIVED-column pure-metadata inspection tables — completes interop
+for ALL FOUR pure-metadata inspection tables. Builder→reviewer (validation-first, per user "validation is
+key"); orchestrator independently re-ran the full gate + committed. **Purely additive — NO production change.**
+
+- [x] **Java oracle** — new `generate-inspection-log` exec mode + `InspectionLogOracle` (reuses the prior
+  increment's `InMemoryInspectionOperations` / `RowWriter` / `rowsToJson`). Builds a FORKED snapshot-log via
+  the 3-commit RE-PARSE recipe (B0 ROOT→main, B1 SIBLING→main, B2 CURRENT→main, re-parse between each to
+  dodge intermediate-snapshot pruning) → log `[ROOT@2018-01, SIBLING@2018-08, CURRENT@2019-04]`,
+  CURRENT.parent=ROOT ⇒ SIBLING off-ancestry. INJECTS a deterministic `metadata-log` (3 straddling entries)
+  via `JsonUtil.mapper()`, re-parses with a stable logical URI, materializes Java's REAL
+  `HistoryTable`/`MetadataLogEntriesTable` rows → `java_history.json` / `java_metadata_log_entries.json`
+  under `testdata/interop/inspection_history/`.
+- [x] **Rust tests (2, added to `interop_inspection.rs`)** — `inspect().history()/.metadata_log_entries()
+  .scan()` asserted field-for-field equal vs the Java rows (all 4 / all 5 columns, order-independent —
+  history by composite `(made_current_at,snapshot_id)`, log by timestamp) + focused pins:
+  `is_current_ancestor` true/FALSE/true (ROOT/SIBLING/CURRENT); `latest_*` NULL/ROOT/SIBLING/CURRENT (with
+  schema_id 0 + seq 1/2/3); synthetic-entry `file` == the stable metadata location.
+- [x] **Gate (orchestrator-rerun, all green):** iceberg lib 1595, interop_inspection 4/4, other 3 interop
+  4/4/4, datafusion 80+9, clippy/fmt/typos clean; `git status` = only `InteropOracle.java` +
+  `interop_inspection.rs` + `inspection_history/` (existing `inspection/` fixtures untouched).
+- [x] **Docs** — GAP_MATRIX, Roadmap (6c), lessons, todo.
+
+**Key recipe (lessons):** forked snapshot-log needs SEPARATE commits + re-parse between (Java
+`intermediateSnapshotIdSet` pruning); deterministic `latest_*` needs an INJECTED metadata-log (real commits
+stamp ≈now); Java `addSnapshot` sets `lastUpdatedMillis = snapshot.ts`, so the synthetic entry lands on
+`CURRENT_TS`, bonus-pinning the `<=` boundary; pin `metadata_location` to a stable URI on both sides.
+Reviewer mutation-probed the fixture (flip SIBLING ancestor; flip creation-row NULL) — each fails the test.
+
+**Deferred (next):** manifest-reading inspection tables (`files`/`entries`/`manifests`/`partitions`/`all_*`)
++ scan interop — need real on-disk manifests + parquet (a bigger harness step: the oracle must write actual
+manifest/data files, or the Rust side must read Java-written ones).
+
+---
+
+## Active (2026-06-09): Manifest-reading interop A1 — `files`/`data_files`/`delete_files` (Phase 3)
+
+Increment: FOUNDATION of the manifest-reading inspection interop. User chose **item (a)** (take on the
+manifest-reading tables) and **run.sh-driven** wiring. Builder→reviewer; orchestrator independently re-ran
+the offline gate AND the run.sh round-trip + committed. **Purely additive — NO production change.**
+
+- [x] **Java oracle** — `generate-inspection-manifests` mode + `InspectionManifestsOracle` + minimal
+  `LocalFileIO` (`Files.localOutput/localInput`) + `LocalTableOperations` (commit writes metadata to disk).
+  Writes a REAL partitioned V2 table (no parquet/hadoop deps): `newAppend` 2 data files (2 partitions, with
+  metrics + id/value bounds) then `newRowDelta` 1 position-delete; materializes Java's REAL `FilesTable`
+  rows (`MetadataTableUtils` + `planFiles` + `ManifestReadTask.asDataTask().rows()`) → java_{files,data_files,
+  delete_files}.json + the table under a gitignored `target/` temp dir.
+- [x] **Rust test** (`interop_inspection_manifests.rs`) — ENV-GATED (`ICEBERG_INTEROP_MANIFEST_DIR`),
+  runtime early-return no-op when unset (offline gate stays green; NOT `#[ignore]`). When set: load
+  `final.metadata.json`, build a Table with `FileIO::new_with_fs()`, scan files/data_files/delete_files,
+  field-match all 21 non-derived columns order-independently (bounds as raw bytes; content filter pinned).
+- [x] **run script** `dev/java-interop/run-inspection-manifests.sh` (mvn generate → env-gated cargo test).
+- [x] **Gate (orchestrator-rerun, all green):** offline (manifests test no-op 1 passed; interop_inspection
+  4/4; workspace build/clippy/fmt/typos clean) + run.sh round-trip (files=3/data_files=2/delete_files=1
+  matched). `git status` = only InteropOracle.java + interop_inspection_manifests.rs + run-inspection-manifests.sh.
+- [x] **Docs** — GAP_MATRIX, Roadmap (6d), lessons, todo.
+
+**Findings (lessons):** Java writes real manifests with NO parquet/hadoop (LocalFileIO + real commits);
+run.sh-driven env-gated test keeps the offline gate green; VERIFY on-disk bytes before calling a render a
+divergence. **Two documented presentation divergences (on-disk MATCHES; not bugs):** `file_format` case
+(Java row UPPERCASE via the FileFormat enum vs Rust lowercase Display — a small inspection-table-only parity
+gap) + absent metric-map `{}` vs `null` (Rust non-optional maps). readable_metrics deferred from comparison.
+
+### FOLLOW-UP DONE (2026-06-09): `file_format` UPPERCASE in inspection tables
+`inspect/data_file.rs` now emits `file_format` upper-cased (`.to_string().to_uppercase()`) for the shared
+files/entries/all_* projection, matching Java's `FilesTable` enum-NAME rendering. On-disk write UNCHANGED
+(`DataFileFormat::Display`/serde, still lowercase; `git diff crates/iceberg/src/spec` empty). The A1 interop
+test was tightened to EXACT file_format equality (canonicalization dropped). No unit-snapshot churn (the
+inspect unit tests assert only the Arrow schema, never the rendered value); datafusion/sqllogictest had no
+file_format value expectation. Gate + run.sh round-trip green. Own commit (fix(inspect)).
+
+**Deferred next (manifest interop):** A2 `entries`/`manifests`/`partitions` (same harness); A3 `all_*`
+(multi-snapshot table); A4 scan PLANNING (file set + residuals); A5 scan EXECUTION (reads parquet → Arrow —
+needs parquet Maven deps + a separate approval).
+
+---
+
+## Active (2026-06-09): Manifest-reading interop A2 — `entries`/`manifests`/`partitions` (Phase 3)
+
+Increment: 3 more manifest-reading tables over a RICHER multi-snapshot table (`InspectionManifestsA2Oracle`
+→ `<dir>/table_a2`; A1's `<dir>/table` + test untouched). Builder→reviewer; orchestrator independently
+re-ran the offline gate + the run.sh round-trip + verified the production fix + committed.
+
+- [x] **Java oracle** — A2 table: `newAppend` A=a/B=b/C=a/D=b → `newRowDelta` +pos-delete (cat=a) →
+  `newDelete` B → DELETED tombstone + content-gated DATA/DELETE manifests + 2 live partitions. Materializes
+  Java's REAL `EntriesTable`/`ManifestsTable`/`PartitionsTable` rows → java_{entries,manifests,partitions}.json.
+- [x] **Rust tests (3, added to `interop_inspection_manifests.rs`)** — entries/manifests/partitions field-match
+  Java order-independently; entries reuses A1's `FileRow` for the nested data_file via a new `ColumnSource`
+  trait; focused pins: status==2 tombstone, content-gating (data manifest 0 delete-counts / delete manifest 0
+  data-counts), partition delete-counts + DATA-only `total_data_file_size_in_bytes`.
+- [x] **Production parity fix** (`inspect/partition_summary.rs`) — `partition_summaries` STRING bounds were
+  JSON-quoted (`Datum::to_string`) vs Java's bare `Transform.toHumanString`; fixed to `to_human_string` (only
+  string bounds change; int/long unit tests unaffected). Verified both the Rust method semantics (datum.rs:1195)
+  AND the Java call-site (ManifestsTable L134-144).
+- [x] **Gate (orchestrator-rerun, all green):** offline (A2 tests no-op; A1 still green; lib 1595; datafusion
+  80+9; clippy/fmt/typos) + run.sh round-trip (A1 + 3 A2). `git status` = partition_summary.rs +
+  interop_inspection_manifests.rs + InteropOracle.java + run-inspection-manifests.sh.
+- [x] **Docs** — GAP_MATRIX, Roadmap (6e), lessons, todo.
+
+**Deferred next:** A3 `all_*` (all_data_files/all_delete_files/all_files/all_entries/all_manifests —
+multi-snapshot reachability + non-dedup for all_manifests); A4 scan PLANNING (planFiles file set + residuals);
+A5 scan EXECUTION (parquet → Arrow, needs parquet Maven deps + separate approval). Then squash + PR.
+
+---
+
+## Active (2026-06-09): Manifest-reading interop A3 — the five cross-snapshot `all_*` tables (Phase 3)
+
+Increment: `all_data_files`/`all_delete_files`/`all_files`/`all_entries`/`all_manifests` interop, REUSING the
+A2 table read-only. **COMPLETES manifest-reading interop for every inspection table.** Purely additive — NO
+production change. Builder→reviewer; orchestrator re-ran gate + run.sh + fixed the stale run.sh echo + committed.
+
+- [x] **Java oracle** — extended the A2 generate step to ALSO materialize Java's REAL `All*` rows over the
+  same `table_a2` → java_all_{data_files,delete_files,files,entries,manifests}.json (generic `rowsToJson`,
+  `all_manifests`'s `reference_snapshot_id` is just another scalar).
+- [x] **Rust tests (5, added to `interop_inspection_manifests.rs`)** — reuse FileRow/EntryRow/ManifestRow
+  extraction (+ an AllManifestRow wrapper). Order-independent MULTISET comparison (sort full rows by Debug,
+  element-wise, NO dedup — these tables may return duplicates). Focused pins: cross-snapshot reach (B present
+  in all_*, absent in current data_files); duplicates preserved (8 rows / 5 distinct paths); all_manifests
+  non-dedup (shared manifest → 2 rows, reference_snapshot_id distinct + ≠ added_snapshot_id).
+- [x] **Gate (orchestrator-rerun, all green):** offline (A3 no-op; A1+A2 green; lib 1595; datafusion 80+9;
+  clippy/fmt/typos) + run.sh round-trip (9 tests = A1 + 3 A2 + 5 A3). Fixed the stale run.sh header/echo (A3).
+- [x] **Docs** — GAP_MATRIX, Roadmap (6f), lessons, todo.
+
+**Manifest-reading interop COMPLETE for all inspection tables.** Remaining inspection interop: the
+`readable_metrics` virtual column (interior field-id JVM-order residual); SCAN interop — A4 PLANNING (planFiles
+file set + residuals, no parquet needed) + A5 EXECUTION (parquet → Arrow, needs parquet Maven deps + approval).
+Then: squash the `phase2-3-remnants` set (now ~9 commits, LOCAL-only) + open the PR.
+
+---
+
+## Active (2026-06-09): Scan-PLANNING interop A4 (Phase 3) — DONE
+
+Increment: scan-planning interop. Java plans 4 filter scenarios via REAL `table.newScan().filter().planFiles()`
+over a dedicated `table_a4` (F1/F2/F3 with distinct `id` bounds + a position-delete on F1, identity(category));
+Rust plans the same via `table.scan().with_filter().plan_files()`; {planned file SET, per-file delete paths,
+residual-always-true} match EXACTLY. Purely additive — NO production change.
+
+- [x] **Java oracle** — `InspectionScanA4Oracle` writes `table_a4` + plans s0 no_filter / s1 partition_a /
+  s2 metric_id_gt_15 / s3 combined → java_scan_*.json.
+- [x] **Rust test** — `test_scan_planning_matches_java_plans` (added to interop_inspection_manifests.rs).
+  Pins partition pruning (s1 drops F2), COLUMN-METRIC pruning (s2 drops F1 via upper bound 10), combined
+  (s3 = F3), residual-covered split, delete association (cat=a delete on BOTH F1+F3). Residual-EXPRESSION
+  string equality DEFERRED (cross-language normalization; Rust residuals unit-tested).
+- [x] **Gate (orchestrator-rerun, all green):** offline (A4 no-op; A1-A3 green; lib 1595; datafusion 80+9;
+  clippy/fmt/typos) + run.sh round-trip (10 tests). spec/ untouched (0 lines).
+- [x] **Docs** — GAP_MATRIX (scan-planning row), Roadmap (6g), lessons, todo.
+
+### NEXT: squash `phase2-3-remnants` + open PR (awaiting user go-ahead on squash-vs-keep + confirm base = the origin fork, NEVER apache upstream)
+Branch = ~10 commits off main `ccfcb062` (3 Phase-2/3 remnants + 4 pure-metadata/manifest-A1 interop + file_format fix + A2 + A3 + A4). All LOCAL-only, not pushed. Deferred beyond this PR: `readable_metrics` interop; A5 scan EXECUTION (parquet deps + approval); other Phase 2/3 remnants (overwriteByRowFilter, RowDelta validateNoNewDeletesForDataFiles, BatchScan, CDC-merge).

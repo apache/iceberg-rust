@@ -24,6 +24,7 @@ use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::visitors::residual_evaluator::ResidualEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::object_cache::ObjectCache;
+use crate::scan::metrics_collector::ScanMetricsCollector;
 use crate::scan::{
     BoundPredicates, ExpressionEvaluatorCache, FileScanTask, ManifestEvaluatorCache,
     PartitionFilterCache,
@@ -209,6 +210,17 @@ pub(crate) struct PlanContext {
     pub partition_filter_cache: Arc<PartitionFilterCache>,
     pub manifest_evaluator_cache: Arc<ManifestEvaluatorCache>,
     pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
+
+    /// The metrics collector for this scan, when a [`MetricsReporter`] was configured.
+    ///
+    /// `Some` only when the scan opted in to metrics
+    /// (`TableScanBuilder::with_metrics_reporter`). When `None`, the planning path counts
+    /// nothing — the manifest-prune accounting below is gated on `Some`, so the
+    /// un-instrumented scan is byte-for-byte unchanged (Java's metrics are a no-op
+    /// `ScanMetrics.noop()` when no reporter is set).
+    ///
+    /// [`MetricsReporter`]: crate::metrics::MetricsReporter
+    pub metrics_collector: Option<Arc<ScanMetricsCollector>>,
 }
 
 impl PlanContext {
@@ -217,6 +229,32 @@ impl PlanContext {
             .as_ref()
             .get_manifest_list(&self.snapshot, &self.table_metadata)
             .await
+    }
+
+    /// Records (when metrics are enabled) that a manifest was pruned by the partition
+    /// filter, on the data or delete counter per its content type. A no-op when no
+    /// collector is configured — keeping the un-instrumented path unchanged.
+    fn record_manifest_skipped(&self, is_delete_manifest: bool) {
+        if let Some(collector) = self.metrics_collector.as_ref() {
+            if is_delete_manifest {
+                collector.increment_skipped_delete_manifests();
+            } else {
+                collector.increment_skipped_data_manifests();
+            }
+        }
+    }
+
+    /// Records (when metrics are enabled) that a manifest survived pruning and will be
+    /// scanned, on the data or delete counter per its content type. A no-op when no
+    /// collector is configured.
+    fn record_manifest_scanned(&self, is_delete_manifest: bool) {
+        if let Some(collector) = self.metrics_collector.as_ref() {
+            if is_delete_manifest {
+                collector.increment_scanned_delete_manifests();
+            } else {
+                collector.increment_scanned_data_manifests();
+            }
+        }
     }
 
     fn get_partition_filter(&self, manifest_file: &ManifestFile) -> Result<Arc<BoundPredicate>> {
@@ -287,7 +325,8 @@ impl PlanContext {
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
         for manifest_file in &manifest_files {
-            let tx = if manifest_file.content == ManifestContentType::Deletes {
+            let is_delete_manifest = manifest_file.content == ManifestContentType::Deletes;
+            let tx = if is_delete_manifest {
                 delete_file_tx.clone()
             } else {
                 tx_data.clone()
@@ -306,6 +345,10 @@ impl PlanContext {
                     )
                     .eval(manifest_file)?
                 {
+                    // A pruned manifest is a SKIPPED manifest (Java `ManifestGroup`'s
+                    // `CloseableIterable.filter(scanMetrics.skippedDataManifests(), ...)`).
+                    // Gated on a configured collector so the no-reporter path is unchanged.
+                    self.record_manifest_skipped(is_delete_manifest);
                     continue;
                 }
 
@@ -313,6 +356,10 @@ impl PlanContext {
             } else {
                 None
             };
+
+            // The manifest survived pruning (or there was no filter): it is SCANNED (Java
+            // `CloseableIterable.count(scanMetrics.scannedDataManifests(), matchingManifests)`).
+            self.record_manifest_scanned(is_delete_manifest);
 
             let mfc = self.create_manifest_file_context(
                 manifest_file,

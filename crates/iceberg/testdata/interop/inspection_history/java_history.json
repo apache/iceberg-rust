@@ -1,0 +1,16 @@
+[ {
+  "made_current_at" : 1515100955770000,
+  "snapshot_id" : 3051729675574597004,
+  "parent_id" : null,
+  "is_current_ancestor" : true
+}, {
+  "made_current_at" : 1535000000000000,
+  "snapshot_id" : 3060729675574597004,
+  "parent_id" : 3051729675574597004,
+  "is_current_ancestor" : false
+}, {
+  "made_current_at" : 1555100955770000,
+  "snapshot_id" : 3055729675574597004,
+  "parent_id" : 3051729675574597004,
+  "is_current_ancestor" : true
+} ]

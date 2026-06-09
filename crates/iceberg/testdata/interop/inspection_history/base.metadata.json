@@ -1,0 +1,97 @@
+{
+  "format-version" : 2,
+  "table-uuid" : "29c8ad43-8146-4469-8511-2d0482b51ecd",
+  "location" : "s3://interop-bucket/inspection_history",
+  "last-sequence-number" : 3,
+  "last-updated-ms" : 1555100955770,
+  "last-column-id" : 2,
+  "current-schema-id" : 0,
+  "schemas" : [ {
+    "type" : "struct",
+    "schema-id" : 0,
+    "fields" : [ {
+      "id" : 1,
+      "name" : "id",
+      "required" : true,
+      "type" : "long"
+    }, {
+      "id" : 2,
+      "name" : "data",
+      "required" : false,
+      "type" : "string"
+    } ]
+  } ],
+  "default-spec-id" : 0,
+  "partition-specs" : [ {
+    "spec-id" : 0,
+    "fields" : [ ]
+  } ],
+  "last-partition-id" : 999,
+  "default-sort-order-id" : 0,
+  "sort-orders" : [ {
+    "order-id" : 0,
+    "fields" : [ ]
+  } ],
+  "properties" : {
+    "write.parquet.compression-codec" : "zstd"
+  },
+  "current-snapshot-id" : 3055729675574597004,
+  "refs" : {
+    "main" : {
+      "snapshot-id" : 3055729675574597004,
+      "type" : "branch"
+    }
+  },
+  "snapshots" : [ {
+    "sequence-number" : 1,
+    "snapshot-id" : 3051729675574597004,
+    "timestamp-ms" : 1515100955770,
+    "summary" : {
+      "operation" : "append"
+    },
+    "manifest-list" : "s3://interop-bucket/inspection_history/metadata/snap-3051729675574597004.avro",
+    "schema-id" : 0
+  }, {
+    "sequence-number" : 2,
+    "snapshot-id" : 3060729675574597004,
+    "parent-snapshot-id" : 3051729675574597004,
+    "timestamp-ms" : 1535000000000,
+    "summary" : {
+      "operation" : "append"
+    },
+    "manifest-list" : "s3://interop-bucket/inspection_history/metadata/snap-3060729675574597004.avro",
+    "schema-id" : 0
+  }, {
+    "sequence-number" : 3,
+    "snapshot-id" : 3055729675574597004,
+    "parent-snapshot-id" : 3051729675574597004,
+    "timestamp-ms" : 1555100955770,
+    "summary" : {
+      "operation" : "append"
+    },
+    "manifest-list" : "s3://interop-bucket/inspection_history/metadata/snap-3055729675574597004.avro",
+    "schema-id" : 0
+  } ],
+  "statistics" : [ ],
+  "partition-statistics" : [ ],
+  "snapshot-log" : [ {
+    "timestamp-ms" : 1515100955770,
+    "snapshot-id" : 3051729675574597004
+  }, {
+    "timestamp-ms" : 1535000000000,
+    "snapshot-id" : 3060729675574597004
+  }, {
+    "timestamp-ms" : 1555100955770,
+    "snapshot-id" : 3055729675574597004
+  } ],
+  "metadata-log" : [ {
+    "timestamp-ms" : 1515100954770,
+    "metadata-file" : "s3://interop-bucket/inspection_history/metadata/00000-creation.metadata.json"
+  }, {
+    "timestamp-ms" : 1515100956770,
+    "metadata-file" : "s3://interop-bucket/inspection_history/metadata/00001-after-root.metadata.json"
+  }, {
+    "timestamp-ms" : 1535000001000,
+    "metadata-file" : "s3://interop-bucket/inspection_history/metadata/00002-after-sibling.metadata.json"
+  } ]
+}

@@ -130,6 +130,14 @@ pub(super) fn append_partition_summaries(
 
 /// Renders a single optional bound's serialized bytes to a human-readable string via `primitive_type`,
 /// returning `None` when the bound is absent (Java renders an absent bound as a null cell).
+///
+/// Uses [`Datum::to_human_string`] — NOT `Datum::to_string` — to match Java
+/// `ManifestsTable.partitionSummariesToRows`, which renders each bound via
+/// `Transform.toHumanString(type, value)`. For a STRING-typed partition bound, Java's `toHumanString`
+/// default case calls `Object.toString()`, yielding the RAW string (e.g. `a`); `Datum::to_string` would
+/// instead JSON-quote it (`"a"`). The two agree for every non-string primitive, so this only affects
+/// string partition bounds — the interop A2 `manifests` fixture (partitioned by identity(category), a
+/// string) is what surfaced the divergence.
 fn bound_to_string(
     bound: Option<&[u8]>,
     primitive_type: &crate::spec::PrimitiveType,
@@ -138,7 +146,7 @@ fn bound_to_string(
         None => Ok(None),
         Some(bytes) => {
             let datum = Datum::try_from_bytes(bytes, primitive_type.clone())?;
-            Ok(Some(datum.to_string()))
+            Ok(Some(datum.to_human_string()))
         }
     }
 }

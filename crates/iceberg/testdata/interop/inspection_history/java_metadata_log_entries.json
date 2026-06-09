@@ -1,0 +1,25 @@
+[ {
+  "timestamp" : 1515100954770000,
+  "file" : "s3://interop-bucket/inspection_history/metadata/00000-creation.metadata.json",
+  "latest_snapshot_id" : null,
+  "latest_schema_id" : null,
+  "latest_sequence_number" : null
+}, {
+  "timestamp" : 1515100956770000,
+  "file" : "s3://interop-bucket/inspection_history/metadata/00001-after-root.metadata.json",
+  "latest_snapshot_id" : 3051729675574597004,
+  "latest_schema_id" : 0,
+  "latest_sequence_number" : 1
+}, {
+  "timestamp" : 1535000001000000,
+  "file" : "s3://interop-bucket/inspection_history/metadata/00002-after-sibling.metadata.json",
+  "latest_snapshot_id" : 3060729675574597004,
+  "latest_schema_id" : 0,
+  "latest_sequence_number" : 2
+}, {
+  "timestamp" : 1555100955770000,
+  "file" : "s3://interop-bucket/inspection_history/metadata/v1.metadata.json",
+  "latest_snapshot_id" : 3055729675574597004,
+  "latest_schema_id" : 0,
+  "latest_sequence_number" : 3
+} ]

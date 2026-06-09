@@ -1,0 +1,28 @@
+[ {
+  "committed_at" : 1515100955770000,
+  "snapshot_id" : 3051729675574597004,
+  "parent_id" : null,
+  "operation" : "append",
+  "manifest_list" : "s3://interop-bucket/inspection/metadata/snap-3051729675574597004.avro",
+  "summary" : { }
+}, {
+  "committed_at" : 1555100955770000,
+  "snapshot_id" : 3055729675574597004,
+  "parent_id" : 3051729675574597004,
+  "operation" : "append",
+  "manifest_list" : "s3://interop-bucket/inspection/metadata/snap-3055729675574597004.avro",
+  "summary" : {
+    "added-data-files" : "3",
+    "added-records" : "100",
+    "total-records" : "100"
+  }
+}, {
+  "committed_at" : 1600000000000000,
+  "snapshot_id" : 3060729675574597004,
+  "parent_id" : 3051729675574597004,
+  "operation" : "append",
+  "manifest_list" : "s3://interop-bucket/inspection/metadata/snap-3060729675574597004.avro",
+  "summary" : {
+    "added-data-files" : "1"
+  }
+} ]

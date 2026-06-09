@@ -244,7 +244,12 @@ impl<'a> DataFileStructBuilder<'a> {
 
         struct_child::<Int32Builder>(b, 0)?.append_value(data_file.content_type() as i32);
         struct_child::<StringBuilder>(b, 1)?.append_value(data_file.file_path());
-        struct_child::<StringBuilder>(b, 2)?.append_value(data_file.file_format().to_string());
+        // Java's `FilesTable`/`ManifestEntriesTable` render `file_format` as the UPPERCASE `FileFormat`
+        // enum NAME (`PARQUET`/`AVRO`/`ORC`) via `format.toString()`. `DataFileFormat`'s `Display` is
+        // lowercase (the on-disk manifest string), so upper-case ONLY here in the inspection projection to
+        // match Java exactly — the on-disk write path (Display/serde) is unchanged.
+        struct_child::<StringBuilder>(b, 2)?
+            .append_value(data_file.file_format().to_string().to_uppercase());
         struct_child::<Int32Builder>(b, 3)?.append_value(data_file.partition_spec_id);
 
         let partition_builder = struct_child::<StructBuilder>(b, 4)?;

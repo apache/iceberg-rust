@@ -41,9 +41,10 @@ use crate::error::Result;
 use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
 use crate::table::Table;
 use crate::transaction::snapshot::{
-    DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
+    DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer, deleted_data_files_after,
 };
 use crate::transaction::{ActionCommit, TransactionAction};
+use crate::{Error, ErrorKind};
 
 /// A transaction action that deletes data files from a table by file path.
 ///
@@ -57,6 +58,13 @@ pub struct DeleteFilesAction {
     commit_uuid: Option<Uuid>,
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
+    /// Whether to reject the commit if a data file this action is deleting was already DELETED by a
+    /// concurrent commit since the starting snapshot (Java `StreamingDelete.validateFilesExist` /
+    /// `MergingSnapshotProducer.validateDataFilesExist`). OFF by default = snapshot isolation (no check).
+    validate_files_exist: bool,
+    /// An explicit starting snapshot for the files-exist check (Java `validateFromSnapshot`). When `None`,
+    /// the check uses the transaction's starting snapshot (the table head when the transaction was created).
+    validate_from_snapshot: Option<i64>,
 }
 
 impl DeleteFilesAction {
@@ -66,6 +74,8 @@ impl DeleteFilesAction {
             commit_uuid: None,
             key_metadata: None,
             snapshot_properties: HashMap::default(),
+            validate_files_exist: false,
+            validate_from_snapshot: None,
         }
     }
 
@@ -109,6 +119,29 @@ impl DeleteFilesAction {
         self.snapshot_properties = snapshot_properties;
         self
     }
+
+    /// ENABLE the files-exist conflict check (Java `StreamingDelete.validateFilesExist` →
+    /// `MergingSnapshotProducer.validateDataFilesExist`): the commit is rejected with a non-retryable
+    /// `ValidationException` if any data file this action is deleting was ALREADY DELETED by a snapshot
+    /// committed since the starting snapshot. Without it, a concurrent removal of the same file is
+    /// silently absorbed (the path simply no longer resolves to a live entry on the re-based commit).
+    ///
+    /// Default (this method NOT called) = snapshot isolation = no check (current behavior unchanged).
+    pub fn validate_files_exist(mut self) -> Self {
+        self.validate_files_exist = true;
+        self
+    }
+
+    /// Override the snapshot from which the files-exist check starts (Java
+    /// `DeleteFiles.validateFromSnapshot(long)`). By default the check uses the transaction's starting
+    /// snapshot (the table head when [`crate::transaction::Transaction::new`] was called); this lets the
+    /// caller pin a specific earlier snapshot id (the snapshot it read when selecting the files to delete).
+    ///
+    /// On its own this does NOT enable the check — call [`Self::validate_files_exist`] for that.
+    pub fn validate_from_snapshot(mut self, snapshot_id: i64) -> Self {
+        self.validate_from_snapshot = Some(snapshot_id);
+        self
+    }
 }
 
 #[async_trait]
@@ -131,6 +164,62 @@ impl TransactionAction for DeleteFilesAction {
                 DefaultManifestProcess,
             )
             .await
+    }
+
+    /// Files-exist conflict validation (Java `StreamingDelete.validate` → `failMissingDeletePaths` /
+    /// `MergingSnapshotProducer.validateDataFilesExist`). Only runs when [`Self::validate_files_exist`] was
+    /// enabled; otherwise a no-op (snapshot isolation).
+    ///
+    /// When enabled: compute the effective starting snapshot ([`Self::validate_from_snapshot`] if set, else
+    /// the transaction-provided `starting_snapshot_id`), enumerate every DATA file DELETED from the refreshed
+    /// base by snapshots committed since it (the shared [`deleted_data_files_after`] helper = Java
+    /// `deletedDataFiles` over `VALIDATE_DATA_FILES_EXIST_OPERATIONS` + `ManifestStatus::Deleted`), and reject
+    /// the commit if ANY of those removed files is a file this action also needs to delete (its path ∈
+    /// `self.delete_paths`, Java `requiredDataFiles.contains(entry.file().location())`). The rejection is a
+    /// NON-retryable [`ErrorKind::DataInvalid`] (Java's non-retryable `ValidationException`), naming the
+    /// missing file so the retry loop stops and the validation message propagates.
+    ///
+    /// `requiredDataFiles` here is `self.delete_paths` — the set of files the delete operation requires (the
+    /// ones it is removing) — mirroring Java `StreamingDelete`, whose required-deletes are the paths/files
+    /// passed to `deleteFile`.
+    async fn validate(
+        self: Arc<Self>,
+        starting_snapshot_id: Option<i64>,
+        current: &Table,
+    ) -> Result<()> {
+        if !self.validate_files_exist {
+            // Default: snapshot isolation, no files-exist check (current behavior unchanged).
+            return Ok(());
+        }
+
+        // Nothing requested to delete ⇒ nothing can be missing — skip the manifest walk.
+        if self.delete_paths.is_empty() {
+            return Ok(());
+        }
+
+        // Java `validateDataFilesExist` uses `startingSnapshotId` (the `validateFromSnapshot` override) when
+        // set, else the operation's starting snapshot.
+        let effective_start = self.validate_from_snapshot.or(starting_snapshot_id);
+
+        // `skip_deletes == false`: a `DeleteFiles` commit validates against ALL data-removing operations
+        // INCLUDING concurrent DELETE-op snapshots (Java `validateDataFilesExist` is called with
+        // `skipDeletes = false` here — the files this op needs to delete must still exist regardless of which
+        // operation removed them). `RowDelta` is the variant that skips DELETE-op snapshots by default.
+        let deleted = deleted_data_files_after(current, effective_start, false).await?;
+
+        // Reject on the FIRST concurrently-deleted file this action also requires (Java throws on the first
+        // matching entry, naming the missing data files).
+        if let Some(missing) = deleted
+            .iter()
+            .find(|file| self.delete_paths.contains(file.file_path()))
+        {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Cannot commit, missing data files: {}", missing.file_path()),
+            ));
+        }
+
+        Ok(())
     }
 }
 
@@ -234,6 +323,23 @@ mod tests {
     async fn append_files(catalog: &impl Catalog, table: &Table, files: Vec<DataFile>) -> Table {
         let tx = Transaction::new(table);
         let action = tx.fast_append().add_data_files(files);
+        let tx = action.apply(tx).unwrap();
+        tx.commit(catalog).await.unwrap()
+    }
+
+    /// Commit a CONCURRENT `delete_files` that removes the given paths in its own `Delete` snapshot, via the
+    /// catalog — the removal that a files-exist check must detect. The resulting snapshot records
+    /// `Operation::Delete` (in `VALIDATE_DATA_FILES_EXIST_OPERATIONS`) and rewrites the affected manifest,
+    /// stamping a `Deleted` tombstone for each removed path under its own `added_snapshot_id`.
+    async fn commit_concurrent_delete(
+        catalog: &impl Catalog,
+        table: &Table,
+        paths: impl IntoIterator<Item = &str>,
+    ) -> Table {
+        let tx = Transaction::new(table);
+        let action = tx
+            .delete_files()
+            .delete_files(paths.into_iter().map(str::to_string));
         let tx = action.apply(tx).unwrap();
         tx.commit(catalog).await.unwrap()
     }
@@ -737,5 +843,343 @@ mod tests {
             .expect_err("mixed delete must error");
         assert_eq!(error.kind(), ErrorKind::DataInvalid);
         assert!(error.message().contains("test/absent.parquet"));
+    }
+
+    // ============================================================================================
+    // Files-exist conflict validation (Java `StreamingDelete.validateFilesExist` /
+    // `MergingSnapshotProducer.validateDataFilesExist`).
+    //
+    // The race these tests simulate: a `delete_files` is BUILT against table head S0, but BEFORE it commits a
+    // SEPARATE commit lands that DELETES a live data file (advancing the head to S1). When the delete then
+    // commits, `do_commit` refreshes to S1 and runs the action's `validate` against that refreshed base. With
+    // `validate_files_exist()` enabled, a concurrent removal of a file THIS action is also deleting must FAIL
+    // the commit (non-retryable) naming the missing file — committing over a vanished required file is a
+    // serializable-isolation violation. A concurrent removal of a DIFFERENT file must NOT fail. With the check
+    // OFF (the default), neither fails (snapshot isolation, unchanged behavior).
+    // ============================================================================================
+
+    /// NO CONCURRENT DELETION. With the files-exist check enabled but nothing landing concurrently, the
+    /// delete commits normally (the concurrent-deleted set is empty ⇒ no conflict). Pins that enabling the
+    /// check does not block a race-free commit. Risk: a files-exist check that wrongly fails with no
+    /// concurrent deletion.
+    #[tokio::test]
+    async fn test_delete_files_exist_validation_no_concurrent_deletion_succeeds() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![
+            data_file("test/a.parquet", 0),
+            data_file("test/b.parquet", 0),
+        ])
+        .await;
+        let s0 = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .delete_files()
+            .delete_file("test/a.parquet")
+            .validate_from_snapshot(s0)
+            .validate_files_exist();
+        let tx = action.apply(tx).unwrap();
+        let table = tx
+            .commit(&catalog)
+            .await
+            .expect("a race-free delete must commit even with the files-exist check enabled");
+
+        assert_eq!(
+            live_file_paths(&table).await,
+            HashSet::from(["test/b.parquet".to_string()]),
+            "the delete applied: only b survives"
+        );
+    }
+
+    /// THE HEADLINE FILES-EXIST TEST. Append S0 ({a, b}). Build a `delete_files(a)` with
+    /// `.validate_from_snapshot(S0).validate_files_exist()`. Then a CONCURRENT `delete_files(a)` lands (S1),
+    /// removing the SAME file this action is deleting. Committing must FAIL with a NON-retryable `DataInvalid`
+    /// whose message NAMES the missing file `a` — a concurrent removal of a required file is a lost-update
+    /// conflict under serializable isolation.
+    ///
+    /// Risk pinned: silently committing over a file that a concurrent commit already deleted. Without the
+    /// check the re-based delete would either no-op or (because the file is no longer live) fail with a
+    /// generic "missing required files to delete" — NOT the serializable-isolation validation error.
+    #[tokio::test]
+    async fn test_delete_files_exist_rejects_concurrent_deletion_of_same_file() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // S0: {a, b}.
+        let table = append_files(&catalog, &table, vec![
+            data_file("test/a.parquet", 0),
+            data_file("test/b.parquet", 0),
+        ])
+        .await;
+        let s0 = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        // Build delete(a) with the files-exist check enabled, pinned to start at S0 (the head we read).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .delete_files()
+            .delete_file("test/a.parquet")
+            .validate_from_snapshot(s0)
+            .validate_files_exist();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a separate delete removes the SAME file a.
+        let _table_after_concurrent =
+            commit_concurrent_delete(&catalog, &table, ["test/a.parquet"]).await;
+
+        // Committing the delete must FAIL: S1 already removed the required file a.
+        let err = tx.commit(&catalog).await.expect_err(
+            "delete must fail: a concurrent commit removed the file this delete also requires",
+        );
+
+        assert_eq!(
+            err.kind(),
+            ErrorKind::DataInvalid,
+            "a files-exist conflict is a non-retryable validation failure (DataInvalid)"
+        );
+        assert!(
+            !err.retryable(),
+            "the validation failure must be NON-retryable so the retry loop stops and it propagates \
+             (it is NOT a retry-exhausted CatalogCommitConflicts)"
+        );
+        assert!(
+            err.message().contains("Cannot commit, missing data files"),
+            "the error must use the validateDataFilesExist wording, got: {}",
+            err.message()
+        );
+        assert!(
+            err.message().contains("test/a.parquet"),
+            "the error must NAME the missing file, got: {}",
+            err.message()
+        );
+
+        // The catalog head is still S1 (the concurrent delete) — the conflicting delete did NOT commit.
+        let reloaded = catalog.load_table(table.identifier()).await.unwrap();
+        assert_eq!(
+            live_file_paths(&reloaded).await,
+            HashSet::from(["test/b.parquet".to_string()]),
+            "only the concurrent delete applied: b survives, a is gone"
+        );
+    }
+
+    /// NEGATIVE CONTROL: same setup, but the concurrent deletion removes a DIFFERENT file (b) than the one
+    /// this action deletes (a). The `delete_files(a)` files-exist check PASSES and the commit succeeds — a
+    /// concurrent removal of an unrelated file is not a conflict.
+    ///
+    /// Risk pinned: an over-eager check that rejects ANY concurrent deletion (false positive) would break
+    /// legitimate concurrent deletes of disjoint files.
+    #[tokio::test]
+    async fn test_delete_files_exist_allows_concurrent_deletion_of_different_file() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // S0: {a, b, c} in one manifest.
+        let table = append_files(&catalog, &table, vec![
+            data_file("test/a.parquet", 0),
+            data_file("test/b.parquet", 0),
+            data_file("test/c.parquet", 0),
+        ])
+        .await;
+        let s0 = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        // Build delete(a) with the check enabled.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .delete_files()
+            .delete_file("test/a.parquet")
+            .validate_from_snapshot(s0)
+            .validate_files_exist();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a separate delete removes a DIFFERENT file b.
+        let _ = commit_concurrent_delete(&catalog, &table, ["test/b.parquet"]).await;
+
+        // The delete must SUCCEED — b's removal does not race a's deletion.
+        let table = tx.commit(&catalog).await.expect(
+            "delete must succeed: the concurrent deletion removed a different file (b), not a",
+        );
+
+        // Both a (this delete) and b (concurrent delete) are gone; c survives.
+        assert_eq!(
+            live_file_paths(&table).await,
+            HashSet::from(["test/c.parquet".to_string()]),
+            "a and b both deleted (this + concurrent), c survives"
+        );
+    }
+
+    /// OFF CONTROL: with the files-exist check NOT enabled (no `validate_files_exist()` call), a concurrent
+    /// deletion of the same file does NOT fail with the validation error — this is snapshot isolation, the
+    /// DEFAULT behavior, unchanged by this increment. (The re-based delete instead finds the file already
+    /// gone and reports the generic missing-file error from path resolution — distinct from the
+    /// validateDataFilesExist message — so this also proves the validation path is the OPT-IN one.)
+    ///
+    /// Risk pinned: the files-exist validation must be OPT-IN — turning it on for every delete by default
+    /// would change existing behavior.
+    #[tokio::test]
+    async fn test_delete_files_exist_off_does_not_run_validation() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // S0: {a, b}.
+        let table = append_files(&catalog, &table, vec![
+            data_file("test/a.parquet", 0),
+            data_file("test/b.parquet", 0),
+        ])
+        .await;
+
+        // Build delete(a) WITHOUT enabling the check (default = snapshot isolation).
+        let tx = Transaction::new(&table);
+        let action = tx.delete_files().delete_file("test/a.parquet");
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a separate delete removes the SAME file a.
+        let _ = commit_concurrent_delete(&catalog, &table, ["test/a.parquet"]).await;
+
+        // With the check OFF, the validateDataFilesExist path never runs. The re-based delete finds a already
+        // gone and fails the generic path-resolution check instead (NOT the validation error).
+        let err = tx.commit(&catalog).await.expect_err(
+            "with the check OFF, the re-based delete still cannot resolve the vanished file",
+        );
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message().contains("Missing required files to delete"),
+            "with validation OFF, the failure is the generic path-resolution error, not \
+             validateDataFilesExist — got: {}",
+            err.message()
+        );
+        assert!(
+            !err.message().contains("Cannot commit, missing data files"),
+            "the validateDataFilesExist message must NOT appear when the check is OFF: {}",
+            err.message()
+        );
+    }
+
+    /// VALIDATE-FROM-SNAPSHOT OVERRIDE TEST. The `validate_from_snapshot(id)` override changes which commits
+    /// count as concurrent. Append S0 ({a, b}); a concurrent delete removes a (S1); then build delete(a) and
+    /// commit. With `validate_from_snapshot(S0)` (the EARLIER snapshot) the S1 removal IS in the window ⇒ the
+    /// files-exist check FAILS. With `validate_from_snapshot(S1)` (the CURRENT head) the window is empty ⇒ the
+    /// check finds nothing (and the commit fails LATER, on path resolution, because a is already gone — NOT on
+    /// the validation error).
+    ///
+    /// Risk pinned: ignoring the override (always using the tx start) would change which concurrent removals
+    /// are detected; this proves the override widens / narrows the window as specified.
+    #[tokio::test]
+    async fn test_delete_files_exist_validate_from_snapshot_override_changes_window() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // S0: {a, b}.
+        let table = append_files(&catalog, &table, vec![
+            data_file("test/a.parquet", 0),
+            data_file("test/b.parquet", 0),
+        ])
+        .await;
+        let s0 = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        // S1: a concurrent delete removes a (committed via the catalog, advancing the head).
+        let table_s1 = commit_concurrent_delete(&catalog, &table, ["test/a.parquet"]).await;
+        let s1 = table_s1
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .snapshot_id();
+        assert_ne!(s0, s1);
+
+        // With validate_from_snapshot(S0): the window includes S1's removal ⇒ files-exist check FAILS naming a.
+        let tx = Transaction::new(&table_s1);
+        let action = tx
+            .delete_files()
+            .delete_file("test/a.parquet")
+            .validate_from_snapshot(s0)
+            .validate_files_exist();
+        let tx = action.apply(tx).unwrap();
+        let err = tx.commit(&catalog).await.expect_err(
+            "validate_from_snapshot(S0) includes S1's removal of a ⇒ files-exist conflict",
+        );
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable());
+        assert!(
+            err.message().contains("Cannot commit, missing data files")
+                && err.message().contains("test/a.parquet"),
+            "the override-widened window must surface the validateDataFilesExist error naming a: {}",
+            err.message()
+        );
+
+        // With validate_from_snapshot(S1): the window starts AT the current head ⇒ empty ⇒ the validation
+        // check finds nothing. The commit still fails, but on the GENERIC path-resolution error (a is gone),
+        // NOT the validation error — proving the narrowed window skipped S1's removal.
+        let tx = Transaction::new(&table_s1);
+        let action = tx
+            .delete_files()
+            .delete_file("test/a.parquet")
+            .validate_from_snapshot(s1)
+            .validate_files_exist();
+        let tx = action.apply(tx).unwrap();
+        let err = tx.commit(&catalog).await.expect_err(
+            "a is already gone, so even with an empty validation window the path cannot resolve",
+        );
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message().contains("Missing required files to delete")
+                && !err.message().contains("Cannot commit, missing data files"),
+            "validate_from_snapshot(S1) empties the window ⇒ the failure is path resolution, not \
+             validateDataFilesExist — got: {}",
+            err.message()
+        );
+    }
+
+    /// TX-CAPTURED START SURVIVES RE-BASE. The files-exist check works WITHOUT an explicit
+    /// `validate_from_snapshot`, relying SOLELY on the transaction-captured starting snapshot id surviving
+    /// `do_commit`'s re-base. Build `delete_files(a).validate_files_exist()` (NO `validate_from_snapshot`);
+    /// the starting snapshot is the one captured in `Transaction::new` (= S0). A concurrent `delete_files(a)`
+    /// lands (S1) removing the SAME file; `do_commit` overwrites `self.table` with the refreshed base (S1),
+    /// but `starting_snapshot_id` must SURVIVE — so S1's removal of `a` is still enumerated and rejected with
+    /// the `validateDataFilesExist` message naming `a`.
+    ///
+    /// Risk pinned: if `effective_start` were re-read from the REFRESHED head at validation time
+    /// (`current.metadata().current_snapshot_id()`) instead of the tx-captured `starting_snapshot_id`, the
+    /// window would start AT the current head ⇒ empty ⇒ the check silently always passes (a
+    /// serializable-isolation hole) and the commit would instead fail on the GENERIC path-resolution error.
+    /// Every OTHER files-exist test pins `validate_from_snapshot`, which short-circuits
+    /// `validate_from_snapshot.or(starting_snapshot_id)` and never reads the tx-captured field — so this is
+    /// the ONLY test that pins the `Transaction::new` capture surviving the re-base for DeleteFiles.
+    #[tokio::test]
+    async fn test_delete_files_exist_rejects_concurrent_using_tx_captured_starting_snapshot() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // S0: {a, b} (the head captured when the transaction is created below).
+        let table = append_files(&catalog, &table, vec![
+            data_file("test/a.parquet", 0),
+            data_file("test/b.parquet", 0),
+        ])
+        .await;
+
+        // Build delete(a) with the check enabled but WITHOUT validate_from_snapshot — the start is the
+        // tx-captured head (S0).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .delete_files()
+            .delete_file("test/a.parquet")
+            .validate_files_exist();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): a separate delete removes the SAME file a, advancing the head.
+        let _concurrent = commit_concurrent_delete(&catalog, &table, ["test/a.parquet"]).await;
+
+        // Committing must FAIL via the tx-captured start surviving the re-base: S1's removal of a is in the
+        // window, so the files-exist check fires with the validateDataFilesExist message naming a.
+        let err = tx.commit(&catalog).await.expect_err(
+            "conflict must be detected via the tx-captured starting snapshot (no validate_from_snapshot)",
+        );
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable());
+        assert!(
+            err.message().contains("Cannot commit, missing data files")
+                && err.message().contains("test/a.parquet"),
+            "the tx-captured window must surface the validateDataFilesExist error naming a (NOT the generic \
+             path-resolution error) — got: {}",
+            err.message()
+        );
     }
 }

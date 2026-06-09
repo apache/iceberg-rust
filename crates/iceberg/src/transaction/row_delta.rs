@@ -65,14 +65,15 @@
 //!   application may have gaps — the end-to-end test focuses on POSITION deletes).
 //! - The remaining DELETE-file conflict blocks of Java `BaseRowDelta.validate` —
 //!   `validateNoNewDeletesForDataFiles` (the `!removedDataFiles.isEmpty()` sub-branch of
-//!   `validateNewDeleteFiles`), `validateDataFilesExist`, and the V3 `validateAddedDVs`. Each needs
-//!   `referenced_data_files` / `removed_data_files` on the action, which it does not yet carry —
-//!   each is its own follow-up.
+//!   `validateNewDeleteFiles`) and the V3 `validateAddedDVs`. Each needs `removed_data_files` on the action,
+//!   which it does not yet carry (`removeRows` / `removeDeletes` are deferred) — each is its own follow-up.
+//!   (`validateDataFilesExist` — the referenced-files-exist check — HAS landed; see
+//!   [`RowDeltaAction::validate_data_files_exist`].)
 //! - `removeRows` / `removeDeletes` (removing existing data / delete files) — RowDelta the ADD-commit
 //!   primitive is this increment's deliverable.
 //! - The deletion-vector (V3 Puffin) write path.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -83,10 +84,11 @@ use crate::expr::Predicate;
 use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
 use crate::table::Table;
 use crate::transaction::snapshot::{
-    DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
+    DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer, deleted_data_files_after,
     validate_no_conflicting_added_data_files, validate_no_conflicting_added_delete_files,
 };
 use crate::transaction::{ActionCommit, TransactionAction};
+use crate::{Error, ErrorKind};
 
 /// A transaction action that performs a row delta: it adds data files AND adds row-level DELETE files
 /// (position / equality) in a single snapshot — the merge-on-read write commit (Java `BaseRowDelta`).
@@ -126,6 +128,21 @@ pub struct RowDeltaAction {
     /// An explicit starting snapshot for conflict validation (Java `validateFromSnapshot`). When `None`, the
     /// validation uses the transaction's starting snapshot (the table head when the transaction was created).
     validate_from_snapshot: Option<i64>,
+    /// The set of DATA file paths the added position-delete files REFERENCE (Java `BaseRowDelta`'s
+    /// `referencedDataFiles`, a CALLER-PROVIDED `CharSequenceSet` populated by `validateDataFilesExist`). When
+    /// NON-EMPTY this ENABLES the files-exist check (Java's `if (!referencedDataFiles.isEmpty())` guard): the
+    /// commit is rejected if any of these data files was DELETED by a concurrent commit since the starting
+    /// snapshot — a position delete cannot apply to a data file that no longer exists. Empty (the default) ⇒
+    /// the check does not run. The set is the caller's responsibility (it is NOT derived from the added delete
+    /// files) — mirroring Java, where the engine passes the position deletes' referenced data-file paths.
+    referenced_data_files: HashSet<String>,
+    /// Whether DELETE-op snapshots are INCLUDED in the files-exist check (Java `BaseRowDelta.validateDeletes`,
+    /// set by `validateDeletedFiles()`). `false` by DEFAULT — Java passes `skipDeletes = !validateDeletes` to
+    /// `validateDataFilesExist`, so with this `false` the default `skipDeletes` is `true` and the check uses
+    /// the `{OVERWRITE}` op set (a concurrent merge-on-read DELETE-op snapshot does NOT trip the check). When
+    /// `validate_deleted_files()` is called this becomes `true`, `skipDeletes` becomes `false`, and the check
+    /// uses the `{OVERWRITE, DELETE}` op set (DELETE-op deletions are then conflicts too).
+    validate_deleted_files: bool,
 }
 
 impl RowDeltaAction {
@@ -140,6 +157,8 @@ impl RowDeltaAction {
             validate_no_conflicting_delete_files: false,
             conflict_detection_filter: None,
             validate_from_snapshot: None,
+            referenced_data_files: HashSet::default(),
+            validate_deleted_files: false,
         }
     }
 
@@ -231,6 +250,44 @@ impl RowDeltaAction {
         self.validate_from_snapshot = Some(snapshot_id);
         self
     }
+
+    /// Provide the DATA files the added position-delete files REFERENCE, ENABLING the files-exist check (Java
+    /// `RowDelta.validateDataFilesExist(Iterable<CharSequence> referencedFiles)`). At commit time the row
+    /// delta is rejected (non-retryable `ValidationException`) if ANY of these data files was DELETED by a
+    /// concurrent commit since the starting snapshot — a position delete cannot apply to a data file that no
+    /// longer exists, so committing it would silently lose the delete.
+    ///
+    /// The set is CALLER-PROVIDED (the engine passes the data-file paths its position deletes reference); it
+    /// is NOT derived from the added delete files. Calling this with a non-empty iterable is what enables the
+    /// check (Java's `if (!referencedDataFiles.isEmpty())` guard) — an empty call (or never calling it) leaves
+    /// the check off. Repeated calls ACCUMULATE into the referenced set (Java
+    /// `referencedFiles.forEach(referencedDataFiles::add)`).
+    ///
+    /// By DEFAULT the check IGNORES concurrent merge-on-read DELETE-op snapshots (Java's `skipDeletes = true`
+    /// default — `validateDeletes` is `false`); call [`Self::validate_deleted_files`] to also treat a
+    /// concurrent DELETE-op removal of a referenced file as a conflict.
+    pub fn validate_data_files_exist(
+        mut self,
+        referenced_files: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.referenced_data_files
+            .extend(referenced_files.into_iter().map(Into::into));
+        self
+    }
+
+    /// INCLUDE concurrent DELETE-op snapshots in the files-exist check (Java
+    /// `RowDelta.validateDeletedFiles()`, which sets `validateDeletes = true`). By default the files-exist
+    /// check uses the `{OVERWRITE}` op set (Java `skipDeletes = !validateDeletes = true`), so a concurrent
+    /// merge-on-read DELETE-op snapshot that removed a referenced data file is NOT a conflict. After this
+    /// call the check uses the `{OVERWRITE, DELETE}` op set (`skipDeletes = false`), so such a removal IS a
+    /// conflict.
+    ///
+    /// On its own this does NOT enable the files-exist check — call [`Self::validate_data_files_exist`] with
+    /// the referenced data files for that.
+    pub fn validate_deleted_files(mut self) -> Self {
+        self.validate_deleted_files = true;
+        self
+    }
 }
 
 #[async_trait]
@@ -285,14 +342,26 @@ impl TransactionAction for RowDeltaAction {
     ///    (position / equality deletes) added by concurrent commits and reject if ANY could APPLY to records
     ///    matching the filter. Delegates to [`validate_no_conflicting_added_delete_files`] (DELETE-manifest
     ///    walk + the V2 guard + the SAME per-file inclusive-metrics test). A no-op on a V1 table.
+    /// 3. **`validateDataFilesExist`** (Java L141-149, when [`Self::referenced_data_files`] is NON-EMPTY,
+    ///    i.e. [`Self::validate_data_files_exist`] was called): enumerate the DATA files DELETED by concurrent
+    ///    commits since the start (the shared [`deleted_data_files_after`] helper) and reject if ANY of them is
+    ///    a data file the added position-deletes REFERENCE — a position delete cannot apply to a file that was
+    ///    concurrently removed. Java passes `skipDeletes = !validateDeletes`, so by DEFAULT
+    ///    ([`Self::validate_deleted_files`] NOT called ⇒ `validate_deleted_files == false`) `skip_deletes` is
+    ///    `true` and the walk uses the `{OVERWRITE}` op set (a concurrent DELETE-op snapshot is EXCLUDED);
+    ///    after `validate_deleted_files()` the walk uses `{OVERWRITE, DELETE}` and a DELETE-op removal of a
+    ///    referenced file is also a conflict. INDEPENDENT of the conflict filter (Java passes the filter to
+    ///    `validateDataFilesExist`, but the Rust [`deleted_data_files_after`] walk does not yet thread a filter
+    ///    — a conservative over-scan that can only over-reject; the referenced-set intersection is the
+    ///    load-bearing gate). The rejection is "Cannot commit, missing data files: {path}".
     ///
-    /// The two checks are INDEPENDENT (enabling one does not run the other), mirroring Java's two separate
-    /// `validateNew*` flags.
+    /// The checks are INDEPENDENT (enabling one does not run the others), mirroring Java's separate flags /
+    /// the `referencedDataFiles.isEmpty()` guard.
     ///
-    /// **Still deferred from Java `BaseRowDelta.validate`** (each needs `referenced_data_files` /
-    /// `removed_data_files` on the action, which it does not yet carry): `validateDataFilesExist`
-    /// (L141-149), `validateNoNewDeletesForDataFiles` (the `!removedDataFiles.isEmpty()` sub-branch of
-    /// `validateNewDeleteFiles`, L161-164), and the V3 `validateAddedDVs` (L172).
+    /// **Still deferred from Java `BaseRowDelta.validate`** (each needs `removed_data_files` on the action,
+    /// which it does not yet carry — `removeRows`/`removeDeletes` are not yet ported):
+    /// `validateNoNewDeletesForDataFiles` (the `!removedDataFiles.isEmpty()` sub-branch of
+    /// `validateNewDeleteFiles`, L161-164) and the V3 `validateAddedDVs` (L172).
     ///
     /// **Over-scan vs Java (documented):** the delete-file check omits Java's `DeleteFileIndex`
     /// `startingSequenceNumber` refinement (see [`validate_no_conflicting_added_delete_files`]) — a
@@ -334,6 +403,26 @@ impl TransactionAction for RowDeltaAction {
                 true,
             )
             .await?;
+        }
+
+        // 3. Referenced-data-files-exist check (Java `validateDataFilesExist`, the `!referencedDataFiles
+        //    .isEmpty()` guard at L141-149). Only runs when the caller provided referenced files via
+        //    `validate_data_files_exist(...)`. `skipDeletes = !validateDeletes` (Java L146) — so the DEFAULT
+        //    excludes concurrent DELETE-op snapshots (`{OVERWRITE}` op set) and `validate_deleted_files()`
+        //    includes them (`{OVERWRITE, DELETE}`). Reject if any concurrently-DELETED data file is one the
+        //    added position-deletes reference.
+        if !self.referenced_data_files.is_empty() {
+            let skip_deletes = !self.validate_deleted_files;
+            let deleted = deleted_data_files_after(current, effective_start, skip_deletes).await?;
+            if let Some(missing) = deleted
+                .iter()
+                .find(|file| self.referenced_data_files.contains(file.file_path()))
+            {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Cannot commit, missing data files: {}", missing.file_path()),
+                ));
+            }
         }
 
         Ok(())
@@ -2210,6 +2299,412 @@ mod tests {
         assert!(
             concurrent_delete_present,
             "the concurrent DELETE file survives — the data flag did not run the delete check"
+        );
+    }
+
+    // ============================================================================================
+    // RowDelta `validateDataFilesExist` — the REFERENCED-data-files-exist check (Java
+    // `BaseRowDelta.validate` L141-149 → `MergingSnapshotProducer.validateDataFilesExist` L773-822).
+    //
+    // A position delete REFERENCES the data file whose rows it removes; if that data file was DELETED by a
+    // concurrent commit since the operation's start, the position delete can no longer apply and committing it
+    // would silently lose the delete. `validate_data_files_exist([referenced_paths])` (Java
+    // `validateDataFilesExist(referencedFiles)`) provides the CALLER-PROVIDED referenced set and ENABLES the
+    // check; at commit the row delta is rejected (non-retryable `DataInvalid`, "Cannot commit, missing data
+    // files: {path}") if any concurrently-DELETED data file is in the referenced set.
+    //
+    // The SKIP-DELETES op-set axis (Java `skipDeletes = !validateDeletes`): by DEFAULT (no
+    // `validate_deleted_files()` call) the walk uses the `{OVERWRITE}` op set, so a concurrent merge-on-read
+    // DELETE-op snapshot that removed a referenced file is EXCLUDED (NOT a conflict). After
+    // `validate_deleted_files()` the walk uses `{OVERWRITE, DELETE}` and a DELETE-op removal IS a conflict.
+    //
+    // These tests simulate the race: a `row_delta` is BUILT against head S0, then a SEPARATE commit DELETES a
+    // referenced data file (advancing the head to S1). When the row delta commits, `do_commit` refreshes to S1
+    // and runs `validate` against that base. An OVERWRITE-op deletion (`overwrite_files().add+delete`) is in
+    // BOTH op sets; a DELETE-op deletion (`delete_files()`) is only in the non-skip set.
+    // ============================================================================================
+
+    /// Commit a CONCURRENT OVERWRITE that DELETES `delete_path` and ADDS `add_path` (both partition x=0),
+    /// recording `Operation::Overwrite` (in BOTH `{OVERWRITE}` and `{OVERWRITE, DELETE}` op sets). The deleted
+    /// data file gets a `Deleted` tombstone on a DATA manifest the new snapshot itself wrote. Used to simulate
+    /// a concurrent removal that the skip-deletes-default check still sees.
+    async fn commit_concurrent_overwrite_deletion(
+        catalog: &impl Catalog,
+        table: &Table,
+        delete_path: &str,
+        add_path: &str,
+    ) -> Table {
+        let tx = Transaction::new(table);
+        let action = tx
+            .overwrite_files()
+            .add_file(synthetic_data_file(add_path, 0))
+            .delete_file(delete_path.to_string());
+        let tx = action.apply(tx).unwrap();
+        tx.commit(catalog).await.unwrap()
+    }
+
+    /// Commit a CONCURRENT DELETE that removes `delete_path` (partition x=0), recording `Operation::Delete`
+    /// (only in the non-skip `{OVERWRITE, DELETE}` op set). The deleted data file gets a `Deleted` tombstone on
+    /// a DATA manifest. Used to exercise the skip-deletes DEFAULT (a DELETE-op deletion is excluded by default).
+    async fn commit_concurrent_delete_op_deletion(
+        catalog: &impl Catalog,
+        table: &Table,
+        delete_path: &str,
+    ) -> Table {
+        let tx = Transaction::new(table);
+        let action = tx.delete_files().delete_file(delete_path.to_string());
+        let tx = action.apply(tx).unwrap();
+        tx.commit(catalog).await.unwrap()
+    }
+
+    /// NO CONCURRENT DELETION. With `validate_data_files_exist([f])` enabled but nothing removing `f`
+    /// concurrently, the row delta commits normally (the concurrently-deleted set is empty ⇒ no missing file).
+    /// Risk pinned: a files-exist check that wrongly fails when the referenced file is still present.
+    #[tokio::test]
+    async fn test_row_delta_files_exist_no_concurrent_deletion_succeeds() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+            "test/f.parquet",
+            0,
+        )])
+        .await;
+
+        // Row delta adds a position delete referencing f, with the files-exist check enabled — but f is never
+        // concurrently deleted.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/f-pos-del.parquet", 0)])
+            .validate_from_snapshot(s0)
+            .validate_data_files_exist(["test/f.parquet"]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx
+            .commit(&catalog)
+            .await
+            .expect("a row delta whose referenced file still exists must commit");
+
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        assert!(
+            manifest_list
+                .entries()
+                .iter()
+                .any(|m| m.content == ManifestContentType::Deletes),
+            "the row delta committed: a DELETE manifest is present"
+        );
+    }
+
+    /// THE HEADLINE TEST. Append S0 with data file `f`. Build a `row_delta` with
+    /// `.validate_data_files_exist(["test/f.parquet"])`. Then a CONCURRENT OVERWRITE DELETES `f` (S1). The
+    /// row-delta commit must FAIL with a NON-retryable `DataInvalid` naming `f` ("Cannot commit, missing data
+    /// files: test/f.parquet").
+    ///
+    /// Risk pinned: committing a position delete that references a data file a concurrent commit already
+    /// removed = a silently-lost delete under serializable isolation. An OVERWRITE-op deletion is in the
+    /// skip-deletes-DEFAULT op set, so this rejects WITHOUT `validate_deleted_files()`.
+    #[tokio::test]
+    async fn test_row_delta_files_exist_rejects_concurrent_deletion_of_referenced_file() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+            "test/f.parquet",
+            0,
+        )])
+        .await;
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/f-pos-del.parquet", 0)])
+            .validate_from_snapshot(s0)
+            .validate_data_files_exist(["test/f.parquet"]);
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): an OVERWRITE that DELETES the referenced f (and adds a sibling).
+        let _concurrent = commit_concurrent_overwrite_deletion(
+            &catalog,
+            &table,
+            "test/f.parquet",
+            "test/g.parquet",
+        )
+        .await;
+
+        let err = tx
+            .commit(&catalog)
+            .await
+            .expect_err("row delta must fail: a referenced data file was concurrently deleted");
+
+        assert_eq!(
+            err.kind(),
+            ErrorKind::DataInvalid,
+            "a missing referenced data file is a non-retryable validation failure (DataInvalid)"
+        );
+        assert!(
+            !err.retryable(),
+            "the validation failure must be NON-retryable so the retry loop stops and it propagates"
+        );
+        assert!(
+            err.message().contains("Cannot commit, missing data files"),
+            "the error must use the missing-data-files message, got: {}",
+            err.message()
+        );
+        assert!(
+            err.message().contains("test/f.parquet"),
+            "the error must name the missing referenced FILE, got: {}",
+            err.message()
+        );
+    }
+
+    /// NO-FALSE-CONFLICT TEST. Same setup, but the concurrent OVERWRITE deletes a DIFFERENT (non-referenced)
+    /// data file. The referenced file `f` is untouched, so the row delta must COMMIT.
+    ///
+    /// Risk pinned: an over-eager check that rejects ANY concurrent deletion (ignoring the referenced set)
+    /// would break legitimate concurrent removals of unrelated files. This is the test that makes
+    /// `referencedDataFiles` (not "any concurrent deletion") the load-bearing gate.
+    #[tokio::test]
+    async fn test_row_delta_files_exist_allows_concurrent_deletion_of_different_file() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        // Two data files: f (referenced) and other (will be concurrently deleted).
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![
+            synthetic_data_file("test/f.parquet", 0),
+            synthetic_data_file("test/other.parquet", 0),
+        ])
+        .await;
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/f-pos-del.parquet", 0)])
+            .validate_from_snapshot(s0)
+            .validate_data_files_exist(["test/f.parquet"]);
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): an OVERWRITE that DELETES the NON-referenced `other` (and adds a sibling).
+        let _concurrent = commit_concurrent_overwrite_deletion(
+            &catalog,
+            &table,
+            "test/other.parquet",
+            "test/g.parquet",
+        )
+        .await;
+
+        let table = tx
+            .commit(&catalog)
+            .await
+            .expect("the row delta must commit: the concurrently-deleted file is not referenced");
+
+        // The referenced f still exists; the row delta committed (its DELETE manifest landed).
+        let live = live_data_file_paths(&table).await;
+        assert!(
+            live.contains("test/f.parquet"),
+            "the referenced file f survives the concurrent deletion of a DIFFERENT file"
+        );
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        assert!(
+            manifest_list
+                .entries()
+                .iter()
+                .any(|m| m.content == ManifestContentType::Deletes),
+            "the row delta committed: a DELETE manifest is present"
+        );
+    }
+
+    /// FLAG-OFF CONTROL. With NO `validate_data_files_exist(...)` call (the referenced set is EMPTY), a
+    /// concurrent deletion of the data file the position delete references does NOT fail the commit — the
+    /// files-exist check is OPT-IN (snapshot isolation, the DEFAULT, unchanged by this increment).
+    ///
+    /// Risk pinned: the files-exist check must be enabled ONLY by a non-empty referenced set (Java's
+    /// `if (!referencedDataFiles.isEmpty())` guard) — running it for every row delta would change behavior.
+    #[tokio::test]
+    async fn test_row_delta_files_exist_without_referenced_set_does_not_check() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/f.parquet",
+            0,
+        )])
+        .await;
+
+        // Build a row delta WITHOUT calling validate_data_files_exist (empty referenced set).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/f-pos-del.parquet", 0)]);
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): an OVERWRITE that DELETES f — would be a conflict IF the check were enabled.
+        let _concurrent = commit_concurrent_overwrite_deletion(
+            &catalog,
+            &table,
+            "test/f.parquet",
+            "test/g.parquet",
+        )
+        .await;
+
+        // With no referenced set, the row delta COMMITS (default behavior unchanged).
+        let table = tx.commit(&catalog).await.expect(
+            "with an empty referenced set, a concurrent deletion must not block the commit",
+        );
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        assert!(
+            manifest_list
+                .entries()
+                .iter()
+                .any(|m| m.content == ManifestContentType::Deletes),
+            "the row delta committed (no files-exist check ran)"
+        );
+    }
+
+    /// THE SKIP-DELETES DEFAULT TEST. A CONCURRENT DELETE-OP (`delete_files`) deletion of the referenced file
+    /// `f`. By DEFAULT (`validate_deleted_files()` NOT called ⇒ `skip_deletes = true` ⇒ `{OVERWRITE}` op set),
+    /// the DELETE-op snapshot is EXCLUDED ⇒ the row delta COMMITS. WITH `validate_deleted_files()`
+    /// (`skip_deletes = false` ⇒ `{OVERWRITE, DELETE}`) the same DELETE-op removal IS a conflict ⇒ REJECTED.
+    ///
+    /// Risk pinned: the skip-deletes DEFAULT — Java `BaseRowDelta` passes `skipDeletes = !validateDeletes`,
+    /// and `validateDeletes` is `false` by default. Getting the default wrong (always including DELETE-op
+    /// snapshots) would reject a legitimate concurrent merge-on-read delete the default is meant to tolerate.
+    /// This is the ONLY test that distinguishes the two op sets, so it pins the `skip_deletes = !flag` default.
+    #[tokio::test]
+    async fn test_row_delta_files_exist_skip_deletes_default_excludes_delete_op_snapshot() {
+        // --- Half A: DEFAULT (no validate_deleted_files) ⇒ a DELETE-op deletion is EXCLUDED ⇒ COMMITS. ---
+        {
+            let catalog = new_memory_catalog().await;
+            let table = make_v3_minimal_table_in_catalog(&catalog).await;
+            let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+                "test/f.parquet",
+                0,
+            )])
+            .await;
+
+            let tx = Transaction::new(&table);
+            let action = tx
+                .row_delta()
+                .add_deletes(vec![synthetic_delete_file("test/f-pos-del.parquet", 0)])
+                .validate_from_snapshot(s0)
+                .validate_data_files_exist(["test/f.parquet"]);
+            let tx = action.apply(tx).unwrap();
+
+            // CONCURRENT commit (S1): a DELETE-op deletion of the referenced f.
+            let _concurrent =
+                commit_concurrent_delete_op_deletion(&catalog, &table, "test/f.parquet").await;
+
+            // DEFAULT skip_deletes = true ⇒ the DELETE-op snapshot is excluded ⇒ the row delta COMMITS.
+            let table = tx.commit(&catalog).await.expect(
+                "by default a concurrent DELETE-op deletion is excluded (skip_deletes) ⇒ commit succeeds",
+            );
+            let snapshot = table.metadata().current_snapshot().unwrap();
+            let manifest_list = snapshot
+                .load_manifest_list(table.file_io(), table.metadata())
+                .await
+                .unwrap();
+            assert!(
+                manifest_list
+                    .entries()
+                    .iter()
+                    .any(|m| m.content == ManifestContentType::Deletes),
+                "the row delta committed under the skip-deletes default"
+            );
+        }
+
+        // --- Half B: WITH validate_deleted_files ⇒ the SAME DELETE-op deletion IS a conflict ⇒ REJECTED. ---
+        {
+            let catalog = new_memory_catalog().await;
+            let table = make_v3_minimal_table_in_catalog(&catalog).await;
+            let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+                "test/f.parquet",
+                0,
+            )])
+            .await;
+
+            let tx = Transaction::new(&table);
+            let action = tx
+                .row_delta()
+                .add_deletes(vec![synthetic_delete_file("test/f-pos-del.parquet", 0)])
+                .validate_from_snapshot(s0)
+                .validate_data_files_exist(["test/f.parquet"])
+                .validate_deleted_files();
+            let tx = action.apply(tx).unwrap();
+
+            let _concurrent =
+                commit_concurrent_delete_op_deletion(&catalog, &table, "test/f.parquet").await;
+
+            let err = tx.commit(&catalog).await.expect_err(
+                "validate_deleted_files() includes DELETE-op snapshots ⇒ the deletion of f is a conflict",
+            );
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(!err.retryable());
+            assert!(
+                err.message().contains("Cannot commit, missing data files")
+                    && err.message().contains("test/f.parquet"),
+                "the error must name the missing referenced file, got: {}",
+                err.message()
+            );
+        }
+    }
+
+    /// TX-CAPTURED START SURVIVES RE-BASE. The files-exist check works WITHOUT an explicit
+    /// `validate_from_snapshot`, relying SOLELY on the transaction-captured starting snapshot id surviving
+    /// `do_commit`'s re-base. Build `row_delta().validate_data_files_exist([f])` (NO `validate_from_snapshot`);
+    /// the start is the `Transaction::new` head (S0). `do_commit` overwrites `self.table` with the refreshed
+    /// base (S1), but `starting_snapshot_id` must SURVIVE — so S1's OVERWRITE deletion of `f` is still
+    /// enumerated and rejected.
+    ///
+    /// Risk pinned: if `effective_start` were re-read from the REFRESHED head at validation time, start ==
+    /// current head ⇒ the concurrently-deleted set is empty ⇒ the check silently always passes. Every OTHER
+    /// files-exist test pins `validate_from_snapshot`, which short-circuits
+    /// `validate_from_snapshot.or(starting_snapshot_id)` and never reads the tx-captured field — so this is
+    /// the only one that pins the `Transaction::new` capture surviving the re-base.
+    #[tokio::test]
+    async fn test_row_delta_files_exist_rejects_concurrent_using_tx_captured_starting_snapshot() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/f.parquet",
+            0,
+        )])
+        .await;
+
+        // Build the row delta with the check enabled but WITHOUT validate_from_snapshot — the start is the
+        // tx-captured head (S0).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/f-pos-del.parquet", 0)])
+            .validate_data_files_exist(["test/f.parquet"]);
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): an OVERWRITE deletion of the referenced f.
+        let _concurrent = commit_concurrent_overwrite_deletion(
+            &catalog,
+            &table,
+            "test/f.parquet",
+            "test/g.parquet",
+        )
+        .await;
+
+        let err = tx.commit(&catalog).await.expect_err(
+            "the missing referenced file must be detected via the tx-captured starting snapshot",
+        );
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable());
+        assert!(
+            err.message().contains("Cannot commit, missing data files")
+                && err.message().contains("test/f.parquet"),
+            "got: {}",
+            err.message()
         );
     }
 }

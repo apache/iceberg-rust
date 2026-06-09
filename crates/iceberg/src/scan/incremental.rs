@@ -346,6 +346,10 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
+            // The incremental-append scan does not emit a `ScanReport` (Java's metrics
+            // reporting lives on the snapshot scan, not `IncrementalDataTableScan`); leave
+            // it uninstrumented.
+            metrics_collector: None,
         };
 
         Ok(IncrementalAppendScan {
