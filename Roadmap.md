@@ -131,6 +131,47 @@ policy is lifted; everything else is comfortably single-agent.
 
 ---
 
+## Operational hardening sprint (2026-06-09) — decision record
+
+A frontier-tier (Fable) review of the repo on 2026-06-09 concluded the **engineering discipline is
+sound but the planning documents have outgrown their own read contract**: `task/todo.md` (380 KB),
+`task/lessons.md` (256 KB), this file (72 KB), and the GAP_MATRIX (132 KB) totalled ~840 KB of
+mandated session-start reading — several context windows — and the same increment status was being
+written in triplicate (Roadmap current-state, Roadmap phase sections, GAP_MATRIX cells). The user
+approved a hardening sprint **before further parity work**. Live plan + checkboxes:
+[task/todo.md](task/todo.md) §"Operational hardening & Opus handoff".
+
+**The decisions, for future sessions:**
+
+1. **Model-tier handoff context.** Frontier-tier sessions are available only until **2026-06-22**;
+   thereafter **Opus is the default maintainer tier**. Judgment-heavy work (write-engine interop
+   semantics: sequence-number inheritance, delete manifests, conflict validation) is prioritized
+   while the frontier tier remains; mechanical breadth (inspection interop, scenario fill-out, ORC,
+   V3 exotica) is deliberately left for Opus — it is well-templated by the existing harness.
+2. **The interop oracle is the project's objective verifier and its model-tier equalizer.** A
+   weaker model's reasoning error cannot survive a bidirectional Java round-trip. Protect
+   `dev/java-interop/` above other assets; every 🟡→✅ flip goes through it.
+3. **Doc-mass discipline (sprint increments A–D):** `map.md` coverage for the hot source
+   directories (A); the `skills/compaction.md` pass on lessons.md (B — it is 3–5× over its own
+   trigger); a todo-archival convention + pass (C); then **one home per fact** (D): the GAP_MATRIX
+   becomes the only status record with terse cells, this file's current-state section shrinks to
+   ~30 lines, and increment narratives live in `task/todo-archive/`. After D, never write the same
+   status in two places — link instead.
+4. **Interop-debt budget (sprint increment E).** The 🟡-with-deferred-interop pattern is accepted,
+   but the debt is paid down in risk order (RowDelta metadata semantics → the rewrite-family four →
+   inspection tables) rather than accumulating indefinitely.
+5. **Open decision — the platform cut line.** Which GAP_MATRIX rows block the downstream
+   algorithmic-trading platform (and whether maintenance actions move ahead of Phase-4 format
+   breadth) was proposed but **not decided**. Do not assume it; ask the user when it becomes
+   load-bearing.
+
+> **Note for sessions arriving mid-sprint:** until increments B–D land, the size warnings above
+> still apply — read this file's "For a new session" + the sprint section of `task/todo.md` first,
+> and treat the long per-increment narratives below as *archive-bound reference*, not required
+> reading.
+
+---
+
 ## Current state
 
 **Base: upstream `iceberg` 0.9.1** (datafusion 52.2, arrow 57.1, parquet 57.1, MSRV 1.92), adopted as the

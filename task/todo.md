@@ -31,6 +31,62 @@ How to use it (see the manuals' §1):
 
 ---
 
+## Active: Operational hardening & Opus handoff — the meta-sprint (2026-06-09)
+
+**Decided 2026-06-09 (user-approved).** Context: frontier-tier (Fable) sessions are available only
+until **2026-06-22**; after that **Opus is the default maintainer tier**. The planning files have
+outgrown the session-start read contract (todo.md 380 KB + lessons.md 256 KB + Roadmap.md 72 KB +
+GAP_MATRIX.md 132 KB ≈ 840 KB of mandated reading — several context windows), so this sprint hardens
+the documentation infrastructure FIRST, then spends the remaining frontier budget on the
+highest-judgment interop debt. Decision record + rationale: Roadmap.md §"Operational hardening
+sprint (2026-06-09)".
+
+**Ordering constraints (load-bearing):**
+- [skills/compaction.md](../skills/compaction.md) routes promoted lessons into directory
+  `map.md#debug` sections → **A (maps) must land before B (lessons compaction)**.
+- The terse GAP_MATRIX cells produced by D link to archived increment narratives → **C (todo
+  archival) must land before D (de-triplication)**.
+- B and C follow compaction.md discipline: **own PR, nothing else in the diff, conservation check,
+  interactive approval of the verdict tally before commit.**
+
+- [x] **Step 0 — stabilize the base.** phase3-scan-exec-interop landed on main as PR #11 (tree
+      verified identical; local main fast-forwarded to 7e56fbf7; 1636 lib tests green on this tree).
+- [x] **A — `map.md` scaffolding.** Created map + `## Debug` for the seven hot directories:
+      `crates/iceberg/src/{transaction,inspect,scan,expr/visitors,writer}/`, `dev/java-interop/`,
+      `crates/iceberg/tests/`. Seeded from code (module lists verified against `mod.rs`); Debug
+      sections seeded with already-recorded failure modes and left thin for B's promotions.
+      Relative links verified resolving; `typos` clean; no code touched. Rides in the same PR as
+      the sprint-plan record (separate commits) since `gh` is unavailable locally.
+- [ ] **B — lessons.md compaction pass (own PR, interactive).** Run skills/compaction.md verbatim:
+      verdict every dated entry (PROMOTE / KEEP / ARCHIVE), promotions land in the same change,
+      archive verbatim to `task/lessons-archive/2026-06_phase0-phase3.md`, conservation check
+      (`grep -c '^### 20'` reconciles), 7-day recency window keeps 2026-06-02+. Target: active file
+      well under 800 lines. **User approves tally + promotion diffs before commit.**
+- [ ] **C — todo.md archival (own PR).** First WRITE the procedure (a todo-archival section in
+      skills/compaction.md or a sibling doc: completed increments archive by phase into
+      `task/todo-archive/` with its own map.md), then execute: completed-increment narratives move
+      verbatim; live todo keeps open items + current context, < ~500 lines; same conservation
+      discipline.
+- [ ] **D — de-triplicate status (own PR, review carefully).** One home per fact:
+      GAP_MATRIX becomes the ONLY status record with terse cells (icon, date, one sentence, links to
+      the interop test + archived narrative); Roadmap "current state" shrinks to ≤ ~30 lines pointing
+      at the matrix; per-increment narrative paragraphs move to the todo-archive; CLAUDE.md gains the
+      one-home-per-fact rule. Gate: every link resolves; session-start read order measured ≤ ~40k
+      tokens (record the number).
+- [ ] **E — interop debt paydown (rest of the frontier budget; one PR per increment).** Risk order:
+      - [ ] **E1 — `RowDelta` metadata-level interop:** sequence-number inheritance, delete
+            manifests, summary fields vs Java `BaseRowDelta` (the scan-exec interop already proves
+            the data level both directions — this targets the snapshot/manifest metadata).
+      - [ ] **E2 — the rewrite-family four:** `DeleteFiles` / `OverwriteFiles` / `ReplacePartitions`
+            / `RewriteFiles` — one oracle `generate`/`verify` pass, per-action scenarios (the Phase-1
+            three-capability consolidation pattern).
+      - [ ] **E3 — inspection-table interop:** mechanical, well-templated — the explicit leave-to-
+            Opus candidate if the budget runs out.
+
+**Explicitly NOT decided:** the "platform cut line" through the GAP_MATRIX (which rows block the
+user's trading platform vs continuous-parity backlog, incl. re-ordering maintenance actions ahead of
+Phase-4 format exotica) was proposed but is an **open user decision — do not assume it.**
+
 ## Active: Scan metrics emission wiring (TableScan → MetricsReporter) — BUILDER Opus, 2026-06-09
 
 Completes the DEFERRED scan-emission wiring from the metrics data-model increment (GAP_MATRIX row 97).
