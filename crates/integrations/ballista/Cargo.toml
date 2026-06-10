@@ -30,22 +30,19 @@ license = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-arrow = { workspace = true }
-async-trait = { workspace = true }
 ballista-core = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
-futures = { workspace = true }
 iceberg = { workspace = true }
 iceberg-catalog-loader = { workspace = true }
 iceberg-datafusion = { workspace = true }
 iceberg-storage-opendal = { workspace = true }
-log = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+arrow = { workspace = true }
 ballista = { workspace = true, features = ["standalone"] }
 # Used by the multi-executor integration test to start a scheduler + several
 # in-process executors directly. Feature flags mirror what ballista's
@@ -55,4 +52,5 @@ ballista-executor = { workspace = true }
 ballista-scheduler = { workspace = true }
 env_logger = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
+log = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -41,7 +41,10 @@ use ballista::prelude::{SessionConfigExt, SessionContextExt};
 use ballista_core::serde::protobuf::scheduler_grpc_client::SchedulerGrpcClient;
 use ballista_executor::new_standalone_executor_from_state;
 use ballista_scheduler::standalone::new_standalone_scheduler_from_state;
-use iceberg_ballista::{IcebergCatalogConfig, register_iceberg_codecs, register_iceberg_table};
+use iceberg_ballista::{
+    IcebergCatalogConfig, register_iceberg_catalog, register_iceberg_codecs,
+    register_iceberg_table,
+};
 use iceberg::spec::{
     NestedField, PrimitiveType, Schema, Transform, Type, UnboundPartitionField,
     UnboundPartitionSpec,
@@ -198,7 +201,7 @@ async fn distributed_insert_and_read() {
         .await
         .expect("start standalone ballista");
 
-    let catalog_config = IcebergCatalogConfig::new("rest", "rest", props);
+    let catalog_config = IcebergCatalogConfig::new("rest", "rest", props.clone());
     register_iceberg_table(
         &ctx,
         "events",
@@ -257,6 +260,33 @@ async fn distributed_insert_and_read() {
         })
         .collect();
     assert_eq!(ids, vec![1, 2, 3]);
+
+    // Catalog-level registration: mount the whole Iceberg catalog and read the
+    // same table as `<catalog>.<namespace>.<table>`. The providers built through
+    // the catalog carry the config too, so this distributed read exercises the
+    // catalog/schema config-threading path end to end.
+    register_iceberg_catalog(&ctx, "ice", IcebergCatalogConfig::new("rest", "rest", props))
+        .await
+        .expect("register iceberg catalog");
+    let batches = ctx
+        .sql(&format!(
+            "SELECT count(*) AS n FROM ice.ballista_it.{table_name}"
+        ))
+        .await
+        .expect("plan catalog-qualified count")
+        .collect()
+        .await
+        .expect("run catalog-qualified count");
+    let count = batches
+        .iter()
+        .find_map(|b| {
+            b.column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .map(|a| a.value(0))
+        })
+        .expect("count column");
+    assert_eq!(count, 3, "catalog-qualified distributed read");
 }
 
 /// Distributed correctness on a real multi-executor cluster, writing a
@@ -330,11 +360,7 @@ async fn parallel_multi_executor_insert_commits_all_rows() {
         .await
         .expect("connect to scheduler");
 
-    // Distinct catalog config name from `distributed_insert_and_read`. The crate
-    // caches reconstructed catalogs process-wide by config; sharing one entry
-    // across two tests would hand this test a catalog client bound to the other
-    // test's already-dropped runtime, making the distributed read silently empty.
-    let catalog_config = IcebergCatalogConfig::new("rest", "rest_parallel", props.clone());
+    let catalog_config = IcebergCatalogConfig::new("rest", "rest", props.clone());
     register_iceberg_table(
         &ctx,
         "target",

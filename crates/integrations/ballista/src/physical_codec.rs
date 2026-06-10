@@ -254,10 +254,19 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
             let config = scan
                 .catalog_config()
                 .ok_or_else(|| missing_config_err("IcebergTableScan"))?;
+            // Pin the snapshot at encode (planning) time. The executor reloads
+            // table metadata independently, so an unpinned scan would read
+            // whatever snapshot is current when each task decodes — concurrent
+            // commits could then give two tasks of one query different
+            // snapshots. `scan.table()` is the table as loaded at planning, so
+            // its current snapshot is the consistent choice for every task.
+            let snapshot_id = scan
+                .snapshot_id()
+                .or_else(|| scan.table().metadata().current_snapshot_id());
             let proto = IcebergPhysicalNode::Scan {
                 catalog: config.into(),
                 table: scan.table().identifier().clone(),
-                snapshot_id: scan.snapshot_id(),
+                snapshot_id,
                 projection: scan.projection().map(|s| s.to_vec()),
                 limit: scan.limit(),
                 predicates: scan.predicates().cloned(),
@@ -445,13 +454,46 @@ mod tests {
     }
 
     #[test]
-    fn delegated_blob_carries_distinct_tag() {
-        // Payloads we hand to the inner codec are framed with TAG_DELEGATED, so
-        // decode routes them to the inner codec rather than parsing them as
-        // Iceberg nodes. The two tags must stay distinct for that to hold.
-        assert_ne!(TAG_ICEBERG, TAG_DELEGATED);
-        let mut buf = vec![TAG_DELEGATED];
-        buf.extend_from_slice(b"inner codec payload");
-        assert_ne!(buf[0], TAG_ICEBERG);
+    fn non_iceberg_node_roundtrips_through_inner_codec() {
+        use ballista_core::execution_plans::ShuffleWriterExec;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+        use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::prelude::SessionContext;
+
+        // A Ballista shuffle node is not an Iceberg node, so the codec must
+        // frame it with TAG_DELEGATED and hand it to the inner Ballista codec —
+        // and decode must route it back there, reconstructing the same node.
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "a",
+            DataType::Int32,
+            false,
+        )]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
+        let shuffle = ShuffleWriterExec::try_new(
+            "job-1".to_string(),
+            7,
+            input.clone(),
+            "/tmp/work".to_string(),
+            None,
+        )
+        .expect("build shuffle writer");
+
+        let codec = IcebergPhysicalCodec::default();
+        let mut buf = Vec::new();
+        codec
+            .try_encode(Arc::new(shuffle), &mut buf)
+            .expect("encode delegated node");
+        assert_eq!(buf[0], TAG_DELEGATED, "non-Iceberg node must be delegated");
+
+        let ctx = SessionContext::new();
+        let decoded = codec
+            .try_decode(&buf, &[input], &ctx.task_ctx())
+            .expect("decode delegated node");
+        let decoded = decoded
+            .as_any()
+            .downcast_ref::<ShuffleWriterExec>()
+            .expect("decoded plan should be a ShuffleWriterExec");
+        assert_eq!(decoded.job_id(), "job-1");
+        assert_eq!(decoded.stage_id(), 7);
     }
 }

@@ -105,3 +105,25 @@ pub async fn register_iceberg_table(
     ctx.register_table(register_name, Arc::new(provider))?;
     Ok(())
 }
+
+/// Builds an [`IcebergCatalogProvider`](iceberg_datafusion::IcebergCatalogProvider)
+/// from `config` and registers it on `ctx` under `register_name`, mounting the
+/// whole Iceberg catalog at once.
+///
+/// Every table then resolves as `<register_name>.<namespace>.<table>` in SQL,
+/// and every provider carries the `config` so the plan nodes it produces can be
+/// serialized and reconstructed on remote Ballista nodes — including metadata
+/// tables such as `<table>$snapshots`.
+pub async fn register_iceberg_catalog(
+    ctx: &SessionContext,
+    register_name: &str,
+    config: IcebergCatalogConfig,
+) -> Result<(), DataFusionError> {
+    let catalog = serde::build_catalog(&config).await?;
+    let provider =
+        iceberg_datafusion::IcebergCatalogProvider::try_new_with_config(catalog, config)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    ctx.register_catalog(register_name, Arc::new(provider));
+    Ok(())
+}

@@ -115,7 +115,7 @@ fn on_durable_runtime() -> bool {
     )
 }
 
-/// Process-wide cache of reconstructed catalogs, keyed by their config.
+/// Process-wide cache of reconstructed catalogs, keyed by runtime + config.
 ///
 /// Building a catalog client (and its underlying HTTP/connection pool) is
 /// relatively expensive, and the codec may decode many plan nodes that share
@@ -123,13 +123,25 @@ fn on_durable_runtime() -> bool {
 /// durable runtime (see [`on_durable_runtime`]); on an ephemeral runtime
 /// `get_catalog` bypasses it so a catalog can never outlive the runtime its
 /// connection pool is bound to.
+///
+/// The key includes the caller's runtime id: a catalog's connection pool is
+/// bound to the runtime it was built on, so an entry must never be served to a
+/// different runtime (whose predecessor may already be shut down — requests
+/// would then fail or hang). With multiple durable runtimes in one process
+/// (e.g. several `#[tokio::test]`s), each gets its own entry.
 static CATALOGS: LazyLock<Mutex<HashMap<String, Arc<dyn Catalog>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Cache key for the runtime this thread is on. Only call on a durable
+/// runtime (after [`on_durable_runtime`]), where a current handle exists.
 fn catalog_cache_key(config: &IcebergCatalogConfig) -> String {
+    let runtime_id = tokio::runtime::Handle::current().id();
     // BTreeMap gives a stable ordering for the props so the key is deterministic.
     let props: BTreeMap<_, _> = config.props.iter().collect();
-    format!("{}|{}|{:?}", config.r#type, config.name, props)
+    format!(
+        "{runtime_id}|{}|{}|{:?}",
+        config.r#type, config.name, props
+    )
 }
 
 /// Builds a catalog from its config.

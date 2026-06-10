@@ -4080,7 +4080,6 @@ name = "iceberg-ballista"
 version = "0.9.0"
 dependencies = [
  "arrow",
- "async-trait",
  "ballista",
  "ballista-core",
  "ballista-executor",
@@ -4088,7 +4087,6 @@ dependencies = [
  "datafusion",
  "datafusion-proto",
  "env_logger",
- "futures",
  "iceberg",
  "iceberg-catalog-loader",
  "iceberg-catalog-rest",
