@@ -241,6 +241,12 @@ them to Sonnet or Haiku; only run an Opus sub-agent on a direct, explicit instru
 
 ## Working conventions
 
+- **One home per fact (de-triplication rule, 2026-06-10).** A capability's STATUS lives ONLY in
+  [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRIX.md) — terse cells (location, 1–2 sentences,
+  flip dates, links). The Roadmap holds the plan and one-line phase statuses; increment narratives
+  live in `task/todo-archive/`, `task/lessons-archive/`, and `docs/parity/archive/` (grep on
+  demand, never required reading). **Never write the same status in two places — link instead.**
+  When a status flips, edit the matrix cell and nothing else.
 - **Chain the verification gate to the commit in ONE `&&` chain** — `typos . && cargo fmt --all --
   check && git add -A && git commit …` — never put `git commit` on a separate line from the gate: a
   failed gate on its own line still lets the commit run. (Promoted 2026-06-09 from a twice-repeated

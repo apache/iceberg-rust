@@ -34,6 +34,7 @@ reconstructing why a shipped increment did what it did).
 | [phase1.md](phase1.md) | **Phase 1 — Spec & metadata completeness.** Schema evolution (`UpdateSchema`), partition evolution (`UpdatePartitionSpec`), snapshot management (`ManageSnapshots`), column defaults, and the spec-mandated default-to-0 read-robustness increments (10/11). |
 | [phase2.md](phase2.md) | **Phase 2 — Write engine.** The first write increment + `DeleteFiles` / `OverwriteFiles` / `ReplacePartitions` / `RewriteFiles` / `RowDelta` actions, the `PositionDeleteFileWriter`, and the concurrent-commit conflict-validation cluster (incl. `validateFilesExist` / `validateDataFilesExist` and the write-validation PR #9 remnants). |
 | [phase3.md](phase3.md) | **Phase 3 — Scan parity.** Inspection-table set (`files`/`entries`/`history`/`partitions`/`all_*` + `readable_metrics`), `ResidualEvaluator` + scan-wiring, the conflict-validation sequence done in the Phase-3 window, scan-metrics emission (`ScanReport`/`MetricsReporter`), and inspection / scan-planning / scan-execution interop. |
+| [roadmap-narratives-2026-06.md](roadmap-narratives-2026-06.md) | **The complete pre-de-triplication `Roadmap.md`** (2026-06-10, sprint increment D), archived verbatim — every per-increment narrative paragraph the Roadmap used to carry. The live Roadmap is now plan-only; statuses live in the GAP_MATRIX. |
 
 ## I want to...
 

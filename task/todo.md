@@ -34,6 +34,31 @@ How to use it (see the manuals' §1):
 
 > **Archival log.** Last todo-archival pass: 2026-06-09 (size trigger — 4,344 lines) → [todo-archive/](todo-archive/) (phase1/phase2/phase3). Completed-increment narratives moved verbatim; this file keeps the active sprint + open items + archive pointers. Procedure: [skills/compaction.md](../skills/compaction.md) §Todo Archival. Archives are not read by default.
 
+## DONE (2026-06-10): Sprint increment D — status de-triplication (branch `docs/de-triplication`)
+
+One home per fact. Trigger: the sprint plan (A ✅ B ✅ C ✅ E3 ✅ → D), freshly motivated by the
+overnight stale-narrative incident (Roadmap said `validateAddedFilesMatchOverwriteFilter` was
+deferred; it had landed in PR #9).
+
+- [x] **GAP_MATRIX cells go terse.** The 19 cells over 400 chars (worst: 36 KB) move VERBATIM to
+      `docs/parity/archive/2026-06_matrix-cell-narratives.md` (keyed by row Area); each cell is
+      rewritten as: Rust location · 1–2 sentence capability summary · flip dates · links (interop
+      test, archive anchor). Status icons unchanged — this pass moves prose, never status.
+- [x] **Roadmap shrinks to plan + pointers.** The per-increment narrative blobs ("For a new
+      session" item 2, "Current state", per-phase Progress sections) move VERBATIM to
+      `task/todo-archive/roadmap-narratives-2026-06.md`; "Current state" is rewritten ≤ ~30 lines
+      pointing at the matrix; phase sections keep Goal/Gates/Deliverables/Exit + one-line status.
+- [x] **CLAUDE.md gains the one-home-per-fact rule** (status lives in the matrix; narrative lives
+      in archives/git; never write the same status twice — link instead).
+- [x] **Gates:** conservation (every moved block verbatim, anchors resolve), all links resolve,
+      `typos` clean, session-start read order (CLAUDE.md+Roadmap+GAP_MATRIX+lessons+todo) measured
+      and recorded — target ≤ ~40k tokens.
+      **Outcome:** GAP_MATRIX 136 KB → 27 KB (19 cells → archive verbatim, conservation 19/19);
+      Roadmap 823 → 298 lines (whole pre-rewrite file archived verbatim, byte-identical diff);
+      read order measured **~41.6k tokens** (was ~210k pre-sprint; lessons.md is the remaining
+      ~19k and shrinks at the next compaction pass); links resolve; typos clean.
+- [x] Update `task/todo-archive/map.md` for the new archive file; flip the sprint-D checkbox.
+
 ## DONE (2026-06-10 overnight): OverwriteFiles validateNewDeletes branch A — Increment 2 of OVERNIGHT_BRIEF
 
 Added the MISSING row-filter sub-branch of Java `BaseOverwriteFiles.validate`'s `validateNewDeletes`
@@ -173,7 +198,7 @@ sprint (2026-06-09)".
       `task/todo-archive/` with its own map.md), then execute: completed-increment narratives move
       verbatim; live todo keeps open items + current context, < ~500 lines; same conservation
       discipline.
-- [ ] **D — de-triplicate status (own PR, review carefully).** One home per fact:
+- [x] **D — de-triplicate status (own PR, review carefully).** DONE 2026-06-10, see below. One home per fact:
       GAP_MATRIX becomes the ONLY status record with terse cells (icon, date, one sentence, links to
       the interop test + archived narrative); Roadmap "current state" shrinks to ≤ ~30 lines pointing
       at the matrix; per-increment narrative paragraphs move to the todo-archive; CLAUDE.md gains the
