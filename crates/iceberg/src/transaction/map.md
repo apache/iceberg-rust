@@ -75,6 +75,9 @@ engine) parity work.
 | Retry loop spins on a validation failure | Conflict errors must be **non-retryable** `ErrorKind::DataInvalid` (Java's non-retryable `ValidationException`) — check the error kind |
 | Fixture lacks the ref/snapshot your test needs | `make_v2_table()` has only `main`; build a forked fixture via `add_snapshot` + `set_ref`, and set the grafted snapshot's `timestamp_ms` against the metadata's `last-updated-ms` |
 | Parity divergence from Java found late | Verify against the Java *source* (`Preconditions.checkArgument`, early-return no-ops) before implementing — not intuition |
+| Schema/spec guard never fires for CTAS or catalog commits | Guards belong at the `TableMetadataBuilder` choke point (e.g. `add_schema`), NOT in an action's `commit()` — the action only EMITS updates; `apply` is where every path converges. Note the blast radius: only tests that APPLY updates hit it, not tests that merely inspect the emitted shape |
+| Action emits over-constrained commit requirements | Derive each `TableRequirement` from the update that induces it (Java `UpdateRequirements`): `AddSpec` ⇒ last-assigned-partition-id, `SetDefaultSpec` ⇒ default-spec-id — never emit guards unconditionally |
+| Surviving entries silently corrupted by a rewrite | The #1 corruption class: re-stamping a surviving/carried-forward entry's snapshot id or sequence numbers. `add_existing_entry` preserves provenance; `add_entry` RESTAMPS. Pin with a cross-snapshot provenance test (see docs/testing.md) |
 
 ### First checks
 
@@ -82,6 +85,12 @@ engine) parity work.
   create-then-remove / replace-to-same.
 - Run the **full** parallel lib suite (`cargo test -p iceberg --lib`), not just the new module's
   filter — added load surfaces latent races elsewhere.
+- Prove a metadata action end-to-end by driving its emitted updates through
+  `TableMetadataBuilder` (`update.apply(builder)`) — the unbound `apply()` shape skips spec dedup,
+  `LAST_ADDED` resolution, and bind-time name checks; only a full catalog commit exercises bind.
+- New conflict validation? It needs the no-override tx-captured-start test (docs/testing.md), a
+  non-retryable `DataInvalid` (+ `!retryable()` assertion), and a REAL concurrent commit through the
+  catalog between txn-build and txn-commit.
 
 ### Escalate to
 

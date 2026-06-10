@@ -67,6 +67,9 @@ tables projecting table metadata as Arrow `RecordBatch`es. The full Java table s
 | Count columns wrong in `manifests`/`all_manifests` | Counts must be **content-gated** (data counts only on data manifests, delete counts only on delete manifests) — a past real bug |
 | Inspection interop mismatch vs Java | Materialize expectations from a **re-parsed** base: Rust matches Java's on-disk round-trip (e.g. `operation` split out of the summary map), not Java's in-memory object |
 | Duplicate rows in `all_*` tables | Expected — Java javadoc says "may return duplicate rows"; manifests dedup by path, files do not |
+| `field_builder::<T>(i)` returns `None` / "child builder has unexpected type" at runtime | `StructBuilder::from_fields` builds Map/List children as BOXED builders (`MapBuilder<Box<dyn ArrayBuilder>, …>`); downcast the boxed inner builders. Compiles fine with the wrong typed builder — only fails on first append, so run the tests, don't trust a green build |
+| Scan panics "unmasked nulls for non-nullable StructArray field" | Java metadata-table `required` flags are NOMINAL (its `Object[]` rows emit nulls unchecked); Arrow ENFORCES them. If the Java producer can return null (boxed `Boolean`, `@Nullable`), the Arrow field must be nullable regardless of Java's schema flag |
+| Tie-break / per-snapshot test passes under inverted comparison | The fixture collapsed to one distinct commit time: `ManifestWriter::add_entry` RESTAMPS `snapshot_id` (and forces `Added`); write the older file with `add_existing_entry` to preserve the parent snapshot id |
 
 ### First checks
 

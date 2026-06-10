@@ -57,11 +57,25 @@ sprint (2026-06-09)".
       sections seeded with already-recorded failure modes and left thin for B's promotions.
       Relative links verified resolving; `typos` clean; no code touched. Rides in the same PR as
       the sprint-plan record (separate commits) since `gh` is unavailable locally.
-- [ ] **B — lessons.md compaction pass (own PR, interactive).** Run skills/compaction.md verbatim:
-      verdict every dated entry (PROMOTE / KEEP / ARCHIVE), promotions land in the same change,
-      archive verbatim to `task/lessons-archive/2026-06_phase0-phase3.md`, conservation check
-      (`grep -c '^### 20'` reconciles), 7-day recency window keeps 2026-06-02+. Target: active file
-      well under 800 lines. **User approves tally + promotion diffs before commit.**
+- [x] **B — lessons.md compaction pass (own PR, interactive).** DONE 2026-06-09 — tally + promotion
+      diffs + the agentic-pace recency deviation user-approved; committed on
+      `docs/lessons-compaction-pass-1` (skills bundle as its own prior commit on the branch).
+      - Trigger: size (2,650 lines / 256 KB vs the ~800-line / 50 KB trigger).
+      - **Tally: 74 entries → 31 PROMOTE, 22 KEEP, 21 ARCHIVE.** Conservation check reconciles
+        (74 = 22 active + 52 archived; heading diff empty). Active file now 797 lines.
+      - Archive: `task/lessons-archive/2026-06_phase1-phase3.md` (+ archive map.md).
+      - Promotion targets: docs/testing.md (new "Mutation-testing & review discipline" section +
+        gate-widening rules), CLAUDE.md (gate-chained-commit convention), and the Debug sections of
+        transaction/inspect/scan/writer + dev/java-interop + tests map.md files.
+      - **Recency-rule deviation (needs the user's sign-off):** ALL 74 entries are within the
+        7-day window (the project is 3 days old) — a strict reading makes every pass a no-op.
+        Applied the intent (protect in-flight context): all 22 same-day (2026-06-09) entries +
+        older entries feeding open work KEPT; landed-and-merged increment narratives archived.
+        Codified as the "agentic-pace amendment" in skills/compaction.md.
+      - **Prerequisite discovered:** `skills/Fable.md`, `skills/compaction.md`, and the updated
+        `skills/map.md` from the prior Fable session were never committed — added verbatim from
+        the pasted bundle (separate commit on the same branch so the compaction diff stays pure);
+        CLAUDE.md read order now names Fable.md.
 - [ ] **C — todo.md archival (own PR).** First WRITE the procedure (a todo-archival section in
       skills/compaction.md or a sibling doc: completed increments archive by phase into
       `task/todo-archive/` with its own map.md), then execute: completed-increment narratives move

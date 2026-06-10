@@ -65,6 +65,7 @@ writing).
 | Symptom | Likely cause |
 |---|---|
 | Java can't read a Rust-written delete file | Field-id mismatch — position-delete columns carry the reserved ids (2147483546/2147483545); equality deletes must carry the equality ids of the *projected* schema |
+| Wrong field ids tolerated by Rust but not Java (or vice versa) | The Rust pos-delete READER matches by column POSITION (col 0 = file_path, col 1 = pos — it never reads field ids); JAVA matches by field id. Both contracts must hold: build the schema from `delete_file_path_field()`/`delete_file_pos_field()` in canonical order |
 | Pruning broken on Rust-written files | Metrics/bounds written by `parquet_writer.rs` diverge from Java `Conversions.toByteBuffer` encoding — exact-byte fixture territory |
 | Rows land in the wrong partition file | Partition-value computation in the partitioning writer vs the spec's transforms — check transform application, not the writer plumbing |
 

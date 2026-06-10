@@ -47,9 +47,10 @@ capability's *status*, the **GAP_MATRIX** (re-audited against the live base) win
 1. **This file (CLAUDE.md)** — repository intent, prohibitions, and the navigation contract.
 2. **[Roadmap.md](Roadmap.md)** — the parity phase plan and the current phase; then
    **[docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRIX.md)** for per-capability status.
-3. **The operating manual for your model tier** — [skills/Opus.md](skills/Opus.md),
-   [skills/Sonnet.md](skills/Sonnet.md), or [skills/Haiku.md](skills/Haiku.md) (the portable
-   engineering contract; see [skills/map.md](skills/map.md)). CLAUDE.md wins on any conflict.
+3. **The operating manual for your model tier** — [skills/Fable.md](skills/Fable.md) (Mythos-class),
+   [skills/Opus.md](skills/Opus.md), [skills/Sonnet.md](skills/Sonnet.md), or
+   [skills/Haiku.md](skills/Haiku.md) (the portable engineering contract; see
+   [skills/map.md](skills/map.md)). CLAUDE.md wins on any conflict.
 4. **[task/lessons.md](task/lessons.md) in full, then [task/todo.md](task/todo.md)** — accumulated
    lessons and any mid-flight plan to pick up.
 5. **The `map.md` of every directory your task will touch** (where present — see the navigation
@@ -240,6 +241,10 @@ them to Sonnet or Haiku; only run an Opus sub-agent on a direct, explicit instru
 
 ## Working conventions
 
+- **Chain the verification gate to the commit in ONE `&&` chain** — `typos . && cargo fmt --all --
+  check && git add -A && git commit …` — never put `git commit` on a separate line from the gate: a
+  failed gate on its own line still lets the commit run. (Promoted 2026-06-09 from a twice-repeated
+  lessons entry.)
 - **Upstream is a sync baseline, not a constraint.** This is an owned fork for Java `iceberg-core`
   parity — edit freely; sync up from upstream and cherry-pick wins, but mergeability is not required.
 - **Tests ship with the change**, plus interop tests where applicable (see the Parity mandate and the
