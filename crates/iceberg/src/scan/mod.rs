@@ -1405,6 +1405,48 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn test_plan_files_carries_name_mapping_into_file_scan_task() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let mapping_json = r#"[{"field-id":1,"names":["id","record_id"]}]"#;
+        let mut metadata = fixture.table.metadata().clone();
+        metadata.properties.insert(
+            DEFAULT_SCHEMA_NAME_MAPPING.to_string(),
+            mapping_json.to_string(),
+        );
+        let table = Table::builder()
+            .metadata(metadata)
+            .identifier(fixture.table.identifier().clone())
+            .file_io(fixture.table.file_io().clone())
+            .metadata_location(fixture.table.metadata_location().unwrap().to_string())
+            .runtime(test_runtime())
+            .build()
+            .unwrap();
+
+        let tasks: Vec<_> = table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert!(!tasks.is_empty(), "expected at least one FileScanTask");
+        for task in &tasks {
+            let mapping = task
+                .name_mapping
+                .as_ref()
+                .expect("name_mapping should reach the FileScanTask");
+            assert_eq!(mapping.fields().len(), 1);
+            assert_eq!(mapping.fields()[0].field_id(), Some(1));
+        }
+    }
+
+    #[tokio::test]
     async fn test_plan_files_on_table_without_any_snapshots() {
         let table = TableTestFixture::new_empty().table;
         let batch_stream = table.scan().build().unwrap().to_arrow().await.unwrap();
