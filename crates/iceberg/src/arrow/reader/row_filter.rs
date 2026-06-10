@@ -160,8 +160,14 @@ impl ArrowReader {
 
     /// Filters row groups by byte range to support Iceberg's file splitting.
     ///
-    /// Iceberg splits large files at row group boundaries, so we only read row groups
-    /// whose byte ranges overlap with [start, start+length).
+    /// External engines (e.g. Spark via Comet) split a data file into multiple scan tasks,
+    /// each covering a byte range `[start, start+length)`. A row group must be read by exactly
+    /// one task, otherwise its rows are duplicated. We assign ownership by the row group's
+    /// midpoint: a task owns a row group only if its range contains that midpoint. Because the
+    /// tasks tile the file contiguously and disjointly, each midpoint falls in exactly one task.
+    /// This matches parquet-mr's `BlockMetaData` midpoint semantics. For a whole-file task
+    /// (`start=0, length=fileSize`, as iceberg-rust's own planner emits) every midpoint lies in
+    /// range, so all row groups are selected.
     pub(super) fn filter_row_groups_by_byte_range(
         parquet_metadata: &Arc<ParquetMetaData>,
         start: u64,
@@ -176,13 +182,15 @@ impl ArrowReader {
 
         for (idx, row_group) in row_groups.iter().enumerate() {
             let row_group_size = row_group.compressed_size() as u64;
-            let row_group_end = current_byte_offset + row_group_size;
+            let row_group_midpoint = current_byte_offset + row_group_size / 2;
 
-            if current_byte_offset < end && start < row_group_end {
+            // Half-open ownership: a midpoint on a task boundary belongs to the upper task,
+            // so exactly one task ever claims a given row group.
+            if start <= row_group_midpoint && row_group_midpoint < end {
                 selected.push(idx);
             }
 
-            current_byte_offset = row_group_end;
+            current_byte_offset += row_group_size;
         }
 
         Ok(selected)
@@ -602,6 +610,78 @@ mod tests {
             println!("Task 2 first value: {first_val}");
 
             assert_eq!(first_val, 100, "Task 2 should start with id=100, not id=0");
+        }
+    }
+
+    /// Reproduces row duplication when a single row group is subdivided into multiple
+    /// byte-range splits (e.g. Spark/Iceberg planning with a split-size smaller than the
+    /// row group size). Each row group must be owned by exactly one split. With the
+    /// previous overlap-based selection, every split whose byte range touched the row
+    /// group claimed it, so the row group was read multiple times and its rows duplicated.
+    #[tokio::test]
+    async fn test_sub_row_group_splits_assign_each_row_group_once() {
+        use std::sync::Arc as StdArc;
+
+        use arrow_array::Int32Array;
+        use parquet::file::metadata::ParquetMetaData;
+        use parquet::file::reader::{FileReader, SerializedFileReader};
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_path = format!("{table_location}/sub_split.parquet");
+
+        // Three row groups so we exercise both interior and boundary midpoints.
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .set_max_row_group_row_count(Some(100))
+            .build();
+        let file = File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
+        for chunk in [0..100, 100..200, 200..300] {
+            let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
+                Int32Array::from(chunk.collect::<Vec<i32>>()),
+            )])
+            .unwrap();
+            writer.write(&batch).expect("Writing batch");
+        }
+        writer.close().unwrap();
+
+        let file = File::open(&file_path).unwrap();
+        let reader = SerializedFileReader::new(file).unwrap();
+        let metadata: StdArc<ParquetMetaData> = StdArc::new(reader.metadata().clone());
+        let num_row_groups = metadata.num_row_groups();
+        assert_eq!(num_row_groups, 3, "Expected 3 row groups");
+
+        // Tile the whole file into 64-byte splits, mirroring Spark's split-size=64 planning.
+        let file_size = std::fs::metadata(&file_path).unwrap().len();
+        let split_size = 64u64;
+
+        // Count how many splits claim each row group. Every row group must be claimed exactly
+        // once; more than once is the duplication bug, zero means data is silently dropped.
+        let mut claims = vec![0usize; num_row_groups];
+        let mut start = 0u64;
+        while start < file_size {
+            let length = split_size.min(file_size - start);
+            let selected =
+                ArrowReader::filter_row_groups_by_byte_range(&metadata, start, length).unwrap();
+            for idx in selected {
+                claims[idx] += 1;
+            }
+            start += length;
+        }
+
+        for (idx, &count) in claims.iter().enumerate() {
+            assert_eq!(
+                count, 1,
+                "row group {idx} was claimed by {count} splits, expected exactly 1"
+            );
         }
     }
 }
