@@ -34,6 +34,95 @@ How to use it (see the manuals' §1):
 
 > **Archival log.** Last todo-archival pass: 2026-06-09 (size trigger — 4,344 lines) → [todo-archive/](todo-archive/) (phase1/phase2/phase3). Completed-increment narratives moved verbatim; this file keeps the active sprint + open items + archive pointers. Procedure: [skills/compaction.md](../skills/compaction.md) §Todo Archival. Archives are not read by default.
 
+## DONE (2026-06-10 overnight): OverwriteFiles validateNewDeletes branch A — Increment 2 of OVERNIGHT_BRIEF
+
+Added the MISSING row-filter sub-branch of Java `BaseOverwriteFiles.validate`'s `validateNewDeletes`
+(L168-172) — Rust previously had only branch B (`!deletedDataFiles.isEmpty()`). Builder→reviewer
+actor-critic; orchestrator independently re-ran the gate + committed.
+
+- [x] `snapshot.rs` — new `validate_deleted_data_files` (filter-based port of Java
+      `MergingSnapshotProducer.validateDeletedDataFiles` L636-654; reuses `deleted_data_files_after(.., false)`
+      + private `first_conflicting_file`; exact Java "Found conflicting deleted files that can contain records
+      matching {filter}: {path}").
+- [x] `overwrite_files.rs` — restructured the `validate_no_conflicting_deletes` block: branch A
+      (`row_filter != AlwaysFalse` ⇒ `filter = conflict_detection_filter ?? row_filter` ⇒
+      `validate_no_conflicting_added_delete_files` + `validate_deleted_data_files`) + branch B unchanged.
+- [x] 7 `MemoryCatalog` tests (2 positives, the no-override tx-captured-start pin, flag-off control, 2
+      row-filter-gate cases incl. the reviewer-added conflict-filter-only gap). Reviewer mutation-pinned each.
+
+**Outcome:** Cargo FROZEN (0 dep changes). Independent gate green — typos/fmt/workspace-clippy clean,
+`cargo test -p iceberg --lib` **1642 passed**, transaction:: 300 ×2. GAP_MATRIX `OverwriteFiles` row note
+updated (stays 🟡 — data-level interop deferred). **2a (`validateAddedFilesMatchOverwriteFilter`) was already
+done in PR #9; 2c (`RewriteFiles.validateNoNewDeletes`) is shadowed by the coarse `has_outstanding_delete_files`
+guard (both `validate` + `commit` run on the refreshed base) so it cannot fire/be tested while that guard
+stands — SKIPPED, see morning report.**
+
+## DONE (2026-06-10 overnight): readable_metrics inspection interop — Increment 3 of OVERNIGHT_BRIEF
+
+The LAST inspection-table surface without a Java interop round-trip. Extended the existing manifest-reading
+harness (A1/A2 pattern, run.sh-driven, Direction-1, env-gated) with a dedicated `table_rm`. Builder→reviewer
+actor-critic; orchestrator independently re-ran BOTH the offline gate AND the round-trip + committed.
+
+- [x] `dev/java-interop/.../InteropOracle.java` — new `InspectionReadableMetricsRmOracle`: unpartitioned V2
+      `{id long, name string, score double}` table at `<dir>/table_rm` with rich per-column metrics (distinct
+      column_sizes; null counts non-zero on name; nan counts non-zero only on the double; distinct typed
+      lower/upper bounds via `Conversions.toByteBuffer(<column type>, value)`); materializes Java's REAL
+      FilesTable readable_metrics struct → `java_rm_files.json` keyed by leaf-column NAME → 6 metric names.
+      A1/A2/A4 emitters untouched (byte-identical).
+- [x] `crates/iceberg/tests/interop_inspection_manifests.rs` — new env-gated test comparing Rust
+      `inspect().files()` readable_metrics to Java BY NAME (order-independent; counts distinguish absent/None
+      from 0; long+string+double typed bounds, double via `f64::to_bits`; leaf-column SET pinned).
+- [x] `run-inspection-manifests.sh` — header note; same single round-trip (table_rm generated alongside).
+
+**Outcome:** Cargo/pom FROZEN (no new deps). Independent gate green — offline interop suite **11 passed**
+(new test no-ops when `ICEBERG_INTEROP_MANIFEST_DIR` unset), `cargo test -p iceberg --lib` 1642 passed,
+clippy/fmt clean. **Round-trip re-run by orchestrator: 11 passed — readable_metrics matched Java field-for-field
+(3 leaf columns, counts + typed bounds).** Reviewer poison-fixture-pinned every axis (bound/count/drop-column/
+absent↔zero/string-bound/double-bits → matching assertion fails); no production bug. By-NAME comparison
+side-steps the documented interior field-id JVM-HashMap-order divergence. GAP_MATRIX inspection row updated;
+inspection interop now COMPLETE (set + columns + scan A4/A5). DEFERRED: promoted-type bound (needs schema
+evolution); byte-level interior field-id parity (the HashMap-order residual). Row stays 🟡.
+
+## NEXT (plan sketch, NOT built): `RewriteManifests` (Phase 2 write engine — the next Roadmap increment)
+
+Increment 4 of OVERNIGHT_BRIEF was STRETCH; SKETCHED not built — it is new machinery (correctness-critical
+manifest re-cluster with per-entry provenance preservation) that warrants its own focused builder→reviewer
+cycle, not a rushed end-of-session pass. Java `BaseRewriteManifests` (`/tmp/iceberg-java-ref/core/.../BaseRewriteManifests.java`,
+386 lines) extends `SnapshotProducer<RewriteManifests>` (NOT `MergingSnapshotProducer`) and produces an
+`Operation::Replace` snapshot whose LIVE FILE SET IS UNCHANGED — only manifest grouping changes.
+
+**Scope (one increment):**
+- New action `transaction/rewrite_manifests.rs` (mirror `sort_order.rs` action shape + wire `mod.rs` + a `pub fn`
+  ctor). Builder surface: `cluster_by(fn: DataFile -> key)` (Java `clusterBy`), `rewrite_if(pred: ManifestFile -> bool)`
+  (Java `rewriteIf`, default all), `add_manifest`/`delete_manifest` (Java `addManifest`/`deleteManifest` — the
+  explicit-replacement mode), `set(property,value)`.
+- `apply` (Java L170-195): partition the current snapshot's data manifests into KEPT (predicate false, or no
+  cluster fn) vs REWRITTEN (predicate true); `performRewrite` (Java L239-276) reads each rewritten manifest's
+  ENTRIES and re-groups them by `cluster_by_func(entry.file())` into new manifests sized to
+  `manifest.target-size-bytes`. **THE LOAD-BEARING INVARIANT: each re-written entry MUST keep its ORIGINAL
+  `snapshot_id` + `data_sequence_number` + `file_sequence_number` + status** (Java copies the entry verbatim via
+  the manifest writer's existing-entry path) — re-stamping is the silent-corruption class (resurrects/loses rows
+  on the next merge-on-read scan). The live set (paths) is identical before/after.
+- Validations: `validateDeletedManifests` (Java L284-302 — every `delete_manifest` must be a current manifest,
+  not concurrently gone) + `validateFilesCounts` (Java L304-322 — total entry count across new manifests ==
+  count across replaced manifests; the conservation guard).
+- Producer support: the existing `snapshot.rs` `SnapshotProducer` writes manifests from `added_data_files`
+  (fresh `Added` entries) — it does NOT currently re-emit EXISTING entries with preserved provenance for a
+  cluster. Likely needs a new producer path "write these pre-built `ManifestEntry`s verbatim into N new
+  manifests" (analogous to `rewrite_manifest_with_deletes` but clustering, not filtering). Scope this carefully;
+  it may be the bulk of the increment.
+
+**Tests (MemoryCatalog, no interop): the provenance pin is MANDATORY** (docs/testing.md write-action pin #2):
+after a rewrite, assert each entry's `snapshot_id`/`data_sequence_number`/`file_sequence_number` == its
+pre-rewrite value (mutation: re-stamp with the new snapshot id → the pin fails); the post-rewrite SCAN live set
+== pre-rewrite (paths unchanged); `validateFilesCounts` fires on a count mismatch; `clusterBy` actually groups
+(N input manifests → M output by key); `rewriteIf` keeps the predicate-false manifests untouched (byte-identical
+ManifestFile). Add the cumulative-totals + provenance mutation pins. Done-bar 🟡 (unit; data-level interop later).
+
+**Why deferred, not attempted:** the Rust `SnapshotProducer` is shaped around add/delete-file PATHS, not
+entry-level manifest re-clustering with preserved provenance; getting that producer path right is the increment's
+real risk and deserves a full actor-critic cycle rather than a tail-of-night rush. Pick this up first next session.
+
 ## Active: Operational hardening & Opus handoff — the meta-sprint (2026-06-09)
 
 **Decided 2026-06-09 (user-approved).** Context: frontier-tier (Fable) sessions are available only

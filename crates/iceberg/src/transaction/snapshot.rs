@@ -1731,6 +1731,69 @@ pub(crate) async fn validate_no_conflicting_added_delete_files(
     Ok(())
 }
 
+/// Reject the commit if any DATA file DELETED by a concurrent commit since `effective_start` COULD contain
+/// records matching `conflict_filter` — the filter-based serializable-isolation check that a concurrent
+/// commit did not remove data this operation's row filter also targets, mirroring Java
+/// `MergingSnapshotProducer.validateDeletedDataFiles` (the `Expression` variant).
+///
+/// This is the Rust port of Java `MergingSnapshotProducer.validateDeletedDataFiles`
+/// (`core/MergingSnapshotProducer.java` L636-654, the `dataFilter` overload): it enumerates the
+/// concurrently-DELETED DATA files via the shared [`deleted_data_files_after`] walk (with
+/// `skip_deletes = false` ⇒ the op set `{Overwrite, Delete}`, Java
+/// `VALIDATE_DATA_FILES_EXIST_OPERATIONS = {OVERWRITE, REPLACE, DELETE}` minus the unrepresentable Java
+/// `REPLACE` operation — Rust never records a `REPLACE` snapshot, so its absence is faithful, not a gap) and
+/// throws a non-retryable `ValidationException` ("Found conflicting deleted files that can contain records
+/// matching %s: %s") on the FIRST removed file whose metrics permit a match. The per-file "could this deleted
+/// file have contained records matching the filter?" test is the SAME [`first_conflicting_file`] (the
+/// existing [`InclusiveMetricsEvaluator`]) the added-file / added-delete checks use, so the three cannot
+/// drift on the load-bearing bind + per-file evaluation contract.
+///
+/// Arguments mirror [`validate_no_conflicting_added_delete_files`]. The only differences from the
+/// added-delete check are (1) the DELETED-data-file walk (concurrent removals, not concurrent additions) and
+/// (2) the deleted-files error message — the per-file conflict test is shared.
+///
+/// Arguments:
+/// - `current` — the REFRESHED base (Java `parent` metadata); the walk inspects the snapshots it gained.
+/// - `effective_start` — the starting snapshot id (exclusive). `None` ⇒ inspect from the root (Java's null
+///   `startingSnapshotId`).
+/// - `conflict_filter` — the row/conflict-detection predicate. `None` ⇒ bind `AlwaysTrue` and render the
+///   filter as `true` (any concurrently-deleted DATA file conflicts — the most conservative serializable
+///   check), mirroring the sibling [`validate_no_conflicting_added_delete_files`].
+/// - `case_sensitive` — column-resolution case sensitivity for binding the filter (Java `isCaseSensitive()`;
+///   the actions default this to `true`, the Iceberg/Java default).
+///
+/// Returns `Ok(())` when nothing concurrently-deleted can match (including an empty concurrent-removed set).
+/// On the first conflict it returns a NON-retryable [`ErrorKind::DataInvalid`] error naming the filter + the
+/// conflicting file path, so the commit retry loop stops and the error propagates (Java's non-retryable
+/// `ValidationException`).
+///
+/// **Conservative posture (documented):** the per-file [`InclusiveMetricsEvaluator`] over-approximates —
+/// it can only over-REJECT (treat a non-matching deletion as a conflict), never under-reject, so it is safe
+/// under serializable isolation. The unrepresentable Java `REPLACE` operation is omitted from the walk's op
+/// set (Rust records no `REPLACE` snapshot), which can only under-scan relative to Java — faithful because
+/// the Rust write path never produces a `REPLACE`, so there is nothing to scan.
+pub(crate) async fn validate_deleted_data_files(
+    current: &Table,
+    effective_start: Option<i64>,
+    conflict_filter: Option<&Predicate>,
+    case_sensitive: bool,
+) -> Result<()> {
+    let deleted = deleted_data_files_after(current, effective_start, false).await?;
+    if let Some(file) = first_conflicting_file(&deleted, current, conflict_filter, case_sensitive)?
+    {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Found conflicting deleted files that can contain records matching {}: {}",
+                conflict_filter.map_or_else(|| "true".to_string(), |filter| format!("{filter}")),
+                file.file_path()
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
 /// Return the first file in `files` that COULD contain records matching `conflict_filter` — the shared
 /// per-file conflict test behind both [`validate_no_conflicting_added_data_files`] and
 /// [`validate_no_conflicting_added_delete_files`].

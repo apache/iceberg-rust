@@ -152,6 +152,13 @@ public final class InteropOracle {
         // and whether each task's residual is fully covered by partitioning — via Java's REAL
         // table.newScan().filter(expr).planFiles(). Driven from here so a single run produces A1/A2/A3/A4.
         InspectionScanA4Oracle.generate(inspectionManifestsDir);
+        // READABLE_METRICS interop reuses the SAME exec mode + temp dir: it writes a FOURTH, dedicated
+        // table to <dir>/table_rm (the A1/A2/A4 tables are untouched) and emits java_rm_files.json — the
+        // `files` table rows INCLUDING the trailing virtual `readable_metrics` STRUCT (one per-leaf-column
+        // struct of the six human-readable metrics), keyed by leaf column NAME then metric NAME. This is
+        // the typed-decode of the same metric/bound maps A1 already round-trips; A1-A4 DEFER this column.
+        // Driven from here so a single run-inspection-manifests.sh invocation produces A1/A2/A3/A4 AND RM.
+        InspectionReadableMetricsRmOracle.generate(inspectionManifestsDir);
         break;
       case "generate-interop-scan-exec":
         // The FIRST DATA-LEVEL scan-execution interop increment. Unlike every mode above (which reads
@@ -2687,6 +2694,253 @@ public final class InteropOracle {
             gen.writeEndArray();
           },
           true);
+    }
+  }
+
+  // ===========================================================================================
+  // Inspection-READABLE_METRICS oracle — the interop proof for the `files` table's trailing virtual
+  // `readable_metrics` STRUCT, the LAST inspection-table surface A1-A4 explicitly DEFER. It builds DIRECTLY
+  // on A1's harness (it reuses A1/A2/A4's LocalTableOperations + LocalFileIO + writeJson + real newAppend
+  // commits) and writes a FOURTH, dedicated table under <dir>/table_rm (A1's <dir>/table + A2's
+  // <dir>/table_a2 + A4's <dir>/table_a4 are UNTOUCHED).
+  //
+  // `readable_metrics` (Java MetricsUtil.READABLE_METRICS / readableMetricsStruct, MetricsUtil.java:140-193
+  // for READABLE_METRIC_COLS, :356-393 for readableMetricsSchema) is a STRUCT with ONE sub-field per LEAF
+  // (primitive-typed) column of the data table, each itself a struct of the six metrics
+  // {column_size, value_count, null_value_count, nan_value_count, lower_bound, upper_bound}. The four counts
+  // are read from the file's metric maps BY FIELD ID; the lower/upper bounds are the file's stored bound
+  // bytes DECODED to the column's OWN type via Conversions.fromByteBuffer(field.type(), buffer)
+  // (MetricsUtil.java:174-192) — Long for a long column, CharSequence/String for a string column, Double for
+  // a double column. This oracle proves that typed decode across THREE type classes, the case the raw-map A1
+  // test (which compares only the bound BYTES) cannot reach (notably the STRING bound).
+  //
+  // SCHEMA (unpartitioned V2): {1 id LONG, 2 name STRING, 3 score DOUBLE} — three leaf primitives of three
+  // type classes. ONE data file carrying RICH, DISTINCT per-column metrics (distinct column_sizes; a
+  // null_value_count non-zero for `name`; a nan_value_count non-zero for the DOUBLE `score` — Java allows NaN
+  // counts only on floating types; distinct long/string/double lower & upper bounds).
+  //
+  // EMIT (java_rm_files.json): a JSON OBJECT keyed by LEAF COLUMN NAME -> an object of the six metric NAMES
+  // -> the typed scalar value (long/string/double). The Rust test compares BY NAME, not by field id — Java's
+  // readable_metrics sub-field ids come from a HashMap-order counter while the Rust port assigns ascending
+  // ids (a documented divergence; see readable_metrics.rs module docs). The sub-field NAMES match, so
+  // everything is keyed by name. A1/A2/A4 emitters are UNCHANGED, so their JSON stays byte-identical.
+  // ===========================================================================================
+
+  /**
+   * The readable-metrics half of the oracle. Builds an UNPARTITIONED V2 table on local disk under
+   * {@code <dir>/table_rm} via one real {@code newAppend} commit (so a real AVRO data manifest + a
+   * manifest-list land under {@code <dir>/table_rm/metadata}), writes the final metadata to a deterministic
+   * {@code <dir>/table_rm/metadata/final.metadata.json}, and emits the rows of Java's REAL {@link FilesTable}
+   * INCLUDING the {@code readable_metrics} struct as {@code java_rm_files.json}, keyed by leaf column name
+   * then metric name.
+   */
+  static final class InspectionReadableMetricsRmOracle {
+    private InspectionReadableMetricsRmOracle() {}
+
+    static void generate(Path dir) throws IOException {
+      Files.createDirectories(dir);
+
+      // 1. Build an UNPARTITIONED V2 table on local disk under <dir>/table_rm. Bare absolute location so the
+      //    manifest/manifest-list paths the commit writes are bare absolute paths the Rust FileIO resolves
+      //    directly (same convention as A1/A2/A4).
+      File tableDir = dir.resolve("table_rm").toFile();
+      File metadataDir = new File(tableDir, "metadata");
+      if (!metadataDir.isDirectory() && !metadataDir.mkdirs()) {
+        throw new IOException("failed to create metadata dir at " + metadataDir);
+      }
+
+      Schema schema =
+          new Schema(
+              Types.NestedField.required(1, "id", Types.LongType.get()),
+              Types.NestedField.optional(2, "name", Types.StringType.get()),
+              Types.NestedField.optional(3, "score", Types.DoubleType.get()));
+      PartitionSpec spec = PartitionSpec.unpartitioned();
+
+      Map<String, String> props = new LinkedHashMap<>();
+      props.put(TableProperties.FORMAT_VERSION, "2");
+      TableMetadata seed =
+          TableMetadata.newTableMetadata(
+              schema, spec, SortOrder.unsorted(), tableDir.getAbsolutePath(), props);
+
+      LocalTableOperations ops = new LocalTableOperations(tableDir, metadataDir);
+      ops.commit(null, seed); // persist v0 metadata so the BaseTable has a current metadata to evolve.
+      BaseTable table = new BaseTable(ops, "interop_inspection_readable_metrics");
+
+      // 2. ONE DATA file carrying RICH, DISTINCT per-column metrics. The referenced .parquet path is pure
+      //    metadata — it need not exist; the files table reads only the manifest entry. The metrics are
+      //    chosen so EVERY one of the six readable-metric sub-fields has a distinct, unambiguous value per
+      //    leaf column (so a cross-wiring of any metric source to the wrong sub-field is observable).
+      DataFile dataFile =
+          DataFiles.builder(spec)
+              .withPath(tableDir.getAbsolutePath() + "/data/00000-rm.parquet")
+              .withFileSizeInBytes(1234L)
+              .withRecordCount(7L)
+              .withMetrics(richMetrics())
+              .build();
+
+      // 3. One real commit: the data file via newAppend (writes a DATA manifest + manifest-list).
+      table.newAppend().appendFile(dataFile).commit();
+
+      // 4. Write the FINAL metadata to a KNOWN path so the Rust test loads it deterministically.
+      Path finalMetadata = metadataDir.toPath().resolve("final.metadata.json");
+      OutputFile finalOut =
+          new LocalFileIO().newOutputFile(finalMetadata.toAbsolutePath().toString());
+      TableMetadataParser.write(ops.current(), finalOut);
+
+      // 5. Materialize + emit Java's REAL FilesTable rows INCLUDING the readable_metrics struct.
+      writeJson(dir.resolve("java_rm_files.json"), readableMetricsToJson(table));
+      System.out.println("generated inspection readable_metrics table + java_rm_files.json to " + dir);
+    }
+
+    /**
+     * Build a pure-metadata {@link Metrics} for the schema {1 id long, 2 name string, 3 score double} with
+     * RICH, DISTINCT values across all six readable-metric sub-fields:
+     *
+     * <ul>
+     *   <li>column_sizes: DISTINCT per column (id=101, name=202, score=303).
+     *   <li>value_counts: the record count (7) for all three columns.
+     *   <li>null_value_counts: NON-ZERO for at least one column — name=2 (id=0, score=1).
+     *   <li>nan_value_counts: NON-ZERO for the DOUBLE column score=3; absent for id/name (Java allows NaN
+     *       counts only on floating types).
+     *   <li>lower_bounds / upper_bounds: DISTINCT per column, each encoded with
+     *       {@code Conversions.toByteBuffer(<the column's type>, value)} — long bounds for id (10/90),
+     *       STRING bounds for name ("alpha"/"zulu", the case the raw-map A1 test cannot reach), double bounds
+     *       for score (1.5/99.5).
+     * </ul>
+     */
+    private static Metrics richMetrics() {
+      Map<Integer, Long> columnSizes = new LinkedHashMap<>();
+      columnSizes.put(1, 101L);
+      columnSizes.put(2, 202L);
+      columnSizes.put(3, 303L);
+      Map<Integer, Long> valueCounts = new LinkedHashMap<>();
+      valueCounts.put(1, 7L);
+      valueCounts.put(2, 7L);
+      valueCounts.put(3, 7L);
+      Map<Integer, Long> nullValueCounts = new LinkedHashMap<>();
+      nullValueCounts.put(1, 0L);
+      nullValueCounts.put(2, 2L); // name has NON-ZERO nulls.
+      nullValueCounts.put(3, 1L);
+      Map<Integer, Long> nanValueCounts = new LinkedHashMap<>();
+      nanValueCounts.put(3, 3L); // only the DOUBLE column carries a NaN count.
+      Map<Integer, ByteBuffer> lowerBounds = new LinkedHashMap<>();
+      lowerBounds.put(1, Conversions.toByteBuffer(Types.LongType.get(), 10L));
+      lowerBounds.put(2, Conversions.toByteBuffer(Types.StringType.get(), "alpha"));
+      lowerBounds.put(3, Conversions.toByteBuffer(Types.DoubleType.get(), 1.5d));
+      Map<Integer, ByteBuffer> upperBounds = new LinkedHashMap<>();
+      upperBounds.put(1, Conversions.toByteBuffer(Types.LongType.get(), 90L));
+      upperBounds.put(2, Conversions.toByteBuffer(Types.StringType.get(), "zulu"));
+      upperBounds.put(3, Conversions.toByteBuffer(Types.DoubleType.get(), 99.5d));
+      return new Metrics(
+          7L, columnSizes, valueCounts, nullValueCounts, nanValueCounts, lowerBounds, upperBounds);
+    }
+
+    /**
+     * Materialize the rows of Java's REAL {@link FilesTable} (via {@link
+     * MetadataTableUtils#createMetadataTableInstance} + {@code task.asDataTask().rows()}, reading the ON-DISK
+     * AVRO manifest) and serialize ONLY the {@code readable_metrics} struct of the single data-file row,
+     * keyed by leaf column NAME then metric NAME.
+     *
+     * <p>The {@code readable_metrics} column is located by NAME in {@code mt.schema().columns()} (never by a
+     * hardcoded position); its Iceberg {@link Types.StructType} provides the per-leaf-column sub-fields (the
+     * column struct names, sorted by name) and each column's six metric sub-fields, and the row value at that
+     * position is the {@code ReadableMetricsStruct} ({@link StructLike}) whose positional values align with
+     * the struct type. The bound metrics are ALREADY decoded Java objects (Long/CharSequence/Double), so
+     * {@code writeMetricScalar} writes each as its natural JSON scalar. The single data file is asserted, so
+     * exactly one row is expected.
+     */
+    private static String readableMetricsToJson(BaseTable baseTable) {
+      Table mt = MetadataTableUtils.createMetadataTableInstance(baseTable, MetadataTableType.FILES);
+      List<Types.NestedField> columns = mt.schema().columns();
+      int metricsPosition = -1;
+      Types.StructType metricsType = null;
+      for (int i = 0; i < columns.size(); i++) {
+        if (MetricsUtil.READABLE_METRICS.equals(columns.get(i).name())) {
+          metricsPosition = i;
+          metricsType = columns.get(i).type().asStructType();
+          break;
+        }
+      }
+      if (metricsPosition < 0 || metricsType == null) {
+        throw new IllegalStateException("FilesTable schema is missing the readable_metrics column");
+      }
+      final int position = metricsPosition;
+      final Types.StructType readableMetricsType = metricsType;
+
+      return JsonUtil.generate(
+          gen -> {
+            int rowCount = 0;
+            try (CloseableIterable<FileScanTask> tasks = mt.newScan().planFiles()) {
+              for (FileScanTask task : tasks) {
+                try (CloseableIterable<StructLike> taskRows = task.asDataTask().rows()) {
+                  for (StructLike row : taskRows) {
+                    if (rowCount > 0) {
+                      throw new IllegalStateException(
+                          "table_rm must have exactly one data file, found more rows");
+                    }
+                    rowCount++;
+                    StructLike readableMetrics = row.get(position, StructLike.class);
+                    writeReadableMetrics(gen, readableMetricsType, readableMetrics);
+                  }
+                }
+              }
+            }
+            if (rowCount != 1) {
+              throw new IllegalStateException(
+                  "table_rm must have exactly one data file, found " + rowCount + " rows");
+            }
+          },
+          true);
+    }
+
+    /**
+     * Serialize the {@code readable_metrics} struct as a JSON object keyed by leaf column NAME -> an object of
+     * the six metric NAMES -> the typed scalar value. Walks the struct type's per-column sub-fields (each a
+     * StructType of the six metrics) positionally against the {@link StructLike} so the metric names come from
+     * the schema, never hardcoded order.
+     */
+    private static void writeReadableMetrics(
+        JsonGenerator gen, Types.StructType readableMetricsType, StructLike readableMetrics)
+        throws IOException {
+      gen.writeStartObject();
+      List<Types.NestedField> columnStructs = readableMetricsType.fields();
+      for (int columnIndex = 0; columnIndex < columnStructs.size(); columnIndex++) {
+        Types.NestedField columnStruct = columnStructs.get(columnIndex);
+        gen.writeObjectFieldStart(columnStruct.name());
+        StructLike columnMetrics = readableMetrics.get(columnIndex, StructLike.class);
+        List<Types.NestedField> metricFields = columnStruct.type().asStructType().fields();
+        for (int metricIndex = 0; metricIndex < metricFields.size(); metricIndex++) {
+          Types.NestedField metricField = metricFields.get(metricIndex);
+          Object value = columnMetrics.get(metricIndex, Object.class);
+          writeMetricScalar(gen, metricField.name(), value);
+        }
+        gen.writeEndObject();
+      }
+      gen.writeEndObject();
+    }
+
+    /**
+     * Write one readable-metric value as its natural JSON scalar. The four counts are {@link Long}; the
+     * bounds are the DECODED column value — {@link Long} for a long column, {@link CharSequence}/{@link
+     * String} for a string column, {@link Double} for a double column. A null metric (absent in the file's
+     * map) is written as JSON null.
+     */
+    private static void writeMetricScalar(JsonGenerator gen, String name, Object value)
+        throws IOException {
+      if (value == null) {
+        gen.writeNullField(name);
+      } else if (value instanceof Long) {
+        gen.writeNumberField(name, (Long) value);
+      } else if (value instanceof Integer) {
+        gen.writeNumberField(name, (Integer) value);
+      } else if (value instanceof Double) {
+        gen.writeNumberField(name, (Double) value);
+      } else if (value instanceof Float) {
+        gen.writeNumberField(name, (Float) value);
+      } else {
+        // String bounds decode to CharSequence; toString() yields the underlying string.
+        gen.writeStringField(name, value.toString());
+      }
     }
   }
 

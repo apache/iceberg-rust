@@ -45,14 +45,28 @@
 //! (this not enabled) = snapshot isolation, behavior unchanged.
 //!
 //! **Concurrent-commit conflicting-DELETE validation (`validateNoConflictingDeletes`, OPT-IN):** when
-//! enabled via [`OverwriteFilesAction::validate_no_conflicting_deletes`] AND this overwrite REMOVES data
-//! files supplied with full metadata via [`OverwriteFilesAction::delete_data_files`], the commit is rejected
-//! if a concurrent commit since the starting snapshot added a DELETE file (position / equality delete) that
-//! APPLIES to one of those removed data files — you cannot drop a data file out from under a concurrent
-//! row-level delete (Java `BaseOverwriteFiles.validate` → the `!deletedDataFiles.isEmpty()` branch →
-//! `MergingSnapshotProducer.validateNoNewDeletesForDataFiles`). It delegates to the shared
-//! [`validate_no_new_deletes_for_data_files`] helper. INDEPENDENT of `validateNoConflictingData` — enabling
-//! one does not enable the other. A no-op on a V1 table.
+//! enabled via [`OverwriteFilesAction::validate_no_conflicting_deletes`], the commit is rejected on a
+//! concurrent delete conflict, mirroring Java `BaseOverwriteFiles.validate`'s full `validateNewDeletes`
+//! block (L167-178) — its TWO sub-branches both live under this one flag:
+//! - **Branch A (Java L168-172, row-filter keyed):** when the [`OverwriteFilesAction::overwrite_by_row_filter`]
+//!   row filter is set (`rowFilter() != alwaysFalse()`), the commit is rejected if a concurrent commit since
+//!   the starting snapshot either ADDED a delete file that can apply to records matching the filter (Java
+//!   `validateNoNewDeleteFiles` → shared [`validate_no_conflicting_added_delete_files`]) or DELETED a data
+//!   file that can contain such records (Java `validateDeletedDataFiles` → shared
+//!   [`validate_deleted_data_files`]). The filter is the explicit
+//!   [`OverwriteFilesAction::conflict_detection_filter`] when set, else the row filter. This is the
+//!   serializable guard that a concurrent merge-on-read delete does not silently invalidate an
+//!   overwrite-by-row-filter.
+//! - **Branch B (Java L174-177, removed-data-file keyed):** when this overwrite REMOVES data files supplied
+//!   with full metadata via [`OverwriteFilesAction::delete_data_files`], the commit is rejected if a
+//!   concurrent commit since the starting snapshot added a DELETE file (position / equality delete) that
+//!   APPLIES to one of those removed data files — you cannot drop a data file out from under a concurrent
+//!   row-level delete (Java's `!deletedDataFiles.isEmpty()` branch →
+//!   `MergingSnapshotProducer.validateNoNewDeletesForDataFiles`). It delegates to the shared
+//!   [`validate_no_new_deletes_for_data_files`] helper.
+//!
+//! INDEPENDENT of `validateNoConflictingData` — enabling one does not enable the other. The delete-file
+//! sub-checks are a no-op on a V1 table (delete files do not exist before format version 2).
 //!
 //! **Delete-by-row-filter mode (`overwriteByRowFilter(Expression)`):** [`OverwriteFilesAction::overwrite_by_row_filter`]
 //! stores a row predicate (Java `BaseOverwriteFiles.overwriteByRowFilter` → `deleteByRowFilter`). At apply
@@ -72,14 +86,11 @@
 //! non-retryable `DataInvalid` ("Cannot append file with rows that do not match filter ..."). Only meaningful
 //! WITH `overwrite_by_row_filter` (the filter is `alwaysFalse` when unset).
 //!
-//! **Out of scope (deferred):**
-//! - The `rowFilter()` branch of `validateNewDeletes` (Java `BaseOverwriteFiles.validate` L168-172:
-//!   `validateNoNewDeleteFiles` / `validateDeletedDataFiles`) — the merge-on-read conflicting-delete checks
-//!   keyed on the row filter.
-//!
-//! This increment is the explicit add + delete core, the delete-by-row-filter mode and its added-file
-//! validation, the filter-based `validateNoConflictingData` (with the row-filter conflict-filter default),
-//! and the `validateNoConflictingDeletes` check on the explicitly-removed (`delete_data_files`) data files.
+//! This action now ports the full `BaseOverwriteFiles.validate`: the explicit add + delete core, the
+//! delete-by-row-filter mode and its added-file validation, the filter-based `validateNoConflictingData`
+//! (with the row-filter conflict-filter default), and the complete `validateNoConflictingDeletes` block —
+//! BOTH the row-filter-keyed sub-branch (Java L168-172) and the explicitly-removed-data-file sub-branch
+//! (Java L174-177).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -97,7 +108,8 @@ use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation, Schema};
 use crate::table::Table;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
-    validate_no_conflicting_added_data_files, validate_no_new_deletes_for_data_files,
+    validate_deleted_data_files, validate_no_conflicting_added_data_files,
+    validate_no_conflicting_added_delete_files, validate_no_new_deletes_for_data_files,
 };
 use crate::transaction::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind};
@@ -507,18 +519,25 @@ impl TransactionAction for OverwriteFilesAction {
     ///    `rowFilter` when it is set (`!= alwaysFalse`) AND there are no explicitly-removed data files; else
     ///    `AlwaysTrue`. Delegates to the SHARED [`validate_no_conflicting_added_data_files`] helper (also used
     ///    by `RowDelta`).
-    /// 3. **`validateNoConflictingDeletes`** (Java L174-177 → `validateNoNewDeletesForDataFiles`, when
-    ///    [`Self::validate_no_conflicting_deletes`] is enabled AND this overwrite removes data files supplied
-    ///    with full metadata via [`Self::delete_data_files`]): enumerate the DELETE files added by concurrent
-    ///    commits since the start and reject if ANY APPLIES to one of those removed data files (you cannot drop
-    ///    a data file out from under a concurrent row-level delete). Delegates to
-    ///    [`validate_no_new_deletes_for_data_files`] with `ignore_equality_deletes = false` (Java passes the
-    ///    full `deletedDataFiles` and does not ignore equality deletes here). Only the
-    ///    [`Self::delete_data_files`] entries (Java's `deletedDataFiles`) are checked — path-only
-    ///    [`Self::delete_file`] / [`Self::delete_files`] removals are not. A no-op on a V1 table.
-    ///
-    /// Out of scope (Java `BaseOverwriteFiles.validate` blocks not ported here): the `validateNewDeletes`
-    /// row-filter sub-branch (Java L168-172: `validateNoNewDeleteFiles` / `validateDeletedDataFiles`).
+    /// 3. **`validateNoConflictingDeletes`** (Java `validateNewDeletes`, L167-178, when
+    ///    [`Self::validate_no_conflicting_deletes`] is enabled) — the two delete-conflict sub-branches, both
+    ///    under one guard, mirroring Java's structure:
+    ///    - **Branch A** (Java L168-172, when the [`Self::overwrite_by_row_filter`] row filter is set, i.e.
+    ///      `rowFilter() != alwaysFalse()`): reject if a concurrent commit since the start either ADDED a
+    ///      delete file that can apply to records matching the filter (`validateNoNewDeleteFiles` → shared
+    ///      [`validate_no_conflicting_added_delete_files`]) or DELETED a data file that can contain such
+    ///      records (`validateDeletedDataFiles` → shared [`validate_deleted_data_files`]). The filter is the
+    ///      explicit [`Self::conflict_detection_filter`] when set, else the row filter (Java's local
+    ///      `filter`). This is the merge-on-read serializable guard for an overwrite-by-row-filter against a
+    ///      concurrent delete it would otherwise silently invalidate.
+    ///    - **Branch B** (Java L174-177 → `validateNoNewDeletesForDataFiles`, when this overwrite removes data
+    ///      files supplied with full metadata via [`Self::delete_data_files`]): enumerate the DELETE files
+    ///      added by concurrent commits since the start and reject if ANY APPLIES to one of those removed data
+    ///      files (you cannot drop a data file out from under a concurrent row-level delete). Delegates to
+    ///      [`validate_no_new_deletes_for_data_files`] with `ignore_equality_deletes = false` (Java passes the
+    ///      full `deletedDataFiles` and does not ignore equality deletes here). Only the
+    ///      [`Self::delete_data_files`] entries (Java's `deletedDataFiles`) are checked — path-only
+    ///      [`Self::delete_file`] / [`Self::delete_files`] removals are not. A no-op on a V1 table.
     ///
     /// **Case sensitivity:** Java binds the conflict filter with `isCaseSensitive()`. This action has no such
     /// field, so the filter is bound case-sensitive (`true`) — the Iceberg/Java default for column resolution.
@@ -553,19 +572,46 @@ impl TransactionAction for OverwriteFilesAction {
             .await?;
         }
 
-        // 3. Concurrent-added DELETE applying to a REMOVED data file (Java `validateNoConflictingDeletes` →
-        //    the `!deletedDataFiles.isEmpty()` branch of `validateNewDeletes`). Only the
-        //    `delete_data_files` (full-metadata) removals are validated — matching Java's `deletedDataFiles`.
-        //    `ignore_equality_deletes = false` (Java passes the full set with equality deletes counted).
-        if self.validate_no_conflicting_deletes && !self.deleted_data_files.is_empty() {
-            validate_no_new_deletes_for_data_files(
-                current,
-                effective_start,
-                self.conflict_detection_filter.as_ref(),
-                &self.deleted_data_files,
-                false,
-            )
-            .await?;
+        // 3. validateNoConflictingDeletes (Java `validateNewDeletes`, L167-178) — the two delete-conflict
+        //    sub-branches under one guard, mirroring Java's structure exactly.
+        if self.validate_no_conflicting_deletes {
+            // 3a. Branch A (Java L168-172): when the delete-by-row-filter is set (`rowFilter() !=
+            //     alwaysFalse()`), reject if a concurrent commit either ADDED a delete file that can apply to
+            //     records matching the filter (`validateNoNewDeleteFiles`) or DELETED a data file that can
+            //     contain such records (`validateDeletedDataFiles`). Java's local `filter` is the explicit
+            //     `conflictDetectionFilter` when set, else the row filter. These are the merge-on-read
+            //     conflicting-delete checks keyed on the row filter — the serializable-isolation guard for an
+            //     overwrite-by-row-filter against a concurrent delete the overwrite would otherwise silently
+            //     invalidate.
+            let row_filter = self.row_filter();
+            if row_filter != Predicate::AlwaysFalse {
+                let filter = self.conflict_detection_filter.clone().unwrap_or(row_filter);
+                validate_no_conflicting_added_delete_files(
+                    current,
+                    effective_start,
+                    Some(&filter),
+                    true,
+                )
+                .await?;
+                validate_deleted_data_files(current, effective_start, Some(&filter), true).await?;
+            }
+
+            // 3b. Branch B (Java L174-177): when this overwrite removes data files supplied with full metadata
+            //     via [`Self::delete_data_files`], reject if a concurrent commit ADDED a DELETE file that
+            //     APPLIES to one of those removed data files (you cannot drop a data file out from under a
+            //     concurrent row-level delete). Only the `delete_data_files` (full-metadata) removals are
+            //     validated — matching Java's `deletedDataFiles`. `ignore_equality_deletes = false` (Java
+            //     passes the full set with equality deletes counted). UNCHANGED from the prior increment.
+            if !self.deleted_data_files.is_empty() {
+                validate_no_new_deletes_for_data_files(
+                    current,
+                    effective_start,
+                    self.conflict_detection_filter.as_ref(),
+                    &self.deleted_data_files,
+                    false,
+                )
+                .await?;
+            }
         }
 
         Ok(())
@@ -2498,5 +2544,408 @@ mod tests {
             "the explicit conflict filter (y >= 100) excludes the [60,70] add ⇒ commit (explicit wins)",
         );
         assert!(live_file_paths(&table).await.contains("test/added.parquet"));
+    }
+
+    // ============================================================================================
+    // validateNewDeletes — BRANCH A (the row-filter-keyed delete-conflict checks). Java
+    // `BaseOverwriteFiles.validate` L168-172: `if rowFilter() != alwaysFalse()` ⇒
+    //   filter = conflictDetectionFilter != null ? conflictDetectionFilter : rowFilter()
+    //   validateNoNewDeleteFiles(base, start, filter, parent)   // a concurrent ADDED delete file
+    //   validateDeletedDataFiles(base, start, filter, parent)   // a concurrent DELETED data file
+    // These guard an overwrite-by-row-filter against a concurrent merge-on-read delete that the
+    // overwrite would otherwise silently invalidate. Both run under `validate_no_conflicting_deletes()`,
+    // and BOTH require the row filter to be set (`overwrite_by_row_filter`) — branch A is gated on
+    // `rowFilter() != alwaysFalse()`.
+    //
+    // The race these tests simulate: an `overwrite_files().overwrite_by_row_filter(P)` is BUILT against
+    // head S0; before it commits a concurrent commit lands (S1) that EITHER adds a delete file matching P
+    // OR removes a data file whose metrics match P. On re-base the overwrite's `validate` runs against S1
+    // and must REJECT (non-retryable).
+    // ============================================================================================
+
+    /// A synthetic POSITION-delete file routed to partition `x = part_value` (spec id 0) whose column `y`
+    /// (field id 2) carries `[y_lower, y_upper]` value bounds — so the [`InclusiveMetricsEvaluator`] inside
+    /// `validateNoNewDeleteFiles` can include/exclude it against a row filter on `y`. A real position-delete
+    /// file does not normally carry data-column bounds; these are synthetic to drive the metrics test.
+    fn position_delete_file_with_y_bounds(
+        path: &str,
+        part_value: i64,
+        y_lower: i64,
+        y_upper: i64,
+    ) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::PositionDeletes)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(0)
+            .partition(Struct::from_iter([Some(Literal::long(part_value))]))
+            .lower_bounds(HashMap::from([(2, Datum::long(y_lower))]))
+            .upper_bounds(HashMap::from([(2, Datum::long(y_upper))]))
+            .build()
+            .unwrap()
+    }
+
+    /// BRANCH A — `validateNoNewDeleteFiles` POSITIVE (Java L170). `overwrite_by_row_filter(y >= 50)` with
+    /// `.validate_no_conflicting_deletes()`. A concurrent `row_delta` ADDS a DELETE file whose `y` bounds
+    /// `[60,70]` match the row filter `y >= 50`. The overwrite commit must be REJECTED with a NON-retryable
+    /// `DataInvalid` carrying Java's "Found new conflicting delete files that can apply to records matching"
+    /// message naming the conflicting delete file.
+    ///
+    /// Risk pinned: WITHOUT branch A, a concurrent merge-on-read delete that targets the same rows this
+    /// overwrite-by-row-filter rewrites is silently invalidated — a lost delete under serializable isolation.
+    /// (Failure mode caught: branch A missing, or gated wrongly, or the added-delete walk not run.)
+    #[tokio::test]
+    async fn test_overwrite_row_filter_rejects_concurrent_added_delete_file_matching_filter() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        // Seed `a` lies OUTSIDE the row filter (y bounds [0,10] < 50) so the row filter keeps it — the
+        // conflict is entirely about the CONCURRENT delete file, not the base.
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![data_file_with_y_bounds(
+            "test/a.parquet",
+            0,
+            0,
+            10,
+        )])
+        .await;
+
+        // Build the overwrite: row filter y >= 50, deletes validation on, pinned to S0.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite_files()
+            .overwrite_by_row_filter(Reference::new("y").greater_than_or_equal_to(Datum::long(50)))
+            .add_file(data_file_with_y_bounds("test/b.parquet", 0, 80, 90))
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_deletes();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): ADD a position-delete file whose y bounds [60,70] match `y >= 50`.
+        let _concurrent = add_deletes(&catalog, &table, vec![position_delete_file_with_y_bounds(
+            "test/concurrent-del.parquet",
+            0,
+            60,
+            70,
+        )])
+        .await;
+
+        let err = tx.commit(&catalog).await.expect_err(
+            "overwrite must fail: a concurrent ADDED delete file matches the row filter (branch A)",
+        );
+        assert_eq!(
+            err.kind(),
+            ErrorKind::DataInvalid,
+            "a conflict is a non-retryable validation failure (DataInvalid)"
+        );
+        assert!(
+            !err.retryable(),
+            "the validation failure must be NON-retryable so the retry loop stops"
+        );
+        assert!(
+            err.message()
+                .contains("Found new conflicting delete files that can apply to records matching"),
+            "must match Java validateNoNewDeleteFiles message, got: {}",
+            err.message()
+        );
+        assert!(
+            err.message().contains("test/concurrent-del.parquet"),
+            "the error must name the conflicting delete file, got: {}",
+            err.message()
+        );
+
+        // The overwrite did NOT commit over the concurrent delete.
+        let reloaded = catalog.load_table(table.identifier()).await.unwrap();
+        assert!(
+            !live_file_paths(&reloaded).await.contains("test/b.parquet"),
+            "the rejected overwrite's added file must NOT be in the table"
+        );
+    }
+
+    /// BRANCH A — `validateDeletedDataFiles` POSITIVE (Java L171). `overwrite_by_row_filter(y >= 50)` with
+    /// `.validate_no_conflicting_deletes()`. A concurrent `overwrite_files().delete_file` REMOVES a data file
+    /// whose `y` bounds `[60,70]` match the row filter. The overwrite commit must be REJECTED with Java's
+    /// "Found conflicting deleted files that can contain records matching" message.
+    ///
+    /// This pins the SECOND of branch A's two checks (the added-delete walk in the test above finds nothing —
+    /// the concurrent commit added no delete file — so this rejection is solely `validate_deleted_data_files`).
+    ///
+    /// Risk pinned: WITHOUT `validate_deleted_data_files`, a concurrent commit that already deleted the rows
+    /// this overwrite-by-row-filter targets is silently re-overwritten — a write-write conflict lost under
+    /// serializable isolation.
+    #[tokio::test]
+    async fn test_overwrite_row_filter_rejects_concurrent_deleted_data_file_matching_filter() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        // Seed `a` carries y bounds [60,70] — INSIDE the row filter `y >= 50`. When a concurrent commit
+        // deletes it, its tombstone (with these bounds) is what `validate_deleted_data_files` flags.
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![
+            data_file_with_y_bounds("test/a.parquet", 0, 60, 70),
+            // A second file the overwrite can keep, so the base is non-trivial.
+            data_file_with_y_bounds("test/keep.parquet", 1, 0, 10),
+        ])
+        .await;
+
+        // Build the overwrite: row filter y >= 50, deletes validation on, pinned to S0. (No explicit
+        // delete_data_files — branch B is inert; only branch A's checks run.)
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite_files()
+            .overwrite_by_row_filter(Reference::new("y").greater_than_or_equal_to(Datum::long(50)))
+            .add_file(data_file_with_y_bounds("test/b.parquet", 0, 80, 90))
+            .validate_from_snapshot(s0)
+            .validate_no_conflicting_deletes();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): DELETE the data file `a` (records Operation::Delete, leaving a tombstone
+        // for `a` carrying its y bounds [60,70]).
+        let concurrent_tx = Transaction::new(&table);
+        let concurrent_action = concurrent_tx
+            .overwrite_files()
+            .delete_file("test/a.parquet");
+        let concurrent_tx = concurrent_action.apply(concurrent_tx).unwrap();
+        let _concurrent = concurrent_tx.commit(&catalog).await.unwrap();
+
+        let err = tx.commit(&catalog).await.expect_err(
+            "overwrite must fail: a concurrent DELETED data file matches the row filter (branch A)",
+        );
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable());
+        assert!(
+            err.message()
+                .contains("Found conflicting deleted files that can contain records matching"),
+            "must match Java validateDeletedDataFiles message, got: {}",
+            err.message()
+        );
+        assert!(
+            err.message().contains("test/a.parquet"),
+            "the error must name the concurrently-deleted data file, got: {}",
+            err.message()
+        );
+
+        // The overwrite did NOT commit over the concurrent delete.
+        let reloaded = catalog.load_table(table.identifier()).await.unwrap();
+        assert!(
+            !live_file_paths(&reloaded).await.contains("test/b.parquet"),
+            "the rejected overwrite's added file must NOT be in the table"
+        );
+    }
+
+    /// BRANCH A — TX-CAPTURED START PIN (MANDATORY, the recurring gap). Branch A rejects WITHOUT an explicit
+    /// `validate_from_snapshot` — relying solely on the transaction-captured starting snapshot surviving
+    /// `do_commit`'s re-base. The action calls ONLY `.overwrite_by_row_filter(y >= 50)` +
+    /// `.validate_no_conflicting_deletes()`. The start is the one captured in `Transaction::new` (= S0);
+    /// `do_commit` overwrites `self.table` with the refreshed base (S1, the concurrent delete file), but
+    /// `starting_snapshot_id` must SURVIVE — so the concurrent S1 delete file is still enumerated and rejected.
+    ///
+    /// Risk pinned: if `effective_start` were re-read from the REFRESHED head at validation time, start ==
+    /// current head ⇒ the concurrent set is empty ⇒ branch A silently always passes (a serializable hole).
+    /// MUTATION PROOF: changing `effective_start` in `validate()` to
+    /// `current.metadata().current_snapshot_id()` (the refreshed head) makes EXACTLY this test fail
+    /// (the other branch-A tests pin `validate_from_snapshot(s0)`, so they survive the mutation). Confirmed
+    /// locally, then reverted.
+    #[tokio::test]
+    async fn test_overwrite_row_filter_rejects_concurrent_delete_using_tx_captured_starting_snapshot()
+     {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        // Seed `a` outside the row filter so the base does not self-conflict.
+        let table = append_files(&catalog, &table, vec![data_file_with_y_bounds(
+            "test/a.parquet",
+            0,
+            0,
+            10,
+        )])
+        .await;
+
+        // Build the overwrite WITHOUT validate_from_snapshot — the start is the tx-captured head (S0).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite_files()
+            .overwrite_by_row_filter(Reference::new("y").greater_than_or_equal_to(Datum::long(50)))
+            .add_file(data_file_with_y_bounds("test/b.parquet", 0, 80, 90))
+            .validate_no_conflicting_deletes();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): ADD a delete file whose y bounds [60,70] match `y >= 50`.
+        let _concurrent = add_deletes(&catalog, &table, vec![position_delete_file_with_y_bounds(
+            "test/concurrent-del.parquet",
+            0,
+            60,
+            70,
+        )])
+        .await;
+
+        let err = tx.commit(&catalog).await.expect_err(
+            "branch A conflict must be detected via the tx-captured starting snapshot (no override)",
+        );
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable());
+        assert!(
+            err.message()
+                .contains("Found new conflicting delete files that can apply to records matching"),
+            "got: {}",
+            err.message()
+        );
+        assert!(err.message().contains("test/concurrent-del.parquet"));
+    }
+
+    /// BRANCH A — FLAG-OFF CONTROL. The SAME concurrent conflict as the `validateNoNewDeleteFiles` positive
+    /// test, but WITHOUT `.validate_no_conflicting_deletes()` ⇒ the overwrite COMMITS cleanly (snapshot
+    /// isolation, the default). Proves branch A is genuinely OPT-IN.
+    ///
+    /// Risk pinned: branch A firing by default would change existing behavior and break callers relying on
+    /// snapshot isolation for overwrite-by-row-filter.
+    #[tokio::test]
+    async fn test_overwrite_row_filter_without_validation_allows_concurrent_added_delete() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![data_file_with_y_bounds(
+            "test/a.parquet",
+            0,
+            0,
+            10,
+        )])
+        .await;
+
+        // Build the overwrite WITHOUT enabling the deletes validation (default = snapshot isolation).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite_files()
+            .overwrite_by_row_filter(Reference::new("y").greater_than_or_equal_to(Datum::long(50)))
+            .add_file(data_file_with_y_bounds("test/b.parquet", 0, 80, 90));
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): ADD a delete file whose y bounds [60,70] WOULD match if branch A ran.
+        let _concurrent = add_deletes(&catalog, &table, vec![position_delete_file_with_y_bounds(
+            "test/concurrent-del.parquet",
+            0,
+            60,
+            70,
+        )])
+        .await;
+
+        // With the deletes validation OFF, the overwrite COMMITS (branch A did not run).
+        let table = tx.commit(&catalog).await.expect(
+            "with validation OFF, a conflicting concurrent delete must not block the commit",
+        );
+        assert!(
+            live_file_paths(&table).await.contains("test/b.parquet"),
+            "the overwrite committed (snapshot isolation, branch A not run)"
+        );
+    }
+
+    /// BRANCH A — ROW-FILTER GATE (Java L168 `if rowFilter() != alwaysFalse()`). With
+    /// `.validate_no_conflicting_deletes()` set but NO `overwrite_by_row_filter` (so `row_filter()` is
+    /// `AlwaysFalse`) and NO `delete_data_files`, branch A does NOT run: a concurrent ADDED delete file that
+    /// branch A WOULD catch does not cause a rejection. The overwrite COMMITS.
+    ///
+    /// Risk pinned: dropping the `rowFilter() != alwaysFalse()` gate would run the row-filter delete checks
+    /// (with an `AlwaysFalse` filter) on EVERY `validate_no_conflicting_deletes()` overwrite — `AlwaysFalse`
+    /// bound by `first_conflicting_file` matches nothing, so it would not over-reject here, but the gate is
+    /// the structural contract: branch A is keyed on a set row filter. This test pins that the row-filter
+    /// checks are not reached when there is no row filter (the add-only/path-delete overwrite path is
+    /// unaffected by branch A). To make the concurrent delete observable as a non-conflict, the overwrite
+    /// adds a file and the commit must succeed.
+    #[tokio::test]
+    async fn test_overwrite_no_row_filter_skips_branch_a() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![data_file_with_y_bounds(
+            "test/a.parquet",
+            0,
+            0,
+            10,
+        )])
+        .await;
+
+        // Deletes validation ON, but NO overwrite_by_row_filter ⇒ row_filter() == AlwaysFalse ⇒ branch A is
+        // gated OFF. No delete_data_files either ⇒ branch B is also inert. An add-only overwrite.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite_files()
+            .add_file(data_file_with_y_bounds("test/b.parquet", 0, 80, 90))
+            .validate_no_conflicting_deletes();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): ADD a delete file whose y bounds [60,70] WOULD match a `y >= 50` row filter
+        // IF branch A ran — but with no row filter the gate skips branch A entirely.
+        let _concurrent = add_deletes(&catalog, &table, vec![position_delete_file_with_y_bounds(
+            "test/concurrent-del.parquet",
+            0,
+            60,
+            70,
+        )])
+        .await;
+
+        // Branch A does not run (no row filter) ⇒ the overwrite COMMITS despite the concurrent delete file.
+        let table = tx.commit(&catalog).await.expect(
+            "with no row filter, branch A is gated off ⇒ a concurrent added delete does not reject",
+        );
+        assert!(
+            live_file_paths(&table).await.contains("test/b.parquet"),
+            "the add-only overwrite committed (branch A skipped, gate held)"
+        );
+    }
+
+    /// BRANCH A — GATE IS ON `rowFilter()`, NOT the conflict filter (Java L168 `if rowFilter() !=
+    /// alwaysFalse()`; inside, `filter = conflictDetectionFilter != null ? conflictDetectionFilter :
+    /// rowFilter()`). The SUBTLE case the prior gate test omits: `.conflict_detection_filter(y >= 50)` IS set
+    /// but there is NO `.overwrite_by_row_filter` (so `row_filter()` is `AlwaysFalse`) and NO
+    /// `delete_data_files`. Java does NOT run branch A — the gate is keyed on the ROW filter, not the
+    /// conflict-detection filter. A concurrent ADDED delete file whose `y` bounds `[60,70]` WOULD match the
+    /// conflict filter `y >= 50` (so it would reject IF branch A ran with that filter) does NOT cause a
+    /// rejection. The overwrite COMMITS.
+    ///
+    /// Risk pinned: a buggy gate keyed on `conflict_detection_filter` (or running branch A unconditionally
+    /// under `validate_no_conflicting_deletes`) would OVER-REJECT here — a serializable-isolation false
+    /// positive that diverges from Java, blocking a legal overwrite. MUTATION PROOF: changing the branch-A
+    /// gate to `if row_filter != Predicate::AlwaysFalse || self.conflict_detection_filter.is_some()` makes
+    /// EXACTLY this test fail (the existing `..._skips_branch_a` test has no conflict filter, so it survives);
+    /// confirmed locally, then reverted.
+    #[tokio::test]
+    async fn test_overwrite_conflict_filter_without_row_filter_skips_branch_a() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![data_file_with_y_bounds(
+            "test/a.parquet",
+            0,
+            0,
+            10,
+        )])
+        .await;
+
+        // Deletes validation ON and a conflict_detection_filter IS set, but NO overwrite_by_row_filter ⇒
+        // row_filter() == AlwaysFalse ⇒ branch A is gated OFF (Java gates on rowFilter(), not the conflict
+        // filter). No delete_data_files ⇒ branch B is also inert. An add-only overwrite.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite_files()
+            .add_file(data_file_with_y_bounds("test/b.parquet", 0, 80, 90))
+            .conflict_detection_filter(
+                Reference::new("y").greater_than_or_equal_to(Datum::long(50)),
+            )
+            .validate_no_conflicting_deletes();
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit (S1): ADD a delete file whose y bounds [60,70] DO match the conflict filter
+        // `y >= 50` — branch A WOULD reject this IF it ran with that filter, but the gate (keyed on the
+        // absent row filter) skips branch A entirely.
+        let _concurrent = add_deletes(&catalog, &table, vec![position_delete_file_with_y_bounds(
+            "test/concurrent-del.parquet",
+            0,
+            60,
+            70,
+        )])
+        .await;
+
+        // Branch A does not run (no row filter, despite the conflict filter) ⇒ the overwrite COMMITS.
+        let table = tx.commit(&catalog).await.expect(
+            "gate is on rowFilter(); with no row filter branch A is skipped even when a conflict filter \
+             is set, so a concurrent added delete does not reject",
+        );
+        assert!(
+            live_file_paths(&table).await.contains("test/b.parquet"),
+            "the add-only overwrite committed (branch A skipped — gate keyed on the absent row filter)"
+        );
     }
 }

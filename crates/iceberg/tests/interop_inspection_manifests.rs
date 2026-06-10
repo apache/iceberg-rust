@@ -69,7 +69,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Int32Type, Int64Type, TimestampMicrosecondType};
+use arrow_array::types::{Float64Type, Int32Type, Int64Type, TimestampMicrosecondType};
 use arrow_array::{Array, ArrayRef, RecordBatch, StringArray, StructArray};
 use futures::TryStreamExt;
 use iceberg::TableIdent;
@@ -2091,5 +2091,334 @@ async fn test_scan_planning_matches_java_plans() {
         rust_s1.len(),
         rust_s2.len(),
         rust_s3.len()
+    );
+}
+
+// ===========================================================================================
+// readable_metrics — the typed-decode interop proof for the `files` table's trailing virtual
+// `readable_metrics` STRUCT, the LAST inspection-table surface A1-A4 explicitly DEFER.
+//
+// `readable_metrics` (Java MetricsUtil.readableMetricsStruct) is a STRUCT with ONE sub-field per LEAF column
+// of the data schema, each itself a struct of the six metrics {column_size, value_count, null_value_count,
+// nan_value_count, lower_bound, upper_bound}. The four counts come from the file's metric maps; the bounds
+// are the file's stored bound bytes DECODED to the COLUMN's OWN type (Java
+// Conversions.fromByteBuffer(field.type(), buffer); Rust `Datum::try_from_bytes`). A1 round-trips the same
+// metric/bound MAPS but compares only the bound BYTES — it never reaches the TYPED decode, notably a STRING
+// bound. This test proves that decode across THREE type classes: Int64 for id, Utf8 for name, Float64 for
+// score.
+//
+// The Java oracle's `generate-inspection-manifests` mode writes a dedicated UNPARTITIONED V2 table to
+// `<dir>/table_rm` (A1's `<dir>/table` + A2's `<dir>/table_a2` + A4's `<dir>/table_a4` UNTOUCHED) — schema
+// {1 id long, 2 name string, 3 score double}, one data file with RICH, DISTINCT per-column metrics — and
+// emits `java_rm_files.json` keyed by leaf column NAME -> the six metric NAMES -> the typed scalar value.
+// This test loads `<dir>/table_rm`, runs `inspect().files().scan().to_arrow()`, extracts the trailing
+// `readable_metrics` struct, and asserts BY COLUMN NAME and BY METRIC NAME (order-independent) that every
+// metric equals Java's: counts exact; long/string bounds exact; the double bound compared by `f64::to_bits`.
+//
+// Same env gate as A1-A4 (`ICEBERG_INTEROP_MANIFEST_DIR`): a clean NO-OP when unset.
+//
+// COMPARE BY NAME, NOT FIELD ID. Java's readable_metrics sub-field ids come from a HashMap-order counter; the
+// Rust port assigns ascending ids (a documented divergence — see `readable_metrics.rs` module docs). The
+// sub-field NAMES match, so everything is keyed by name; the id divergence is OUT OF SCOPE here (the row
+// stays 🟡 — the GAP_MATRIX `ids` divergence note stands).
+//
+// DEFERRED — the PROMOTED-TYPE bound (an int-encoded bound on a column promoted to long). It needs schema
+// evolution / an old-schema data file and is OUT OF SCOPE for this increment; long/string/double is rich
+// enough to pin the typed decode. Noted as deferred.
+// ===========================================================================================
+
+/// The decoded `readable_metrics` of ONE leaf column: the four counts (optional i64) plus the lower/upper
+/// bound read as the column's own typed Arrow value. Exactly one of the three typed-bound `Option`s is
+/// populated per column (Int64 for id, Utf8 for name, Float64 for score) — the other two stay `None`.
+#[derive(Debug, Clone, PartialEq)]
+struct ColumnReadableMetrics {
+    column_size: Option<i64>,
+    value_count: Option<i64>,
+    null_value_count: Option<i64>,
+    nan_value_count: Option<i64>,
+    lower_bound_long: Option<i64>,
+    upper_bound_long: Option<i64>,
+    lower_bound_string: Option<String>,
+    upper_bound_string: Option<String>,
+    lower_bound_double: Option<f64>,
+    upper_bound_double: Option<f64>,
+}
+
+/// Build a `Table` over the Java-written `table_rm` `final.metadata.json`, local-fs FileIO.
+fn load_table_rm(dir: &std::path::Path) -> Table {
+    let metadata_path = dir.join("table_rm/metadata/final.metadata.json");
+    let json = fs::read_to_string(&metadata_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", metadata_path.display()));
+    let metadata: TableMetadata = serde_json::from_str(&json)
+        .unwrap_or_else(|error| panic!("parse {}: {error}", metadata_path.display()));
+    Table::builder()
+        .metadata(metadata)
+        .metadata_location(metadata_path.to_string_lossy().to_string())
+        .identifier(
+            TableIdent::from_strs(["interop", "inspection_readable_metrics"])
+                .expect("valid identifier"),
+        )
+        .file_io(FileIO::new_with_fs())
+        .build()
+        .expect("build readable_metrics table from Java-written final.metadata.json")
+}
+
+/// An optional i64 count sub-field of a per-column metric struct, read by metric NAME.
+fn rm_opt_i64(metrics: &StructArray, name: &str) -> Option<i64> {
+    let array = metrics
+        .column_by_name(name)
+        .unwrap_or_else(|| panic!("readable_metrics metric {name} present"))
+        .as_primitive::<Int64Type>();
+    if array.is_null(0) {
+        None
+    } else {
+        Some(array.value(0))
+    }
+}
+
+/// Extract the SINGLE-row Rust `readable_metrics` struct into a map keyed by leaf column NAME. Each leaf
+/// column's sub-struct is read for the four counts and the THREE possible typed bound shapes; only the shape
+/// matching the column's Arrow type is populated (the others stay `None`), so the test can assert the right
+/// type decoded without hardcoding column order.
+fn extract_rust_readable_metrics(batch: &RecordBatch) -> HashMap<String, ColumnReadableMetrics> {
+    assert_eq!(
+        batch.num_rows(),
+        1,
+        "table_rm has exactly one data file, so the files table has exactly one row"
+    );
+    let readable_metrics = batch
+        .column_by_name("readable_metrics")
+        .expect("the files table has a trailing readable_metrics struct column")
+        .as_struct();
+
+    let mut out = HashMap::new();
+    for column_index in 0..readable_metrics.num_columns() {
+        let column_name = readable_metrics.column_names()[column_index].to_string();
+        let metrics = readable_metrics.column(column_index).as_struct();
+
+        // The two bound sub-fields carry the COLUMN's own Arrow type. Read whichever of Int64 / Utf8 /
+        // Float64 the sub-field actually is; the other two stay None. A wrong builder type in the production
+        // path would make BOTH the expected reader fail here AND leave the typed value unmatched below.
+        let bound_field = |name: &str| -> &ArrayRef {
+            metrics.column_by_name(name).unwrap_or_else(|| {
+                panic!("readable_metrics bound {name} present for {column_name}")
+            })
+        };
+        let lower = bound_field("lower_bound");
+        let upper = bound_field("upper_bound");
+
+        let read_long = |array: &ArrayRef| -> Option<i64> {
+            let array = array.as_primitive::<Int64Type>();
+            if array.is_null(0) {
+                None
+            } else {
+                Some(array.value(0))
+            }
+        };
+        let read_string = |array: &ArrayRef| -> Option<String> {
+            let array = array.as_string::<i32>();
+            if array.is_null(0) {
+                None
+            } else {
+                Some(array.value(0).to_string())
+            }
+        };
+        let read_double = |array: &ArrayRef| -> Option<f64> {
+            let array = array.as_primitive::<Float64Type>();
+            if array.is_null(0) {
+                None
+            } else {
+                Some(array.value(0))
+            }
+        };
+
+        let is_long = matches!(lower.data_type(), arrow_schema::DataType::Int64);
+        let is_string = matches!(lower.data_type(), arrow_schema::DataType::Utf8);
+        let is_double = matches!(lower.data_type(), arrow_schema::DataType::Float64);
+
+        out.insert(column_name.clone(), ColumnReadableMetrics {
+            column_size: rm_opt_i64(metrics, "column_size"),
+            value_count: rm_opt_i64(metrics, "value_count"),
+            null_value_count: rm_opt_i64(metrics, "null_value_count"),
+            nan_value_count: rm_opt_i64(metrics, "nan_value_count"),
+            lower_bound_long: if is_long { read_long(lower) } else { None },
+            upper_bound_long: if is_long { read_long(upper) } else { None },
+            lower_bound_string: if is_string { read_string(lower) } else { None },
+            upper_bound_string: if is_string { read_string(upper) } else { None },
+            lower_bound_double: if is_double { read_double(lower) } else { None },
+            upper_bound_double: if is_double { read_double(upper) } else { None },
+        });
+    }
+    out
+}
+
+/// Read one metric of a Java leaf column's object as an optional i64 (a count or a long bound). A JSON null
+/// is `None`; a number is `Some`. Panics if the metric is missing or not an integer.
+fn java_opt_i64(column: &serde_json::Value, column_name: &str, metric: &str) -> Option<i64> {
+    let value = column
+        .get(metric)
+        .unwrap_or_else(|| panic!("Java {column_name}.{metric} present"));
+    if value.is_null() {
+        None
+    } else {
+        Some(
+            value
+                .as_i64()
+                .unwrap_or_else(|| panic!("Java {column_name}.{metric} is an integer")),
+        )
+    }
+}
+
+#[tokio::test]
+async fn test_readable_metrics_table_matches_java_rows() {
+    let Some(dir) = manifest_dir() else {
+        println!(
+            "skipping test_readable_metrics_table_matches_java_rows — set ICEBERG_INTEROP_MANIFEST_DIR \
+             (run dev/java-interop/run-inspection-manifests.sh)"
+        );
+        return;
+    };
+
+    let table = load_table_rm(&dir);
+    let batches: Vec<RecordBatch> = table
+        .inspect()
+        .files()
+        .scan()
+        .await
+        .expect("files scan")
+        .try_collect()
+        .await
+        .expect("collect files scan");
+    assert_eq!(
+        batches.len(),
+        1,
+        "table_rm's single data file yields one files-table batch"
+    );
+    let rust_metrics = extract_rust_readable_metrics(&batches[0]);
+
+    // Parse Java's `java_rm_files.json`: an object keyed by leaf column NAME -> the six metric names.
+    let java_path = dir.join("java_rm_files.json");
+    let java_json = fs::read_to_string(&java_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", java_path.display()));
+    let java_columns: HashMap<String, serde_json::Value> = serde_json::from_str(&java_json)
+        .unwrap_or_else(|error| panic!("parse {}: {error}", java_path.display()));
+
+    // RISK (missing/extra leaf column): the SET of leaf column names must match Java exactly. A leaf-detection
+    // bug (e.g. dropping a primitive, or emitting a non-leaf container) would change this set.
+    let rust_names: std::collections::BTreeSet<&String> = rust_metrics.keys().collect();
+    let java_names: std::collections::BTreeSet<&String> = java_columns.keys().collect();
+    assert_eq!(
+        rust_names, java_names,
+        "the SET of readable_metrics leaf column names must match Java (no missing/extra column)"
+    );
+    assert_eq!(
+        rust_names.into_iter().collect::<Vec<_>>(),
+        vec!["id", "name", "score"],
+        "table_rm's three leaf columns are id, name, score (sorted by name)"
+    );
+
+    // -- Per-column, per-metric comparison BY NAME (order-independent). --------------------------------
+    for (column_name, rust) in &rust_metrics {
+        let java = java_columns
+            .get(column_name)
+            .unwrap_or_else(|| panic!("Java has the {column_name} readable_metrics column"));
+
+        // RISK (count cross-wiring / wrong source): each of the four counts must equal Java's EXACTLY. Java's
+        // metrics are distinct per metric source (column_size != value_count != null_value_count != ...), so a
+        // swap between two count sub-fields is observable. nan_value_count is non-null ONLY for score (the
+        // double column); null_value_count is non-zero for name — both pin the absent-vs-present count path.
+        assert_eq!(
+            rust.column_size,
+            java_opt_i64(java, column_name, "column_size"),
+            "{column_name}.column_size must equal Java"
+        );
+        assert_eq!(
+            rust.value_count,
+            java_opt_i64(java, column_name, "value_count"),
+            "{column_name}.value_count must equal Java"
+        );
+        assert_eq!(
+            rust.null_value_count,
+            java_opt_i64(java, column_name, "null_value_count"),
+            "{column_name}.null_value_count must equal Java (non-zero for name)"
+        );
+        assert_eq!(
+            rust.nan_value_count,
+            java_opt_i64(java, column_name, "nan_value_count"),
+            "{column_name}.nan_value_count must equal Java (present only for the double score)"
+        );
+
+        // RISK (wrong typed decode of the bound): the lower/upper bound must decode to the COLUMN's own type
+        // and value. For id (long) and name (string), an exact compare; for score (double), a `f64::to_bits`
+        // compare so float bit-level drift in the decode cannot hide. The Java bound is the already-decoded
+        // scalar; the Rust bound is the Arrow typed value. Comparing by NAME catches a typed-decode bug that a
+        // raw-bytes compare (A1) cannot — most pointedly the STRING bound.
+        let lower_value = java
+            .get("lower_bound")
+            .unwrap_or_else(|| panic!("Java {column_name}.lower_bound present"));
+        let upper_value = java
+            .get("upper_bound")
+            .unwrap_or_else(|| panic!("Java {column_name}.upper_bound present"));
+
+        match column_name.as_str() {
+            "id" => {
+                let java_lower = lower_value.as_i64().expect("id lower_bound is a long");
+                let java_upper = upper_value.as_i64().expect("id upper_bound is a long");
+                assert_eq!(
+                    rust.lower_bound_long,
+                    Some(java_lower),
+                    "id.lower_bound decodes to the column's LONG type and Java's value"
+                );
+                assert_eq!(
+                    rust.upper_bound_long,
+                    Some(java_upper),
+                    "id.upper_bound decodes to the column's LONG type and Java's value"
+                );
+            }
+            "name" => {
+                let java_lower = lower_value.as_str().expect("name lower_bound is a string");
+                let java_upper = upper_value.as_str().expect("name upper_bound is a string");
+                assert_eq!(
+                    rust.lower_bound_string.as_deref(),
+                    Some(java_lower),
+                    "name.lower_bound decodes to the column's STRING type and Java's value (the case A1's \
+                     raw-bytes compare cannot reach)"
+                );
+                assert_eq!(
+                    rust.upper_bound_string.as_deref(),
+                    Some(java_upper),
+                    "name.upper_bound decodes to the column's STRING type and Java's value"
+                );
+            }
+            "score" => {
+                let java_lower = lower_value.as_f64().expect("score lower_bound is a double");
+                let java_upper = upper_value.as_f64().expect("score upper_bound is a double");
+                let rust_lower = rust
+                    .lower_bound_double
+                    .expect("score.lower_bound decodes to the column's DOUBLE type");
+                let rust_upper = rust
+                    .upper_bound_double
+                    .expect("score.upper_bound decodes to the column's DOUBLE type");
+                // RISK (float bit-level drift in the bound decode): compare by `f64::to_bits`, not `==`, so a
+                // NaN-vs-NaN or a 1-ulp drift in the double-bound round-trip cannot pass unnoticed.
+                assert_eq!(
+                    rust_lower.to_bits(),
+                    java_lower.to_bits(),
+                    "score.lower_bound decodes to Java's double bit-for-bit"
+                );
+                assert_eq!(
+                    rust_upper.to_bits(),
+                    java_upper.to_bits(),
+                    "score.upper_bound decodes to Java's double bit-for-bit"
+                );
+            }
+            other => panic!("unexpected leaf column {other} in table_rm readable_metrics"),
+        }
+    }
+
+    println!(
+        "test_readable_metrics_table_matches_java_rows OK — {} leaf columns (id long, name string, score \
+         double) matched Java's readable_metrics struct field-for-field (counts + typed bounds)",
+        rust_metrics.len()
     );
 }

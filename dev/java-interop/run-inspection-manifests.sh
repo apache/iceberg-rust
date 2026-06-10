@@ -20,8 +20,11 @@
 # MANIFEST-READING inspection interop harness — the `files` / `data_files` / `delete_files` tables (A1),
 # the `entries` / `manifests` / `partitions` tables (A2), the five cross-snapshot `all_*` tables
 # `all_data_files` / `all_delete_files` / `all_files` / `all_entries` / `all_manifests` (A3, over the A2 table),
-# AND SCAN PLANNING interop (A4): does Rust plan the SAME data files Java does for a given filter? — over a
-# dedicated `table_a4` with four named filter scenarios (no_filter / partition_a / metric_id_gt_15 / combined).
+# SCAN PLANNING interop (A4): does Rust plan the SAME data files Java does for a given filter? — over a
+# dedicated `table_a4` with four named filter scenarios (no_filter / partition_a / metric_id_gt_15 / combined),
+# AND the `readable_metrics` STRUCT (RM) — the typed decode of the `files` table's trailing virtual column
+# (one per-leaf-column struct of six metrics, the bounds decoded to the column's OWN type) — over a dedicated
+# unpartitioned `table_rm` (schema {id long, name string, score double}) emitted as `java_rm_files.json`.
 #
 # This is a TEST-ONLY ORACLE (a dev tool, like dev/spark/) — it is NOT part of the shipped Rust library, and
 # it is NOT part of the offline `cargo test` gate (it needs Java + Maven). Unlike the pure-metadata
@@ -42,14 +45,20 @@
 #           THIRD, dedicated A4 table under "$TMP/table_a4" (append F1/F2/F3 with distinct id metric bounds;
 #           row-delta a position-delete for F1) over which it plans four named filter scenarios via Java's
 #           REAL table.newScan().filter(expr).planFiles(), emitting "$TMP/java_scan_{no_filter,partition_a,
-#           metric_id_gt_15,combined}.json".
+#           metric_id_gt_15,combined}.json", AND a FOURTH, dedicated unpartitioned RM table under
+#           "$TMP/table_rm" (schema {id long, name string, score double}; one data file with rich, distinct
+#           per-column metrics) whose REAL FilesTable rows INCLUDING the `readable_metrics` struct are emitted
+#           to "$TMP/java_rm_files.json" (keyed by leaf column name -> the six metric names -> typed scalar).
 #   2. ICEBERG_INTEROP_MANIFEST_DIR="$TMP" cargo test ... interop_inspection_manifests
-#        -> The env-gated Rust tests load "$TMP/table[/_a2/_a4]/metadata/final.metadata.json", build a Table
-#           over a local-filesystem FileIO (resolving the absolute manifest paths), run
+#        -> The env-gated Rust tests load "$TMP/table[/_a2/_a4/_rm]/metadata/final.metadata.json", build a
+#           Table over a local-filesystem FileIO (resolving the absolute manifest paths), run
 #           inspect().files()/.data_files()/.delete_files() (A1) and .entries()/.manifests()/.partitions()
 #           (A2) and the all_* tables (A3) .scan(), and — for A4 — table.scan().with_filter(pred).plan_files(),
-#           comparing EVERY column (except the deferred readable_metrics) / the planned data-file SET +
-#           delete association + residual-always-true field-for-field, order-independent, against Java.
+#           comparing EVERY column (except readable_metrics — proven separately by RM) / the planned data-file
+#           SET + delete association + residual-always-true field-for-field, order-independent, against Java.
+#           RM loads "$TMP/table_rm", runs inspect().files().scan(), extracts the trailing readable_metrics
+#           STRUCT, and asserts each leaf column's six metrics (counts + typed lower/upper bounds, the double
+#           by f64::to_bits) equal "$TMP/java_rm_files.json" BY COLUMN NAME and BY METRIC NAME.
 #
 # Without ICEBERG_INTEROP_MANIFEST_DIR the Rust test is a clean no-op (it stays green in the offline gate);
 # this script is what flips it into the REAL comparison.
@@ -71,7 +80,7 @@ echo "==> [1/3] Reset the temp table dir: ${TMP}"
 rm -rf "${TMP}"
 mkdir -p "${TMP}"
 
-echo "==> [2/3] Java oracle: write REAL partitioned V2 tables (A1 table + A2 table_a2 + A4 table_a4) + emit java_*.json"
+echo "==> [2/3] Java oracle: write REAL V2 tables (A1 table + A2 table_a2 + A4 table_a4 + RM table_rm) + emit java_*.json"
 (
   cd "${SCRIPT_DIR}"
   JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64 \
@@ -81,11 +90,11 @@ echo "==> [2/3] Java oracle: write REAL partitioned V2 tables (A1 table + A2 tab
     -Dinterop.inspection_manifests.dir="${TMP}"
 )
 
-echo "==> [3/3] Rust: load final.metadata.json (A1) + table_a2/...(A2/A3) + table_a4/...(A4), scan tables + plan scans, compare vs Java"
+echo "==> [3/3] Rust: load final.metadata.json (A1) + table_a2/...(A2/A3) + table_a4/...(A4) + table_rm/...(RM), scan tables + plan scans + readable_metrics, compare vs Java"
 (
   cd "${REPO_ROOT}"
   ICEBERG_INTEROP_MANIFEST_DIR="${TMP}" \
     cargo test -p iceberg --test interop_inspection_manifests -- --nocapture
 )
 
-echo "==> DONE — manifest-reading inspection interop passed (A1 files/data_files/delete_files + A2 entries/manifests/partitions + A3 all_* + A4 scan planning)."
+echo "==> DONE — manifest-reading inspection interop passed (A1 files/data_files/delete_files + A2 entries/manifests/partitions + A3 all_* + A4 scan planning + RM readable_metrics)."
