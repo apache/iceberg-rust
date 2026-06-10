@@ -247,6 +247,13 @@ public final class InteropOracle {
           System.exit(1);
         }
         break;
+      case "generate-interop-write-actions":
+        // METADATA-LEVEL rewrite-family interop fixture (E2): the five-commit
+        // fast-append/delete/overwrite/replace-partitions/rewrite chain on a partitioned V2
+        // table, manifests only (no parquet). The dir is via -Dinterop.write_actions.dir.
+        Path writeActionsDir = requireFixturesDir("interop.write_actions.dir");
+        WriteActionsOracle.generate(writeActionsDir);
+        break;
       case "emit-snapshot-meta":
         // METADATA-LEVEL row-delta interop (E1). Emits the canonical snapshot-metadata view (ordinal
         // snapshots, COUNT-only summaries, manifest-list -> entry structure with post-inheritance
@@ -3951,6 +3958,97 @@ public final class InteropOracle {
   }
 
   // =============================================================================================
+  // WriteActionsOracle — the METADATA-LEVEL rewrite-family interop fixture (E2). Performs the SAME
+  // four-action chain the Rust GEN test (interop_write_actions_meta.rs) performs, on a V2 table
+  // partitioned by identity(category), with IDENTICAL logical constants (paths differ; record
+  // counts and partition values must match). NO parquet is written — the four actions only read
+  // and rewrite MANIFESTS, so the data-file paths need not exist (the A1-A4 convention).
+  //
+  //   s1 newFastAppend  A(cat=a,10) B(cat=b,20) C(cat=a,30)      seq 1, op append
+  //                     (FAST append, mirroring Rust fast_append — newAppend() would be the
+  //                     MERGING producer, a different machinery than the Rust side exercises)
+  //   s2 newDelete      deleteFile(A.path)                        seq 2, op delete
+  //                     (the manifest-filter rewrite: A tombstoned, B/C carried as Existing
+  //                     with their ORIGINAL provenance — the corruption-class axis)
+  //   s3 newOverwrite   addFile(D cat=b,40) deleteFile(B)         seq 3, op overwrite
+  //   s4 newReplacePartitions addFile(E cat=a,50)                 seq 4, op overwrite +
+  //                     replace-partitions=true (drops the live cat=a file C)
+  //   s5 newRewrite     rewriteFiles({E}, {F cat=a,50})           seq 5, op replace
+  //                     (the compaction commit; record count conserved)
+  // =============================================================================================
+
+  static final class WriteActionsOracle {
+    private WriteActionsOracle() {}
+
+    static void generate(Path dir) throws IOException {
+      Files.createDirectories(dir);
+      File tableDir = dir.resolve("table").toFile();
+      File metadataDir = new File(tableDir, "metadata");
+      if (!metadataDir.isDirectory() && !metadataDir.mkdirs()) {
+        throw new IOException("failed to create metadata dir at " + metadataDir);
+      }
+
+      Schema schema =
+          new Schema(
+              Types.NestedField.required(1, "id", Types.LongType.get()),
+              Types.NestedField.required(2, "category", Types.StringType.get()));
+      PartitionSpec spec = PartitionSpec.builderFor(schema).identity("category").build();
+
+      Map<String, String> props = new LinkedHashMap<>();
+      props.put(TableProperties.FORMAT_VERSION, "2");
+      TableMetadata seed =
+          TableMetadata.newTableMetadata(
+              schema, spec, SortOrder.unsorted(), tableDir.getAbsolutePath(), props);
+
+      LocalTableOperations ops = new LocalTableOperations(tableDir, metadataDir);
+      ops.commit(null, seed);
+      BaseTable table = new BaseTable(ops, "interop_write_actions");
+
+      String dataDir = tableDir.getAbsolutePath() + "/data";
+      DataFile fileA = fakeDataFile(table, dataDir + "/a1.parquet", "category=a", 10L);
+      DataFile fileB = fakeDataFile(table, dataDir + "/b1.parquet", "category=b", 20L);
+      DataFile fileC = fakeDataFile(table, dataDir + "/a2.parquet", "category=a", 30L);
+      DataFile fileD = fakeDataFile(table, dataDir + "/b2.parquet", "category=b", 40L);
+      DataFile fileE = fakeDataFile(table, dataDir + "/a3.parquet", "category=a", 50L);
+      DataFile fileF = fakeDataFile(table, dataDir + "/a4-compacted.parquet", "category=a", 50L);
+
+      // The five-commit chain (sequence numbers 1..5).
+      table.newFastAppend().appendFile(fileA).appendFile(fileB).appendFile(fileC).commit();
+      table.newDelete().deleteFile(fileA.path()).commit();
+      table.newOverwrite().addFile(fileD).deleteFile(fileB).commit();
+      table.newReplacePartitions().addFile(fileE).commit();
+      java.util.Set<DataFile> rewriteDelete = new java.util.HashSet<>();
+      rewriteDelete.add(fileE);
+      java.util.Set<DataFile> rewriteAdd = new java.util.HashSet<>();
+      rewriteAdd.add(fileF);
+      table.newRewrite().rewriteFiles(rewriteDelete, rewriteAdd).commit();
+
+      // The FINAL metadata at a known path for the emitter + the Rust test.
+      Path finalMetadata = metadataDir.toPath().resolve("final.metadata.json");
+      OutputFile finalOut =
+          new LocalFileIO().newOutputFile(finalMetadata.toAbsolutePath().toString());
+      TableMetadataParser.write(ops.current(), finalOut);
+      System.out.println("generated write-actions table to " + dir);
+    }
+
+    /**
+     * A metadata-only {@link DataFile} (the path need not exist — the four actions only read
+     * manifests). Record count + partition are the cross-language-comparable constants; the file
+     * size is excluded from the canonical view, so any stable value works.
+     */
+    private static DataFile fakeDataFile(
+        BaseTable table, String path, String partitionPath, long recordCount) {
+      return DataFiles.builder(table.spec())
+          .withPath(path)
+          .withFileSizeInBytes(recordCount * 100)
+          .withRecordCount(recordCount)
+          .withPartitionPath(partitionPath)
+          .withFormat(FileFormat.PARQUET)
+          .build();
+    }
+  }
+
+  // =============================================================================================
   // SnapshotMetaOracle — the METADATA-LEVEL row-delta interop (E1). Emits a CANONICAL "snapshot
   // metadata view" of ANY on-disk table (Java-written or Rust-written): per snapshot (ordered by
   // sequence number) the operation, the COUNT-only summary, and the manifest-list -> manifest-entry
@@ -4006,7 +4104,10 @@ public final class InteropOracle {
             SnapshotSummary.ADDED_EQ_DELETES_PROP,
             SnapshotSummary.REMOVED_EQ_DELETES_PROP,
             SnapshotSummary.TOTAL_EQ_DELETES_PROP,
-            SnapshotSummary.CHANGED_PARTITION_COUNT_PROP);
+            SnapshotSummary.CHANGED_PARTITION_COUNT_PROP,
+            // Not a count, but a cross-language-comparable semantic marker
+            // (BaseReplacePartitions sets replace-partitions=true; the Rust action mirrors it).
+            SnapshotSummary.REPLACE_PARTITIONS_PROP);
 
     /**
      * Emit the canonical snapshot-metadata view of the table whose CURRENT metadata file is
@@ -4053,11 +4154,22 @@ public final class InteropOracle {
 
                   // Manifest list -> manifests -> entries.
                   List<ManifestFile> manifests = new ArrayList<>(snap.allManifests(io));
+                  // The full tuple, INCLUDING the count fields: within one commit a rewritten
+                  // (tombstone-carrying) manifest and an added manifest share (content, seq,
+                  // min_seq), and a tie would fall back to each table's manifest-LIST file order —
+                  // writer-dependent, not a spec contract. The counts disambiguate
+                  // deterministically (mirrored by the Rust common/snapshot_meta_view.rs sort).
                   manifests.sort(
                       java.util.Comparator.comparingInt(
                               (ManifestFile m) -> m.content().id())
                           .thenComparingLong(ManifestFile::sequenceNumber)
-                          .thenComparingLong(ManifestFile::minSequenceNumber));
+                          .thenComparingLong(ManifestFile::minSequenceNumber)
+                          .thenComparingLong(m -> nullToMinusOne(m.addedFilesCount()))
+                          .thenComparingLong(m -> nullToMinusOne(m.existingFilesCount()))
+                          .thenComparingLong(m -> nullToMinusOne(m.deletedFilesCount()))
+                          .thenComparingLong(m -> nullToMinusOne(m.addedRowsCount()))
+                          .thenComparingLong(m -> nullToMinusOne(m.existingRowsCount()))
+                          .thenComparingLong(m -> nullToMinusOne(m.deletedRowsCount())));
                   gen.writeArrayFieldStart("manifests");
                   for (ManifestFile manifest : manifests) {
                     gen.writeStartObject();
@@ -4222,6 +4334,10 @@ public final class InteropOracle {
           equalityIdsKey.toString(),
           partitionJson,
           json);
+    }
+
+    private static long nullToMinusOne(Number value) {
+      return value == null ? -1L : value.longValue();
     }
 
     private static String contentName(FileContent content) {

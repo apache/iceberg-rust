@@ -824,3 +824,27 @@ How to use it (see the manuals' §2):
   the env-gated harness, the second is invisible even there (the canonical view excludes the key).
   One added unit test (the trusted-but-empty-changeset case: count=="0" present, marker absent)
   catches both. When a fix's evidence is an EXTERNAL harness, add the offline unit pin too.
+
+### 2026-06-10 (E2 — rewrite-family metadata interop — ORCHESTRATOR Fable + REVIEWER Opus)
+- **DO canonicalize manifest-LIST order with the FULL count tuple — (content, seq, min_seq) TIES
+  within a single commit.** A rewritten (tombstone-carrying) manifest and the same commit's added
+  manifest share all three; the tie falls back to each writer's manifest-list file order, which is
+  writer-dependent and NOT a spec contract. The first E2 run failed on exactly this; an
+  order-insensitive re-comparison proved every hunk a pure swap (Rust's four write actions were
+  already Java-identical). When a cross-language comparison fails, CHECK ORDER-INSENSITIVELY before
+  hunting a semantic bug. (The extended 9-tuple is still not provably total — a future
+  fanout/multi-spec fixture could tie with differing entries; flagged in both emitters.)
+- **DO mirror Java's FAST producer (`newFastAppend`), never `newAppend`, when the Rust side uses
+  `fast_append`** — `newAppend` is the MERGING producer whose manifest-merge machinery Rust does
+  not have; under merge thresholds it would produce a different manifest count/shape and the
+  comparison would fail on machinery Rust never claims.
+- **Java's delete-resolution is PATH equality end-to-end** (`DataFileSet` equality/hashCode are
+  purely `file.location()`), so Java `deleteFile(DataFile)` and Rust `delete_file(path)` are the
+  SAME resolved semantics — the API shapes differ, the contract doesn't (reviewer-cited).
+- **DO scope an interop claim to the PATHS the fixture exercises.** The five-commit chain proves
+  the explicit-API paths only — not row-filter commits, not conflict validation (linear chain, no
+  concurrency), not DELETE-content manifests in the rewrite family, not multi-spec. The GAP_MATRIX
+  notes say "metadata-level interop ✅ (explicit-API paths)", rows stay 🟡. Also
+  reviewer-corrected: Java does NOT enforce rewrite record-count conservation
+  (`validateReplacedAndAddedFiles` checks non-emptiness only) — conservation in the fixture is a
+  test-data property, not a Java invariant.

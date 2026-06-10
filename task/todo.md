@@ -34,6 +34,37 @@ How to use it (see the manuals' §1):
 
 > **Archival log.** Last todo-archival pass: 2026-06-09 (size trigger — 4,344 lines) → [todo-archive/](todo-archive/) (phase1/phase2/phase3). Completed-increment narratives moved verbatim; this file keeps the active sprint + open items + archive pointers. Procedure: [skills/compaction.md](../skills/compaction.md) §Todo Archival. Archives are not read by default.
 
+## DONE (2026-06-10): Sprint increment E2 — rewrite-family METADATA-level interop (branch `interop/write-actions-meta`)
+
+All four rewrite-family actions proven in ONE five-commit chain (fast-append → DeleteFiles →
+OverwriteFiles → ReplacePartitions → RewriteFiles) on a partitioned V2 table, through the E1
+canonical-view oracle (no parquet — pure manifest metadata). **GREEN with ZERO Rust production
+changes** — the Phase-2 ports already emit Java-identical metadata semantics.
+
+- [x] Shared-module refactor: the E1 view builder → `tests/common/snapshot_meta_view.rs` (E1
+      round-trip re-run green); allowlist += `replace-partitions` (both sides).
+- [x] Manifest comparator extended with the count fields on BOTH sides — the first run surfaced a
+      TIE: within one commit a rewritten (tombstone) manifest and an added manifest share
+      (content, seq, min_seq) and the tie fell back to writer-dependent manifest-LIST order
+      (order-insensitive re-comparison proved every hunk a pure swap — canonicalization, not
+      semantics).
+- [x] Java `WriteActionsOracle` (newFastAppend — NOT the merging newAppend — newDelete,
+      newOverwrite, newReplacePartitions, newRewrite) + Rust GEN chain via the production actions
+      + `run-interop-write-actions.sh` (Java byte-diff judge).
+- [x] REVIEWER (Opus): APPROVE — chain faithfulness line-cited (DataFileSet path-equality =
+      Rust's by-path resolution; FastAppend mirror correct); tie-extension exercised AND
+      load-bearing in-fixture (non-total in general — flagged for future fanout fixtures);
+      corrected an over-claim (Java does NOT enforce rewrite record-count conservation —
+      `validateReplacedAndAddedFiles` checks non-emptiness only); 2 reviewer mutations caught
+      (one-sided allowlist removal → both tests fail; delete-C-instead-of-B → legible cascade).
+
+**Outcome:** 3 comparison directions green; s2 provenance (A tombstoned seq 1, B/C Existing
+seq 1), s4 `replace-partitions=true` + C tombstoned, s5 `replace` with E tombstoned at seq 4 all
+Java-identical. Poison mutation fails exactly the 2 comparison tests. Gate: lib 1643,
+clippy/fmt/typos clean, both interop binaries no-op offline; Cargo FROZEN. GAP_MATRIX: the four
+cells gain a SCOPED "metadata-level interop ✅ (explicit-API paths)" note — rows stay 🟡
+(row-filter/conflict/multi-spec paths uncovered by the chain).
+
 ## DONE (2026-06-10): Sprint increment E1 — RowDelta METADATA-level interop (branch `interop/rowdelta-metadata`)
 
 The snapshot/manifest SEMANTICS proof on top of the data-level scan-exec interop. Both sides emit a
@@ -239,9 +270,8 @@ sprint (2026-06-09)".
       - [x] **E1 — `RowDelta` metadata-level interop:** DONE 2026-06-10 (see the E1 section
             above) — canonical-view equality across 3 fixtures × 3 directions; surfaced + fixed
             the `changed-partition-count` summary parity bug.
-      - [ ] **E2 — the rewrite-family four:** `DeleteFiles` / `OverwriteFiles` / `ReplacePartitions`
-            / `RewriteFiles` — one oracle `generate`/`verify` pass, per-action scenarios (the Phase-1
-            three-capability consolidation pattern).
+      - [x] **E2 — the rewrite-family four:** DONE 2026-06-10 (see the E2 section above) — one
+            five-commit chain through the E1 oracle; zero production changes needed.
       - [ ] **E3 — inspection-table interop:** mechanical, well-templated — the explicit leave-to-
             Opus candidate if the budget runs out.
 
