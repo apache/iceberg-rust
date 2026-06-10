@@ -56,9 +56,11 @@ pub use action::*;
 mod append;
 mod delete_files;
 mod manage_snapshots;
+mod merge_append;
 mod overwrite_files;
 mod replace_partitions;
 mod rewrite_files;
+mod rewrite_manifests;
 mod row_delta;
 mod snapshot;
 mod sort_order;
@@ -81,9 +83,11 @@ use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::delete_files::DeleteFilesAction;
 use crate::transaction::manage_snapshots::ManageSnapshotsAction;
+use crate::transaction::merge_append::MergeAppendAction;
 use crate::transaction::overwrite_files::OverwriteFilesAction;
 use crate::transaction::replace_partitions::ReplacePartitionsAction;
 use crate::transaction::rewrite_files::RewriteFilesAction;
+use crate::transaction::rewrite_manifests::RewriteManifestsAction;
 use crate::transaction::row_delta::RowDeltaAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
@@ -166,6 +170,30 @@ impl Transaction {
         FastAppendAction::new()
     }
 
+    /// Creates a merge-append action: append data files in one `Operation::Append` snapshot (exactly like
+    /// [`Self::fast_append`]) and then MERGE the resulting manifest list into a minimal number of
+    /// manifests (Java `MergeAppend`). Java's `Table.newAppend()` returns this MERGING producer, whereas
+    /// `newFastAppend()` returns the non-merging one this fork exposes as [`Self::fast_append`].
+    ///
+    /// The merge honors three table properties (read at commit time, Java `ManifestMergeManager`):
+    /// - `commit.manifest-merge.enabled` (default `true`) — when `false`, the manifest list is left as-is
+    ///   (the action then behaves like a fast append).
+    /// - `commit.manifest.min-count-to-merge` (default `100`) — the bin holding this commit's NEW added
+    ///   manifest is merged only once it accumulates at least this many manifests.
+    /// - `commit.manifest.target-size-bytes` (default 8 MB) — the bin-packing target weight (by manifest
+    ///   length).
+    ///
+    /// Merged manifests preserve every carried-forward entry's provenance (original snapshot id + data /
+    /// file sequence numbers, status `Existing`); this commit's added entries stay `Added` and re-inherit
+    /// the new snapshot's sequence number. The live file set is identical to the equivalent fast append.
+    ///
+    /// **Deferred (vs Java):** delete-manifest merging (delete manifests are carried forward unchanged),
+    /// `appendManifest`, and the retry cache / orphan cleanup. See the
+    /// [`merge_append`](crate::transaction) module for the full Java contract and deviations.
+    pub fn merge_append(&self) -> MergeAppendAction {
+        MergeAppendAction::new()
+    }
+
     /// Creates a delete-files action (remove data files from the table by path / `DataFile`
     /// reference). Delete-by-row-filter / partition-predicate is not yet supported.
     pub fn delete_files(&self) -> DeleteFilesAction {
@@ -192,20 +220,35 @@ impl Transaction {
 
     /// Creates a rewrite-files action (the compaction-commit primitive): atomically replace a set of
     /// data files with a new set in one `Replace` snapshot (Java `BaseRewriteFiles`). The files to delete
-    /// must be non-empty and present in the current snapshot. Rewriting DELETE files,
-    /// `dataSequenceNumber` preservation, and concurrent-commit conflict validation are not yet supported.
+    /// must be non-empty and present in the current snapshot. Rewriting DELETE files is not yet supported.
     ///
-    /// **Precondition:** the table must NOT carry outstanding row-level (merge-on-read) delete files —
-    /// the commit is rejected if its current snapshot references any delete manifest. Without
-    /// `dataSequenceNumber` preservation, rewriting deleted-from data into fresh higher-sequence files
-    /// would make those deletes stop applying and resurrect deleted rows. This guard is lifted once
-    /// `dataSequenceNumber` preservation lands.
+    /// **Preserving outstanding equality deletes:** by default the added files take a fresh, higher data
+    /// sequence number, so an outstanding merge-on-read EQUALITY delete (which applies only to data with a
+    /// strictly lower data seq) stops applying to them and silently resurrects deleted rows. Call
+    /// [`RewriteFilesAction::data_sequence_number`] with the (max) data seq of the replaced files to preserve
+    /// the seq so the deletes still apply (Java `RewriteFiles.dataSequenceNumber`). Without it this is the
+    /// caller's responsibility — exactly as in Java, which has no guard against the hazard.
+    /// [`RewriteFilesAction::validate`] rejects a commit when a concurrent row-level delete conflicts with a
+    /// replaced data file (Java `validateNoNewDeletesForDataFiles`).
     pub fn rewrite_files(
         &self,
         files_to_delete: impl IntoIterator<Item = crate::spec::DataFile>,
         files_to_add: impl IntoIterator<Item = crate::spec::DataFile>,
     ) -> RewriteFilesAction {
         RewriteFilesAction::new().rewrite_files(files_to_delete, files_to_add)
+    }
+
+    /// Creates a rewrite-manifests action: re-organize the table's manifests without changing its
+    /// live data files, producing one `Operation::Replace` snapshot (Java `BaseRewriteManifests`). Use
+    /// [`RewriteManifestsAction::cluster_by`] to re-group matching data manifests' live entries into new
+    /// manifests (provenance preserved), and/or [`RewriteManifestsAction::add_manifest`] +
+    /// [`RewriteManifestsAction::delete_manifest`] for explicit replacement. A no-op rewrite keeps every
+    /// manifest as-is. The live set is identical before and after.
+    ///
+    /// **Deferred:** `add_manifest` on a V1 table (`FeatureUnsupported`), the parallel `scanManifestsWith`
+    /// executor, and metadata-level interop with Java (this is a 🟡 unit-proven action).
+    pub fn rewrite_manifests(&self) -> RewriteManifestsAction {
+        RewriteManifestsAction::new()
     }
 
     /// Creates a row-delta action (the merge-on-read write commit): add data files AND add row-level

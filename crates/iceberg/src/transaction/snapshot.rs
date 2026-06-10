@@ -106,21 +106,33 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
 pub(crate) struct DefaultManifestProcess;
 
 impl ManifestProcess for DefaultManifestProcess {
-    fn process_manifests(
+    async fn process_manifests(
         &self,
-        _snapshot_produce: &SnapshotProducer<'_>,
+        _snapshot_produce: &mut SnapshotProducer<'_>,
         manifests: Vec<ManifestFile>,
-    ) -> Vec<ManifestFile> {
-        manifests
+    ) -> Result<Vec<ManifestFile>> {
+        // Pass the manifest list through unchanged — the fast-append / single-manifest path. This MUST
+        // stay a no-op so `FastAppend` behavior is byte-identical to the pre-seam-change producer.
+        Ok(manifests)
     }
 }
 
+/// Post-process the manifest list a snapshot is about to commit, after the producer has written the
+/// added DATA/DELETE manifests and rewritten any delete-bearing manifests (Java
+/// `MergingSnapshotProducer.apply`'s `mergeManager.mergeManifests(...)` step). The default
+/// ([`DefaultManifestProcess`]) returns the list untouched (fast append); the merge-append manager
+/// ([`crate::transaction::merge_append::MergeManifestProcess`]) bin-packs and merges them.
+///
+/// Takes `&mut SnapshotProducer` because a manager that MERGES manifests needs the producer's writer
+/// factory ([`SnapshotProducer::new_cluster_manifest_writer`]) — which advances the manifest-name
+/// counter — to write the merged manifests. It is async + `Result` because merging reads the input
+/// manifests back from object storage and writes new ones.
 pub(crate) trait ManifestProcess: Send + Sync {
     fn process_manifests(
         &self,
-        snapshot_produce: &SnapshotProducer<'_>,
+        snapshot_produce: &mut SnapshotProducer<'_>,
         manifests: Vec<ManifestFile>,
-    ) -> Vec<ManifestFile>;
+    ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
 }
 
 pub(crate) struct SnapshotProducer<'a> {
@@ -136,6 +148,13 @@ pub(crate) struct SnapshotProducer<'a> {
     // empty. Their entries inherit the new snapshot's sequence number at read time, exactly like added
     // data files (so a delete added now applies to earlier data: `data_seq <= delete_seq`).
     added_delete_files: Vec<DataFile>,
+    // An explicit DATA sequence number to stamp on every ADDED data file (Java
+    // `MergingSnapshotProducer.newDataFilesDataSequenceNumber`). When `Some(seq)`, each added data
+    // entry is written with this explicit data seq instead of inheriting the new snapshot's seq at
+    // read time — the `RewriteFiles.dataSequenceNumber` preservation path that keeps outstanding
+    // equality deletes applying to rewritten data (`data_seq < delete_seq`). `None` (the default for
+    // every other operation) ⇒ the added files inherit the new snapshot's sequence number as usual.
+    new_data_files_data_sequence_number: Option<i64>,
     // Data files removed by this snapshot, resolved against the current snapshot at commit time. Held
     // so the snapshot summary can reflect the deleted file/record counts (Java overwrite/delete summary).
     // Empty for add-only operations such as fast append.
@@ -162,6 +181,7 @@ impl<'a> SnapshotProducer<'a> {
             snapshot_properties,
             added_data_files,
             added_delete_files: vec![],
+            new_data_files_data_sequence_number: None,
             removed_data_files: vec![],
             manifest_counter: (0..),
         }
@@ -173,6 +193,95 @@ impl<'a> SnapshotProducer<'a> {
     pub(crate) fn with_added_delete_files(mut self, added_delete_files: Vec<DataFile>) -> Self {
         self.added_delete_files = added_delete_files;
         self
+    }
+
+    /// Stamp every ADDED data file with an explicit DATA sequence number instead of inheriting the new
+    /// snapshot's sequence number (Java `MergingSnapshotProducer.setNewDataFilesDataSequenceNumber` /
+    /// `RewriteFiles.dataSequenceNumber`). Used by the compaction write path (`RewriteFiles`) to preserve
+    /// the replaced files' data sequence number so any outstanding merge-on-read EQUALITY delete still
+    /// applies to the rewritten data (`data_seq < delete_seq`) — without this, the added files would take a
+    /// fresh, higher sequence number and the old deletes would stop applying, resurrecting deleted rows.
+    /// `seq` must be non-negative (the manifest writer silently strips a negative one back into
+    /// re-inheritance — the caller validates this before calling).
+    pub(crate) fn with_new_data_files_data_sequence_number(mut self, sequence_number: i64) -> Self {
+        self.new_data_files_data_sequence_number = Some(sequence_number);
+        self
+    }
+
+    /// The id of the snapshot this producer is creating. Exposed so an action that pre-computes its
+    /// own manifest list (e.g. `RewriteManifests`) can stamp externally-added manifests with the new
+    /// snapshot id before they reach the manifest-list writer (Java `withSnapshotId`,
+    /// `BaseRewriteManifests.apply` L184-187 — required by
+    /// [`ManifestListWriter::add_manifests`]'s `assign_sequence_numbers` precondition).
+    pub(crate) fn snapshot_id(&self) -> i64 {
+        self.snapshot_id
+    }
+
+    /// Merge additional snapshot summary properties computed AFTER construction (Java
+    /// `RewriteManifests.summary()` sets `manifests-created` / `-kept` / `-replaced` /
+    /// `entries-processed` only once the rewrite has run). [`SnapshotProducer::new`] takes the
+    /// user-supplied properties up front; this additive setter lets the rewrite inject the counts it
+    /// can only know post-rewrite. These non-empty properties also satisfy the empty-commit
+    /// precondition in [`SnapshotProducer::manifest_file`] for an action that adds no data files.
+    pub(crate) fn extend_snapshot_properties(
+        &mut self,
+        properties: impl IntoIterator<Item = (String, String)>,
+    ) {
+        self.snapshot_properties.extend(properties);
+    }
+
+    /// Build a manifest writer for a brand-new (non-filtered) DATA manifest under `partition_spec_id`
+    /// — the cluster-writer factory for [`crate::transaction::rewrite_manifests`]. Mirrors
+    /// [`SnapshotProducer::new_filtering_manifest_writer`] but is keyed by the partition-spec id
+    /// directly (a cluster writer is created per `(cluster_key, partition_spec_id)`, Java
+    /// `BaseRewriteManifests.getWriter` keyed on `Pair.of(key, partitionSpecId)`) rather than off a
+    /// source [`ManifestFile`]. The entries appended to it are pre-existing data entries copied
+    /// forward via `add_existing_entry` (provenance preserved), so the writer is always a DATA writer.
+    pub(crate) fn new_cluster_manifest_writer(
+        &mut self,
+        partition_spec_id: i32,
+    ) -> Result<ManifestWriter> {
+        let partition_spec = self
+            .table
+            .metadata()
+            .partition_spec_by_id(partition_spec_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Cannot rewrite manifests: unknown partition spec id {partition_spec_id}"
+                    ),
+                )
+            })?
+            .as_ref()
+            .clone();
+
+        let new_manifest_path = format!(
+            "{}/{}/{}-m{}.{}",
+            self.table.metadata().location(),
+            META_ROOT_PATH,
+            self.commit_uuid,
+            self.manifest_counter.next().ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Exhausted manifest file name counter",
+                )
+            })?,
+            DataFileFormat::Avro
+        );
+        let output_file = self.table.file_io().new_output(new_manifest_path)?;
+        let builder = ManifestWriterBuilder::new(
+            output_file,
+            Some(self.snapshot_id),
+            self.key_metadata.clone(),
+            self.table.metadata().current_schema().clone(),
+            partition_spec,
+        );
+        match self.table.metadata().format_version() {
+            FormatVersion::V1 => Ok(builder.build_v1()),
+            FormatVersion::V2 => Ok(builder.build_v2_data()),
+            FormatVersion::V3 => Ok(builder.build_v3_data()),
+        }
     }
 
     /// Validate the added DELETE files (Java `RowDelta.addDeletes` / `MergingSnapshotProducer.add`):
@@ -267,12 +376,35 @@ impl<'a> SnapshotProducer<'a> {
         Ok(())
     }
 
-    /// Return every current data manifest (the candidates the producer's `process_deletes` filters).
+    /// Return EVERY current manifest — DATA **and** DELETE — from the current snapshot's manifest list,
+    /// the complete candidate set a delete-bearing operation's `existing_manifest` hands to the producer.
     ///
-    /// Shared by the delete-bearing operations (`DeleteFiles`, `OverwriteFiles`): each exposes every
-    /// current data manifest so `process_deletes` can decide per manifest whether to rewrite, carry
-    /// forward, or drop it. Returns an empty list when the table has no current snapshot.
-    pub(crate) async fn current_data_manifests(&self) -> Result<Vec<ManifestFile>> {
+    /// Shared by every delete-bearing operation (`DeleteFiles`, `OverwriteFiles`, `ReplacePartitions`,
+    /// `RewriteFiles`): each exposes the FULL manifest list so the producer's `process_deletes` can decide
+    /// per DATA manifest whether to rewrite (drop the removed/replaced files), carry forward unchanged, or
+    /// drop it, while every DELETE manifest is carried forward UNCHANGED — a delete manifest's entries are
+    /// delete-file paths, which can never appear in a DATA `delete_paths` set, so `process_deletes` leaves
+    /// them alone.
+    ///
+    /// Carrying delete manifests forward is REQUIRED FOR CORRECTNESS, not an optimization. This mirrors Java
+    /// `MergingSnapshotProducer.apply` (`core/MergingSnapshotProducer.java` L973-1011), which composes BOTH
+    /// `filterManager.filterManifests(dataManifests)` AND `deleteFilterManager.filterManifests(deleteManifests)`
+    /// into the new manifest list. If an action returned DATA manifests only (the old
+    /// `current_data_manifests`), the new snapshot's manifest list would OMIT every delete manifest the
+    /// current snapshot carried — on a merge-on-read table (Java- or Rust-written) that silently drops all
+    /// outstanding position / equality deletes table-wide, resurrecting every deleted row. This helper exists
+    /// to make that whole bug class unrepresentable: all four delete-bearing actions carry the full set.
+    ///
+    /// **Conservative dangling-delete posture (documented divergence from Java):** Java's `apply` also drops
+    /// delete files older than the surviving data's minimum sequence number and removes DVs orphaned by the
+    /// data files it deleted (L982-993, `dropDeleteFilesOlderThan` / `removeDanglingDeletesFor`). This port
+    /// deliberately does NOT port that pruning — it carries every delete manifest forward UNCHANGED. That is
+    /// the conservative-safe direction: keeping a delete that no longer applies is harmless (it matches no
+    /// live row), whereas dropping one that still applies resurrects deleted rows. Dangling-delete cleanup is
+    /// a maintenance concern for a future `RemoveDanglingDeleteFiles` action, not a commit-path obligation.
+    ///
+    /// Returns an empty list when the table has no current snapshot.
+    pub(crate) async fn current_manifests(&self) -> Result<Vec<ManifestFile>> {
         let Some(snapshot) = self.table.metadata().current_snapshot() else {
             return Ok(vec![]);
         };
@@ -281,12 +413,7 @@ impl<'a> SnapshotProducer<'a> {
             .load_manifest_list(self.table.file_io(), &self.table.metadata_ref())
             .await?;
 
-        Ok(manifest_list
-            .entries()
-            .iter()
-            .filter(|entry| entry.content == ManifestContentType::Data)
-            .cloned()
-            .collect())
+        Ok(manifest_list.entries().to_vec())
     }
 
     /// Resolve `delete_paths` against the current snapshot's live data entries, returning the matching
@@ -632,12 +759,24 @@ impl<'a> SnapshotProducer<'a> {
 
         let snapshot_id = self.snapshot_id;
         let format_version = self.table.metadata().format_version();
+        // When set (the `RewriteFiles.dataSequenceNumber` preservation path, Java
+        // `newDataFilesDataSequenceNumber`), every added data entry carries this EXPLICIT data sequence
+        // number so the manifest writer keeps it (mirrors Java `writeDataFileGroup` calling
+        // `writer.add(file, dataSeq)` instead of `writer.add(file)`). V2/V3 only — V1 manifests carry no
+        // sequence numbers, so on V1 this is ignored and the added entry just stamps the snapshot id.
+        let new_data_seq = self.new_data_files_data_sequence_number;
         let manifest_entries = added_data_files.into_iter().map(|data_file| {
             let builder = ManifestEntry::builder()
                 .status(crate::spec::ManifestStatus::Added)
                 .data_file(data_file);
             if format_version == FormatVersion::V1 {
                 builder.snapshot_id(snapshot_id).build()
+            } else if let Some(sequence_number) = new_data_seq {
+                // Preserve the explicit data sequence number on the added entry (Java
+                // `writeDataFileGroup` with a non-null `dataSeq`). The writer keeps a non-negative
+                // explicit data seq and lets the FILE sequence number inherit at read time — matching
+                // Java `wrapAppend(snapshotId, dataSeq, file)` with a null file seq.
+                builder.sequence_number(sequence_number).build()
             } else {
                 // For format version > 1, we set the snapshot id at the inherited time to avoid rewrite the manifest file when
                 // commit failed.
@@ -738,7 +877,9 @@ impl<'a> SnapshotProducer<'a> {
             manifest_files.push(added_delete_manifest);
         }
 
-        let manifest_files = manifest_process.process_manifests(self, manifest_files);
+        let manifest_files = manifest_process
+            .process_manifests(self, manifest_files)
+            .await?;
         Ok(manifest_files)
     }
 

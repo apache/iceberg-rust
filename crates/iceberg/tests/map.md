@@ -37,6 +37,8 @@ asserts structural equality with Java's result. All run **offline** in plain `ca
 | `interop_update_partition_spec.rs` | `UpdatePartitionSpec` — 7 scenarios incl. V1 void replacement, id recycling | ✅ both directions |
 | `interop_manage_snapshots.rs` | `ManageSnapshots` ref operations — 7 scenarios | ✅ both directions |
 | `interop_scan_exec.rs` | data-level scan execution: Java-written parquet + position/equality deletes + partitioned MoR read by Rust, and the reverse | landed 2026-06-09 |
+| `interop_rowdelta_meta.rs` | E1 metadata-level row-delta interop: the canonical snapshot-metadata view over the 3 scan-exec fixtures (env-gated) | landed 2026-06-10 |
+| `interop_write_actions_meta.rs` | E2 + Increment-4 metadata-level write-actions interop: ONE eight-step chain (delete/overwrite/replace-partitions/rewrite/rewrite-manifests/merge-append) + a delete-bearing seq-preserving `rewrite_files` fixture B, all via the canonical view (env-gated) | landed 2026-06-10 |
 | `interop_inspection.rs` / `interop_inspection_manifests.rs` | inspection tables vs Java expectations | in progress (🟡) |
 
 ## I want to...

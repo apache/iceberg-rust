@@ -254,6 +254,15 @@ public final class InteropOracle {
         Path writeActionsDir = requireFixturesDir("interop.write_actions.dir");
         WriteActionsOracle.generate(writeActionsDir);
         break;
+      case "generate-interop-rewrite-seq":
+        // DELETE-BEARING rewrite fixture (Increment 4, E1-family / metadata-only): fast-append A,B →
+        // row-delta adding a position-delete referencing B → rewrite A->A' preserving data sequence
+        // number 1 (validated from the row-delta snapshot). Pins: A' carries data_seq 1 (not the
+        // rewrite snapshot's seq) and the delete manifest survives the rewrite intact. The dir is via
+        // -Dinterop.rewrite_seq.dir.
+        Path rewriteSeqDir = requireFixturesDir("interop.rewrite_seq.dir");
+        RewriteSeqOracle.generate(rewriteSeqDir);
+        break;
       case "emit-snapshot-meta":
         // METADATA-LEVEL row-delta interop (E1). Emits the canonical snapshot-metadata view (ordinal
         // snapshots, COUNT-only summaries, manifest-list -> entry structure with post-inheritance
@@ -3958,15 +3967,16 @@ public final class InteropOracle {
   }
 
   // =============================================================================================
-  // WriteActionsOracle — the METADATA-LEVEL rewrite-family interop fixture (E2). Performs the SAME
-  // four-action chain the Rust GEN test (interop_write_actions_meta.rs) performs, on a V2 table
-  // partitioned by identity(category), with IDENTICAL logical constants (paths differ; record
-  // counts and partition values must match). NO parquet is written — the four actions only read
-  // and rewrite MANIFESTS, so the data-file paths need not exist (the A1-A4 convention).
+  // WriteActionsOracle — the METADATA-LEVEL rewrite-family interop fixture (E2, extended for
+  // Increment 4). Performs the SAME chain the Rust GEN test (interop_write_actions_meta.rs)
+  // performs, on a V2 table partitioned by identity(category), with IDENTICAL logical constants
+  // (paths differ; record counts and partition values must match). NO parquet is written — the
+  // actions only read and rewrite MANIFESTS, so the data-file paths need not exist (the A1-A4
+  // convention).
   //
   //   s1 newFastAppend  A(cat=a,10) B(cat=b,20) C(cat=a,30)      seq 1, op append
   //                     (FAST append, mirroring Rust fast_append — newAppend() would be the
-  //                     MERGING producer, a different machinery than the Rust side exercises)
+  //                     MERGING producer; s8 below is where this fixture exercises that path)
   //   s2 newDelete      deleteFile(A.path)                        seq 2, op delete
   //                     (the manifest-filter rewrite: A tombstoned, B/C carried as Existing
   //                     with their ORIGINAL provenance — the corruption-class axis)
@@ -3975,6 +3985,14 @@ public final class InteropOracle {
   //                     replace-partitions=true (drops the live cat=a file C)
   //   s5 newRewrite     rewriteFiles({E}, {F cat=a,50})           seq 5, op replace
   //                     (the compaction commit; record count conserved)
+  //   s6 rewriteManifests clusterBy(partition)                    seq 5 (no data change), op replace
+  //                     (re-group live DATA entries one manifest per partition; every entry carried
+  //                     EXISTING with its original provenance; live set {C,D,F} unchanged)
+  //   s7 updateProperties set min-count-to-merge=2                NO SNAPSHOT (a property commit)
+  //                     (arms the s8 merge; the snapshot-level view is unaffected both sides)
+  //   s8 newAppend      appendFile(G cat=a,60)                    seq 6, op append (MERGING)
+  //                     (Rust merge_append — with min-count=2 + KB manifests vs 8 MB target every
+  //                     manifest lands in ONE bin ⇒ the merge fires into ONE merged manifest)
   // =============================================================================================
 
   static final class WriteActionsOracle {
@@ -4012,7 +4030,10 @@ public final class InteropOracle {
       DataFile fileE = fakeDataFile(table, dataDir + "/a3.parquet", "category=a", 50L);
       DataFile fileF = fakeDataFile(table, dataDir + "/a4-compacted.parquet", "category=a", 50L);
 
-      // The five-commit chain (sequence numbers 1..5).
+      DataFile fileG = fakeDataFile(table, dataDir + "/a5-merged.parquet", "category=a", 60L);
+
+      // The eight-commit chain (s1..s5 produce sequence numbers 1..5; s7 is a PROPERTY commit and
+      // produces NO snapshot; s8 takes sequence number 6).
       table.newFastAppend().appendFile(fileA).appendFile(fileB).appendFile(fileC).commit();
       table.newDelete().deleteFile(fileA.path()).commit();
       table.newOverwrite().addFile(fileD).deleteFile(fileB).commit();
@@ -4022,6 +4043,27 @@ public final class InteropOracle {
       java.util.Set<DataFile> rewriteAdd = new java.util.HashSet<>();
       rewriteAdd.add(fileF);
       table.newRewrite().rewriteFiles(rewriteDelete, rewriteAdd).commit();
+
+      // s6 rewriteManifests clustered BY PARTITION: re-group the live DATA entries one manifest per
+      // partition. The cluster key STRING never appears in metadata — only the resulting GROUPING is
+      // compared, so any key fn that produces one group per distinct partition tuple is equivalent to
+      // the Rust side's. Java keys on `String.valueOf(file.partition())`; Rust keys on
+      // `format!("{:?}", data_file.partition())` (documented on both sides) — both produce one group
+      // per category. Live data after s5 is {C(cat=a,30), D(cat=b,40), F(cat=a,50)} ⇒ two manifests
+      // (cat=a: {C,F}; cat=b: {D}), every entry carried EXISTING with its original provenance.
+      table.rewriteManifests().clusterBy(file -> String.valueOf(file.partition())).commit();
+
+      // s7 set commit.manifest.min-count-to-merge=2 as a TABLE PROPERTY (no snapshot is produced — the
+      // canonical snapshot-level view is unaffected on both sides). This arms the MERGING append in s8.
+      table.updateProperties().set(TableProperties.MANIFEST_MIN_MERGE_COUNT, "2").commit();
+
+      // s8 newAppend (the MERGING producer, Rust `merge_append`): add G(cat=a,60). With
+      // min-count-to-merge=2 and KB-size manifests vs the 8 MB target, every manifest lands in ONE bin
+      // and the merge fires — the new added manifest merges with the existing manifests into ONE merged
+      // manifest carrying the Existing entries (original snapshot-id ordinals + seqs) + G as Added.
+      // Manifest avro length differs a few bytes across writers, but all-tiny ⇒ one bin on both sides
+      // (length-insensitive BY DESIGN — see the fixture doc).
+      table.newAppend().appendFile(fileG).commit();
 
       // The FINAL metadata at a known path for the emitter + the Rust test.
       Path finalMetadata = metadataDir.toPath().resolve("final.metadata.json");
@@ -4036,6 +4078,137 @@ public final class InteropOracle {
      * manifests). Record count + partition are the cross-language-comparable constants; the file
      * size is excluded from the canonical view, so any stable value works.
      */
+    private static DataFile fakeDataFile(
+        BaseTable table, String path, String partitionPath, long recordCount) {
+      return DataFiles.builder(table.spec())
+          .withPath(path)
+          .withFileSizeInBytes(recordCount * 100)
+          .withRecordCount(recordCount)
+          .withPartitionPath(partitionPath)
+          .withFormat(FileFormat.PARQUET)
+          .build();
+    }
+  }
+
+  // =============================================================================================
+  // RewriteSeqOracle — the DELETE-BEARING rewrite fixture (Increment 4, E1-family / metadata-only).
+  // A SIBLING of WriteActionsOracle that pins the seq-preserving rewrite over a merge-on-read table:
+  //
+  //   s1 newFastAppend  A(cat=a,10) B(cat=b,20)                   seq 1, op append
+  //   s2 newRowDelta    addDeletes(posDelete -> B)                seq 2, op delete
+  //                     (a metadata-only POSITION-delete referencing B — the SURVIVOR of the rewrite)
+  //   s3 newRewrite     validateFromSnapshot(s2).rewriteFiles({A}, {A'}, dataSequenceNumber=1L)
+  //                                                               seq 3, op replace
+  //                     (A is replaced by A'; A' is STAMPED with data sequence number 1 — the
+  //                     replaced file's seq, NOT the rewrite snapshot's seq 3)
+  //
+  // The two LOAD-BEARING assertions (judged through the same canonical view as WriteActionsOracle):
+  //   1. A' carries data_sequence_number 1 in the post-inheritance entry view (not 3).
+  //   2. The DELETE manifest (the position-delete on B) SURVIVES the rewrite intact.
+  //
+  // DESIGN CONSTRAINT (decided): the position delete references B, which SURVIVES the rewrite — NOT
+  // A. This keeps Java's dangling-delete machinery (`removeDanglingDeletesFor` /
+  // `dropDeleteFilesOlderThan`, which the Rust port deliberately does NOT implement) DORMANT on both
+  // sides, so the comparison cleanly pins what this fixture is FOR (the two assertions above) rather
+  // than an unported retention path.
+  //
+  // EMPIRICAL PROBE FINDING (Increment 4, throwaway probe — NOT in the byte-diffed chain): a SECOND
+  // rewrite that ALSO rewrites B -> B' (making the delete-on-B DANGLING) COMMITS on 1.10.0 and KEEPS
+  // the dangling parquet position-delete manifest intact in the final snapshot. MECHANISM (re-traced
+  // 2026-06-10): a RewriteFiles DOES run `deleteFilterManager.removeDanglingDeletesFor(...)`
+  // (MergingSnapshotProducer L995) successfully — `deleteFilterManager` is a `DeleteFileFilterManager`
+  // that does NOT override it. The `UnsupportedOperationException` throw at L1220-1222 is on the
+  // SIBLING `DataFileFilterManager` (the DATA-file side) and is NEVER reached for delete pruning. The
+  // real reason a dangling POSITION-DELETE PARQUET survives is that BOTH delete-drop paths miss it:
+  // `isDanglingDV` is gated on `ContentFileUtil.isDV` == `FileFormat.PUFFIN` (so a V2 parquet position
+  // delete, a non-DV, is structurally exempt), and `dropDeleteFilesOlderThan(minDataSequenceNumber)`
+  // does not drop it (the carried A'@seq1 keeps the min data seq at 1, below the delete's seq 2) —
+  // i.e. 1.10.0 prunes only dangling DVs on a RewriteFiles. This CONVERGES with the Rust action's
+  // documented carry-unchanged posture — PARITY, not divergence — so the probe step is left out of the
+  // chain purely because the survivor-delete fixture already pins the load-bearing behavior cleanly.
+  //
+  // Java uses `validateFromSnapshot(rowDeltaSnapshotId)` explicitly; the Rust mirror builds the
+  // rewrite transaction AFTER the row-delta commit, so its transaction-captured starting snapshot IS
+  // the row-delta snapshot and the concurrent window is empty — the semantic twin of Java's explicit
+  // validateFromSnapshot (documented on both sides).
+  //
+  // NO parquet: the data + delete files are metadata-only (the paths need not exist — the rewrite +
+  // the canonical view only read MANIFESTS). The Java side uses `DataFiles.builder` /
+  // `FileMetadata.deleteFileBuilder(...).ofPositionDeletes()`; the Rust side uses
+  // `DataFileBuilder` with `content(PositionDeletes)`.
+  // =============================================================================================
+
+  static final class RewriteSeqOracle {
+    private RewriteSeqOracle() {}
+
+    static void generate(Path dir) throws IOException {
+      Files.createDirectories(dir);
+      File tableDir = dir.resolve("table").toFile();
+      File metadataDir = new File(tableDir, "metadata");
+      if (!metadataDir.isDirectory() && !metadataDir.mkdirs()) {
+        throw new IOException("failed to create metadata dir at " + metadataDir);
+      }
+
+      Schema schema =
+          new Schema(
+              Types.NestedField.required(1, "id", Types.LongType.get()),
+              Types.NestedField.required(2, "category", Types.StringType.get()));
+      PartitionSpec spec = PartitionSpec.builderFor(schema).identity("category").build();
+
+      Map<String, String> props = new LinkedHashMap<>();
+      props.put(TableProperties.FORMAT_VERSION, "2");
+      TableMetadata seed =
+          TableMetadata.newTableMetadata(
+              schema, spec, SortOrder.unsorted(), tableDir.getAbsolutePath(), props);
+
+      LocalTableOperations ops = new LocalTableOperations(tableDir, metadataDir);
+      ops.commit(null, seed);
+      BaseTable table = new BaseTable(ops, "interop_rewrite_seq");
+
+      String dataDir = tableDir.getAbsolutePath() + "/data";
+      DataFile fileA = fakeDataFile(table, dataDir + "/a1.parquet", "category=a", 10L);
+      DataFile fileB = fakeDataFile(table, dataDir + "/b1.parquet", "category=b", 20L);
+      DataFile fileAprime = fakeDataFile(table, dataDir + "/a1-compacted.parquet", "category=a", 10L);
+
+      // A metadata-only POSITION-delete referencing B (partition category=b). Built via
+      // FileMetadata.deleteFileBuilder (the metadata-only analog of fakeDataFile) — no parquet.
+      DeleteFile deleteB =
+          FileMetadata.deleteFileBuilder(spec)
+              .ofPositionDeletes()
+              .withPath(dataDir + "/b1-deletes.parquet")
+              .withFileSizeInBytes(100L)
+              .withRecordCount(1L)
+              .withPartitionPath("category=b")
+              .withFormat(FileFormat.PARQUET)
+              .build();
+
+      // s1 append A,B (seq 1); s2 row-delta adding the position-delete on B (seq 2).
+      table.newFastAppend().appendFile(fileA).appendFile(fileB).commit();
+      long rowDeltaSnapshotId;
+      table.newRowDelta().addDeletes(deleteB).commit();
+      rowDeltaSnapshotId = table.currentSnapshot().snapshotId();
+
+      // s3 rewrite A -> A' preserving data sequence number 1 (the replaced file's seq), validated from
+      // the row-delta snapshot. Java's `rewriteFiles(Set, Set, long)` overload stamps every added file
+      // with the given data sequence number.
+      java.util.Set<DataFile> rewriteDelete = new java.util.HashSet<>();
+      rewriteDelete.add(fileA);
+      java.util.Set<DataFile> rewriteAdd = new java.util.HashSet<>();
+      rewriteAdd.add(fileAprime);
+      table
+          .newRewrite()
+          .validateFromSnapshot(rowDeltaSnapshotId)
+          .rewriteFiles(rewriteDelete, rewriteAdd, 1L)
+          .commit();
+
+      Path finalMetadata = metadataDir.toPath().resolve("final.metadata.json");
+      OutputFile finalOut =
+          new LocalFileIO().newOutputFile(finalMetadata.toAbsolutePath().toString());
+      TableMetadataParser.write(ops.current(), finalOut);
+      System.out.println("generated rewrite-seq (delete-bearing) table to " + dir);
+    }
+
+    /** A metadata-only {@link DataFile} (no parquet — the path need not exist). */
     private static DataFile fakeDataFile(
         BaseTable table, String path, String partitionPath, long recordCount) {
       return DataFiles.builder(table.spec())

@@ -452,9 +452,15 @@ impl SnapshotProduceOperation for ReplacePartitionsOperation {
         &self,
         snapshot_produce: &SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestFile>> {
-        // Expose every current data manifest; the producer's `process_deletes` decides per manifest
-        // whether to rewrite (to drop replaced-partition files), carry forward unchanged, or drop it.
-        snapshot_produce.current_data_manifests().await
+        // Expose EVERY current manifest — DATA and DELETE — via the shared
+        // [`SnapshotProducer::current_manifests`]. The producer's `process_deletes` decides per DATA manifest
+        // whether to rewrite (to drop replaced-partition files), carry forward unchanged, or drop it; every
+        // DELETE manifest carries forward UNCHANGED (its entries are delete-file paths, never in the
+        // data-file `delete_paths`), so replacing a partition on a merge-on-read table preserves all
+        // outstanding position / equality deletes in the UNREPLACED partitions instead of silently dropping
+        // them table-wide and resurrecting deleted rows. The conservative dangling-delete posture (no
+        // pruning) is documented on the helper.
+        snapshot_produce.current_manifests().await
     }
 }
 
@@ -463,15 +469,28 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::fs::File;
     use std::io::BufReader;
+    use std::sync::Arc;
+
+    use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+    use futures::TryStreamExt;
 
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
-        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, ManifestStatus,
-        Operation, Struct, TableMetadata,
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, ManifestContentType,
+        ManifestStatus, Operation, Struct, TableMetadata,
     };
     use crate::table::Table;
     use crate::transaction::tests::make_v3_minimal_table_in_catalog;
     use crate::transaction::{ApplyTransactionAction, Transaction};
+    use crate::writer::base_writer::position_delete_writer::{
+        PositionDeleteFileWriterBuilder, PositionDeleteWriterConfig,
+    };
+    use crate::writer::file_writer::location_generator::{
+        DefaultFileNameGenerator, DefaultLocationGenerator,
+    };
+    use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+    use crate::writer::file_writer::{FileWriter, FileWriterBuilder, ParquetWriterBuilder};
+    use crate::writer::{IcebergWriter, IcebergWriterBuilder};
     use crate::{Catalog, ErrorKind, TableCreation, TableIdent};
 
     /// Build a data file routed to partition `x = part_value` (the V3 minimal table is partitioned by
@@ -1674,5 +1693,222 @@ mod tests {
             "data validation alone must not reject a concurrent ADDED DELETE (delete check stays off)",
         );
         assert!(live_file_paths(&table).await.contains("test/a2.parquet"));
+    }
+
+    // ============================================================================================
+    // Merge-on-read DELETE-MANIFEST CARRY (Increment 2b — the silent-resurrection bug fix).
+    //
+    // `existing_manifest` now returns the FULL manifest list (DATA + DELETE) via the shared
+    // `SnapshotProducer::current_manifests`, so a `replace_partitions` commit on a table that already carries
+    // outstanding position/equality deletes in an UNREPLACED partition preserves those delete manifests
+    // instead of dropping them table-wide. This test uses the row_delta crown-jewel fixture (real parquet +
+    // a REAL position-delete file written by the production writer + a production scan), so the resurrection
+    // physics is proven end-to-end, not just at the manifest-metadata level.
+    // ============================================================================================
+
+    /// Write a REAL parquet data file with rows `(x, y, z)` into the table location, routed to partition
+    /// `x = part_value`. Returns the finished partitioned [`DataFile`]. Mirrors the row_delta fixture.
+    async fn write_data_file(
+        table: &Table,
+        file_name: &str,
+        part_value: i64,
+        rows: &[(i64, i64, i64)],
+    ) -> DataFile {
+        use crate::arrow::schema_to_arrow_schema;
+
+        let schema = table.metadata().current_schema();
+        let arrow_schema = Arc::new(schema_to_arrow_schema(schema).unwrap());
+
+        let xs: Vec<i64> = rows.iter().map(|(x, _, _)| *x).collect();
+        let ys: Vec<i64> = rows.iter().map(|(_, y, _)| *y).collect();
+        let zs: Vec<i64> = rows.iter().map(|(_, _, z)| *z).collect();
+        let batch = RecordBatch::try_new(arrow_schema, vec![
+            Arc::new(Int64Array::from(xs)) as ArrayRef,
+            Arc::new(Int64Array::from(ys)) as ArrayRef,
+            Arc::new(Int64Array::from(zs)) as ArrayRef,
+        ])
+        .unwrap();
+
+        let file_path = format!("{}/data/{}", table.metadata().location(), file_name);
+        let output = table.file_io().new_output(file_path).unwrap();
+        let parquet_builder = ParquetWriterBuilder::new(
+            parquet::file::properties::WriterProperties::builder().build(),
+            schema.clone(),
+        );
+        let mut writer = parquet_builder.build(output).await.unwrap();
+        writer.write(&batch).await.unwrap();
+        let data_file_builders = writer.close().await.unwrap();
+
+        let mut builder = data_file_builders.into_iter().next().unwrap();
+        builder
+            .content(DataContentType::Data)
+            .partition_spec_id(0)
+            .partition(Struct::from_iter([Some(Literal::long(part_value))]))
+            .build()
+            .unwrap()
+    }
+
+    /// Write a REAL position-delete parquet file (via the production `PositionDeleteFileWriter`) into the
+    /// table location, deleting the given `(data_file_path, pos)` pairs, in partition `x = part_value`.
+    async fn write_position_delete_file(
+        table: &Table,
+        part_value: i64,
+        deletes: &[(String, i64)],
+    ) -> DataFile {
+        use arrow_array::StringArray;
+
+        let config = PositionDeleteWriterConfig::new().unwrap();
+        let location_gen = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+        let file_name_gen = DefaultFileNameGenerator::new(
+            "pos-del".to_string(),
+            Some(uuid::Uuid::now_v7().to_string()),
+            DataFileFormat::Parquet,
+        );
+        let parquet_builder = ParquetWriterBuilder::new(
+            parquet::file::properties::WriterProperties::builder().build(),
+            config.schema().clone(),
+        );
+        let rolling = RollingFileWriterBuilder::new_with_default_file_size(
+            parquet_builder,
+            table.file_io().clone(),
+            location_gen,
+            file_name_gen,
+        );
+        let partition_key = crate::spec::PartitionKey::new(
+            table.metadata().default_partition_spec().as_ref().clone(),
+            table.metadata().current_schema().clone(),
+            Struct::from_iter([Some(Literal::long(part_value))]),
+        );
+        let mut writer = PositionDeleteFileWriterBuilder::new(rolling, config.clone())
+            .build(Some(partition_key))
+            .await
+            .unwrap();
+
+        let paths: Vec<&str> = deletes.iter().map(|(p, _)| p.as_str()).collect();
+        let positions: Vec<i64> = deletes.iter().map(|(_, pos)| *pos).collect();
+        let batch = RecordBatch::try_new(config.arrow_schema().clone(), vec![
+            Arc::new(StringArray::from(paths)) as ArrayRef,
+            Arc::new(Int64Array::from(positions)) as ArrayRef,
+        ])
+        .unwrap();
+        writer.write(batch).await.unwrap();
+        writer.close().await.unwrap().into_iter().next().unwrap()
+    }
+
+    /// Scan the table and collect the `y` column values across all returned batches — the real read-side
+    /// signal (what a query would see, with merge-on-read deletes applied).
+    async fn scan_y_values(table: &Table) -> HashSet<i64> {
+        let stream = table
+            .scan()
+            .select(["y"])
+            .build()
+            .unwrap()
+            .to_arrow()
+            .await
+            .unwrap();
+        let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+
+        let mut values = HashSet::new();
+        for batch in batches {
+            let col = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap();
+            for index in 0..col.len() {
+                values.insert(col.value(index));
+            }
+        }
+        values
+    }
+
+    /// Count the DELETE-content manifests in the table's current snapshot manifest list (structural
+    /// signal, independent of the read path). A replace-partitions must carry outstanding delete manifests
+    /// in unreplaced partitions forward, so this count must NOT drop to 0 across the commit.
+    async fn count_delete_manifests(table: &Table) -> usize {
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        manifest_list
+            .entries()
+            .iter()
+            .filter(|m| m.content == ManifestContentType::Deletes)
+            .count()
+    }
+
+    /// THE CROWN JEWEL (risk: a `replace_partitions` on a merge-on-read table silently DROPS every
+    /// outstanding delete manifest, resurrecting deleted rows even in partitions it did NOT replace). Data
+    /// file X (partition a=0) carries a real position delete masking its row y=20; data file Y lives in
+    /// partition b=1. Replacing partition b with a new file G (partition 1, y=80) must leave partition a's
+    /// delete applying — the scan after the commit is exactly {10, 80} (X's masked y=20 stays absent, Y's
+    /// rows are gone, G's y=80 present).
+    ///
+    /// MUTATION (run manually, then restore): in `ReplacePartitionsOperation::existing_manifest`, filter the
+    /// `current_manifests()` result to DATA manifests only (the old data-only behavior) ⇒ this test FAILS
+    /// with y=20 resurrected (the scan returns {10, 20, 80}) AND the structural delete-manifest count drops
+    /// to 0.
+    #[tokio::test]
+    async fn test_replace_partitions_preserves_outstanding_delete_manifests_no_resurrection() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // X in partition a=0 with rows y = [10, 20]; Y in partition b=1 with rows y = [60, 70].
+        let x = write_data_file(&table, "x.parquet", 0, &[(0, 10, 100), (0, 20, 200)]).await;
+        let x_path = x.file_path().to_string();
+        let y = write_data_file(&table, "y.parquet", 1, &[(1, 60, 600), (1, 70, 700)]).await;
+        let table = append_files(&catalog, &table, vec![x, y]).await;
+
+        // RowDelta a REAL position delete masking X's row at position 1 (y=20), in partition a=0.
+        let pos_delete = write_position_delete_file(&table, 0, &[(x_path.clone(), 1)]).await;
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![pos_delete]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        assert_eq!(
+            count_delete_manifests(&table).await,
+            1,
+            "the row_delta must leave one delete manifest in the snapshot"
+        );
+
+        // Sanity: before the replace, the scan drops y=20 (X's masked row) and shows Y's rows.
+        assert_eq!(
+            scan_y_values(&table).await,
+            HashSet::from([10, 60, 70]),
+            "the position delete masks y=20 from X; Y's rows are present"
+        );
+
+        // Dynamic partition overwrite: add G in partition b=1 ⇒ replaces every file in partition 1 (Y).
+        // Partition a=0 (and its outstanding delete) must be UNTOUCHED.
+        let g = write_data_file(&table, "g.parquet", 1, &[(1, 80, 800)]).await;
+        let tx = Transaction::new(&table);
+        let action = tx.replace_partitions().add_file(g);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        assert_eq!(
+            table
+                .metadata()
+                .current_snapshot()
+                .unwrap()
+                .summary()
+                .operation,
+            Operation::Overwrite
+        );
+
+        // SCAN PIN: partition b replaced (Y gone, G's y=80 present) AND partition a's masked y=20 stays
+        // absent ⇒ exactly {10, 80}.
+        assert_eq!(
+            scan_y_values(&table).await,
+            HashSet::from([10, 80]),
+            "partition b replaced by G AND partition a's masked y=20 stays absent — no resurrection"
+        );
+
+        // STRUCTURAL PIN: the delete manifest survived the commit (count must not drop to 0).
+        assert_eq!(
+            count_delete_manifests(&table).await,
+            1,
+            "the replace_partitions commit must carry the outstanding delete manifest forward (not drop it)"
+        );
     }
 }

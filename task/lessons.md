@@ -848,3 +848,158 @@ How to use it (see the manuals' §2):
   reviewer-corrected: Java does NOT enforce rewrite record-count conservation
   (`validateReplacedAndAddedFiles` checks non-emptiness only) — conservation in the fixture is a
   test-data property, not a Java invariant.
+
+### 2026-06-10 (Phase-2 completion arc Increment 1 — RewriteManifests, BUILDER + REVIEWER Opus)
+- **DO pick the RIGHT corrupting mutation for a provenance suite: `add_entry` (re-stamp) KEEPS an
+  explicit non-negative sequence number, so it only fails metadata assertions — the resurrection
+  mutation is SEQ-STRIPPING (`sequence_number = None` ⇒ V2/V3 re-inheritance of the NEW, higher
+  snapshot seq ⇒ older position deletes stop applying).** *Why:* the builder's re-stamp mutation
+  passed the merge-on-read scan test and looked like a scan-level blind spot; the reviewer's
+  seq-strip mutation made the SAME scan test fail with resurrected rows — the suite was sound, the
+  first mutation was just too weak. Run BOTH mutations on any manifest-rewriting change; pin the
+  on-disk seqs too (read the rewritten manifest's RAW avro via `Manifest::try_from_avro_bytes`,
+  pre-inheritance, and assert explicit original seqs — never null).
+- **DO NOT trust a builder's "Java would not emit key X" divergence claim without re-deriving from
+  `SnapshotSummary.Builder.build()`.** *Why:* the builder flagged `changed-partition-count=0` as a
+  Rust-only key for rewrite snapshots; the source (build() L191-213) shows `trustPartitionMetrics`
+  stays true with no files added and Java emits `changed-partition-count=0` TOO — parity, not
+  divergence. The interop s6 comparison must expect it on both sides.
+- **DO key cluster/fanout manifest writers by `(key, partition_spec_id)` and PIN the multi-spec
+  axis with a partition-evolution fixture** (append spec 0 → evolve → append spec 1 → cluster by a
+  CONSTANT key → one output manifest per spec id). *Why:* a spec-id-less key cross-merges
+  partition tuples from different specs into one manifest (`zip_eq` panic at best, corrupt
+  partition metadata at worst); single-spec fixtures can never catch it.
+
+### 2026-06-10 (Phase-2 completion arc Increment 2 — RewriteFiles seq preservation, BUILDER + REVIEWER Opus)
+- **WHEN LIFTING A COARSE GUARD, AUDIT THE WHOLE PATH IT GUARDED — the guard may be masking a
+  SECOND latent bug.** *Why:* lifting `has_outstanding_delete_files` exposed that
+  `RewriteFilesOperation::existing_manifest` returned `current_data_manifests()` only — a rewrite
+  on a delete-bearing table silently DROPPED every DELETE manifest from the new snapshot (table-
+  wide delete loss, resurrection regardless of seq preservation). The guard had made the broken
+  path unreachable, so no test could ever catch it. Fixed: carry ALL current manifests; a DELETE
+  manifest can never match a data `delete_path` in `process_deletes`, so it flows through the
+  carry branch. Java parity: `MergingSnapshotProducer.apply` (L973-1011) composes BOTH
+  `filterManager.filterManifests(dataManifests)` AND `deleteFilterManager.filterManifests(
+  deleteManifests)`; Rust's carry-unchanged is conservative-safe (Java also drops fully-dangling
+  delete manifests — not ported, harmless retention). Pin BOTH levels: the read-side crown jewel
+  (scan) AND a manifest-LIST structural pin (delete-manifest count survives the commit) — the two
+  fail under DIFFERENT mutations (carry-revert vs seq-strip), so neither subsumes the other.
+- **THE SAME `current_data_manifests()`-only bug exists in `delete_files.rs` (L256), `overwrite_
+  files.rs` (L695), `replace_partitions.rs` (L451) — UNGUARDED.** Any of those actions committed
+  on a merge-on-read table (Java- OR Rust-written) drops all outstanding delete manifests. The E2
+  metadata interop never saw it (its chain had no delete manifests — exactly the scoped-out path).
+  Tracked as the arc's Increment 2b (fix + per-action crown jewels).
+- **DO wire `ignore_equality_deletes = data_sequence_number.is_some()` (Java MergingSnapshot-
+  Producer L475-479) and pin BOTH directions with a concurrent-eq-delete pair.** *Why:* with the
+  seq preserved, a concurrent equality delete still applies to the rewritten data (eq applies iff
+  `data_seq < delete_seq` STRICTLY) — not a conflict; without preservation it IS fatal. A
+  position delete is path-scoped — it dies with the replaced file, so a NEW one is ALWAYS fatal.
+  Corollary: the resurrection crown jewel MUST use an EQUALITY delete — a position delete cannot
+  resurrect rows via sequence numbers (the delete vector is keyed by the data file's path).
+- **DO reject a NEGATIVE explicit data sequence number at the action boundary.** *Why:* the Rust
+  `ManifestWriter::add_entry` silently STRIPS a negative explicit seq into `None` ⇒ V2/V3
+  re-inheritance of the new (higher) seq ⇒ exactly the resurrection the parameter exists to
+  prevent. Java never receives one (compactions pass real seqs); Rust fails loudly.
+
+### 2026-06-10 (Phase-2 completion arc Increment 3 — MergeAppend, BUILDER + REVIEWER Opus)
+- **The uncommitted-new-manifest read-back chain is load-bearing for any merging producer:**
+  `load_manifest` on a manifest whose list entry has `sequence_number == -1` (UNASSIGNED) makes
+  `inherit_data` stamp `Some(-1)` into its Added entries; re-routing them through `add_entry`
+  strips the negative back to `None` on disk ⇒ they correctly re-inherit the REAL snapshot seq at
+  commit. Carried committed entries go through `add_existing_entry` (touches ONLY status; both seq
+  fields + snapshot id preserved verbatim; `add_entry_inner` hard-errors on a missing seq). Pin
+  BOTH halves with a raw-avro on-disk test (new entries None, carried entries Some(original) !=
+  the merged list seq).
+- **A suppression/filter test is VACUOUS if an earlier filter already removes its fixture — route
+  the case through the path under test and ASSERT the routing.** *Why:* the first tombstone-
+  suppression test used a manifest whose only entry was the tombstone; `existing_manifest`'s
+  has-live-files filter dropped it before the merge ever saw it, and the broaden-mutation passed.
+  Fix: co-locate the tombstone with a LIVE entry in one manifest and assert pre-merge that the
+  manifest reaches the merge input.
+- **`manifests-created`/`-kept`/`-replaced` summary keys: Java MAIN's merging producer emits them
+  (`SnapshotProducer.buildManifestCountSummary` L716-733); Rust emits them ONLY from
+  RewriteManifests.** The interop canonical view's `SUMMARY_COUNT_KEYS` allowlist EXCLUDES them,
+  so the s7 merge-append comparison is insensitive either way — no allowlist or production change
+  needed for Increment 4. Proving manifests-* parity later requires a properly-tagged Java
+  checkout (the /tmp ref is a depth-1 TAGLESS shallow clone — `git log -S` / `merge-base
+  --is-ancestor` answers from it about version ancestry are ARTIFACTS, not facts).
+- **Bin-packing port: Java `canAdd` is `<=` on weight, `<` on max-items; `packEnd` = reverse input
+  → pack → reverse each bin → reverse bin list; min-count gate is STRICT `<` (== merges).**
+  Hand-trace ≥3 cases through BOTH algorithms before trusting unit tests — a test asserting the
+  port's own behavior pins nothing about Java.
+
+### 2026-06-10 (Phase-2 completion arc Increment 4 — metadata interop extension, BUILDER Opus)
+- **The three Phase-2 ports (`rewrite_manifests` cluster-by, `merge_append` one-bin merge,
+  `rewrite_files` seq-preservation) were GREEN against Java 1.10.0 on the FIRST round-trip run —
+  zero canonicalization fixes, zero production changes.** Extending the E2 chain (s6 cluster-by-
+  partition → s7 property-set → s8 merge-append) + a sibling delete-bearing fixture B all matched
+  Java byte-for-byte immediately. The unit-level builder+reviewer cycles for Increments 1-3 had
+  already pinned the exact provenance/seq semantics, so the metadata interop confirmed rather than
+  discovered. (When the upstream increments were rigorous, the interop increment is a confirmation
+  step, not a debugging one — but it is still the ONLY 1:1 proof, so it lands regardless.)
+- **A property-set commit (`updateProperties`/`update_table_properties`) produces NO snapshot — the
+  snapshot-level canonical view is unaffected, and the ordinal scheme stays consistent.** s7 set
+  `commit.manifest.min-count-to-merge=2` on both sides; the chain has 7 snapshots (s1-s6 + s8), seq
+  numbers 1-7 with no gap (the property commit consumes no sequence number either). Confirmed both
+  sides agree the merge-arming property is visible to s8's MERGING append within the same chain.
+- **Empirical 1.10.0 dangling-delete probe (the optional one): a `RewriteFiles` that rewrites the
+  data file a position-delete REFERENCES commits and KEEPS the now-dangling delete manifest.**
+  MECHANISM (re-traced against 1.10.0 by the reviewer — the BUILDER's original attribution was
+  WRONG): a `RewriteFiles` commit DOES run `deleteFilterManager.removeDanglingDeletesFor(...)`
+  (`MergingSnapshotProducer` L995) — `deleteFilterManager` is a `DeleteFileFilterManager` that does
+  NOT override it, so the base impl runs fine (it just records the removed data-file paths). The
+  `UnsupportedOperationException` throw at L1220-1222 lives on the SIBLING `DataFileFilterManager`
+  (the DATA-file side) and is NEVER reached for delete pruning. The real reason a dangling
+  POSITION-DELETE PARQUET survives is that the only two delete-drop paths both miss it: (a)
+  `isDanglingDV` is gated on `ContentFileUtil.isDV` == `FileFormat.PUFFIN`, so a parquet position
+  delete (V2, non-DV) is structurally exempt; (b) the `minSequenceNumber` cutoff
+  (`dropDeleteFilesOlderThan`) does not drop it (the carried A'@seq1 holds the min data seq at 1,
+  below the delete's seq 2). NET: only dangling *DVs* are pruned on a `RewriteFiles` in 1.10.0; a
+  dangling parquet position-delete is kept — which CONVERGES with the Rust action's documented
+  carry-unchanged posture (PARITY, not divergence). Lesson: drive the divergence question
+  EMPIRICALLY with a throwaway probe (commit it, emit the canonical view, read it) — and when you
+  cite a source mechanism for WHY, trace which concrete subclass/instance is actually invoked (the
+  data-vs-delete filter-manager pair is a classic misattribution trap). DELETE the probe (it must
+  not enter the byte-diffed chain) and record the finding in prose + the GAP_MATRIX cell.
+- **Cluster keys are GROUPING-only: any key fn producing the same partition of entries is
+  equivalent across languages, because the key string never appears in metadata.** Java
+  `String.valueOf(file.partition())` and Rust `format!("{:?}", data_file.partition())` render
+  differently but both yield one group per distinct partition tuple ⇒ identical manifest grouping.
+  Document the chosen key fns on both sides; the comparison guards the rest.
+
+### 2026-06-10 (Phase-2 completion arc Increment 5 — stale-deferral audit + matrix repair, ORCHESTRATOR Fable)
+- **DO verify a deferral note against the LIVE Java source before building it.** *Why:* the
+  Increment-5 brief and the GAP_MATRIX OverwriteFiles cell both said "deferred:
+  `validateDataFilesExist` wiring" — but Java's `BaseOverwriteFiles.validate` (L135-175) has
+  exactly three blocks, ALL ported; `validateDataFilesExist` is RowDelta-ONLY (grep of core/
+  confirms the single caller) and already landed in Rust 2026-06-09. OverwriteFiles' concurrent-
+  removal protection is `failMissingDeletePaths` ≡ Rust `resolve_delete_paths`. Building the
+  "missing" block would have been anti-parity. Same family as the 2026-06-09 "verify a suspected
+  parity divergence against the LIVE Java source BEFORE instructing a fix" lesson — it applies to
+  deferral notes too.
+- **DO pipe-count-audit the GAP_MATRIX after any matrix-wide edit: every `^|` row must carry
+  exactly 5 `|` characters.** *Why:* the de-triplication cell mover split the OverwriteFiles
+  narrative MID-EXPRESSION on the logical-OR inside `(strict.eval(part) || metrics.eval(file))` —
+  half the narrative was stranded in the matrix as a phantom column and the archive section ended
+  mid-sentence. Raw pipes inside code spans break naive pipe-delimited cell handling. Repaired
+  2026-06-10 by rejoining the strand verbatim in the archive (conservation preserved).
+
+### 2026-06-10 (post-arc logic + security audit, ORCHESTRATOR Fable — two parity bugs found + fixed)
+- **Java's merge `first` is the unconditional STREAM HEAD (`manifestIter.next()`,
+  ManifestMergeManager L85), NOT "this commit's new manifest".** For an empty-data merging append
+  (properties-only commit) the head is the first EXISTING manifest and ITS bin still gets the
+  min-count protection. Gating `first` on `added_snapshot_id == this snapshot` returned None on
+  that path and silently dropped the protection — Rust merged 2 manifests where Java keeps 2
+  (empirically pinned: the audit test failed 1≠2 pre-fix). When porting a "the first element"
+  concept, port the CODE's selection rule, not the comment's intent.
+- **Java `deletedManifests` is a Set (path equality); a Vec-backed port double-counts a duplicate
+  `delete_manifest` on the replaced side of `validateFilesCounts`** ("0 (new), 2 (old)" vs Java's
+  1 — spurious rejection, fail-loud not corruption, but a divergence). Mirror the COLLECTION
+  semantics of the Java field, not just its uses: Set-backed fields dedupe at insertion.
+- **DO use saturating arithmetic on any accumulator fed by UNTRUSTED on-disk metadata**
+  (`manifest_length` from a manifest list): `bin_weight + weight` and the rolling size estimate
+  could panic in debug builds (overflow check) or wrap in release on a hostile value. Saturation
+  makes an absurd sum "never fits"/"roll now" — strictly safe, identical to Java for every
+  realistic value. Audit greps that pay off: `as u64|as u32` casts on spec-struct fields (clamp
+  negatives first), `+=` on u64 accumulators, `debug_assert` guarding anything reachable in
+  release, `zip_eq` on data derived from storage.

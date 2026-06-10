@@ -39,6 +39,8 @@ generate/verify flow; this map only routes.**
 | `run-interop-scan-exec.sh` / `-d2.sh` | data-level scan-execution interop (Java writes parquet + position delete; D2: Java reads Rust) |
 | `run-interop-eq-delete.sh` / `-d2.sh` | equality-delete scan-exec interop, both directions |
 | `run-interop-part.sh` / `-d2.sh` | partitioned merge-on-read scan-exec interop, both directions |
+| `run-interop-rowdelta-meta.sh` | E1 metadata-level row-delta interop: canonical snapshot-metadata view over the 3 scan-exec fixtures, 3 comparison directions each |
+| `run-interop-write-actions.sh` | E2 + Increment-4 metadata-level write-actions interop: ONE eight-step chain (`WriteActionsOracle`: delete/overwrite/replace-partitions/rewrite/rewrite-manifests/merge-append) + a delete-bearing seq-preserving `rewrite_files` fixture B (`RewriteSeqOracle`), each judged 3 ways via `SnapshotMetaOracle` |
 | `run-inspection-manifests.sh` | inspection-table expectation generation |
 
 Durable artifacts are the committed fixtures under `crates/iceberg/testdata/interop/` and the Rust

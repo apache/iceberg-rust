@@ -135,6 +135,29 @@ impl TableProperties {
     /// Default value for data file format
     pub const PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT: &str = "parquet";
 
+    /// Target size (bytes) for a manifest file when rewriting / merging manifests (Java
+    /// `TableProperties.MANIFEST_TARGET_SIZE_BYTES`, `core/TableProperties.java` L115). A manifest
+    /// writer rolls to a new file once it reaches this size. Consumed by `RewriteManifests`.
+    pub const PROPERTY_COMMIT_MANIFEST_TARGET_SIZE_BYTES: &str =
+        "commit.manifest.target-size-bytes";
+    /// Default manifest target size: 8 MB (Java `MANIFEST_TARGET_SIZE_BYTES_DEFAULT`).
+    pub const PROPERTY_COMMIT_MANIFEST_TARGET_SIZE_BYTES_DEFAULT: u64 = 8 * 1024 * 1024;
+
+    /// Minimum number of manifests that must accumulate before a merge-append merges them (Java
+    /// `TableProperties.MANIFEST_MIN_MERGE_COUNT`, `core/TableProperties.java` L118). Reserved for the
+    /// merge-append action (a later increment); not consumed by `RewriteManifests`.
+    pub const PROPERTY_COMMIT_MANIFEST_MIN_COUNT_TO_MERGE: &str =
+        "commit.manifest.min-count-to-merge";
+    /// Default minimum manifest count to merge: 100 (Java `MANIFEST_MIN_MERGE_COUNT_DEFAULT`).
+    pub const PROPERTY_COMMIT_MANIFEST_MIN_COUNT_TO_MERGE_DEFAULT: u32 = 100;
+
+    /// Whether a merge-append automatically merges manifests on commit (Java
+    /// `TableProperties.MANIFEST_MERGE_ENABLED`, `core/TableProperties.java` L121). Reserved for the
+    /// merge-append action (a later increment); not consumed by `RewriteManifests`.
+    pub const PROPERTY_COMMIT_MANIFEST_MERGE_ENABLED: &str = "commit.manifest-merge.enabled";
+    /// Default for manifest-merge-enabled: `true` (Java `MANIFEST_MERGE_ENABLED_DEFAULT`).
+    pub const PROPERTY_COMMIT_MANIFEST_MERGE_ENABLED_DEFAULT: bool = true;
+
     /// Target file size for newly written files.
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str = "write.target-file-size-bytes";
     /// Default target file size

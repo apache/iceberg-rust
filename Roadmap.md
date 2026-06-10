@@ -134,13 +134,14 @@ merge-on-read DATA-level scan execution (the full {position, equality} × {Java-
 inspection-table set incl. `readable_metrics` (Direction-1, 2026-06-09→10).
 
 **Built but interop-deferred 🟡:** the Phase-2 write actions (`DeleteFiles`, `OverwriteFiles`,
-`ReplacePartitions`, `RewriteFiles`, `RowDelta` + position-delete writer) with their
+`ReplacePartitions`, `RewriteFiles` incl. `dataSequenceNumber` preservation, `RowDelta` +
+position-delete writer, `RewriteManifests`, merge append — the write-action set's metadata-level
+semantics are Java-judged via the 8-step interop chain, 2026-06-10) with their
 serializable-isolation conflict validations; incremental append/changelog scans; residual
 evaluation; scan-metrics model + emission.
 
-**Missing ❌:** `RewriteManifests` (sketched in [task/todo.md](task/todo.md)), merge append,
-deletion-vector writer, ORC/Avro data files, variant/geo/unknown types, views, maintenance
-actions, encryption.
+**Missing ❌:** deletion-vector writer, ORC/Avro data files, variant/geo/unknown types, views,
+maintenance actions, encryption.
 
 **Row-by-row truth:** [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRIX.md).
 
@@ -195,15 +196,14 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
   residual V3 groundwork (row-lineage fields, remaining `MIN_FORMAT_VERSIONS` types) tracks in the
   GAP_MATRIX. Increment narratives: [task/todo-archive/phase1.md](task/todo-archive/phase1.md).
 
-### Phase 2 — Write engine  ·  **Status: 🟡 in progress (all core actions built; interop + remaining machinery outstanding)**
+### Phase 2 — Write engine  ·  **Status: 🟡 far along (the FULL action set built incl. `RewriteManifests` + merge append + seq-preserving rewrite, 2026-06-10; metadata-level interop Java-judged; DV writer + real-catalog hardening + data-level interop outstanding)**
 - **Goal:** the full commit/write surface beyond fast-append.
 - **Gates on:** Phase 1.
 - **Key deliverables:** `DeleteFiles`, `OverwriteFiles`, `ReplacePartitions`, `RewriteFiles`,
   `RowDelta` + position-delete/DV writers, `RewriteManifests`, merge append, multi-op transactions +
   optimistic-concurrency retry validated against Glue + S3 Tables.
-- **Where it stands:** the five core actions + the conflict-validation layer are built and
-  unit-proven (per-action status: GAP_MATRIX); `RewriteManifests` is sketched in
-  [task/todo.md](task/todo.md); merge append + DV writer + real-catalog hardening remain.
+- **Where it stands:** per-action status: GAP_MATRIX (the only status record). Remaining in-phase:
+  DV writer, real-catalog (Glue + S3 Tables) hardening, data-level interop for the write actions.
 - **Exit criteria:** each write action commits correctly through the real catalogs with conflict
   detection, with interop round-trips vs Java. Narratives:
   [task/todo-archive/phase2.md](task/todo-archive/phase2.md).
@@ -261,8 +261,9 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
 
 ## Headline gap AREAS (ranked by effort × value — statuses live in the GAP_MATRIX)
 
-1. **Write engine completion** — `RewriteManifests`, merge append, DV writer, real-catalog
-   (Glue + S3 Tables) hardening, metadata-level interop for the landed actions.
+1. **Write engine completion** — DV writer, real-catalog (Glue + S3 Tables) hardening,
+   data-level interop for the write actions (`RewriteManifests` + merge append + the
+   seq-preserving rewrite landed with metadata-level interop 2026-06-10 — see GAP_MATRIX).
 2. **Format & type breadth** — ORC + Avro data files; remaining V3 types (variant, geo, `unknown`).
 3. **Scan completion** — `BatchScan`, CDC-merge, split planning, incremental-scan interop.
 4. **Views in catalogs** (`ViewCatalog` + view operations).
