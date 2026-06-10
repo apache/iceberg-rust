@@ -47,9 +47,10 @@ capability's *status*, the **GAP_MATRIX** (re-audited against the live base) win
 1. **This file (CLAUDE.md)** — repository intent, prohibitions, and the navigation contract.
 2. **[Roadmap.md](Roadmap.md)** — the parity phase plan and the current phase; then
    **[docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRIX.md)** for per-capability status.
-3. **The operating manual for your model tier** — [skills/Opus.md](skills/Opus.md),
-   [skills/Sonnet.md](skills/Sonnet.md), or [skills/Haiku.md](skills/Haiku.md) (the portable
-   engineering contract; see [skills/map.md](skills/map.md)). CLAUDE.md wins on any conflict.
+3. **The operating manual for your model tier** — [skills/Fable.md](skills/Fable.md) (Mythos-class),
+   [skills/Opus.md](skills/Opus.md), [skills/Sonnet.md](skills/Sonnet.md), or
+   [skills/Haiku.md](skills/Haiku.md) (the portable engineering contract; see
+   [skills/map.md](skills/map.md)). CLAUDE.md wins on any conflict.
 4. **[task/lessons.md](task/lessons.md) in full, then [task/todo.md](task/todo.md)** — accumulated
    lessons and any mid-flight plan to pick up.
 5. **The `map.md` of every directory your task will touch** (where present — see the navigation
