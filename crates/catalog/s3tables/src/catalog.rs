@@ -246,9 +246,11 @@ impl S3TablesCatalog {
                 .as_service_error()
                 .is_some_and(GetTableError::is_not_found_exception)
             {
+                // S3 Tables GetTable API only reports that the resource was not found, and does not distinguish between namespaces and tables.
+                // https://docs.aws.amazon.com/AmazonS3/latest/API/API_s3Buckets_GetTable.html#API_s3Buckets_GetTable_Errors
                 Error::new(
                     ErrorKind::TableNotFound,
-                    format!("Table {table_ident} is not found"),
+                    format!("Table {table_ident} is not found, either because the namespace or table did not exist"),
                 )
                 .with_source(err)
             } else {
