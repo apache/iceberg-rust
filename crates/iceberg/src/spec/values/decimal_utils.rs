@@ -83,7 +83,7 @@ pub fn try_decimal_from_i128_with_scale(mantissa: i128, scale: u32) -> Result<De
 /// Create a D128 from i64 mantissa and scale.
 ///
 /// This is equivalent to rust_decimal's `Decimal::new`.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn decimal_new(mantissa: i64, scale: u32) -> Decimal {
     decimal_from_i128_with_scale(mantissa as i128, scale)
 }
