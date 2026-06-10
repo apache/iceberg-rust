@@ -613,18 +613,24 @@ mod tests {
         }
     }
 
-    /// Reproduces row duplication when a single row group is subdivided into multiple
-    /// byte-range splits (e.g. Spark/Iceberg planning with a split-size smaller than the
-    /// row group size). Each row group must be owned by exactly one split. With the
-    /// previous overlap-based selection, every split whose byte range touched the row
-    /// group claimed it, so the row group was read multiple times and its rows duplicated.
+    /// A single data file split into multiple sub-row-group byte ranges (as Spark/Iceberg
+    /// planning produces when split-size is smaller than a row group) must still yield each
+    /// row exactly once. The previous overlap-based selection let every split whose byte range
+    /// touched a row group read it, duplicating rows; ownership by midpoint reads each row group
+    /// from exactly one split.
     #[tokio::test]
-    async fn test_sub_row_group_splits_assign_each_row_group_once() {
-        use std::sync::Arc as StdArc;
-
+    async fn test_sub_row_group_splits_do_not_duplicate_rows() {
         use arrow_array::Int32Array;
-        use parquet::file::metadata::ParquetMetaData;
-        use parquet::file::reader::{FileReader, SerializedFileReader};
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
 
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
@@ -637,7 +643,7 @@ mod tests {
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
         let file_path = format!("{table_location}/sub_split.parquet");
 
-        // Three row groups so we exercise both interior and boundary midpoints.
+        // Three row groups of 100 rows each (ids 0..300).
         let props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
             .set_max_row_group_row_count(Some(100))
@@ -653,35 +659,55 @@ mod tests {
         }
         writer.close().unwrap();
 
-        let file = File::open(&file_path).unwrap();
-        let reader = SerializedFileReader::new(file).unwrap();
-        let metadata: StdArc<ParquetMetaData> = StdArc::new(reader.metadata().clone());
-        let num_row_groups = metadata.num_row_groups();
-        assert_eq!(num_row_groups, 3, "Expected 3 row groups");
-
-        // Tile the whole file into 64-byte splits, mirroring Spark's split-size=64 planning.
         let file_size = std::fs::metadata(&file_path).unwrap().len();
-        let split_size = 64u64;
+        let file_io = FileIO::new_with_fs();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
-        // Count how many splits claim each row group. Every row group must be claimed exactly
-        // once; more than once is the duplication bug, zero means data is silently dropped.
-        let mut claims = vec![0usize; num_row_groups];
+        // Tile the whole file into 64-byte splits, mirroring Spark's split-size planning, and
+        // read every split. A 64-byte split is far smaller than a row group, so each row group
+        // is touched by several splits but must be owned (read) by exactly one.
+        let mut ids = Vec::new();
+        let split_size = 64u64;
         let mut start = 0u64;
         while start < file_size {
             let length = split_size.min(file_size - start);
-            let selected =
-                ArrowReader::filter_row_groups_by_byte_range(&metadata, start, length).unwrap();
-            for idx in selected {
-                claims[idx] += 1;
+            let task = FileScanTask::builder()
+                .with_file_size_in_bytes(file_size)
+                .with_start(start)
+                .with_length(length)
+                .with_data_file_path(file_path.clone())
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![1])
+                .with_case_sensitive(false)
+                .build();
+
+            let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+            let batches = reader
+                .clone()
+                .read(tasks)
+                .unwrap()
+                .stream()
+                .try_collect::<Vec<RecordBatch>>()
+                .await
+                .unwrap();
+
+            for batch in &batches {
+                let col = batch
+                    .column(0)
+                    .as_primitive::<arrow_array::types::Int32Type>();
+                ids.extend(col.values().iter().copied());
             }
+
             start += length;
         }
 
-        for (idx, &count) in claims.iter().enumerate() {
-            assert_eq!(
-                count, 1,
-                "row group {idx} was claimed by {count} splits, expected exactly 1"
-            );
-        }
+        ids.sort_unstable();
+        assert_eq!(
+            ids,
+            (0..300).collect::<Vec<i32>>(),
+            "each row must be read exactly once across all splits, got {} rows",
+            ids.len()
+        );
     }
 }
