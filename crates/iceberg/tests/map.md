@@ -63,6 +63,8 @@ asserts structural equality with Java's result. All run **offline** in plain `ca
 | Test passes locally, Direction 2 fails | Rust emits metadata Java rejects — run the `-d2` script and read Java's parse/validation error |
 | Fixture file not found | Fixtures are committed under `crates/iceberg/testdata/interop/` — a new scenario needs a `generate` run first |
 | Scenario drift | Rust `apply_scenario_ops` and Java `InteropOracle.scenarios()` must stay op-for-op identical — they are mirrored by hand |
+| `register_table` rejects a pre-written metadata file | The catalog reads via its OWN FileIO: build `MemoryCatalog` `with_storage_factory(Arc::new(LocalFsStorageFactory))` over a tempdir, put the file under a `metadata/` subdirectory, and name it `<version>-<uuid>.metadata.json` — a bare `base.metadata.json` fails "Invalid metadata file name format" |
+| Can't name an action type / call `.commit()` from an integration test | `TransactionAction` is `pub(crate)` — drive evolution through the PUBLIC path (catalog register + `Transaction` + `commit`); do NOT widen production visibility for a test. The catalog path is stronger anyway (it runs the `TableRequirement` checks) |
 
 ### First checks
 

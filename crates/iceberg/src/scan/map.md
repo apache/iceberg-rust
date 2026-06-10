@@ -62,6 +62,7 @@ propagation, and opt-in scan-metrics reporting.
 | Identity-partition constants wrong / type errors in record batches | The `PartitionUtil.constantsMap` constant-materialization path is **deliberately deferred** — `record_batch_transformer` has latent type bugs; the task's `partition_spec` stays `None` |
 | Metrics report emitted on a dropped stream / per task | The report fires ONCE on full consumption (`None` from the stream); early-drop emits NOTHING (pinned by test) |
 | No-reporter path changed | With no reporter there must be **no collector, no timer, no wrapper** — the plan path is byte-unchanged (structural test pins this) |
+| Wrong rows after partition evolution | The residual (and any per-file logic) must use the FILE's own spec (`partition_spec_by_id(manifest.partition_spec_id)`), never `default_partition_spec()`. A single-spec fixture is structurally BLIND to this swap — use the 2-spec `new_with_evolved_default_spec` fixture to pin it |
 
 ### First checks
 

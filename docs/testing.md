@@ -72,6 +72,44 @@ Java **in both directions where applicable**:
 Until an interop test exists for a capability, record it as 🟡 (partial), not ✅, in
 [docs/parity/GAP_MATRIX.md](parity/GAP_MATRIX.md) — even if the unit tests are green.
 
+## Mutation-testing & review discipline
+
+Distilled from the Phase 1–3 builder/reviewer lessons (promoted 2026-06-09 from
+[task/lessons.md](../task/lessons.md); full narratives in
+[task/lessons-archive/](../task/lessons-archive/)). A test suite is only trusted when targeted
+mutations of the production code make it fail.
+
+- **Mutate both directions.** Disable a guard (its rejection tests must fail) AND over-broaden it
+  (a legal-case test must fail). One direction alone misses an over-firing guard.
+- **Pin a strict inequality ON the boundary, not near it.** Only an input exactly equal to the
+  boundary distinguishes `<` from `<=`; a near-boundary value survives the mutation.
+- **Mutation-test a shared helper from EVERY consumer.** One mutation of the shared logic should
+  fail tests in all callers simultaneously; a caller with no failure has a coverage gap.
+- **When N sources feed N output slots, one test must give all N distinct values.** Two all-null
+  (or equal) sources cannot catch a cross-wiring swap.
+- **A documented-but-unpinned divergence needs a test.** Prose is not a regression guard; a kept
+  divergence without a pinning test is indistinguishable from an accidental one.
+- **Test interaction branches, not just each method.** When porting a Java API, grep its test file
+  for the *combinations* of the new methods (e.g. add-with-default → require).
+- **Add a public-entry-point negative test even when a downstream layer already rejects the case.**
+  Defense-in-depth layers each need a pin at their own door.
+- **Mutation mechanics:** snapshot the file BEFORE any in-place mutation; restore from the
+  pre-mutation copy; re-run the FULL suite (a filtered run can hide a mutation that corrupted a
+  test's own expectation). NEVER `git checkout -- <file>` to revert a mutation on a tracked file
+  with uncommitted work — it wipes the work; revert surgically. When a target fails, `git stash`
+  your change and re-run on the clean tree before blaming it.
+- **Verify-then-fix may land zero production changes.** The deliverable is per-case empirical proof
+  plus mutation-verified regression tests. Convert throwaway probes into named regression tests —
+  never ship a probe, never delete one without a replacement.
+- **Write-action suites need three specific pins:** (1) the post-commit scan LIVE SET (what a scan
+  would read), not just emitted updates; (2) cross-snapshot PROVENANCE — surviving/carried-forward
+  entries keep their ORIGINAL snapshot id + sequence numbers (re-stamping is the silent-corruption
+  bug class); (3) cumulative multi-commit TOTALS (append, append, delete) — per-commit assertions
+  cannot catch a previous-summary seed bug.
+- **Every concurrent-commit validation needs a no-override test** that relies solely on the
+  transaction-captured starting snapshot (no `validate_from_snapshot`) — an override-only suite
+  cannot pin the capture surviving `do_commit`'s re-base. This gap recurred three times.
+
 ## Verification commands (the Done gate)
 
 Run before declaring any change complete (canonical list in [CLAUDE.md](../CLAUDE.md) and the
@@ -98,6 +136,15 @@ Or the `Makefile` targets: `make check` (fmt + clippy + TOML + unused-deps) and 
 
 When the offline suite is green but service-bound suites were skipped, say so explicitly — a skip is
 not a pass.
+
+Two gate-widening rules learned the hard way (2026-06-08, promoted 2026-06-09):
+
+- **A `-p iceberg` fast gate is NOT enough for cross-crate changes.** Adding a public enum variant /
+  trait method must build the consumers: `cargo build --workspace --exclude iceberg-sqllogictest
+  --all-targets` (a non-exhaustive-match break once sat latent across four committed increments).
+- **A scan/read-path change must RUN the downstream tests, not just build them:**
+  `cargo test -p iceberg-datafusion` (its MemoryCatalog integration tests run locally, no Docker)
+  — a workspace BUILD compiles them but caught nothing when the read path changed behavior.
 
 ## Definition of done (per capability)
 

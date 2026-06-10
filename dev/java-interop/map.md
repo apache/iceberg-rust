@@ -71,6 +71,9 @@ tests in [crates/iceberg/tests/](../../crates/iceberg/tests/map.md) that read th
 | Inspection expectations don't match Rust output | Materialize Java expectations from a **re-parsed** base (Java's on-disk round-trip), not Java's in-memory objects — e.g. `operation` is split out of the summary map on disk |
 | `mvn` step fails offline | The oracle needs network for first dependency resolution; committed fixtures keep `cargo test` independent of it |
 | Scenario passes one direction only | Scenario op-sequences must be **identical and identically named** on both sides — diff `apply_scenario_ops` vs `InteropOracle.scenarios()` |
+| A Java code path silently doesn't run in the oracle | Drive REAL Java objects (`new BaseTable(ops, name).updateSpec()…commit()` over an in-memory `TableOperations`), NOT the `@VisibleForTesting` ctors — those set `base = null` and skip base-dependent paths (e.g. field-id recycling) |
+| Interop test passes but proves nothing | Mutation-prove BOTH directions by corrupting fixtures: edit a Java-written field (Dir-1 assertion must fail) and shrink a Rust-written value (Dir-2 `mvn verify` must exit 1). A harness comparing a file to itself passes tautologically |
+| Noisy fixture diffs after a regen | Java's `newTableMetadata` regenerates `table-uuid`/`last-updated-ms` every run — confirm STRUCTURAL identity, and `git checkout --` fixtures outside your increment's scope |
 
 ### First checks
 

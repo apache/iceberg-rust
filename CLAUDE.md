@@ -241,6 +241,10 @@ them to Sonnet or Haiku; only run an Opus sub-agent on a direct, explicit instru
 
 ## Working conventions
 
+- **Chain the verification gate to the commit in ONE `&&` chain** — `typos . && cargo fmt --all --
+  check && git add -A && git commit …` — never put `git commit` on a separate line from the gate: a
+  failed gate on its own line still lets the commit run. (Promoted 2026-06-09 from a twice-repeated
+  lessons entry.)
 - **Upstream is a sync baseline, not a constraint.** This is an owned fork for Java `iceberg-core`
   parity — edit freely; sync up from upstream and cherry-pick wins, but mergeability is not required.
 - **Tests ship with the change**, plus interop tests where applicable (see the Parity mandate and the

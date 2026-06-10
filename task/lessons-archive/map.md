@@ -1,0 +1,63 @@
+<!--
+  ~ Licensed to the Apache Software Foundation (ASF) under one
+  ~ or more contributor license agreements.  See the NOTICE file
+  ~ distributed with this work for additional information
+  ~ regarding copyright ownership.  The ASF licenses this file
+  ~ to you under the Apache License, Version 2.0 (the
+  ~ "License"); you may not use this file except in compliance
+  ~ with the License.  You may obtain a copy of the License at
+  ~
+  ~   http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing,
+  ~ software distributed under the License is distributed on an
+  ~ "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  ~ KIND, either express or implied.  See the License for the
+  ~ specific language governing permissions and limitations
+  ~ under the License.
+-->
+
+# map.md — task/lessons-archive/
+
+## Purpose
+
+Verbatim archives produced by [skills/compaction.md](../../skills/compaction.md) passes over
+[../lessons.md](../lessons.md). **Not read by default** — sessions grep here on demand (a past-issue
+smell, a superseded reference, a `_promoted_` stub trail). Nothing is ever deleted: every entry is
+in the active file, in exactly one archive file, or promoted with a stub here.
+
+## Contents
+
+| File | Covers | Entries |
+|---|---|---|
+| `2026-06_phase1-phase3.md` | Pass 1 (2026-06-09, size trigger): Phase 0 reset + Phase 1 evolution actions (ManageSnapshots / UpdatePartitionSpec / UpdateSchema, increments 1–11) + Phase 2 write-engine increments (DeleteFiles / OverwriteFiles / ReplacePartitions / RewriteFiles / PositionDeleteWriter) + Phase 3 inspection tables, residual evaluator, incremental scans — BUILDER/REVIEWER narratives dated 2026-06-07 → 2026-06-09 | 52 (31 with promotion stubs, 21 plain) |
+
+## I want to...
+
+| I want to... | go to |
+|---|---|
+| Find why a rule exists in a map.md `## Debug` / docs/testing.md | grep this directory for the rule's keywords; the `_promoted 2026-06-09 → <target>_` stub marks the source entry |
+| Read a landed increment's full builder/reviewer narrative | `2026-06_phase1-phase3.md`, ordered chronologically by the original `### YYYY-MM-DD (…)` headings |
+| Check whether a lesson was lost | run the conservation check: `grep -c '^### 20'` over active + archives vs the pre-pass git history |
+
+## Pointers
+
+- **Up:** [../lessons.md](../lessons.md) (the active file, read every session) ·
+  procedure: [skills/compaction.md](../../skills/compaction.md)
+
+## Debug
+
+### Known failure modes
+
+| Symptom | Likely cause |
+|---|---|
+| A session routinely needs an archive entry | The pass gave it the wrong verdict — it was a KEEP or a PROMOTE; restore it to the active file (or promote it) in a follow-up change, don't read archives habitually |
+| An archive entry contradicts a current map/manual rule | The promotion distilled or superseded it — the canonical home wins; the archive is provenance, not authority |
+
+### First checks
+
+- Check the compaction log at the top of [../lessons.md](../lessons.md) for which pass moved what.
+
+### Escalate to
+
+- Procedure questions → [skills/compaction.md](../../skills/compaction.md).
