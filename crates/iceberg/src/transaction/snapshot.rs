@@ -84,8 +84,8 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
     /// - **Overwrite operations**: May exclude manifests for partitions being overwritten
     /// - **Delete operations**: May exclude manifests for partitions being deleted
     fn existing_manifest(
-        &self,
-        snapshot_produce: &SnapshotProducer<'_>,
+        &mut self,
+        snapshot_produce: &mut SnapshotProducer<'_>,
     ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
 }
 
@@ -239,7 +239,10 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_id
     }
 
-    fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
+    pub(crate) fn new_manifest_writer(
+        &mut self,
+        content: ManifestContentType,
+    ) -> Result<ManifestWriter> {
         let new_manifest_path = format!(
             "{}/{}/{}-m{}.{}",
             self.table.metadata().location(),
@@ -338,7 +341,7 @@ impl<'a> SnapshotProducer<'a> {
     /// and collects all of the manifests to be included in the new snapshot as [ManifestFile] entries.
     async fn produce_manifests<OP: SnapshotProduceOperation, MP: ManifestProcess>(
         &mut self,
-        snapshot_produce_operation: &OP,
+        snapshot_produce_operation: &mut OP,
         manifest_process: &MP,
     ) -> Result<Vec<ManifestFile>> {
         // Assert current snapshot producer contains new content to add to new snapshot.
@@ -437,7 +440,7 @@ impl<'a> SnapshotProducer<'a> {
     /// Finished building the action and return the [`ActionCommit`] to the transaction.
     pub(crate) async fn commit<OP: SnapshotProduceOperation, MP: ManifestProcess>(
         mut self,
-        snapshot_produce_operation: OP,
+        mut snapshot_produce_operation: OP,
         process: MP,
     ) -> Result<ActionCommit> {
         let manifest_list_path = self.generate_manifest_list_file_path(0);
@@ -478,7 +481,7 @@ impl<'a> SnapshotProducer<'a> {
         })?;
 
         let new_manifests = self
-            .produce_manifests(&snapshot_produce_operation, &process)
+            .produce_manifests(&mut snapshot_produce_operation, &process)
             .await?;
 
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;
