@@ -34,6 +34,37 @@ How to use it (see the manuals' §1):
 
 > **Archival log.** Last todo-archival pass: 2026-06-09 (size trigger — 4,344 lines) → [todo-archive/](todo-archive/) (phase1/phase2/phase3). Completed-increment narratives moved verbatim; this file keeps the active sprint + open items + archive pointers. Procedure: [skills/compaction.md](../skills/compaction.md) §Todo Archival. Archives are not read by default.
 
+## DONE (2026-06-10): Sprint increment E1 — RowDelta METADATA-level interop (branch `interop/rowdelta-metadata`)
+
+The snapshot/manifest SEMANTICS proof on top of the data-level scan-exec interop. Both sides emit a
+CANONICAL "snapshot metadata view" (ordinal snapshots, COUNT-only summaries, manifest-list → entry
+structure with POST-INHERITANCE sequence numbers, single-value-JSON partitions) over the three
+EXISTING scan-exec fixtures; compared 3 ways per fixture.
+
+- [x] Java `SnapshotMetaOracle` + `emit-snapshot-meta` mode (InteropOracle.java); explicit
+      cross-language entry sort tuple.
+- [x] Rust mirror `crates/iceberg/tests/interop_rowdelta_meta.rs` (env-gated, offline no-op).
+- [x] `run-interop-rowdelta-meta.sh`: Java writes 3 tables + emits views; Rust writes 3 equivalents
+      (existing GEN paths reused); Java emits + byte-DIFFS its view of each Rust table vs its own
+      (Java judging Rust); Rust asserts its views of BOTH tables equal Java's.
+- [x] **REAL parity bug found + fixed** (`spec/snapshot_summary.rs`): Rust omitted
+      `changed-partition-count` from every summary (unpartitioned files never tracked; count
+      emitted only-if-positive; `trust_partition_metrics` defaulted FALSE vs Java's trusted
+      default). Fixed Java-faithfully (trust-gated count incl. 0, empty-partition tracked,
+      `partition-summaries-included`, empty-key skip); 2 inconsistent test fixtures reconciled.
+- [x] REVIEWER (Opus, actor-critic): canonicalization verified sound (null-vs-empty equality_ids
+      symmetric; sort-tuple ties render identical; *-files-size exclusion correct); production fix
+      line-cited exact vs Java `SnapshotSummary.java`; found 2 UNPINNED offline mutation axes
+      (count only-if-positive; marker unconditional) and added the closing test; flagged the
+      V1 sequence-number-tie ordinal limit (documented in both emitters).
+
+**Outcome:** round-trip GREEN — 3 fixtures × {Java-reads-Rust byte-diff, Rust-reads-Java,
+Rust-self} (9 comparisons). Mutations: pre-fix run failure = the disable-mutation; poisoned count
+fails both Rust tests; reviewer's 2 mutations caught by the added test. Offline gate: lib **1643**,
+datafusion 80+9 (doctest = documented pre-existing artifact), clippy/fmt/typos clean; Cargo FROZEN.
+Offline write-path pin added (`fast_append` summary carries `changed-partition-count`).
+DEFERRED: `file_sequence_number` in the view (no public accessor); V1-table ordinal tiebreaker.
+
 ## DONE (2026-06-10): Sprint increment D — status de-triplication (branch `docs/de-triplication`)
 
 One home per fact. Trigger: the sprint plan (A ✅ B ✅ C ✅ E3 ✅ → D), freshly motivated by the
@@ -205,9 +236,9 @@ sprint (2026-06-09)".
       one-home-per-fact rule. Gate: every link resolves; session-start read order measured ≤ ~40k
       tokens (record the number).
 - [ ] **E — interop debt paydown (rest of the frontier budget; one PR per increment).** Risk order:
-      - [ ] **E1 — `RowDelta` metadata-level interop:** sequence-number inheritance, delete
-            manifests, summary fields vs Java `BaseRowDelta` (the scan-exec interop already proves
-            the data level both directions — this targets the snapshot/manifest metadata).
+      - [x] **E1 — `RowDelta` metadata-level interop:** DONE 2026-06-10 (see the E1 section
+            above) — canonical-view equality across 3 fixtures × 3 directions; surfaced + fixed
+            the `changed-partition-count` summary parity bug.
       - [ ] **E2 — the rewrite-family four:** `DeleteFiles` / `OverwriteFiles` / `ReplacePartitions`
             / `RewriteFiles` — one oracle `generate`/`verify` pass, per-action scenarios (the Phase-1
             three-capability consolidation pattern).

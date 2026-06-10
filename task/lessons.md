@@ -795,3 +795,32 @@ How to use it (see the manuals' §2):
   specific branches (`failAnyDelete`, duplicate-path warning, `isDelete`/`isDanglingDV`/`minSequenceNumber`)
   irrelevant to the data-file row-filter case; not porting them is fine IF named explicitly in the report +
   module doc so a future reader knows the boundary.
+
+### 2026-06-10 (E1 — RowDelta metadata-level interop — ORCHESTRATOR Fable + REVIEWER Opus)
+- **A metadata-level interop needs a CANONICAL VIEW, not byte comparison — and the canonicalization
+  choices are the increment's real judgment calls.** Snapshot ids → ordinals (by sequence number);
+  COUNT summary keys only (byte sizes legitimately differ between writers); entries sorted by an
+  EXPLICIT cross-language tuple (never rendered-string order — Jackson and serde_json differ);
+  partitions via the spec's single-value JSON (`SingleValueParser.toJson` ↔ `Literal::try_into_json`
+  — the one cross-language-canonical tuple rendering). *Limit:* ordinals assume DISTINCT sequence
+  numbers — all V1 snapshots share seq 0, so the scheme is V1-unsafe without a tiebreaker
+  (documented in both emitters).
+- **DO default `SnapshotSummaryCollector.trust_partition_metrics` to TRUE — a derived
+  `#[derive(Default)]` bool is FALSE and silently suppressed `changed-partition-count` on every
+  per-file commit.** Java `SnapshotSummary.Builder` starts trusted and only distrusts when a whole
+  MANIFEST (unknown per-partition breakdown) is added. The harness caught this within minutes of
+  first running: Java's summaries carried `changed-partition-count` (`setIf(trustPartitionMetrics,
+  …)`, written even when 0; the unpartitioned EMPTY partition counts as one), Rust's omitted it
+  (only-if-positive + unpartitioned files never tracked). *Why it matters beyond parity:* a derived
+  `Default` on a semantically-true-by-default bool is a silent behavior class to audit for.
+- **DO reconcile test fixtures that exploit a removed guard rather than weaken the fix.** Two
+  summary tests paired an EMPTY partition struct with a PARTITIONED spec — impossible for real
+  files, tolerated only by the old skip-gate; tracking every file made `partition_to_path` panic on
+  them. The fix is consistent fixtures (a real partition value / an unpartitioned spec), not a
+  defensive branch in production that would mask genuinely inconsistent data.
+- **The reviewer's distinctive catch: a parity FIX can be green everywhere and still unpinned.**
+  Both of the reviewer's mutations (count back to only-if-positive; `partition-summaries-included`
+  emitted unconditionally) passed the ENTIRE offline suite — the first is interop-visible only via
+  the env-gated harness, the second is invisible even there (the canonical view excludes the key).
+  One added unit test (the trusted-but-empty-changeset case: count=="0" present, marker absent)
+  catches both. When a fix's evidence is an EXTERNAL harness, add the offline unit pin too.

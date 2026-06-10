@@ -247,6 +247,17 @@ public final class InteropOracle {
           System.exit(1);
         }
         break;
+      case "emit-snapshot-meta":
+        // METADATA-LEVEL row-delta interop (E1). Emits the canonical snapshot-metadata view (ordinal
+        // snapshots, COUNT-only summaries, manifest-list -> entry structure with post-inheritance
+        // sequence numbers) of ANY on-disk table — Java-written or Rust-written — so the run script
+        // can diff "Java's view of Java's table" against "Java's view of Rust's table", and the Rust
+        // test (interop_rowdelta_meta.rs) can assert its own views equal Java's. The table's CURRENT
+        // metadata json is -Dinterop.meta.metadata; the output path is -Dinterop.meta.out.
+        Path metaIn = requireFixturesDir("interop.meta.metadata");
+        Path metaOut = requireFixturesDir("interop.meta.out");
+        SnapshotMetaOracle.emit(metaIn, metaOut);
+        break;
       case "verify":
         int failures = 0;
         failures += SchemaOracle.verify(schemaFixturesDir);
@@ -3936,6 +3947,313 @@ public final class InteropOracle {
                 + "{10,30,40,50}");
       }
       return failures;
+    }
+  }
+
+  // =============================================================================================
+  // SnapshotMetaOracle — the METADATA-LEVEL row-delta interop (E1). Emits a CANONICAL "snapshot
+  // metadata view" of ANY on-disk table (Java-written or Rust-written): per snapshot (ordered by
+  // sequence number) the operation, the COUNT-only summary, and the manifest-list -> manifest-entry
+  // structure with POST-INHERITANCE sequence numbers. The SAME canonicalization is mirrored by
+  // crates/iceberg/tests/interop_rowdelta_meta.rs, so "Java's view of Java's table" ==
+  // "Java's view of Rust's table" == "Rust's view of either" is the metadata-parity contract.
+  //
+  // Canonicalization decisions (the comparable subset):
+  // - snapshot ids -> ORDINALS (position in the sequence-number-ordered chain); parent likewise.
+  // - summary: COUNT keys only (an explicit allowlist) — the *-files-size keys are EXCLUDED because
+  //   parquet byte sizes legitimately differ between writers. `operation` is its own field (the
+  //   re-parsed summary map splits it out — SnapshotParser.fromJson).
+  // - manifests sorted by (content, sequence_number, min_sequence_number); paths excluded; the
+  //   added_snapshot_id is emitted as an ORDINAL.
+  // - entries sorted by a content/status/record-count/equality-ids/partition key; file paths and
+  //   byte sizes excluded; `sequence_number` is the POST-INHERITANCE data sequence number (the
+  //   merge-on-read applicability input). file_sequence_number is NOT emitted (the Rust public API
+  //   does not expose it on entries; tracked).
+  // - partition: null for an unpartitioned spec, else the spec's SINGLE-VALUE JSON serialization
+  //   (SingleValueParser.toJson <-> Rust Literal::try_into_json — the one cross-language-canonical
+  //   rendering of a partition tuple).
+  //
+  // LIMIT (reviewer-flagged): the ordinal scheme assumes DISTINCT sequence numbers. Every V1
+  // snapshot has sequence number 0, so a multi-snapshot V1 table would produce
+  // iteration-order-dependent ordinals — do NOT point this oracle at V1 tables without adding a
+  // tiebreaker (timestamp, then snapshot id). The current fixtures are V2 row-delta chains.
+  // =============================================================================================
+
+  static final class SnapshotMetaOracle {
+    private SnapshotMetaOracle() {}
+
+    /** The COUNT-only summary allowlist — every SnapshotSummary count key, no byte-size keys. */
+    private static final List<String> SUMMARY_COUNT_KEYS =
+        java.util.Arrays.asList(
+            SnapshotSummary.ADDED_FILES_PROP,
+            SnapshotSummary.DELETED_FILES_PROP,
+            SnapshotSummary.TOTAL_DATA_FILES_PROP,
+            SnapshotSummary.ADDED_DELETE_FILES_PROP,
+            SnapshotSummary.ADD_EQ_DELETE_FILES_PROP,
+            SnapshotSummary.REMOVED_EQ_DELETE_FILES_PROP,
+            SnapshotSummary.ADD_POS_DELETE_FILES_PROP,
+            SnapshotSummary.REMOVED_POS_DELETE_FILES_PROP,
+            SnapshotSummary.ADDED_DVS_PROP,
+            SnapshotSummary.REMOVED_DVS_PROP,
+            SnapshotSummary.REMOVED_DELETE_FILES_PROP,
+            SnapshotSummary.TOTAL_DELETE_FILES_PROP,
+            SnapshotSummary.ADDED_RECORDS_PROP,
+            SnapshotSummary.DELETED_RECORDS_PROP,
+            SnapshotSummary.TOTAL_RECORDS_PROP,
+            SnapshotSummary.ADDED_POS_DELETES_PROP,
+            SnapshotSummary.REMOVED_POS_DELETES_PROP,
+            SnapshotSummary.TOTAL_POS_DELETES_PROP,
+            SnapshotSummary.ADDED_EQ_DELETES_PROP,
+            SnapshotSummary.REMOVED_EQ_DELETES_PROP,
+            SnapshotSummary.TOTAL_EQ_DELETES_PROP,
+            SnapshotSummary.CHANGED_PARTITION_COUNT_PROP);
+
+    /**
+     * Emit the canonical snapshot-metadata view of the table whose CURRENT metadata file is
+     * {@code metadataJson} (loaded RE-PARSED from disk — the canonical form) to {@code out}.
+     */
+    static void emit(Path metadataJson, Path out) throws IOException {
+      TableMetadata metadata =
+          TableMetadataParser.fromJson(metadataJson.toString(), readString(metadataJson));
+      LocalFileIO io = new LocalFileIO();
+
+      // Order snapshots by sequence number (the commit order); ordinal = index in that order.
+      List<Snapshot> snapshots = new ArrayList<>(metadata.snapshots());
+      snapshots.sort(java.util.Comparator.comparingLong(Snapshot::sequenceNumber));
+      Map<Long, Integer> ordinals = new LinkedHashMap<>();
+      for (int i = 0; i < snapshots.size(); i++) {
+        ordinals.put(snapshots.get(i).snapshotId(), i);
+      }
+
+      String json =
+          JsonUtil.generate(
+              gen -> {
+                gen.writeStartObject();
+                gen.writeArrayFieldStart("snapshots");
+                for (Snapshot snap : snapshots) {
+                  gen.writeStartObject();
+                  gen.writeNumberField("ordinal", ordinals.get(snap.snapshotId()));
+                  if (snap.parentId() == null) {
+                    gen.writeNullField("parent_ordinal");
+                  } else {
+                    gen.writeNumberField("parent_ordinal", ordinals.get(snap.parentId()));
+                  }
+                  gen.writeNumberField("sequence_number", snap.sequenceNumber());
+                  gen.writeStringField("operation", snap.operation());
+
+                  // COUNT-only summary, allowlist order (stable on both sides).
+                  gen.writeObjectFieldStart("summary");
+                  Map<String, String> summary = snap.summary();
+                  for (String key : SUMMARY_COUNT_KEYS) {
+                    if (summary != null && summary.containsKey(key)) {
+                      gen.writeStringField(key, summary.get(key));
+                    }
+                  }
+                  gen.writeEndObject();
+
+                  // Manifest list -> manifests -> entries.
+                  List<ManifestFile> manifests = new ArrayList<>(snap.allManifests(io));
+                  manifests.sort(
+                      java.util.Comparator.comparingInt(
+                              (ManifestFile m) -> m.content().id())
+                          .thenComparingLong(ManifestFile::sequenceNumber)
+                          .thenComparingLong(ManifestFile::minSequenceNumber));
+                  gen.writeArrayFieldStart("manifests");
+                  for (ManifestFile manifest : manifests) {
+                    gen.writeStartObject();
+                    gen.writeStringField(
+                        "content", manifest.content() == ManifestContent.DATA ? "data" : "deletes");
+                    gen.writeNumberField("sequence_number", manifest.sequenceNumber());
+                    gen.writeNumberField("min_sequence_number", manifest.minSequenceNumber());
+                    Integer addedOrdinal = ordinals.get(manifest.snapshotId());
+                    if (addedOrdinal == null) {
+                      gen.writeNullField("added_snapshot_ordinal");
+                    } else {
+                      gen.writeNumberField("added_snapshot_ordinal", addedOrdinal);
+                    }
+                    writeNullableInt(gen, "added_files_count", manifest.addedFilesCount());
+                    writeNullableInt(gen, "existing_files_count", manifest.existingFilesCount());
+                    writeNullableInt(gen, "deleted_files_count", manifest.deletedFilesCount());
+                    writeNullableLong(gen, "added_rows_count", manifest.addedRowsCount());
+                    writeNullableLong(gen, "existing_rows_count", manifest.existingRowsCount());
+                    writeNullableLong(gen, "deleted_rows_count", manifest.deletedRowsCount());
+
+                    gen.writeArrayFieldStart("entries");
+                    for (String entryJson : entryJsons(metadata, manifest, io)) {
+                      gen.writeRawValue(entryJson);
+                    }
+                    gen.writeEndArray();
+                    gen.writeEndObject();
+                  }
+                  gen.writeEndArray();
+                  gen.writeEndObject();
+                }
+                gen.writeEndArray();
+                gen.writeEndObject();
+              },
+              true);
+      writeJson(out, json);
+      System.out.println("emitted canonical snapshot-metadata view of " + metadataJson + " to " + out);
+    }
+
+    /**
+     * Read EVERY entry of one manifest (data or delete reader per content type — both apply
+     * sequence-number INHERITANCE from the manifest-list entry), render each to a canonical JSON
+     * object string, and return them sorted by the EXPLICIT cross-language tuple
+     * {@code (status, content, record_count, sequence_number, equality_ids, partition)} — the SAME
+     * tuple the Rust mirror sorts by, so the two sides' entry arrays align element-for-element
+     * without relying on rendered-string ordering.
+     */
+    private static List<String> entryJsons(TableMetadata metadata, ManifestFile manifest, FileIO io) {
+      List<EntryView> views = new ArrayList<>();
+      try {
+        if (manifest.content() == ManifestContent.DATA) {
+          try (ManifestReader<DataFile> reader = ManifestFiles.read(manifest, io, metadata.specsById())) {
+            for (ManifestEntry<DataFile> entry : reader.entries()) {
+              views.add(entryView(metadata, entry));
+            }
+          }
+        } else {
+          try (ManifestReader<DeleteFile> reader =
+              ManifestFiles.readDeleteManifest(manifest, io, metadata.specsById())) {
+            for (ManifestEntry<DeleteFile> entry : reader.entries()) {
+              views.add(entryView(metadata, entry));
+            }
+          }
+        }
+      } catch (IOException error) {
+        throw new RuntimeException("failed to read manifest " + manifest.path(), error);
+      }
+      views.sort(
+          java.util.Comparator.comparingInt((EntryView v) -> v.status)
+              .thenComparing(v -> v.content)
+              .thenComparingLong(v -> v.recordCount)
+              .thenComparingLong(v -> v.sequenceNumber == null ? Long.MIN_VALUE : v.sequenceNumber)
+              .thenComparing(v -> v.equalityIdsKey)
+              .thenComparing(v -> v.partitionJson == null ? "" : v.partitionJson));
+      List<String> rendered = new ArrayList<>();
+      for (EntryView view : views) {
+        rendered.add(view.json);
+      }
+      return rendered;
+    }
+
+    /** The sortable canonical view of one manifest entry + its rendered JSON. */
+    private static final class EntryView {
+      final int status;
+      final String content;
+      final long recordCount;
+      final Long sequenceNumber;
+      final String equalityIdsKey;
+      final String partitionJson;
+      final String json;
+
+      EntryView(
+          int status,
+          String content,
+          long recordCount,
+          Long sequenceNumber,
+          String equalityIdsKey,
+          String partitionJson,
+          String json) {
+        this.status = status;
+        this.content = content;
+        this.recordCount = recordCount;
+        this.sequenceNumber = sequenceNumber;
+        this.equalityIdsKey = equalityIdsKey;
+        this.partitionJson = partitionJson;
+        this.json = json;
+      }
+    }
+
+    private static <F extends ContentFile<F>> EntryView entryView(
+        TableMetadata metadata, ManifestEntry<F> entry) {
+      F file = entry.file();
+      PartitionSpec spec = metadata.specsById().get(file.specId());
+      boolean unpartitioned = spec == null || spec.isUnpartitioned();
+      String partitionJson =
+          unpartitioned ? null : SingleValueParser.toJson(spec.partitionType(), file.partition());
+      List<Integer> equalityIds =
+          file.equalityFieldIds() == null ? null : new ArrayList<>(file.equalityFieldIds());
+      if (equalityIds != null) {
+        java.util.Collections.sort(equalityIds);
+      }
+      final List<Integer> sortedEqualityIds = equalityIds;
+      StringBuilder equalityIdsKey = new StringBuilder();
+      if (sortedEqualityIds != null) {
+        for (Integer id : sortedEqualityIds) {
+          equalityIdsKey.append(id).append(',');
+        }
+      }
+      String json = JsonUtil.generate(
+          gen -> {
+            gen.writeStartObject();
+            gen.writeNumberField("status", entry.status().id());
+            gen.writeStringField("content", contentName(file.content()));
+            gen.writeNumberField("record_count", file.recordCount());
+            if (entry.dataSequenceNumber() == null) {
+              gen.writeNullField("sequence_number");
+            } else {
+              gen.writeNumberField("sequence_number", entry.dataSequenceNumber());
+            }
+            if (sortedEqualityIds == null) {
+              gen.writeNullField("equality_ids");
+            } else {
+              gen.writeArrayFieldStart("equality_ids");
+              for (Integer id : sortedEqualityIds) {
+                gen.writeNumber(id);
+              }
+              gen.writeEndArray();
+            }
+            if (partitionJson == null) {
+              gen.writeNullField("partition");
+            } else {
+              gen.writeFieldName("partition");
+              gen.writeRawValue(partitionJson);
+            }
+            gen.writeEndObject();
+          },
+          false);
+      return new EntryView(
+          entry.status().id(),
+          contentName(file.content()),
+          file.recordCount(),
+          entry.dataSequenceNumber(),
+          equalityIdsKey.toString(),
+          partitionJson,
+          json);
+    }
+
+    private static String contentName(FileContent content) {
+      switch (content) {
+        case DATA:
+          return "data";
+        case POSITION_DELETES:
+          return "position_deletes";
+        case EQUALITY_DELETES:
+          return "equality_deletes";
+        default:
+          throw new IllegalArgumentException("unknown file content: " + content);
+      }
+    }
+
+    private static void writeNullableInt(
+        com.fasterxml.jackson.core.JsonGenerator gen, String field, Integer value)
+        throws IOException {
+      if (value == null) {
+        gen.writeNullField(field);
+      } else {
+        gen.writeNumberField(field, value);
+      }
+    }
+
+    private static void writeNullableLong(
+        com.fasterxml.jackson.core.JsonGenerator gen, String field, Long value) throws IOException {
+      if (value == null) {
+        gen.writeNullField(field);
+      } else {
+        gen.writeNumberField(field, value);
+      }
     }
   }
 

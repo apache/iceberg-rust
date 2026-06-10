@@ -211,6 +211,19 @@ mod tests {
                 .unwrap(),
             "val"
         );
+
+        // Java parity (SnapshotSummary.Builder, trusted partition metrics): a per-file producer
+        // commit carries `changed-partition-count` — one appended file touches exactly ONE
+        // partition. Pins the PRODUCER wiring of the 2026-06-10 summary fix offline (the
+        // metadata-level interop harness pins it end-to-end).
+        assert_eq!(
+            new_snapshot
+                .summary()
+                .additional_properties
+                .get("changed-partition-count")
+                .unwrap(),
+            "1"
+        );
     }
 
     #[tokio::test]

@@ -47,17 +47,34 @@ const TOTAL_RECORDS: &str = "total-records";
 const TOTAL_FILE_SIZE: &str = "total-files-size";
 const CHANGED_PARTITION_COUNT_PROP: &str = "changed-partition-count";
 const CHANGED_PARTITION_PREFIX: &str = "partitions.";
+/// Advertises that per-partition summaries are included (Java `SnapshotSummary.PARTITION_SUMMARY_PROP`).
+const PARTITION_SUMMARY_PROP: &str = "partition-summaries-included";
 
 /// `SnapshotSummaryCollector` collects and aggregates snapshot update metrics.
 /// It gathers metrics about added or removed data files and manifests, and tracks
 /// partition-specific updates.
-#[derive(Default)]
 pub struct SnapshotSummaryCollector {
     metrics: UpdateMetrics,
     partition_metrics: HashMap<String, UpdateMetrics>,
     max_changed_partitions_for_summaries: u64,
     properties: HashMap<String, String>,
     trust_partition_metrics: bool,
+}
+
+impl Default for SnapshotSummaryCollector {
+    /// Partition metrics start TRUSTED, mirroring Java `SnapshotSummary.Builder`
+    /// (`trustPartitionMetrics = true` until a whole MANIFEST is added, whose per-partition
+    /// breakdown is unknown — `add_manifest` then flips it off and clears the map). A derived
+    /// `false` default would suppress `changed-partition-count` on every per-file commit.
+    fn default() -> Self {
+        Self {
+            metrics: UpdateMetrics::default(),
+            partition_metrics: HashMap::new(),
+            max_changed_partitions_for_summaries: 0,
+            properties: HashMap::new(),
+            trust_partition_metrics: true,
+        }
+    }
 }
 
 impl SnapshotSummaryCollector {
@@ -80,9 +97,7 @@ impl SnapshotSummaryCollector {
         partition_spec: PartitionSpecRef,
     ) {
         self.metrics.add_file(data_file);
-        if !data_file.partition.fields().is_empty() {
-            self.update_partition_metrics(schema, partition_spec, data_file, true);
-        }
+        self.update_partition_metrics(schema, partition_spec, data_file, true);
     }
 
     /// Removes a data file from the summary collector
@@ -93,9 +108,7 @@ impl SnapshotSummaryCollector {
         partition_spec: PartitionSpecRef,
     ) {
         self.metrics.remove_file(data_file);
-        if !data_file.partition.fields().is_empty() {
-            self.update_partition_metrics(schema, partition_spec, data_file, false);
-        }
+        self.update_partition_metrics(schema, partition_spec, data_file, false);
     }
 
     /// Adds a manifest to the summary collector
@@ -113,6 +126,9 @@ impl SnapshotSummaryCollector {
         data_file: &DataFile,
         is_add_file: bool,
     ) {
+        if !self.trust_partition_metrics {
+            return;
+        }
         let partition_path = partition_spec.partition_to_path(&data_file.partition, schema);
         let metrics = self.partition_metrics.entry(partition_path).or_default();
 
@@ -145,14 +161,23 @@ impl SnapshotSummaryCollector {
     pub fn build(&self) -> HashMap<String, String> {
         let mut properties = self.metrics.to_map();
         let changed_partitions_count = self.partition_metrics.len() as u64;
-        set_if_positive(
-            &mut properties,
-            changed_partitions_count,
-            CHANGED_PARTITION_COUNT_PROP,
-        );
+        if self.trust_partition_metrics {
+            properties.insert(
+                CHANGED_PARTITION_COUNT_PROP.to_string(),
+                changed_partitions_count.to_string(),
+            );
+        }
 
-        if changed_partitions_count <= self.max_changed_partitions_for_summaries {
+        if self.trust_partition_metrics
+            && changed_partitions_count <= self.max_changed_partitions_for_summaries
+        {
+            if changed_partitions_count > 0 {
+                properties.insert(PARTITION_SUMMARY_PROP.to_string(), "true".to_string());
+            }
             for (partition_path, update_metrics_partition) in &self.partition_metrics {
+                if partition_path.is_empty() {
+                    continue;
+                }
                 let property_key = format!("{CHANGED_PARTITION_PREFIX}{partition_path}");
                 let partition_summary = update_metrics_partition
                     .to_map()
@@ -752,7 +777,7 @@ mod tests {
             content: DataContentType::Data,
             file_path: "s3://testbucket/path/to/file1.parquet".to_string(),
             file_format: DataFileFormat::Parquet,
-            partition: Struct::from_iter(vec![]),
+            partition: Struct::from_iter(vec![Some(Literal::string("2024"))]),
             record_count: 10,
             file_size_in_bytes: 100,
             column_sizes: HashMap::from([(1, 46), (2, 48), (3, 48)]),
@@ -822,6 +847,13 @@ mod tests {
         assert_eq!(props.get(ADDED_FILE_SIZE).unwrap(), "300");
         assert_eq!(props.get(REMOVED_FILE_SIZE).unwrap(), "100");
 
+        // Java parity: BOTH touched partitions are counted, the partition-summaries marker is
+        // advertised (limit 10 >= 2), and the add/remove-balanced 2024 partition still has a row.
+        assert_eq!(props.get(CHANGED_PARTITION_COUNT_PROP).unwrap(), "2");
+        assert_eq!(props.get(PARTITION_SUMMARY_PROP).unwrap(), "true");
+        let partition_key_2024 = format!("{}{}", CHANGED_PARTITION_PREFIX, "year=2024");
+        assert!(props.contains_key(&partition_key_2024));
+
         let partition_key = format!("{}{}", CHANGED_PARTITION_PREFIX, "year=2025");
 
         assert!(props.contains_key(&partition_key));
@@ -830,6 +862,40 @@ mod tests {
         assert!(partition_summary.contains(&format!("{ADDED_FILE_SIZE}=200")));
         assert!(partition_summary.contains(&format!("{ADDED_DATA_FILES}=1")));
         assert!(partition_summary.contains(&format!("{ADDED_RECORDS}=20")));
+    }
+
+    /// Java parity for the EMPTY-changeset case (Java `SnapshotSummary.Builder.build`, lines
+    /// 200/203): when partition metrics are TRUSTED but nothing was tracked, `changed-partition-count`
+    /// is still emitted as `0` (`setIf(trustPartitionMetrics, ...)` — unconditional on trust, count
+    /// included even at 0), while `partition-summaries-included` is NOT emitted
+    /// (`setIf(!changedPartitions.isEmpty(), ...)`). Pins two branches the offline suite otherwise
+    /// leaves uncovered: (a) reverting count emission to "only if positive" (the OLD bug) and (b)
+    /// over-firing `partition-summaries-included` on an empty changeset both survive every other
+    /// unit test here — only this one fails.
+    #[test]
+    fn test_changed_partition_count_zero_when_trusted_but_no_partition_changes() {
+        let collector = SnapshotSummaryCollector::default();
+        collector_partition_summary_limit_check(&collector);
+
+        let props = collector.build();
+        // count emitted even though it is 0 (trusted by default, nothing tracked)
+        assert_eq!(
+            props.get(CHANGED_PARTITION_COUNT_PROP).map(String::as_str),
+            Some("0"),
+            "changed-partition-count must be emitted as 0 when trusted with no changes (Java setIf(trust,...))"
+        );
+        // the summaries marker must NOT appear on an empty changeset (Java setIf(!isEmpty,...))
+        assert!(
+            !props.contains_key(PARTITION_SUMMARY_PROP),
+            "partition-summaries-included must be absent when there are no changed partitions"
+        );
+    }
+
+    /// No-op helper documenting that the default collector starts trusted with a zero limit; kept
+    /// separate so the assertion above reads as the risk it pins.
+    fn collector_partition_summary_limit_check(collector: &SnapshotSummaryCollector) {
+        assert!(collector.trust_partition_metrics);
+        assert_eq!(collector.max_changed_partitions_for_summaries, 0);
     }
 
     #[test]
@@ -882,15 +948,7 @@ mod tests {
 
         let partition_spec = Arc::new(
             PartitionSpec::builder(schema.clone())
-                .add_unbound_fields(vec![
-                    UnboundPartitionField::builder()
-                        .source_id(2)
-                        .name("year".to_string())
-                        .transform(Transform::Identity)
-                        .build(),
-                ])
-                .unwrap()
-                .with_spec_id(1)
+                .with_spec_id(0)
                 .build()
                 .unwrap(),
         );
