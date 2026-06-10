@@ -54,6 +54,9 @@ mod action;
 
 pub use action::*;
 mod append;
+mod delete_aware;
+mod manifest_filter;
+mod rewrite_files;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -73,6 +76,7 @@ use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
+use crate::transaction::rewrite_files::RewriteFilesAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -147,6 +151,15 @@ impl Transaction {
     /// Creates a fast append action.
     pub fn fast_append(&self) -> FastAppendAction {
         FastAppendAction::new()
+    }
+
+    /// Creates a rewrite files action.
+    ///
+    /// `RewriteFiles` replaces a set of existing files with a new, equivalent set (i.e.
+    /// compaction) in a single `Replace` snapshot, validating that no conflicting row-level
+    /// deletes have appeared for the rewritten data files since the starting snapshot.
+    pub fn rewrite_files(&self) -> RewriteFilesAction {
+        RewriteFilesAction::new()
     }
 
     /// Creates replace sort order action.
