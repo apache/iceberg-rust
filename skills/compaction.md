@@ -191,3 +191,122 @@ treated with the same care as a destructive operation, even though nothing is de
 - **Let archives become required reading.** If sessions routinely need an archive, the pass that
   created it archived something that was actually a KEEP or a PROMOTE — fix the verdict, don't
   grow the read order.
+
+---
+
+# Todo Archival — keeping `task/todo.md` actionable in one sitting
+
+The todo-file analogue of lessons compaction. [task/todo.md](../task/todo.md) is the in-flight
+plan; the manuals require reading it to pick up mid-flight work. Like `lessons.md` it grows
+append-only — every shipped increment leaves its full narrative behind — so without periodic
+archival the "what's next" signal drowns in "what already happened." A todo file a session must
+read to find the open items, but that is 90% completed-increment history, is a todo file that gets
+skimmed, and a skimmed plan is how in-flight work gets dropped or redone.
+
+Archival bounds the read cost **without destroying a narrative.** Nothing is deleted — increment
+narratives are *archived* (and remain grep-able forever); open work is *kept* live.
+
+## The lifecycle model — two verdicts, no PROMOTE
+
+Unlike lessons compaction there is **no PROMOTE verdict** (a todo narrative is not a durable rule
+with a canonical home elsewhere; it is a record of work). Every section gets one of two fates:
+
+| Verdict | What it means | Where it goes |
+|---|---|---|
+| **KEEP** | Live work: the intro, the current active/hardening-sprint plan, and every genuinely-OPEN (`[ ]`) item with enough context to act on. | Stays in the active `task/todo.md`, verbatim (or, for an open item buried in an otherwise-shipped section, lifted into a live "Carried-forward open items" section with a pointer to its archived narrative). |
+| **ARCHIVE** | A *completed* increment narrative — its work has shipped (and usually merged). | Moved verbatim to `task/todo-archive/<phase>.md`, grouped by Roadmap phase. |
+
+**Default-deny on deletion:** there is no third verdict. A spent narrative is ARCHIVE, not gone.
+
+### Stale vs genuinely-open checkboxes
+
+A shipped section often carries `[ ]` boxes that were never ticked but whose work *did* land under
+a renumbered/superseded increment (planning churn). These are **not** live work: archive the
+section verbatim (the unticked box is preserved in context, so a future reader sees it was
+superseded) and do **not** surface it in the live file. Only a box whose work is genuinely
+outstanding is carried forward. When unsure whether a box is stale, verify against the
+GAP_MATRIX / the code / the `[x]` siblings in the same section before deciding — surfacing a
+done item as "open" is as misleading as burying a real one.
+
+## Archive layout
+
+```
+task/
+├── todo.md                        # the active file — intro + active sprint + open items + pointers
+└── todo-archive/
+    ├── map.md                     # standard map.md: which phase archive covers what
+    ├── phase1.md                  # one file per Roadmap phase THAT HAS shipped narratives
+    ├── phase2.md
+    └── phase3.md
+```
+
+- One file **per Roadmap phase** (phase0, phase1, …) — but only create a file for a phase that
+  actually has archived narratives (an empty-phase file is noise). A section is assigned to the
+  phase its header names; a write-engine validation done during a later phase's calendar window
+  is still Phase-2 work — assign by the capability, and when a header is explicit ("Phase 3")
+  trust it.
+- Archive files are **verbatim moves** — sections keep their original headings, dates, checkbox
+  states, and wording. No paraphrasing, no checkbox flips on the way out.
+- The archive directory carries its own `map.md` (navigation convention) whose Contents table
+  says which increments/capabilities each phase file covers — so a future session greps the one
+  relevant archive instead of all of them.
+- **Sessions do not read archives by default.** They read them on demand — when the live file's
+  Carried-forward pointers route them there, or when reconstructing why a shipped increment did
+  what it did.
+
+## The active file after a pass
+
+```
+intro (purpose + how-to-use)
+## Active: <the current sprint / hardening section>       ← KEEP verbatim
+## Carried-forward open items (detail in todo-archive/)   ← every genuinely-open [ ] not in the sprint,
+                                                             lifted with a one-line archive pointer each
+## Archived increment narratives                          ← one pointer line per phase archive file
+```
+
+A genuinely-open item buried in a shipped section is **lifted** into "Carried-forward open items"
+(verbatim where short; a faithful one-line summary + archive pointer where it is a long sub-tree),
+so the live file stays the actionable plan. Its originating narrative still archives in full — the
+lifted bullet is the single carve-out from "the live file and the archive never overlap," and it is
+intentional: an open item must be visible in the plan, its history visible in the archive.
+
+## Procedure — a pass is its own scoped change
+
+Treated with the same care as lessons compaction (it edits the plan every future session reads):
+
+1. **Never bundle.** Its own branch, its own commit/PR — a reviewer sees *only* the archival move.
+2. **Plan first (§1).** Name the trigger (size), the archive filenames, the phase assignment of
+   each section, and which `[ ]` items are genuinely-open (carry forward) vs stale (archive).
+3. **Script the split — never hand-copy.** Drive the move with a script (Python over the `## ` /
+   `### ` heading boundaries) so a section is moved as an exact byte range, not retyped. Hand-copy
+   is where a line silently drops.
+4. **Conservation check (the gate):** every `## ` and `### ` heading present BEFORE the pass must
+   exist AFTER it in exactly one place (the active file or exactly one archive). `grep -c '^##'`
+   and `grep -c '^###'` across the old file vs (new active + all new archives) must reconcile, and
+   no heading may appear twice. Record the tally in the commit message (e.g. "18 ##/42 ###: 1 ##
+   kept live, 17 ## archived → phase1 1, phase2 4, phase3 12"). A pass that loses a heading is
+   reverted, not patched.
+5. **Build the active file:** intro + the active-sprint section(s) + the Carried-forward section +
+   the Archived-narratives pointer section. Target: **well under ~500 lines.**
+6. **Create/update `task/todo-archive/map.md`** in the same change.
+7. **`typos` clean** and the chained-gate commit (CLAUDE.md Working conventions).
+
+## Done gate for a todo-archival pass
+
+- [ ] Trigger named in the plan; pass is a standalone change (nothing else in the diff).
+- [ ] Every pre-pass `## ` / `### ` heading accounted for (conservation reconciles, none duplicated).
+- [ ] No section was paraphrased, reworded, or had a checkbox flipped on its way to the archive.
+- [ ] Every genuinely-open `[ ]` item is reachable from the active file (kept in the sprint section
+      or lifted into Carried-forward with an archive pointer); no stale box surfaced as live work.
+- [ ] `task/todo-archive/map.md` created/updated; pointer section in the active file lists each archive.
+- [ ] Active file is well under ~500 lines.
+
+## Anti-patterns — what a pass must never do
+
+- **Flip a checkbox to "tidy up."** Archival preserves state verbatim; deciding a stale `[ ]` is
+  done is a separate, explicit judgment recorded as such — not a silent edit during the move.
+- **Hand-copy a section.** A 700-line section retyped by hand is a section with a dropped line.
+  Script the byte-range move and conservation-check it.
+- **Create an empty per-phase file** for a phase with no shipped narratives — pointers to nothing.
+- **Archive a section that still has live work** just to hit the line target — lift its open items
+  first, then archive the spent narrative.
