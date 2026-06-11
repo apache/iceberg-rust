@@ -34,6 +34,16 @@ How to use it (see the manuals' §1):
 
 > **Archival log.** Last todo-archival pass: 2026-06-09 (size trigger — 4,344 lines) → [todo-archive/](todo-archive/) (phase1/phase2/phase3). Completed-increment narratives moved verbatim; this file keeps the active sprint + open items + archive pointers. Procedure: [skills/compaction.md](../skills/compaction.md) §Todo Archival. Archives are not read by default.
 
+## DONE (2026-06-11): Lessons compaction pass 2 (branch `docs/lessons-compaction-pass-2`, user-approved)
+
+- Trigger: SIZE — 1,369 lines / 128 KB on the settled post-#24 main (trigger ~800 / 50 KB).
+- Tally: **42 entries → 17 KEEP / 25 ARCHIVE / 6 rules PROMOTED** (the 25-entry archive set and
+  all six promotion diffs are byte-identical to the version presented for approval pre-merges;
+  the KEEP set absorbed every 2026-06-10/11 arc entry — current work feeding the platform plan).
+- Archive: `task/lessons-archive/2026-06_phase2-completion.md` (+ archive map row). Promotions:
+  2 → docs/testing.md, 2 → dev/java-interop/map.md#debug, 1 → transaction/map.md#debug,
+  1 → CLAUDE.md. Conservation: 42 == 17 + 25, no duplicates. Active file 583 lines.
+
 ## ACTIVE (2026-06-10/11 overnight): autonomous 8-hour plan (user asleep, auto mode)
 
 User instruction: complete the DV sequence, then plan + execute ~8 hours autonomously. **Tier

@@ -251,6 +251,9 @@ them to Sonnet or Haiku; only run an Opus sub-agent on a direct, explicit instru
   check && git add -A && git commit …` — never put `git commit` on a separate line from the gate: a
   failed gate on its own line still lets the commit run. (Promoted 2026-06-09 from a twice-repeated
   lessons entry.)
+- **Pipe-count-audit the GAP_MATRIX after any matrix-wide edit** — every `^|` row must carry
+  exactly 5 `|` characters (raw pipes inside code spans split cells silently; the de-triplication
+  pass once stranded half a cell as a phantom column). _Promoted 2026-06-11 from lessons._
 - **Upstream is a sync baseline, not a constraint.** This is an owned fork for Java `iceberg-core`
   parity — edit freely; sync up from upstream and cherry-pick wins, but mergeability is not required.
 - **Tests ship with the change**, plus interop tests where applicable (see the Parity mandate and the

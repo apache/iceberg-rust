@@ -106,6 +106,18 @@ mutations of the production code make it fail.
   entries keep their ORIGINAL snapshot id + sequence numbers (re-stamping is the silent-corruption
   bug class); (3) cumulative multi-commit TOTALS (append, append, delete) — per-commit assertions
   cannot catch a previous-summary seed bug.
+- **Manifest-rewriting suites need BOTH corruption mutations, not one.** The re-stamp
+  (`add_existing_entry` → `add_entry`) keeps an explicit non-negative sequence number and only
+  fails metadata pins; the genuinely corrupting mutation is the SEQ-STRIP (`sequence_number =
+  None` ⇒ V2/V3 re-inheritance of the new, higher seq ⇒ older deletes stop applying ⇒
+  resurrection). Run both, and pin the ON-DISK sequence numbers via raw avro
+  (`Manifest::try_from_avro_bytes`, pre-inheritance): carried entries explicit originals, this-
+  commit entries null. _(Promoted 2026-06-11 from the RewriteManifests/MergeAppend lessons.)_
+- **A suppression/filter test is VACUOUS if an earlier filter removes its fixture before the path
+  under test runs.** Co-locate the suppressed case with LIVE data in one fixture so it survives
+  the earlier filter, and ASSERT (pre-flight, in the test) that the fixture actually reaches the
+  path under test — then mutation-verify. _(Promoted 2026-06-11 from the MergeAppend tombstone-
+  suppression lesson, whose first version passed under the broaden mutation.)_
 - **Every concurrent-commit validation needs a no-override test** that relies solely on the
   transaction-captured starting snapshot (no `validate_from_snapshot`) — an override-only suite
   cannot pin the capture surviving `do_commit`'s re-base. This gap recurred three times.

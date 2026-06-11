@@ -76,6 +76,8 @@ tests in [crates/iceberg/tests/](../../crates/iceberg/tests/map.md) that read th
 | Scenario passes one direction only | Scenario op-sequences must be **identical and identically named** on both sides — diff `apply_scenario_ops` vs `InteropOracle.scenarios()` |
 | A Java code path silently doesn't run in the oracle | Drive REAL Java objects (`new BaseTable(ops, name).updateSpec()…commit()` over an in-memory `TableOperations`), NOT the `@VisibleForTesting` ctors — those set `base = null` and skip base-dependent paths (e.g. field-id recycling) |
 | Interop test passes but proves nothing | Mutation-prove BOTH directions by corrupting fixtures: edit a Java-written field (Dir-1 assertion must fail) and shrink a Rust-written value (Dir-2 `mvn verify` must exit 1). A harness comparing a file to itself passes tautologically |
+| A cross-language comparison fails on ordering | CHECK ORDER-INSENSITIVELY FIRST (sort both sides by an explicit total key) before hunting a semantic bug — manifest-list ties within one commit fall back to writer-dependent order; fix canonicalization in BOTH emitters symmetrically. _Promoted 2026-06-11._ |
+| A version-ancestry claim sourced from `/tmp/iceberg-java-ref` | The ref is a depth-1 TAGLESS shallow clone — `git log -S` / `merge-base --is-ancestor` answers about version ancestry are ARTIFACTS. Verify version-sensitive behavior against the pinned 1.10.0 jar bytecode (`javap` from `~/.m2`), or run a live oracle probe. _Promoted 2026-06-11._ |
 | Noisy fixture diffs after a regen | Java's `newTableMetadata` regenerates `table-uuid`/`last-updated-ms` every run — confirm STRUCTURAL identity, and `git checkout --` fixtures outside your increment's scope |
 
 ### First checks
