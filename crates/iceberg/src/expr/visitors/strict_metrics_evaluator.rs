@@ -22,9 +22,12 @@ use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{DataFile, Datum};
 use crate::{Error, ErrorKind, Result};
 
+#[allow(dead_code)]
 const ROWS_MUST_MATCH: Result<bool> = Ok(true);
+#[allow(dead_code)]
 const ROWS_MIGHT_NOT_MATCH: Result<bool> = Ok(false);
 
+#[allow(dead_code)]
 /// Evaluates an `Expression` on a `DataFile` to test whether all rows in the file match.
 ///  
 /// This evaluation is strict: it returns true if all rows in a file must match the expression.
@@ -38,6 +41,7 @@ pub(crate) struct StrictMetricsEvaluator<'a> {
 }
 
 impl<'a> StrictMetricsEvaluator<'a> {
+    #[allow(dead_code)]
     fn new(data_file: &'a DataFile) -> Self {
         StrictMetricsEvaluator { data_file }
     }
@@ -46,6 +50,7 @@ impl<'a> StrictMetricsEvaluator<'a> {
     /// provided [`DataFile`]'s metrics. Used by [`TableScan`] to
     /// see if this `DataFile` contains data that could match
     /// the scan's filter.
+    #[allow(dead_code)]
     pub(crate) fn eval(filter: &'a BoundPredicate, data_file: &'a DataFile) -> crate::Result<bool> {
         if data_file.record_count == 0 {
             return ROWS_MUST_MATCH;

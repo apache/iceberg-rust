@@ -336,7 +336,10 @@ impl ManifestWriter {
     /// Add a delete manifest entry. This method will update following status of the entry:
     /// - Update the entry status to `Deleted`
     /// - Set the snapshot id to the current snapshot id
-    #[cfg(test)]
+    ///
+    /// # TODO
+    /// Remove this allow later
+    #[allow(dead_code)]
     pub(crate) fn add_delete_entry(&mut self, mut entry: ManifestEntry) -> Result<()> {
         self.check_data_file(&entry.data_file)?;
         entry.status = ManifestStatus::Deleted;
@@ -368,7 +371,10 @@ impl ManifestWriter {
 
     /// Add an existing manifest entry. This method will update following status of the entry:
     /// - Update the entry status to `Existing`
-    #[cfg(test)]
+    ///
+    /// # TODO
+    /// Remove this allow later
+    #[allow(dead_code)]
     pub(crate) fn add_existing_entry(&mut self, mut entry: ManifestEntry) -> Result<()> {
         self.check_data_file(&entry.data_file)?;
         entry.status = ManifestStatus::Existing;

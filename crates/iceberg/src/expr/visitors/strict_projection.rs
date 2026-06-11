@@ -24,11 +24,15 @@ use crate::expr::{BoundPredicate, BoundReference, Predicate};
 use crate::spec::{Datum, PartitionField, PartitionSpecRef};
 use crate::{Error, ErrorKind};
 
+// # TODO
+// Remove this after delete support
+#[allow(dead_code)]
 pub(crate) struct StrictProjection {
     partition_spec: PartitionSpecRef,
     cached_parts: HashMap<i32, Vec<PartitionField>>,
 }
 
+#[allow(dead_code)]
 impl StrictProjection {
     pub(crate) fn new(partition_spec: PartitionSpecRef) -> Self {
         Self {
