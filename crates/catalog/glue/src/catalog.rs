@@ -221,6 +221,7 @@ impl GlueCatalog {
         });
         let file_io = FileIOBuilder::new(factory)
             .with_props(file_io_props)
+            .with_runtime(runtime.clone())
             .build();
 
         Ok(GlueCatalog {
