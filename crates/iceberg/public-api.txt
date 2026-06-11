@@ -3195,8 +3195,10 @@ pub async fn iceberg::writer::file_writer::ParquetWriter::close(self) -> iceberg
 pub async fn iceberg::writer::file_writer::ParquetWriter::write(&mut self, batch: &arrow_array::record_batch::RecordBatch) -> iceberg::Result<()>
 pub struct iceberg::writer::file_writer::ParquetWriterBuilder
 impl iceberg::writer::file_writer::ParquetWriterBuilder
+pub fn iceberg::writer::file_writer::ParquetWriterBuilder::from_table_properties(table_props: &iceberg::spec::TableProperties, schema: iceberg::spec::SchemaRef) -> Self
 pub fn iceberg::writer::file_writer::ParquetWriterBuilder::new(props: parquet::file::properties::WriterProperties, schema: iceberg::spec::SchemaRef) -> Self
 pub fn iceberg::writer::file_writer::ParquetWriterBuilder::new_with_match_mode(props: parquet::file::properties::WriterProperties, schema: iceberg::spec::SchemaRef, match_mode: iceberg::arrow::FieldMatchMode) -> Self
+pub fn iceberg::writer::file_writer::ParquetWriterBuilder::with_match_mode(self, match_mode: iceberg::arrow::FieldMatchMode) -> Self
 impl core::clone::Clone for iceberg::writer::file_writer::ParquetWriterBuilder
 pub fn iceberg::writer::file_writer::ParquetWriterBuilder::clone(&self) -> iceberg::writer::file_writer::ParquetWriterBuilder
 impl core::fmt::Debug for iceberg::writer::file_writer::ParquetWriterBuilder
