@@ -1203,3 +1203,261 @@ How to use it (see the manuals' §2):
   full diff had been captured to a tool-results file and re-applied with `git apply`. RULE for reverting
   probes on uncommitted files: snapshot the file to `/tmp` BEFORE the probe edit and restore from THAT
   (`cp`), or undo the exact textual edit — never `git checkout`/`git restore` a path with uncommitted work.
+
+### 2026-06-11 (Wave-4 Group O / O1 — FastAppend all-tombstone-manifest carry, BUILDER Opus, wt-rewrite)
+- **`FastAppend` (`newFastAppend`) and `MergeAppend` (`newAppend`) carry prior manifests by DIFFERENT
+  rules — the "same-class sweep" answer is NO-FIX for merge_append, settled from bytecode.** *Why:*
+  `FastAppend.apply` (1.10.0 bytecode offsets 89-94 + `core/FastAppend.java`) does
+  `manifests.addAll(snapshot.allManifests(io))` with NO predicate (`BaseSnapshot.allManifests` returns
+  the manifest list verbatim) ⇒ ALL prior manifests carry forward, including a manifest left
+  ALL-DELETED by a copy-on-write delete. But `MergingSnapshotProducer.apply` (the producer `MergeAppend`
+  extends, L1007-1011) filters its carried set through `shouldKeep = hasAddedFiles() OR hasExistingFiles()
+  OR snapshotId() == snapshotId()` — which DROPS all-tombstone prior manifests (the third clause is
+  unreachable for a pure append: no carried manifest was written by the not-yet-committed snapshot). So
+  the Rust `has_added/existing` filter is a DIVERGENCE in fast_append (fix = carry unfiltered) but exact
+  PARITY in merge_append (keep the filter). Lesson: when sweeping a sibling for "the same bug," read the
+  sibling's OWN Java carry path — `newFastAppend` and `newAppend` route through different `apply`s, and
+  the merging one legitimately filters what the non-merging one keeps.
+- **There are THREE places this filter pattern appears in the producer family — only ONE was the bug.**
+  `append.rs` `existing_manifest` (the bug, now `entries().to_vec()`), `merge_append.rs`
+  `existing_manifest` (intentional `shouldKeep` parity — KEPT), and `snapshot.rs` `process_deletes`
+  L1100 (carry-if-no-matching-delete, ALSO correct: a delete-bearing op's `shouldKeep` analogue; the
+  rewritten all-tombstone manifest is pushed unconditionally elsewhere in the loop). For fast_append
+  `process_deletes` returns early (`delete_files` empty), so append.rs:148 was the SOLE drop point.
+  Grep `has_added_files() || has_existing_files()` before assuming one site.
+- **The on-disk reproduction must RE-PARSE the manifest-list FILE, and the producer of the
+  all-tombstone state is an EMPTYING copy-on-write delete (append d1 → delete d1) — not a hand-built
+  fixture.** *Why:* `delete_files(["d1"])` rewrites d1's manifest to {d1: Deleted}, 0 live, which
+  `process_deletes` pushes into the manifest list (added_snapshot_id = delete snapshot,
+  `has_deleted_files` only). The next commit's `existing_manifest` reads that real on-disk list. Fail
+  before / pass after: with the filter the new snapshot's list omits the tombstone manifest path; without
+  it, it is present. Two co-pins keep the fix honest WITHOUT relying on the env-gated interop chain: a
+  scan-unchanged pin (the carry does NOT resurrect the deleted row — the worst regression class) and a
+  merge_append-still-drops pin (the deliberate asymmetry). Both PASS under the OLD filter too, so only
+  the fail-before reproduction proves the fix — the other two guard against over-correcting.
+- **Carrying an extra all-tombstone manifest forward changes NO snapshot summary counter** — Rust does
+  not emit `manifests-created/-kept/-replaced` (only `RewriteManifests` does), and `total-*`/`added-*`
+  counters come from FILE accounting (`added_data_files`/`removed_data_files` seeded from the prior
+  summary), never from counting manifest-list entries. The full lib suite (2000→2003, only the 3 new
+  tests added) passed unchanged — corroborating zero knock-on. Orphan/expire universes read ALL
+  manifests and are strictly SAFER (one fewer dropped-then-relisted manifest).
+
+### 2026-06-11 (Wave-4 Group O / O1 — REVIEWER Opus, wt-rewrite)
+- **The merge_append NO-FIX verdict is CONFIRMED from 1.10.0 bytecode, both sub-questions.** `javap -c
+  MergingSnapshotProducer` → `lambda$apply$16` (the `shouldKeep` Predicate) is exactly `hasAddedFiles()
+  (offset 1, ifne 35) || hasExistingFiles() (offset 10, ifne 35) || manifest.snapshotId().longValue()
+  == this.snapshotId() (offsets 18-32)`. (a) The third clause is UNREACHABLE for a carried manifest in a
+  pure merge_append: `filterManifest` returns the manifest VERBATIM (old snapshot id) when there are no
+  matching deletes (`!canContainDeletedFiles` → `return manifest`, offsets 23-45) — only a REWRITTEN
+  manifest gets the new snapshot id, and merge_append rewrites nothing. So an all-tombstone carried
+  manifest fails all three clauses ⇒ dropped, matching Rust's `has_added || has_existing`. (b) `shouldKeep`
+  (apply local 8) is applied to BOTH the data-manifest iterable (apply offset 175) AND the delete-manifest
+  iterable (offset 191) — so Java drops all-tombstone DELETE manifests in the merge path identically;
+  Rust's content-agnostic filter matches. MAIN `MergingSnapshotProducer.java` L1003-1011 confirms the
+  bytecode (the builder's "L1007-1011" citation is accurate; the third clause is L1007).
+- **Entry-copy fidelity had a TEST GAP — closed by the reviewer.** `to_vec()` clones `ManifestFile`
+  verbatim (Java `allManifests` carries the cached objects with no `copyOf`/`withSnapshotId` — that
+  restamp is only `lambda$apply$1`, the unported `appendManifest()` path). But the original reproduction
+  test only checked the carried entry's PATH + tombstone counts, NOT `added_snapshot_id`. Mutation —
+  restamping `added_snapshot_id` to the new snapshot id — left the O1 tests GREEN and only tripped
+  cross-cutting concurrent-conflict tests in overwrite/row_delta/replace_partitions/cherry_pick
+  (`added_*_files_after` reads `added_snapshot_id`). Reviewer strengthened the reproduction pin to a full
+  `ManifestFile` `==` against the pre-carry entry (covers added_snapshot_id, both seq numbers, all counts,
+  partition summaries); mutation-verified it now fails directly on the `added_snapshot_id` diff. Lesson:
+  a "carried verbatim" pin must field-compare against the SOURCE entry, not just re-assert the entry's own
+  derived predicates — re-inheritance corruption hides in fields the predicate doesn't read.
+- **Manifest-LIST entry ORDER diverges from Java but is NOT a spec/interop contract (REPORT, not fix).**
+  Java `FastAppend.apply` writes NEW manifests FIRST then carried `allManifests` LAST (bytecode offsets
+  4-23 then 74-99; MAIN `FastAppend.java` L153 then L166). Rust `SnapshotProducer::manifest_file`
+  (snapshot.rs:1030-1039) writes CARRIED first (`process_deletes`) then NEW (`write_added_manifests`
+  extend) — the OPPOSITE order. This is PRE-EXISTING (O1 only changed which carried entries survive, not
+  the carried-vs-new order) and the canonical interop oracle (`snapshot_meta_view.rs:107-127`) SORTS
+  manifests by a deterministic tuple precisely because manifest-list file order is "writer-dependent, not
+  a spec contract." Both readers reconcile by sequence number, order-agnostic. So the three interop chains
+  pass and the divergence is cosmetic. Fixing it would touch the shared `manifest_file` path (blast radius:
+  every action) — out of O1 scope.
+- **Comment drift: merge_append.rs:282 now LIES after O1.** It says its `existing_manifest` "Mirrors
+  `FastAppendOperation::existing_manifest` exactly so the carried set is byte-identical" — but O1 made
+  fast_append carry UNFILTERED while merge_append still filters. The two are now DELIBERATELY different.
+  Reported to the orchestrator (merge_append.rs production is outside the reviewer's allowed file set; a
+  one-line comment correction is the only follow-up).
+
+### 2026-06-11 (Wave-4 Group O / O2 — `RewriteDataFiles` bin-pack compaction, BUILDER Opus)
+- **BIN-PACK COMPACTION READS DELETES-APPLIED, which makes it SAFER than plain `RewriteFiles` for an
+  EXISTING delete — and the "resurrection-without-seq" test premise is WRONG.** *Why:* the Spark
+  runner (`SparkBinPackFileRewriteRunner.doRewrite`, MAIN) reads each group via the normal Iceberg
+  scan, so merge-on-read deletes are APPLIED and the rewritten file contains only LIVE rows. So an
+  EXISTING equality-deleted row is physically gone from the output REGARDLESS of the stamped seq —
+  it cannot resurrect (that is the whole point of `DELETE_FILE_THRESHOLD`: rewrite a delete-laden file
+  to physically drop its deletes). The naive "compact without `use_starting_sequence_number` ⇒ y=20
+  resurrects" test FAILED because y=20 was never written to the new file. The seq flag's REAL
+  load-bearing role is keeping a CONCURRENT equality delete (one added after planning, at a higher
+  seq) still applying to the rewritten data — that is what `RewriteDataFilesCommitManager`'s
+  `dataSequenceNumber(startingSnapshot.sequenceNumber())` preserves. Re-cast the broken test to an
+  ON-DISK seq mechanism pin (raw avro, pre-inheritance, both directions: with-flag ⇒ explicit
+  starting seq; without ⇒ `None`/re-inherit-fresh) — that is mutation-sensitive (the seq-drop mutation
+  fails it) and CORRECT, where the scan-resurrection claim was a category error. Contrast with plain
+  `RewriteFiles` (rewrite_files.rs crown jewel), which rewrites the file's RAW bytes (delete still
+  present), so THAT path genuinely resurrects without seq preservation — the two actions have
+  different read semantics and therefore different resurrection physics.
+- **THE STAMPED SEQ IS THE STARTING SNAPSHOT'S, not the file's own (1.10.0 bytecode-pinned).**
+  `RewriteDataFilesCommitManager.commitFileGroups` (core jar, offsets 81-145): `table.newRewrite()
+  .validateFromSnapshot(startingSnapshotId)`; IF `useStartingSequenceNumber` (default TRUE per api
+  bytecode `USE_STARTING_SEQUENCE_NUMBER_DEFAULT`): `.dataSequenceNumber(table.snapshot(
+  startingSnapshotId).sequenceNumber())`. Maps cleanly onto the fork's
+  `RewriteFilesAction.data_sequence_number(seq)` + `.validate_from_snapshot(id)` — the O2 action
+  threads `starting_snapshot.sequence_number()`, not the input files' seqs.
+- **The 1.10.0 candidate predicate + group filter (MAIN, literal constants bytecode-confirmed):**
+  `filterFiles` = `outsideDesiredFileSizeRange(length<minFileSize || length>maxFileSize) || tooManyDeletes
+  (deletes.size()>=deleteFileThreshold) || tooHighDeleteRatio`; `filterFileGroups` = `enoughInputFiles
+  (size>1 && size>=minInputFiles) || enoughContent(size>1 && inputSize>target) || tooMuchContent(inputSize>
+  maxFileSize) || anyMatch(tooManyDeletes) || anyMatch(tooHighDeleteRatio)`. Defaults: min=0.75·target,
+  max=1.8·target, minInputFiles=5, maxGroupSize=100GiB, deleteFileThreshold=Integer.MAX_VALUE (disabled),
+  target=`write.target-file-size-bytes` (512MiB). The `size>1` guard in `enoughInputFiles`/`enoughContent`
+  is what leaves a LONE undersized file alone — a single-file group only qualifies via `tooMuchContent`
+  (oversized) or the delete clause, never by being merely small (pin the boundary: 2 files < min=3 ⇒ no-op,
+  3 == min ⇒ rewritten).
+- **PER-PARTITION grouping (`groupByPartition`): key by `task.file().partition()` ONLY when the file's spec
+  id == the table's CURRENT default spec id, else the EMPTY struct** ("an incompatible-spec file could span
+  multiple current partitions, so group it un-partitioned"). The pure-fn pin builds an old-spec (id 1) task
+  + a current-spec (id 0) task and asserts they bucket SEPARATELY (never merged into one qualifying group) —
+  the mutation that always-empties the key fails both the unit pin and the e2e partition-isolation pin.
+- **Java's PLANNER does NOT split an oversized INPUT file — it bin-packs whole `FileScanTask`s and lets the
+  WRITE-time rolling writer (`inputSplitSize`/`writeMaxFileSize`) control OUTPUT rolling.** An input file >
+  max is SELECTED (oversized candidate, `tooMuchContent`) and rewritten, but never split before reading.
+  Ported faithfully: bin-pack whole tasks, roll output at the target via `RollingFileWriter`. (The brief
+  flagged oversized-split as a possible deferral — the answer is "Java doesn't do input-split," not "deferred.")
+- **Bin packing = FORWARD `pack` (lookback-1), NOT `packEnd`.** `SizeBasedFileRewritePlanner.planFileGroups`
+  uses `new BinPacking.ListPacker(maxGroupSize, 1, false, maxGroupCount).pack(...)` — the forward greedy
+  first-fit, whereas the fork's MERGE-APPEND manifest packer uses `packEnd` (reversed, so the underfilled bin
+  is first). DIFFERENT entry point, same `PackingIterator` core. The fork's `bin_packing` module is
+  `pub(crate)`-PRIVATE to `transaction/merge_append.rs`; reusing it would require making it visible = a
+  `transaction/` change (out of a maintenance action's scope), so the lookback-1 forward case is reimplemented
+  locally (~15 lines) + algorithm-verified against Java + the fork's `pack`. When a needed helper is private
+  to a read-only module, reimplement-locally beats opening the module if the algorithm is small and pinnable.
+- **A maintenance action that reads + writes + commits is cleanly composable from the existing surface with
+  ZERO transaction/scan/writer edits.** O2 used `table.scan().filter().plan_files()` (tasks carry deletes),
+  `ArrowReaderBuilder::read` (deletes applied), `DataFileWriter`/`RollingFileWriter` (roll at target), and
+  `Transaction::rewrite_files(...).data_sequence_number().validate_from_snapshot()` — every seam already
+  public. The brief's "STOP and report if you need a visibility change in transaction/scan/writer" never
+  fired. The A2 (`DeleteOrphanFiles`) builder idiom (`new(table)` → builder methods → `execute(catalog)`)
+  ported directly; the rewrite_files.rs test fixtures (real parquet write + scan + on-disk-seq raw-avro read)
+  ported directly into the maintenance test module (the transaction `tests` module is private, so the helpers
+  were re-authored, not imported).
+
+### 2026-06-11 (Wave-4 Group O / O2 — `RewriteDataFiles`, REVIEWER Opus)
+- **A COMPACTION/REWRITE READ MUST STRIP THE SCAN RESIDUAL (`FileScanTask.predicate`) BEFORE READING, or
+  `.filter(Predicate)` SILENTLY DROPS LIVE ROWS.** *Found + fixed in O2.* `scan().with_filter(p)` computes a
+  per-file partition-reduced RESIDUAL and stores it on each `FileScanTask.predicate`; `arrow/reader.rs` turns
+  that residual into a row-level `RowFilter` (`final_predicate` → `with_row_filter`, reader.rs ~471/521). A
+  maintenance action that re-feeds the planned tasks into `ArrowReaderBuilder::read` (to read the group's live
+  rows) therefore ALSO applies the filter PER ROW — so a file whose rows only PARTIALLY match the filter has its
+  non-matching LIVE rows DISCARDED from the rewritten output ⇒ permanent data loss (row count fell 10→5 in the
+  repro). Java does NOT do this: `BinPackRewriteFilePlanner.planFileGroups` builds the plan scan with
+  **`.ignoreResiduals()`** (core MAIN ~L291) so tasks carry NO residual, and `SparkBinPackFileRewriteRunner.doRewrite`
+  reads the group by SCAN_TASK_SET_ID with NO row filter (reads ALL rows). FIX (the Rust analogue of
+  `ignoreResiduals`): set `task.predicate = None` on the group tasks before `read`; keep the delete files (deletes
+  still apply) and keep `.with_filter` on the PLANNING scan (file-selection only). RULE: when an action reads a
+  pre-planned `FileScanTask` for a purpose OTHER than answering the filter (rewrite/compact/copy), STRIP
+  `task.predicate` — the residual belongs to query reads, not data-movement reads. Pin: an e2e with rows
+  straddling the filter boundary, asserting the post-rewrite scan still has BOTH sides.
+- **The on-disk-seq mechanism pin is NECESSARY but not SUFFICIENT — add the behavioral concurrent-eq-delete e2e.**
+  The builder pinned `use_starting_sequence_number` only via raw-avro on-disk seq. The REAL behavior is
+  constructible by driving the action's internals: capture starting snapshot S; `write_compacted_files`; commit a
+  CONCURRENT equality delete at seq S+1 (deleting a row in the to-be-rewritten files); then commit the rewrite
+  stamping S — `ignore_equality_deletes = data_sequence_number.is_some()` makes the commit SUCCEED, and the
+  post-rewrite scan shows the row GONE (data at seq S < delete seq S+1). Dropping the seq stamp either resurrects
+  the row OR (more often) flips `ignore_equality_deletes` off ⇒ the delete now CONFLICTS ⇒ commit FAILS — either
+  way the mutation is caught.
+- **`validate_from_snapshot(start)` is REDUNDANT for a single-group first commit but LOAD-BEARING across groups.**
+  `RewriteFilesAction.validate` uses `effective_start = validate_from_snapshot.or(starting_snapshot_id)` where the
+  fallback is the TRANSACTION-captured base. In `rewrite_group`, `Transaction::new(table)` for the FIRST group has
+  base == starting snapshot, so dropping `validate_from_snapshot` is behaviorally identical there (a single-group
+  concurrent-delete e2e through `.execute()` does NOT catch the drop). It diverges only on the 2nd+ group (base has
+  advanced past the original start). Keep the call (Java-faithful + multi-group-correct) but know a one-group e2e
+  can't pin it; the staged conflict tests + the `.execute()` conflict pin cover the single-group path, and the
+  bytecode + the `.or()` trace cover the rest.
+
+### 2026-06-11 (Wave-4 Group O / O3 — `RemoveDanglingDeleteFiles` + RewriteFiles delete-removal surface, BUILDER Opus)
+- **The dangling predicate's OFF-BY-ONE (pos `<` min vs eq `<=` min) is the EXACT COMPLEMENT of the read-path
+  applicability rule — derive it from BOTH sides and pin the boundary with a pure-fn test, not an e2e.** Java's
+  `RemoveDanglingDeletesSparkAction.findDanglingDeletes` SQL (lines 152-165): a POSITION delete dangles when `seq <
+  min_data_sequence_number` (STRICT), an EQUALITY delete when `seq <= min` (NON-strict). Why the difference: position
+  deletes APPLY to same-seq data (`delete_file_index.rs` L289 `delete_seq >= data_seq`), equality deletes do NOT
+  (L238 `delete_seq > data_seq` STRICTLY). So a delete applies to the partition's MIN-seq data file iff `delete_seq
+  >= min` (pos) / `delete_seq > min` (eq) ⇒ dangles iff `< min` (pos) / `<= min` (eq). The e2e fixtures (rewrite data
+  to a FRESH higher seq) put the delete strictly below min, so `<` and `<=` BOTH fire there — only a PURE-FN test at
+  the exact boundary (min=5; pos@5 kept, pos@4 removed, eq@5 removed, eq@6 kept) distinguishes the two and catches
+  EITHER flip. The off-by-one IS the resurrection corruption edge; isolate it boundary-exactly.
+- **The vehicle was ALREADY half-built: `RowDelta.remove_deletes` (Arc E) drives the exact delete-filter-manager
+  removal Java's `RewriteFiles.deleteFile(DeleteFile)` does — they differ ONLY in the recorded operation
+  (Overwrite vs Replace) + the 3 RewriteFiles preconditions.** `MergingSnapshotProducer.delete(DeleteFile)`
+  (1.10.0 bytecode: `deleteFile(DeleteFile)` → `invokevirtual delete`) is the same machinery the producer's
+  `with_removed_delete_files` → `resolve_delete_file_paths` → `process_deletes` + summary `remove_file` already
+  drives. Extending `RewriteFiles` with the removal surface was therefore ADDITIVE — a field + 2 builders + the
+  producer routing call + the precondition arithmetic — with ZERO snapshot.rs change (the routing exists). When a
+  new commit-vehicle's machinery overlaps an existing one, the delta is usually just the operation classification +
+  the action-specific preconditions; reuse the producer plumbing, don't fork it.
+- **All THREE `BaseRewriteFiles.validateReplacedAndAddedFiles()` preconditions disassembled (1.10.0 bytecode) —
+  the matrix's "third precondition" is `deletesDeleteFiles() || !addsDeleteFiles()` ("Delete files to add must be
+  empty because there's no delete file to be rewritten").** Preconditions: (1) `deletesDataFiles() ||
+  deletesDeleteFiles()` "Files to delete cannot be empty"; (2) `deletesDataFiles() || !addsDataFiles()` "Data files
+  to add must be empty…"; (3) "Delete files to add must be empty…". With the REMOVAL-only surface (no add-delete),
+  `addsDeleteFiles()` is always false ⇒ (3) always passes (presently unreachable). Kept the check + Java-exact
+  message anyway so the third precondition fires the moment the add-delete builder lands — an unreachable-but-correct
+  guard is cheaper than a missing one, but DOCUMENT the unreachability (clippy would otherwise be right to flag the
+  dead `false`). `operation()` = "replace" UNCONDITIONALLY (bytecode `ldc "replace"; areturn`), even for a
+  delete-file-only rewrite — so a `RemoveDanglingDeleteFiles` commit records Replace, NOT the RowDelta Overwrite.
+- **Severing the producer routing (`with_removed_delete_files` gated on `false`) doesn't silently misroute — it
+  HARD-FAILS the empty-commit guard.** A delete-file-ONLY rewrite has nothing for the producer to do once the
+  removal set is severed (no added data, no removed data, no removed deletes) ⇒ the producer rejects with
+  `PreconditionFailed "No added data files, added delete files, deleted data files, or added snapshot properties
+  found when write a manifest file"`. The routing mutation test catches this as a loud panic, which is even
+  stronger than a silent-stays-live divergence. Good defense-in-depth: the empty-commit guard backstops a severed
+  routing.
+- **MAIN-only impl flag: `RemoveDanglingDeletesSparkAction` is SPARK MAIN-source (no 1.10.0 spark bytecode in
+  ~/.m2 — only the api interface + Result shape are in `iceberg-api-1.10.0.jar`).** The api `RemoveDanglingDeleteFiles`
+  interface (`Result.removedDeleteFiles()`) and the RewriteFiles vehicle (`BaseRewriteFiles`, `deleteFile(DeleteFile)`,
+  the 3 preconditions, `operation()`) ARE 1.10.0-bytecode-verified; the predicate SQL + the per-partition+spec
+  grouping + the unpartitioned-single-spec early return are derived from the Spark v3.5/v4.0/v4.1 MAIN source
+  (identical across the three). Flag the impl-source asymmetry on the GAP_MATRIX cell.
+
+### 2026-06-11 (O3 REVIEWER Opus — `RemoveDanglingDeleteFiles` adversarial review; verdict PASS w/ added pins+docs)
+- **A delete-only `RewriteFiles` has a KNOWN Java-faithful RESURRECTION RACE — confirm it with a staged probe, then
+  DOCUMENT it (don't guard it).** `BaseRewriteFiles.validate` runs `validateNoNewDeletesForDataFiles` only
+  `if (!replacedDataFiles.isEmpty())` (1.10.0 bytecode — disassembled the gated call), and the dangling-removal has
+  an EMPTY replaced-DATA set, so NO concurrent-conflict check runs; Java's `RemoveDanglingDeletesSparkAction` adds no
+  `validateFromSnapshot` either. A concurrent SEQ-PRESERVING compaction (O2's `use_starting_sequence_number`) that
+  lands a data file at a LOWER seq in the dangling delete's partition between plan and commit makes the "dangling"
+  delete APPLICABLE again — and its removal RESURRECTS rows. Reviewer probe staged exactly this (eq@2 dangles vs
+  min=3 → land Z@seq1 carrying the masked row → remove eq@2 → y=20 resurrected, scan went {10,30}→{10,20,30}).
+  IDENTICAL in Java, so pin to Java: documented on the module doc + matrix cell, NOT guarded (a guard would diverge).
+- **The DV simplification (DV → ref-gone check only, never the per-partition min-seq comparison) is BEHAVIORALLY
+  EQUIVALENT to Java's union of `findDanglingDeletes` ∪ `findDanglingDvs` for VALID tables — prove it, don't assume.**
+  Java flows DVs through BOTH (the `findDanglingDeletes` filter is `content != 0`, which includes content==1 PUFFIN
+  DVs) and unions via `DeleteFileSet`. But a DV whose referenced file is LIVE can never additionally trip the seq
+  branch: `dv_seq >= referenced_data_seq` (read-path invariant, `delete_file_index` L263) and `referenced_data_seq >=
+  partition_min` (the ref file is in the min group), so `dv_seq >= partition_min` always ⇒ `dv_seq < min` impossible.
+  So Java's union reduces to just the ref-gone check for live-ref DVs; the Rust simplification matches. Built the
+  missing DV e2e (real Puffin DV → rewrite referenced data away → action removes it, `removed-dvs:1`, scan unchanged).
+- **The global/unpartitioned EQUALITY delete is keyed by `(its-own-spec_id, empty-partition)`, NOT "matches all
+  specs" — so under a multi-spec table it can be flagged dangling while the READER still applies it table-wide. This
+  action↔reader inconsistency is inherited 1:1 from Java.** The reader (`global_equality_deletes` / Java
+  `findGlobalDeletes`) applies a global eq delete to data under ANY spec; the action (and Java's SQL join on `spec_id
+  AND partition`) groups it only against same-unpartitioned-spec data. Reachable after unpartitioned→partitioned spec
+  evolution. Probe confirmed the action flags it dangling; documented as Java-faithful, not a Rust bug.
+- **`RewriteFiles` SETS `failMissingDeletePaths()` in its CONSTRUCTOR (bytecode offset 18-21) — so the action's
+  fail-loud on a missing delete-removal path is Java-faithful for THIS caller** (unlike `RowDelta`, which only sets
+  it conditionally). The missing-path test is correct and matches Java.
+- **Mutation sweep (8 run, all caught, all reverted):** drop spec_id from the group key → cross-spec test; min-IS-NULL
+  as keep → no-live-data test; counter cross-wire pos→eq → dangling-pos test; content-guard removal → data-content
+  rejection test; operation()=Overwrite → 8 tests incl. delete-only-Replace + on-disk changelog; pos `<`→`<=` and eq
+  `<=`→`<` → the off-by-one pure-fn boundary pin; producer-routing sever → both tombstone tests (loud via the
+  empty-commit guard). The builder's pins held under every mutation.
+- **Strengthen an incompatible-spec partition pin by giving the off-spec file the SAME partition struct as a
+  current-spec file.** The original pin used DIFFERENT partition values ([7] vs [0]), so the "always key by
+  partition" mutation still bucketed them apart (different structs) and the pin passed under mutation. Making both
+  structs `[0]` (with `min_input_files=2` so a co-grouped pair WOULD qualify) makes the mutation observable: correct
+  code buckets the off-spec file under the EMPTY struct (separate), the mutation co-groups them into one qualifying
+  group. A mutation-insensitive guard test is worse than none — pick fixture values that make the guard's job
+  actually necessary.

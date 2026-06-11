@@ -278,8 +278,11 @@ impl SnapshotProduceOperation for MergeAppendOperation {
     ) -> Result<Vec<ManifestFile>> {
         // Carry forward every existing manifest that still has live files (Java
         // `MergingSnapshotProducer.apply`'s `shouldKeep = hasAddedFiles || hasExistingFiles ||
-        // snapshotId() == snapshotId()`). Mirrors `FastAppendOperation::existing_manifest` exactly so
-        // the carried set is byte-identical; the merge step then decides which of these to combine.
+        // snapshotId() == snapshotId()`; the third clause is unreachable here — carried manifests
+        // keep their old snapshot id). DELIBERATELY DIFFERENT from `FastAppendOperation`, which
+        // carries ALL manifests unfiltered (Java `FastAppend.apply` -> `allManifests`): Java itself
+        // is asymmetric between the two append flavors (O1, 2026-06-11, bytecode-pinned both ways).
+        // The merge step then decides which of these to combine.
         let Some(snapshot) = snapshot_produce.table.metadata().current_snapshot() else {
             return Ok(vec![]);
         };

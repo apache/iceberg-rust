@@ -78,11 +78,35 @@
 //! set, else the transaction-captured starting snapshot (Java `startingSnapshotId`). A conflict is a
 //! non-retryable [`ErrorKind::DataInvalid`] (Java's non-retryable `ValidationException`).
 //!
+//! **DELETE-file REMOVAL surface (Java `RewriteFiles.deleteFile(DeleteFile)`, landed 2026-06-11, O3):** this
+//! action can also REMOVE position-delete / equality-delete / deletion-vector files via
+//! [`RewriteFilesAction::delete_delete_file`] / [`RewriteFilesAction::delete_delete_files`]. This is the
+//! commit vehicle Java's `RemoveDanglingDeletesSparkAction` uses (`table.newRewrite()` then
+//! `rewriteFiles.deleteFile(deleteFile)` per dangling delete). The removed delete files reach the producer
+//! exactly as `RowDelta.removeDeletes` routes them — [`SnapshotProducer::with_removed_delete_files`] →
+//! `resolve_delete_file_paths` (by path against the current DELETE manifests, fail-loud on a missing path)
+//! → `process_deletes` (tombstone in the rewritten DELETE manifest via the content-keyed filtering writer) +
+//! summary `remove_file` (DV → `removed-dvs`, parquet position → `removed-position-delete-files`, equality →
+//! `removed-equality-delete-files`). The operation stays [`Operation::Replace`] — Java
+//! `BaseRewriteFiles.operation()` returns `"replace"` unconditionally, even for a delete-only rewrite
+//! (1.10.0 bytecode). In 1.10.0 `MergingSnapshotProducer.delete(DeleteFile)` underlies the
+//! `deleteFile(DeleteFile)` overload, so this Rust surface drives the same delete-filter-manager removal.
+//!
+//! **Three preconditions (Java `BaseRewriteFiles.validateReplacedAndAddedFiles()`, 1.10.0 bytecode):**
+//!   1. `deletesDataFiles() || deletesDeleteFiles()` — the to-delete set (data OR delete) must be non-empty
+//!      (**"Files to delete cannot be empty"**). A delete-file-only rewrite is now legal.
+//!   2. `deletesDataFiles() || !addsDataFiles()` — data files may be added only if data files are deleted
+//!      (**"Data files to add must be empty because there's no data file to be rewritten"**).
+//!   3. `deletesDeleteFiles() || !addsDeleteFiles()` — delete files may be added only if delete files are
+//!      deleted (**"Delete files to add must be empty because there's no delete file to be rewritten"**).
+//!      ADD-of-delete-files is NOT yet supported by this action (only REMOVAL), so `addsDeleteFiles()` is
+//!      always false and (3) always passes; the message is mirrored for when the add-delete surface lands.
+//!
 //! **Out of scope (deferred, with precise reasons):**
-//! - **DELETE-file rewrite** — Java `RewriteFiles` can also rewrite position-delete / deletion-vector
-//!   files (`deleteFile(DeleteFile)` / `addFile(DeleteFile)`). That needs the delete-file write path (a
-//!   later Phase-2 increment). This action rewrites DATA files only. (It carries the third Java precondition
-//!   `deletesDeleteFiles() || !addsDeleteFiles()` with it.)
+//! - **DELETE-file ADD** — Java `RewriteFiles.addFile(DeleteFile)` / `addFile(DeleteFile, long)` (rewriting a
+//!   position-delete / DV file into a NEW delete file). That needs the delete-file WRITE path threaded into
+//!   the producer's added-delete-file machinery; the REMOVAL surface (above) is all `RemoveDanglingDeleteFiles`
+//!   needs. The third precondition is already carried for when this lands.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -123,6 +147,11 @@ pub struct RewriteFilesAction {
     added_data_files: Vec<DataFile>,
     /// Data files to remove from the table (their paths are resolved against the current snapshot).
     deleted_data_files: Vec<DataFile>,
+    /// DELETE files (position / equality / deletion-vector content) to remove from the table — the Java
+    /// `RewriteFiles.deleteFile(DeleteFile)` surface (`MergingSnapshotProducer.delete(DeleteFile)`). Their
+    /// paths are resolved against the current snapshot's DELETE manifests and tombstoned in one snapshot.
+    /// This is the commit vehicle `RemoveDanglingDeleteFiles` drives.
+    deleted_delete_files: Vec<DataFile>,
     commit_uuid: Option<Uuid>,
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
@@ -142,6 +171,7 @@ impl RewriteFilesAction {
         Self {
             added_data_files: vec![],
             deleted_data_files: vec![],
+            deleted_delete_files: vec![],
             commit_uuid: None,
             key_metadata: None,
             snapshot_properties: HashMap::default(),
@@ -185,6 +215,25 @@ impl RewriteFilesAction {
     /// Remove multiple rewritten [`DataFile`]s from the table.
     pub fn delete_files(mut self, data_files: impl IntoIterator<Item = DataFile>) -> Self {
         self.deleted_data_files.extend(data_files);
+        self
+    }
+
+    /// Remove a single DELETE file (position / equality / deletion-vector content) from the table — the Java
+    /// `RewriteFiles.deleteFile(DeleteFile)` overload (`MergingSnapshotProducer.delete(DeleteFile)`). Its path
+    /// must equal a live DELETE-file path in the current snapshot, or the commit errors
+    /// (`failMissingDeletePaths`). The supplied file must be `PositionDeletes` or `EqualityDeletes` content (a
+    /// `Data` file is rejected at commit — that goes through [`Self::delete_file`]). This is the surface
+    /// `RemoveDanglingDeleteFiles` uses to drop a delete file that no longer applies to any live data file.
+    pub fn delete_delete_file(mut self, delete_file: DataFile) -> Self {
+        self.deleted_delete_files.push(delete_file);
+        self
+    }
+
+    /// Remove multiple DELETE files (position / equality / deletion-vector content) from the table — the
+    /// plural of [`Self::delete_delete_file`]. Each file must be `PositionDeletes` or `EqualityDeletes`
+    /// content (a `Data` file is rejected at commit).
+    pub fn delete_delete_files(mut self, delete_files: impl IntoIterator<Item = DataFile>) -> Self {
+        self.deleted_delete_files.extend(delete_files);
         self
     }
 
@@ -241,24 +290,60 @@ impl RewriteFilesAction {
 #[async_trait]
 impl TransactionAction for RewriteFilesAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
-        // Java `BaseRewriteFiles.validateReplacedAndAddedFiles()` (the data-file subset). Run BEFORE the
-        // producer's own machinery so the exact Java message surfaces.
+        // Java `BaseRewriteFiles.validateReplacedAndAddedFiles()` (1.10.0 bytecode — all three preconditions).
+        // Run BEFORE the producer's own machinery so the exact Java message surfaces.
         //
-        // Precondition (1): `deletesDataFiles() || deletesDeleteFiles()` — the files-to-delete set must be
-        // non-empty ("Files to delete cannot be empty"). A delete-only rewrite is legal; an add-only or
-        // fully-empty rewrite is rejected.
-        //
-        // Java precondition (2) `deletesDataFiles() || !addsDataFiles()` ("Data files to add must be empty
-        // because there's no data file to be rewritten") is SUBSUMED here: with DELETE-file rewrite out of
-        // scope, the only way to delete files is to delete DATA files, so `deletesDataFiles()` is true
-        // exactly when this delete set is non-empty — i.e. whenever (1) passes — and an add is therefore
-        // always permitted. (When the delete-file write path lands, a delete-file-only rewrite that tries
-        // to add data files will need precondition (2) enforced explicitly.)
-        if self.deleted_data_files.is_empty() {
+        // `deletesDataFiles()` ⇔ `!deleted_data_files.is_empty()`; `deletesDeleteFiles()` ⇔
+        // `!deleted_delete_files.is_empty()`; `addsDataFiles()` ⇔ `!added_data_files.is_empty()`;
+        // `addsDeleteFiles()` ⇔ false (this action removes delete files but does not yet ADD them).
+        let deletes_data_files = !self.deleted_data_files.is_empty();
+        let deletes_delete_files = !self.deleted_delete_files.is_empty();
+        let adds_data_files = !self.added_data_files.is_empty();
+
+        // Precondition (1): `deletesDataFiles() || deletesDeleteFiles()` — the to-delete set (DATA or DELETE
+        // files) must be non-empty ("Files to delete cannot be empty"). A delete-file-only rewrite (the
+        // `RemoveDanglingDeleteFiles` vehicle) is legal; an add-only or fully-empty rewrite is rejected.
+        if !deletes_data_files && !deletes_delete_files {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 "Files to delete cannot be empty",
             ));
+        }
+
+        // Precondition (2): `deletesDataFiles() || !addsDataFiles()` ("Data files to add must be empty because
+        // there's no data file to be rewritten") — data files may be added only when data files are deleted.
+        // Now distinct from (1): a delete-file-only rewrite that ALSO tries to add data files is rejected here.
+        if !deletes_data_files && adds_data_files {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Data files to add must be empty because there's no data file to be rewritten",
+            ));
+        }
+
+        // Precondition (3): `deletesDeleteFiles() || !addsDeleteFiles()` ("Delete files to add must be empty
+        // because there's no delete file to be rewritten"). `addsDeleteFiles()` is always false here (the
+        // add-delete surface is not yet ported), so this always passes; the check + Java-exact message are
+        // mirrored for when the add-delete surface lands.
+        // NOTE: with `addsDeleteFiles()` unconditionally false, this branch is presently unreachable; it is
+        // kept (rather than omitted) so the third precondition is enforced the moment the add-delete builder
+        // lands. The added-delete count would replace the `false` below.
+        let adds_delete_files = false;
+        if !deletes_delete_files && adds_delete_files {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Delete files to add must be empty because there's no delete file to be rewritten",
+            ));
+        }
+
+        // Content-type guard on the removed DELETE set (Java `RewriteFiles.deleteFile(DeleteFile)` takes a
+        // DeleteFile — a Data file must go through `delete_file`). Mirrors `RowDelta`'s removed-delete guard.
+        for delete_file in &self.deleted_delete_files {
+            if delete_file.content_type() == crate::spec::DataContentType::Data {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Only position-delete or equality-delete content is allowed for removed delete files (use delete_file to remove data files)",
+                ));
+            }
         }
 
         // Fail-loud on a negative `dataSequenceNumber` (Rust-only addition, not a Java mirror): the manifest
@@ -292,6 +377,18 @@ impl TransactionAction for RewriteFilesAction {
         if let Some(sequence_number) = self.data_sequence_number {
             snapshot_producer =
                 snapshot_producer.with_new_data_files_data_sequence_number(sequence_number);
+        }
+
+        // Route the removed DELETE files (Java `RewriteFiles.deleteFile(DeleteFile)` →
+        // `MergingSnapshotProducer.delete(DeleteFile)`) through the producer's apply-side delete-removal path
+        // (the same one `RowDelta.removeDeletes` uses): at commit the producer resolves each path against the
+        // current snapshot's DELETE manifests (fail-loud on a missing path), tombstones it in the rewritten
+        // DELETE manifest via the content-keyed filtering writer, and bumps the matching summary counter
+        // (`removed-dvs` / `removed-position-delete-files` / `removed-equality-delete-files`). Empty for a
+        // data-only rewrite, so this is inert there.
+        if deletes_delete_files {
+            snapshot_producer =
+                snapshot_producer.with_removed_delete_files(self.deleted_delete_files.clone());
         }
 
         // Validate the added files like fast append: data content type, partition-spec match, and
@@ -1705,6 +1802,260 @@ mod tests {
         assert!(
             !live_file_paths(&reloaded).await.contains("test/b.parquet"),
             "the rejected rewrite must not have added b.parquet"
+        );
+    }
+
+    // ============================================================================================
+    // DELETE-file REMOVAL surface (Java `RewriteFiles.deleteFile(DeleteFile)`) — the commit vehicle
+    // `RemoveDanglingDeleteFiles` drives. These pin the relaxed precondition (1) (a delete-file-only
+    // rewrite is legal), the Replace operation, the `removed-*` summary counters, the content guard,
+    // and the producer routing (tombstoning in the rewritten DELETE manifest).
+    // ============================================================================================
+
+    /// The set of live DELETE-file paths in the table's current snapshot.
+    async fn live_delete_file_paths(table: &Table) -> HashSet<String> {
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let mut paths = HashSet::new();
+        for manifest_file in manifest_list.entries() {
+            if manifest_file.content != crate::spec::ManifestContentType::Deletes {
+                continue;
+            }
+            let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
+            for entry in manifest.entries() {
+                if entry.is_alive() {
+                    paths.insert(entry.file_path().to_string());
+                }
+            }
+        }
+        paths
+    }
+
+    /// DELETE-FILE-ONLY REWRITE records Replace + bumps `removed-equality-delete-files` (Java
+    /// `BaseRewriteFiles.operation()` = "replace" unconditionally, even when only delete files are
+    /// removed). Append X, add an equality delete via row_delta, then a RewriteFiles that REMOVES the
+    /// delete file (nothing added, no data deleted) — the new snapshot is Replace, the delete is
+    /// tombstoned, and `removed-equality-delete-files: 1`.
+    ///
+    /// Risk pinned: precondition (1) wrongly rejecting a delete-only rewrite; the operation being
+    /// misclassified (Overwrite, the RowDelta classification) instead of Replace; the summary missing.
+    #[tokio::test]
+    async fn test_rewrite_delete_file_only_records_replace_and_removed_counter() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let x = write_data_file(&table, "x.parquet", 0, &[(0, 10, 100), (0, 20, 200)]).await;
+        let table = append_files(&catalog, &table, vec![x]).await;
+
+        let eq_delete = write_equality_delete_file(&table, 0, &[20]).await;
+        let eq_path = eq_delete.file_path().to_string();
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![eq_delete.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        assert!(
+            live_delete_file_paths(&table).await.contains(&eq_path),
+            "the equality delete is live before removal"
+        );
+
+        // Remove the delete file via the RewriteFiles delete-file surface (no data add, no data delete).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_files(vec![], vec![])
+            .delete_delete_files(vec![eq_delete]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        assert_eq!(
+            table
+                .metadata()
+                .current_snapshot()
+                .unwrap()
+                .summary()
+                .operation,
+            Operation::Replace,
+            "a delete-file-only RewriteFiles records Replace (Java operation() = replace always)"
+        );
+        assert_eq!(
+            summary_prop(&table, "removed-equality-delete-files").as_deref(),
+            Some("1"),
+            "the removed equality delete bumps removed-equality-delete-files"
+        );
+        assert!(
+            !live_delete_file_paths(&table).await.contains(&eq_path),
+            "the removed equality delete must be tombstoned"
+        );
+    }
+
+    /// A removed PARQUET POSITION delete bumps `removed-position-delete-files` and restores the masked
+    /// rows. Pins the position-delete branch of the summary + the end-to-end read effect (the rows come
+    /// back) through the RewriteFiles delete-removal vehicle.
+    #[tokio::test]
+    async fn test_rewrite_delete_file_only_removes_position_delete_restores_rows() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+
+        let x = write_data_file(&table, "x.parquet", 0, &[
+            (0, 10, 100),
+            (0, 20, 200),
+            (0, 30, 300),
+        ])
+        .await;
+        let x_path = x.file_path().to_string();
+        let table = append_files(&catalog, &table, vec![x]).await;
+
+        let pos_delete = write_position_delete_file(&table, 0, &[(x_path, 1)]).await;
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![pos_delete.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        assert_eq!(
+            scan_y_values(&table).await,
+            HashSet::from([10, 30]),
+            "the position delete drops y=20"
+        );
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_files(vec![], vec![])
+            .delete_delete_files(vec![pos_delete]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        assert_eq!(
+            summary_prop(&table, "removed-position-delete-files").as_deref(),
+            Some("1"),
+            "the removed position delete bumps removed-position-delete-files"
+        );
+        assert_eq!(
+            summary_prop(&table, "removed-dvs"),
+            None,
+            "a parquet position delete is not a DV"
+        );
+        assert_eq!(
+            scan_y_values(&table).await,
+            HashSet::from([10, 20, 30]),
+            "removing the position delete restores y=20"
+        );
+    }
+
+    /// A `Data`-content file passed to the DELETE-removal surface is rejected (Java's
+    /// `deleteFile(DeleteFile)` takes a DeleteFile; a Data file must go through `delete_file`).
+    /// Risk pinned: a data file silently routed into the delete-removal path.
+    #[tokio::test]
+    async fn test_rewrite_delete_delete_files_rejects_data_content() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![data_file("test/a.parquet", 0)]).await;
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_files(vec![], vec![])
+            .delete_delete_files(vec![data_file("test/a.parquet", 0)]);
+        let tx = action.apply(tx).unwrap();
+        let error = tx
+            .commit(&catalog)
+            .await
+            .expect_err("delete_delete_files must reject a Data-content file");
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(
+            error
+                .message()
+                .contains("Only position-delete or equality-delete content is allowed for removed delete files"),
+            "unexpected message: {}",
+            error.message()
+        );
+    }
+
+    /// Removing a delete file that is NOT live in the current snapshot fails loud with Java's
+    /// `failMissingDeletePaths` message shape. Risk pinned: a delete-removal silently no-op'ing when its
+    /// target is absent (a partial rewrite). Pins the missing-path validation on the delete-removal path.
+    #[tokio::test]
+    async fn test_rewrite_delete_delete_file_missing_path_errors() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![data_file("test/a.parquet", 0)]).await;
+
+        // No delete file was ever committed — removing one must fail.
+        let ghost = DataFileBuilder::default()
+            .content(DataContentType::PositionDeletes)
+            .file_path("test/ghost-pos-del.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(0)
+            .partition(Struct::from_iter([Some(Literal::long(0))]))
+            .referenced_data_file(Some("test/a.parquet".to_string()))
+            .build()
+            .unwrap();
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_files(vec![], vec![])
+            .delete_delete_files(vec![ghost]);
+        let tx = action.apply(tx).unwrap();
+        let error = tx
+            .commit(&catalog)
+            .await
+            .expect_err("removing a delete file that is not live must fail loud");
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(
+            error.message().contains("Missing required files to delete"),
+            "unexpected message: {}",
+            error.message()
+        );
+    }
+
+    /// PRODUCER-ROUTING MUTATION PIN. A RewriteFiles that removes a delete file must route it through
+    /// `with_removed_delete_files` so the producer tombstones it in the rewritten DELETE manifest. After
+    /// removing an equality delete, the rewritten DELETE manifest must carry it as a Deleted tombstone.
+    ///
+    /// MUTATION (run manually, then restore): in `RewriteFilesAction::commit`, gate the
+    /// `with_removed_delete_files` call on `false` (sever the routing) ⇒ this test FAILS (the delete
+    /// stays live — no tombstone) and the summary counter is gone.
+    #[tokio::test]
+    async fn test_rewrite_delete_file_routes_through_producer_tombstone() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let x = write_data_file(&table, "x.parquet", 0, &[(0, 10, 100), (0, 20, 200)]).await;
+        let table = append_files(&catalog, &table, vec![x]).await;
+        let eq_delete = write_equality_delete_file(&table, 0, &[20]).await;
+        let eq_path = eq_delete.file_path().to_string();
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![eq_delete.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .rewrite_files(vec![], vec![])
+            .delete_delete_files(vec![eq_delete]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // The removed delete must be a Deleted tombstone in a DELETE manifest of the new snapshot.
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let mut found_tombstone = false;
+        for manifest_file in manifest_list.entries() {
+            if manifest_file.content != crate::spec::ManifestContentType::Deletes {
+                continue;
+            }
+            let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
+            for entry in manifest.entries() {
+                if entry.file_path() == eq_path && entry.status() == ManifestStatus::Deleted {
+                    found_tombstone = true;
+                }
+            }
+        }
+        assert!(
+            found_tombstone,
+            "the removed delete must be tombstoned (producer routing fired)"
         );
     }
 }
