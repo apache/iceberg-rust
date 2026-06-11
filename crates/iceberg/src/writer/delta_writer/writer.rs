@@ -18,7 +18,7 @@
 //! Delta writer that produces data files, position delete files and equality delete files
 //! in a single pass.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use arrow_array::builder::BooleanBuilder;
@@ -40,6 +40,16 @@ use crate::{Error, ErrorKind, Result};
 pub const INSERT_OP: i32 = 1;
 /// Delete operation marker.
 pub const DELETE_OP: i32 = 2;
+
+/// Number of position-delete entries per write call to the underlying writer.
+///
+/// Writing in chunks gives `RollingFileWriter` roll opportunities between calls.
+/// Rolling fires at the start of the *next* write, so a chunk can still exceed the
+/// target by its own size; chunking bounds that overshoot to roughly one chunk.
+/// Each contiguous chunk of a globally sorted sequence is itself sorted, so the
+/// `(file_path, pos)` ordering required by the Iceberg v2 spec holds within every
+/// output file.
+const POSITION_DELETE_FLUSH_CHUNK_SIZE: usize = 65_536;
 
 /// Builder for [`DeltaWriter`].
 #[derive(Clone)]
@@ -105,6 +115,7 @@ pub struct DeltaWriter<D, PD, ED> {
     projector: RecordBatchProjector,
     inserted_row: HashMap<OwnedRow, PositionDeleteInput>,
     row_converter: RowConverter,
+    position_delete_buffer: BTreeMap<Arc<str>, Vec<i64>>,
 }
 
 impl<D, PD, ED> DeltaWriter<D, PD, ED>
@@ -153,6 +164,7 @@ where
             projector,
             inserted_row: HashMap::new(),
             row_converter,
+            position_delete_buffer: BTreeMap::new(),
         })
     }
 
@@ -178,7 +190,8 @@ where
             }
         }
 
-        self.write_position_deletes(position_deletes).await
+        self.buffer_position_deletes(position_deletes);
+        Ok(())
     }
 
     async fn delete(&mut self, batch: RecordBatch) -> Result<()> {
@@ -194,7 +207,7 @@ where
             }
         }
 
-        self.write_position_deletes(position_deletes).await?;
+        self.buffer_position_deletes(position_deletes);
 
         let delete_mask = delete_row.finish();
         if delete_mask.null_count() == delete_mask.len() {
@@ -224,22 +237,18 @@ where
             })
     }
 
-    async fn write_position_deletes(
-        &mut self,
-        mut deletes: Vec<PositionDeleteInput>,
-    ) -> Result<()> {
-        if deletes.is_empty() {
-            return Ok(());
+    /// Accumulate position-delete entries into the buffer.
+    ///
+    /// Writing is deferred to [`DeltaWriter::close`] so all entries from both insert evictions
+    /// and explicit deletes are merged and written globally sorted by `(file_path, pos)`, as
+    /// required by the Iceberg v2 spec.
+    fn buffer_position_deletes(&mut self, deletes: Vec<PositionDeleteInput>) {
+        for delete in deletes {
+            self.position_delete_buffer
+                .entry(delete.path)
+                .or_default()
+                .push(delete.pos);
         }
-        deletes.sort_by(|a, b| {
-            let path_cmp = a.path.as_ref().cmp(b.path.as_ref());
-            if path_cmp == std::cmp::Ordering::Equal {
-                a.pos.cmp(&b.pos)
-            } else {
-                path_cmp
-            }
-        });
-        self.position_delete_writer.write(deletes).await
     }
 }
 
@@ -295,6 +304,27 @@ where
 
     async fn close(&mut self) -> Result<Vec<DataFile>> {
         let data_files = self.data_writer.close().await?;
+
+        // Flush the position-delete buffer sorted by (file_path, pos) as required by the
+        // Iceberg v2 spec. BTreeMap iteration gives file_path order; positions within each
+        // path are sorted before emission. Chunked writes give the rolling writer roll
+        // opportunities between calls; each chunk is a contiguous slice of a sorted
+        // sequence and is therefore itself sorted.
+        if !self.position_delete_buffer.is_empty() {
+            let sorted: Vec<PositionDeleteInput> = std::mem::take(&mut self.position_delete_buffer)
+                .into_iter()
+                .flat_map(|(path, mut positions)| {
+                    positions.sort_unstable();
+                    positions
+                        .into_iter()
+                        .map(move |pos| PositionDeleteInput::new(path.clone(), pos))
+                })
+                .collect();
+            for chunk in sorted.chunks(POSITION_DELETE_FLUSH_CHUNK_SIZE) {
+                self.position_delete_writer.write(chunk.to_vec()).await?;
+            }
+        }
+
         let position_delete_files = self.position_delete_writer.close().await?;
         let equality_delete_files = self.equality_delete_writer.close().await?;
         Ok(data_files
@@ -600,6 +630,264 @@ mod tests {
             Arc::new(StringArray::from(vec!["k"])),
         ])?;
         assert_eq!(expected_batches, res);
+
+        Ok(())
+    }
+
+    /// Regression: positions buffered from `insert()` (dup eviction) and `delete()` must be
+    /// merged and sorted globally before writing. Without fix: file = [1, 0]. With fix: [0, 1].
+    #[tokio::test]
+    async fn test_position_deletes_globally_sorted() -> Result<()> {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    Arc::new(NestedField::required(
+                        1,
+                        "id".to_string(),
+                        Type::Primitive(PrimitiveType::Long),
+                    )),
+                    Arc::new(NestedField::required(
+                        2,
+                        "data".to_string(),
+                        Type::Primitive(PrimitiveType::String),
+                    )),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIOBuilder::new_fs_io().build()?;
+        let location_gen =
+            DefaultLocationGenerator::with_data_location(temp_dir.path().to_string_lossy().into());
+        let file_name_gen =
+            DefaultFileNameGenerator::new("sorted_test".to_string(), None, DataFileFormat::Parquet);
+
+        // unique_column_ids = [1] — id alone is the PK, data is ignored for dedup.
+        let (data_file_writer_builder, position_delete_writer_builder, _, _) =
+            create_writer_builders(
+                schema.clone(),
+                &file_io,
+                location_gen.clone(),
+                file_name_gen.clone(),
+            )?;
+
+        let equality_config = EqualityDeleteWriterConfig::new(vec![1], schema.clone())?;
+        let equality_delete_writer_builder = {
+            let eq_schema =
+                arrow_schema_to_schema(equality_config.projected_arrow_schema_ref())?.into();
+            let parquet_builder =
+                ParquetWriterBuilder::new(WriterProperties::builder().build(), eq_schema);
+            let rolling = RollingFileWriterBuilder::new_with_default_file_size(
+                parquet_builder,
+                file_io.clone(),
+                location_gen,
+                file_name_gen,
+            );
+            EqualityDeleteFileWriterBuilder::new(rolling, equality_config)
+        };
+
+        let mut delta_writer = DeltaWriterBuilder::new(
+            data_file_writer_builder,
+            position_delete_writer_builder,
+            equality_delete_writer_builder,
+            vec![1], // id-only PK
+            schema.clone(),
+        )
+        .build(None)
+        .await?;
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int64, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                1.to_string(),
+            )])),
+            Field::new("data", DataType::Utf8, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                2.to_string(),
+            )])),
+            Field::new("op", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                3.to_string(),
+            )])),
+        ]));
+
+        // INSERT id=1@0, id=2@1, id=2(dup)@2 evicts pos 1 → buf [1]; DELETE id=1 evicts pos 0 → buf [0].
+        // close() sorts buffer: [0, 1].
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(Int64Array::from(vec![1_i64, 2, 2, 1])),
+            Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from(vec![
+                INSERT_OP, INSERT_OP, INSERT_OP, DELETE_OP,
+            ])),
+        ])?;
+        delta_writer.write(batch).await?;
+
+        let data_files = delta_writer.close().await?;
+
+        let pos_del_file = data_files
+            .iter()
+            .find(|f| f.content == DataContentType::PositionDeletes)
+            .expect("expected a position-delete file");
+
+        let bytes = file_io
+            .new_input(pos_del_file.file_path.clone())?
+            .read()
+            .await?;
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)?
+            .build()
+            .unwrap();
+        let batches: Vec<_> = reader.map(|b| b.unwrap()).collect();
+        let position_schema = Arc::new(position_delete_arrow_schema());
+        let result = concat_batches(&position_schema, &batches).unwrap();
+
+        let pos_col = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let positions: Vec<i64> = (0..pos_col.len()).map(|i| pos_col.value(i)).collect();
+
+        assert_eq!(
+            positions,
+            vec![0_i64, 1],
+            "position-delete file is not globally sorted"
+        );
+
+        Ok(())
+    }
+
+    /// Regression: positions from two `write()` calls interleave.
+    /// insert() evictions → [1, 3]; delete() evictions → [0, 2].
+    /// Without fix: file = [1, 3, 0, 2] (two sorted runs). With fix: [0, 1, 2, 3].
+    #[tokio::test]
+    async fn test_position_deletes_sorted_across_multiple_writes() -> Result<()> {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    Arc::new(NestedField::required(
+                        1,
+                        "id".to_string(),
+                        Type::Primitive(PrimitiveType::Long),
+                    )),
+                    Arc::new(NestedField::required(
+                        2,
+                        "data".to_string(),
+                        Type::Primitive(PrimitiveType::String),
+                    )),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIOBuilder::new_fs_io().build()?;
+        let location_gen =
+            DefaultLocationGenerator::with_data_location(temp_dir.path().to_string_lossy().into());
+        let file_name_gen = DefaultFileNameGenerator::new(
+            "multi_write_test".to_string(),
+            None,
+            DataFileFormat::Parquet,
+        );
+
+        let (data_file_writer_builder, position_delete_writer_builder, _, _) =
+            create_writer_builders(
+                schema.clone(),
+                &file_io,
+                location_gen.clone(),
+                file_name_gen.clone(),
+            )?;
+
+        let equality_config = EqualityDeleteWriterConfig::new(vec![1], schema.clone())?;
+        let equality_delete_writer_builder = {
+            let eq_schema =
+                arrow_schema_to_schema(equality_config.projected_arrow_schema_ref())?.into();
+            let parquet_builder =
+                ParquetWriterBuilder::new(WriterProperties::builder().build(), eq_schema);
+            let rolling = RollingFileWriterBuilder::new_with_default_file_size(
+                parquet_builder,
+                file_io.clone(),
+                location_gen,
+                file_name_gen,
+            );
+            EqualityDeleteFileWriterBuilder::new(rolling, equality_config)
+        };
+
+        let mut delta_writer = DeltaWriterBuilder::new(
+            data_file_writer_builder,
+            position_delete_writer_builder,
+            equality_delete_writer_builder,
+            vec![1],
+            schema.clone(),
+        )
+        .build(None)
+        .await?;
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int64, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                1.to_string(),
+            )])),
+            Field::new("data", DataType::Utf8, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                2.to_string(),
+            )])),
+            Field::new("op", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                3.to_string(),
+            )])),
+        ]));
+
+        // write() #1: four fresh inserts, no position-deletes.
+        let write_one = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(Int64Array::from(vec![1_i64, 2, 3, 4])),
+            Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from(vec![INSERT_OP; 4])),
+        ])?;
+        delta_writer.write(write_one).await?;
+
+        // write() #2: dup inserts evict positions [1,3]; deletes evict positions [0,2].
+        // Buffer accumulates [0,1,2,3]; close() writes them sorted.
+        let write_two = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(Int64Array::from(vec![5_i64, 2, 4, 1, 3])),
+            Arc::new(StringArray::from(vec!["e", "B", "D", "a", "c"])),
+            Arc::new(Int32Array::from(vec![
+                INSERT_OP, INSERT_OP, INSERT_OP, // id=5 fresh, id=2 dup, id=4 dup
+                DELETE_OP, DELETE_OP, // id=1, id=3
+            ])),
+        ])?;
+        delta_writer.write(write_two).await?;
+
+        let data_files = delta_writer.close().await?;
+
+        let pos_del_file = data_files
+            .iter()
+            .find(|f| f.content == DataContentType::PositionDeletes)
+            .expect("expected a position-delete file");
+
+        let bytes = file_io
+            .new_input(pos_del_file.file_path.clone())?
+            .read()
+            .await?;
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)?
+            .build()
+            .unwrap();
+        let batches: Vec<_> = reader.map(|b| b.unwrap()).collect();
+        let position_schema = Arc::new(position_delete_arrow_schema());
+        let result = concat_batches(&position_schema, &batches).unwrap();
+
+        let pos_col = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let positions: Vec<i64> = (0..pos_col.len()).map(|i| pos_col.value(i)).collect();
+
+        assert_eq!(
+            positions,
+            vec![0_i64, 1, 2, 3],
+            "position-delete file is not globally sorted (got {positions:?})"
+        );
 
         Ok(())
     }
