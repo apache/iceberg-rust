@@ -263,9 +263,10 @@ Delete-class actions opt into validation explicitly; append actions do neither.
 // NEW delete-class action — placeholder
 impl TransactionAction for OverwriteFilesAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
-        self.validate(table, table.metadata().current_snapshot_id()).await?;
+        let op = self.build_operation(); // build delete_aware_op
+        op.validate(table, table.metadata().current_snapshot_id()).await?;
         let producer = SnapshotProducer::new(table, /* ... */);
-        producer.commit(self.build_operation(), DefaultManifestProcess).await
+        producer.commit(op, DefaultManifestProcess).await
     }
 }
 
