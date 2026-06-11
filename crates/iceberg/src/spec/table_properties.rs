@@ -158,6 +158,37 @@ impl TableProperties {
     /// Default for manifest-merge-enabled: `true` (Java `MANIFEST_MERGE_ENABLED_DEFAULT`).
     pub const PROPERTY_COMMIT_MANIFEST_MERGE_ENABLED_DEFAULT: bool = true;
 
+    /// Max age (ms) a snapshot may reach before `ExpireSnapshots` expires it, unless a branch's own
+    /// `max_snapshot_age_ms` overrides it (Java `TableProperties.MAX_SNAPSHOT_AGE_MS`). Consumed by
+    /// `transaction/expire_snapshots.rs`.
+    pub const PROPERTY_MAX_SNAPSHOT_AGE_MS: &str = "history.expire.max-snapshot-age-ms";
+    /// Default max snapshot age: 5 days (Java `MAX_SNAPSHOT_AGE_MS_DEFAULT` = `432000000`,
+    /// bytecode-verified vs `iceberg-core-1.10.0.jar`).
+    pub const PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT: i64 = 5 * 24 * 60 * 60 * 1000;
+
+    /// Minimum number of snapshots `ExpireSnapshots` keeps on a branch regardless of age, unless the
+    /// branch's own `min_snapshots_to_keep` overrides it (Java `TableProperties.MIN_SNAPSHOTS_TO_KEEP`).
+    pub const PROPERTY_MIN_SNAPSHOTS_TO_KEEP: &str = "history.expire.min-snapshots-to-keep";
+    /// Default minimum snapshots to keep: 1 (Java `MIN_SNAPSHOTS_TO_KEEP_DEFAULT`, bytecode-verified
+    /// vs `iceberg-core-1.10.0.jar`).
+    pub const PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT: i32 = 1;
+
+    /// Max age (ms) a snapshot reference (branch or tag, never `main`) may reach before
+    /// `ExpireSnapshots` removes it, unless the ref's own `max_ref_age_ms` overrides it (Java
+    /// `TableProperties.MAX_REF_AGE_MS`).
+    pub const PROPERTY_MAX_REF_AGE_MS: &str = "history.expire.max-ref-age-ms";
+    /// Default max reference age: forever (Java `MAX_REF_AGE_MS_DEFAULT` = `Long.MAX_VALUE`,
+    /// bytecode-verified vs `iceberg-core-1.10.0.jar`).
+    pub const PROPERTY_MAX_REF_AGE_MS_DEFAULT: i64 = i64::MAX;
+
+    /// Whether garbage collection (snapshot expiry, orphan-file removal) is permitted on this table
+    /// (Java `TableProperties.GC_ENABLED`). `ExpireSnapshots` refuses to run when this is `false`
+    /// (Java's `RemoveSnapshots` constructor `ValidationException`).
+    pub const PROPERTY_GC_ENABLED: &str = "gc.enabled";
+    /// Default for `gc.enabled`: `true` (Java `GC_ENABLED_DEFAULT`, bytecode-verified vs
+    /// `iceberg-core-1.10.0.jar`).
+    pub const PROPERTY_GC_ENABLED_DEFAULT: bool = true;
+
     /// Target file size for newly written files.
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str = "write.target-file-size-bytes";
     /// Default target file size

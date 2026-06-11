@@ -110,7 +110,7 @@
 | Encryption (`EncryptionManager`, KMS, encrypted FileIO/manifests) | ❌ | `api/encryption/`, `core/.../encryption` | V3 `spec/encrypted_key.rs` stub only |
 | FileIO (S3/GCS/Azure/OSS/fs/memory) | ✅ | `core/.../io`, cloud modules | `io/` + extracted `crates/storage/opendal` (OpenDAL) |
 | Puffin read/write + blob types (theta NDV, DV) | 🟡 | `core/.../puffin`, `api/.../puffin` | `puffin/` (blob coverage partial) |
-| Maintenance: `ExpireSnapshots` | ❌ | `api/actions/ExpireSnapshots.java` | none |
+| Maintenance: `ExpireSnapshots` | 🟡 | `api/ExpireSnapshots.java`, `core/RemoveSnapshots.java`, `core/ReachableFileCleanup.java` | `transaction/expire_snapshots.rs` (2026-06-11, B1 — metadata retention, 1.10.0 bytecode-verified) + `transaction/expire_cleanup.rs` (2026-06-11, B2 — `ReachableFileCleanup` file cleanup: post-commit-only `ExpireSnapshotsCleanup::commit_and_clean` seam, candidates-minus-retained set algebra by path, live-entry content-file subtraction across data AND delete manifests incl. shared-puffin DVs, statistics files, injectable delete fn, failures collected in `CleanupReport`). Documented divergences: cleanup is explicit opt-in (Java defaults `cleanExpiredFiles(true)`); retained-shared manifest lists spared (under-deletion, pinned). Deferred: `IncrementalFileCleanup` (an optimization with stricter eligibility — rationale in the `expire_cleanup` module docs), `cleanExpiredMetadata`, interop. |
 | Maintenance: `DeleteOrphanFiles` | ❌ | `api/actions/DeleteOrphanFiles.java` | none |
 | Maintenance: `RewriteDataFiles` (compaction) | ❌ | `api/actions/RewriteDataFiles.java` | none |
 | Maintenance: `RewritePositionDeleteFiles` | ❌ | `api/actions/RewritePositionDeleteFiles.java` | none |

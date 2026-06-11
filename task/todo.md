@@ -269,6 +269,161 @@ manifest-comparator multi-spec tie (from increment 1). No commit.
   `table_provider_factory.rs:41` DOCTEST failure CONFIRMED pre-existing + unrelated (no datafusion files changed).
   Pipe audit CLEAN. Files added to the changed set by the reviewer: `transaction/snapshot.rs` (the `resolve_delete_paths`
   posture note). Tree clean, no commit.
+## ACTIVE (2026-06-11): ExpireSnapshots Increment B1 — METADATA retention semantics (worktree wt-expire, BUILDER Fable, Group B)
+
+Java `RemoveSnapshots` retention computation, metadata-only (`cleanExpiredFiles(false)` semantics).
+**B1 is METADATA-ONLY: no file deletion of any kind — file cleanup is Increment B2, not this one.**
+
+- [x] `transaction/expire_snapshots.rs` (new): `ExpireSnapshotsAction` — `expire_older_than(ts)`,
+      `retain_last(n)` (deferred-to-commit validation, Java's exact message), `expire_snapshot_id(id)`
+      repeatable; commit-time retention computation against the refreshed table (1.10.0
+      `internalApply`, bytecode-verified): retained refs (main never ref-expired; `now − ts <=
+      maxRefAgeMs` retains; missing-snapshot refs dropped) → explicit-id-vs-retained-ref precondition
+      ("Cannot expire %s. Still referenced by refs: %s") → per-branch contiguous-prefix retention
+      (`kept < minToKeep || ts >= cutoff`, EARLY STOP) → unreferenced retention (`ts >=
+      defaultExpireOlderThan`) → emit `RemoveSnapshotRef` (expired refs, sorted) +
+      `RemoveSnapshots` (sorted ids) + `RefSnapshotIdMatch` guards for every ref consulted.
+      GC gate (`gc.enabled`, Java ctor message verbatim) at commit. No-op emits nothing.
+- [x] `spec/table_properties.rs`: `history.expire.max-snapshot-age-ms` (default 432000000),
+      `history.expire.min-snapshots-to-keep` (default 1), `history.expire.max-ref-age-ms`
+      (default i64::MAX) — all three bytecode-verified vs 1.10.0; plus `gc.enabled` (default true,
+      needed by the GC gate — flagged as the 4th const).
+- [x] `spec/table_metadata_builder.rs` — complete `remove_snapshots` vs Java 1.10.0
+      `rewriteSnapshotsInternal`: prune statistics + partition statistics per removed id (with
+      changes), and remove dangling refs via `remove_ref` semantics (pushes `RemoveSnapshotRef`,
+      resets `current_snapshot_id` for main) instead of the silent `refs.retain`. (catalog/mod.rs
+      apply routing already correct — no edit needed there.)
+- [x] Wire `Transaction::expire_snapshots()` in `transaction/mod.rs` + `transaction/map.md` row.
+- [x] Tests both directions of every boundary (age boundary ON the cutoff, retain_last n/1/n>len,
+      per-ref overrides both ways, tag expiry removed/kept, main never expired, explicit-id error +
+      seed-set semantics, ancestors survive, unreferenced boundary, no-op, idempotent re-run,
+      snapshot-log prune, stats prune, dangling-main, GC gate, ref guards + stale-guard conflict,
+      end-to-end memory-catalog commit). Then the 4 mutations (age-boundary flip, min-floor drop,
+      ancestor-retention drop, tag-expiry invert) + restore + full suite ×2.
+- [x] Docs: GAP_MATRIX `ExpireSnapshots` ❌→🟡 (metadata semantics landed; file cleanup = B2;
+      interop deferred), map.md row, lessons.
+
+Deferred loudly: B2 file cleanup (`cleanExpiredFiles`, delete callbacks, incremental-cleanup
+strategy selection), `cleanExpiredMetadata` (spec/schema GC — needs manifest IO), interop.
+
+Outcome (2026-06-11): landed in one increment. 32 action tests + 2 builder tests (1832 lib total,
+×2 green). 5 builder mutations all caught (branch-walk `>=`→`>`; unreferenced `>=`→`>`; min-floor
+drop; ancestor-retention drop; ref-age-expiry invert + the M5 builder revert proving the apply-side
+tests fail pre-fix). `catalog/mod.rs` needed NO edit (apply routing was already correct — the
+completeness gap was in the builder). One extra const beyond the planned three: `gc.enabled`
+(needed by the GC gate; same file, flagged). `tracing` is NOT an iceberg-crate dep, so the
+invalid-ref drop is silent with a comment (Java WARN-logs) — no Cargo edit made.
+
+Review (2026-06-11, REVIEWER Fable): re-derived `internalApply` / `computeRetainedRefs` /
+`computeBranchSnapshotsToRetain` / `unreferencedSnapshotsToRetain` / `rewriteSnapshotsInternal` /
+`removeRef` / `removeStatistics` from 1.10.0 bytecode — semantics, messages, defaults, and change
+recording all confirmed; M5 revert re-run (exactly the 2 builder tests catch it);
+requirements-drop mutation caught by the stale-guard + requirements-shape tests. THREE survivor
+mutations found and pinned (+5 tests, 1 extension): the branch-walk EARLY STOP under clock-skewed
+timestamps (a newer-than-cutoff ancestor behind the stop point IS expired — previously removable
+with the whole suite green), the ref-age `<=` boundary (age == maxRefAgeMs retained), and the
+refs-first update emission order (Java's change order; the apply-side dangling sweep self-heals,
+so only a shape pin catches a reorder). Also pinned: explicit id == main's head errors with
+`[main]`; a mid-ancestry explicit-id hole clears the snapshot log at the hole on apply; a branch's
+own `max_snapshot_age_ms` beats even the EXPLICIT `expire_older_than` (Java: `expireOlderThan`
+only overwrites the default). Known acceptable gap (Java's REST posture shares it): a ref CREATED
+concurrently at a to-be-expired snapshot is not guardable via `RefSnapshotIdMatch`; the apply-side
+sweep then drops it — full-CAS catalogs (Java's primary path) reject it; revisit at B2.
+
+## ACTIVE (2026-06-11): ExpireSnapshots Increment B2 — FILE CLEANUP (worktree wt-expire, BUILDER Fable, Group B)
+
+Port Java 1.10.0 `ReachableFileCleanup` (the general-correct strategy) as a post-commit cleanup
+seam. **THE most dangerous increment: it deletes files. Every choice biases under-deletion; every
+test pins the deletion set BOTH directions.**
+
+- [x] `transaction/expire_cleanup.rs` (new): `ExpireSnapshotsCleanup` (FileIO + injectable
+      delete fn) with `clean_expired_files(before, after) -> CleanupReport` (the two-state core,
+      1.10.0 `ReachableFileCleanup.cleanFiles` bytecode-rederived) and
+      `commit_and_clean(tx, catalog)` (the commit-THEN-clean wrapper; deletion structurally
+      unreachable on a failed commit — Java `RemoveSnapshots.commit()` ordering). GC gate
+      re-honored at the cleanup door (Java's is in the ctor, which also covers cleanup).
+- [x] Set algebra (bytecode-cited): expired = before.snapshots − after.snapshots (by id);
+      manifest-lists of expired snapshots (RUST SAFETY DIVERGENCE: minus retained lists — Java
+      deletes unconditionally, unreachable case for Java-written tables); candidate manifests =
+      ∪ expired lists' entries; retained = ∪ after-snapshots' lists' entries (path equality —
+      `GenericManifestFile.equals` is manifestPath-only); manifests-to-delete = candidates −
+      retained; content files = ∪ LIVE entries (status != DELETED — `isLiveEntry`) of
+      manifests-to-delete, minus ∪ LIVE entries of retained manifests (BOTH data + delete
+      manifests — the 1.10.0 cleanup projection omits `content` and the avro ctor defaults DATA,
+      so Java walks both identically; DV puffin path dedup via path-set semantics); stats =
+      before-locations − after-locations.
+- [x] Failure posture (divergence from Java's log-and-continue, no-logging-dep constraint):
+      manifest-LIST read errors → hard Err BEFORE any deletion (Java throwFailureWhenFinished);
+      candidate-manifest read error → collect + skip its files; retained-manifest read error →
+      collect + CLEAR the whole content-file set (Java catch-Throwable→empty, fail-safe);
+      per-file delete errors → collect + continue. `CleanupReport {deleted_* per funnel,
+      failures: Vec<CleanupFailure {path, kind, error}>}`.
+- [x] Tests (15, each class both directions): grafted shared manifest-list survives (the pinned
+      Rust divergence); carried-forward shared manifest SURVIVES + expired list dies (the #1
+      pin); rewritten-but-live data file survives (rewrite_manifests); expired-only data file
+      dies + retained tombstone does NOT protect (delete_files chain); shared puffin survives
+      via cross-manifest carried-EXISTING DV + replaced puffin dies (NOTE: the planned
+      two-DVs-one-puffin-remove-one shape is unbuildable — delete-file removal is BY PATH in
+      Java too, 1.10.0 `ManifestFilterManager.delete` adds `file.location()` to `deletePaths`,
+      so removing one DV tombstones every same-path entry; fixture reshaped, finding recorded
+      in lessons); expired-only DV puffin dies; stats file dies / retained stats survives;
+      failed-commit ⇒ zero deletes (MockCatalog + recorder); injected failing delete → failure
+      listed, sweep continues; dry-run by injection (storage untouched); unreadable retained
+      manifest → ALL content files spared; unreadable candidate manifest → its files skipped,
+      manifest still dies; unreadable manifest list → Err before any deletion; empty-expiry
+      no-op; GC gate refused with Java's message.
+- [x] Mutations (`wtB2_*`): M1 drop the `!` in the manifest subtraction → 9 tests fail,
+      headlined by the carried-forward pin ("the SHARED manifest must survive: [...m0.avro]" —
+      the data-loss class); M2 `if false` the retained-files subtraction in (c) → 3 fail
+      (rewritten-but-live "the still-live data file must NOT die", shared-puffin,
+      unreadable-retained); M3 cleanup-not-gated-on-commit-success (fabricated post-state on
+      Err) → failed-commit pin fails ("the failed commit must propagate" + recorder
+      non-empty). Snapshot-copied before each, restored surgically, full suite green after.
+- [x] Docs: GAP_MATRIX ExpireSnapshots row (B2 landed; Incremental deferred with the
+      optimization-with-stricter-eligibility rationale; interop deferred), transaction/map.md
+      `expire_cleanup.rs` row, expire_snapshots.rs + mod.rs module-doc pointers, lessons.
+- [x] Gate: typos clean; fmt clean; clippy workspace -D warnings (excl. sqllogictest) clean;
+      `cargo test -p iceberg --lib` ×2 — 1847 passed (baseline 1832 + 15 new).
+
+Outcome (2026-06-11): B2 landed in one increment — `ReachableFileCleanup` semantics ported as
+the explicit post-commit `ExpireSnapshotsCleanup` seam (Java's `cleanExpiredFiles(true)` default
+deliberately NOT mirrored: deletion is opt-in via `commit_and_clean`/`clean_expired_files`,
+documented in-module + GAP_MATRIX). Java-side findings that reshaped the port, all
+bytecode-derived: (1) 1.10.0's cleanup walks DELETE manifests through the DATA reader because
+`MANIFEST_PROJECTION` omits `content` and the avro ctor defaults it to DATA — so delete files /
+DV puffins ARE cleaned, despite `readPaths`' delete-manifest precondition reading as if they
+could not be; (2) `GenericManifestFile` equality is path-only; (3) `findFilesToDelete` returns
+the EMPTY set on any retained-side enumeration failure (catch-Throwable) — ported as
+clear-and-report; (4) delete-file removal is by-path (shared-puffin fixture reshaped). The B1
+concurrently-created-ref gap is unchanged by B2: cleanup computes reachability from the
+COMMITTED post-state (Java refreshes; we use the returned table — equivalence argued in-module),
+so the window is inherited from the metadata commit, not widened. Files touched:
+`transaction/expire_cleanup.rs` (new), `transaction/expire_snapshots.rs` (doc pointer +
+`parse_property` → `pub(super)`), `transaction/mod.rs` (mod + re-export + doc), map.md,
+GAP_MATRIX, todo, lessons.
+
+Review (2026-06-11, REVIEWER Fable): re-derived `cleanFiles` / `readManifests` /
+`pruneReferencedManifests` / `findFilesToDelete` (incl. the lambda exception tables) /
+`FileCleanupStrategy.{MANIFEST_PROJECTION,deleteFiles,statsFileLocations}` /
+`RemoveSnapshots.{commit,cleanExpiredSnapshots}` / `GenericManifestFile.{equals,avro-ctor}` /
+`ManifestReader.{liveEntries,isLiveEntry}` / `ManifestFiles.readPaths` from the 1.10.0
+bytecode — set algebra, three failure tiers (Err / skip / clear-all scopes), sweep order, gate,
+and the MANIFEST_PROJECTION finding all confirmed exactly. Timing verdict: no new concurrency
+window beyond B1's recorded ref gap (post-commit append files can never be candidates;
+double-expire races are double-delete-or-planning-abort, never over-deletion). M1/M2 re-run
+(9 and 3 tests respectively, matching the build record). TWO survivor mutations found and
+pinned (+2 tests, 1 extension; 1849 total ×2 green): the cross-funnel SWEEP ORDER
+(lists-before-content survived everything — pinned structurally via the recorder's invocation
+sequence; the order is the crash-RESUME property: leaves before indexes keeps the expired
+lists plannable until last) and the GC gate SIDE (`after` instead of `before` survived —
+pinned with before=disabled/after=enabled must refuse, Java's ctor reads `base`). Also added
+the re-run pin (second sweep of the same (before, after) aborts at planning with zero delete
+calls — Java's `readManifests` throws identically). Doc corrections: the "staler `before` only
+shrinks" claim was unsound (a concurrent expire GROWS the set — still safe, argued via
+unreachability-from-`after`; module doc + lessons fixed), `BaseSnapshot.equals` citation
+corrected (5 fields, id-diff equivalent by immutability), the inherited B1 window now stated
+in the module docs, and the Rust-stricter retained-list read scope noted (Java's prune
+early-exits; Rust always reads both sides — more pre-deletion `Err` cases only).
 
 ## Carried-forward open items (full context in todo-archive/)
 

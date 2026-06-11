@@ -484,6 +484,16 @@ impl TableMetadataBuilder {
     /// Remove snapshots by its ids from the table metadata.
     /// Does nothing if a snapshot id is not present.
     /// Keeps as changes only the snapshots that were actually removed.
+    ///
+    /// Mirrors Java `TableMetadata.Builder.removeSnapshots` (1.10.0
+    /// `rewriteSnapshotsInternal`, bytecode-verified): each removed snapshot also drops its
+    /// statistics and partition-statistics entries (via [`Self::remove_statistics`] /
+    /// [`Self::remove_partition_statistics`], which record their own changes), and any ref left
+    /// pointing at a removed snapshot is removed through [`Self::remove_ref`] — recording a
+    /// `RemoveSnapshotRef` change and, for `main`, clearing `current_snapshot_id` so the
+    /// snapshot-log consistency check in [`Self::build`] is skipped exactly as in Java (where
+    /// `removeRef(MAIN_BRANCH)` sets `currentSnapshotId = -1`). The snapshot log itself is pruned
+    /// at build time by `update_snapshot_log`.
     pub fn remove_snapshots(mut self, snapshot_ids: &[i64]) -> Self {
         let mut removed_snapshots = Vec::with_capacity(snapshot_ids.len());
 
@@ -498,14 +508,29 @@ impl TableMetadataBuilder {
 
         if !removed_snapshots.is_empty() {
             self.changes.push(TableUpdate::RemoveSnapshots {
-                snapshot_ids: removed_snapshots,
+                snapshot_ids: removed_snapshots.clone(),
             });
         }
 
-        // Remove refs that are no longer valid
-        self.metadata
+        // A removed snapshot's statistics files are no longer addressable: drop their metadata
+        // entries (Java records a RemoveStatistics / RemovePartitionStatistics change per hit).
+        for snapshot_id in &removed_snapshots {
+            self = self.remove_statistics(*snapshot_id);
+            self = self.remove_partition_statistics(*snapshot_id);
+        }
+
+        // Remove refs that are no longer valid, through remove_ref so the change is recorded and
+        // a dangling `main` clears `current_snapshot_id` (Java: `danglingRefs.forEach(this::removeRef)`).
+        let dangling_refs: Vec<String> = self
+            .metadata
             .refs
-            .retain(|_, v| self.metadata.snapshots.contains_key(&v.snapshot_id));
+            .iter()
+            .filter(|(_, reference)| !self.metadata.snapshots.contains_key(&reference.snapshot_id))
+            .map(|(name, _)| name.clone())
+            .collect();
+        for ref_name in dangling_refs {
+            self = self.remove_ref(&ref_name);
+        }
 
         self
     }
@@ -2357,6 +2382,150 @@ mod tests {
             TableUpdate::RemoveSnapshotRef {
                 ref_name: MAIN_BRANCH.to_string()
             }
+        );
+    }
+
+    /// Shared fixture for the remove-snapshots completeness tests: snapshot 1 ← snapshot 2 on
+    /// `main`, built in two passes so the snapshot log carries both entries.
+    fn metadata_with_two_snapshots() -> TableMetadata {
+        let builder = builder_without_changes(FormatVersion::V2);
+        let last_updated = builder.metadata.last_updated_ms;
+        let snapshot = |id: i64, parent: Option<i64>, sequence_number: i64| {
+            Snapshot::builder()
+                .with_snapshot_id(id)
+                .with_parent_snapshot_id(parent)
+                .with_timestamp_ms(last_updated + id)
+                .with_sequence_number(sequence_number)
+                .with_schema_id(0)
+                .with_manifest_list(format!("/snap-{id}.avro"))
+                .with_summary(Summary {
+                    operation: Operation::Append,
+                    additional_properties: HashMap::new(),
+                })
+                .build()
+        };
+        let metadata = builder
+            .set_branch_snapshot(snapshot(1, None, 1), MAIN_BRANCH)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata2.json".to_string(),
+            ))
+            .set_branch_snapshot(snapshot(2, Some(1), 2), MAIN_BRANCH)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata
+    }
+
+    /// Risk pinned: stale statistics metadata surviving snapshot removal. Java 1.10.0
+    /// `rewriteSnapshotsInternal` (bytecode-verified) calls `removeStatistics` +
+    /// `removePartitionStatistics` for every removed snapshot id, recording both changes; without
+    /// it, expired snapshots leave dangling `statistics` / `partition-statistics` entries in the
+    /// metadata forever. A still-live snapshot's statistics must NOT be touched (the
+    /// over-pruning direction), and a live ref must not be swept.
+    #[test]
+    fn test_remove_snapshots_prunes_statistics_of_removed_snapshots_only() {
+        let statistics = |snapshot_id: i64| StatisticsFile {
+            snapshot_id,
+            statistics_path: format!("/stats-{snapshot_id}.puffin"),
+            file_size_in_bytes: 100,
+            file_footer_size_in_bytes: 10,
+            key_metadata: None,
+            blob_metadata: vec![],
+        };
+        let partition_statistics = |snapshot_id: i64| PartitionStatisticsFile {
+            snapshot_id,
+            statistics_path: format!("/partition-stats-{snapshot_id}.parquet"),
+            file_size_in_bytes: 50,
+        };
+        let metadata = metadata_with_two_snapshots()
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata3.json".to_string(),
+            ))
+            .set_statistics(statistics(1))
+            .set_statistics(statistics(2))
+            .set_partition_statistics(partition_statistics(1))
+            .build()
+            .unwrap()
+            .metadata;
+
+        let result = metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata4.json".to_string(),
+            ))
+            .remove_snapshots(&[1])
+            .build()
+            .unwrap();
+
+        assert!(!result.metadata.statistics.contains_key(&1));
+        assert!(!result.metadata.partition_statistics.contains_key(&1));
+        assert!(
+            result.metadata.statistics.contains_key(&2),
+            "the live snapshot's statistics must survive"
+        );
+        assert_eq!(result.metadata.refs.len(), 1, "main (at 2) must survive");
+        assert!(result.changes.contains(&TableUpdate::RemoveSnapshots {
+            snapshot_ids: vec![1],
+        }));
+        assert!(
+            result
+                .changes
+                .contains(&TableUpdate::RemoveStatistics { snapshot_id: 1 })
+        );
+        assert!(
+            result
+                .changes
+                .contains(&TableUpdate::RemovePartitionStatistics { snapshot_id: 1 })
+        );
+        assert!(
+            !result
+                .changes
+                .iter()
+                .any(|change| matches!(change, TableUpdate::RemoveSnapshotRef { .. })),
+            "no ref dangles, so no ref removal may be recorded"
+        );
+    }
+
+    /// Risk pinned: removing the snapshot `main` points at leaving `current_snapshot_id` aimed at
+    /// a nonexistent snapshot — pre-fix the silent `refs.retain` sweep kept `current_snapshot_id`
+    /// and `build()` failed (`Cannot set invalid snapshot log`); Java removes the dangling ref via
+    /// `removeRef` (recording the change, resetting current to -1) and builds fine. Every catalog
+    /// path applying a `RemoveSnapshots` update runs through this.
+    #[test]
+    fn test_remove_snapshots_dangling_main_resets_current_and_records_ref_removal() {
+        let metadata = metadata_with_two_snapshots();
+
+        let result = metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata3.json".to_string(),
+            ))
+            .remove_snapshots(&[1, 2])
+            .build()
+            .unwrap();
+
+        assert_eq!(result.metadata.current_snapshot_id, None);
+        assert!(result.metadata.refs.is_empty());
+        assert!(result.metadata.snapshots.is_empty());
+        assert!(result.metadata.snapshot_log.is_empty());
+        let mut removed_ids = result
+            .changes
+            .iter()
+            .find_map(|change| match change {
+                TableUpdate::RemoveSnapshots { snapshot_ids } => Some(snapshot_ids.clone()),
+                _ => None,
+            })
+            .expect("RemoveSnapshots change must be recorded");
+        removed_ids.sort_unstable();
+        assert_eq!(removed_ids, vec![1, 2]);
+        assert!(
+            result.changes.contains(&TableUpdate::RemoveSnapshotRef {
+                ref_name: MAIN_BRANCH.to_string(),
+            }),
+            "the dangling main removal must be recorded as a change (Java removeRef)"
         );
     }
 

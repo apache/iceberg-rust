@@ -56,6 +56,11 @@ pub use action::*;
 mod append;
 mod cherry_pick;
 mod delete_files;
+mod expire_cleanup;
+mod expire_snapshots;
+pub use expire_cleanup::{
+    CleanupFailure, CleanupFailureKind, CleanupReport, ExpireSnapshotsCleanup,
+};
 mod manage_snapshots;
 mod merge_append;
 mod overwrite_files;
@@ -84,6 +89,7 @@ use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
 use crate::transaction::cherry_pick::CherryPickAction;
 use crate::transaction::delete_files::DeleteFilesAction;
+use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
 use crate::transaction::manage_snapshots::ManageSnapshotsAction;
 use crate::transaction::merge_append::MergeAppendAction;
 use crate::transaction::overwrite_files::OverwriteFilesAction;
@@ -280,6 +286,24 @@ impl Transaction {
     /// Creates a manage-snapshots action (branch/tag lifecycle, rollback, fast-forward, retention).
     pub fn manage_snapshots(&self) -> ManageSnapshotsAction {
         ManageSnapshotsAction::new()
+    }
+
+    /// Creates an expire-snapshots action — the METADATA retention semantics of Java
+    /// `ExpireSnapshots` (`Table.expireSnapshots()` / core `RemoveSnapshots`): per-branch
+    /// age+count retention, branch/tag `max_ref_age_ms` ref expiry (`main` never expires),
+    /// unreferenced-snapshot retention, and explicit [`ExpireSnapshotsAction::expire_snapshot_id`],
+    /// honoring the `history.expire.*` table properties.
+    ///
+    /// **THIS ACTION NEVER DELETES FILES.** It emits `RemoveSnapshots` / `RemoveSnapshotRef`
+    /// updates and nothing else. Physical cleanup of newly-unreachable manifest lists /
+    /// manifests / content files / statistics files (Java's `cleanExpiredFiles(true)` default,
+    /// `ReachableFileCleanup`) is the EXPLICIT post-commit step [`ExpireSnapshotsCleanup`] —
+    /// run it via [`ExpireSnapshotsCleanup::commit_and_clean`], which commits the transaction
+    /// and cleans only on success (the Java `RemoveSnapshots.commit()` ordering). See
+    /// [`expire_snapshots`](crate::transaction::expire_snapshots) for the retention contract
+    /// and [`expire_cleanup`](crate::transaction::expire_cleanup) for the cleanup contract.
+    pub fn expire_snapshots(&self) -> ExpireSnapshotsAction {
+        ExpireSnapshotsAction::new()
     }
 
     /// Creates a cherry-pick action: PUBLISH a staged snapshot onto `main` (write-audit-publish), mirroring
