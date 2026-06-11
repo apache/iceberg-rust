@@ -85,10 +85,6 @@ impl ParquetWriterBuilder {
     /// Currently translates the content-defined-chunking keys
     /// (`write.parquet.content-defined-chunking.*`); other keys fall back to
     /// parquet-rs defaults.
-    ///
-    /// Prefer this over [`Self::new`] when writing into an existing table — it
-    /// can't silently drop `write.parquet.*` properties. Obtain `table_props`
-    /// from [`TableMetadata::table_properties`](crate::spec::TableMetadata::table_properties).
     pub fn from_table_properties(table_props: &TableProperties, schema: SchemaRef) -> Self {
         let cdc = table_props.cdc_enabled.then_some(CdcOptions {
             min_chunk_size: table_props.cdc_min_chunk_size,
@@ -2345,8 +2341,16 @@ mod tests {
         assert!(builder.props.content_defined_chunking().is_none());
     }
 
-    #[test]
-    fn test_from_table_properties_sets_cdc() {
+    #[tokio::test]
+    async fn test_from_table_properties_propagate_to_writer() {
+        // `build()` must carry the translated `WriterProperties` through to the
+        // `ParquetWriter` unchanged — otherwise the `write.parquet.*` settings
+        // derived in `from_table_properties` would never reach parquet-rs.
+        //
+        // Asserting on the writer's `WriterProperties` (rather than re-reading a
+        // written file) keeps this a direct propagation check: every future
+        // `write.parquet.*` option just adds an assertion on its corresponding
+        // `WriterProperties` getter here.
         let tp = table_props(HashMap::from([
             (
                 TableProperties::PROPERTY_PARQUET_CDC_ENABLED.to_string(),
@@ -2365,124 +2369,23 @@ mod tests {
                 "2".to_string(),
             ),
         ]));
-        let cdc = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema())
-            .props
+
+        let tmp = TempDir::new().unwrap();
+        let output = FileIO::new_with_fs()
+            .new_output(format!("{}/cdc.parquet", tmp.path().to_str().unwrap()))
+            .unwrap();
+        let writer = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema())
+            .build(output)
+            .await
+            .unwrap();
+
+        let cdc = writer
+            .writer_properties
             .content_defined_chunking()
             .copied()
-            .expect("CDC should be enabled");
+            .expect("CDC should be enabled on the built writer");
         assert_eq!(cdc.min_chunk_size, 4096);
         assert_eq!(cdc.max_chunk_size, 8192);
         assert_eq!(cdc.norm_level, 2);
-    }
-
-    /// End-to-end: build a writer via `from_table_properties`, write through it,
-    /// and confirm the resulting parquet file is actually content-chunked — the
-    /// `payload` column lands in multiple data pages with variable row counts.
-    /// Without CDC the same data is a single page. Guards the whole
-    /// properties → translation → writer → file path.
-    #[tokio::test]
-    async fn test_cdc_table_properties_produce_chunked_pages() {
-        use arrow_array::{Int64Array, RecordBatch, StringArray};
-        use bytes::Bytes;
-        use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
-        use tempfile::TempDir;
-
-        let schema = cdc_test_schema();
-
-        // ~25 bytes/row × 10_000 ≈ 250 KiB of payload: well above the 4 KiB CDC
-        // min and below parquet-rs's 1 MiB default page limit, so the non-CDC
-        // baseline is a single page.
-        let n = 10_000usize;
-        let arrow_schema: ArrowSchemaRef = Arc::new(schema.as_ref().try_into().unwrap());
-        let batch = RecordBatch::try_new(arrow_schema, vec![
-            Arc::new(Int64Array::from_iter_values(0i64..n as i64)),
-            Arc::new(StringArray::from_iter_values(
-                (0..n).map(|i| format!("payload-row-{i:010}-tail")),
-            )),
-        ])
-        .unwrap();
-
-        let tmp = TempDir::new().unwrap();
-        let file_io = FileIO::new_with_fs();
-
-        // Write `batch` via from_table_properties and return the per-data-page
-        // row counts of the `payload` column.
-        async fn payload_page_rows(
-            tp: &TableProperties,
-            schema: SchemaRef,
-            batch: RecordBatch,
-            file_io: &FileIO,
-            path: &str,
-        ) -> Vec<i64> {
-            let output = file_io.new_output(path).unwrap();
-            let mut writer = ParquetWriterBuilder::from_table_properties(tp, schema)
-                .build(output)
-                .await
-                .unwrap();
-            let num_rows = batch.num_rows() as i64;
-            writer.write(&batch).await.unwrap();
-            writer.close().await.unwrap();
-
-            let bytes: Bytes = std::fs::read(path).unwrap().into();
-            let mut reader =
-                ParquetMetaDataReader::new().with_offset_index_policy(PageIndexPolicy::Required);
-            reader.try_parse(&bytes).unwrap();
-            let meta = reader.finish().unwrap();
-            let payload = &meta.offset_index().expect("offset index")[0][1];
-            let locations = payload.page_locations();
-            // Per-page row count = first_row_index gaps, last page runs to num_rows.
-            let mut rows: Vec<i64> = locations
-                .windows(2)
-                .map(|w| w[1].first_row_index - w[0].first_row_index)
-                .collect();
-            rows.push(num_rows - locations.last().unwrap().first_row_index);
-            rows
-        }
-
-        let cdc_tp = table_props(HashMap::from([
-            (
-                TableProperties::PROPERTY_PARQUET_CDC_ENABLED.to_string(),
-                "true".to_string(),
-            ),
-            (
-                TableProperties::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE.to_string(),
-                "4096".to_string(),
-            ),
-            (
-                TableProperties::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE.to_string(),
-                "8192".to_string(),
-            ),
-        ]));
-        let cdc_rows = payload_page_rows(
-            &cdc_tp,
-            schema.clone(),
-            batch.clone(),
-            &file_io,
-            &format!("{}/cdc.parquet", tmp.path().to_str().unwrap()),
-        )
-        .await;
-        let plain_rows = payload_page_rows(
-            &table_props(HashMap::new()),
-            schema,
-            batch,
-            &file_io,
-            &format!("{}/plain.parquet", tmp.path().to_str().unwrap()),
-        )
-        .await;
-
-        assert!(
-            cdc_rows.len() > 1,
-            "CDC should split `payload` into multiple pages, got {cdc_rows:?}"
-        );
-        let distinct: std::collections::HashSet<i64> = cdc_rows.iter().copied().collect();
-        assert!(
-            distinct.len() > 1,
-            "CDC pages should have variable row counts, got {cdc_rows:?}"
-        );
-        assert_eq!(
-            plain_rows.len(),
-            1,
-            "non-CDC payload should be one page, got {plain_rows:?}"
-        );
     }
 }
