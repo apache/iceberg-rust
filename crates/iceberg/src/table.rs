@@ -405,13 +405,12 @@ impl StaticTable {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::fs;
 
     use super::*;
-    use crate::encryption::StandardKeyMetadata;
+    use crate::encryption::SensitiveBytes;
     use crate::encryption::kms::MemoryKeyManagementClient;
-    use crate::spec::{ManifestListWriter, Operation, Snapshot, Summary, TableProperties};
+    use crate::spec::TableProperties;
 
     fn load_test_metadata(filename: &str) -> TableMetadata {
         let path = format!(
@@ -502,65 +501,38 @@ mod tests {
         Arc::new(kms)
     }
 
-    async fn encrypted_table_metadata() -> (TableMetadata, FileIO, Arc<dyn KeyManagementClient>) {
-        let io = FileIO::new_with_memory();
-        let plain_path = "memory:///table/metadata/manifest-list-plain.avro";
-        let encrypted_path = "memory:///table/metadata/manifest-list-enc.avro";
-
-        let output = io.new_output(plain_path).unwrap().writer().await.unwrap();
-        let mut writer = ManifestListWriter::v3(output, 1, None, 0, Some(0));
-        writer.add_manifests(std::iter::empty()).unwrap();
-        writer.close().await.unwrap();
-        let raw = io.new_input(plain_path).unwrap().read().await.unwrap();
-
-        let kms: Arc<dyn KeyManagementClient> = {
-            let k = MemoryKeyManagementClient::new();
-            k.add_master_key("master-1").unwrap();
-            Arc::new(k)
-        };
-        let mgr = EncryptionManager::builder()
-            .kms_client(Arc::clone(&kms))
-            .table_key_id("master-1")
-            .build();
-        let encrypted_output = mgr.encrypt(io.new_output(encrypted_path).unwrap());
-        let std_km: StandardKeyMetadata = encrypted_output.key_metadata().clone();
-        encrypted_output.write(raw).await.unwrap();
-        let key_id = mgr
-            .encrypt_manifest_list_key_metadata(&std_km)
-            .await
-            .unwrap();
-
-        let mut metadata: TableMetadata = load_test_metadata("TableMetadataV3ValidEncryption.json");
-        metadata.encryption_keys = mgr.with_encryption_keys(|keys| keys.clone());
-
-        let snapshot = Arc::new(
-            Snapshot::builder()
-                .with_snapshot_id(1)
-                .with_sequence_number(0)
-                .with_timestamp_ms(0)
-                .with_manifest_list(encrypted_path.to_string())
-                .with_summary(Summary {
-                    operation: Operation::Append,
-                    additional_properties: HashMap::new(),
-                })
-                .with_schema_id(0)
-                .with_encryption_key_id(Some(key_id))
-                .build(),
-        );
-        metadata
-            .snapshots
-            .insert(snapshot.snapshot_id(), snapshot.clone());
-        metadata.current_snapshot_id = Some(snapshot.snapshot_id());
-
-        (metadata, io, kms)
-    }
-
     #[tokio::test]
     async fn table_decrypts_manifest_list_via_object_cache() {
-        let (metadata, io, kms) = encrypted_table_metadata().await;
+        // The fixture contains a snapshot with key-id, encryption-keys (KEK + wrapped DEK),
+        // all generated with the master key bytes below.
+        let mut metadata: TableMetadata = load_test_metadata("TableMetadataV3ValidEncryption.json");
+
+        // Point the snapshot's manifest-list at the testdata file on disk.
+        let manifest_list_path = format!(
+            "{}/testdata/manifests_lists/manifest-list-v3-encrypted.avro",
+            env!("CARGO_MANIFEST_DIR"),
+        );
+        let snapshot = metadata.snapshots.get_mut(&1).unwrap();
+        let mut patched = snapshot.as_ref().clone();
+        patched.manifest_list = manifest_list_path;
+        *snapshot = Arc::new(patched);
+
+        // Seed the KMS with the same master key bytes used to generate the fixture.
+        let kms: Arc<dyn KeyManagementClient> = {
+            let k = MemoryKeyManagementClient::new();
+            k.add_master_key_bytes(
+                "master-1",
+                SensitiveBytes::new([
+                    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
+                    0x0d, 0x0e, 0x0f,
+                ]),
+            )
+            .unwrap();
+            Arc::new(k)
+        };
 
         let table = Table::builder()
-            .file_io(io)
+            .file_io(FileIO::new_with_fs())
             .metadata(metadata)
             .identifier(TableIdent::from_strs(["ns", "enc"]).unwrap())
             .kms_client(kms)
