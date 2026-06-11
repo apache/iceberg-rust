@@ -530,7 +530,7 @@ impl Catalog for HmsCatalog {
             table_name.clone(),
             location,
             metadata_location_str.clone(),
-            metadata.properties(),
+            metadata.properties().as_raw(),
         )?;
 
         self.client

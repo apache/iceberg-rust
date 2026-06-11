@@ -98,8 +98,10 @@ pub(crate) fn parse_metadata_file_compression(
 }
 
 /// TableProperties that contains the properties of a table.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct TableProperties {
+    /// The raw properties map.
+    raw: HashMap<String, String>,
     /// The number of times to retry a commit.
     pub commit_num_retries: usize,
     /// The minimum wait time between retries.
@@ -130,7 +132,43 @@ pub struct TableProperties {
     pub cdc_norm_level: i32,
 }
 
+impl Default for TableProperties {
+    fn default() -> Self {
+        Self::try_from(&HashMap::new()).expect("default properties should always be valid")
+    }
+}
+
 impl TableProperties {
+    /// Get a property value by key.
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.raw.get(key)
+    }
+
+    /// Check if a property key exists.
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.raw.contains_key(key)
+    }
+
+    /// Iterate over all raw properties.
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &String)> {
+        self.raw.iter()
+    }
+
+    /// Return the number of raw properties.
+    pub fn len(&self) -> usize {
+        self.raw.len()
+    }
+
+    /// Return whether the raw properties map is empty.
+    pub fn is_empty(&self) -> bool {
+        self.raw.is_empty()
+    }
+
+    /// Return a reference to the raw properties map.
+    pub fn as_raw(&self) -> &HashMap<String, String> {
+        &self.raw
+    }
+
     /// Reserved table property for table format version.
     ///
     /// Iceberg will default a new table's format version to the latest stable and recommended
@@ -261,6 +299,7 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
 
     fn try_from(props: &HashMap<String, String>) -> Result<Self> {
         Ok(TableProperties {
+            raw: props.clone(),
             commit_num_retries: parse_property(
                 props,
                 TableProperties::PROPERTY_COMMIT_NUM_RETRIES,

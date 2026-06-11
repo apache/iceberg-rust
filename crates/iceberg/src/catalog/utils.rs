@@ -60,7 +60,7 @@ pub async fn drop_table_data(table_info: &Table) -> Result<()> {
     }
 
     // Delete data files only if gc.enabled is true, to avoid corrupting shared tables
-    if metadata.table_properties()?.gc_enabled {
+    if metadata.properties().gc_enabled {
         delete_data_files(io, &manifests_to_delete).await?;
     }
 

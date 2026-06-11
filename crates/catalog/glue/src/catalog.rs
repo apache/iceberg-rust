@@ -624,7 +624,7 @@ impl Catalog for GlueCatalog {
             &table_name,
             metadata_location_str.clone(),
             &metadata,
-            metadata.properties(),
+            metadata.properties().as_raw(),
             None,
         )?;
 
@@ -837,7 +837,7 @@ impl Catalog for GlueCatalog {
             table_name,
             metadata_location.clone(),
             &metadata,
-            metadata.properties(),
+            metadata.properties().as_raw(),
             None,
         )?;
 
@@ -906,7 +906,7 @@ impl Catalog for GlueCatalog {
                 table_ident.name(),
                 staged_metadata_location.to_string(),
                 staged_table.metadata(),
-                staged_table.metadata().properties(),
+                staged_table.metadata().properties().as_raw(),
                 Some(current_metadata_location),
             )?);
 

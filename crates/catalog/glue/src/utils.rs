@@ -381,7 +381,7 @@ mod tests {
             &table_name,
             metadata_location,
             &metadata,
-            metadata.properties(),
+            metadata.properties().as_raw(),
             None,
         )?;
 
