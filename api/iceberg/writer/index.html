@@ -58,7 +58,7 @@ allowing seamless integration with existing writers. (See the example below.)</p
     </span><span class="kw">let </span>table = catalog
         .load_table(<span class="kw-2">&amp;</span>TableIdent::from_strs([<span class="string">"hello"</span>, <span class="string">"world"</span>])<span class="question-mark">?</span>)
         .<span class="kw">await</span><span class="question-mark">?</span>;
-    <span class="kw">let </span>location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    <span class="kw">let </span>location_generator = DefaultLocationGenerator::new(table.metadata()).unwrap();
     <span class="kw">let </span>file_name_generator = DefaultFileNameGenerator::new(
         <span class="string">"test"</span>.to_string(),
         <span class="prelude-val">None</span>,
@@ -183,7 +183,7 @@ allowing seamless integration with existing writers. (See the example below.)</p
         table.metadata().current_schema().clone(),
         Struct::from_iter(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(Literal::string(<span class="string">"Seattle"</span>))]),
     );
-    <span class="kw">let </span>location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+    <span class="kw">let </span>location_generator = DefaultLocationGenerator::new(table.metadata()).unwrap();
     <span class="kw">let </span>file_name_generator = DefaultFileNameGenerator::new(
         <span class="string">"test"</span>.to_string(),
         <span class="prelude-val">None</span>,

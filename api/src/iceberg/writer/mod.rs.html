@@ -78,7 +78,7 @@
 <a href=#78 id=78 data-nosnippet>78</a>//!     let table = catalog
 <a href=#79 id=79 data-nosnippet>79</a>//!         .load_table(&amp;TableIdent::from_strs(["hello", "world"])?)
 <a href=#80 id=80 data-nosnippet>80</a>//!         .await?;
-<a href=#81 id=81 data-nosnippet>81</a>//!     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+<a href=#81 id=81 data-nosnippet>81</a>//!     let location_generator = DefaultLocationGenerator::new(table.metadata()).unwrap();
 <a href=#82 id=82 data-nosnippet>82</a>//!     let file_name_generator = DefaultFileNameGenerator::new(
 <a href=#83 id=83 data-nosnippet>83</a>//!         "test".to_string(),
 <a href=#84 id=84 data-nosnippet>84</a>//!         None,
@@ -207,7 +207,7 @@
 <a href=#207 id=207 data-nosnippet>207</a>//!         table.metadata().current_schema().clone(),
 <a href=#208 id=208 data-nosnippet>208</a>//!         Struct::from_iter(vec![Some(Literal::string("Seattle"))]),
 <a href=#209 id=209 data-nosnippet>209</a>//!     );
-<a href=#210 id=210 data-nosnippet>210</a>//!     let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+<a href=#210 id=210 data-nosnippet>210</a>//!     let location_generator = DefaultLocationGenerator::new(table.metadata()).unwrap();
 <a href=#211 id=211 data-nosnippet>211</a>//!     let file_name_generator = DefaultFileNameGenerator::new(
 <a href=#212 id=212 data-nosnippet>212</a>//!         "test".to_string(),
 <a href=#213 id=213 data-nosnippet>213</a>//!         None,
@@ -272,7 +272,7 @@
 <a href=#272 id=272 data-nosnippet>272</a>//! #     .load("memory", HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), "file:///path/to/warehouse".to_string())]))
 <a href=#273 id=273 data-nosnippet>273</a>//! #     .await?;
 <a href=#274 id=274 data-nosnippet>274</a>//! # let table = catalog.load_table(&amp;TableIdent::from_strs(["hello", "world"])?).await?;
-<a href=#275 id=275 data-nosnippet>275</a>//! # let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+<a href=#275 id=275 data-nosnippet>275</a>//! # let location_generator = DefaultLocationGenerator::new(table.metadata()).unwrap();
 <a href=#276 id=276 data-nosnippet>276</a>//! # let file_name_generator = DefaultFileNameGenerator::new("test".to_string(), None, iceberg::spec::DataFileFormat::Parquet);
 <a href=#277 id=277 data-nosnippet>277</a>//! # let parquet_writer_builder = ParquetWriterBuilder::new(WriterProperties::default(), table.metadata().current_schema().clone());
 <a href=#278 id=278 data-nosnippet>278</a>//! # let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
@@ -336,7 +336,7 @@
 <a href=#336 id=336 data-nosnippet>336</a>//! #     .load("memory", HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), "file:///path/to/warehouse".to_string())]))
 <a href=#337 id=337 data-nosnippet>337</a>//! #     .await?;
 <a href=#338 id=338 data-nosnippet>338</a>//! # let table = catalog.load_table(&amp;TableIdent::from_strs(["hello", "world"])?).await?;
-<a href=#339 id=339 data-nosnippet>339</a>//! # let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+<a href=#339 id=339 data-nosnippet>339</a>//! # let location_generator = DefaultLocationGenerator::new(table.metadata()).unwrap();
 <a href=#340 id=340 data-nosnippet>340</a>//! # let file_name_generator = DefaultFileNameGenerator::new("test".to_string(), None, iceberg::spec::DataFileFormat::Parquet);
 <a href=#341 id=341 data-nosnippet>341</a>//! # let parquet_writer_builder = ParquetWriterBuilder::new(WriterProperties::default(), table.metadata().current_schema().clone());
 <a href=#342 id=342 data-nosnippet>342</a>//! # let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(

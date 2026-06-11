@@ -244,8 +244,8 @@
 <a href=#244 id=244 data-nosnippet>244</a>
 <a href=#245 id=245 data-nosnippet>245</a>        <span class="kw">let </span>file_io = <span class="self">self</span>.table.file_io().clone();
 <a href=#246 id=246 data-nosnippet>246</a>        <span class="comment">// todo location_gen and file_name_gen should be configurable
-<a href=#247 id=247 data-nosnippet>247</a>        </span><span class="kw">let </span>location_generator = DefaultLocationGenerator::new(<span class="self">self</span>.table.metadata().clone())
-<a href=#248 id=248 data-nosnippet>248</a>            .map_err(to_datafusion_error)<span class="question-mark">?</span>;
+<a href=#247 id=247 data-nosnippet>247</a>        </span><span class="kw">let </span>location_generator =
+<a href=#248 id=248 data-nosnippet>248</a>            DefaultLocationGenerator::new(<span class="self">self</span>.table.metadata()).map_err(to_datafusion_error)<span class="question-mark">?</span>;
 <a href=#249 id=249 data-nosnippet>249</a>        <span class="comment">// todo filename prefix/suffix should be configurable
 <a href=#250 id=250 data-nosnippet>250</a>        </span><span class="kw">let </span>file_name_generator =
 <a href=#251 id=251 data-nosnippet>251</a>            DefaultFileNameGenerator::new(Uuid::now_v7().to_string(), <span class="prelude-val">None</span>, file_format);

@@ -1272,7 +1272,7 @@
 <a href=#1272 id=1272 data-nosnippet>1272</a>        .unwrap();
 <a href=#1273 id=1273 data-nosnippet>1273</a>
 <a href=#1274 id=1274 data-nosnippet>1274</a>        <span class="comment">// Locations will be generated based on the table metadata, which will be using `s3://` for Amazon S3 Tables.
-<a href=#1275 id=1275 data-nosnippet>1275</a>        </span><span class="kw">let </span>location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+<a href=#1275 id=1275 data-nosnippet>1275</a>        </span><span class="kw">let </span>location_generator = DefaultLocationGenerator::new(table.metadata()).unwrap();
 <a href=#1276 id=1276 data-nosnippet>1276</a>        <span class="kw">let </span>file_name_generator = DefaultFileNameGenerator::new(
 <a href=#1277 id=1277 data-nosnippet>1277</a>            <span class="string">"test"</span>.to_string(),
 <a href=#1278 id=1278 data-nosnippet>1278</a>            <span class="prelude-val">None</span>,
