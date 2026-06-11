@@ -34,7 +34,205 @@ How to use it (see the manuals' §1):
 
 > **Archival log.** Last todo-archival pass: 2026-06-09 (size trigger — 4,344 lines) → [todo-archive/](todo-archive/) (phase1/phase2/phase3). Completed-increment narratives moved verbatim; this file keeps the active sprint + open items + archive pointers. Procedure: [skills/compaction.md](../skills/compaction.md) §Todo Archival. Archives are not read by default.
 
-## ACTIVE (2026-06-10): Deletion-vector arc (branch `phase2/dv-writer`)
+## ACTIVE (2026-06-10/11 overnight): autonomous 8-hour plan (user asleep, auto mode)
+
+User instruction: complete the DV sequence, then plan + execute ~8 hours autonomously. **Tier
+decision (documented):** the Fable-subagent authorization was scoped to the DV sequence (now
+complete); overnight arcs revert to the STANDING default — Opus builder → Opus reviewer (the
+parity-orchestration feedback memory + CLAUDE.md subagent policy; budget-prudent while the user
+cannot approve frontier spend). Orchestrator (Fable) preps, briefs, gates, commits, pushes;
+merges NOTHING; compaction passes NOT run (interactive-only — triggers have fired, re-flagged
+for morning).
+
+- [ ] **Arc E — DV previous-deletes merge + superseded-delete removal** (branch `phase2/dv-merge`
+      STACKED on `phase2/dv-writer`; if the user squash-merges dv-writer in the morning, rebase
+      `--onto origin/main` per the standing instruction). The deferred half of Java's DV surface:
+      the DELETE-manifest filter machinery (the `deleteFilterManager` sibling of `process_deletes`
+      — rewrite DELETE manifests tombstoning superseded delete files), RowDelta `removeDeletes`
+      apply-side, `DVFileWriter` `loadPreviousDeletes` merge hook, then LIFT the fresh-DV door.
+      Completes the DV story; `removed-dvs` becomes reachable end-to-end. 1-2 increments.
+  - [ ] **Arc-E Increment 1 — apply-side DELETE-FILE removal (BUILDER Opus, 2026-06-10).** The
+        `deleteFilterManager` sibling of the data-manifest filtering + `RowDelta::remove_deletes`
+        + the fresh-DV door relaxation. (The DVFileWriter merge hook + interop = NEXT increment.)
+        Plan:
+        1. **Producer (`snapshot.rs`):** add `removed_delete_files: Vec<DataFile>` + builder setter
+           `with_removed_delete_files` (mirroring `with_added_delete_files`). In `commit()`, resolve
+           them against the CURRENT snapshot's DELETE manifests BY PATH (new
+           `resolve_delete_file_paths`, missing path → "Missing required files to delete: %s"). Feed
+           them to the SAME `process_deletes` rewrite path (matched by path) AND to the summary's
+           `remove_file` (DV → removed-dvs, parquet pos → removed-pos-delete-files, eq → removed-eq).
+           Extend `new_filtering_manifest_writer` to build a DELETE-content writer when the SOURCE
+           manifest is a DELETE manifest (`build_v2_deletes`/`build_v3_deletes`) — keyed off
+           `source_manifest.content`. The DATA-side behavior must be byte-identical (its tests prove it).
+        2. **RowDelta surface (`row_delta.rs`):** `remove_deletes(DataFile)` + `remove_deletes_many`,
+           rejecting DATA-content files (Java `delete(DeleteFile)` is delete-content-only). Wire to
+           the producer via `with_removed_delete_files` + `RowDeltaOperation::delete_files` returning
+           removed delete files (so they flow through `process_deletes`).
+        3. **Door relaxation (`validate_fresh_dvs_only`):** a DV add for a referenced file with an
+           EXISTING live DV (or shadowed legacy-parquet delete) is legal IFF that existing delete's
+           path is in this commit's removed set. The D3 door tests stay green (add-DV-without-removal
+           still rejected); the removed-set escape hatch is purely additive.
+        4. **OPERATION CLASSIFICATION FIX (the 2026-06-08 lesson's third condition — TODAY).**
+           BYTECODE FINDING (1.10.0 jar): `BaseRowDelta.operation()` is TWO-branch — `addsDeleteFiles
+           && !addsDataFiles → DELETE; else → OVERWRITE`. NO APPEND branch (MAIN's 3-branch
+           `addsDataFiles && !addsDeleteFiles && !deletesDataFiles → APPEND` is POST-1.10.0). The
+           interop oracle pins 1.10.0, so the faithful classification is the 1.10.0 two-branch form.
+           This SUPERSEDES the current Rust 3-branch form + flips `test_row_delta_add_data_only_
+           records_append` (add-data-only RowDelta → Overwrite per 1.10.0, not Append). `removeRows`
+           feeds `deletesDataFiles`, `removeDeletes` feeds `deletesDeleteFiles` — NEITHER is used by
+           1.10.0 `operation()`, so the two-branch form handles all removal cases correctly.
+        5. **CROWN JEWEL:** V3 → parquet → DV1 {1} committed → scan → DV2 {1,3} (hand-merged) →
+           `row_delta().add_deletes(dv2).remove_deletes(dv1)` → scan = survivors of {1,3}; old DV
+           tombstoned (raw-avro provenance: tombstone carries new snapshot id, survivors keep
+           original); summary `removed-dvs: 1` + `added-dvs: 1`; manifest list holds exactly ONE live
+           DV. Mutations: (a) skip removal + door off → scan rejects at load door (two DVs); (b)
+           survivors re-stamped (`add_existing_entry`→`add_entry`) → provenance pin fails.
+        6. **Other tests:** remove parquet pos delete (V2) e2e; remove eq delete; missing-removal-path
+           error; remove-only commit (operation classification per 1.10.0); door-relaxation pair;
+           provenance pin on rewritten delete manifest; cumulative totals append→row_delta(DV)→
+           row_delta(replace DV). NO new concurrent-window validation added (removal reuses the
+           existing `resolve` + `process_deletes` path; the tx-captured-start pin is N/A — say so).
+        7. **Docs:** GAP_MATRIX (DV-writer + RowDelta rows), transaction/map.md, this outcome.
+        BUILDER OUTCOME (2026-06-10, Arc-E Inc 1 — Opus; awaiting reviewer): **CROWN JEWEL GREEN ON
+        FIRST RUN — all-Rust DV-replaces-DV closed the merge-and-replace loop.** Producer gained
+        `removed_delete_files` + `with_removed_delete_files` + `resolve_delete_file_paths` (the
+        by-path DELETE-manifest sibling of `resolve_delete_paths`, missing-path → Java
+        `failMissingDeletePaths` shape); removed delete files flow through the SAME `process_deletes`
+        rewrite (matched by path across the full manifest list) + the summary's `remove_file` (DV →
+        `removed-dvs`, parquet pos → `removed-position-delete-files`, eq → `removed-equality-delete-
+        files`). `new_filtering_manifest_writer` now CONTENT-KEYED off the source manifest
+        (`build_v2/v3_deletes` for a DELETE source) — the LOUD change; data-side stays byte-identical
+        (`build_v2/v3_data`, its existing rewrite tests + a new explicit pin prove it). RowDelta:
+        `remove_deletes(DeleteFile)` + `remove_deletes_many` (reject Data content), wired via
+        `with_removed_delete_files`; the fresh-DV door gained the `remove_deletes` escape hatch (a DV
+        may shadow a live delete IFF it is removed in the same commit — Java's merge-and-replace).
+        **OPERATION CLASSIFICATION FIX (the 2026-06-08 lesson's third condition, TODAY):** read the
+        1.10.0 JAR BYTECODE of `BaseRowDelta.operation()` — it is the TWO-branch `addsDeleteFiles &&
+        !addsDataFiles ⇒ DELETE; else ⇒ OVERWRITE` with NO APPEND branch (MAIN's append arm + its
+        `!deletesDataFiles()` guard are POST-1.10.0). The interop oracle pins 1.10.0, so the faithful
+        fix DROPS to the two-branch form (not "add MAIN's third condition") — re-classifying
+        add-data-only RowDelta as Overwrite (was Append); flipped `test_row_delta_add_data_only_
+        records_append` → `..._records_overwrite_per_1_10_0`. 11 new tests (lib 1756→1767): crown
+        jewel (DV-replaces-DV: one live DV, old tombstoned, removed-dvs:1+added-dvs:1, raw-avro
+        provenance) + door pair (with-removal commits / without-removal still rejected) + remove
+        parquet pos delete e2e + remove eq delete + missing-removal-path message + remove-only op
+        classification + remove-Data-content rejection + survivor-provenance pin + cumulative totals +
+        data-side-unchanged regression guard. 5 mutations (snapshot to /tmp, restored byte-clean, full
+        suite re-run): (1) escape-hatch disabled ⇒ exactly the 3 removal-commit tests; (2) survivor
+        `add_existing_entry`→`add_entry` ⇒ my provenance pin + 6 data-side provenance tests (shared
+        helper covered from EVERY consumer); (3) content-keyed writer→always-data ⇒ exactly the 7
+        delete-removal tests (data-side test stays green ⇒ byte-identical); (4) re-add APPEND branch ⇒
+        exactly the operation pin; (5) missing-path validation off ⇒ exactly the missing-removal test.
+        NO new concurrent-window validation added (removal reuses resolve + process_deletes); the
+        tx-captured-start pin is N/A — stated. `snapshot_summary.rs` NOT touched (D3 already wired the
+        `remove_file` DV branch — no counter gap). Gate: typos/fmt/clippy(workspace excl. sqllogictest)
+        clean; lib 1767 ×2; datafusion 80+9 (the documented pre-existing rt-multi-thread doctest
+        artifact — unrelated, fails on clean tree); `run-interop-dv.sh` GREEN end-to-end (D1-D4 surface
+        intact). Files: only transaction/{snapshot,row_delta}.rs + transaction/map.md + GAP_MATRIX +
+        todo. DEFERRED LOUDLY (next increment): the WRITER-side `loadPreviousDeletes` auto-merge (the
+        test HAND-merges the super-set DV); apply-side `removeRows` data removal still validation-only;
+        interop for the removal path.
+  - [x] **Arc-E Increment 2 — DVFileWriter previous-deletes MERGE hook + DV-replacement interop
+        (BUILDER Opus, 2026-06-10).** DONE — see BUILDER OUTCOME below (DV-writer row flipped ✅).
+        Completes Java's DV write surface — the WRITER-side
+        `BaseDVFileWriter.loadPreviousDeletes` half E1 deferred. After this the GAP_MATRIX DV-writer
+        row is judged for ✅. Plan:
+        1. **The merge hook (`deletion_vector_writer.rs`):** `DVFileWriter::with_previous_deletes(...)`
+           — a Rust-pragmatic mirror of Java's ctor `loadPreviousDeletes: Function<String,
+           PositionDeleteIndex>`. Per referenced data-file path it carries the previous positions
+           (`DeleteVector`) + the SOURCE delete `DataFile`(s) they came from (Java
+           `PositionDeleteIndex.deleteFiles()`). On `close()`: union previous positions into the new
+           DV for that path (record_count/cardinality = MERGED set); previous source files that are
+           FILE-SCOPED (`is_file_scoped` — Java `ContentFileUtil.isFileScoped` = `referencedDataFile
+           != null`, BYTECODE-verified: DV OR path-scoped position delete, NOT equality, NOT
+           partition-scoped) are returned as `rewritten_delete_files` (a `DeleteWriteResult`-shaped
+           return — `DVWriteResult { delete_files, rewritten_delete_files }`, mirroring Java's
+           `DeleteWriteResult(dvs, referencedDataFiles, rewrittenDeleteFiles)`). Files NOT file-scoped
+           are NOT rewritten (Java L121-124). No-previous case BYTE-IDENTICAL to today (D2/D4 pins are
+           the floor). `is_file_scoped`: REUSE `is_deletion_vector` (it lives in `delete_file_index.rs`
+           — NOT in scope; implement a small `is_file_scoped` predicate IN `deletion_vector_writer.rs`
+           via the public `referenced_data_file()` accessor, NOT forking `is_deletion_vector`).
+        2. **Merge support (`delete_vector.rs` if needed):** a positions-out accessor / union helper.
+           `BitOrAssign` already exists; a `clone`/`from_iter` from positions may be needed. The
+           serializer itself does NOT change.
+        3. **Crown jewel (`row_delta.rs` tests):** V3 → data file → DV1 {1} committed → load DV1's
+           positions back via the PRODUCTION read path (`CachingDeleteFileLoader`/decoder, NOT a
+           hand-built vector) → feed as previous-deletes to a new DVFileWriter writing position {3} →
+           writer outputs merged DV {1,3} + rewritten=[dv1] → `row_delta().add_deletes(dv2)
+           .remove_deletes(rewritten...)` commits (E1's escape hatch unlocks) → scan = survivors of
+           {1,3} = {10,30,50}. Mirrors the REAL engine flow (Spark `SparkPositionDeltaWrite`
+           L251+L255-256: `addDeletes(dv)` + `for rewritten: removeDeletes(file)`).
+        4. **The Run-store re-serialization question (the D2 caveat, now LIVE):** the previous DV
+           deserializes into Run containers; after merge we re-serialize. Determine EMPIRICALLY whether
+           the merged blob byte-matches Java's merged blob (extend Direction-2 byte-compare — the
+           oracle does the SAME merge in Java via `BaseDVFileWriter` + a `loadPreviousDeletes` fn). If
+           the tie diverges, document precisely + scope the byte claim (positions identical, bytes may
+           differ at the documented tie); Java reads our blob either way (the oracle proves it). Do NOT
+           contort production code to chase the tie.
+        5. **Interop (`run-interop-dv.sh` + oracle):** (a) table-level Dir-2: the Rust REPLACEMENT
+           chain's final table read by Java's production scan (rows reflect merged DV; old DV absent
+           from manifests — Java manifest cross-check); (b) metadata-level: both sides run {append,
+           row_delta(DV1), row_delta(add DV2 + remove DV1)} → canonical views 3-way (`removed-dvs`
+           allowlist key, first LIVE comparison); fail-closed sentinels per the D4 rule. Mutations: (i)
+           skip the remove in the Rust chain → metadata diff fails (extra live DV + missing
+           removed-dvs); (ii) skip the merge (DV2={3} only) → Java table-read shows position-1 rows
+           RESURRECTED. Restore + green.
+        6. **GAP_MATRIX reckoning:** with merge + removal + replacement interop both directions, judge
+           the DV-writer row against DoD (API matches Java + unit tests + interop both directions). If
+           ✅, flip with dated evidence chain + name residue moving elsewhere (read row keeps its own
+           residue). RowDelta + read rows: terse note updates. transaction/ should need NOTHING — STOP
+           and report if otherwise. Pipe audit.
+        7. **Docs:** writer/map.md, this outcome, lessons entry if a correction lands.
+        BUILDER OUTCOME (2026-06-10, Arc-E Inc 2 — Opus; awaiting reviewer): **DV-WRITER ROW FLIPPED
+        🟡→✅ — the writer surface is now complete vs Java's BaseDVFileWriter.** Hook:
+        `DVFileWriter::with_previous_deletes(HashMap<path, PreviousDeletes>)` (mirrors Java's
+        `loadPreviousDeletes` ctor arg) + `close_with_result() -> DVWriteResult { delete_files,
+        rewritten_delete_files }` (mirrors Java `DeleteWriteResult`; `close()` kept returning just the
+        DVs — ZERO blast radius for ~10 existing callers). Merge unions previous positions
+        (`DeleteVector::merge`) into the new DV; file-scoped source files returned for removal.
+        **isFileScoped finding (1.10.0 BYTECODE-verified):** `ContentFileUtil.isFileScoped(df) ==
+        (referencedDataFile(df) != null)` — NOT just `isDV`; it is eq-delete→false, then non-null
+        `referenced_data_file`, then the `_file_path`-bounds-equal fallback (DV OR path-scoped pos
+        delete). `is_file_scoped` lives in the writer module (NOT a fork of `is_deletion_vector`, which
+        is `format==Puffin`). Engine-caller contract mirrored: Spark `SparkPositionDeltaWrite`
+        L251+L255-256 `addDeletes(dv)` + `for rewritten: removeDeletes(file)` → Rust
+        `add_deletes(result.delete_files).remove_deletes_many(result.rewritten_delete_files)`.
+        **Run-store byte question: ANSWERED.** The merged blob (prev {1} ∪ new {3} = {1,3}, array
+        container) is BYTE-IDENTICAL to Java's same merge (interop `test_dv_replace_merged_blob_bytes`,
+        44 B). The documented universal caveat stands (a previous DV whose store is ALREADY a Run
+        container ties at `card == 2·runs` to array on roaring-rs vs run on Java — positions identical,
+        bytes may differ; Java reads our blob either way — not contorted around). **Tests:** 7 unit
+        (merge cardinality, file-scoped selectivity, eq-delete exclusion, unwritten-path ignore,
+        byte-identical floor, `is_file_scoped` predicate, the crown jewel: DV1{1} → loaded back via the
+        production DECODER → writer merges {1,3} → add+remove → scan {10,30,50}) + 3 interop (table
+        Dir-2 read incl. DV1-absent manifest check, metadata 3-way incl. first LIVE `removed-dvs`, the
+        merged-blob byte-compare). Mutations: merge→no-op (crown jewel + unit fail), `is_file_scoped`→
+        always-true (3 scope tests fail); interop (i) skip remove → Rust commit REJECTED at the fresh-DV
+        door (stronger than the briefed metadata-diff — fail-loud at commit); (ii) skip merge → Rust
+        scan sanity shows id 20 RESURRECTED (stronger than the briefed Java-read — caught at GEN). Both
+        restored byte-clean. **lib 1775 ×2; datafusion 80 lib + 9 integration (the documented
+        rt-multi-thread doctest artifact still fails on the clean tree — unrelated); full
+        `run-interop-dv.sh` GREEN end-to-end (16 steps, both mutations shown failing then restored).**
+        **OUT-OF-SCOPE EDIT FLAGGED:** `lib.rs` `mod delete_vector` → `pub mod delete_vector` (the
+        public `PreviousDeletes::new(DeleteVector, …)` API requires `DeleteVector` to be NAMEABLE
+        downstream — it was a private-module pub type, callable but not constructible externally). Added
+        7 doc comments + `is_empty()` to satisfy `#![deny(missing_docs)]` + clippy on the now-public
+        type. transaction/ took ZERO production change (only the crown-jewel TEST, as expected). Files:
+        ONLY the allowed set + the flagged `lib.rs`.
+- [ ] **Arc F — `cherrypick`** (branch `phase2/cherrypick` off MAIN — no DV dependency): Java
+      `SnapshotManager.cherrypick` / cherry-pick operation (WAP semantics: `wap.id`,
+      `published-wap-id`, `source-snapshot-id`; fast-forward when the source is directly ahead;
+      conflict validation between source base and current head). The last Phase-2-gated
+      ManageSnapshots item, now unblocked by the write machinery. 1-2 increments.
+- [ ] **Arc G (as time remains) — carried-forward small items off MAIN:** (1) table-metadata
+      `last-sequence-number` lenient read (`#[serde(default)]`, the Phase-1 carried item) with
+      spec citation + tests; (2) the retention-positivity question — settle WHERE (if anywhere)
+      Java enforces non-positive rejection from 1.10.0 bytecode, then port or close the item with
+      evidence. Then, if hours remain: data-level write-actions interop starter.
+- [ ] **Morning report** in this file + the final session message: per-arc outcomes, branches +
+      compare URLs, anything skipped, the compaction flags.
+
+## DONE (2026-06-10): Deletion-vector arc (branch `phase2/dv-writer`, 4 commits 88f852b4→67aa056f, pushed — ONE PR ready for morning review)
 
 Actor-critic per increment with **FABLE builder + FABLE reviewer** (user-authorized for this
 sequence, naming the tier explicitly — supersedes the Opus default for this arc only).

@@ -159,6 +159,15 @@ pub(crate) struct SnapshotProducer<'a> {
     // so the snapshot summary can reflect the deleted file/record counts (Java overwrite/delete summary).
     // Empty for add-only operations such as fast append.
     removed_data_files: Vec<DataFile>,
+    // DELETE files (position / equality / DV) removed by this snapshot — the merge-on-read apply-side
+    // removal of superseded delete files (Java `MergingSnapshotProducer.delete(DeleteFile)` →
+    // `deleteFilterManager.delete(file)`). Resolved against the current snapshot's DELETE manifests by
+    // path in `commit()`, then fed to the SAME `process_deletes` rewrite path (which matches by path
+    // across the full manifest list, so a removed delete file's tombstone lands in the rewritten DELETE
+    // manifest) and to the summary's `remove_file` (DV → `removed-dvs`, parquet position →
+    // `removed-position-delete-files`, equality → `removed-equality-delete-files`). Populated by
+    // `RowDelta.removeDeletes`; empty for every operation that does not remove delete files.
+    removed_delete_files: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
@@ -183,6 +192,7 @@ impl<'a> SnapshotProducer<'a> {
             added_delete_files: vec![],
             new_data_files_data_sequence_number: None,
             removed_data_files: vec![],
+            removed_delete_files: vec![],
             manifest_counter: (0..),
         }
     }
@@ -192,6 +202,24 @@ impl<'a> SnapshotProducer<'a> {
     /// `MergingSnapshotProducer.add(DeleteFile)`). Used by the merge-on-read write path (`RowDelta`).
     pub(crate) fn with_added_delete_files(mut self, added_delete_files: Vec<DataFile>) -> Self {
         self.added_delete_files = added_delete_files;
+        self
+    }
+
+    /// Attach the DELETE files (position / equality / DV) this snapshot REMOVES — the apply-side
+    /// removal of superseded merge-on-read delete files (Java `MergingSnapshotProducer.delete(DeleteFile)`
+    /// → `deleteFilterManager.delete(file)`, the delete-side sibling of `delete(DataFile)`). Used by the
+    /// merge-on-read write path (`RowDelta.removeDeletes`) to drop a delete file the new delete supersedes
+    /// — e.g. removing the OLD deletion vector when a merged super-set DV replaces it.
+    ///
+    /// The supplied files are resolved against the current snapshot's DELETE manifests by path in
+    /// [`SnapshotProducer::commit`] (a missing path fails loud), then fed to the SAME `process_deletes`
+    /// rewrite path as removed DATA files: `process_deletes` matches each removed file's path against EVERY
+    /// existing manifest (DATA and DELETE), so a removed delete file's tombstone lands in the rewritten
+    /// DELETE manifest while DATA manifests are untouched. The resolved files also reach the summary's
+    /// `remove_file` (DV → `removed-dvs`, parquet position → `removed-position-delete-files`, equality →
+    /// `removed-equality-delete-files`).
+    pub(crate) fn with_removed_delete_files(mut self, removed_delete_files: Vec<DataFile>) -> Self {
+        self.removed_delete_files = removed_delete_files;
         self
     }
 
@@ -455,6 +483,70 @@ impl<'a> SnapshotProducer<'a> {
 
             for manifest_file in manifest_list.entries() {
                 if manifest_file.content != ManifestContentType::Data {
+                    continue;
+                }
+                let manifest = manifest_file.load_manifest(self.table.file_io()).await?;
+                for entry in manifest.entries() {
+                    if entry.is_alive() && delete_paths.contains(entry.file_path()) {
+                        found_paths.insert(entry.file_path().to_string());
+                        resolved.push(entry.data_file().clone());
+                    }
+                }
+            }
+        }
+
+        let missing: Vec<&str> = delete_paths
+            .iter()
+            .map(String::as_str)
+            .filter(|path| !found_paths.contains(*path))
+            .collect();
+        if !missing.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Missing required files to delete: {}", missing.join(", ")),
+            ));
+        }
+
+        Ok(resolved)
+    }
+
+    /// Resolve `delete_paths` against the current snapshot's live DELETE entries, returning the matching
+    /// [`DataFile`]s, and fail if any requested path matched no live delete entry — the DELETE-manifest
+    /// sibling of [`SnapshotProducer::resolve_delete_paths`] (Java
+    /// `MergingSnapshotProducer.delete(DeleteFile)` → `deleteFilterManager.delete(file)` resolved at
+    /// `filterManifests` time).
+    ///
+    /// Scans every current DELETE manifest (NOT data manifests — a removed delete file's path lives in a
+    /// `ManifestContentType::Deletes` manifest) and collects each live entry whose path is in
+    /// `delete_paths`. The missing-path check mirrors `resolve_delete_paths`' present-and-absent semantics
+    /// (Java `failMissingDeletePaths` / `validateRequiredDeletes`, "Missing required files to delete: %s").
+    ///
+    /// **Posture note (slightly stricter than Java's `RowDelta.removeDeletes` DEFAULT):** Java's
+    /// `validateRequiredDeletes` only fails on a missing path when `failMissingDeletePaths` is set, which
+    /// `RowDelta` does NOT set (only `StreamingDelete`/overwrite call `failMissingDeletePaths()`). This port
+    /// fails loud on a missing removal path unconditionally — the same conservative posture the Rust
+    /// `process_deletes` already takes for removed DATA files (it never models the `failMissingDeletePaths`
+    /// flag): removing a delete file that is not live is a caller error worth surfacing, not silently
+    /// dropping. One consequence: a commit RETRY whose target delete file was concurrently removed fails
+    /// loud (non-retryable) where Java's silent-ignore default would converge — the safe (loud) direction,
+    /// accepted. Returns an empty vector when `delete_paths` is empty.
+    pub(crate) async fn resolve_delete_file_paths(
+        &self,
+        delete_paths: &HashSet<String>,
+    ) -> Result<Vec<DataFile>> {
+        if delete_paths.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut resolved = Vec::new();
+        let mut found_paths: HashSet<String> = HashSet::new();
+        if let Some(snapshot) = self.table.metadata().current_snapshot() {
+            let manifest_list = snapshot
+                .load_manifest_list(self.table.file_io(), &self.table.metadata_ref())
+                .await?;
+
+            for manifest_file in manifest_list.entries() {
+                if manifest_file.content != ManifestContentType::Deletes {
                     continue;
                 }
                 let manifest = manifest_file.load_manifest(self.table.file_io()).await?;
@@ -846,15 +938,22 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_produce_operation: &OP,
         manifest_process: &MP,
     ) -> Result<Vec<ManifestFile>> {
-        // The data files to remove were resolved in `commit()` (before `summary()`, so the summary can
-        // reflect the deletes) and stored in `self.removed_data_files`. Take them here to drive the
-        // manifest rewrite without re-resolving.
-        let delete_files = std::mem::take(&mut self.removed_data_files);
+        // The files to remove were resolved in `commit()` (before `summary()`, so the summary can reflect
+        // the deletes) and stored in `self.removed_data_files` / `self.removed_delete_files`. Take both
+        // here and pass them as ONE set to `process_deletes`, which matches by path across the full
+        // manifest list (DATA and DELETE manifests): a removed DATA file's tombstone lands in the
+        // rewritten DATA manifest, a removed DELETE file's in the rewritten DELETE manifest — the Rust
+        // analogue of Java composing `filterManager.filterManifests(dataManifests)` AND
+        // `deleteFilterManager.filterManifests(deleteManifests)` (`MergingSnapshotProducer.apply` L977-1000).
+        let mut delete_files = std::mem::take(&mut self.removed_data_files);
+        let removed_delete_files = std::mem::take(&mut self.removed_delete_files);
+        delete_files.extend(removed_delete_files);
 
         // Assert the new snapshot contributes content: added data files, added DELETE files, removed
-        // (deleted) data files, or added snapshot properties. An add-deletes-only commit (delete files,
-        // no data files) is allowed (the merge-on-read `RowDelta` path); a delete-only data commit
-        // (rewrite data manifests, no adds) is allowed; a truly-empty commit is not.
+        // (deleted) data or delete files, or added snapshot properties. An add-deletes-only commit (delete
+        // files, no data files) is allowed (the merge-on-read `RowDelta` path); a delete-only data commit
+        // (rewrite data manifests, no adds) is allowed; a remove-deletes-only commit (drop a superseded
+        // delete file, no adds) is allowed; a truly-empty commit is not.
         //
         // TODO: Allowing snapshot property setup with no added data files is a workaround.
         // We should clean it up after all necessary actions are supported.
@@ -1009,6 +1108,20 @@ impl<'a> SnapshotProducer<'a> {
 
     /// Build a manifest writer for a rewritten (filtered) manifest, using the partition spec of the
     /// source manifest so existing entries keep their spec id and partition type.
+    ///
+    /// **Content-keyed (the delete-side extension — read this if you touch it):** the writer's CONTENT
+    /// matches the SOURCE manifest's content. A rewritten DATA manifest gets a DATA writer
+    /// (`build_v2_data`/`build_v3_data`); a rewritten DELETE manifest gets a DELETE writer
+    /// (`build_v2_deletes`/`build_v3_deletes`). This is REQUIRED for the merge-on-read apply-side delete
+    /// removal (`RowDelta.removeDeletes`): when `process_deletes` rewrites a DELETE manifest to tombstone a
+    /// superseded delete file, the rewritten manifest MUST stay a DELETE manifest (content `Deletes`,
+    /// `_file_type` 1) or the manifest list misclassifies it and the read path stops applying its
+    /// surviving deletes (resurrection). Java keys this on the filter manager: `DataFileFilterManager`'s
+    /// `newManifestWriter` calls `newManifestWriter(spec)` (DATA), `DeleteFileFilterManager`'s calls
+    /// `newDeleteManifestWriter(spec)` (DELETE) — `MergingSnapshotProducer.java` L1205/L1274. Mirroring it
+    /// off `source_manifest.content` keeps a single `process_deletes` path serving both, exactly as Java's
+    /// shared `ManifestFilterManager.filterManifest` does. The DATA-side behavior is UNCHANGED (a DATA
+    /// source still gets `build_v2_data`/`build_v3_data`) — its existing rewrite tests are the proof.
     fn new_filtering_manifest_writer(
         &mut self,
         source_manifest: &ManifestFile,
@@ -1052,8 +1165,14 @@ impl<'a> SnapshotProducer<'a> {
         );
         match self.table.metadata().format_version() {
             FormatVersion::V1 => Ok(builder.build_v1()),
-            FormatVersion::V2 => Ok(builder.build_v2_data()),
-            FormatVersion::V3 => Ok(builder.build_v3_data()),
+            FormatVersion::V2 => match source_manifest.content {
+                ManifestContentType::Data => Ok(builder.build_v2_data()),
+                ManifestContentType::Deletes => Ok(builder.build_v2_deletes()),
+            },
+            FormatVersion::V3 => match source_manifest.content {
+                ManifestContentType::Data => Ok(builder.build_v3_data()),
+                ManifestContentType::Deletes => Ok(builder.build_v3_deletes()),
+            },
         }
     }
 
@@ -1111,6 +1230,21 @@ impl<'a> SnapshotProducer<'a> {
             );
         }
 
+        // Reflect removed DELETE files (position / equality / DV) in the summary. `remove_file` branches
+        // on content type: a removed DV increments `removed-dvs` (D3's reachable-end-to-end branch — this
+        // is the path that makes it live), a removed parquet position delete increments
+        // `removed-position-delete-files`, an equality delete `removed-equality-delete-files` (Java
+        // `SnapshotSummary.UpdateMetrics.removedFile`). `removed_delete_files` is populated in `commit()`
+        // (the resolved removal set) before `summary()`; empty for every operation that removes no delete
+        // files, so this loop is a no-op there.
+        for delete_file in &self.removed_delete_files {
+            summary_collector.remove_file(
+                delete_file,
+                table_metadata.current_schema().clone(),
+                table_metadata.default_partition_spec().clone(),
+            );
+        }
+
         // The previous snapshot is the current branch head (the parent of the snapshot being produced):
         // at summary time the new snapshot is not yet in `table_metadata`, so its totals are seeded from
         // the current snapshot's summary. Mirrors Java `SnapshotProducer.summary(previous)` which reads
@@ -1158,6 +1292,20 @@ impl<'a> SnapshotProducer<'a> {
         // summary can reflect the deleted file/record counts and `manifest_file()` can reuse the result
         // without re-resolving. Empty for add-only operations (e.g. fast append).
         self.removed_data_files = snapshot_produce_operation.delete_files(&self).await?;
+
+        // Resolve the DELETE files this operation removes against the current snapshot's DELETE manifests by
+        // path (the apply-side `RowDelta.removeDeletes` path). Re-binding `self.removed_delete_files` to the
+        // RESOLVED set (a) validates every requested removal is a live delete file (missing path fails loud)
+        // and (b) replaces the caller-supplied (possibly-stale) `DataFile`s with the ON-DISK entries, so the
+        // summary's `remove_file` reads the committed metadata. Empty when no delete files are removed.
+        if !self.removed_delete_files.is_empty() {
+            let requested_paths: HashSet<String> = self
+                .removed_delete_files
+                .iter()
+                .map(|file| file.file_path().to_string())
+                .collect();
+            self.removed_delete_files = self.resolve_delete_file_paths(&requested_paths).await?;
+        }
 
         let manifest_list_path = self.generate_manifest_list_file_path(0);
         let next_seq_num = self.table.metadata().next_sequence_number();

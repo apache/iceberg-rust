@@ -33,7 +33,7 @@ The file-writing layer (Java `data/` writers): Arrow batches in → data / delet
 | `base_writer/data_file_writer.rs` | plain data files |
 | `base_writer/equality_delete_writer.rs` | equality-delete files (equality ids → projected schema) |
 | `base_writer/position_delete_writer.rs` | position-delete files: `file_path` (id 2147483546) + `pos` (id 2147483545), `content(PositionDeletes)`, **write-as-given** (no sorting/merging — Java-faithful) |
-| `base_writer/deletion_vector_writer.rs` | deletion vectors (V3 Puffin DVs, Java `BaseDVFileWriter`): accumulate `delete(path, pos, partition)`, `close()` → ONE Puffin file, one `deletion-vector-v1` blob per referenced data file (sorted-path order), `DeleteFile` per `createDV` L145-159; serialization in `../delete_vector.rs` (`serialize_deletion_vector_v1`, byte-identical to Java incl. run containers). Previous-deletes merge + commit path deferred to D3 |
+| `base_writer/deletion_vector_writer.rs` | deletion vectors (V3 Puffin DVs, Java `BaseDVFileWriter`): accumulate `delete(path, pos, partition)`, `close()` → ONE Puffin file, one `deletion-vector-v1` blob per referenced data file (sorted-path order), `DeleteFile` per `createDV` L145-159; serialization in `../delete_vector.rs` (`serialize_deletion_vector_v1`, byte-identical to Java incl. run containers). **Previous-deletes MERGE hook (Arc-E Inc 2):** `with_previous_deletes(HashMap<path, PreviousDeletes>)` mirrors Java `loadPreviousDeletes`; `close_with_result()` → `DVWriteResult { delete_files, rewritten_delete_files }` (Java `DeleteWriteResult`): previous positions unioned into the new DV, file-scoped (`is_file_scoped` = Java `ContentFileUtil.isFileScoped`) source files returned for `RowDelta.remove_deletes`. The DV writer surface is COMPLETE vs Java (GAP_MATRIX ✅) |
 | `file_writer/parquet_writer.rs` | Parquet IO + per-column metrics collection (the bounds the evaluators later prune on) |
 | `file_writer/rolling_writer.rs` | size-based file rolling |
 | `file_writer/location_generator.rs` | file naming/placement |
@@ -41,8 +41,9 @@ The file-writing layer (Java `data/` writers): Arrow batches in → data / delet
 | `partitioning/clustered_writer.rs` | sorted-input single-partition-at-a-time |
 | `partitioning/unpartitioned_writer.rs` | passthrough |
 
-Parity gaps live in the GAP_MATRIX (deletion-vector COMMIT path — the writer landed in D2, ORC/Avro
-data files, sort-order-aware writing).
+Parity gaps live in the GAP_MATRIX (ORC/Avro data files, sort-order-aware writing). The
+deletion-vector writer is now ✅ — serialization (D2), commit (D3), and the previous-deletes merge
+hook + replacement interop (Arc-E Inc 2) all landed.
 
 ## I want to...
 

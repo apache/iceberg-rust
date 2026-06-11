@@ -288,6 +288,34 @@ public final class InteropOracle {
         Path dvTableGenDir = requireFixturesDir("interop.dv_table.dir");
         DvTableOracle.generate(dvTableGenDir);
         break;
+      case "verify-interop-dv-replace":
+        // DELETION-VECTOR REPLACEMENT chain, DIRECTION 2 (Arc-E Increment 2 — the
+        // BaseDVFileWriter.loadPreviousDeletes merge hook). The Rust GEN test (env
+        // ICEBERG_INTEROP_DV_REPLACE_DIR, tests/interop_dv_replace.rs) committed a V3 table to
+        // <dir>/rust_table whose DV1 ({1}) was REPLACED by a WRITER-MERGED DV2 ({1,3}) — DV1 removed
+        // in the same commit. Java reads it with its PRODUCTION scan (live rows must be the
+        // survivors of {1,3}), cross-checks the manifests (EXACTLY ONE live DV, DV1 ABSENT), AND
+        // performs the SAME merge in Java to emit java_merged_dv_blob.bin for the Rust byte-compare.
+        // A read/row mismatch or two live DVs is a REAL replacement-incompatibility finding. NOTE:
+        // `mvn exec:java` does not propagate System.exit — run-interop-dv.sh greps the sentinel.
+        Path dvReplaceVerifyDir = requireFixturesDir("interop.dv_replace.dir");
+        int dvReplaceFailures = DvReplaceOracle.verify(dvReplaceVerifyDir);
+        System.out.println("verify-interop-dv-replace: " + dvReplaceFailures + " failures");
+        if (dvReplaceFailures > 0) {
+          System.exit(1);
+        }
+        break;
+      case "generate-interop-dv-replace":
+        // DELETION-VECTOR REPLACEMENT metadata-level mirror (Arc-E Increment 2). Java performs the
+        // SAME logical chain the Rust GEN commits — fast_append, newRowDelta(DV1{1}), then
+        // newRowDelta().addDeletes(mergedDv).removeDeletes(DV1) where mergedDv is the writer-merged
+        // {1,3} (BaseDVFileWriter with a real loadPreviousDeletes) — under <dir>/table. The run
+        // script byte-diffs Java's canonical snapshot-metadata view of the RUST table against this
+        // one (the FIRST LIVE comparison of `removed-dvs`); the Rust test asserts its own views of
+        // both. The dir is via -Dinterop.dv_replace.dir.
+        Path dvReplaceGenDir = requireFixturesDir("interop.dv_replace.dir");
+        DvReplaceOracle.generate(dvReplaceGenDir);
+        break;
       case "generate-interop-eq-delete":
         // EQUALITY-DELETE merge-on-read, DIRECTION 1 — "Rust reads what JAVA writes". The sibling of
         // generate-interop-scan-exec, but the merge-on-read mechanism is delete-by-VALUE (an equality
@@ -4873,6 +4901,446 @@ public final class InteropOracle {
                 + "one puffin with two DVs), merge-on-read live rows = " + dataById);
       }
       return failures;
+    }
+  }
+
+  // =============================================================================================
+  // DvReplaceOracle — DELETION-VECTOR REPLACEMENT chain (Arc-E Increment 2, the
+  // BaseDVFileWriter.loadPreviousDeletes merge hook). Two modes over ONE shared fixture shape, the
+  // unpartitioned sibling of DvTableOracle:
+  //
+  //   verify-interop-dv-replace (Direction 2, the headline): Java reads the RUST-COMMITTED V3
+  //   replacement table at <dir>/rust_table (one parquet data file ids 10..50, DV1 deleting {1},
+  //   then a WRITER-MERGED DV2 deleting {1,3} that REPLACED DV1 — DV1 removed in the same commit)
+  //   with the PRODUCTION scan (IcebergGenerics -> BaseDeleteLoader.readDV) and asserts the live
+  //   rows equal <dir>/expected_rows.json = {(10,x),(30,z),(50,q)}. It ALSO cross-checks the
+  //   manifests: EXACTLY ONE live DV (DV1 ABSENT — a Java-visible proof the replacement removed the
+  //   old DV, not just shadowed it). AND it performs the SAME merge in Java (a BaseDVFileWriter
+  //   whose loadPreviousDeletes returns DV1's deserialized index) and dumps the merged blob to
+  //   java_merged_dv_blob.bin for the Rust byte-compare (the Run-store re-serialization pin).
+  //
+  //   generate-interop-dv-replace (the metadata-level mirror): Java performs the SAME logical chain
+  //   on an equivalent V3 table under <dir>/table — newFastAppend, newRowDelta(DV1), then
+  //   newRowDelta().addDeletes(mergedDv).removeDeletes(DV1) where mergedDv is produced by a
+  //   BaseDVFileWriter with a real loadPreviousDeletes — so the run script can byte-diff Java's
+  //   canonical snapshot-metadata view (SnapshotMetaOracle) of the RUST table against Java's view of
+  //   THIS table, and the Rust test asserts its own views of both. This is the FIRST LIVE comparison
+  //   of the `removed-dvs` summary key end to end.
+  // =============================================================================================
+
+  static final class DvReplaceOracle {
+    private DvReplaceOracle() {}
+
+    /** The shared schema: {1 id long required, 2 category string optional, 3 data string optional}. */
+    private static Schema replaceSchema() {
+      return new Schema(
+          Types.NestedField.required(1, "id", Types.LongType.get()),
+          Types.NestedField.optional(2, "category", Types.StringType.get()),
+          Types.NestedField.optional(3, "data", Types.StringType.get()));
+    }
+
+    /** GEN: the JAVA mirror of the Rust REPLACEMENT chain under <dir>/table. */
+    static void generate(Path dir) throws IOException {
+      Files.createDirectories(dir);
+
+      File tableDir = dir.resolve("table").toFile();
+      File metadataDir = new File(tableDir, "metadata");
+      File dataDir = new File(tableDir, "data");
+      if (!metadataDir.isDirectory() && !metadataDir.mkdirs()) {
+        throw new IOException("failed to create metadata dir at " + metadataDir);
+      }
+      if (!dataDir.isDirectory() && !dataDir.mkdirs()) {
+        throw new IOException("failed to create data dir at " + dataDir);
+      }
+
+      Schema schema = replaceSchema();
+      PartitionSpec spec = PartitionSpec.unpartitioned();
+      Map<String, String> props = new LinkedHashMap<>();
+      props.put(TableProperties.FORMAT_VERSION, "3"); // DVs are V3-only.
+      TableMetadata seed =
+          TableMetadata.newTableMetadata(
+              schema, spec, SortOrder.unsorted(), tableDir.getAbsolutePath(), props);
+
+      LocalTableOperations ops = new LocalTableOperations(tableDir, metadataDir);
+      ops.commit(null, seed);
+      BaseTable table = new BaseTable(ops, "interop_dv_replace");
+
+      // 1. ONE real parquet data file (ids 10..50 at positions 0..4), fast-appended at sequence 1.
+      DataFile dataFile =
+          writeDataFile(
+              table,
+              schema,
+              spec,
+              new File(dataDir, "00000-data.parquet").getAbsolutePath(),
+              new long[] {10L, 20L, 30L, 40L, 50L},
+              new String[] {"x", "y", "z", "p", "q"});
+      table.newFastAppend().appendFile(dataFile).commit();
+
+      // 2. DV1 deletes position {1} (id 20), committed via newRowDelta at sequence 2.
+      DeleteFile dv1 = writeFreshDv(table, spec, dataFile.location(), new long[] {1L}, 1, 1L);
+      table.newRowDelta().addDeletes(dv1).commit();
+      // The snapshot the replacement operation "starts from" (after DV1 landed) — the engine
+      // captures this at operation start and passes it to validateFromSnapshot, so DV1 is NOT seen
+      // as a CONCURRENTLY-added DV by validateAddedDVs (which otherwise checks ALL history since
+      // startingSnapshotId == null). This is the Java twin of Rust's Transaction-captured starting
+      // snapshot (`Transaction::new` captures the current head); without it Java rejects the
+      // replacement with "Found concurrently added DV".
+      long replaceStartSnapshotId = table.currentSnapshot().snapshotId();
+
+      // 3. The MERGE: a BaseDVFileWriter with a real loadPreviousDeletes that reads DV1's index
+      //    back; it unions DV1's {1} with the new {3} -> {1,3} and returns DV1 as rewritten. Commit
+      //    addDeletes(mergedDv) + removeDeletes(DV1) (the Spark SparkPositionDeltaWrite flow).
+      MergeOutcome merge = writeMergedDv(table, spec, dataFile.location(), new long[] {3L}, dv1);
+      if (merge.mergedDv.recordCount() != 2L) {
+        throw new IOException(
+            "expected merged DV cardinality 2 ({1,3}), got " + merge.mergedDv.recordCount());
+      }
+      if (merge.rewritten.isEmpty()) {
+        throw new IOException("expected DV1 to be returned as a rewritten/superseded file");
+      }
+      RowDelta replace = table.newRowDelta().validateFromSnapshot(replaceStartSnapshotId);
+      replace.addDeletes(merge.mergedDv);
+      for (DeleteFile rewritten : merge.rewritten) {
+        replace.removeDeletes(rewritten);
+      }
+      replace.commit();
+
+      Path finalMetadata = metadataDir.toPath().resolve("final.metadata.json");
+      OutputFile finalOut =
+          new LocalFileIO().newOutputFile(finalMetadata.toAbsolutePath().toString());
+      TableMetadataParser.write(ops.current(), finalOut);
+
+      System.out.println(
+          "generated the JAVA mirror DV REPLACEMENT chain (fast-append + DV1{1} + writer-merged "
+              + "DV2{1,3} replacing DV1 via newRowDelta addDeletes+removeDeletes) under "
+              + dir.resolve("table"));
+    }
+
+    /**
+     * verify-interop-dv-replace: read the RUST-committed replacement table, assert rows + exactly
+     * ONE live DV (DV1 absent), and emit java_merged_dv_blob.bin for the byte-compare.
+     */
+    static int verify(Path dir) throws IOException {
+      int failures = 0;
+      Path finalMetadata =
+          dir.resolve("rust_table").resolve("metadata").resolve("final.metadata.json");
+      if (!Files.exists(finalMetadata)) {
+        System.out.println(
+            "FAIL dv-replace: missing " + finalMetadata + " (run the Rust GEN path first)");
+        return 1;
+      }
+
+      List<ExpectedRow> expectedRows = new ArrayList<>();
+      for (com.fasterxml.jackson.databind.JsonNode node :
+          JsonUtil.mapper().readTree(readString(dir.resolve("expected_rows.json")))) {
+        expectedRows.add(new ExpectedRow(node));
+      }
+      List<ExpectedDvMeta> expectedDvs = new ArrayList<>();
+      for (com.fasterxml.jackson.databind.JsonNode node :
+          JsonUtil.mapper().readTree(readString(dir.resolve("expected_dvs.json")))) {
+        expectedDvs.add(new ExpectedDvMeta(node));
+      }
+
+      TableMetadata metadata;
+      try {
+        metadata =
+            TableMetadataParser.fromJson(finalMetadata.toString(), readString(finalMetadata));
+      } catch (RuntimeException parseError) {
+        System.out.println(
+            "FAIL dv-replace: Java could not parse the Rust-written V3 final.metadata.json: "
+                + parseError);
+        return 1;
+      }
+
+      FileIO io = new LocalFileIO();
+      BaseTable table =
+          new BaseTable(new InMemoryInspectionOperations(metadata, io), "rust_table");
+
+      // (1) The PRODUCTION merge-on-read read.
+      Map<Long, String> dataById = new LinkedHashMap<>();
+      try (CloseableIterable<Record> records = IcebergGenerics.read(table).build()) {
+        for (Record record : records) {
+          Long id = (Long) record.getField("id");
+          Object data = record.getField("data");
+          dataById.put(id, data == null ? null : data.toString());
+        }
+      } catch (RuntimeException | IOException readError) {
+        System.out.println(
+            "FAIL dv-replace: Java could not READ the Rust-committed replacement table: "
+                + readError);
+        return 1;
+      }
+
+      List<Long> liveIds = new ArrayList<>(dataById.keySet());
+      liveIds.sort(Long::compareTo);
+      List<Long> expectedIds = new ArrayList<>();
+      boolean rowsMatch = true;
+      for (ExpectedRow row : expectedRows) {
+        expectedIds.add(row.id);
+        String actual = dataById.get(row.id);
+        if (!dataById.containsKey(row.id)
+            || (row.data == null ? actual != null : !row.data.equals(actual))) {
+          rowsMatch = false;
+        }
+      }
+      if (!liveIds.equals(expectedIds) || !rowsMatch) {
+        System.out.println(
+            "FAIL dv-replace: live (id,data) mismatch — RESURRECTED/missing rows: java-read="
+                + dataById + " expected ids " + expectedIds
+                + " (a broken merge resurrects the old DV's positions)");
+        failures++;
+      } else {
+        System.out.println(
+            "PASS dv-replace: Java's production scan read the replacement table -> live rows "
+                + dataById);
+      }
+
+      // (2) The manifest cross-check: EXACTLY ONE live DV, DV1 absent.
+      List<DeleteFile> liveDvs = new ArrayList<>();
+      Snapshot current = table.currentSnapshot();
+      for (ManifestFile manifest : current.deleteManifests(io)) {
+        try (ManifestReader<DeleteFile> reader =
+            ManifestFiles.readDeleteManifest(manifest, io, metadata.specsById())) {
+          for (DeleteFile deleteFile : reader) {
+            liveDvs.add(deleteFile);
+          }
+        }
+      }
+      if (liveDvs.size() != expectedDvs.size()) {
+        System.out.println(
+            "FAIL dv-replace: expected " + expectedDvs.size() + " live DV(s) (the merged DV only, "
+                + "DV1 removed), manifests hold " + liveDvs.size()
+                + " (the old DV was not removed -> two live DVs, a read-door violation)");
+        failures++;
+      } else {
+        for (ExpectedDvMeta expected : expectedDvs) {
+          DeleteFile dv = null;
+          for (DeleteFile candidate : liveDvs) {
+            if (expected.referencedDataFile.equals(String.valueOf(candidate.referencedDataFile()))) {
+              dv = candidate;
+              break;
+            }
+          }
+          if (dv == null) {
+            System.out.println(
+                "FAIL dv-replace: no live DV references " + expected.referencedDataFile);
+            failures++;
+            continue;
+          }
+          if (dv.content() != FileContent.POSITION_DELETES || dv.format() != FileFormat.PUFFIN) {
+            System.out.println(
+                "FAIL dv-replace: surviving DV content/format: " + dv.content() + "/" + dv.format());
+            failures++;
+          }
+          if (dv.recordCount() != expected.recordCount) {
+            System.out.println(
+                "FAIL dv-replace: surviving DV cardinality " + dv.recordCount() + ", expected "
+                    + expected.recordCount + " (must be the MERGED {1,3} = 2)");
+            failures++;
+          }
+        }
+        if (failures == 0) {
+          System.out.println(
+              "PASS dv-replace: manifest cross-check — exactly ONE live DV (the merged {1,3}), "
+                  + "the old DV1 is ABSENT (removed by the replacement)");
+        }
+      }
+
+      // (3) Emit Java's own merged blob for the byte-compare: the SAME merge (loadPreviousDeletes
+      // returns DV1's deserialized index) over the SAME inputs, dumped to java_merged_dv_blob.bin.
+      emitJavaMergedBlob(dir);
+
+      return failures;
+    }
+
+    /** Write a FRESH DV (no merge) via BaseDVFileWriter and return its single DeleteFile. */
+    private static DeleteFile writeFreshDv(
+        BaseTable table, PartitionSpec spec, String dataFilePath, long[] positions, int partitionId,
+        long partitionIdLong)
+        throws IOException {
+      org.apache.iceberg.io.OutputFileFactory factory =
+          org.apache.iceberg.io.OutputFileFactory.builderFor(table, partitionId, partitionIdLong)
+              .format(FileFormat.PUFFIN)
+              .build();
+      org.apache.iceberg.deletes.DVFileWriter dvWriter =
+          new org.apache.iceberg.deletes.BaseDVFileWriter(factory, path -> null);
+      for (long pos : positions) {
+        dvWriter.delete(dataFilePath, pos, spec, null);
+      }
+      dvWriter.close();
+      List<DeleteFile> dvs = dvWriter.result().deleteFiles();
+      if (dvs.size() != 1) {
+        throw new IOException("expected one DV, got " + dvs.size());
+      }
+      return dvs.get(0);
+    }
+
+    /** The outcome of a MERGE write: the merged DV + the rewritten (superseded) delete files. */
+    private static final class MergeOutcome {
+      final DeleteFile mergedDv;
+      final List<DeleteFile> rewritten;
+
+      MergeOutcome(DeleteFile mergedDv, List<DeleteFile> rewritten) {
+        this.mergedDv = mergedDv;
+        this.rewritten = rewritten;
+      }
+    }
+
+    /**
+     * Write a MERGED DV via BaseDVFileWriter with a real loadPreviousDeletes that reads
+     * {@code previousDv}'s index off disk (PositionDeleteIndex.deserialize, carrying previousDv as
+     * its source file) — Java's production merge-and-replace. Returns the merged DV + the rewritten
+     * files (the file-scoped previous source files, here previousDv).
+     */
+    private static MergeOutcome writeMergedDv(
+        BaseTable table,
+        PartitionSpec spec,
+        String dataFilePath,
+        long[] newPositions,
+        DeleteFile previousDv)
+        throws IOException {
+      org.apache.iceberg.io.OutputFileFactory factory =
+          org.apache.iceberg.io.OutputFileFactory.builderFor(table, 2, 2L)
+              .format(FileFormat.PUFFIN)
+              .build();
+      org.apache.iceberg.deletes.DVFileWriter dvWriter =
+          new org.apache.iceberg.deletes.BaseDVFileWriter(
+              factory, path -> loadPreviousDeletes(table.io(), path, dataFilePath, previousDv));
+      for (long pos : newPositions) {
+        dvWriter.delete(dataFilePath, pos, spec, null);
+      }
+      dvWriter.close();
+      org.apache.iceberg.io.DeleteWriteResult result = dvWriter.result();
+      List<DeleteFile> dvs = result.deleteFiles();
+      if (dvs.size() != 1) {
+        throw new IOException("expected one merged DV, got " + dvs.size());
+      }
+      return new MergeOutcome(dvs.get(0), result.rewrittenDeleteFiles());
+    }
+
+    /**
+     * The loadPreviousDeletes function: for {@code dataFilePath} return previousDv's positions as a
+     * PositionDeleteIndex carrying previousDv as its source file (so close() collects it into
+     * rewrittenDeleteFiles via isFileScoped); for any other path return null.
+     */
+    private static org.apache.iceberg.deletes.PositionDeleteIndex loadPreviousDeletes(
+        FileIO io, String path, String dataFilePath, DeleteFile previousDv) {
+      if (!path.equals(dataFilePath)) {
+        return null;
+      }
+      try {
+        byte[] blob =
+            readBlob(
+                io.newInputFile(previousDv.location()),
+                previousDv.contentOffset(),
+                previousDv.contentSizeInBytes().intValue());
+        return org.apache.iceberg.deletes.PositionDeleteIndex.deserialize(blob, previousDv);
+      } catch (IOException error) {
+        throw new RuntimeException("failed to load previous deletes for " + dataFilePath, error);
+      }
+    }
+
+    /**
+     * Perform the SAME merge Java's writer does on the SAME inputs and dump the merged blob bytes —
+     * a throwaway V3 table provides the OutputFileFactory + the DV1 the loadPreviousDeletes reads.
+     */
+    private static void emitJavaMergedBlob(Path dir) throws IOException {
+      File tableDir = dir.resolve("java_merge_table").toFile();
+      File metadataDir = new File(tableDir, "metadata");
+      File dataDir = new File(tableDir, "data");
+      if (!metadataDir.isDirectory() && !metadataDir.mkdirs()) {
+        throw new IOException("failed to create metadata dir at " + metadataDir);
+      }
+      if (!dataDir.isDirectory() && !dataDir.mkdirs()) {
+        throw new IOException("failed to create data dir at " + dataDir);
+      }
+      Schema schema = replaceSchema();
+      PartitionSpec spec = PartitionSpec.unpartitioned();
+      Map<String, String> props = new LinkedHashMap<>();
+      props.put(TableProperties.FORMAT_VERSION, "3");
+      TableMetadata seed =
+          TableMetadata.newTableMetadata(
+              schema, spec, SortOrder.unsorted(), tableDir.getAbsolutePath(), props);
+      LocalTableOperations ops = new LocalTableOperations(tableDir, metadataDir);
+      ops.commit(null, seed);
+      BaseTable table = new BaseTable(ops, "interop_dv_merge_emit");
+
+      // A throwaway data path (no parquet needed — the blob bytes depend only on the positions).
+      String dataFilePath = new File(dataDir, "00000-data.parquet").getAbsolutePath();
+      DeleteFile dv1 = writeFreshDv(table, spec, dataFilePath, new long[] {1L}, 1, 1L);
+      MergeOutcome merge = writeMergedDv(table, spec, dataFilePath, new long[] {3L}, dv1);
+
+      byte[] javaBlob =
+          readBlob(
+              new LocalFileIO().newInputFile(merge.mergedDv.location()),
+              merge.mergedDv.contentOffset(),
+              merge.mergedDv.contentSizeInBytes().intValue());
+      Files.write(dir.resolve("java_merged_dv_blob.bin"), javaBlob);
+      System.out.println(
+          "emitted java_merged_dv_blob.bin (" + javaBlob.length
+              + " bytes, merged {1,3}) for the byte-compare");
+    }
+
+    /** Write one REAL parquet data file (the DvScanOracle template, {id, category, data}). */
+    private static DataFile writeDataFile(
+        BaseTable table, Schema schema, PartitionSpec spec, String path, long[] ids, String[] values)
+        throws IOException {
+      List<Record> rows = new ArrayList<>();
+      for (int i = 0; i < ids.length; i++) {
+        GenericRecord record = GenericRecord.create(schema);
+        record.setField("id", ids[i]);
+        record.setField("category", null);
+        record.setField("data", values[i]);
+        rows.add(record);
+      }
+      GenericAppenderFactory factory = new GenericAppenderFactory(schema, spec);
+      OutputFile out = table.io().newOutputFile(path);
+      DataWriter<Record> writer =
+          factory.newDataWriter(
+              org.apache.iceberg.encryption.EncryptedFiles.encryptedOutput(
+                  out, org.apache.iceberg.encryption.EncryptionKeyMetadata.EMPTY),
+              FileFormat.PARQUET,
+              null);
+      try (Closeable toClose = writer) {
+        writer.write(rows);
+      }
+      return writer.toDataFile();
+    }
+
+    private static byte[] readBlob(InputFile inputFile, long offset, int length) throws IOException {
+      byte[] bytes = new byte[length];
+      try (org.apache.iceberg.io.SeekableInputStream in = inputFile.newStream()) {
+        in.seek(offset);
+        org.apache.iceberg.io.IOUtil.readFully(in, bytes, 0, length);
+      }
+      return bytes;
+    }
+
+    private static String readString(Path path) throws IOException {
+      return new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
+    }
+
+    /** One expected live row parsed from expected_rows.json. */
+    private static final class ExpectedRow {
+      final long id;
+      final String data;
+
+      ExpectedRow(com.fasterxml.jackson.databind.JsonNode node) {
+        this.id = node.get("id").asLong();
+        com.fasterxml.jackson.databind.JsonNode dataNode = node.get("data");
+        this.data = dataNode == null || dataNode.isNull() ? null : dataNode.asText();
+      }
+    }
+
+    /** One expected committed-DV metadata entry parsed from expected_dvs.json. */
+    private static final class ExpectedDvMeta {
+      final String referencedDataFile;
+      final long recordCount;
+
+      ExpectedDvMeta(com.fasterxml.jackson.databind.JsonNode node) {
+        this.referencedDataFile = node.get("referenced_data_file").asText();
+        this.recordCount = node.get("record_count").asLong();
+      }
     }
   }
 

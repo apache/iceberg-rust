@@ -15,6 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! In-memory deletion vectors and their on-disk `deletion-vector-v1` (Puffin DV blob) encoding.
+//!
+//! [`DeleteVector`] is the Rust analogue of Java's `PositionDeleteIndex` — a roaring-treemap-backed
+//! set of deleted row positions for a single data file. It serializes to / deserializes from the
+//! Puffin `deletion-vector-v1` blob format byte-compatibly with Java
+//! (`BitmapPositionDeleteIndex.serialize`/`deserialize` + `RoaringPositionBitmap`), and is the type
+//! the merge-on-read scan applies and the [`crate::writer::base_writer::deletion_vector_writer`]
+//! writes. Callers supplying previous deletes to the DV writer construct a `DeleteVector` here.
+
 use std::io::Read;
 use std::ops::BitOrAssign;
 
@@ -24,7 +33,11 @@ use roaring::{RoaringBitmap, RoaringTreemap};
 
 use crate::{Error, ErrorKind, Result};
 
-#[derive(Debug, Default)]
+/// An in-memory set of deleted row positions for a single data file — the Rust analogue of Java's
+/// `PositionDeleteIndex` / `BitmapPositionDeleteIndex`. Backed by a 64-bit roaring treemap so it
+/// stays compact for large or sparse position sets, and serializes to / deserializes from the
+/// Puffin `deletion-vector-v1` blob format (byte-compatible with Java).
+#[derive(Debug, Default, Clone)]
 pub struct DeleteVector {
     inner: RoaringTreemap,
 }
@@ -59,20 +72,36 @@ fn dv_blob_error(message: impl Into<String>) -> Error {
 }
 
 impl DeleteVector {
-    #[allow(unused)]
+    /// Wraps an existing 64-bit roaring treemap of deleted positions as a `DeleteVector`.
     pub fn new(roaring_treemap: RoaringTreemap) -> DeleteVector {
         DeleteVector {
             inner: roaring_treemap,
         }
     }
 
+    /// Iterates the deleted positions in ascending order.
     pub fn iter(&self) -> DeleteVectorIterator<'_> {
         let outer = self.inner.bitmaps();
         DeleteVectorIterator { outer, inner: None }
     }
 
+    /// Marks `pos` as deleted; returns `true` if it was newly added (`false` if already present).
     pub fn insert(&mut self, pos: u64) -> bool {
         self.inner.insert(pos)
+    }
+
+    /// Unions every position of `other` into this vector (a set OR), mirroring Java
+    /// `PositionDeleteIndex.merge` / `BitmapPositionDeleteIndex.merge` (L61-65): the bitmaps are
+    /// OR-ed so the merged set is the union of both. Positions already present are no-ops (a set
+    /// union), so the cardinality after merge counts each position once.
+    ///
+    /// Used by [`crate::writer::base_writer::deletion_vector_writer::DVFileWriter`] to fold a data
+    /// file's PREVIOUS deletes into the new deletion vector (Java `BaseDVFileWriter.close`
+    /// L118-119: `positions.merge(previousPositions)`). Takes `&other` (not by value, unlike the
+    /// [`BitOrAssign`] impl) so the previous vector can be inspected for its source delete files
+    /// afterwards.
+    pub fn merge(&mut self, other: &DeleteVector) {
+        self.inner |= &other.inner;
     }
 
     /// Marks the given `positions` as deleted and returns the number of elements appended.
@@ -94,9 +123,14 @@ impl DeleteVector {
         Ok(positions.len())
     }
 
-    #[allow(unused)]
+    /// Returns the number of deleted positions (the cardinality of the set).
     pub fn len(&self) -> u64 {
         self.inner.len()
+    }
+
+    /// Returns `true` if no positions are deleted (the set is empty).
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
     }
 
     /// Deserializes a Puffin `deletion-vector-v1` blob payload into a [`DeleteVector`].
@@ -424,6 +458,8 @@ impl DeleteVector {
 // There is a PR open on roaring to add this (https://github.com/RoaringBitmap/roaring-rs/pull/314)
 // and if that gets merged then we can simplify `DeleteVectorIterator` here, refactoring `advance_to`
 // to just a wrapper around the underlying iterator's method.
+/// Ascending iterator over a [`DeleteVector`]'s positions, with an [`advance_to`](Self::advance_to)
+/// fast-forward used by the scan-side row-selection builder.
 pub struct DeleteVectorIterator<'a> {
     // NB: `BitMapIter` was only exposed publicly in https://github.com/RoaringBitmap/roaring-rs/pull/316
     // which is not yet released. As a consequence our Cargo.toml temporarily uses a git reference for
@@ -461,6 +497,8 @@ impl Iterator for DeleteVectorIterator<'_> {
 }
 
 impl DeleteVectorIterator<'_> {
+    /// Fast-forwards the iterator so the next yielded position is `>= pos`, skipping over any
+    /// positions below it (used by the scan to align the delete stream to a data-row position).
     pub fn advance_to(&mut self, pos: u64) {
         let hi = (pos >> 32) as u32;
         let lo = pos as u32;

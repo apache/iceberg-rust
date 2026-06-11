@@ -102,24 +102,36 @@
 //! position deletes, V3 REQUIRES position deletes to be DVs; equality deletes are exempt at every version
 //! (Java `MergingSnapshotProducer.validateDeleteFileForVersion`, 1.10.0-bytecode-verified).
 //!
-//! **The fresh-DV-only door (Rust-conservative, NOT a Java check):** a row delta adding a DV is rejected when
-//! the CURRENT snapshot already carries a live position-scoped delete for the same referenced data file —
-//! a live DV for that file, or a legacy parquet position delete that still applies to it (possible on a
-//! V2→V3 upgraded table). Java instead MERGES the previous deletes into the new DV and replaces the old file
-//! (`BaseDVFileWriter.loadPreviousDeletes` L117-126 + `RowDelta.removeDeletes`); that path needs the
-//! apply-side delete-file removal this port defers. Without the door, the second DV would COMMIT and either
-//! make the data file unreadable at the scan's duplicate-DV load door (fail-late) or silently supersede the
-//! parquet delete's positions (resurrection). See [`RowDeltaAction::validate_fresh_dvs_only`].
+//! **Apply-side removal of delete files (`removeDeletes`, NOW LANDED):** Java's
+//! `RowDelta.removeDeletes(DeleteFile)` (`BaseRowDelta.removeDeletes` L82-86) drops a superseded delete file
+//! from the table — `delete(deletes)` → `deleteFilterManager.delete(file)`, the delete-side sibling of the
+//! data-file filter manager. This port supports it via [`RowDeltaAction::remove_deletes`]: the removed delete
+//! files are resolved against the current snapshot's DELETE manifests by path and tombstoned in the rewritten
+//! DELETE manifest (the producer's `process_deletes` + the content-keyed filtering writer), and they flow
+//! through the summary's `remove_file` (a removed DV bumps `removed-dvs`). The primary use case is merge-on
+//! -read superseding: a merged super-set deletion vector replaces an older DV for the same data file, the old
+//! DV is removed in the same commit, and the reader's one-live-DV-per-file invariant holds post-commit.
 //!
-//! **Out of scope (deferred):**
+//! **The fresh-DV door (Rust-conservative, NOT a Java check) + its `remove_deletes` escape hatch:** a row
+//! delta adding a DV is rejected when the CURRENT snapshot already carries a live position-scoped delete for
+//! the same referenced data file (a live DV for that file, or a legacy parquet position delete that still
+//! applies — possible on a V2→V3 upgraded table) UNLESS this same commit REMOVES that existing delete. Java
+//! never commits a "second" DV: `BaseDVFileWriter.loadPreviousDeletes` (L117-126) MERGES the previous deletes
+//! into the new DV and the superseded delete files are removed via `rewrittenDeleteFiles` →
+//! `RowDelta.removeDeletes`. With the apply-side removal landed, a merged super-set DV + the removal of the
+//! old delete commits cleanly; without a matching removal the door still fires (the second DV would make the
+//! data file unreadable at the scan's duplicate-DV load door, or silently supersede a parquet delete's
+//! positions). See [`RowDeltaAction::validate_fresh_dvs_only`].
+//!
+//! **Out of scope (deferred — the NEXT increment):**
 //! - Equality-delete WRITER end-to-end (the writer exists; the RowDelta-with-equality-deletes scan
 //!   application may have gaps — the end-to-end test focuses on POSITION deletes).
-//! - APPLY-SIDE removal for `remove_data_files` (see above) and `removeDeletes` (removing existing delete
-//!   files) — only the VALIDATION half of `removeRows` lands here.
-//! - The previous-deletes MERGE for deletion vectors (`BaseDVFileWriter.loadPreviousDeletes` +
-//!   `rewrittenDeleteFiles`/`removeDeletes`) — guarded by the fresh-DV-only door above until the apply-side
-//!   delete-file removal lands. (The DV WRITE path itself — `DVFileWriter` → `add_deletes` → commit → scan —
-//!   is supported as of the D2/D3 increments.)
+//! - APPLY-SIDE removal for `remove_data_files` (`removeRows`) — only the VALIDATION half lands here (the
+//!   `removeDeletes` half is now apply-side; removing DATA files is `OverwriteFiles`' job today).
+//! - The WRITER-side previous-deletes MERGE for deletion vectors (`BaseDVFileWriter.loadPreviousDeletes`
+//!   reading + unioning the old positions into the new DV) — the apply-side removal here is the commit-path
+//!   half; the writer hook that auto-merges is the next increment. (The DV WRITE path itself — `DVFileWriter`
+//!   → `add_deletes` → commit → scan, plus `remove_deletes` of a superseded DV — is supported now.)
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -208,6 +220,18 @@ pub struct RowDeltaAction {
     /// mirroring the existing validation-only [`Self::referenced_data_files`]. The apply path does NOT yet drop
     /// them from the manifests.
     removed_data_files: Vec<DataFile>,
+    /// The DELETE files (position / equality / deletion vector) this row delta REMOVES from the table — the
+    /// apply-side `RowDelta.removeDeletes(DeleteFile)` (Java `BaseRowDelta.removeDeletes` L82-86 →
+    /// `delete(deletes)` → `deleteFilterManager.delete(file)`). Unlike [`Self::removed_data_files`] (which is
+    /// validation-only), these are ACTUALLY DROPPED in apply: they are passed to the producer via
+    /// [`SnapshotProducer::with_removed_delete_files`], resolved against the current snapshot's DELETE
+    /// manifests by path, and tombstoned in the rewritten DELETE manifest (`process_deletes`).
+    ///
+    /// The use case is merge-on-read superseding: a merged super-set deletion vector replaces an older DV for
+    /// the same data file, and the old DV is removed in the SAME commit so the table never holds two live DVs
+    /// for one file. Each file must be `PositionDeletes` or `EqualityDeletes` content (a `Data` file is
+    /// rejected — Java `removeDeletes` takes a `DeleteFile`); repeated calls ACCUMULATE.
+    removed_delete_files: Vec<DataFile>,
 }
 
 impl RowDeltaAction {
@@ -225,6 +249,7 @@ impl RowDeltaAction {
             referenced_data_files: HashSet::default(),
             validate_deleted_files: false,
             removed_data_files: vec![],
+            removed_delete_files: vec![],
         }
     }
 
@@ -270,6 +295,32 @@ impl RowDeltaAction {
     /// VALIDATION-ONLY in this port — apply-side removal is deferred).
     pub fn remove_rows(self, data_file: DataFile) -> Self {
         self.remove_data_files([data_file])
+    }
+
+    /// Remove a single DELETE file (position / equality / deletion vector) from the table — the apply-side
+    /// `RowDelta.removeDeletes(DeleteFile)` (Java `BaseRowDelta.removeDeletes` L82-86 → `delete(deletes)`).
+    ///
+    /// Unlike [`Self::remove_rows`] (validation-only in this port), this ACTUALLY DROPS the delete file:
+    /// at commit time it is resolved against the current snapshot's DELETE manifests by path and tombstoned
+    /// in the rewritten DELETE manifest, with surviving delete entries copied forward provenance-preserved.
+    ///
+    /// The primary use case is merge-on-read superseding: when a merged super-set deletion vector replaces an
+    /// older DV for the same data file, the old DV is removed in the SAME commit so the table never holds two
+    /// live DVs for one file (and the fresh-DV-only door's escape hatch — see
+    /// [`Self::validate_fresh_dvs_only`] — lets the merged DV commit). The supplied file must be
+    /// `PositionDeletes` or `EqualityDeletes` content (a `Data` file is rejected at commit — Java's
+    /// `removeDeletes` takes a `DeleteFile`). Repeated calls ACCUMULATE.
+    pub fn remove_deletes(self, delete_file: DataFile) -> Self {
+        self.remove_deletes_many([delete_file])
+    }
+
+    /// Remove multiple DELETE files (position / equality / deletion vector) from the table — the plural of
+    /// [`Self::remove_deletes`] (Java `RowDelta.removeDeletes` called per file). Each file must be
+    /// `PositionDeletes` or `EqualityDeletes` content (a `Data` file is rejected at commit). Repeated calls
+    /// ACCUMULATE.
+    pub fn remove_deletes_many(mut self, delete_files: impl IntoIterator<Item = DataFile>) -> Self {
+        self.removed_delete_files.extend(delete_files);
+        self
     }
 
     /// Set the commit UUID for the snapshot (otherwise a fresh v7 UUID is generated).
@@ -513,9 +564,10 @@ impl RowDeltaAction {
         Ok(())
     }
 
-    /// THE FRESH-DV-ONLY DOOR (Rust-conservative; NOT a Java check — documented divergence). Reject this row
+    /// THE FRESH-DV DOOR (Rust-conservative; NOT a Java check — documented divergence). Reject this row
     /// delta when the CURRENT snapshot already carries a live position-scoped delete for a data file this row
-    /// delta adds a deletion vector for:
+    /// delta adds a deletion vector for — UNLESS that existing delete is REMOVED in this same commit (the
+    /// `remove_deletes` escape hatch — see below). The blocking cases are:
     ///
     /// - **A live DV for the same `referenced_data_file`.** Committing a second DV would leave TWO live DVs
     ///   for one data file — an invalid table per the spec, which the scan's duplicate-DV load door
@@ -534,12 +586,18 @@ impl RowDeltaAction {
     ///   delete never applies to a data file added after it). A referenced file with NO live entry is being
     ///   added in THIS commit and postdates every live delete — nothing applies.
     ///
-    /// Java has no such door because it never commits a "second" DV: `BaseDVFileWriter.loadPreviousDeletes`
-    /// (L117-126) MERGES the file's previous deletes into the new DV and the superseded delete files are
-    /// removed via `rewrittenDeleteFiles` + `RowDelta.removeDeletes`. That merge-and-replace path needs the
-    /// apply-side delete-file removal this port defers; until it lands, only FRESH DVs (for data files with
-    /// no live position-scoped deletes) can be committed. Equality deletes are NOT superseded by a DV and do
-    /// not trip the door.
+    /// **The `remove_deletes` escape hatch (the relaxation — the apply-side removal now landed):** Java
+    /// never commits a "second" DV because `BaseDVFileWriter.loadPreviousDeletes` (L117-126) MERGES the
+    /// file's previous deletes into the new DV and the superseded delete files are removed via
+    /// `rewrittenDeleteFiles` → `RowDelta.removeDeletes`. This port now supports the apply-side delete-file
+    /// removal ([`RowDeltaAction::remove_deletes`]), so a row delta MAY add a DV for a file with a live
+    /// position-scoped delete AS LONG AS it removes that existing delete in the SAME commit: the existing
+    /// delete's path is in `self.removed_delete_files`, so post-commit the table holds exactly ONE live DV
+    /// per file (the reader's invariant). The door skips its rejection for any existing delete whose path is
+    /// in the removed set; with no matching removal it still fires (the D3 fail-loud posture). What remains
+    /// DEFERRED is the WRITER-side automatic merge (`loadPreviousDeletes` reading + unioning the old
+    /// positions into the new DV) — the test hand-merges the super-set DV; the apply-side removal here is the
+    /// commit-path half. Equality deletes are NOT superseded by a DV and do not trip the door.
     ///
     /// Runs in the action's `commit()` against the refreshed base, alongside the producer's added-delete-file
     /// validation. Self-skips when this row delta adds no DVs.
@@ -548,6 +606,20 @@ impl RowDeltaAction {
         if added_dvs.is_empty() {
             return Ok(());
         }
+
+        // THE RELAXATION (the merge-and-replace escape hatch). An existing live position-scoped delete for
+        // a referenced file is LEGAL to shadow IFF this same commit REMOVES it (`remove_deletes`) — the
+        // Java contract: `BaseDVFileWriter` merges the previous deletes into the new DV and the engine
+        // removes the superseded file via `rewrittenDeleteFiles` → `RowDelta.removeDeletes`, so post-commit
+        // the table holds exactly ONE live DV per file (the reader's invariant). The door below skips its
+        // rejection when the existing delete's path is in this removed set; without a removal it still
+        // fires (the D3 fail-loud posture). Path equality is Java's resolution (`DeleteFileSet` keys on
+        // location), so a removed file matches the live entry by path.
+        let removed_delete_paths: HashSet<&str> = self
+            .removed_delete_files
+            .iter()
+            .map(|file| file.file_path())
+            .collect();
 
         let Some(snapshot) = table.metadata().current_snapshot() else {
             return Ok(());
@@ -599,6 +671,13 @@ impl RowDeltaAction {
                 let existing = entry.data_file();
                 if existing.content_type() != DataContentType::PositionDeletes {
                     // Equality deletes coexist with DVs (a DV supersedes only position deletes).
+                    continue;
+                }
+
+                // The escape hatch: a delete file REMOVED in this same commit (`remove_deletes`) is being
+                // superseded deliberately — the Java merge-and-replace path — so it does NOT block the new
+                // DV. Skip it here; `process_deletes` will tombstone it in the rewritten DELETE manifest.
+                if removed_delete_paths.contains(existing.file_path()) {
                     continue;
                 }
 
@@ -673,6 +752,22 @@ impl RowDeltaAction {
         Ok(())
     }
 
+    /// Reject a `Data`-content file in the removed-delete set — Java `RowDelta.removeDeletes(DeleteFile)`
+    /// only accepts delete files (a data file must go through `removeRows`). The content check mirrors the
+    /// added-delete-file content check (`SnapshotProducer::validate_added_delete_files` rejects `Data`); the
+    /// version gate does NOT apply to removals (a removed delete file already exists on a versioned table).
+    fn validate_removed_delete_files(&self) -> Result<()> {
+        for delete_file in &self.removed_delete_files {
+            if delete_file.content_type() == DataContentType::Data {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Only position-delete or equality-delete content is allowed for removed delete files (use remove_rows to remove data files)",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Reject a row delta that REMOVES a data file the added delete files REFERENCE — the Rust port of Java
     /// `BaseRowDelta.validateNoConflictingFileAndPositionDeletes` (1.10.0-bytecode-verified, called
     /// UNCONDITIONALLY from `BaseRowDelta.validate` right before `validateAddedDVs`): the intersection of
@@ -705,6 +800,11 @@ impl RowDeltaAction {
 #[async_trait]
 impl TransactionAction for RowDeltaAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+        // Reject a DATA-content file in the removed-delete set BEFORE building the producer — Java's
+        // `removeDeletes(DeleteFile)` takes a delete file; a `Data` file would be a `removeRows`. (The
+        // producer also validates added files; this guards the removal surface at its own door.)
+        self.validate_removed_delete_files()?;
+
         let snapshot_producer = SnapshotProducer::new(
             table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
@@ -712,7 +812,8 @@ impl TransactionAction for RowDeltaAction {
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
         )
-        .with_added_delete_files(self.added_delete_files.clone());
+        .with_added_delete_files(self.added_delete_files.clone())
+        .with_removed_delete_files(self.removed_delete_files.clone());
 
         // Validate the added data files like fast append (Data content type, partition-spec match,
         // partition-value compatibility) and the added delete files (position/equality content type,
@@ -725,16 +826,19 @@ impl TransactionAction for RowDeltaAction {
         snapshot_producer.validate_added_delete_files()?;
 
         // The fresh-DV-only door (Rust-conservative; see its doc): a DV for a data file that already has
-        // a live position-scoped delete cannot be committed until the previous-delete merge path lands.
+        // a live position-scoped delete cannot be committed UNLESS that existing delete is removed in this
+        // same commit (the `removed_delete_files` escape hatch — the Java merge-and-replace contract).
         self.validate_fresh_dvs_only(table).await?;
 
         snapshot_producer
             .commit(
                 RowDeltaOperation {
-                    // Classified on the REQUESTED sets, before deletes resolve against the table —
-                    // matching Java `BaseRowDelta.operation()` (`addsDataFiles()` / `addsDeleteFiles()`).
+                    // Classified on the REQUESTED sets, before files resolve against the table —
+                    // matching Java 1.10.0 `BaseRowDelta.operation()` (`addsDeleteFiles()` /
+                    // `addsDataFiles()`; see `RowDeltaOperation::operation`).
                     adds_data_files: !self.added_data_files.is_empty(),
                     adds_delete_files: !self.added_delete_files.is_empty(),
+                    removes_delete_files: !self.removed_delete_files.is_empty(),
                 },
                 DefaultManifestProcess,
             )
@@ -909,17 +1013,47 @@ struct RowDeltaOperation {
     adds_data_files: bool,
     /// Whether this row delta requested any added delete files (Java `addsDeleteFiles()`).
     adds_delete_files: bool,
+    /// Whether this row delta requested any REMOVED delete files (Java `deletesDeleteFiles()` —
+    /// `removeDeletes` feeds the delete-file filter manager). NOTE: 1.10.0 `operation()` does NOT
+    /// consult this (or `deletesDataFiles()`); it is kept so the classification's inputs document the
+    /// full request shape and so the empty-commit check (a remove-deletes-only commit is non-empty) can
+    /// be reasoned about at this seam.
+    removes_delete_files: bool,
 }
 
 impl SnapshotProduceOperation for RowDeltaOperation {
-    /// Classify the recorded operation exactly as Java `BaseRowDelta.operation()` does, on the
-    /// REQUESTED add sets: adds-data-only (no delete files) → [`Operation::Append`], adds-deletes-only
-    /// (no data files) → [`Operation::Delete`], both → [`Operation::Overwrite`]. An empty row delta
-    /// (neither) is rejected by the producer before this is read.
+    /// Classify the recorded operation exactly as Java **1.10.0** `BaseRowDelta.operation()` does
+    /// (BYTECODE-VERIFIED against `iceberg-core-1.10.0.jar` — the version the interop oracle pins):
+    ///
+    /// ```text
+    /// if (addsDeleteFiles() && !addsDataFiles()) return DELETE;
+    /// return OVERWRITE;
+    /// ```
+    ///
+    /// A TWO-branch form: adds-deletes-only (no data files) → [`Operation::Delete`]; everything else →
+    /// [`Operation::Overwrite`]. There is **no APPEND branch** in 1.10.0.
+    ///
+    /// **Divergence from MAIN — and why 1.10.0 wins (the 2026-06-08 lesson's third condition, settled
+    /// 2026-06-10):** the MAIN `core/BaseRowDelta.java` source has a THIRD, leading branch
+    /// `if (addsDataFiles() && !addsDeleteFiles() && !deletesDataFiles()) return APPEND;` — a
+    /// POST-1.10.0 addition. The earlier Rust port mirrored MAIN (a 3-branch form with an APPEND arm),
+    /// pinned by `test_row_delta_add_data_only_records_append`. The 2026-06-08 lesson warned that
+    /// "when removeRows/removeDeletes land, the third condition MUST be added" — but reading the 1.10.0
+    /// BYTECODE (the version the interop oracle pins, and the authority per the
+    /// "MAIN lines are navigation hints only" rule) shows 1.10.0 has NEITHER the APPEND branch NOR a
+    /// `deletes*` term. So the faithful-to-the-pinned-version fix is to DROP to the two-branch form, NOT
+    /// to add MAIN's third condition. This re-classifies an add-data-only row delta as OVERWRITE (1.10.0)
+    /// rather than APPEND (MAIN) — unobservable via interop (the oracle never commits an add-data-only
+    /// row delta; data is `newFastAppend`ed), and correct for the removal cases: an add-data +
+    /// `removeDeletes` row delta is OVERWRITE either way (it adds no delete files and is not
+    /// adds-deletes-only), and a remove-deletes-only row delta (no adds) is OVERWRITE (Java's
+    /// `addsDeleteFiles()` is false ⇒ the DELETE branch's `&& !addsDataFiles()` is moot, falls through).
     fn operation(&self) -> Operation {
-        if self.adds_data_files && !self.adds_delete_files {
-            Operation::Append
-        } else if self.adds_delete_files && !self.adds_data_files {
+        // 1.10.0 bytecode: `addsDeleteFiles() && !addsDataFiles()` ⇒ DELETE, else OVERWRITE.
+        // `removes_delete_files` is intentionally not consulted (1.10.0 `operation()` ignores
+        // `deletesDeleteFiles()`); it is bound on the struct only to document the request shape.
+        let _ = self.removes_delete_files;
+        if self.adds_delete_files && !self.adds_data_files {
             Operation::Delete
         } else {
             Operation::Overwrite
@@ -971,8 +1105,12 @@ mod tests {
     use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
     use futures::TryStreamExt;
 
+    use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
+    use crate::delete_file_index::is_deletion_vector;
+    use crate::delete_vector::DeleteVector;
     use crate::expr::Reference;
     use crate::memory::tests::new_memory_catalog;
+    use crate::scan::FileScanTaskDeleteFile;
     use crate::spec::{
         DataContentType, DataFile, DataFileBuilder, DataFileFormat, Datum, Literal,
         ManifestContentType, ManifestStatus, Operation, Struct,
@@ -1380,13 +1518,20 @@ mod tests {
         );
     }
 
-    /// Pins: an add-DATA-only row delta (no delete files) records `Append` (Java
-    /// `BaseRowDelta.operation()` = APPEND when only data files are added and nothing is removed). Risk:
-    /// the dynamic-op classifier wrongly recording `Overwrite`/`Delete` for a pure-add row delta. Note:
-    /// this increment never removes files (`removeRows`/`removeDeletes` deferred), so Java's extra
-    /// `!deletesDataFiles()` guard on the APPEND branch is always satisfied here.
+    /// THE OPERATION-CLASSIFICATION PIN (1.10.0 bytecode; the 2026-06-08 lesson's "third condition",
+    /// settled 2026-06-10). An add-DATA-only row delta (no delete files) records `Overwrite` per Java
+    /// **1.10.0** `BaseRowDelta.operation()` — the two-branch `addsDeleteFiles() && !addsDataFiles() ⇒
+    /// DELETE; else ⇒ OVERWRITE`, which has NO APPEND branch (verified against `iceberg-core-1.10.0.jar`;
+    /// MAIN's leading `addsDataFiles() && !addsDeleteFiles() && !deletesDataFiles() ⇒ APPEND` is a
+    /// POST-1.10.0 addition). The pre-fix Rust port mirrored MAIN and asserted `Append` here; the interop
+    /// oracle pins 1.10.0, so the faithful classification is `Overwrite`.
+    ///
+    /// Risk pinned: a classifier that wrongly records `Append` (the MAIN/pre-fix behavior) — and, with
+    /// `removeDeletes` now landing, the broader risk the lesson flagged: an add + REMOVE row delta
+    /// mislabelled `Append`. This and the remove-only / add-deletes-only pins together cover both branches
+    /// of the 1.10.0 form. Mutation: re-adding the APPEND branch flips this to `Append` and fails.
     #[tokio::test]
-    async fn test_row_delta_add_data_only_records_append() {
+    async fn test_row_delta_add_data_only_records_overwrite_per_1_10_0() {
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
         let table = append_files(&catalog, &table, vec![synthetic_data_file(
@@ -1409,8 +1554,9 @@ mod tests {
                 .unwrap()
                 .summary()
                 .operation,
-            Operation::Append,
-            "an add-data-only row delta records Append (Java BaseRowDelta.operation())"
+            Operation::Overwrite,
+            "an add-data-only row delta records Overwrite per Java 1.10.0 BaseRowDelta.operation() \
+             (no APPEND branch in 1.10.0 — MAIN's append arm is post-1.10.0)"
         );
     }
 
@@ -4995,5 +5141,997 @@ mod tests {
         tx.commit(&catalog)
             .await
             .expect("the legacy delete does not apply to the newer file — the DV must commit");
+    }
+
+    // ============================================================================================
+    // Arc-E Increment 1: apply-side DELETE-FILE removal (`RowDelta.removeDeletes`) + the fresh-DV
+    // door's `remove_deletes` escape hatch. Java `BaseRowDelta.removeDeletes` L82-86 →
+    // `delete(deletes)` → `deleteFilterManager.delete(file)`; apply composes
+    // `deleteFilterManager.filterManifests(deleteManifests)` (`MergingSnapshotProducer.apply`
+    // L997-1000).
+    // ============================================================================================
+
+    /// Write a REAL Puffin deletion vector for `data_file_path` at `positions`, in partition
+    /// `x = part_value`, via D2's `DVFileWriter`. Returns the single produced DV `DataFile`.
+    async fn write_real_dv_file(
+        table: &Table,
+        file_name: &str,
+        data_file_path: &str,
+        part_value: i64,
+        positions: &[u64],
+    ) -> DataFile {
+        use crate::spec::PartitionKey;
+        use crate::writer::base_writer::deletion_vector_writer::DVFileWriter;
+
+        let partition_key = PartitionKey::new(
+            table.metadata().default_partition_spec().as_ref().clone(),
+            table.metadata().current_schema().clone(),
+            Struct::from_iter([Some(Literal::long(part_value))]),
+        );
+        let dv_path = format!("{}/data/{}", table.metadata().location(), file_name);
+        let output_file = table.file_io().new_output(&dv_path).unwrap();
+        let mut dv_writer = DVFileWriter::new(output_file);
+        for pos in positions {
+            dv_writer
+                .delete(data_file_path, *pos, Some(&partition_key))
+                .unwrap();
+        }
+        dv_writer.close().await.unwrap().into_iter().next().unwrap()
+    }
+
+    /// Collect the LIVE (alive) delete entries across every DELETE manifest of the table's current
+    /// snapshot, returning each file's `(path, is_dv, referenced_data_file)`. Used to assert the
+    /// one-live-DV-per-file invariant and the tombstoning of a superseded delete.
+    async fn live_delete_entries(table: &Table) -> Vec<(String, bool, Option<String>)> {
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        for manifest_file in manifest_list.entries() {
+            if manifest_file.content != ManifestContentType::Deletes {
+                continue;
+            }
+            let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
+            for entry in manifest.entries() {
+                if !entry.is_alive() {
+                    continue;
+                }
+                let file = entry.data_file();
+                out.push((
+                    file.file_path().to_string(),
+                    is_deletion_vector(file),
+                    file.referenced_data_file(),
+                ));
+            }
+        }
+        out
+    }
+
+    /// THE CROWN JEWEL: DV-replaces-DV, all-Rust end-to-end. V3 real-FS table → real parquet data
+    /// file (y=[10,20,30,40,50]) → DV#1 deleting position {1} (y=20) committed via row_delta → scan
+    /// = {10,30,40,50} → build DV#2 for positions {1,3} (the hand-merged super-set: y=20 + y=40) →
+    /// `row_delta().add_deletes(dv2).remove_deletes(dv1)` commits → scan = survivors of {1,3} =
+    /// {10,30,50}. Asserts: the OLD DV is tombstoned in the rewritten DELETE manifest (raw-avro: the
+    /// tombstone carries the NEW snapshot id; the surviving new DV keeps its own provenance); the
+    /// summary carries `removed-dvs: 1` + `added-dvs: 1`; the manifest list holds exactly ONE live DV
+    /// for the data file (the load-door invariant the door+removal pair protects).
+    ///
+    /// Risk pinned: a broken removal leaves TWO live DVs for the file (the scan's duplicate-DV load
+    /// door would reject — fail-late, table unreadable), or drops the wrong positions (resurrection).
+    /// This is the only test that proves the apply-side removal closes the merge-and-replace loop.
+    #[tokio::test]
+    async fn test_row_delta_dv_replaces_dv_end_to_end_remove_deletes() {
+        use crate::spec::Manifest;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // 1. A real parquet data file: 5 rows, partition x=0, y=[10,20,30,40,50].
+        let data_file = write_data_file(&table, "rows.parquet", 0, &[
+            (0, 10, 100),
+            (0, 20, 200),
+            (0, 30, 300),
+            (0, 40, 400),
+            (0, 50, 500),
+        ])
+        .await;
+        let data_file_path = data_file.file_path().to_string();
+        let table = append_files(&catalog, &table, vec![data_file]).await;
+
+        // 2. DV#1 deletes position {1} (y=20). Commit via row_delta.
+        let dv1 = write_real_dv_file(&table, "dv1.puffin", &data_file_path, 0, &[1]).await;
+        let dv1_path = dv1.file_path().to_string();
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![dv1.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        assert_eq!(
+            scan_y_values(&table).await,
+            HashSet::from([10, 30, 40, 50]),
+            "after DV#1 the scan drops y=20"
+        );
+
+        // 3. DV#2 is the merged super-set {1,3} (y=20 + y=40), hand-merged here (the WRITER-side
+        //    loadPreviousDeletes auto-merge is the next increment). Commit add(dv2) + remove(dv1).
+        let dv2 = write_real_dv_file(&table, "dv2.puffin", &data_file_path, 0, &[1, 3]).await;
+        let dv2_path = dv2.file_path().to_string();
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![dv2.clone()])
+            .remove_deletes(dv1.clone());
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        let new_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
+
+        // 4a. The scan now drops exactly {1,3} of the data file → survivors {10,30,50}.
+        assert_eq!(
+            scan_y_values(&table).await,
+            HashSet::from([10, 30, 50]),
+            "after the DV replace, the scan drops the super-set {{1,3}} (y=20, y=40)"
+        );
+
+        // 4b. The manifest list holds exactly ONE live DV for the data file (the load-door invariant).
+        let live = live_delete_entries(&table).await;
+        let live_dvs_for_file: Vec<&(String, bool, Option<String>)> = live
+            .iter()
+            .filter(|(_, is_dv, referenced)| {
+                *is_dv && referenced.as_deref() == Some(data_file_path.as_str())
+            })
+            .collect();
+        assert_eq!(
+            live_dvs_for_file.len(),
+            1,
+            "exactly ONE live DV for the data file post-commit — got {:?}",
+            live
+        );
+        assert_eq!(
+            live_dvs_for_file[0].0, dv2_path,
+            "the surviving live DV is DV#2 (the merged super-set), not the removed DV#1"
+        );
+
+        // 4c. The summary carries removed-dvs: 1 + added-dvs: 1.
+        assert_eq!(
+            summary_prop(&table, "added-dvs").as_deref(),
+            Some("1"),
+            "the added super-set DV bumps added-dvs"
+        );
+        assert_eq!(
+            summary_prop(&table, "removed-dvs").as_deref(),
+            Some("1"),
+            "the removed old DV bumps removed-dvs (the D3 branch, now reachable end-to-end)"
+        );
+
+        // 4d. PROVENANCE PIN (raw avro): the rewritten DELETE manifest that contained DV#1 carries it
+        //     as a DELETED tombstone stamped with the NEW snapshot id; any surviving EXISTING entry
+        //     keeps its ORIGINAL snapshot id (not re-stamped).
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let mut found_dv1_tombstone = false;
+        for manifest_file in manifest_list.entries() {
+            if manifest_file.content != ManifestContentType::Deletes {
+                continue;
+            }
+            let bytes = table
+                .file_io()
+                .new_input(&manifest_file.manifest_path)
+                .unwrap()
+                .read()
+                .await
+                .unwrap();
+            let (_, entries) = Manifest::try_from_avro_bytes(&bytes).unwrap();
+            for entry in &entries {
+                if entry.file_path() == dv1_path {
+                    assert_eq!(
+                        entry.status(),
+                        ManifestStatus::Deleted,
+                        "DV#1 must be a DELETED tombstone in the rewritten DELETE manifest"
+                    );
+                    assert_eq!(
+                        entry.snapshot_id(),
+                        Some(new_snapshot_id),
+                        "the tombstone carries the NEW snapshot id (the rewrite's provenance stamp)"
+                    );
+                    found_dv1_tombstone = true;
+                }
+            }
+        }
+        assert!(
+            found_dv1_tombstone,
+            "DV#1 must appear as a tombstone in a rewritten DELETE manifest (it was not dropped \
+             silently)"
+        );
+    }
+
+    /// Load a committed DV's positions back through the PRODUCTION read path — the D1
+    /// `CachingDeleteFileLoader` (ranged Puffin read → `deletion-vector-v1` decode), NOT a hand-built
+    /// vector. Returns the decoded [`DeleteVector`] keyed by the DV's `referenced_data_file`. This is
+    /// exactly what an engine's `loadPreviousDeletes` does: read the existing DV off disk.
+    async fn load_dv_positions_via_production_loader(
+        table: &Table,
+        dv_file: &DataFile,
+        referenced_data_file: &str,
+    ) -> DeleteVector {
+        let task = FileScanTaskDeleteFile {
+            file_path: dv_file.file_path().to_string(),
+            file_size_in_bytes: dv_file.file_size_in_bytes(),
+            file_type: dv_file.content_type(),
+            partition_spec_id: dv_file.partition_spec_id,
+            equality_ids: None,
+            file_format: dv_file.file_format(),
+            referenced_data_file: dv_file.referenced_data_file(),
+            content_offset: dv_file.content_offset(),
+            content_size_in_bytes: dv_file.content_size_in_bytes(),
+            record_count: Some(dv_file.record_count()),
+        };
+        let loader = CachingDeleteFileLoader::new(table.file_io().clone(), 4);
+        let delete_filter = loader
+            .load_deletes(
+                std::slice::from_ref(&task),
+                Arc::new(
+                    crate::spec::Schema::builder()
+                        .build()
+                        .expect("empty schema"),
+                ),
+            )
+            .await
+            .expect("loader future")
+            .expect("the production loader must load the committed DV");
+        let vector = delete_filter
+            .get_delete_vector_for_path(referenced_data_file)
+            .expect("a delete vector for the referenced data file");
+        let guard = vector.lock().expect("lock delete vector");
+        DeleteVector::new(guard.iter().collect())
+    }
+
+    /// Write a DV via the WRITER-side MERGE hook (`DVFileWriter::with_previous_deletes`): the writer
+    /// unions `previous_positions` (sourced from `previous_dv`) into its new positions and returns
+    /// the merged DV `DeleteFile`s + the file-scoped rewritten (superseded) delete files. The Rust
+    /// mirror of Java `BaseDVFileWriter` driven by a real `loadPreviousDeletes`.
+    async fn write_merged_dv_file(
+        table: &Table,
+        file_name: &str,
+        data_file_path: &str,
+        part_value: i64,
+        new_positions: &[u64],
+        previous_positions: DeleteVector,
+        previous_dv: DataFile,
+    ) -> crate::writer::base_writer::deletion_vector_writer::DVWriteResult {
+        use crate::spec::PartitionKey;
+        use crate::writer::base_writer::deletion_vector_writer::{DVFileWriter, PreviousDeletes};
+
+        let partition_key = PartitionKey::new(
+            table.metadata().default_partition_spec().as_ref().clone(),
+            table.metadata().current_schema().clone(),
+            Struct::from_iter([Some(Literal::long(part_value))]),
+        );
+        let dv_path = format!("{}/data/{}", table.metadata().location(), file_name);
+        let output_file = table.file_io().new_output(&dv_path).unwrap();
+        let previous = PreviousDeletes::new(previous_positions, vec![previous_dv]);
+        let mut dv_writer = DVFileWriter::new(output_file)
+            .with_previous_deletes(HashMap::from([(data_file_path.to_string(), previous)]));
+        for pos in new_positions {
+            dv_writer
+                .delete(data_file_path, *pos, Some(&partition_key))
+                .unwrap();
+        }
+        dv_writer.close_with_result().await.unwrap()
+    }
+
+    /// THE CROWN JEWEL (Arc-E Inc 2): the WRITER-side previous-deletes MERGE closes the loop, all-Rust
+    /// end-to-end — mirroring the REAL engine flow (Spark `SparkPositionDeltaWrite` L234-256:
+    /// `addDeletes(dv)` + `for f in rewrittenDeleteFiles: removeDeletes(f)`).
+    ///   1. V3 real-FS table → real parquet data file (y=[10,20,30,40,50]);
+    ///   2. DV#1 deleting position {1} (y=20) committed via row_delta → scan = {10,30,40,50};
+    ///   3. LOAD DV#1's positions back via the PRODUCTION loader (`CachingDeleteFileLoader`, NOT a
+    ///      hand-built vector), feed them as previous-deletes to a NEW `DVFileWriter` writing only the
+    ///      NEW position {3} → the WRITER merges {1}∪{3} = {1,3} and returns rewritten=[DV#1];
+    ///   4. `row_delta().add_deletes(merged_dv).remove_deletes_many(rewritten)` commits (the escape
+    ///      hatch unlocks); scan = survivors of {1,3} = {10,30,50}, exactly ONE live DV, DV#1 absent.
+    ///
+    /// Risk pinned: the merge is the load-bearing new behavior — the writer (not the test) must
+    /// produce {1,3} from previous {1} + new {3}. A broken merge writes only {3} → y=20 RESURRECTS
+    /// (scan would return {10,20,30,50}). The rewritten-file plumbing must also flow DV#1 into
+    /// `remove_deletes` (else the door rejects the second DV, or two DVs survive). This is the test
+    /// that proves the WRITER-side `loadPreviousDeletes` half (the last deferred piece of the DV
+    /// write surface) works end to end against the real read path.
+    #[tokio::test]
+    async fn test_row_delta_dv_writer_merges_previous_deletes_end_to_end() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // 1. A real parquet data file: 5 rows, partition x=0, y=[10,20,30,40,50].
+        let data_file = write_data_file(&table, "rows.parquet", 0, &[
+            (0, 10, 100),
+            (0, 20, 200),
+            (0, 30, 300),
+            (0, 40, 400),
+            (0, 50, 500),
+        ])
+        .await;
+        let data_file_path = data_file.file_path().to_string();
+        let table = append_files(&catalog, &table, vec![data_file]).await;
+
+        // 2. DV#1 deletes position {1} (y=20). Commit via row_delta.
+        let dv1 = write_real_dv_file(&table, "dv1.puffin", &data_file_path, 0, &[1]).await;
+        let dv1_path = dv1.file_path().to_string();
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![dv1.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        assert_eq!(
+            scan_y_values(&table).await,
+            HashSet::from([10, 30, 40, 50]),
+            "after DV#1 the scan drops y=20"
+        );
+
+        // 3. Load DV#1's positions back through the PRODUCTION loader, then write DV#2 with the WRITER
+        //    MERGE hook supplying those positions + adding the NEW position {3}. The WRITER produces
+        //    the super-set {1,3} (NOT hand-merged) and returns rewritten=[DV#1].
+        let previous_positions =
+            load_dv_positions_via_production_loader(&table, &dv1, &data_file_path).await;
+        assert_eq!(
+            previous_positions.iter().collect::<Vec<_>>(),
+            vec![1],
+            "the production loader must read back DV#1's position {{1}}"
+        );
+
+        let merge_result = write_merged_dv_file(
+            &table,
+            "dv2.puffin",
+            &data_file_path,
+            0,
+            &[3],
+            previous_positions,
+            dv1.clone(),
+        )
+        .await;
+
+        // The writer produced exactly one merged DV with the UNION cardinality, plus rewritten=[DV#1].
+        assert_eq!(merge_result.delete_files.len(), 1);
+        let dv2 = merge_result.delete_files[0].clone();
+        let dv2_path = dv2.file_path().to_string();
+        assert_eq!(
+            dv2.record_count(),
+            2,
+            "the merged DV must carry the UNION {{1,3}} (cardinality 2), proving the WRITER merged"
+        );
+        assert_eq!(
+            merge_result.rewritten_delete_files.len(),
+            1,
+            "DV#1 (file-scoped) must be returned as a rewritten/superseded delete file"
+        );
+        assert_eq!(
+            merge_result.rewritten_delete_files[0].file_path(),
+            dv1_path,
+            "the rewritten file is DV#1"
+        );
+
+        // 4. Commit add(merged DV) + remove(rewritten DV#1) — EXACTLY the engine flow. The fresh-DV
+        //    door's escape hatch unlocks because the live DV#1 is removed in the same commit.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(merge_result.delete_files)
+            .remove_deletes_many(merge_result.rewritten_delete_files);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // 4a. The scan now drops exactly the merged {1,3} (y=20, y=40) → survivors {10,30,50}. A
+        //     broken merge (only {3}) would RESURRECT y=20 here.
+        assert_eq!(
+            scan_y_values(&table).await,
+            HashSet::from([10, 30, 50]),
+            "after the writer-merged DV replace, the scan drops {{1,3}} (y=20 + y=40)"
+        );
+
+        // 4b. Exactly ONE live DV for the data file post-commit (the load-door invariant), and it is
+        //     the merged DV#2 — DV#1 is gone.
+        let live = live_delete_entries(&table).await;
+        let live_dvs_for_file: Vec<&(String, bool, Option<String>)> = live
+            .iter()
+            .filter(|(_, is_dv, referenced)| {
+                *is_dv && referenced.as_deref() == Some(data_file_path.as_str())
+            })
+            .collect();
+        assert_eq!(
+            live_dvs_for_file.len(),
+            1,
+            "exactly ONE live DV for the data file post-commit — got {live:?}"
+        );
+        assert_eq!(
+            live_dvs_for_file[0].0, dv2_path,
+            "the surviving live DV is the writer-merged DV#2, not the removed DV#1"
+        );
+
+        // 4c. The summary carries removed-dvs: 1 + added-dvs: 1 (the merge-and-replace shape).
+        assert_eq!(summary_prop(&table, "added-dvs").as_deref(), Some("1"));
+        assert_eq!(summary_prop(&table, "removed-dvs").as_deref(), Some("1"));
+    }
+
+    /// MUTATION (a): the door+removal pair protects the post-commit one-DV invariant. With the
+    /// removal SKIPPED (add DV#2 only, no `remove_deletes`), the fresh-DV door REJECTS the commit
+    /// (a live DV already covers the file) — proving the door is what stops the two-DV state the
+    /// removal would otherwise be needed to clear. (The brief's "door mutated off → scan rejects at
+    /// the load door" is the same invariant from the read side; the door rejecting at COMMIT is the
+    /// fail-loud conversion of that fail-late read error, and is the directly-testable half without
+    /// mutating production code.)
+    #[tokio::test]
+    async fn test_row_delta_second_dv_without_removal_still_rejected_by_door() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        // DV#1 for A commits.
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![synthetic_dv_file(
+            "test/a-dv1.puffin",
+            0,
+            "test/a.parquet",
+        )]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // DV#2 for A WITHOUT removing DV#1 — the door must still reject (no escape hatch engaged).
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![synthetic_dv_file(
+            "test/a-dv2.puffin",
+            0,
+            "test/a.parquet",
+        )]);
+        let tx = action.apply(tx).unwrap();
+        let err = tx.commit(&catalog).await.expect_err(
+            "without removing the live DV, a second DV for the same file must still be rejected",
+        );
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message()
+                .contains("Cannot commit deletion vector for test/a.parquet"),
+            "got: {}",
+            err.message()
+        );
+    }
+
+    /// THE DOOR-RELAXATION POSITIVE (synthetic, fast): a DV#2 for A that REMOVES the live DV#1 in the
+    /// same commit COMMITS — the escape hatch engages on the removed-set path match. The negative
+    /// half (no removal → rejected) is the D3 door test
+    /// `test_row_delta_second_dv_for_same_file_rejected_until_merge_lands`, which stays green.
+    #[tokio::test]
+    async fn test_row_delta_dv_with_removal_of_live_dv_commits() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        let dv1 = synthetic_dv_file("test/a-dv1.puffin", 0, "test/a.parquet");
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![dv1.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // DV#2 for A + remove DV#1 in the same commit — the escape hatch lets it through.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_dv_file(
+                "test/a-dv2.puffin",
+                0,
+                "test/a.parquet",
+            )])
+            .remove_deletes(dv1);
+        let tx = action.apply(tx).unwrap();
+        let table = tx
+            .commit(&catalog)
+            .await
+            .expect("removing the live DV in the same commit must let the new DV through the door");
+
+        // Exactly one live DV remains (DV#2), and the old one is gone.
+        let live = live_delete_entries(&table).await;
+        let live_dv_paths: Vec<&String> = live
+            .iter()
+            .filter(|(_, is_dv, _)| *is_dv)
+            .map(|(path, _, _)| path)
+            .collect();
+        assert_eq!(
+            live_dv_paths,
+            vec![&"test/a-dv2.puffin".to_string()],
+            "exactly DV#2 is live; DV#1 is tombstoned — got {:?}",
+            live
+        );
+        assert_eq!(summary_prop(&table, "removed-dvs").as_deref(), Some("1"));
+        assert_eq!(summary_prop(&table, "added-dvs").as_deref(), Some("1"));
+    }
+
+    /// THE ESCAPE HATCH IS PER-REFERENCED-FILE, NOT GLOBAL (REVIEWER pin — adversarial case ii). Two
+    /// data files A and B each carry a live DV. A row delta adds a NEW DV for A but removes B's DV (a
+    /// DIFFERENT file's delete). The door must STILL REJECT the new DV for A: the removed-set match is
+    /// keyed on the EXISTING delete's path, and only A's own live DV (whose path is NOT in the removed
+    /// set) is consulted when deciding whether A's new DV is fresh. A bug that treated "something was
+    /// removed in this commit" as a GLOBAL unlock (rather than per-delete-file-path) would wrongly let
+    /// the A DV through, leaving two live DVs for A (the load-door corruption the door+removal pair
+    /// exists to prevent). Mutation that surfaces it: keying the escape-hatch skip on
+    /// `!removed_delete_paths.is_empty()` instead of `removed_delete_paths.contains(existing.file_path())`.
+    #[tokio::test]
+    async fn test_row_delta_remove_different_files_dv_does_not_unlock_door() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![
+            synthetic_data_file("test/a.parquet", 0),
+            synthetic_data_file("test/b.parquet", 0),
+        ])
+        .await;
+
+        // A live DV for A and a live DV for B (committed in one row delta — different referenced files,
+        // so neither trips the other's door).
+        let a_dv1 = synthetic_dv_file("test/a-dv1.puffin", 0, "test/a.parquet");
+        let b_dv1 = synthetic_dv_file("test/b-dv1.puffin", 0, "test/b.parquet");
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![a_dv1.clone(), b_dv1.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Add a NEW DV for A while removing B's DV (the WRONG file's removal). The door must still
+        // reject: A's live DV is not in the removed set, so the escape hatch does not engage for A.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_dv_file(
+                "test/a-dv2.puffin",
+                0,
+                "test/a.parquet",
+            )])
+            .remove_deletes(b_dv1);
+        let tx = action.apply(tx).unwrap();
+        let err = tx.commit(&catalog).await.expect_err(
+            "removing a DIFFERENT file's DV must NOT unlock the door for A's new DV (per-file, not global)",
+        );
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message()
+                .contains("Cannot commit deletion vector for test/a.parquet"),
+            "got: {}",
+            err.message()
+        );
+    }
+
+    /// REMOVE A PARQUET POSITION DELETE end-to-end (V2 fixture). A real parquet data file + a real
+    /// position-delete deleting {1,3} is committed; the scan drops y=20/y=40. Then `row_delta()
+    /// .remove_deletes(pos_delete)` (a delete-manifest-only commit, no adds) removes it; the scan
+    /// returns all five rows again, and the summary carries `removed-position-delete-files: 1`. The
+    /// operation is `Overwrite` (1.10.0: adds nothing ⇒ not the adds-deletes-only DELETE branch).
+    ///
+    /// Risk pinned: the removal silently doing nothing (scan still missing the rows), or the rewritten
+    /// DELETE manifest being misclassified as DATA (the content-keyed filtering writer) so the read
+    /// path stops applying its survivors.
+    #[tokio::test]
+    async fn test_row_delta_remove_parquet_position_delete_restores_rows() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+
+        let data_file = write_data_file(&table, "rows.parquet", 0, &[
+            (0, 10, 100),
+            (0, 20, 200),
+            (0, 30, 300),
+            (0, 40, 400),
+            (0, 50, 500),
+        ])
+        .await;
+        let data_file_path = data_file.file_path().to_string();
+        let table = append_files(&catalog, &table, vec![data_file]).await;
+
+        let delete_file = write_position_delete_file(&table, 0, &[
+            (data_file_path.clone(), 1),
+            (data_file_path.clone(), 3),
+        ])
+        .await;
+        let delete_file_path = delete_file.file_path().to_string();
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![delete_file.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        assert_eq!(
+            scan_y_values(&table).await,
+            HashSet::from([10, 30, 50]),
+            "the position delete drops y=20, y=40"
+        );
+
+        // Remove the position delete (a delete-manifest-only commit).
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().remove_deletes(delete_file);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        assert_eq!(
+            scan_y_values(&table).await,
+            HashSet::from([10, 20, 30, 40, 50]),
+            "removing the position delete restores all five rows"
+        );
+        assert_eq!(
+            summary_prop(&table, "removed-position-delete-files").as_deref(),
+            Some("1"),
+            "a removed parquet position delete bumps removed-position-delete-files (NOT removed-dvs)"
+        );
+        assert_eq!(
+            summary_prop(&table, "removed-dvs"),
+            None,
+            "a parquet position delete is not a DV"
+        );
+        assert_eq!(
+            table
+                .metadata()
+                .current_snapshot()
+                .unwrap()
+                .summary()
+                .operation,
+            Operation::Overwrite,
+            "a remove-only row delta records Overwrite per 1.10.0 (adds no delete files)"
+        );
+
+        // The removed delete file must be tombstoned, no longer live.
+        let live = live_delete_entries(&table).await;
+        assert!(
+            !live.iter().any(|(path, _, _)| *path == delete_file_path),
+            "the removed position delete must not be live anymore — got {:?}",
+            live
+        );
+    }
+
+    /// REMOVE AN EQUALITY DELETE (V2 fixture, manifest-level). A synthetic equality delete is
+    /// committed, then removed via `remove_deletes`; the summary carries
+    /// `removed-equality-delete-files: 1` and the entry is tombstoned. Risk pinned: the equality
+    /// branch of `remove_file` (summary) and the content-keyed DELETE-manifest rewrite both working.
+    #[tokio::test]
+    async fn test_row_delta_remove_equality_delete_bumps_removed_equality_counter() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        let eq_delete = synthetic_equality_delete_file("test/a-eq.parquet", 0);
+        let eq_path = eq_delete.file_path().to_string();
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![eq_delete.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().remove_deletes(eq_delete);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        assert_eq!(
+            summary_prop(&table, "removed-equality-delete-files").as_deref(),
+            Some("1"),
+            "a removed equality delete bumps removed-equality-delete-files"
+        );
+        let live = live_delete_entries(&table).await;
+        assert!(
+            !live.iter().any(|(path, _, _)| *path == eq_path),
+            "the removed equality delete must be tombstoned — got {:?}",
+            live
+        );
+    }
+
+    /// MISSING-REMOVAL-PATH ERROR. Removing a delete file that is NOT live in the current snapshot
+    /// fails loud with the exact Java `failMissingDeletePaths` message shape ("Missing required files
+    /// to delete: %s"). Risk pinned: a removal silently no-op'ing when the target is absent (the
+    /// present-and-absent validation of `resolve_delete_file_paths`).
+    #[tokio::test]
+    async fn test_row_delta_remove_nonexistent_delete_file_errors_with_missing_message() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        // No delete file was ever committed — removing one must fail with the missing message.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .remove_deletes(synthetic_delete_file("test/ghost-pos-del.parquet", 0));
+        let tx = action.apply(tx).unwrap();
+        let err = tx
+            .commit(&catalog)
+            .await
+            .expect_err("removing a delete file that is not live must fail loud");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.message(),
+            "Missing required files to delete: test/ghost-pos-del.parquet",
+            "the missing-removal-path error must match Java failMissingDeletePaths shape"
+        );
+    }
+
+    /// REMOVE-ONLY COMMIT OPERATION CLASSIFICATION (1.10.0). A row delta that ONLY removes a delete
+    /// file (no adds) records `Operation::Overwrite` per Java 1.10.0 `BaseRowDelta.operation()`
+    /// (`addsDeleteFiles()` is false ⇒ not the DELETE branch ⇒ OVERWRITE). Risk pinned: a remove-only
+    /// commit being misclassified, and confirms the empty-commit guard treats a removal as content.
+    #[tokio::test]
+    async fn test_row_delta_remove_deletes_only_records_overwrite() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        let pos_delete = synthetic_delete_file("test/a-pos-del.parquet", 0);
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![pos_delete.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().remove_deletes(pos_delete);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        assert_eq!(
+            table
+                .metadata()
+                .current_snapshot()
+                .unwrap()
+                .summary()
+                .operation,
+            Operation::Overwrite,
+            "a remove-deletes-only row delta records Overwrite per 1.10.0"
+        );
+    }
+
+    /// REMOVE-DELETES REJECTS A DATA-CONTENT FILE. `remove_deletes` is the delete-side surface (Java
+    /// `removeDeletes(DeleteFile)`); passing a `Data` file is a caller error (use `remove_rows`).
+    /// Risk pinned: a data file silently routed into the delete-removal path.
+    #[tokio::test]
+    async fn test_row_delta_remove_deletes_rejects_data_content() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .remove_deletes(synthetic_data_file("test/a.parquet", 0));
+        let tx = action.apply(tx).unwrap();
+        let err = tx
+            .commit(&catalog)
+            .await
+            .expect_err("remove_deletes must reject a Data-content file");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message()
+                .contains("Only position-delete or equality-delete content is allowed for removed delete files"),
+            "got: {}",
+            err.message()
+        );
+    }
+
+    /// PROVENANCE PIN on the rewritten DELETE manifest (synthetic, isolates the survivor-preservation).
+    /// A DELETE manifest holding TWO live deletes (D1, D2) has D1 removed; the rewritten manifest must
+    /// carry D1 as a DELETED tombstone (new snapshot id) and D2 as an EXISTING entry keeping its
+    /// ORIGINAL snapshot id + sequence number (NOT re-stamped). Mutation (b) from the brief: routing
+    /// the survivor through `add_entry` (re-stamp) instead of `add_existing_entry` makes the
+    /// original-provenance assertion fail.
+    #[tokio::test]
+    async fn test_row_delta_remove_delete_preserves_surviving_entry_provenance() {
+        use crate::spec::Manifest;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![
+            synthetic_data_file("test/a.parquet", 0),
+            synthetic_data_file("test/b.parquet", 0),
+        ])
+        .await;
+
+        // Commit TWO position deletes (D1 for A, D2 for B) in ONE delete manifest.
+        let d1 = synthetic_delete_file("test/d1-pos-del.parquet", 0);
+        let d2 = synthetic_delete_file("test/d2-pos-del.parquet", 0);
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![d1.clone(), d2.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        let add_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
+        let add_seq = table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .sequence_number();
+
+        // Remove ONLY D1; D2 survives.
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().remove_deletes(d1);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        let remove_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
+        assert_ne!(add_snapshot_id, remove_snapshot_id);
+
+        // Read the rewritten DELETE manifest (the one this snapshot wrote) raw.
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let rewritten = manifest_list
+            .entries()
+            .iter()
+            .find(|m| {
+                m.content == ManifestContentType::Deletes
+                    && m.added_snapshot_id == remove_snapshot_id
+            })
+            .expect("the remove commit wrote a rewritten DELETE manifest");
+        let bytes = table
+            .file_io()
+            .new_input(&rewritten.manifest_path)
+            .unwrap()
+            .read()
+            .await
+            .unwrap();
+        let (_, entries) = Manifest::try_from_avro_bytes(&bytes).unwrap();
+
+        let d1_entry = entries
+            .iter()
+            .find(|e| e.file_path() == "test/d1-pos-del.parquet")
+            .expect("D1 is in the rewritten manifest as a tombstone");
+        assert_eq!(d1_entry.status(), ManifestStatus::Deleted);
+        assert_eq!(
+            d1_entry.snapshot_id(),
+            Some(remove_snapshot_id),
+            "the D1 tombstone carries the NEW (remove) snapshot id"
+        );
+
+        let d2_entry = entries
+            .iter()
+            .find(|e| e.file_path() == "test/d2-pos-del.parquet")
+            .expect("D2 survives in the rewritten manifest");
+        assert_eq!(
+            d2_entry.status(),
+            ManifestStatus::Existing,
+            "the surviving D2 is copied forward as Existing (provenance preserved)"
+        );
+        assert_eq!(
+            d2_entry.snapshot_id(),
+            Some(add_snapshot_id),
+            "the surviving D2 keeps its ORIGINAL (add) snapshot id — re-stamping is the corruption \
+             class this pins"
+        );
+        // The surviving D2's data sequence number is preserved verbatim (it flows through
+        // `add_existing_entry`, which copies the POST-inheritance seq from the source manifest read
+        // — never re-inherits the new snapshot's seq).
+        assert_eq!(
+            d2_entry.sequence_number(),
+            Some(add_seq),
+            "the surviving D2 keeps its original sequence number (no re-inheritance)"
+        );
+    }
+
+    /// CUMULATIVE TOTALS across append → row_delta(DV) → row_delta(replace DV). The total-* summary
+    /// keys must reflect previous + added − removed across the chain (the seed-from-previous rule):
+    /// after the DV replace, `total-delete-files` stays 1 (added 1 super-set DV, removed 1 old DV) and
+    /// `total-position-deletes` reflects the net. Risk pinned: a per-commit seed bug (totals reset
+    /// instead of carried from the previous summary) — only a multi-commit chain catches it.
+    #[tokio::test]
+    async fn test_row_delta_cumulative_totals_across_dv_replace() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let data_file = write_data_file(&table, "rows.parquet", 0, &[
+            (0, 10, 100),
+            (0, 20, 200),
+            (0, 30, 300),
+            (0, 40, 400),
+            (0, 50, 500),
+        ])
+        .await;
+        let data_file_path = data_file.file_path().to_string();
+        let table = append_files(&catalog, &table, vec![data_file]).await;
+
+        // DV#1 {1}: total-delete-files 1, total-position-deletes 1.
+        let dv1 = write_real_dv_file(&table, "dv1.puffin", &data_file_path, 0, &[1]).await;
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![dv1.clone()]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        assert_eq!(
+            summary_prop(&table, "total-delete-files").as_deref(),
+            Some("1"),
+            "after DV#1: one delete file"
+        );
+        assert_eq!(
+            summary_prop(&table, "total-position-deletes").as_deref(),
+            Some("1"),
+            "after DV#1: one position delete"
+        );
+
+        // DV#2 {1,3} replaces DV#1: total-delete-files stays 1 (1 + 1 − 1), total-position-deletes
+        // becomes 2 (1 + 2 − 1).
+        let dv2 = write_real_dv_file(&table, "dv2.puffin", &data_file_path, 0, &[1, 3]).await;
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![dv2]).remove_deletes(dv1);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        assert_eq!(
+            summary_prop(&table, "total-delete-files").as_deref(),
+            Some("1"),
+            "after the DV replace: total-delete-files = 1 + 1 − 1 = 1 (the seed-from-previous rule)"
+        );
+        assert_eq!(
+            summary_prop(&table, "total-position-deletes").as_deref(),
+            Some("2"),
+            "after the DV replace: total-position-deletes = 1 + 2 − 1 = 2"
+        );
+    }
+
+    /// THE DATA-SIDE FILTERING WRITER IS UNCHANGED (regression guard for the content-keyed
+    /// `new_filtering_manifest_writer` extension). A DELETE-from-data-files commit
+    /// (`overwrite_files().delete_files`) still rewrites the DATA manifest with the removed file as a
+    /// DELETED tombstone and survivors EXISTING — the brief's "data-side behavior must be
+    /// byte-identical" pin at the read level. Risk pinned: the content-keying mistakenly building a
+    /// DELETE writer for a DATA source (which would misclassify the rewritten data manifest).
+    #[tokio::test]
+    async fn test_overwrite_delete_data_file_still_rewrites_data_manifest() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![
+            synthetic_data_file("test/a.parquet", 0),
+            synthetic_data_file("test/b.parquet", 0),
+        ])
+        .await;
+
+        // Remove A via overwrite_files (the data-side filter path).
+        let tx = Transaction::new(&table);
+        let action = tx.overwrite_files().delete_files(["test/a.parquet"]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // The rewritten DATA manifest still classifies correctly: A tombstoned, B live.
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let mut a_tombstoned = false;
+        let mut b_live = false;
+        for manifest_file in manifest_list.entries() {
+            assert_eq!(
+                manifest_file.content,
+                ManifestContentType::Data,
+                "no DELETE manifest should exist on this data-only table"
+            );
+            let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
+            for entry in manifest.entries() {
+                match entry.file_path() {
+                    "test/a.parquet" if entry.status() == ManifestStatus::Deleted => {
+                        a_tombstoned = true
+                    }
+                    "test/b.parquet" if entry.is_alive() => b_live = true,
+                    _ => {}
+                }
+            }
+        }
+        assert!(a_tombstoned, "A must be a DATA-manifest tombstone");
+        assert!(b_live, "B must remain live in the DATA manifest");
     }
 }
