@@ -69,17 +69,39 @@
 //! is rejected if a concurrent commit since the start added a position/equality delete that APPLIES to one
 //! of those removed data files (you cannot drop a data file out from under a concurrent row-level delete).
 //! It delegates to the SHARED [`validate_no_new_deletes_for_data_files`] helper (the same check
-//! `OverwriteFiles.validateNoConflictingDeletes` uses), with `ignore_equality_deletes = false` — RowDelta's
-//! non-rewrite path counts ALL applicable deletes (Java passes the full `removedDataFiles`).
+//! `OverwriteFiles.validateNoConflictingDeletes` uses), with `ignore_equality_deletes = false` — RowDelta
+//! counts ALL applicable deletes, position and equality (Java passes the full `removedDataFiles` and does not
+//! ignore equality deletes, unlike `RewriteFiles`' seq-preserving path).
 //!
-//! **Apply-side removal of `removed_data_files` is VALIDATION-ONLY / DEFERRED (documented):** Java's
-//! `removeRows(file)` both records the file for validation (`removedDataFiles.add(file)`) AND removes it
-//! from the table in apply (`delete(file)`). This port stores the removed files as VALIDATION-ONLY metadata
-//! — exactly like the existing [`RowDeltaAction::referenced_data_files`] — and does NOT yet drop them from
-//! the manifests in apply. Wiring apply-side removal would change the operation classification, the
-//! summary, and the manifest-rewrite path (it is `OverwriteFiles`' job today and would re-route RowDelta
-//! through `process_deletes`); that is its own follow-up. The serializable-isolation validation — the
-//! load-bearing safety check — is faithful now.
+//! **Apply-side removal of `removed_data_files` (`removeRows`, NOW LANDED):** Java's `removeRows(file)`
+//! both records the file for the serializable-isolation validation (`removedDataFiles.add(file)`) AND
+//! removes it from the table in apply (`delete(file)` → the data-file filter manager — the SAME removal
+//! machinery `DeleteFiles`/`OverwriteFiles` use). This port now ports the apply side: the removed DATA-file
+//! paths are routed through the producer (the action's `RowDeltaOperation::delete_files` resolves them via
+//! the shared [`SnapshotProducer::resolve_delete_paths`], the producer stores the result in
+//! `removed_data_files` → `process_deletes` tombstones each in the rewritten DATA manifest → the summary's
+//! `remove_file` reflects the deleted-data-files / deleted-records counters), EXACTLY as `OverwriteFiles`
+//! routes its `delete_data_files`. A removed data file therefore drops from the scan in the SAME row-delta
+//! snapshot that adds the new deletes. The operation classification is UNAFFECTED: 1.10.0
+//! `BaseRowDelta.operation()` is the two-branch `addsDeleteFiles() && !addsDataFiles()` form and consults
+//! NEITHER `deletesDataFiles()` nor the removal set (bytecode-verified), so a remove+add-delete row delta
+//! is `Overwrite` and a remove-only row delta is `Overwrite` either way — see
+//! [`RowDeltaOperation::operation`]. The serializable-isolation validation (`validateNoNewDeletesForDataFiles`
+//! on the removed files, the removed∩referenced self-contradiction check) is unchanged and still
+//! load-bearing.
+//!
+//! **Missing-removal-path posture (DOCUMENTED DIVERGENCE — Rust is STRICTER than Java's `RowDelta`
+//! default, the same loud posture as the `removeDeletes` path from Arc E):** `resolve_delete_paths`
+//! fails loud ("Missing required files to delete: …") when a removed path matched no live data entry.
+//! For `DeleteFiles`/`OverwriteFiles` this is Java-faithful — `StreamingDelete`/`BaseOverwriteFiles`
+//! both call `failMissingDeletePaths()` (1.10.0 bytecode). But Java's `BaseRowDelta` does NOT set
+//! `failMissingDeletePaths` for `removeRows`: its only `failMissingDeletePaths()` call sits in
+//! `validate()` behind `if (validateDeletes)` (the `validateDeletedFiles()` opt-in, which gates the
+//! UNRELATED `validateDataFilesExist` walk), so the `delete(file)` from a default `removeRows` is
+//! best-effort — a path absent from the table is silently ignored. This Rust port instead surfaces it
+//! (the safe, loud direction; one consequence is that a retry whose removal target was concurrently
+//! removed fails non-retryably where Java would converge — accepted, identical to the `removeDeletes`
+//! call already made in `SnapshotProducer::resolve_delete_file_paths`).
 //!
 //! **`validateAddedDVs` — the V3 deletion-vector conflict check (ALWAYS-ON, self-skipping):** the LAST step
 //! of Java `BaseRowDelta.validate` (`MergingSnapshotProducer.validateAddedDVs`, L825-895) is called
@@ -126,12 +148,13 @@
 //! **Out of scope (deferred — the NEXT increment):**
 //! - Equality-delete WRITER end-to-end (the writer exists; the RowDelta-with-equality-deletes scan
 //!   application may have gaps — the end-to-end test focuses on POSITION deletes).
-//! - APPLY-SIDE removal for `remove_data_files` (`removeRows`) — only the VALIDATION half lands here (the
-//!   `removeDeletes` half is now apply-side; removing DATA files is `OverwriteFiles`' job today).
 //! - The WRITER-side previous-deletes MERGE for deletion vectors (`BaseDVFileWriter.loadPreviousDeletes`
 //!   reading + unioning the old positions into the new DV) — the apply-side removal here is the commit-path
 //!   half; the writer hook that auto-merges is the next increment. (The DV WRITE path itself — `DVFileWriter`
 //!   → `add_deletes` → commit → scan, plus `remove_deletes` of a superseded DV — is supported now.)
+//!
+//! (Apply-side `removeRows` data-file removal is NO LONGER deferred — it landed here; see the apply-side
+//! removal note above.)
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -215,17 +238,22 @@ pub struct RowDeltaAction {
     /// rejected if a concurrent commit since the start added a position/equality delete that APPLIES to one of
     /// these removed data files (you cannot drop a data file out from under a concurrent row-level delete).
     ///
-    /// VALIDATION-ONLY (apply-side removal deferred — see the module docs): unlike Java's `removeRows`, which
-    /// also `delete(file)`s the file from the table in apply, these are held purely as the validation set,
-    /// mirroring the existing validation-only [`Self::referenced_data_files`]. The apply path does NOT yet drop
-    /// them from the manifests.
+    /// APPLY-SIDE REMOVAL LANDED: like Java's `removeRows`, which also `delete(file)`s the file from the table
+    /// in apply, these are now resolved against the current snapshot's live data entries at commit time (via
+    /// the operation's `delete_files` → the shared [`SnapshotProducer::resolve_delete_paths`]) and dropped
+    /// from the manifests by the producer's `process_deletes` rewrite (with each removal also reflected in the
+    /// summary's deleted-data-files / deleted-records counters). A path that matches no live entry fails loud
+    /// (Java `failMissingDeletePaths`). The supplied [`DataFile`] metadata also drives the
+    /// `validateNoNewDeletesForDataFiles` check (the partition + metrics a bare path lacks).
     removed_data_files: Vec<DataFile>,
     /// The DELETE files (position / equality / deletion vector) this row delta REMOVES from the table — the
     /// apply-side `RowDelta.removeDeletes(DeleteFile)` (Java `BaseRowDelta.removeDeletes` L82-86 →
-    /// `delete(deletes)` → `deleteFilterManager.delete(file)`). Unlike [`Self::removed_data_files`] (which is
-    /// validation-only), these are ACTUALLY DROPPED in apply: they are passed to the producer via
+    /// `delete(deletes)` → `deleteFilterManager.delete(file)`). Like [`Self::removed_data_files`] (the
+    /// data-file sibling, `removeRows`), these are ACTUALLY DROPPED in apply — the difference is the
+    /// manifest type: removed DELETE files are passed to the producer via
     /// [`SnapshotProducer::with_removed_delete_files`], resolved against the current snapshot's DELETE
-    /// manifests by path, and tombstoned in the rewritten DELETE manifest (`process_deletes`).
+    /// manifests by path, and tombstoned in the rewritten DELETE manifest (`process_deletes`), whereas the
+    /// removed DATA files resolve against the DATA manifests through the operation's `delete_files` seam.
     ///
     /// The use case is merge-on-read superseding: a merged super-set deletion vector replaces an older DV for
     /// the same data file, and the old DV is removed in the SAME commit so the table never holds two live DVs
@@ -269,30 +297,37 @@ impl RowDeltaAction {
         self
     }
 
-    /// Record DATA files this row delta REMOVES, for the `validateNoNewDeletesForDataFiles` conflict check
-    /// (Java `RowDelta.removeRows(DataFile)` → `removedDataFiles.add(file)`).
+    /// Record DATA files this row delta REMOVES (Java `RowDelta.removeRows(DataFile)` →
+    /// `removedDataFiles.add(file)` → `delete(file)`). These files are DROPPED from the table in the same
+    /// row-delta snapshot AND drive the `validateNoNewDeletesForDataFiles` conflict check.
     ///
-    /// When this set is NON-EMPTY and [`Self::validate_no_conflicting_delete_files`] is enabled, the commit
-    /// is rejected if a concurrent commit since the starting snapshot added a position/equality delete that
-    /// APPLIES to one of these removed data files — under serializable isolation you cannot drop a data file
-    /// out from under a concurrent row-level delete. The check needs each removed file's partition + metrics,
-    /// which is why the full [`DataFile`] is supplied here (a bare path would not carry it).
+    /// **Apply side (LANDED):** at commit time each removed file's path is resolved against the current
+    /// snapshot's live data entries (via the shared [`SnapshotProducer::resolve_delete_paths`]) and
+    /// tombstoned by the producer's `process_deletes` rewrite — the SAME removal machinery
+    /// [`crate::transaction::Transaction::delete_files`] / [`crate::transaction::Transaction::overwrite_files`]
+    /// use — with each removal reflected in the snapshot summary's deleted-data-files / deleted-records
+    /// counters. A path that matches no live entry fails loud at commit (Java `failMissingDeletePaths`,
+    /// "Missing required files to delete: ..."). The full [`DataFile`] is supplied (not a bare path) because
+    /// the conflict check below needs each file's partition + metrics.
     ///
-    /// VALIDATION-ONLY (apply-side removal deferred — see the module docs): unlike Java's `removeRows`, which
-    /// also removes the file from the table in apply, this Rust port holds the supplied files purely as the
-    /// validation set (mirroring the validation-only [`Self::validate_data_files_exist`]). It does NOT yet drop
-    /// them from the manifests; use [`crate::transaction::Transaction::overwrite_files`]'s `delete_data_files`
-    /// to actually remove data files until the apply-side path lands. Repeated calls ACCUMULATE.
+    /// **Validation side:** when this set is NON-EMPTY and [`Self::validate_no_conflicting_delete_files`] is
+    /// enabled, the commit is rejected if a concurrent commit since the starting snapshot added a
+    /// position/equality delete that APPLIES to one of these removed data files — under serializable isolation
+    /// you cannot drop a data file out from under a concurrent row-level delete. A removed file that is also
+    /// REFERENCED by this row delta's added delete files (see [`Self::validate_data_files_exist`]) is a
+    /// self-contradiction and is rejected unconditionally (`validateNoConflictingFileAndPositionDeletes`).
+    /// Repeated calls ACCUMULATE.
     ///
-    /// On its own this does NOT enable validation — call [`Self::validate_no_conflicting_delete_files`] for that.
+    /// The apply-side removal runs on every commit; the conflict check is opt-in via
+    /// [`Self::validate_no_conflicting_delete_files`].
     pub fn remove_data_files(mut self, data_files: impl IntoIterator<Item = DataFile>) -> Self {
         self.removed_data_files.extend(data_files);
         self
     }
 
-    /// Record a single DATA file this row delta REMOVES (Java `RowDelta.removeRows(DataFile)`). A convenience
-    /// wrapper over [`Self::remove_data_files`]; see it for the full contract (notably that removal is
-    /// VALIDATION-ONLY in this port — apply-side removal is deferred).
+    /// Record a single DATA file this row delta REMOVES (Java `RowDelta.removeRows(DataFile)` — this is the
+    /// method name Java exposes). A convenience wrapper over [`Self::remove_data_files`]; see it for the full
+    /// contract (the file is dropped in apply AND drives the conflict check).
     pub fn remove_rows(self, data_file: DataFile) -> Self {
         self.remove_data_files([data_file])
     }
@@ -300,9 +335,10 @@ impl RowDeltaAction {
     /// Remove a single DELETE file (position / equality / deletion vector) from the table — the apply-side
     /// `RowDelta.removeDeletes(DeleteFile)` (Java `BaseRowDelta.removeDeletes` L82-86 → `delete(deletes)`).
     ///
-    /// Unlike [`Self::remove_rows`] (validation-only in this port), this ACTUALLY DROPS the delete file:
-    /// at commit time it is resolved against the current snapshot's DELETE manifests by path and tombstoned
-    /// in the rewritten DELETE manifest, with surviving delete entries copied forward provenance-preserved.
+    /// Like [`Self::remove_rows`] (the data-file sibling, which drops DATA files via the DATA manifests),
+    /// this ACTUALLY DROPS the delete file: at commit time it is resolved against the current snapshot's
+    /// DELETE manifests by path and tombstoned in the rewritten DELETE manifest, with surviving delete
+    /// entries copied forward provenance-preserved.
     ///
     /// The primary use case is merge-on-read superseding: when a merged super-set deletion vector replaces an
     /// older DV for the same data file, the old DV is removed in the SAME commit so the table never holds two
@@ -839,6 +875,13 @@ impl TransactionAction for RowDeltaAction {
                     adds_data_files: !self.added_data_files.is_empty(),
                     adds_delete_files: !self.added_delete_files.is_empty(),
                     removes_delete_files: !self.removed_delete_files.is_empty(),
+                    // The DATA files this row delta removes (Java `removeRows` → `delete(file)`), keyed by
+                    // path for resolution against the current snapshot in `delete_files`.
+                    removed_data_file_paths: self
+                        .removed_data_files
+                        .iter()
+                        .map(|file| file.file_path().to_string())
+                        .collect(),
                 },
                 DefaultManifestProcess,
             )
@@ -1003,11 +1046,14 @@ impl TransactionAction for RowDeltaAction {
 
 /// The [`SnapshotProduceOperation`] for [`RowDeltaAction`].
 ///
-/// A row delta only ADDS files (data + deletes), so it removes nothing from the existing manifests:
-/// `delete_files` returns empty and `existing_manifest` carries every current manifest forward. The
-/// added data files reach the producer via `SnapshotProducer::new` and the added delete files via
-/// `with_added_delete_files`, so the single snapshot carries the new DATA manifest and the new DELETE
-/// manifest alongside the carried-forward manifests.
+/// A row delta ADDS files (data + deletes) and MAY remove DATA files (Java `removeRows` →
+/// `delete(file)`). The added data files reach the producer via `SnapshotProducer::new` and the added
+/// delete files via `with_added_delete_files`; the removed DATA-file paths are resolved against the
+/// current snapshot's live entries in [`Self::delete_files`] (the SAME `resolve_delete_paths` →
+/// `process_deletes` machinery `OverwriteFiles`/`DeleteFiles` use), so the single snapshot carries the
+/// new DATA manifest, the new DELETE manifest, AND the rewritten manifests that tombstone the removed
+/// data files, alongside the carried-forward manifests. A row delta that removes no data files takes
+/// the empty path (`delete_files` returns `[]`, every current manifest carries forward unchanged).
 struct RowDeltaOperation {
     /// Whether this row delta requested any added data files (Java `addsDataFiles()`).
     adds_data_files: bool,
@@ -1019,6 +1065,13 @@ struct RowDeltaOperation {
     /// full request shape and so the empty-commit check (a remove-deletes-only commit is non-empty) can
     /// be reasoned about at this seam.
     removes_delete_files: bool,
+    /// The fully-qualified paths of the DATA files this row delta REMOVES (Java `removeRows(DataFile)` →
+    /// `removedDataFiles.add(file)` → `delete(file)` → the data-file filter manager). Resolved against the
+    /// current snapshot's live data entries in [`Self::delete_files`] via the shared
+    /// [`SnapshotProducer::resolve_delete_paths`], then fed to the producer's `process_deletes` rewrite +
+    /// the summary's `remove_file` — EXACTLY the removal machinery `OverwriteFiles`/`DeleteFiles` route
+    /// through. Empty (the common merge-on-read row delta that only adds) ⇒ `delete_files` returns `[]`.
+    removed_data_file_paths: HashSet<String>,
 }
 
 impl SnapshotProduceOperation for RowDeltaOperation {
@@ -1067,12 +1120,18 @@ impl SnapshotProduceOperation for RowDeltaOperation {
         Ok(vec![])
     }
 
-    async fn delete_files(
-        &self,
-        _snapshot_produce: &SnapshotProducer<'_>,
-    ) -> Result<Vec<DataFile>> {
-        // A row delta removes no existing files (it only ADDS data + deletes).
-        Ok(vec![])
+    async fn delete_files(&self, snapshot_produce: &SnapshotProducer<'_>) -> Result<Vec<DataFile>> {
+        // Resolve the DATA files this row delta REMOVES (Java `removeRows` → `delete(file)`) against the
+        // current snapshot's live data entries, validating that EVERY requested path matched a live entry
+        // (Java `failMissingDeletePaths`). This routes the removed data files through the SAME producer
+        // machinery `OverwriteFiles`/`DeleteFiles` use (`resolve_delete_paths` → the producer stores the
+        // result in `removed_data_files` → `process_deletes` tombstones them in the rewritten DATA manifest
+        // AND the summary's `remove_file` counts them). The common merge-on-read row delta removes no data
+        // files (`removed_data_file_paths` empty) ⇒ `resolve_delete_paths` returns `[]` and every current
+        // manifest carries forward unchanged.
+        snapshot_produce
+            .resolve_delete_paths(&self.removed_data_file_paths)
+            .await
     }
 
     async fn existing_manifest(
@@ -1715,10 +1774,13 @@ mod tests {
         );
     }
 
-    /// Pins: a delete file whose partition spec id does not match the table default is rejected. Risk:
-    /// a mismatched-spec delete file that the read side cannot associate to the right partition.
+    /// Pins: a delete file whose partition spec id matches NO table spec (an UNKNOWN id) is rejected with
+    /// Java's exact "Cannot find partition spec %s for delete file: %s" message. Risk: an unknown-spec
+    /// delete file that the read side cannot associate to any partition spec. (A delete under a known
+    /// non-default spec is now ACCEPTED — the multi-spec lift; see
+    /// `snapshot::multispec_tests::test_row_delta_two_specs_produces_per_spec_delete_manifests`.)
     #[tokio::test]
-    async fn test_row_delta_rejects_partition_spec_mismatch() {
+    async fn test_row_delta_rejects_unknown_partition_spec() {
         let catalog = new_memory_catalog().await;
         let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let table = append_files(&catalog, &table, vec![synthetic_data_file(
@@ -1733,7 +1795,7 @@ mod tests {
             .file_format(DataFileFormat::Parquet)
             .file_size_in_bytes(100)
             .record_count(1)
-            // Wrong partition spec id (table default is 0).
+            // Unknown partition spec id (the table has only spec 0).
             .partition_spec_id(999)
             .partition(Struct::from_iter([Some(Literal::long(0))]))
             .build()
@@ -1745,10 +1807,11 @@ mod tests {
         let err = tx
             .commit(&catalog)
             .await
-            .expect_err("a partition-spec-mismatched delete file must be rejected");
+            .expect_err("an unknown-spec delete file must be rejected");
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(
-            err.message().contains("partition spec id"),
+            err.message()
+                .contains("Cannot find partition spec 999 for delete file: test/bad-spec.parquet"),
             "unexpected error: {}",
             err.message()
         );
@@ -3394,7 +3457,8 @@ mod tests {
         let a = synthetic_data_file("test/a.parquet", 0);
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![a.clone()]).await;
 
-        // Row delta REMOVES A (validation-only) and adds a delete, delete check enabled — no concurrent delete.
+        // Row delta REMOVES A (now apply-side: A is dropped) and adds a delete, delete check enabled — no
+        // concurrent delete.
         let tx = Transaction::new(&table);
         let action = tx
             .row_delta()
@@ -3740,7 +3804,8 @@ mod tests {
         let a = synthetic_data_file("test/a.parquet", 0);
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![a.clone()]).await;
 
-        // Row delta REMOVES A (validation-only) + adds DATA only (V1 has no delete files), delete check on.
+        // Row delta REMOVES A (now apply-side: A is dropped) + adds DATA only (V1 has no delete files),
+        // delete check on.
         let tx = Transaction::new(&table);
         let action = tx
             .row_delta()
@@ -3818,6 +3883,329 @@ mod tests {
             err.message()
         );
         assert!(err.message().contains("test/a.parquet"));
+    }
+
+    // ============================================================================================
+    // RowDelta `removeRows` APPLY-SIDE removal (Java `BaseRowDelta.removeRows(DataFile)` → `delete(file)` →
+    // the data-file filter manager — the SAME removal machinery `DeleteFiles`/`OverwriteFiles` use). The
+    // action routes its removed DATA-file paths through `RowDeltaOperation::delete_files` →
+    // `SnapshotProducer::resolve_delete_paths` → `process_deletes` (manifest rewrite) + the summary's
+    // `remove_file`. These tests pin that a removed data file actually DROPS from the scan, the operation
+    // classification is unaffected, missing paths fail loud, the removed∩referenced rejection still fires
+    // (and FIRST, in `validate()` before `commit()`), and the summary counters move.
+    // ============================================================================================
+
+    /// THE HEADLINE APPLY-SIDE TEST. Append A, B. A `row_delta` REMOVES A (via `remove_rows`) AND adds a
+    /// position delete for B in ONE snapshot. The post-commit SCAN live set is exactly {B} — A is gone — and
+    /// the new snapshot carries BOTH a rewritten DATA manifest (A tombstoned) and a DELETE manifest. Pins the
+    /// core apply-side compose-remove-and-add-delete risk: a wrong live set (A still visible) is a silently
+    /// un-applied `removeRows`.
+    ///
+    /// MUTATION: severing the producer routing (making `RowDeltaOperation::delete_files` return `Ok(vec![])`
+    /// again — validation-only) makes this assertion fail: A stays visible in the live set.
+    #[tokio::test]
+    async fn test_row_delta_remove_data_file_drops_it_from_scan_with_added_delete() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let a = synthetic_data_file("test/a.parquet", 0);
+        let b = synthetic_data_file("test/b.parquet", 0);
+        let table = append_files(&catalog, &table, vec![a.clone(), b]).await;
+
+        // Remove A AND add a position delete for B, in one row delta.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/b-pos-del.parquet", 0)])
+            .remove_rows(a);
+        let tx = action.apply(tx).unwrap();
+        let table = tx
+            .commit(&catalog)
+            .await
+            .expect("a row delta removing A and adding a delete must commit");
+
+        // The scan reflects BOTH: A is gone from the live data set, B remains.
+        assert_eq!(
+            live_data_file_paths(&table).await,
+            HashSet::from(["test/b.parquet".to_string()]),
+            "removeRows must drop A from the scan (apply-side removal); B remains"
+        );
+
+        // A appears as a Deleted tombstone, and a DELETE manifest is present (the added delete).
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let mut a_tombstoned = false;
+        let mut has_delete_manifest = false;
+        for manifest_file in manifest_list.entries() {
+            if manifest_file.content == ManifestContentType::Deletes {
+                has_delete_manifest = true;
+            }
+            let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
+            for entry in manifest.entries() {
+                if entry.file_path() == "test/a.parquet" {
+                    assert_eq!(entry.status(), ManifestStatus::Deleted);
+                    a_tombstoned = true;
+                }
+            }
+        }
+        assert!(a_tombstoned, "A must be a Deleted tombstone in the rewrite");
+        assert!(
+            has_delete_manifest,
+            "the added delete's DELETE manifest must be present"
+        );
+    }
+
+    /// REMOVE-ONLY row delta. A `row_delta` that removes A and adds NOTHING else drops A from the scan AND
+    /// records `Operation::Overwrite` — the 1.10.0 two-branch `operation()` form: `removeRows` is not an
+    /// `addsDeleteFiles`, so it is NOT the delete-only branch (`addsDeleteFiles && !addsDataFiles`) and falls
+    /// through to Overwrite. Pins the operation classification is unaffected by removals (and that a
+    /// remove-only commit is non-empty, so it is not rejected by the empty-commit precondition).
+    #[tokio::test]
+    async fn test_row_delta_remove_only_drops_file_and_records_overwrite() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let a = synthetic_data_file("test/a.parquet", 0);
+        let b = synthetic_data_file("test/b.parquet", 0);
+        let table = append_files(&catalog, &table, vec![a.clone(), b]).await;
+
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().remove_rows(a);
+        let tx = action.apply(tx).unwrap();
+        let table = tx
+            .commit(&catalog)
+            .await
+            .expect("a remove-only row delta is non-empty and must commit");
+
+        assert_eq!(
+            live_data_file_paths(&table).await,
+            HashSet::from(["test/b.parquet".to_string()]),
+            "remove-only row delta drops A from the scan"
+        );
+        assert_eq!(
+            table
+                .metadata()
+                .current_snapshot()
+                .unwrap()
+                .summary()
+                .operation,
+            Operation::Overwrite,
+            "1.10.0 operation() is two-branch: a remove-only row delta (no added deletes) is Overwrite"
+        );
+    }
+
+    /// MISSING-PATH ERROR. A `row_delta` that removes a data file ABSENT from the table fails loud at commit
+    /// (Java `failMissingDeletePaths` / `resolve_delete_paths` semantics, "Missing required files to delete:
+    /// ..."), and does not silently add anything. Pins that the apply-side removal validates the removal
+    /// target exists, the same as `OverwriteFiles`' by-path delete.
+    #[tokio::test]
+    async fn test_row_delta_remove_absent_data_file_errors() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_data_files(vec![synthetic_data_file("test/c.parquet", 0)])
+            .remove_rows(synthetic_data_file("test/does-not-exist.parquet", 0));
+        let tx = action.apply(tx).unwrap();
+        let err = tx
+            .commit(&catalog)
+            .await
+            .expect_err("removing an absent data file must fail loud");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message().contains("Missing required files to delete"),
+            "unexpected message: {}",
+            err.message()
+        );
+
+        // The table is unchanged — the failed row delta did not add c.parquet.
+        let reloaded = catalog.load_table(table.identifier()).await.unwrap();
+        assert_eq!(
+            live_data_file_paths(&reloaded).await,
+            HashSet::from(["test/a.parquet".to_string()]),
+            "a failed removal leaves the table untouched (no partial add)"
+        );
+    }
+
+    /// ORDERING PIN: the removed∩referenced rejection (`validateNoConflictingFileAndPositionDeletes`) fires
+    /// in `validate()`, which runs BEFORE `commit()` (the apply-side removal). So a row delta that removes a
+    /// data file its added deletes also reference is rejected by the self-contradiction check FIRST — the
+    /// apply-side removal never runs, and the table is untouched. Pins both the rejection AND its precedence.
+    #[tokio::test]
+    async fn test_row_delta_removed_referenced_rejection_fires_before_apply_side_removal() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/a-pos-del.parquet", 0)])
+            .validate_data_files_exist(["test/a.parquet"])
+            .remove_rows(synthetic_data_file("test/a.parquet", 0));
+        let tx = action.apply(tx).unwrap();
+        let err = tx.commit(&catalog).await.expect_err(
+            "removing a referenced data file is a self-contradiction rejected before apply-side removal",
+        );
+        assert_eq!(
+            err.message(),
+            "Cannot delete data files [test/a.parquet] that are referenced by new delete files",
+            "the removed∩referenced check (in validate) fires first, before the apply-side removal"
+        );
+
+        // The table is untouched: A is still live (the rejection happened in validate(), pre-commit).
+        let reloaded = catalog.load_table(table.identifier()).await.unwrap();
+        assert!(
+            live_data_file_paths(&reloaded)
+                .await
+                .contains("test/a.parquet"),
+            "A survives — the rejection precedes any apply-side removal"
+        );
+    }
+
+    /// SUMMARY COUNTERS. A `row_delta` that removes A (1 record) flows it through the summary's `remove_file`:
+    /// `deleted-data-files` and `deleted-records` appear, and the cumulative `total-data-files` /
+    /// `total-records` pin to (previous + added − removed). Append A, B (2 files, 2 records); remove A + add a
+    /// delete ⇒ total-data-files = 2 + 0 − 1 = 1, deleted-data-files = 1, deleted-records = 1.
+    #[tokio::test]
+    async fn test_row_delta_remove_data_file_summary_counters() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let a = synthetic_data_file("test/a.parquet", 0);
+        let b = synthetic_data_file("test/b.parquet", 0);
+        let table = append_files(&catalog, &table, vec![a.clone(), b]).await;
+        assert_eq!(
+            summary_prop(&table, "total-data-files").as_deref(),
+            Some("2"),
+            "after appending A, B: two data files"
+        );
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/b-pos-del.parquet", 0)])
+            .remove_rows(a);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        assert_eq!(
+            summary_prop(&table, "deleted-data-files").as_deref(),
+            Some("1"),
+            "removeRows must surface deleted-data-files = 1 via remove_file"
+        );
+        assert_eq!(
+            summary_prop(&table, "deleted-records").as_deref(),
+            Some("1"),
+            "removeRows must surface deleted-records = 1 (A's record_count)"
+        );
+        assert_eq!(
+            summary_prop(&table, "total-data-files").as_deref(),
+            Some("1"),
+            "cumulative total-data-files = 2 + 0 − 1 = 1 (seed-from-previous − removed)"
+        );
+        assert_eq!(
+            summary_prop(&table, "total-records").as_deref(),
+            Some("1"),
+            "cumulative total-records = 2 + 0 − 1 = 1"
+        );
+    }
+
+    /// REPLACE-IN-PLACE PROBE (Point 3b): a row delta that REMOVES path X and ADDS a fresh data file at
+    /// the SAME path X in one snapshot. Java `removeRows(X)` does `removedDataFiles.add(X)` + `delete(X)`
+    /// (tombstone the live entry) while `addRows(X)` adds a new entry — the manifest filter tombstones the
+    /// OLD entry and the producer writes the NEW one, so X survives as the freshly-added file. This pins
+    /// that Rust converges: post-commit X is still live (the add wins), AND the old entry is tombstoned
+    /// (the remove is honored), so it is NOT a silent no-op nor a double-live nor a vanish. The summary
+    /// reflects BOTH a removal and an add (deleted-data-files=1, added-data-files=1; cumulative
+    /// total-data-files stays 1).
+    #[tokio::test]
+    async fn test_row_delta_remove_and_add_same_path_replaces_in_place() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let a_old = synthetic_data_file("test/a.parquet", 0);
+        let table = append_files(&catalog, &table, vec![a_old.clone()]).await;
+
+        // A fresh file at the SAME path (distinct record_count so the add is observable in the summary).
+        let a_new = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/a.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(7)
+            .partition_spec_id(0)
+            .partition(Struct::from_iter([Some(Literal::long(0))]))
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_data_files(vec![a_new])
+            .remove_rows(a_old);
+        let tx = action.apply(tx).unwrap();
+        let table = tx
+            .commit(&catalog)
+            .await
+            .expect("remove + add of the same path commits (replace-in-place)");
+
+        // X is still live (the add wins), and there is exactly one live entry for it.
+        assert_eq!(
+            live_data_file_paths(&table).await,
+            HashSet::from(["test/a.parquet".to_string()]),
+            "X survives as the freshly-added file — replace-in-place, not a vanish"
+        );
+
+        // The OLD entry is tombstoned somewhere (the remove is honored, not a silent no-op): the snapshot
+        // carries both an Added and a Deleted entry for the path.
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let (mut added, mut deleted) = (false, false);
+        for manifest_file in manifest_list.entries() {
+            let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
+            for entry in manifest.entries() {
+                if entry.file_path() == "test/a.parquet" {
+                    match entry.status() {
+                        ManifestStatus::Added => added = true,
+                        ManifestStatus::Deleted => deleted = true,
+                        ManifestStatus::Existing => {}
+                    }
+                }
+            }
+        }
+        assert!(added, "the fresh file is Added");
+        assert!(deleted, "the old file is Deleted (the removal is honored)");
+
+        // Summary: one removal AND one add; cumulative total stays at one file.
+        assert_eq!(
+            summary_prop(&table, "deleted-data-files").as_deref(),
+            Some("1"),
+            "the remove is counted"
+        );
+        assert_eq!(
+            summary_prop(&table, "added-data-files").as_deref(),
+            Some("1"),
+            "the add is counted"
+        );
+        assert_eq!(
+            summary_prop(&table, "total-data-files").as_deref(),
+            Some("1"),
+            "cumulative total-data-files = 1 + 1 − 1 = 1"
+        );
     }
 
     // ============================================================================================

@@ -30,8 +30,8 @@ use crate::scan::{
     PartitionFilterCache,
 };
 use crate::spec::{
-    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, SchemaRef, SnapshotRef,
-    TableMetadataRef,
+    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, PartitionSpecRef, SchemaRef,
+    SnapshotRef, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -54,6 +54,14 @@ pub(crate) struct ManifestFileContext {
     /// built once per manifest file and shared across its entries. `None` when the
     /// scan has no row filter (every task then carries no per-row predicate).
     residual_evaluator: Option<Arc<ResidualEvaluator>>,
+
+    /// The partition spec this manifest's files were written under (Java `file.spec()`),
+    /// resolved once per manifest from its `partition_spec_id` and shared across its
+    /// entries. Threaded onto each [`FileScanTask`] so the arrow reader can materialize
+    /// identity-partition columns as constants from partition metadata (Java
+    /// `PartitionUtil.constantsMap`). `None` only when the spec id cannot be resolved
+    /// in the table metadata, in which case the reader reads those columns from the file.
+    partition_spec: Option<PartitionSpecRef>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -72,6 +80,12 @@ pub(crate) struct ManifestEntryContext {
     /// The residual evaluator for the scan's (spec, snapshot filter) pair, shared
     /// across the manifest's entries. `None` when the scan has no row filter.
     pub residual_evaluator: Option<Arc<ResidualEvaluator>>,
+
+    /// The partition spec this entry's file was written under, shared from the
+    /// manifest context (all entries in one manifest share one spec id). Threaded
+    /// onto the produced [`FileScanTask`] to activate identity-partition constant
+    /// materialization in the arrow reader (Java `PartitionUtil.constantsMap`).
+    pub partition_spec: Option<PartitionSpecRef>,
 }
 
 impl ManifestFileContext {
@@ -88,6 +102,7 @@ impl ManifestFileContext {
             expression_evaluator_cache,
             delete_file_index,
             residual_evaluator,
+            partition_spec,
             ..
         } = self;
 
@@ -105,6 +120,7 @@ impl ManifestFileContext {
                 delete_file_index: delete_file_index.clone(),
                 case_sensitive: self.case_sensitive,
                 residual_evaluator: residual_evaluator.clone(),
+                partition_spec: partition_spec.clone(),
             };
 
             sender
@@ -127,7 +143,7 @@ impl ManifestEntryContext {
                 self.manifest_entry.data_file(),
                 self.manifest_entry.sequence_number(),
             )
-            .await;
+            .await?;
 
         // Compute the PARTITION-REDUCED residual for this file (Java
         // `BaseFileScanTask.residual()` = `residuals.residualFor(file.partition())`).
@@ -156,14 +172,16 @@ impl ManifestEntryContext {
 
             deletes,
 
-            // Include partition data and spec from manifest entry
+            // Include partition data and spec from manifest entry. The spec activates the
+            // reader's identity-partition constant-materialization path (Java
+            // `PartitionUtil.constantsMap`): identity-transform partition columns are
+            // materialized as constants from THIS file's partition metadata (under the
+            // file's own spec) instead of being read from the data file. Non-identity
+            // transforms (bucket/truncate/...) are read from the file. The spec is resolved
+            // once per manifest from its `partition_spec_id`, so a multi-spec scan
+            // materializes each file's constants under its own spec.
             partition: Some(self.manifest_entry.data_file.partition.clone()),
-            // Left `None` deliberately: setting it activates the reader's identity-partition
-            // constant-materialization path (Java `PartitionUtil.constantsMap`), whose
-            // `record_batch_transformer` has latent type bugs (RunEndEncoded vs the declared
-            // column type; no Int->Int64 widening). That path is a separate parity feature,
-            // deferred to its own increment; the residual above does not need it.
-            partition_spec: None,
+            partition_spec: self.partition_spec.clone(),
             // TODO: Extract name_mapping from table metadata property "schema.name-mapping.default"
             name_mapping: None,
             case_sensitive: self.case_sensitive,
@@ -430,6 +448,7 @@ impl PlanContext {
             delete_file_index,
             case_sensitive: self.case_sensitive,
             residual_evaluator,
+            partition_spec,
         })
     }
 }

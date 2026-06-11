@@ -470,7 +470,8 @@ impl MergeManifestProcess {
         spec_id: i32,
         bin: &[ManifestFile],
     ) -> Result<ManifestFile> {
-        let mut writer = snapshot_producer.new_cluster_manifest_writer(spec_id)?;
+        let mut writer =
+            snapshot_producer.new_cluster_manifest_writer(spec_id, ManifestContentType::Data)?;
 
         for manifest_file in bin {
             let manifest = manifest_file

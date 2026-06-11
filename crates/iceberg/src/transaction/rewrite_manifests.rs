@@ -572,7 +572,8 @@ impl ClusterWriters {
 
         // Ensure an open writer exists for this key.
         if !self.open_writers.contains_key(&key) {
-            let writer = snapshot_producer.new_cluster_manifest_writer(partition_spec_id)?;
+            let writer = snapshot_producer
+                .new_cluster_manifest_writer(partition_spec_id, ManifestContentType::Data)?;
             self.open_writers.insert(key.clone(), writer);
             self.open_estimates.insert(key.clone(), 0);
         }

@@ -89,8 +89,31 @@ fn constants_map(
                     continue;
                 }
                 Some(Literal::Primitive(value)) => {
-                    // Create a Datum from the primitive type and value
-                    let datum = Datum::new(prim_type.clone(), value.clone());
+                    // Build the constant from the partition value, COERCED to the source field's
+                    // Iceberg type. The partition tuple can carry a literal whose in-memory variant
+                    // is NARROWER than the (possibly type-promoted) column — e.g. an `Int(i32)`
+                    // partition value for a column promoted to `Long`. Without coercion the array
+                    // builder sees `(Int64, Int(19))` and errors ("Unsupported constant type
+                    // combination: Int64 with Some(Int(19))", `test_evolved_schema`).
+                    //
+                    // `Datum::to(field_type)` is the canonical Iceberg coercion (the same table used
+                    // throughout `arrow/`): `Int->Long`, `Int->Date`, `Long->Timestamp/Timestamptz`,
+                    // `Int128->Long`, with equal types passing through. This mirrors Java
+                    // `IdentityPartitionConverters.convertConstant(partitionType.field(pos).type(),
+                    // value)`, where the TYPE comes from the (schema-derived) partition type, not the
+                    // literal's stored representation.
+                    let datum = Datum::new(prim_type.clone(), value.clone())
+                        .to(&iceberg_field.field_type)
+                        .map_err(|e| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Failed to coerce identity-partition value for field {} to its column type {:?}",
+                                    field.source_id, iceberg_field.field_type
+                                ),
+                            )
+                            .with_source(e)
+                        })?;
                     constants.insert(field.source_id, datum);
                 }
                 Some(literal) => {
@@ -378,21 +401,21 @@ impl RecordBatchTransformer {
                                 )]));
                         Ok(Arc::new(arrow_field))
                     } else {
-                        // This is a partition constant field (exists in schema but uses constant value)
-                        let field = &field_id_to_mapped_schema_map
+                        // This is an identity-partition constant field. It EXISTS in the table
+                        // schema, so its declared scan-schema field (plain Arrow type, nullability
+                        // and field-id metadata) is authoritative — the materialized constant must
+                        // match it EXACTLY, not a Run-End-Encoded variant. Emitting REE here is the
+                        // bug that broke `test_insert_into_partitioned` ("expected Utf8 but found
+                        // RunEndEncoded"): the output batch schema would declare REE where the
+                        // projected scan schema (and DataFusion) require a plain `Utf8`/`Int64`.
+                        // Java's `PartitionUtil.constantsMap` is encoding-agnostic; REE was a
+                        // Rust-only storage optimization that violated the schema contract for
+                        // columns the reader must hand back in their declared physical type.
+                        Ok(field_id_to_mapped_schema_map
                             .get(field_id)
                             .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
-                            .0;
-                        let datum = constant_fields.get(field_id).ok_or(Error::new(
-                            ErrorKind::Unexpected,
-                            "constant field not found",
-                        ))?;
-                        let arrow_type = datum_to_arrow_type_with_ree(datum);
-                        // Use the type from constant_fields (REE for constants)
-                        let constant_field =
-                            Field::new(field.name(), arrow_type, field.is_nullable())
-                                .with_metadata(field.metadata().clone());
-                        Ok(Arc::new(constant_field))
+                            .0
+                            .clone())
                     }
                 } else {
                     // Regular field - use schema as-is
@@ -407,7 +430,28 @@ impl RecordBatchTransformer {
 
         let target_schema = Arc::new(ArrowSchema::new(fields?));
 
-        match Self::compare_schemas(source_schema, &target_schema) {
+        // A constant field (identity-partition or metadata/virtual) is AUTHORITATIVE and
+        // must OVERRIDE any column of the same field id physically present in the data file
+        // (Java: partition metadata wins over file data; `BaseParquetReaders` consults
+        // `idToConstant` before the file column). If such a field is also in the source
+        // file, the `PassThrough` / `ModifySchema` fast paths would hand back the FILE
+        // value instead of the constant — so we must take the column-rebuilding `Modify`
+        // path. (In the common Hive-migration case the partition column is NOT in the file,
+        // and `compare_schemas` already reports `Different` because the field is missing.)
+        let constant_overrides_file_column = !constant_fields.is_empty() && {
+            let source_field_ids = Self::build_field_id_to_arrow_schema_map(source_schema)?;
+            constant_fields
+                .keys()
+                .any(|field_id| source_field_ids.contains_key(field_id))
+        };
+
+        let comparison = if constant_overrides_file_column {
+            SchemaComparison::Different
+        } else {
+            Self::compare_schemas(source_schema, &target_schema)
+        };
+
+        match comparison {
             SchemaComparison::Equivalent => Ok(BatchTransform::PassThrough),
             SchemaComparison::NameChangesOnly => Ok(BatchTransform::ModifySchema { target_schema }),
             SchemaComparison::Different => Ok(BatchTransform::Modify {
@@ -486,10 +530,32 @@ impl RecordBatchTransformer {
                 // they exist in the Parquet file. This is per Iceberg spec rule #1: partition metadata
                 // is authoritative and should be preferred over file data.
                 if let Some(datum) = constant_fields.get(field_id) {
-                    let arrow_type = datum_to_arrow_type_with_ree(datum);
+                    // The column's physical Arrow type MUST equal what the target schema declares
+                    // for it (built in `generate_batch_transform` above), or the produced batch
+                    // fails `RecordBatch::try_new` against that schema.
+                    //
+                    //  * Metadata/virtual fields (`_file`, ...) have no entry in the table schema,
+                    //    so the target schema declares them Run-End-Encoded — keep REE here.
+                    //  * Identity-partition fields EXIST in the table schema; the target schema
+                    //    declares their plain physical type (e.g. `Int64`/`Utf8`), so the constant
+                    //    is a PLAIN repeated array of that type. Emitting REE for these is the bug
+                    //    that broke `test_insert_into_partitioned`.
+                    let target_type = if get_metadata_field(*field_id).is_ok() {
+                        datum_to_arrow_type_with_ree(datum)
+                    } else {
+                        field_id_to_mapped_schema_map
+                            .get(field_id)
+                            .ok_or(Error::new(
+                                ErrorKind::Unexpected,
+                                "could not find constant field in schema",
+                            ))?
+                            .0
+                            .data_type()
+                            .clone()
+                    };
                     return Ok(ColumnSource::Add {
                         value: Some(datum.literal().clone()),
-                        target_type: arrow_type,
+                        target_type,
                     });
                 }
 
@@ -1674,5 +1740,268 @@ mod test {
         assert!(data_col.is_null(0));
         assert!(data_col.is_null(1));
         assert!(data_col.is_null(2));
+    }
+
+    /// Regression pin for the REE-leak bug that triggered the 2026-06-08 revert
+    /// (`test_insert_into_partitioned` — "expected Utf8 but found RunEndEncoded").
+    ///
+    /// An identity-partition column EXISTS in the table schema, so the transformer's
+    /// output batch schema must declare it with the SAME plain physical Arrow type the
+    /// scan schema declares (`Utf8` here) — NOT a `RunEndEncoded` variant. Materializing
+    /// the constant as REE made the output schema disagree with the projected scan schema,
+    /// and DataFusion (and `RecordBatch::try_new` against the declared schema) rejected it.
+    ///
+    /// This test asserts the EXACT physical type (plain `StringArray`, declared `Utf8`),
+    /// not just the value — a `get_string_value`-style helper would pass under REE too.
+    /// Java's `PartitionUtil.constantsMap` is encoding-agnostic; the column is handed back
+    /// in its declared type.
+    #[test]
+    fn identity_partition_constant_is_plain_array_not_run_end_encoded() {
+        use arrow_schema::DataType;
+
+        use crate::spec::Transform;
+
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "category", Type::Primitive(PrimitiveType::String))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let partition_spec = Arc::new(
+            crate::spec::PartitionSpec::builder(snapshot_schema.clone())
+                .with_spec_id(0)
+                .add_partition_field("category", "category", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        let partition_data = Struct::from_iter(vec![Some(Literal::string("electronics"))]);
+
+        // The parquet file lacks the partition column (Hive-style migration): only `id`.
+        let parquet_schema = Arc::new(ArrowSchema::new(vec![simple_field(
+            "id",
+            DataType::Int32,
+            false,
+            "1",
+        )]));
+
+        let projected_field_ids = [1, 2];
+
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
+                .with_partition(partition_spec, partition_data)
+                .expect("partition constants")
+                .build();
+
+        let parquet_batch =
+            RecordBatch::try_new(parquet_schema, vec![Arc::new(Int32Array::from(vec![
+                1, 2, 3,
+            ]))])
+            .unwrap();
+
+        let result = transformer.process_record_batch(parquet_batch).unwrap();
+
+        // The output batch's declared schema field for `category` must be PLAIN Utf8,
+        // matching the table schema — never RunEndEncoded.
+        assert_eq!(
+            result.schema().field(1).data_type(),
+            &DataType::Utf8,
+            "identity-partition constant must declare its plain scan-schema type, not REE"
+        );
+
+        // And the materialized column must be a plain StringArray (not a RunArray).
+        let category = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("category column must be a plain StringArray, not RunEndEncoded");
+        assert_eq!(category.value(0), "electronics");
+        assert_eq!(category.value(1), "electronics");
+        assert_eq!(category.value(2), "electronics");
+    }
+
+    /// Regression pin for the int->long widening bug that triggered the 2026-06-08 revert
+    /// (`test_evolved_schema` — "Unsupported constant type combination: Int64 with Some(Int(19))").
+    ///
+    /// A partition tuple can carry a literal whose in-memory variant is NARROWER than the
+    /// (type-promoted) column: an `Int(i32)` partition value for a column whose Iceberg type
+    /// is `Long`. The constant must be materialized into an `Int64` (`Long`) column by
+    /// coercing the value to the FIELD's Iceberg type via `Datum::to` — the same coercion
+    /// Java applies in `IdentityPartitionConverters.convertConstant(partitionType.field(pos)
+    /// .type(), value)`, where the type comes from the schema-derived partition type, not the
+    /// literal's stored representation. Without the coercion the array builder sees
+    /// `(Int64, Int(19))` and errors.
+    #[test]
+    fn identity_partition_widens_int_literal_to_long_column() {
+        use arrow_schema::DataType;
+
+        use crate::spec::Transform;
+
+        // Column `p` has Iceberg type Long (e.g. promoted from Int) but the partition
+        // tuple still stores the value as the narrower Int(19) variant.
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "p", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let partition_spec = Arc::new(
+            crate::spec::PartitionSpec::builder(snapshot_schema.clone())
+                .with_spec_id(0)
+                .add_partition_field("p", "p", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        // Partition value stored as the NARROW Int(19) variant (the revert's exact case).
+        let partition_data = Struct::from_iter(vec![Some(Literal::int(19))]);
+
+        let parquet_schema = Arc::new(ArrowSchema::new(vec![simple_field(
+            "id",
+            DataType::Int32,
+            false,
+            "1",
+        )]));
+
+        let projected_field_ids = [1, 2];
+
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
+                .with_partition(partition_spec, partition_data)
+                .expect("partition constants must widen Int(i32) to a Long column")
+                .build();
+
+        let parquet_batch =
+            RecordBatch::try_new(parquet_schema, vec![Arc::new(Int32Array::from(vec![7, 8]))])
+                .unwrap();
+
+        let result = transformer.process_record_batch(parquet_batch).unwrap();
+
+        // The materialized `p` column must be a plain Int64 column carrying the widened value.
+        assert_eq!(result.schema().field(1).data_type(), &DataType::Int64);
+        let p_col = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("p column must be a plain Int64Array");
+        assert_eq!(p_col.value(0), 19);
+        assert_eq!(p_col.value(1), 19);
+    }
+
+    /// Schema-contract pin (reviewer-added): a projection that REORDERS and SUBSETS the
+    /// columns — the identity-partition constant column projected FIRST and a non-partition
+    /// data column SECOND, while a third schema column is dropped — must produce an output
+    /// batch whose schema EXACTLY equals the declared projection (field names, plain physical
+    /// types, nullability, AND order), with the constant column a plain array (never REE) and
+    /// carrying the PARTITION value (overriding the differing file value).
+    ///
+    /// Scope note: the reordered/subset shape already forces the column-rebuilding `Modify`
+    /// path (source has 3 fields, target 2), so this test does NOT isolate the
+    /// `constant_overrides_file_column` flag — the constant-vs-file OVERRIDE in isolation is
+    /// pinned by the scan test `test_identity_partition_column_value_comes_from_metadata_not_file`
+    /// (in-order full projection, where only the override forces `Modify`). What this pin adds
+    /// is that the OVERRIDE-path schema build emits the declared plain physical type in the
+    /// requested column ORDER for a reordered/subset projection.
+    #[test]
+    fn identity_partition_reordered_subset_projection_matches_declared_schema() {
+        use arrow_schema::DataType;
+
+        use crate::spec::Transform;
+
+        // Schema order: id(1, Int), category(2, String, identity-partition), extra(3, Long).
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "category", Type::Primitive(PrimitiveType::String))
+                        .into(),
+                    NestedField::optional(3, "extra", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let partition_spec = Arc::new(
+            crate::spec::PartitionSpec::builder(snapshot_schema.clone())
+                .with_spec_id(0)
+                .add_partition_field("category", "category", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        // Partition value DIFFERS from the file `category` so the override is observable.
+        let partition_data = Struct::from_iter(vec![Some(Literal::string("books"))]);
+
+        // The file physically carries ALL THREE columns (add_files style), including the
+        // partition column with a DIFFERENT value ("ignored_file_value").
+        let parquet_schema = Arc::new(ArrowSchema::new(vec![
+            simple_field("id", DataType::Int32, false, "1"),
+            simple_field("category", DataType::Utf8, false, "2"),
+            simple_field("extra", DataType::Int64, true, "3"),
+        ]));
+
+        // Project REORDERED + SUBSET: category(2) FIRST, id(1) SECOND, drop extra(3).
+        let projected_field_ids = [2, 1];
+
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
+                .with_partition(partition_spec, partition_data)
+                .expect("partition constants")
+                .build();
+
+        let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
+            Arc::new(Int32Array::from(vec![10, 11])),
+            Arc::new(StringArray::from(vec![
+                "ignored_file_value",
+                "ignored_file_value",
+            ])),
+            Arc::new(Int64Array::from(vec![100, 200])),
+        ])
+        .unwrap();
+
+        let result = transformer.process_record_batch(parquet_batch).unwrap();
+
+        // Output schema must be exactly [category: Utf8 (non-null), id: Int32 (non-null)].
+        assert_eq!(result.num_columns(), 2);
+        let sch = result.schema();
+        assert_eq!(sch.field(0).name(), "category");
+        assert_eq!(sch.field(0).data_type(), &DataType::Utf8);
+        assert!(!sch.field(0).is_nullable());
+        assert_eq!(sch.field(1).name(), "id");
+        assert_eq!(sch.field(1).data_type(), &DataType::Int32);
+        assert!(!sch.field(1).is_nullable());
+
+        // category is the constant (plain StringArray), OVERRIDING the file value.
+        let category = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("category must be a plain StringArray, not REE");
+        assert_eq!(category.value(0), "books");
+        assert_eq!(category.value(1), "books");
+
+        // id is read from the file unchanged.
+        let id = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id.value(0), 10);
+        assert_eq!(id.value(1), 11);
     }
 }

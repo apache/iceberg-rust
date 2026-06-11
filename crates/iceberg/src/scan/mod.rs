@@ -1230,6 +1230,178 @@ pub mod tests {
             }
         }
 
+        /// Builds a fixture whose metadata carries TWO identity specs over DIFFERENT
+        /// source columns: the template's `identity(x)` (spec 0) and a new `identity(y)`
+        /// (spec 1, set as the table default). Used by the multi-spec scan test together
+        /// with [`Self::setup_two_identity_spec_manifests`]: each data file is written in
+        /// its OWN manifest under its OWN spec, so the scan must materialize each file's
+        /// identity-partition constant under that file's spec (Java `file.spec()` per
+        /// `ManifestFile.partition_spec_id`), not under one shared/default spec.
+        pub fn new_with_two_identity_specs() -> Self {
+            let tmp_dir = TempDir::new().unwrap();
+            let table_location = tmp_dir.path().join("table1");
+            let manifest_list1_location = table_location.join("metadata/manifests_list_1.avro");
+            let manifest_list2_location = table_location.join("metadata/manifests_list_2.avro");
+            let table_metadata1_location = table_location.join("metadata/v1.json");
+
+            let file_io = FileIO::new_with_fs();
+
+            let mut table_metadata = {
+                let template_json_str = fs::read_to_string(format!(
+                    "{}/testdata/example_table_metadata_v2.json",
+                    env!("CARGO_MANIFEST_DIR")
+                ))
+                .unwrap();
+                let metadata_json = render_template(&template_json_str, context! {
+                    table_location => &table_location,
+                    manifest_list_1_location => &manifest_list1_location,
+                    manifest_list_2_location => &manifest_list2_location,
+                    table_metadata_1_location => &table_metadata1_location,
+                });
+                serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
+            };
+
+            // Add spec 1 = identity(y) (source_id 2) and make it the default. Spec 0
+            // (identity(x)) stays in the spec map for the file written under it.
+            let identity_y_spec = Arc::new(
+                PartitionSpec::builder(table_metadata.current_schema().clone())
+                    .with_spec_id(1)
+                    .add_unbound_field(
+                        UnboundPartitionField::builder()
+                            .source_id(2)
+                            .name("y".to_string())
+                            .field_id(1000)
+                            .transform(Transform::Identity)
+                            .build(),
+                    )
+                    .unwrap()
+                    .build()
+                    .unwrap(),
+            );
+            let identity_y_partition_type = identity_y_spec
+                .partition_type(table_metadata.current_schema())
+                .unwrap();
+            table_metadata.default_spec = identity_y_spec.clone();
+            table_metadata.default_partition_type = identity_y_partition_type;
+            table_metadata.partition_specs.insert(1, identity_y_spec);
+
+            let table = Table::builder()
+                .metadata(table_metadata)
+                .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
+                .file_io(file_io.clone())
+                .metadata_location(table_metadata1_location.to_str().unwrap())
+                .build()
+                .unwrap();
+
+            Self {
+                table_location: table_location.to_str().unwrap().to_string(),
+                table,
+            }
+        }
+
+        /// Writes two live data files for the multi-spec scan test, each in its OWN
+        /// manifest under its OWN spec, with a partition value that DIFFERS from the
+        /// parquet data so the constant source is observable:
+        ///  * 1.parquet under `identity(x)` (spec 0), partition `x == 777` (file x is `1`).
+        ///  * 2.parquet under `identity(y)` (spec 1), partition `y == 888` (file y starts `2`).
+        ///
+        /// A correct multi-spec scan returns x=777 for the first file's rows and y=888 for
+        /// the second file's rows — each under that file's own spec.
+        pub async fn setup_two_identity_spec_manifests(&mut self) {
+            let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+            let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+            let spec_zero = self
+                .table
+                .metadata()
+                .partition_spec_by_id(0)
+                .expect("spec 0 (identity(x)) must exist")
+                .clone();
+            let spec_one = self
+                .table
+                .metadata()
+                .partition_spec_by_id(1)
+                .expect("spec 1 (identity(y)) must exist")
+                .clone();
+
+            let parquet_file_size = self.write_parquet_data_files();
+
+            // Manifest A: 1.parquet under spec 0 (identity(x)), partition x == 777.
+            let mut writer_a = ManifestWriterBuilder::new(
+                self.next_manifest_file(),
+                Some(current_snapshot.snapshot_id()),
+                None,
+                current_schema.clone(),
+                spec_zero.as_ref().clone(),
+            )
+            .build_v2_data();
+            writer_a
+                .add_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(0)
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/1.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(parquet_file_size)
+                                .record_count(1)
+                                .partition(Struct::from_iter([Some(Literal::long(777))]))
+                                .key_metadata(None)
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            let manifest_a = writer_a.write_manifest_file().await.unwrap();
+
+            // Manifest B: 2.parquet under spec 1 (identity(y)), partition y == 888.
+            let mut writer_b = ManifestWriterBuilder::new(
+                self.next_manifest_file(),
+                Some(current_snapshot.snapshot_id()),
+                None,
+                current_schema.clone(),
+                spec_one.as_ref().clone(),
+            )
+            .build_v2_data();
+            writer_b
+                .add_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(1)
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/2.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(parquet_file_size)
+                                .record_count(1)
+                                .partition(Struct::from_iter([Some(Literal::long(888))]))
+                                .key_metadata(None)
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            let manifest_b = writer_b.write_manifest_file().await.unwrap();
+
+            let mut manifest_list_write = ManifestListWriter::v2(
+                self.table
+                    .file_io()
+                    .new_output(current_snapshot.manifest_list())
+                    .unwrap(),
+                current_snapshot.snapshot_id(),
+                current_snapshot.parent_snapshot_id(),
+                current_snapshot.sequence_number(),
+            );
+            manifest_list_write
+                .add_manifests(vec![manifest_a, manifest_b].into_iter())
+                .unwrap();
+            manifest_list_write.close().await.unwrap();
+        }
+
         /// Writes a single live data file (1.parquet) under the NON-default
         /// `identity(x)` spec (id 0, partition `x == 1`), matching the parquet `x`
         /// column (`[1; 1024]`). Companion to [`Self::new_with_evolved_default_spec`].
@@ -1268,6 +1440,125 @@ pub mod tests {
                                 .record_count(1)
                                 // identity(x) == 1, matching the parquet `x` column.
                                 .partition(Struct::from_iter([Some(Literal::long(1))]))
+                                .key_metadata(None)
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            let data_file_manifest = writer.write_manifest_file().await.unwrap();
+
+            let mut manifest_list_write = ManifestListWriter::v2(
+                self.table
+                    .file_io()
+                    .new_output(current_snapshot.manifest_list())
+                    .unwrap(),
+                current_snapshot.snapshot_id(),
+                current_snapshot.parent_snapshot_id(),
+                current_snapshot.sequence_number(),
+            );
+            manifest_list_write
+                .add_manifests(vec![data_file_manifest].into_iter())
+                .unwrap();
+            manifest_list_write.close().await.unwrap();
+        }
+
+        /// Writes a single live data file (1.parquet) under `identity(x)` (spec 0) whose
+        /// manifest partition value (`x == 999`) DELIBERATELY DIFFERS from the parquet `x`
+        /// column (`[1; 1024]`). This makes the scan output observably distinguish the two
+        /// sources: with the identity-partition constants map ACTIVE the scan returns the
+        /// PARTITION value (999, Java `PartitionUtil.constantsMap`); a reader that read `x`
+        /// from the file would return 1. The metadata value is authoritative for an
+        /// identity-partition column.
+        pub async fn setup_manifest_files_partition_value_differs(&mut self) {
+            let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+            let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+            let current_partition_spec = self.table.metadata().default_partition_spec();
+
+            let parquet_file_size = self.write_parquet_data_files();
+
+            let mut writer = ManifestWriterBuilder::new(
+                self.next_manifest_file(),
+                Some(current_snapshot.snapshot_id()),
+                None,
+                current_schema.clone(),
+                current_partition_spec.as_ref().clone(),
+            )
+            .build_v2_data();
+            writer
+                .add_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(0)
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/1.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(parquet_file_size)
+                                .record_count(1)
+                                // Partition value 999 != the parquet `x` column ([1; 1024]).
+                                .partition(Struct::from_iter([Some(Literal::long(999))]))
+                                .key_metadata(None)
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            let data_file_manifest = writer.write_manifest_file().await.unwrap();
+
+            let mut manifest_list_write = ManifestListWriter::v2(
+                self.table
+                    .file_io()
+                    .new_output(current_snapshot.manifest_list())
+                    .unwrap(),
+                current_snapshot.snapshot_id(),
+                current_snapshot.parent_snapshot_id(),
+                current_snapshot.sequence_number(),
+            );
+            manifest_list_write
+                .add_manifests(vec![data_file_manifest].into_iter())
+                .unwrap();
+            manifest_list_write.close().await.unwrap();
+        }
+
+        /// Writes a single live data file (1.parquet) under `identity(x)` (spec 0) whose
+        /// manifest partition value is NULL. With the constants map active, the
+        /// identity-partition `x` column materializes as all-null (Iceberg column-projection
+        /// rule #4 — a null partition value is not added to the constants map, so the column
+        /// resolves to null), rather than erroring. Companion to
+        /// [`Self::setup_manifest_files_partition_value_differs`].
+        pub async fn setup_manifest_files_null_partition(&mut self) {
+            let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+            let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+            let current_partition_spec = self.table.metadata().default_partition_spec();
+
+            let parquet_file_size = self.write_parquet_data_files();
+
+            let mut writer = ManifestWriterBuilder::new(
+                self.next_manifest_file(),
+                Some(current_snapshot.snapshot_id()),
+                None,
+                current_schema.clone(),
+                current_partition_spec.as_ref().clone(),
+            )
+            .build_v2_data();
+            writer
+                .add_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(0)
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/1.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(parquet_file_size)
+                                .record_count(1)
+                                // NULL partition value for the identity(x) column.
+                                .partition(Struct::from_iter([None]))
                                 .key_metadata(None)
                                 .build()
                                 .unwrap(),
@@ -2538,8 +2829,8 @@ pub mod tests {
 
         let col = batches[0].column_by_name("x").unwrap();
 
-        // `x` is an identity-partition column, materialized by the reader as a
-        // run-end-encoded constant from the partition metadata (value 1).
+        // `x` is an identity-partition column, materialized by the reader as a plain
+        // Int64 constant from the partition metadata (value 1), matching the scan schema.
         let int64_arr = decode_int64_column(col);
         assert_eq!(int64_arr.value(0), 1);
     }
@@ -2603,7 +2894,8 @@ pub mod tests {
         assert_eq!(batches[0].num_columns(), 2);
 
         let col1 = batches[0].column_by_name("x").unwrap();
-        // `x` is an identity-partition constant (run-end-encoded); decode it.
+        // `x` is an identity-partition constant materialized from partition metadata
+        // (value 1) as a plain Int64 column matching the declared scan schema.
         let int64_arr = decode_int64_column(col1);
         assert_eq!(int64_arr.value(0), 1);
 
@@ -2618,6 +2910,155 @@ pub mod tests {
 
         assert_eq!(batches[0].num_columns(), 0);
         assert_eq!(batches[0].num_rows(), 1024);
+    }
+
+    /// The load-bearing semantic of the identity-partition constants map: the value of
+    /// an identity-partition column comes from PARTITION METADATA, not the data file.
+    ///
+    /// The fixture writes a data file whose parquet `x` column is `[1; 1024]` but whose
+    /// manifest partition value is `x == 999`. A scan must return 999 (the partition
+    /// metadata constant, Java `PartitionUtil.constantsMap`), NOT 1 (the file bytes).
+    /// This is the test the whole feature exists for, and the activation MUTATION
+    /// (`task.partition_spec = None`) makes it fail by reading 1 from the file.
+    ///
+    /// The output `x` is also asserted to be a PLAIN `Int64Array` (declared `Int64`,
+    /// not RunEndEncoded) — pinning the bug-(a) schema-equality fix end-to-end through
+    /// the reader, not only at the transformer unit level.
+    #[tokio::test]
+    async fn test_identity_partition_column_value_comes_from_metadata_not_file() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files_partition_value_differs().await;
+
+        let table_scan = fixture.table.scan().select(["x", "y"]).build().unwrap();
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let total_rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        assert_eq!(total_rows, 1024);
+
+        for batch in &batches {
+            let x_col = batch.column_by_name("x").unwrap();
+            // EXACT physical type: a plain Int64 column (the declared scan-schema type),
+            // never RunEndEncoded.
+            assert_eq!(
+                x_col.data_type(),
+                &arrow_schema::DataType::Int64,
+                "identity-partition `x` must be a plain Int64 column, not REE"
+            );
+            let x = x_col.as_any().downcast_ref::<Int64Array>().unwrap();
+            for index in 0..x.len() {
+                assert_eq!(
+                    x.value(index),
+                    999,
+                    "x must be the PARTITION metadata value (999), not the file value (1)"
+                );
+            }
+            // `y` is NOT a partition column, so it is read from the file unchanged.
+            let y = batch.column_by_name("y").unwrap();
+            let y = y.as_any().downcast_ref::<Int64Array>().unwrap();
+            assert_eq!(y.value(0), 2);
+        }
+    }
+
+    /// Multi-spec interaction (this increment sits on top of the multi-spec WRITE
+    /// increment): each data file's identity-partition constants are materialized under
+    /// THAT file's own spec, resolved from its manifest's `partition_spec_id`.
+    ///
+    /// The fixture writes 1.parquet under `identity(x)` (spec 0, partition `x == 777`)
+    /// and 2.parquet under `identity(y)` (spec 1, partition `y == 888`), each in its own
+    /// manifest. Both files share the same parquet bytes (`x == 1`, `y` starting at `2`).
+    /// A correct scan returns, per file:
+    ///  * spec-0 file: x = 777 (constant from spec 0), y read from file (= 2)
+    ///  * spec-1 file: y = 888 (constant from spec 1), x read from file (= 1)
+    ///
+    /// A single-spec scan (using one shared spec for both files) cannot produce this.
+    #[tokio::test]
+    async fn test_multispec_scan_materializes_each_file_constant_under_its_own_spec() {
+        let mut fixture = TableTestFixture::new_with_two_identity_specs();
+        fixture.setup_two_identity_spec_manifests().await;
+
+        let table_scan = fixture.table.scan().select(["x", "y"]).build().unwrap();
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        // Each batch corresponds to one file; identify which spec produced it by its
+        // constant column, then assert the OTHER column was read from the file.
+        let mut saw_spec_zero_file = false;
+        let mut saw_spec_one_file = false;
+        for batch in &batches {
+            let x = decode_int64_column(batch.column_by_name("x").unwrap());
+            let y = decode_int64_column(batch.column_by_name("y").unwrap());
+
+            if x.value(0) == 777 {
+                // spec-0 file: x is the constant 777, y read from the file (= 2).
+                saw_spec_zero_file = true;
+                for index in 0..x.len() {
+                    assert_eq!(x.value(index), 777, "spec-0 file: x constant under spec 0");
+                }
+                assert_eq!(y.value(0), 2, "spec-0 file: y read from file");
+            } else {
+                // spec-1 file: y is the constant 888, x read from the file (= 1).
+                saw_spec_one_file = true;
+                for index in 0..y.len() {
+                    assert_eq!(y.value(index), 888, "spec-1 file: y constant under spec 1");
+                }
+                assert_eq!(x.value(0), 1, "spec-1 file: x read from file");
+            }
+        }
+        assert!(
+            saw_spec_zero_file && saw_spec_one_file,
+            "scan must surface BOTH the spec-0 and spec-1 files (each under its own spec)"
+        );
+    }
+
+    /// Null identity-partition value, end-to-end through the scan/reader path.
+    ///
+    /// Per Iceberg column-projection rule #4 (`constants_map` skips a null partition value,
+    /// Java `PartitionUtil.constantsMap` only puts non-null converted values), a null
+    /// partition value does NOT enter the constants map, so it does not override anything.
+    /// In THIS fixture the data file physically contains `x` (`[1; 1024]`), so the column
+    /// resolves to the FILE value (1), not an error — the absence of an override is the
+    /// behavior under test. (When the file LACKS the column, the same null path yields a
+    /// null column — pinned by the transformer unit test `null_identity_partition_value`.)
+    /// The point here is that a null partition value is handled WITHOUT erroring and the
+    /// column keeps its plain declared scan-schema type.
+    #[tokio::test]
+    async fn test_identity_partition_null_value_does_not_override_and_does_not_error() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files_null_partition().await;
+
+        let table_scan = fixture.table.scan().select(["x", "y"]).build().unwrap();
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let total_rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        assert_eq!(total_rows, 1024);
+        for batch in &batches {
+            let x_col = batch.column_by_name("x").unwrap();
+            // Plain declared scan-schema type, no error from the null partition value.
+            assert_eq!(x_col.data_type(), &arrow_schema::DataType::Int64);
+            let x = x_col.as_any().downcast_ref::<Int64Array>().unwrap();
+            // No override (null is skipped): the file value is read.
+            assert_eq!(x.value(0), 1);
+            let y = batch.column_by_name("y").unwrap();
+            let y = y.as_any().downcast_ref::<Int64Array>().unwrap();
+            assert_eq!(y.value(0), 2);
+        }
     }
 
     #[tokio::test]

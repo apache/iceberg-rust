@@ -26,6 +26,7 @@ use tokio::sync::Notify;
 use crate::runtime::spawn;
 use crate::scan::{DeleteFileContext, FileScanTaskDeleteFile};
 use crate::spec::{DataContentType, DataFile, DataFileFormat, Struct};
+use crate::{Error, ErrorKind, Result};
 
 /// Index of delete files
 #[derive(Debug, Clone)]
@@ -96,11 +97,16 @@ impl DeleteFileIndex {
     }
 
     /// Gets all the delete files that apply to the specified data file.
+    ///
+    /// Fallible: a deletion vector whose data sequence number is LESS THAN the data file's marks an
+    /// invalid table and returns an [`ErrorKind::DataInvalid`] error (Java
+    /// `DeleteFileIndex.findDV` `ValidationException`) — see
+    /// [`PopulatedDeleteFileIndex::get_deletes_for_data_file`].
     pub(crate) async fn get_deletes_for_data_file(
         &self,
         data_file: &DataFile,
         seq_num: Option<i64>,
-    ) -> Vec<FileScanTaskDeleteFile> {
+    ) -> Result<Vec<FileScanTaskDeleteFile>> {
         let notifier = {
             let guard = self.state.read().unwrap();
             match *guard {
@@ -196,11 +202,21 @@ impl PopulatedDeleteFileIndex {
     }
 
     /// Determine all the delete files that apply to the provided `DataFile`.
+    ///
+    /// FALLIBLE because of the deletion-vector sequence-number validation (Java
+    /// `DeleteFileIndex.findDV` L208-214, 1.10.0-bytecode-verified): a DV attached to a data file
+    /// MUST have `dv.dataSequenceNumber() >= dataFile.dataSequenceNumber()`, or the table is
+    /// invalid and the scan must fail loud rather than silently apply the wrong DV. The lookup was
+    /// infallible before this validation landed (D1's deferred residue); the ripple was assessed
+    /// small (one production caller — `scan/context.rs`, already `Result`-returning) and the index
+    /// is the ONLY place both sequence numbers are in hand (`seq_num` = the data file's, the DV's via
+    /// its manifest entry), so the check lives here rather than at the load door (the caching loader
+    /// never receives either sequence number — `FileScanTaskDeleteFile` drops them).
     fn get_deletes_for_data_file(
         &self,
         data_file: &DataFile,
         seq_num: Option<i64>,
-    ) -> Vec<FileScanTaskDeleteFile> {
+    ) -> Result<Vec<FileScanTaskDeleteFile>> {
         let mut results = vec![];
 
         self.global_equality_deletes
@@ -231,16 +247,33 @@ impl PopulatedDeleteFileIndex {
         // {global eq, partition eq, dv} when `findDV` hits and only consults the
         // position-delete maps when it does not. The DV lookup is by the data file's PATH
         // (Java `findDV` L202-216: `dvByPath.get(dataFile.location())`) and is NOT
-        // sequence-filtered — Java instead VALIDATES `dv.dataSequenceNumber() >= seq`
-        // (ValidationException, L209-213). That validation is DEFERRED here: this lookup is
-        // infallible by signature, and the invalid state (a DV older than the data file at the
-        // same path) cannot be produced by a correctly-written table — flagged as residue in
-        // docs/parity/GAP_MATRIX.md. Duplicate DVs for one path (Java's other
-        // ValidationException, L528-535) are all returned so the loader rejects them loudly.
+        // sequence-filtered. Instead Java VALIDATES `dv.dataSequenceNumber() >= seq` (the data
+        // file's sequence number) and throws a `ValidationException` otherwise (L208-214,
+        // 1.10.0-bytecode-verified) — a DV must never be attached to a data file from a LATER
+        // sequence number. That validation now lives HERE (was D1's deferred residue): the index
+        // is the only place both sequence numbers are in hand. Duplicate DVs for one path (Java's
+        // other ValidationException, L528-535) are all returned so the loader rejects them loudly.
         if let Some(dvs) = self.dv_by_path.get(data_file.file_path()) {
-            dvs.iter()
-                .for_each(|delete| results.push(delete.as_ref().into()));
-            return results;
+            for delete in dvs {
+                // Java `findDV` L208-214: a DV's data sequence number must be >= the data file's.
+                // `seq_num` is the data file's data sequence number (Java `seq`); the DV's is its
+                // manifest entry's. A `None` data-file seq (only in unit fixtures that pass
+                // `seq_num = None`) cannot be violated, so it is treated as valid — Java always has
+                // a concrete `seq`. The mirror is the EXACT 1.10.0 message.
+                if let Some(data_seq) = seq_num
+                    && let Some(dv_seq) = delete.manifest_entry.sequence_number()
+                    && dv_seq < data_seq
+                {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "DV data sequence number ({dv_seq}) must be greater than or equal to data file sequence number ({data_seq})"
+                        ),
+                    ));
+                }
+                results.push(delete.as_ref().into());
+            }
+            return Ok(results);
         }
 
         // TODO: the spec states that:
@@ -260,7 +293,7 @@ impl PopulatedDeleteFileIndex {
                 .for_each(|delete| results.push(delete.as_ref().into()));
         }
 
-        results
+        Ok(results)
     }
 }
 
@@ -301,18 +334,21 @@ mod tests {
         let data_file = build_unpartitioned_data_file();
 
         // All deletes apply to sequence 0
-        let delete_files_to_apply_for_seq_0 =
-            delete_file_index.get_deletes_for_data_file(&data_file, Some(0));
+        let delete_files_to_apply_for_seq_0 = delete_file_index
+            .get_deletes_for_data_file(&data_file, Some(0))
+            .unwrap();
         assert_eq!(delete_files_to_apply_for_seq_0.len(), 4);
 
         // All deletes apply to sequence 3
-        let delete_files_to_apply_for_seq_3 =
-            delete_file_index.get_deletes_for_data_file(&data_file, Some(3));
+        let delete_files_to_apply_for_seq_3 = delete_file_index
+            .get_deletes_for_data_file(&data_file, Some(3))
+            .unwrap();
         assert_eq!(delete_files_to_apply_for_seq_3.len(), 4);
 
         // Last 3 deletes apply to sequence 4
-        let delete_files_to_apply_for_seq_4 =
-            delete_file_index.get_deletes_for_data_file(&data_file, Some(4));
+        let delete_files_to_apply_for_seq_4 = delete_file_index
+            .get_deletes_for_data_file(&data_file, Some(4))
+            .unwrap();
         let actual_paths_to_apply_for_seq_4: Vec<String> = delete_files_to_apply_for_seq_4
             .into_iter()
             .map(|file| file.file_path)
@@ -324,8 +360,9 @@ mod tests {
         );
 
         // Last 3 deletes apply to sequence 5
-        let delete_files_to_apply_for_seq_5 =
-            delete_file_index.get_deletes_for_data_file(&data_file, Some(5));
+        let delete_files_to_apply_for_seq_5 = delete_file_index
+            .get_deletes_for_data_file(&data_file, Some(5))
+            .unwrap();
         let actual_paths_to_apply_for_seq_5: Vec<String> = delete_files_to_apply_for_seq_5
             .into_iter()
             .map(|file| file.file_path)
@@ -336,8 +373,9 @@ mod tests {
         );
 
         // Only the last position delete applies to sequence 6
-        let delete_files_to_apply_for_seq_6 =
-            delete_file_index.get_deletes_for_data_file(&data_file, Some(6));
+        let delete_files_to_apply_for_seq_6 = delete_file_index
+            .get_deletes_for_data_file(&data_file, Some(6))
+            .unwrap();
         let actual_paths_to_apply_for_seq_6: Vec<String> = delete_files_to_apply_for_seq_6
             .into_iter()
             .map(|file| file.file_path)
@@ -351,8 +389,9 @@ mod tests {
         let partitioned_file =
             build_partitioned_data_file(&Struct::from_iter([Some(Literal::long(100))]), 1);
 
-        let delete_files_to_apply_for_partitioned_file =
-            delete_file_index.get_deletes_for_data_file(&partitioned_file, Some(0));
+        let delete_files_to_apply_for_partitioned_file = delete_file_index
+            .get_deletes_for_data_file(&partitioned_file, Some(0))
+            .unwrap();
         let actual_paths_to_apply_for_partitioned_file: Vec<String> =
             delete_files_to_apply_for_partitioned_file
                 .into_iter()
@@ -394,18 +433,21 @@ mod tests {
             build_partitioned_data_file(&Struct::from_iter([Some(Literal::long(100))]), spec_id);
 
         // All deletes apply to sequence 0
-        let delete_files_to_apply_for_seq_0 =
-            delete_file_index.get_deletes_for_data_file(&partitioned_file, Some(0));
+        let delete_files_to_apply_for_seq_0 = delete_file_index
+            .get_deletes_for_data_file(&partitioned_file, Some(0))
+            .unwrap();
         assert_eq!(delete_files_to_apply_for_seq_0.len(), 4);
 
         // All deletes apply to sequence 3
-        let delete_files_to_apply_for_seq_3 =
-            delete_file_index.get_deletes_for_data_file(&partitioned_file, Some(3));
+        let delete_files_to_apply_for_seq_3 = delete_file_index
+            .get_deletes_for_data_file(&partitioned_file, Some(3))
+            .unwrap();
         assert_eq!(delete_files_to_apply_for_seq_3.len(), 4);
 
         // Last 3 deletes apply to sequence 4
-        let delete_files_to_apply_for_seq_4 =
-            delete_file_index.get_deletes_for_data_file(&partitioned_file, Some(4));
+        let delete_files_to_apply_for_seq_4 = delete_file_index
+            .get_deletes_for_data_file(&partitioned_file, Some(4))
+            .unwrap();
         let actual_paths_to_apply_for_seq_4: Vec<String> = delete_files_to_apply_for_seq_4
             .into_iter()
             .map(|file| file.file_path)
@@ -417,8 +459,9 @@ mod tests {
         );
 
         // Last 3 deletes apply to sequence 5
-        let delete_files_to_apply_for_seq_5 =
-            delete_file_index.get_deletes_for_data_file(&partitioned_file, Some(5));
+        let delete_files_to_apply_for_seq_5 = delete_file_index
+            .get_deletes_for_data_file(&partitioned_file, Some(5))
+            .unwrap();
         let actual_paths_to_apply_for_seq_5: Vec<String> = delete_files_to_apply_for_seq_5
             .into_iter()
             .map(|file| file.file_path)
@@ -429,8 +472,9 @@ mod tests {
         );
 
         // Only the last position delete applies to sequence 6
-        let delete_files_to_apply_for_seq_6 =
-            delete_file_index.get_deletes_for_data_file(&partitioned_file, Some(6));
+        let delete_files_to_apply_for_seq_6 = delete_file_index
+            .get_deletes_for_data_file(&partitioned_file, Some(6))
+            .unwrap();
         let actual_paths_to_apply_for_seq_6: Vec<String> = delete_files_to_apply_for_seq_6
             .into_iter()
             .map(|file| file.file_path)
@@ -443,8 +487,9 @@ mod tests {
         // Data file with different partition tuples does not match any delete files
         let partitioned_second_file =
             build_partitioned_data_file(&Struct::from_iter([Some(Literal::long(200))]), 1);
-        let delete_files_to_apply_for_different_partition =
-            delete_file_index.get_deletes_for_data_file(&partitioned_second_file, Some(0));
+        let delete_files_to_apply_for_different_partition = delete_file_index
+            .get_deletes_for_data_file(&partitioned_second_file, Some(0))
+            .unwrap();
         let actual_paths_to_apply_for_different_partition: Vec<String> =
             delete_files_to_apply_for_different_partition
                 .into_iter()
@@ -454,8 +499,9 @@ mod tests {
 
         // Data file with same tuple but different spec ID does not match any delete files
         let partitioned_different_spec = build_partitioned_data_file(&partition_one, 2);
-        let delete_files_to_apply_for_different_spec =
-            delete_file_index.get_deletes_for_data_file(&partitioned_different_spec, Some(0));
+        let delete_files_to_apply_for_different_spec = delete_file_index
+            .get_deletes_for_data_file(&partitioned_different_spec, Some(0))
+            .unwrap();
         let actual_paths_to_apply_for_different_spec: Vec<String> =
             delete_files_to_apply_for_different_spec
                 .into_iter()
@@ -553,7 +599,9 @@ mod tests {
             .collect();
         let index = PopulatedDeleteFileIndex::new(delete_contexts);
 
-        let results = index.get_deletes_for_data_file(&data_file, Some(1));
+        let results = index
+            .get_deletes_for_data_file(&data_file, Some(1))
+            .unwrap();
         let result_paths: Vec<&str> = results.iter().map(|f| f.file_path.as_str()).collect();
 
         assert_eq!(
@@ -606,7 +654,9 @@ mod tests {
             .collect();
         let index = PopulatedDeleteFileIndex::new(delete_contexts);
 
-        let sibling_results = index.get_deletes_for_data_file(&sibling_data_file, Some(1));
+        let sibling_results = index
+            .get_deletes_for_data_file(&sibling_data_file, Some(1))
+            .unwrap();
         let sibling_paths: Vec<&str> = sibling_results
             .iter()
             .map(|f| f.file_path.as_str())
@@ -617,7 +667,9 @@ mod tests {
             "the sibling file gets the partition-scoped parquet position delete, never the DV"
         );
 
-        let dv_file_results = index.get_deletes_for_data_file(&data_file_with_dv, Some(1));
+        let dv_file_results = index
+            .get_deletes_for_data_file(&data_file_with_dv, Some(1))
+            .unwrap();
         let dv_file_paths: Vec<&str> = dv_file_results
             .iter()
             .map(|f| f.file_path.as_str())
@@ -625,14 +677,13 @@ mod tests {
         assert_eq!(dv_file_paths, vec![dv_path.as_str()]);
     }
 
-    /// Risk pinned (documented deferral): Java VALIDATES `dv.dataSequenceNumber() >= seq`
-    /// (ValidationException, `findDV` L209-213) instead of seq-FILTERING the DV. This index is
-    /// infallible by signature, so the DV is returned regardless of sequence numbers — this test
-    /// pins that the DV is NOT silently dropped by a sequence filter (dropping it would
-    /// resurrect deleted rows on valid tables where dv_seq >= data_seq always holds; the
-    /// fail-loud half of Java's contract is the deferred residue, see GAP_MATRIX).
+    /// Risk pinned: a DV is NOT seq-FILTERED (Java `findDV` does not drop it by sequence number —
+    /// dropping a valid DV would resurrect deleted rows), and the VALID boundary is returned. With
+    /// a DV at data seq 5: `dv_seq == data_seq` (5 == 5, the row-delta same-snapshot-family case)
+    /// and `dv_seq > data_seq` (5 > 3) both return the DV. The INVALID case (`dv_seq < data_seq`)
+    /// is the separate `test_dv_lower_seq_than_data_file_is_invalid_table` test.
     #[test]
-    fn test_dv_is_not_sequence_filtered() {
+    fn test_dv_is_not_sequence_filtered_at_valid_boundary() {
         let partition = Struct::from_iter([Some(Literal::long(100))]);
         let spec_id = 1;
         let data_file = build_partitioned_data_file(&partition, spec_id);
@@ -646,15 +697,58 @@ mod tests {
             partition_spec_id: spec_id,
         }]);
 
-        // Same seq (the row-delta case: DV committed in the same snapshot family) and a HIGHER
-        // data seq (the invalid state Java rejects loudly): the DV is returned in both.
+        // dv_seq == data_seq (5 == 5) — the row-delta case; the DV applies.
         assert_eq!(
-            index.get_deletes_for_data_file(&data_file, Some(5)).len(),
+            index
+                .get_deletes_for_data_file(&data_file, Some(5))
+                .unwrap()
+                .len(),
             1
         );
+        // dv_seq > data_seq (5 > 3) — a later DV on earlier data; the DV applies.
         assert_eq!(
-            index.get_deletes_for_data_file(&data_file, Some(9)).len(),
+            index
+                .get_deletes_for_data_file(&data_file, Some(3))
+                .unwrap()
+                .len(),
             1
+        );
+    }
+
+    /// Risk pinned (the dv_seq residue, now landed): a DV whose data sequence number is LESS THAN
+    /// the data file's marks an INVALID table — Java `DeleteFileIndex.findDV` throws a
+    /// `ValidationException` (L208-214, 1.10.0-bytecode-verified). A valid writer never produces
+    /// this, so the metadata is hand-built: a DV at data seq 5 looked up against a data file at
+    /// seq 9 (5 < 9). The lookup must fail LOUD with the EXACT Java message naming both sequence
+    /// numbers, never silently apply the wrong DV.
+    ///
+    /// MUTATION: disabling the check (returning the DV regardless) makes this test see a silent
+    /// `Ok(vec![dv])` instead of the error.
+    #[test]
+    fn test_dv_lower_seq_than_data_file_is_invalid_table() {
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let spec_id = 1;
+        let data_file = build_partitioned_data_file(&partition, spec_id);
+
+        // Hand-built invalid metadata: a DV committed at data seq 5, looked up for a data file at
+        // seq 9 — `dv_seq (5) < data_seq (9)`, which no valid writer produces.
+        let dv_entry = build_added_manifest_entry(
+            5,
+            &build_partitioned_deletion_vector(data_file.file_path(), &partition, spec_id),
+        );
+        let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
+            manifest_entry: dv_entry.into(),
+            partition_spec_id: spec_id,
+        }]);
+
+        let err = index
+            .get_deletes_for_data_file(&data_file, Some(9))
+            .expect_err("a DV from an earlier sequence number than the data file is invalid");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.message(),
+            "DV data sequence number (5) must be greater than or equal to data file sequence number (9)",
+            "the message must mirror Java DeleteFileIndex.findDV exactly (1.10.0 bytecode)"
         );
     }
 
@@ -683,7 +777,9 @@ mod tests {
             partition_spec_id: spec_id,
         }]);
 
-        let results = index.get_deletes_for_data_file(&data_file, Some(1));
+        let results = index
+            .get_deletes_for_data_file(&data_file, Some(1))
+            .unwrap();
         assert_eq!(results.len(), 1, "the invalid DV must reach the loader");
         assert_eq!(results[0].file_format, DataFileFormat::Puffin);
         assert_eq!(results[0].referenced_data_file, None);

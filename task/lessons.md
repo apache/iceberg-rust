@@ -581,3 +581,168 @@ How to use it (see the manuals' §2):
 - **Escalate evidence to a LIVE ORACLE when the jars are present:** the reviewer ran
   `SnapshotRefParser`/`TableMetadataParser` directly on the disputed documents — reject/accept and
   messages matched Rust exactly. Bytecode reasoning is good; an executed oracle is proof.
+
+### 2026-06-11 (Multi-spec writes — producer per-spec grouping, BUILDER Opus, Group A)
+- **DO group added DATA *and* DELETE files by their OWN `partition_spec_id` and write ONE manifest
+  per (content × spec) — the producer was DEFAULT-SPEC-ONLY (validated `spec == default`, wrote the
+  added manifest under `default_partition_spec()`).** *Why:* Java's `MergingSnapshotProducer.add` /
+  `FastAppend.appendFile` (1.10.0 source AND `FastAppend.java` in the jar — VERIFIED, FastAppend does
+  support multi-spec adds) keep each file's own `specId()` in `newDataFilesBySpec` /
+  `newDeleteFilesBySpec` (a `HashMap`) and `forEach`-write `writeDataManifests(files, spec(specId))`
+  per group. Writing a spec-0 file's 1-field partition tuple into a default-spec-1 manifest (2-field
+  type) is partition-tuple CORRUPTION — the mutation made the writer `zip_eq`-panic on the arity
+  mismatch (the exact corruption the grouping prevents). Chose spec-id DESCENDING order (the
+  established Rust convention — `merge_append`/`rewrite_manifests` reverse-sort; Java `groupBySpec` is
+  a `TreeMap(reverseOrder())` for merging; HashMap `forEach` order is non-deterministic and the group
+  order never appears in the spec-canonical metadata view — a manifest list is compared as a SET, the
+  cluster-key GROUPING-only lesson applied to manifest ordering).
+- **DO lift the added-file validation from "spec == default" to "spec EXISTS in `partition_spec_by_id`"
+  with Java's EXACT two messages** ("Cannot find partition spec %s for data file: %s" /
+  "...delete file: %s", spec id + `file.location()`), and check partition-value compatibility against
+  the FILE's OWN spec's partition type, not the default's. *Why:* Java's `Preconditions.checkArgument(
+  spec != null, ...)` accepts any known spec and rejects only an UNKNOWN id. The validation-revert
+  mutation (fall back to the default spec instead of erroring) made the door-level message vanish —
+  the unknown-spec commit still ultimately failed DEEPER (the cluster writer errors "unknown partition
+  spec id", or the partition-value check fails on the default's arity), proving the door is
+  defense-in-depth and the tests must pin the DOOR's exact message, not just "a commit fails".
+- **THE RIPPLE THE BRIEF FLAGGED: `SnapshotSummaryCollector.add_file`/`remove_file` must take the
+  file's OWN spec, not the table default** — Java `SnapshotSummary.Builder.addedFile(spec(file.specId()),
+  file)` → `updatePartitions(spec, file)` computes `spec.partitionToPath(file.partition())` with the
+  file's spec. `summary()` passed `default_partition_spec()` for every file; on a multi-spec commit a
+  spec-0 file's path would be rendered under the wrong spec ⇒ wrong `changed-partition-N=` summary keys
+  (the changed-partition-summaries family). Fixed via a `file_partition_spec(file)` helper (falls back
+  to default only for the unreachable "spec vanished" case, since validation runs first and the summary
+  path is infallible).
+- **VERIFIED-UNAFFECTED ripples (cited, not changed):** the fresh-DV door
+  (`row_delta::validate_fresh_dvs_only`) resolves the REFERENCED file's LIVE manifest entry and keys
+  on ITS `(spec_id, partition)` — never the added file's own fields — so it is independent of the
+  producer's added-file path (the cross-spec DV test stayed green). `rewrite_manifests` /
+  `merge_append` cluster writers are already `(key, spec_id)`-keyed; `replace_partitions` resolves
+  `(spec_id, partition)` tuples (per-spec already). The only producer-side write/validation surface
+  was the default-spec assumption — everything downstream already threaded spec ids.
+- **FLAG (deferred, NOT fixed): `OverwriteFiles::validate_added_files` (the opt-in
+  `validateAddedFilesMatchOverwriteFilter`) builds its partition evaluators from the DEFAULT spec.**
+  Java uses `dataSpec()`, which `checkState(specIds.size() == 1, ...)` — Java itself REJECTS a
+  multi-spec overwrite under that opt-in check. So the Rust path diverges only for a
+  multi-spec-overwrite-with-row-filter-validation combination Java forbids anyway; out of the
+  producer's core scope. The WRITER-LAYER spec threading (`DataFileWriter`/`DeletionVectorWriter` stamp
+  the table default) also stays deferred — a single writer instance produces single-spec files; a
+  multi-spec commit is assembled by the CALLER passing already-spec-stamped files (which is what the
+  producer now groups correctly). Multi-spec Java↔Rust interop is the other deferral.
+
+### 2026-06-11 (Multi-spec writes — REVIEWER pass, Group A, wt-closeout)
+- **A per-file-spec fix needs a SAME-ARITY pin, or the panic is "luck" not coverage.** The summary-collector
+  fix (render each file's `partitions.{path}` under ITS own spec) had no dedicated test. Reverting it only
+  failed the multi-spec MANIFEST tests — and only because those fixtures use DIFFERENT-ARITY specs
+  (`identity(x)` 1-field vs `identity(x)+identity(y)` 2-field), so `partition_to_path` index-out-of-bounds
+  PANICS and aborts the commit before the manifest asserts. A SAME-ARITY different-NAME multi-spec commit
+  (`identity(x)` vs `identity(y)`, both 1-field) renders the WRONG field name with NO panic — silent
+  corruption of `partitions.{path}` keys and `changed-partition-count`. The pin MUST use the same-arity
+  shape (V2 omits a removed-only base field, so `remove(x)+add(y)` gives a clean 1-field `identity(y)`) and
+  pick the SAME partition value on both files so the default-spec bug COLLAPSES two distinct tuples onto one
+  path ⇒ a wrong `changed-partition-count`. General rule: when a fix routes a per-element spec/type, pin it
+  with elements that differ ONLY in the routed attribute, never in arity (arity divergence masks the bug
+  behind an unrelated panic).
+- **`added-/total-data-files` summary counts do NOT guard against manifest-grouping FILE LOSS.** They are
+  computed from `added_data_files` BEFORE `group_files_by_spec`, so a grouping bug that drops a spec group
+  leaves the totals intact while the file vanishes from every manifest. File-loss is caught only by tests
+  that assert manifest COUNT + per-file PRESENCE in a loaded manifest (the two-spec manifest tests do; a
+  cumulative-totals test does not). Pin write-path file-loss at the manifest layer, never via the summary.
+- **The canonical interop view (`snapshot_meta_view.rs`) does NOT encode manifest `partition_spec_id`** (not
+  in the sort tuple, not in the emitted JSON). Same-content/same-seq/same-counts manifests of DIFFERENT
+  specs tie on the whole tuple ⇒ array order is manifest-list position (Rust spec-descending vs Java HashMap
+  `forEach`). Today no interop fixture is multi-spec single-commit, so the view is fine; the FIRST multi-spec
+  interop fixture must add spec id to the comparator tuple (or compare the manifest SET order-insensitively).
+
+### 2026-06-11 (Phase 3 Increment 2 RE-DONE — identity-partition constants-map ACTIVATION, BUILDER Group A)
+- **DO materialize identity-partition constants as PLAIN arrays of the DECLARED scan-schema type, not
+  Run-End-Encoded.** *Why:* the 2026-06-08 revert's first bug ("expected Utf8 but found RunEndEncoded",
+  `test_insert_into_partitioned`) was that `record_batch_transformer` built the target schema field for a
+  constant identity-partition column via `datum_to_arrow_type_with_ree` (a Rust-only storage optimization),
+  so the OUTPUT batch schema declared REE where the projected scan schema (and DataFusion / `RecordBatch::
+  try_new`) require a plain `Utf8`/`Int64`. The fix: for a constant field that EXISTS in the table schema
+  (identity-partition), use the field's declared plain Arrow type + a plain repeated array; REE stays ONLY
+  for metadata-virtual fields (`_file`) that have no schema entry. Java `PartitionUtil.constantsMap` is
+  encoding-agnostic — the column is handed back in its declared physical type. Pin BOTH the field's declared
+  `data_type()` AND the concrete array downcast (`StringArray`/`Int64Array`), because a value-only helper
+  (`get_string_value`) passes under REE too.
+- **DO coerce a partition constant to the COLUMN'S Iceberg type via `Datum::to(&field.field_type)`, not the
+  literal's stored variant.** *Why:* the revert's second bug ("Unsupported constant type combination: Int64
+  with Some(Int(19))", `test_evolved_schema`) was a partition tuple carrying a NARROW `Int(i32)` literal for
+  a column promoted to `Long`; `Datum::new(Long, Int(19))` kept the narrow literal and the array builder's
+  `(Int64, Int(19))` arm did not exist. `Datum::to` is the canonical Iceberg coercion table (`Int->Long`,
+  `Int->Date`, `Long->Timestamp/Timestamptz`, `Int128->Long`, equal-type passthrough) — it mirrors Java
+  `IdentityPartitionConverters.convertConstant(partitionType.field(pos).type(), value)`, where the TYPE comes
+  from the schema-derived partition type (verified against 1.10.0 bytecode: the per-field loop reads
+  `partitionType.fields().get(pos).type()`, and the converter's `default` case is a passthrough — the
+  widening is implicit in Java's boxing/coercion).
+- **DO force the constant to OVERRIDE a file-present column — the `PassThrough`/`ModifySchema` fast paths
+  silently return the FILE value.** *Why:* the revert's two known bugs were the loud failures, but a SILENT
+  third one lurked: `compare_schemas` is constant-unaware, so when an identity-partition column is ALSO
+  physically in the data file with a matching type (the test fixtures — the partition column is in the
+  parquet), the transformer took `PassThrough` and returned the FILE value, never applying the constant. The
+  existing scan read tests NEVER caught this because the fixture made the file value == the partition value
+  (both 1) — indistinguishable. The metadata-vs-file test (partition `x==999`, file `x==[1;1024]`) is the
+  one that exposed it; the fix forces the column-rebuilding `Modify` path whenever a constant field id is
+  also in the source file (Java: partition metadata wins over file data). LESSON: a "constant overrides
+  file" feature is structurally untestable on a fixture where the two sources AGREE — make them DIFFER.
+- **DO thread the spec the same once-per-manifest way the residual already does.** `create_manifest_file_
+  context` already resolves `partition_spec_by_id(manifest.partition_spec_id)` (an `Arc`) to build the
+  residual evaluator; thread THAT same Arc onto `ManifestFileContext` -> `ManifestEntryContext` -> `FileScan
+  Task.partition_spec` — no new resolution, no per-file rebuild, and multi-spec falls out for free (each
+  manifest's files get their own spec). Multi-spec test: two identity specs over different columns, one file
+  each in its own manifest, partition values differing from the data — each file's constant materializes
+  under ITS spec (mutation: disable activation ⇒ both the metadata-vs-file AND multi-spec tests fail).
+- **PROCESS WIN: the gate that killed the first attempt now PASSES BY CONSTRUCTION.** Ran `cargo test -p
+  iceberg-datafusion` (lib 80 + MemoryCatalog integration 9 incl. `test_insert_into_partitioned`) EARLY and
+  after every transformer edit, not just at the end. The REE-mutation reproduced the ORIGINAL revert error
+  byte-for-byte ("expected Utf8 but found RunEndEncoded at column index 1") in the datafusion integration
+  test — proof the offline pin and the gate catch the same regression. (The pre-existing
+  `table_provider_factory.rs` DOCTEST failure — `#[tokio::main]` without `rt-multi-thread`, present in HEAD,
+  Cargo edits prohibited — is the only datafusion red and is unrelated.)
+- **MUTATION-MECHANICS near-miss (re-learned): restore from the POST-EDIT snapshot, never a pre-edit one.**
+  I mutated the file in place, then restored from a backup taken BEFORE my edits — wiping my own work. Recovered
+  only because the mutation's `.mut` artifact held my edits-plus-mutation and I could reverse the mutation
+  textually. RULE: snapshot the file AFTER your edits and immediately BEFORE each mutation; that is the only
+  correct restore source. (Promoted-rule restatement, but it bit again — keep the post-edit `.bak` namespaced.)
+
+### 2026-06-11 (Multi-spec closeout 3 — `removeRows` apply-side + dv_seq validation, BUILDER Group A)
+- **The scheduled flip arrived: the 2026-06-09 "validation-only must be documented at EVERY surface" lesson's
+  twin is "when the apply side lands, flip EVERY one of those surfaces — they all lied symmetrically."** *Why:*
+  the deferral was deliberately stamped on the module doc, the field doc, BOTH method docs, AND the
+  sibling-field contrast (`removed_delete_files` said "unlike removed_data_files which is validation-only").
+  Landing the apply side means each of those must now say the OPPOSITE, and the symmetric ones (the two
+  "unlike X (validation-only)" contrasts) flip to "like X" — miss one and the docs self-contradict. Grep the
+  EXACT deferral phrase ("validation-only", "deferred", "OverwriteFiles' job") across the file, not just the
+  method you changed; two test-comment instances also carried it.
+- **The cheapest apply-side port is the one where the producer machinery already routes through the seam — you
+  add nothing to snapshot.rs.** *Why:* `SnapshotProducer::commit` already does
+  `self.removed_data_files = operation.delete_files(&self)` and feeds that into `process_deletes` (rewrite) +
+  `summary()` (`remove_file`). `RowDeltaOperation::delete_files` returned `[]` (the validation-only seam). The
+  ENTIRE apply-side port was: resolve the removed paths via the SAME shared `resolve_delete_paths`
+  `OverwriteFiles` uses. Read overwrite_files.rs's `delete_files` FIRST and mirror it — don't invent a parallel
+  removal path.
+- **`operation()` confirmation is a real deliverable, not a formality — and `do_commit` order makes the
+  ordering pin free.** *Why:* the brief asked to CONFIRM the 1.10.0 two-branch `operation()` is unaffected by
+  removals. It is: it consults `addsDeleteFiles`/`addsDataFiles` only, never `deletesDataFiles()` — so
+  remove-only and remove+add-delete are both Overwrite. And because `do_commit` runs `validate()` for ALL
+  actions BEFORE any `commit()`, the removed∩referenced rejection (`validateNoConflictingFileAndPositionDeletes`,
+  in validate) fires strictly before the apply-side removal (in commit) — the ordering test pins this by
+  asserting the table is UNTOUCHED after the rejection, and it PASSES under the routing-sever mutation (proving
+  it's a validate-time gate, independent of the apply path).
+- **Place a fallibility-introducing check where the inputs already live; measure the ripple before rejecting
+  "make it fallible".** *Why:* the dv_seq check needs BOTH the DV's seq and the data file's seq. The caching
+  loader (the duplicate-DV check's home — the tempting "consistent placement") has NEITHER:
+  `FileScanTaskDeleteFile`'s `From<&DeleteFileContext>` DROPS the manifest entry's sequence number, so placing
+  it there means threading two new seqs through a public serialized struct. The index has both in hand
+  (`seq_num` param + the DV's manifest entry) and ONE production caller (`scan/context.rs`, already
+  `Result`-returning). The "infallible signature" that justified D1's deferral was a one-`?` ripple, not a
+  scan-wide fallibility cascade — assess, don't assume. Two sibling checks need NOT share a home if their
+  inputs differ.
+- **A deferred-residue test often INVERTS when the residue lands — split it, don't just `.unwrap()` it.** *Why:*
+  `test_dv_is_not_sequence_filtered` asserted the DV is returned at BOTH `dv_seq==data_seq` AND
+  `dv_seq<data_seq` (the latter being exactly the invalid state the deferral let through). Landing the check
+  makes the second assertion the ERROR case. Split: the valid-boundary half (==, >) keeps "DV applies, not
+  seq-filtered"; the invalid half (<) becomes the new fail-loud test with the bytecode-exact message. Mirror
+  the EXACT Java message from the jar (`javap -c` the `ldc` String constant), not the MAIN source — they can
+  differ; here they matched.

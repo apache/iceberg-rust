@@ -55,16 +55,15 @@
 //! action — the same choice already made for `replace_partitions` / `overwrite_files`, which Java also reaches
 //! through producer subclasses. `ManageSnapshotsAction` carries a doc pointer here.
 //!
-//! **Multi-spec divergence (fail-loud, NOT silent).** Java's add path (`MergingSnapshotProducer.add`)
+//! **Multi-spec replay (Java parity since 2026-06-11).** Java's add path (`MergingSnapshotProducer.add`)
 //! preserves each added file's OWN partition spec id and writes per-spec manifests, so cherry-picking a
 //! snapshot whose data files belong to an OLDER partition spec onto a table whose default spec has since moved
-//! SUCCEEDS in Java. The Rust replay reuses the producer's `validate_added_data_files`, which (like fast
-//! append) REQUIRES every added file to carry the table's CURRENT default spec id and the producer writes the
-//! added manifest under the default spec only — so the same old-spec replay FAILS-LOUD with a non-retryable
-//! `DataInvalid` ("Data file partition spec id does not match table default partition spec id"). This is the
-//! conservative-safe direction (accepting an old-spec file would misplace its partition under the wrong spec,
-//! corrupting it); it holds until the producer grows per-spec manifest grouping. Pinned by
-//! `test_cherrypick_multispec_replay_fails_loud`.
+//! SUCCEEDS in Java. The Rust replay reuses the producer's `validate_added_data_files`, which now mirrors
+//! Java: an added file is accepted as long as its `partition_spec_id` EXISTS in the table's specs (an UNKNOWN
+//! spec id is rejected with Java's "Cannot find partition spec %s for data file: %s"), and the producer
+//! writes ONE manifest per partition-spec group — so the same old-spec replay SUCCEEDS, the replayed files
+//! land in a manifest stamped with their own spec id, and a scan reads them correctly. Pinned by
+//! `test_cherrypick_multispec_replay_produces_per_spec_manifest`.
 //!
 //! **Out of scope (deferred):** Java↔Rust byte-level interop for the published snapshot (this is a 🟡
 //! unit-proven action); the stage-only WAP WRITE path (`stageOnly()` on the append/overwrite producers that
@@ -1440,7 +1439,8 @@ mod tests {
     // ============================================================================================
     // Reviewer-added pins (2026-06-11): the dangling-publish negative control (the dedup scope —
     // CURRENT ancestors only, not all snapshots), the FF-precedence cell for a NON-eligible op, and
-    // the multi-spec replay fail-loud divergence.
+    // the multi-spec replay pin (converted 2026-06-11 from the former fail-loud divergence to the
+    // per-spec Java-parity contract — the replay now SUCCEEDS under its own spec id).
     // ============================================================================================
 
     /// DANGLING-PUBLISH NEGATIVE CONTROL (the double-publish dedup SCOPE). The `source-snapshot-id`
@@ -1570,20 +1570,19 @@ mod tests {
         );
     }
 
-    /// MULTI-SPEC REPLAY — DOCUMENTED FAIL-LOUD DIVERGENCE FROM JAVA. Java's cherry-pick add path
-    /// (`MergingSnapshotProducer.add(DataFile)`) preserves each added file's OWN `specId()` and writes
-    /// per-spec manifests, so replaying a snapshot whose files belong to an OLDER partition spec onto a table
-    /// whose default spec has since moved SUCCEEDS. The Rust producer's `validate_added_data_files` (shared
-    /// with fast append) REQUIRES every added data file to carry the table's CURRENT default spec id, so the
-    /// same replay FAILS-LOUD with a non-retryable `DataInvalid`.
+    /// MULTI-SPEC REPLAY — JAVA PARITY (converted 2026-06-11 from the former fail-loud divergence pin).
+    /// Java's cherry-pick add path (`MergingSnapshotProducer.add(DataFile)`) preserves each added file's OWN
+    /// `specId()` and writes per-spec manifests, so replaying a snapshot whose files belong to an OLDER
+    /// partition spec onto a table whose default spec has since moved SUCCEEDS. The Rust producer now mirrors
+    /// this: `validate_added_data_files` accepts any added file whose `partition_spec_id` EXISTS in the
+    /// table's specs, and `write_added_manifests` writes ONE manifest per partition-spec group.
     ///
-    /// This is a faithful, conservative divergence: the whole Rust write engine writes added files under the
-    /// default spec only (`write_added_manifest` uses `default_partition_spec()`), so accepting an old-spec
-    /// file would silently misplace its partition under the wrong spec (corruption). Failing loud is correct
-    /// until the producer grows per-spec manifest grouping. Risk pinned: a future change that SILENTLY accepts
-    /// (and corrupts) an old-spec replay instead of erroring; this test fixes the contract as fail-loud.
+    /// Risk pinned: the replayed spec-0 staged file must (a) commit successfully (no spurious spec-mismatch
+    /// rejection), (b) be written into a manifest stamped with ITS OWN spec id 0 (NOT the new default), and
+    /// (c) be live after publish so a scan reads it. A regression that reverted to default-spec-only writing
+    /// would either reject the commit or stamp the manifest under the new spec id (partition corruption).
     #[tokio::test]
-    async fn test_cherrypick_multispec_replay_fails_loud() {
+    async fn test_cherrypick_multispec_replay_produces_per_spec_manifest() {
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
 
@@ -1621,16 +1620,45 @@ mod tests {
         )])
         .await;
 
-        // Replaying the spec-0 staged files onto a table whose default spec is now 1 fails-loud.
-        let err = cherry_pick_err(&catalog, &table, staged_id).await;
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(!err.retryable(), "a spec mismatch is non-retryable");
+        // Replaying the spec-0 staged files onto a table whose default spec is now 1 SUCCEEDS (Java parity).
+        let before = snapshot_count(&table);
+        let table = cherry_pick(&catalog, &table, staged_id).await;
+        assert_eq!(
+            snapshot_count(&table),
+            before + 1,
+            "an old-spec append replay produces a NEW snapshot"
+        );
+
+        // The replayed spec-0 file is live (a scan reads it) and the head spec-1 file survives.
+        let live = live_file_paths(&table).await;
         assert!(
-            err.message().contains(
-                "Data file partition spec id does not match table default partition spec id"
-            ),
-            "unexpected message (expected the fail-loud spec-mismatch divergence): {}",
-            err.message()
+            live.contains("test/staged.parquet"),
+            "the replayed old-spec file is live after publish: {live:?}"
+        );
+        assert!(
+            live.contains("test/head.parquet"),
+            "the new-spec head file survives: {live:?}"
+        );
+
+        // The replayed file is in a manifest stamped with ITS OWN spec id 0, NOT the new default spec.
+        let published = table.metadata().current_snapshot().unwrap();
+        let manifest_list = published
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let mut staged_spec_id = None;
+        for manifest_file in manifest_list.entries() {
+            let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
+            for entry in manifest.entries() {
+                if entry.file_path() == "test/staged.parquet" {
+                    staged_spec_id = Some(manifest_file.partition_spec_id);
+                }
+            }
+        }
+        assert_eq!(
+            staged_spec_id,
+            Some(0),
+            "the replayed old-spec file must live in a manifest stamped with spec id 0, not the new default"
         );
     }
 
