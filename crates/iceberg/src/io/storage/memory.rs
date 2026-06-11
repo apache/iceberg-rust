@@ -25,16 +25,39 @@
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{Arc, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::io::{
-    FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
+    FileInfo, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
     StorageFactory,
 };
 use crate::{Error, ErrorKind, Result};
+
+/// A stored in-memory blob together with the wall-clock time it was last written.
+///
+/// The timestamp is captured at write time so [`Storage::list`] can report a plausible
+/// `created_at_millis` for each entry (mirroring the last-modified value Java's object-store
+/// `FileIO` implementations attach to `FileInfo`).
+#[derive(Debug, Clone)]
+pub(crate) struct MemoryEntry {
+    bytes: Bytes,
+    created_at_millis: i64,
+}
+
+/// Current wall-clock time as milliseconds since the Unix epoch.
+///
+/// A clock at or before the epoch (unreachable in practice) clamps to `0` so the recorded
+/// timestamp stays non-negative.
+fn now_millis() -> i64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+        Err(_) => 0,
+    }
+}
 
 /// In-memory storage implementation.
 ///
@@ -60,10 +83,10 @@ use crate::{Error, ErrorKind, Result};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MemoryStorage {
     #[serde(skip, default = "default_memory_data")]
-    data: Arc<RwLock<HashMap<String, Bytes>>>,
+    data: Arc<RwLock<HashMap<String, MemoryEntry>>>,
 }
 
-fn default_memory_data() -> Arc<RwLock<HashMap<String, Bytes>>> {
+fn default_memory_data() -> Arc<RwLock<HashMap<String, MemoryEntry>>> {
     Arc::new(RwLock::new(HashMap::new()))
 }
 
@@ -73,6 +96,16 @@ impl MemoryStorage {
         Self {
             data: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Test-only accessor for an entry's recorded write timestamp.
+    #[cfg(test)]
+    pub(crate) fn created_at_millis(&self, path: &str) -> Option<i64> {
+        let normalized = Self::normalize_path(path);
+        self.data
+            .read()
+            .ok()
+            .and_then(|data| data.get(&normalized).map(|entry| entry.created_at_millis))
     }
 
     /// Normalize a path by removing scheme prefixes and leading slashes.
@@ -115,8 +148,8 @@ impl Storage for MemoryStorage {
             )
         })?;
         match data.get(&normalized) {
-            Some(bytes) => Ok(FileMetadata {
-                size: bytes.len() as u64,
+            Some(entry) => Ok(FileMetadata {
+                size: entry.bytes.len() as u64,
             }),
             None => Err(Error::new(
                 ErrorKind::DataInvalid,
@@ -134,7 +167,7 @@ impl Storage for MemoryStorage {
             )
         })?;
         match data.get(&normalized) {
-            Some(bytes) => Ok(bytes.clone()),
+            Some(entry) => Ok(entry.bytes.clone()),
             None => Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!("File not found: {path}"),
@@ -151,7 +184,7 @@ impl Storage for MemoryStorage {
             )
         })?;
         match data.get(&normalized) {
-            Some(bytes) => Ok(Box::new(MemoryFileRead::new(bytes.clone()))),
+            Some(entry) => Ok(Box::new(MemoryFileRead::new(entry.bytes.clone()))),
             None => Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!("File not found: {path}"),
@@ -167,7 +200,10 @@ impl Storage for MemoryStorage {
                 format!("Failed to acquire write lock: {e}"),
             )
         })?;
-        data.insert(normalized, bs);
+        data.insert(normalized, MemoryEntry {
+            bytes: bs,
+            created_at_millis: now_millis(),
+        });
         Ok(())
     }
 
@@ -218,6 +254,51 @@ impl Storage for MemoryStorage {
         }
 
         Ok(())
+    }
+
+    /// List every blob whose normalized key falls under `prefix`.
+    ///
+    /// # Prefix semantics: STRING-PREFIX
+    ///
+    /// Like an object store (Java's `SupportsPrefixOperations` permits arbitrary string
+    /// prefixes for key/value stores) and matching this backend's `delete_prefix`, the prefix
+    /// is matched against the normalized key with a trailing `/` enforced. Enforcing the `/`
+    /// is the boundary guard: prefix `dir` matches `dir/file.txt` but NOT a sibling key
+    /// `dir2/file.txt`. (The flat key space has no notion of nested directories, so every
+    /// match is already "recursive" — there is nothing to descend into.) A prefix with no
+    /// matching keys yields an empty list, never an error.
+    ///
+    /// The trailing-`/` construction is deliberately identical to `delete_prefix`'s (no
+    /// `is_empty()` shortcut): this is what makes `list(p)` and `delete_prefix(p)` agree on the
+    /// exact key set for EVERY prefix, including the empty/root prefix — the safety invariant an
+    /// orphan-file sweep depends on.
+    async fn list(&self, prefix: &str) -> Result<Vec<FileInfo>> {
+        let normalized = Self::normalize_path(prefix);
+        let prefix = if normalized.ends_with('/') {
+            normalized
+        } else {
+            format!("{normalized}/")
+        };
+
+        let data = self.data.read().map_err(|e| {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!("Failed to acquire read lock: {e}"),
+            )
+        })?;
+
+        let files = data
+            .iter()
+            .filter(|(key, _)| key.starts_with(&prefix))
+            .map(|(key, entry)| {
+                FileInfo::new(
+                    key.clone(),
+                    entry.bytes.len() as u64,
+                    entry.created_at_millis,
+                )
+            })
+            .collect();
+        Ok(files)
     }
 
     fn new_input(&self, path: &str) -> Result<InputFile> {
@@ -286,7 +367,7 @@ impl FileRead for MemoryFileRead {
 /// flushed to the storage.
 #[derive(Debug)]
 pub struct MemoryFileWrite {
-    data: Arc<RwLock<HashMap<String, Bytes>>>,
+    data: Arc<RwLock<HashMap<String, MemoryEntry>>>,
     path: String,
     buffer: Vec<u8>,
     closed: bool,
@@ -294,7 +375,7 @@ pub struct MemoryFileWrite {
 
 impl MemoryFileWrite {
     /// Create a new `MemoryFileWrite` for the given path.
-    pub fn new(data: Arc<RwLock<HashMap<String, Bytes>>>, path: String) -> Self {
+    pub fn new(data: Arc<RwLock<HashMap<String, MemoryEntry>>>, path: String) -> Self {
         Self {
             data,
             path,
@@ -329,10 +410,10 @@ impl FileWrite for MemoryFileWrite {
             )
         })?;
 
-        data.insert(
-            self.path.clone(),
-            Bytes::from(std::mem::take(&mut self.buffer)),
-        );
+        data.insert(self.path.clone(), MemoryEntry {
+            bytes: Bytes::from(std::mem::take(&mut self.buffer)),
+            created_at_millis: now_millis(),
+        });
         self.closed = true;
         Ok(())
     }
@@ -574,6 +655,98 @@ mod tests {
         assert!(format!("{storage:?}").contains("MemoryStorage"));
     }
 
+    /// Risk: a wrong path set, size, or timestamp from the in-memory listing feeds A2 a wrong
+    /// orphan set. Pins write -> list round-trip: the full key set, per-file sizes, and
+    /// plausible (>0, <= now) timestamps that match the recorded write time.
+    #[tokio::test]
+    async fn test_list_returns_written_paths_sizes_and_timestamps() {
+        let storage = MemoryStorage::new();
+        storage
+            .write("memory://dir/a.txt", Bytes::from("a"))
+            .await
+            .unwrap();
+        storage
+            .write("memory://dir/sub/b.txt", Bytes::from("bb"))
+            .await
+            .unwrap();
+        let after_writes = now_millis();
+
+        let listed = storage.list("memory://dir").await.unwrap();
+
+        // Keys are stored normalized (scheme + leading slash stripped).
+        let mut locations: Vec<String> = listed.iter().map(|f| f.location.clone()).collect();
+        locations.sort();
+        assert_eq!(locations, vec![
+            "dir/a.txt".to_string(),
+            "dir/sub/b.txt".to_string()
+        ]);
+
+        let entry = |location: &str| listed.iter().find(|f| f.location == location).unwrap();
+        assert_eq!(entry("dir/a.txt").size, 1);
+        assert_eq!(entry("dir/sub/b.txt").size, 2);
+
+        for file in &listed {
+            assert!(file.created_at_millis > 0);
+            assert!(file.created_at_millis <= after_writes);
+            // The listed timestamp is exactly the one recorded at write time.
+            let normalized = format!("memory://{}", file.location);
+            assert_eq!(
+                storage.created_at_millis(&normalized),
+                Some(file.created_at_millis)
+            );
+        }
+    }
+
+    /// Risk: over-listing is over-deletion in A2. Prefix `dir` must match `dir/...` but NOT a
+    /// sibling key `dir2/...` (the trailing-`/` boundary guard, string-prefix semantics).
+    #[tokio::test]
+    async fn test_list_prefix_excludes_sibling_key() {
+        let storage = MemoryStorage::new();
+        storage
+            .write("memory://dir/inside.txt", Bytes::from("in"))
+            .await
+            .unwrap();
+        storage
+            .write("memory://dir2/outside.txt", Bytes::from("out"))
+            .await
+            .unwrap();
+
+        let listed = storage.list("memory://dir").await.unwrap();
+        let locations: Vec<&str> = listed.iter().map(|f| f.location.as_str()).collect();
+        assert_eq!(locations, vec!["dir/inside.txt"]);
+        assert!(!locations.contains(&"dir2/outside.txt"));
+    }
+
+    /// Risk: a prefix with no matching keys is a legitimate empty answer, not an error.
+    #[tokio::test]
+    async fn test_list_empty_prefix_is_empty_not_error() {
+        let storage = MemoryStorage::new();
+        storage
+            .write("memory://other/file.txt", Bytes::from("x"))
+            .await
+            .unwrap();
+
+        let listed = storage.list("memory://nothing-here").await.unwrap();
+        assert!(listed.is_empty());
+    }
+
+    /// Risk: a writer-path (`writer().close()`) write must also record a timestamp, so files
+    /// created via the streaming writer are listable with plausible metadata.
+    #[tokio::test]
+    async fn test_list_includes_writer_created_files_with_timestamp() {
+        let storage = MemoryStorage::new();
+        let mut writer = storage.writer("memory://dir/streamed.txt").await.unwrap();
+        writer.write(Bytes::from("hello")).await.unwrap();
+        writer.close().await.unwrap();
+        let after = now_millis();
+
+        let listed = storage.list("memory://dir").await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].location, "dir/streamed.txt");
+        assert_eq!(listed[0].size, 5);
+        assert!(listed[0].created_at_millis > 0 && listed[0].created_at_millis <= after);
+    }
+
     #[tokio::test]
     async fn test_path_normalization_consistency() {
         let storage = MemoryStorage::new();
@@ -593,5 +766,55 @@ mod tests {
         assert_eq!(storage.read("memory:/path/to/file").await.unwrap(), content);
         assert_eq!(storage.read("/path/to/file").await.unwrap(), content);
         assert_eq!(storage.read("path/to/file").await.unwrap(), content);
+    }
+
+    /// Risk: the increment's load-bearing safety invariant is "`list(prefix)` returns exactly
+    /// the set `delete_prefix(prefix)` would remove" — a disagreement is the data-loss class the
+    /// orphan sweep is built against. This pins the invariant ACROSS prefix shapes, including the
+    /// empty/root prefix (`memory://`) where an earlier `list`-only `is_empty()` special case
+    /// made `list` report every key while `delete_prefix` removed none. For each prefix the two
+    /// sets must be byte-for-byte equal.
+    #[tokio::test]
+    async fn test_list_set_equals_delete_prefix_set_including_empty_prefix() {
+        let seed_keys = [
+            "memory://ab/inside.txt",
+            "memory://ab/sub/deep.txt",
+            "memory://ab2/sibling.txt",
+            "memory://ab", // a key EXACTLY equal to the prefix name (file-as-prefix boundary)
+            "memory://other/x.txt",
+        ];
+
+        for prefix in ["memory://ab", "memory://ab/", "memory://", "memory://ab2"] {
+            let storage = MemoryStorage::new();
+            for key in seed_keys {
+                storage.write(key, Bytes::from("x")).await.unwrap();
+            }
+
+            let listed: std::collections::BTreeSet<String> = storage
+                .list(prefix)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|file| file.location)
+                .collect();
+
+            // Compute the set delete_prefix actually removes: snapshot-all, delete, diff.
+            let snapshot_all = |storage: &MemoryStorage| {
+                let data = storage.data.read().unwrap();
+                data.keys()
+                    .cloned()
+                    .collect::<std::collections::BTreeSet<String>>()
+            };
+            let before = snapshot_all(&storage);
+            storage.delete_prefix(prefix).await.unwrap();
+            let after = snapshot_all(&storage);
+            let removed: std::collections::BTreeSet<String> =
+                before.difference(&after).cloned().collect();
+
+            assert_eq!(
+                listed, removed,
+                "list/delete_prefix disagree for prefix {prefix:?}: list={listed:?} delete={removed:?}"
+            );
+        }
     }
 }

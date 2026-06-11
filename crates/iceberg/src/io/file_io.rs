@@ -166,6 +166,41 @@ impl FileIO {
     pub fn new_output(&self, path: impl AsRef<str>) -> Result<OutputFile> {
         self.get_storage()?.new_output(path.as_ref())
     }
+
+    /// Recursively list all files under a prefix.
+    ///
+    /// This mirrors Java's `SupportsPrefixOperations.listPrefix`
+    /// (`api/.../io/SupportsPrefixOperations.java`): it returns one [`FileInfo`] for every
+    /// file (never a directory) reachable under `prefix`, descending into nested
+    /// subdirectories. It is the read-side sibling of [`Self::delete_prefix`] and the two
+    /// agree on what "under the prefix" means for a given storage backend.
+    ///
+    /// # Arguments
+    ///
+    /// * prefix: It should be an *absolute* path starting with the scheme string used to
+    ///   construct [`FileIO`].
+    ///
+    /// # Prefix semantics
+    ///
+    /// As Java's interface documents, hierarchical filesystems may require the prefix to name
+    /// a directory while key/value object stores allow arbitrary string prefixes. Each
+    /// concrete [`Storage`] documents which it implements (the local filesystem uses
+    /// directory semantics; in-memory storage uses string-prefix semantics) — matching that
+    /// backend's [`Self::delete_prefix`] behavior.
+    ///
+    /// # Divergence from Java
+    ///
+    /// * **Eager, not lazy.** Java returns a lazy `Iterable<FileInfo>`; this returns an
+    ///   eagerly-materialized `Vec<FileInfo>`. For an orphan-file sweep — which must observe
+    ///   the full set under a fixed table root — the laziness carries no observable difference.
+    /// * **File-as-prefix.** When `prefix` names a regular file rather than a directory, Hadoop's
+    ///   `FileSystem.listFiles(file, true)` returns that file as a single entry; the directory-
+    ///   semantics backend here instead returns an EMPTY list. This is the conservative GC
+    ///   posture (a file-as-prefix never arises for a real table root, and "list nothing" can
+    ///   only ever under-delete, never over-delete) and is documented per backend below.
+    pub async fn list(&self, prefix: impl AsRef<str>) -> Result<Vec<FileInfo>> {
+        self.get_storage()?.list(prefix.as_ref()).await
+    }
 }
 
 /// Builder for [`FileIO`].
@@ -227,6 +262,44 @@ impl FileIOBuilder {
 pub struct FileMetadata {
     /// The size of the file.
     pub size: u64,
+}
+
+/// Information about a single file returned by a prefix listing.
+///
+/// This mirrors Java's `org.apache.iceberg.io.FileInfo` (constructed as
+/// `FileInfo(String location, long size, long createdAtMillis)`), the element type of
+/// `SupportsPrefixOperations.listPrefix`.
+///
+/// # Field semantics
+///
+/// * `location` — the file's location in the storage's native form (the same string shape
+///   accepted by the other [`Storage`](super::Storage) methods). Mirrors Java
+///   `FileInfo.location()`.
+/// * `size` — the file's size in bytes. Mirrors Java `FileInfo.size()`.
+/// * `created_at_millis` — milliseconds since the Unix epoch. Java's object-store and Hadoop
+///   `FileIO` implementations populate this from the object's **last-modified** time (e.g.
+///   `HadoopFileIO.listPrefix` uses `FileStatus.getModificationTime()`), not a true creation
+///   timestamp; this port follows that convention. Mirrors Java `FileInfo.createdAtMillis()`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileInfo {
+    /// The location of the file in the storage's native form.
+    pub location: String,
+    /// The size of the file in bytes.
+    pub size: u64,
+    /// Milliseconds since the Unix epoch of the file's last-modified time (see the struct doc
+    /// for why this mirrors Java's "createdAtMillis" naming while carrying last-modified).
+    pub created_at_millis: i64,
+}
+
+impl FileInfo {
+    /// Create a new [`FileInfo`].
+    pub fn new(location: String, size: u64, created_at_millis: i64) -> Self {
+        Self {
+            location,
+            size,
+            created_at_millis,
+        }
+    }
 }
 
 /// Trait for reading file.
@@ -501,6 +574,50 @@ mod tests {
 
         io.delete(&path).await.unwrap();
         assert!(!io.exists(&path).await.unwrap());
+    }
+
+    /// Risk: the public `FileIO::list` wrapper must thread through to the backing storage and
+    /// return the recursive file set (this is the surface A2 will call). Pins it end-to-end
+    /// over the local filesystem.
+    #[tokio::test]
+    async fn test_file_io_list_recursive() {
+        let tmp_dir = TempDir::new().unwrap();
+        let root = tmp_dir.path().to_str().unwrap().to_string();
+
+        let top = format!("{root}/top.txt");
+        let nested = format!("{root}/sub/nested.txt");
+        write_to_file("a", &top);
+        write_to_file("bb", &nested);
+
+        let file_io = create_local_file_io();
+        let mut listed = file_io.list(&root).await.unwrap();
+        listed.sort_by(|a, b| a.location.cmp(&b.location));
+
+        let mut expected = vec![top.clone(), nested.clone()];
+        expected.sort();
+        let locations: Vec<String> = listed.iter().map(|f| f.location.clone()).collect();
+        assert_eq!(locations, expected);
+
+        let nested_info = listed.iter().find(|f| f.location == nested).unwrap();
+        assert_eq!(nested_info.size, 2);
+        assert!(nested_info.created_at_millis > 0);
+    }
+
+    /// Risk: an in-memory `FileIO` must list what was written through it, so the same public
+    /// surface works for the memory backend A1's tests and downstream callers rely on.
+    #[tokio::test]
+    async fn test_file_io_list_memory() {
+        let io = FileIO::new_with_memory();
+        io.new_output("memory://dir/a.txt")
+            .unwrap()
+            .write("hello".into())
+            .await
+            .unwrap();
+
+        let listed = io.list("memory://dir").await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].location, "dir/a.txt");
+        assert_eq!(listed[0].size, 5);
     }
 
     #[tokio::test]

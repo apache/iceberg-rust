@@ -82,6 +82,9 @@ pub mod io;
 pub mod spec;
 
 pub mod inspect;
+/// Table maintenance actions (`DeleteOrphanFiles`, …) — the engine-agnostic ports of Java's
+/// `org.apache.iceberg.actions` that operate on a committed table rather than producing a snapshot.
+pub mod maintenance;
 pub mod metrics;
 pub mod scan;
 

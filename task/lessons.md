@@ -958,3 +958,248 @@ How to use it (see the manuals' §2):
   all 7 matched, so the compact in-repo pins stand. A reviewer of a new CRC-pinned fixture
   set should repeat that probe rather than trust CRC32 alone (CRC collisions are trivial to
   miss adversarially).
+### 2026-06-11 (DeleteOrphanFiles A1 — `Storage::list` prefix primitive, BUILDER Opus, wt-orphan)
+- **DO mirror EACH storage backend's existing `delete_prefix` prefix semantics in `list`, not a
+  single global rule.** *Why:* Java's `SupportsPrefixOperations` interface doc explicitly says
+  hierarchical filesystems may require the prefix to NAME A DIRECTORY while key/value object stores
+  allow ARBITRARY STRING PREFIXES. The fork's `delete_prefix` already split exactly this way —
+  `local_fs` uses directory semantics (`path.is_dir()` → `remove_dir_all`), `memory` uses
+  string-prefix semantics (append `/`, `starts_with`). `list` and `delete_prefix` MUST agree per
+  backend on "under the prefix": a disagreement means A2 (the orphan-file GC) lists with one rule
+  and deletes with another, which is a data-loss class. local_fs `list` walks the dir tree
+  (sibling `ab2/` never matches prefix `ab` because they are distinct directory boundaries);
+  memory `list` enforces the trailing-`/` boundary so prefix `dir` excludes sibling key `dir2/...`.
+  Pinned both backends' sibling-boundary case (the over-listing = over-deletion risk).
+- **DO make the trait DEFAULT body for an optional capability ERROR LOUDLY (`FeatureUnsupported`),
+  never return an empty `Vec`.** *Why:* an empty listing reads downstream (A2) as "no orphans /
+  everything orphan" — a silent empty answer from a backend that simply cannot enumerate would
+  corrupt the orphan decision. The defaulted body on the `#[typetag::serde]` `Storage` trait also
+  keeps external implementors compiling (the reason it is defaulted rather than required). Pinned
+  with a stub `Storage` that overrides every method EXCEPT `list` and asserts the error kind +
+  message-names-the-op.
+- **opendal 0.55 `Metadata::last_modified()` returns `opendal::raw::Timestamp` (a newtype over
+  `jiff::Timestamp`), NOT `chrono::DateTime` and NOT a directly-millisecond-able type.** *Why it
+  bites:* the obvious `.as_millisecond()` (a `jiff::Timestamp` inherent method) does NOT exist on
+  the opendal newtype, and naming `jiff::` in a `use` would need `jiff` as a DIRECT dep (Cargo edit
+  — forbidden). The clean escape: opendal provides an infallible `impl From<raw::Timestamp> for
+  std::time::SystemTime`, so convert through `SystemTime` and `duration_since(UNIX_EPOCH)` — pure
+  `std`, zero new deps. (The 0.55 upgrade note saying "metadata APIs now use `jiff::Timestamp`" is
+  about the INNER type; the surfaced public type is `opendal::raw::Timestamp`.)
+- **`Duration::as_millis()` is `u128`; guard the `i64` conversion with `i64::try_from(...).unwrap_or(
+  i64::MAX)`, not `as i64`.** *Why:* a far-future mtime would wrap silently under `as`; `try_from`
+  saturates. Same guard used in all three `*_to_millis` helpers (local_fs mtime, memory write-time,
+  opendal last-modified), and pre-epoch clamps to `0` so `created_at_millis` stays non-negative
+  (the test asserts `>0 && <= now`).
+- **The OpenDAL stretch needed a per-file `stat`, not the lister's inline metadata.** *Why:* some
+  opendal backends do not populate `content_length`/`last_modified` on a `list` entry; `stat`-ing
+  each FILE entry (skipping dir markers via `entry.metadata().is_file()`) guarantees authoritative
+  size + mtime across backends. Cost is one extra request per file — acceptable for a
+  correctness-first GC-input primitive; documented in the method doc. Location reconstruction:
+  entries' `.path()` are operator-relative, so re-prefix with `base = &path[..path.len() -
+  relative_path.len()]` (the scheme-qualified portion `create_operator` stripped).
+
+### 2026-06-11 (DeleteOrphanFiles A1 — REVIEWER Opus, wt-orphan)
+- **DON'T add an `is_empty()` shortcut to a `list` prefix-construction that the matching
+  `delete_prefix` lacks — it silently breaks the list/delete_prefix agreement at the empty/root
+  prefix.** *Bug found & fixed:* `MemoryStorage::list` used `if normalized.is_empty() ||
+  normalized.ends_with('/')` while `delete_prefix` used only `if normalized.ends_with('/')`. For an
+  empty normalized prefix (`memory://`), `list` matched on `""` (every key) but `delete_prefix` built
+  `"/"` and matched nothing (memory keys are stored leading-slash-stripped). So `list` reported all
+  keys while `delete_prefix` removed none — the over-listing direction, the exact data-loss class A2
+  guards against. Fix: make `list`'s prefix construction byte-identical to `delete_prefix`'s. When two
+  methods must "agree," write the boundary logic ONCE and copy it verbatim; any asymmetry is a latent
+  bug. (Note: opendal had the same `is_empty()` branch but is NOT a bug there — opendal-memory treats
+  `list_with("")` and `list_with("/")` identically and `remove_all("/")` removes everything, so they
+  agree regardless; verified by probe before leaving it.)
+- **`std::fs::DirEntry::metadata()` does NOT follow symlinks (it is `lstat`-based) — this is the
+  load-bearing safety property for a filesystem prefix-walk feeding a GC.** *Why it matters:* an
+  explicit-stack dir walk that classifies entries with `DirEntry::metadata()` automatically (a) does
+  not loop on a symlinked-directory cycle (`a/loop -> a`), because the symlink is neither `is_dir()`
+  nor `is_file()` so it's skipped; and (b) cannot pull files from OUTSIDE the prefix into the listing
+  via an escaping symlink (`table/out -> /elsewhere`) — which would otherwise become A2 deleting live
+  data outside the table root. It also agrees with `remove_dir_all` (removes a dir-symlink itself,
+  never follows it). Verified with cycle + escape probes; pinned with permanent tests; documented the
+  "skip symlinks, do not follow" contract in the method doc so nobody "fixes" it to follow links.
+  (If you ever switch to `walkdir` or `fs::metadata`/`stat`, you re-open both holes.)
+- **A mutation that an offline backend can't exercise is a real coverage gap to NAME, not a test to
+  fake.** The opendal `entry.metadata().is_file()` filter (skip directory markers) is correct but
+  un-pinnable on opendal-memory (flat store emits no dir markers); dropping it changed nothing in the
+  smoke test. Don't contort a memory test to "catch" it — flag it as needing a live S3/HDFS fixture
+  (the same class as the builder's `file_io_s3_test`-needs-MinIO flag) and move on.
+
+### 2026-06-11 (DeleteOrphanFiles A2 — the `DeleteOrphanFiles` action, BUILDER Opus, wt-orphan)
+- **DeleteOrphanFiles' valid-file universe is the OPPOSITE liveness rule from `expire_cleanup`'s, so
+  do NOT extract a "reachability helper" — re-derive it locally.** *Why:* `expire_cleanup`
+  (`ReachableFileCleanup`) computes a `before − after` DELTA and subtracts on `is_alive()` (status !=
+  DELETED). DeleteOrphanFiles' universe is the FULL reachable set across ALL snapshots with NO
+  liveness filter — Java `BaseSparkAction.contentFileDS` flat-maps each manifest through
+  `ManifestFiles.read`/`readDeleteManifest` (the iterators that yield EVERY entry, incl. DELETED
+  tombstones), NOT `liveEntries()`. The two are structurally different set-algebras over the same
+  primitives (`load_manifest_list` → `load_manifest` → entries); sharing code would mean a flag that
+  toggles liveness — the wrong-abstraction trap. Re-deriving cost ~40 lines and touched ZERO
+  expire_cleanup lines (its 17 tests stayed green by CONSTRUCTION, not by re-running an extraction).
+  When two callers want the same DATA primitive but OPPOSITE filtering, that's not a shared helper.
+- **The DELETED-tombstone reachability clause is unconstructible-distinct from a live-only walk on a
+  multi-snapshot table — pin the OBSERVABLE risk (history survival) and NAME the coverage limit.**
+  *Why:* mutation M1 (add `if entry.is_alive()` to the universe collection — the `expire_cleanup`
+  behavior) SURVIVED the whole suite. Reason: a file added by ANY snapshot is ALIVE in that snapshot's
+  manifest, and the universe spans all snapshots, so a file referenced ONLY by a DELETED tombstone
+  (with no live entry anywhere) cannot be produced by real commits. So the no-liveness-filter is
+  Java-faithful but behaviorally identical to live-only for normally-written tables. Kept the
+  Java-faithful no-filter; renamed the test to what it ACTUALLY pins (a copy-on-write-deleted file
+  survives because the PRIOR snapshot references it) and documented the limit in the test + module
+  doc. Same class as A1's opendal-`is_file`-untestable-on-memory gap: name it, don't fake it.
+- **URI normalization's load-bearing asymmetry: a scheme-less VALID path matches an actual of ANY
+  scheme, but a concrete VALID scheme does NOT match an absent actual scheme.** *Why:* Java
+  `FileURI.uriComponentMatch(valid, actual)` = `Strings.isNullOrEmpty(valid) ||
+  valid.equalsIgnoreCase(actual)` (core 1.10.0 bytecode-verified) — the NULL/EMPTY test is on the
+  VALID (metadata) side only. So metadata storing bare `/tmp/.../a.parquet` (scheme None) matches a
+  listing returning `file:///tmp/.../a.parquet` (scheme `file`) — null valid matches any actual; but
+  metadata storing `file://...` vs a bare-path listing is a REAL conflict (`file` != None). Getting
+  the direction backwards makes every local-fs table either report all files as scheme-conflicts
+  (ERROR-fail) or conflate distinct schemes (delete live data). Pinned both directions at the unit
+  level. The local `split_uri` mirrors Hadoop `new Path(s).toUri()` for the writer-produced URI
+  shapes (bare path / `scheme:/p` / `scheme://auth/p` / `scheme:///p`); Windows drive letters are
+  flagged as out-of-parity-scope.
+- **The DeleteOrphanFiles ACTION is MAIN-source (no 1.10.0 Spark bytecode locally), but every
+  load-bearing PRIMITIVE it delegates to IS in core/api 1.10.0 — javap them and flag the residue.**
+  *Why:* `DeleteOrphanFilesSparkAction` lives in `iceberg-spark` (no 1.10.0 spark jar here), so the
+  defaults (3-day `olderThan`, `EQUAL_SCHEMES_DEFAULT`, merge order), the messages, and the
+  universe composition are MAIN-only. But `FileURI`, `DeleteOrphanFiles$PrefixMismatchMode`,
+  `HiddenPathFilter`, and `FileSystemWalker$PartitionAwareHiddenPathFilter` ARE in
+  iceberg-core/iceberg-api 1.10.0 — javap-verified the match rule, the enum, the `_`/`.` hidden
+  rule, and the `_<field>=` partition exception. State the MAIN/bytecode split explicitly in the
+  module doc so the reviewer/next-agent knows which facts are 1.10.0-pinned and which ride MAIN.
+
+### 2026-06-11 (DeleteOrphanFiles A2 — REVIEWER Opus, wt-orphan)
+- **"Unconstructible with real commits" is almost never true — reach for a SECOND maintenance action
+  to construct the missing precondition.** *Why:* the A2 builder declared M1 (an `is_alive()` filter
+  on the all-snapshots universe) unconstructible because a file added by any snapshot is alive in that
+  snapshot's manifest. That's true UNTIL you EXPIRE the adding snapshot. The fork's own ExpireSnapshots
+  is metadata-only (it deletes no files — cleanup is the opt-in B2 sibling), so expiring S1 after a
+  copy-on-write delete leaves the data file on disk referenced ONLY by S2's DELETED tombstone — exactly
+  the tombstone-only state. The orphan sweep must spare it (the no-liveness universe does; an `is_alive`
+  filter deletes it → history corruption). Lesson: when a mutation "can't be triggered," compose two
+  actions (write + expire, append + rewrite, etc.) before believing it. The kill test cost ~70 lines.
+- **For a deleter, prove a URI-normalization divergence is SAFE by checking BOTH representation sides
+  come from the same producer — don't just diff against the Java oracle.** *Why:* Rust `split_uri` does
+  NOT collapse `//` or decode `%xx` the way Hadoop `new Path(s).toUri()` does (ground-truth via
+  `java -cp hadoop-client-api PathProbe`). That LOOKS like a split-the-live-file bug, but it is SAFE
+  because the metadata-writer and the lister both carry the IDENTICAL raw string for a Rust-native
+  table, so they still join on the same key. The split only bites cross-engine (Java-normalized metadata
+  vs Rust-listed paths) — i.e. interop, which is deferred. Verify the no-corruption claim with an e2e
+  trailing-slash-warehouse probe, not just a unit diff.
+- **A scheme-qualified table `location` can silently NO-OP the orphan sweep on a scheme-stripping
+  backend — under-deletion, safe, but a real masking limitation.** *Why:* the hidden-path filter walks
+  `relative_under(base = table.location, listed)`; when `base` is `file://…` but the local-fs lister
+  returns BARE paths (it strips `file://`), `strip_prefix` fails → every file is treated as hidden →
+  zero candidates → the sweep deletes nothing (orphans included). This NEVER deletes live data (the bias
+  is correct), but it means a `file://`-located table is never cleaned. OpenDAL (S3/Glue) re-prefixes
+  listed entries WITH the scheme, so base and listing agree there. If this needs fixing later, normalize
+  `self.location` to the listing's representation BEFORE the hidden filter — but that touches a deleter's
+  match surface, so pin it heavily first. Flagged, not fixed (architectural, out of reviewer scope).
+
+### 2026-06-11 (A3 — ExpireSnapshots Java interop, BUILDER Opus, wt-orphan)
+- **DO force Java down `ReachableFileCleanup` (the only ported strategy) with a SURVIVING TAG, and
+  cite the selection condition from bytecode.** *Why:* Java `RemoveSnapshots.cleanExpiredSnapshots`
+  (1.10.0 bytecode) picks INCREMENTAL when `incrementalCleanup==null && !specifiedSnapshotId &&
+  !hasRemovedNonMainAncestors(base,current) && !hasNonMainSnapshots(current)`, else REACHABLE. Rust
+  ports ONLY `ReachableFileCleanup`. A surviving non-main ref (a tag/branch) makes `hasNonMainSnapshots`
+  true ⇒ Java picks Reachable — so both engines run the SAME algorithm. The tag also doubles as the
+  ref-protection judgment-surface element (a tag pinning an otherwise-expirable mid-chain snapshot). The
+  abstract `ReachableFileCleanup.cleanFiles` is 2-arg `(base, current)` = the Rust 2-state
+  `clean_expired_files`; the 3-arg `cleanFiles(base, current, cleanupLevel)` in `cleanExpiredSnapshots`
+  is a newer overload not in 1.10.0's abstract method.
+- **DO compare cross-language DELETED-FILE sets via a path-INDEPENDENT `<funnel>@ord<N>` descriptor
+  multiset, NEVER raw paths.** *Why:* Java and Rust write their tables at DIFFERENT absolute paths
+  (random manifest/list UUIDs, different temp roots), so a `deleteWith`/`CleanupReport` path set is
+  uncomparable. Normalize each deleted file to `<funnel>@ord<N>` (funnel = content/manifest/manifest_list/
+  statistics; ordinal = the owning snapshot's position in the PRE-EXPIRE metadata's sequence-number
+  order): a manifest list → its owning snapshot; a manifest → its `added_snapshot_id`; a content file →
+  its manifest's `added_snapshot_id`; a stats file → its `snapshot_id`. The multiset is identical on
+  both sides because the snapshot GRAPH is logically identical. (Same family as the E1 snapshot-id →
+  ordinal canonicalization, extended to the deleted-file set.) An UNCLASSIFIED token makes a
+  misattribution fail the comparison loudly rather than drop out.
+- **The shared `SnapshotMetaOracle.emit` / `snapshot_meta_view` PANIC on an EXPIRED table — a surviving
+  snapshot's parent was removed, so `ordinals.get(parentId)` is null (Java NPE) / `ordinals[&parent_id]`
+  panics (Rust).** *Why it bit:* the expire fixtures are the FIRST interop fixtures where a retained
+  snapshot's parent is expired out of the table; every prior fixture (write-actions/rowdelta/dv) only
+   APPENDS, so the parent is always present and the branch was dormant. Fix: emit `null` `parent_ordinal`
+  when the parent has no in-table ordinal. The Java emitter (in scope — `InteropOracle.java`) got the
+  fix directly; the Rust shared `common/snapshot_meta_view.rs` is OUT of A3 scope, so `interop_expire.rs`
+  carries a LOCAL `expire_meta_view` copy with the fix (and inlines `SUMMARY_COUNT_KEYS` to avoid pulling
+  the unused shared view builder in as dead code). When an interop increment is the first to feed a
+  shared materializer a new metadata SHAPE, audit the materializer's `null`/absent-key handling for that
+  shape before assuming reuse.
+- **DETERMINISTIC-by-OUTCOME beats re-stamping when the comparison is timestamp-agnostic.** *Why:* the
+  Java oracle re-stamps snapshots to fixed timestamps (`T0 + 1000*ordinal`) so its cut is wall-clock-
+  independent — but re-stamping through the Rust PUBLIC catalog path is impossible (`do_commit` reloads
+  from the catalog, losing an in-memory re-stamp; the action's `commit()` + `Table::with_metadata` are
+  private). It is also UNNECESSARY: the canonical view + the deleted descriptor both key on ORDINALS, never
+  raw timestamps, so the comparison is timestamp-agnostic and only the expiry OUTCOME must match. The Rust
+  side commits real appends, reads the ACTUAL head timestamp, and uses `expire_older_than(head_ts) +
+  retain_last(1)` (the head is the unique newest ⇒ everything strictly older expires) — the same outcome
+  as Java's fixed cut, through the production `ExpireSnapshotsAction` + `ExpireSnapshotsCleanup::
+  commit_and_clean` with a collect-only deleter (so Java can still read the table). Re-stamping is only
+  needed when the comparison itself reads timestamps.
+- **STOP-FINDING (real Rust divergence, separate increment): `FastAppend::existing_manifest`
+  (append.rs:148) DROPS all-tombstone manifests; Java `FastAppend.apply` carries ALL prior manifests
+  forward.** *Why:* Java's `apply` does `manifests.addAll(snapshot.allManifests(io))` with NO filter
+  (1.10.0 MAIN, verified) — every prior manifest, including a manifest left ALL-DELETED by a copy-on-write
+  delete that emptied it. Rust filters to `has_added_files() || has_existing_files()`, so a fast_append
+  AFTER an emptying delete drops the all-tombstone manifest from the manifest LIST. Surfaced by a `rewrite`
+  fixture (append d1 → delete d1 → append): Rust's deleted descriptor carried an extra `manifest@ord2`
+  (the dropped all-tombstone manifest, now unreferenced and GC'd) that Java keeps referenced. Net effect
+  is benign (the dropped manifest holds only a tombstone — no data loss) but it is a real manifest-LIST
+  structure divergence that would also bite general append-after-delete interop. FIXTURED AWAY for A3: the
+  `rewrite` delete now leaves a sibling file EXISTING (1-existing + 1-deleted manifest, carried by both
+  engines), so A3 pins ONLY the expire+cleanup surface. Reported on the GAP_MATRIX row for its own
+  increment. *Rule:* when an interop fixture diverges, trace WHICH production path differs (here:
+  FastAppend, not the expire modules under test) before attributing it to the increment's subject — and if
+  it is outside the increment's scope, fixture it away + report rather than expanding scope.
+
+### 2026-06-11 (A3 — ExpireSnapshots Java interop, REVIEWER Opus, wt-orphan)
+- **A SURVIVING TAG ALONE DOES NOT FORCE `ReachableFileCleanup` — `hasNonMainSnapshots(current)`
+  needs a survivor OFF the POST-EXPIRY main ancestry, and a head-tag leaves every survivor ON it.**
+  *The central A3 claim was cross-strategy, not 1:1.* A reflection probe on Java's private
+  `incrementalCleanup` proved 4/5 fixtures (linear/stats/deletes/rewrite) ran Java's
+  **IncrementalFileCleanup**, not the Reachable strategy the Rust side ports. Bytecode
+  (`RemoveSnapshots.cleanExpiredSnapshots`, 1.10.0): incremental iff `!specifiedSnapshotId &&
+  !hasRemovedNonMainAncestors(base,current) && !hasNonMainSnapshots(current)`. `hasNonMainSnapshots`
+  is true only when a SURVIVING snapshot is not in `mainAncestors(current)` = the head's parent-walk
+  (which STOPS at the first expired parent). A tag on the HEAD (every survivor on main) ⇒ all three
+  false ⇒ Java auto-picks INCREMENTAL; only a tag on a MID-CHAIN survivor (tag_protected) auto-picks
+  Reachable. The sets coincided for these shapes (force-probed both ways), so the comparison passed
+  even cross-strategy — a coincidence of shape, NOT proof of the Reachable port. FIX: force Java's
+  Reachable via the REAL engine selector `((RemoveSnapshots) api).withIncrementalCleanup(false)`
+  (package-private, same package; offset-verified — pre-sets the field so `cleanExpiredSnapshots`
+  skips auto-derivation), against the identical fixture sets. RULE: when an interop harness pins a
+  SPECIFIC algorithm the other side selects among several, ASSERT the selection (probe the strategy
+  field / log), never assume a fixture knob forces it — and prefer a real public/engine selector over
+  reshaping fixtures so coverage is unchanged.
+- **A PATH-INDEPENDENT deleted-file descriptor keyed ONLY on the owning-snapshot ordinal is
+  NON-INJECTIVE over sibling files of one commit — a swap passes set-equality vacuously.** Two
+  DIFFERENT content files in a 2-file append share `added_snapshot_id` ⇒ both `content@ord<N>`, so a
+  Rust-deletes-X / Java-deletes-Y swap is invisible to the multiset compare. FIX: add a
+  cross-language-STABLE per-file discriminator (`#rc<record_count>` for content, `#a<>e<>d<>` file
+  counts for manifests, `#sz<file_size>` for stats; a manifest LIST needs none — one per snapshot).
+  Pin it OFFLINE (fail-before/pass-after on the bare-ordinal scheme), since the env-gated chain
+  passing is not evidence of injectivity. The ordinal itself (sequence-number position) is fine —
+  semantically meaningful + V2-stable; the hole was granularity, not order. GENERAL: a structural
+  cross-language descriptor must be INJECTIVE over the set it compares, or it manufactures false
+  set-equality — discriminate by a content fingerprint, not just the owning container.
+- **A delete/DV-bearing interop fixture does NOT exercise delete-manifest CONTENT cleanup unless a
+  manifest actually DIES — a carried-forward delete manifest is never read by the cleanup walk.**
+  `deletes` (row-delta carried into the head) leaves `manifestsToDelete` EMPTY, so the content-file
+  subtraction block (the only place `load_manifest`/`ManifestFiles.read` runs on a delete manifest) is
+  gated off on BOTH sides; the fixture pins metadata + manifest-LIST GC on a delete-bearing table, not
+  delete-manifest content cleanup (that is the B2 unit tests' job). Corrected the oracle's "the delete
+  manifest is read but spared" overclaim. RULE: for a fixture asserting "feature X traverses path P,"
+  confirm P actually EXECUTES for that input (here: a gate `if !manifests_to_delete.is_empty()` made it
+  inert) — an inert feature is false coverage even when the comparison is green.
+- **DON'T `git checkout --` an UNCOMMITTED file to revert a probe edit — it reverts to HEAD and WIPES
+  the (uncommitted) builder work underneath.** I reverted a Java probe with `git checkout -- InteropOracle.java`
+  and lost the builder's entire uncommitted `ExpireOracle` (HEAD predates it); recovered only because the
+  full diff had been captured to a tool-results file and re-applied with `git apply`. RULE for reverting
+  probes on uncommitted files: snapshot the file to `/tmp` BEFORE the probe edit and restore from THAT
+  (`cp`), or undo the exact textual edit — never `git checkout`/`git restore` a path with uncommitted work.

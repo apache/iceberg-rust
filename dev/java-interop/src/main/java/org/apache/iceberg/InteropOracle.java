@@ -360,6 +360,34 @@ public final class InteropOracle {
         Path rewriteSeqDir = requireFixturesDir("interop.rewrite_seq.dir");
         RewriteSeqOracle.generate(rewriteSeqDir);
         break;
+      case "generate-interop-expire":
+        // EXPIRE-SNAPSHOTS interop (increment A3). Builds four fixtures (linear / tag_protected /
+        // stats / deletes), each a real-manifest table with deterministically re-stamped snapshot
+        // timestamps and a surviving TAG (which forces Java down ReachableFileCleanup — the strategy
+        // the Rust side ports — AND is the ref-protection element). Runs Java's full
+        // table.expireSnapshots()...cleanExpiredFiles(true).deleteWith(collector).commit(), emitting
+        // each <fixture>/java_deleted.json (the SORTED deleted-file list) + the post-expire
+        // final.metadata.json. The dir is via -Dinterop.expire.dir.
+        Path expireDir = requireFixturesDir("interop.expire.dir");
+        ExpireOracle.generate(expireDir);
+        break;
+      case "verify-interop-expire":
+        // EXPIRE-SNAPSHOTS interop, DIRECTION 2 — "Java verifies what RUST expired". The Rust GEN
+        // test (env ICEBERG_INTEROP_EXPIRE_GEN_DIR, tests/interop_expire.rs) ran the SAME chain +
+        // ExpireSnapshotsCleanup::commit_and_clean with a COLLECTING deleter on a copy at
+        // <fixture>/rust_table, landing final.metadata.json + rust_deleted.json. Here Java re-reads
+        // the Rust-expired table and asserts (a) its surviving snapshots/refs match Java's own
+        // expiry of the Java fixture and (b) the Rust-collected deleted set equals Java's
+        // java_deleted.json as sorted sets. A failure is a REAL expiry-incompatibility finding
+        // (stranded or over-deleted files, resurrected snapshots). NOTE: `mvn exec:java` does not
+        // reliably propagate System.exit — run-interop-expire.sh greps the "0 failures" sentinel.
+        Path expireVerifyDir = requireFixturesDir("interop.expire.dir");
+        int expireFailures = ExpireOracle.verify(expireVerifyDir);
+        System.out.println("verify-interop-expire: " + expireFailures + " failures");
+        if (expireFailures > 0) {
+          System.exit(1);
+        }
+        break;
       case "emit-snapshot-meta":
         // METADATA-LEVEL row-delta interop (E1). Emits the canonical snapshot-metadata view (ordinal
         // snapshots, COUNT-only summaries, manifest-list -> entry structure with post-inheritance
@@ -5345,6 +5373,571 @@ public final class InteropOracle {
   }
 
   // =============================================================================================
+  // ExpireOracle — the EXPIRE-SNAPSHOTS interop oracle (increment A3). Proves the Rust
+  // ExpireSnapshotsAction (B1 retention) + ExpireSnapshotsCleanup (B2 ReachableFileCleanup file GC)
+  // agree with Java 1.10.0 RemoveSnapshots + cleanExpiredFiles(true) on the SAME fixtures, judged by
+  // Java where possible.
+  //
+  // THE STRATEGY-SELECTION CONSTRAINT (bytecode-verified RemoveSnapshots.cleanExpiredSnapshots,
+  // 1.10.0): when incrementalCleanup==null Java picks INCREMENTAL iff (!specifiedSnapshotId &&
+  // !hasRemovedNonMainAncestors(base,current) && !hasNonMainSnapshots(current)), else REACHABLE. The
+  // Rust side ports ReachableFileCleanup ONLY, so EVERY fixture here FORCES Java down Reachable by
+  // keeping a surviving TAG (⇒ hasNonMainSnapshots(current)==true). That tag doubles as a
+  // judgment-surface element (a ref protecting an otherwise-expirable snapshot). ReachableFileCleanup
+  // .cleanFiles is the 2-arg (base, current) core that the Rust 2-state clean_expired_files mirrors.
+  //
+  // DETERMINISTIC TIMESTAMPS (no wall-clock dependence): the table is built by REAL fast appends
+  // (real manifests + manifest lists on disk via LocalTableOperations), then every snapshot is
+  // RE-STAMPED with a controlled timestamp (T0 + 1000*ordinal) preserving its REAL manifestList
+  // location, by rebuilding from a FRESH seed (TableMetadata.buildFrom(seed) — no metadata-log
+  // history yet, so the past timestamps don't trip the "before the latest metadata log entry"
+  // guard) and re-parsing from disk to clear pending AddSnapshot changes (the manage-snapshots
+  // oracle pattern). The expire cut is then a fixed value between two snapshots' fixed timestamps.
+  //
+  // FIXTURE-AWAY DECISIONS (so the byte-equality holds without fuzzy compares):
+  //   - Each Java snapshot owns a UNIQUE manifest-list file (real fast appends), so the Rust
+  //     retained-shared-manifest-list under-deletion guard NEVER fires ⇒ the deleted sets agree.
+  //   - Ref aging (max_ref_age_ms) is NOT exercised (the tag uses the default forever max-ref-age);
+  //     the cut is age-only, isolating retention + file GC from ref-age expiry.
+  //
+  // THE FIVE FIXTURES (each forces Reachable via a surviving tag):
+  //   - linear:        s1..s4 linear, tag at head; the cut prunes a contiguous prefix (s1/s2/s3) ⇒
+  //                    3 manifest lists die (the carried-forward manifests survive). Pins prefix
+  //                    retention + manifest-list GC.
+  //   - tag_protected: s1..s4 linear, tag on s2 (an otherwise-expirable mid-chain snapshot); the tag
+  //                    KEEPS s2 + its list (s1 + s3 lists die). Pins ref-protection of the cleanup set.
+  //   - stats:         s1..s3 linear, a statistics file on s2 (expired) + one on the head (survives);
+  //                    the expired stats file is in the deleted set. Pins statistics-file cleanup.
+  //   - deletes:       s1 append, s2 a POSITION-DELETE row-delta, s3 append; s1/s2 expire ⇒ their
+  //                    manifest LISTS die. The DELETE manifest is carried forward into the surviving
+  //                    head (s3), so it appears in BOTH the expired snapshots' list enumeration and
+  //                    the retained head's list ⇒ the candidates-minus-retained subtraction (by PATH)
+  //                    cancels it and it SURVIVES. SCOPE: this fixture pins that a delete-bearing
+  //                    table expires identically cross-language at the metadata + manifest-LIST level
+  //                    and that a carried-forward delete manifest is spared. It does NOT exercise
+  //                    delete-manifest CONTENT cleanup: because no manifest dies (manifestsToDelete is
+  //                    empty), neither side's cleanup ever READS the delete manifest's entries — that
+  //                    path (an expired-only delete manifest whose delete file is deleted) is covered
+  //                    by the B2 unit tests in expire_cleanup.rs, not here. (Reviewer-corrected: the
+  //                    earlier "the delete manifest is read but spared" overstated — only the
+  //                    list-level ManifestFile reference is enumerated; the manifest body is not read.)
+  //   - rewrite:       s1 append D1, s2 append D2, s3 DELETE D1 (rewrites s1's manifest), s4 append D3;
+  //                    when s1/s2/s3 expire, D1 (live only in the expired snapshots) + s1's original
+  //                    manifest become expired-only ⇒ both DIE — exercising the CONTENT + MANIFEST
+  //                    deletion funnels end-to-end (the others only delete lists/stats).
+  //
+  // generate-interop-expire (-Dinterop.expire.dir): build the five fixtures, run Java's
+  // table.expireSnapshots()...cleanExpiredFiles(true).deleteWith(collector).commit(), emit each
+  // <fixture>/java_deleted.json (a PATH-INDEPENDENT `<funnel>@ord<N>` descriptor multiset) + leave the
+  // expired table's final.metadata.json. verify-interop-expire (-Dinterop.expire.dir): Java re-reads the
+  // RUST-expired table at <fixture>/rust_table and asserts (a) its surviving-snapshot COUNT + ref NAMES
+  // match Java's own and (b) the Rust-collected deleted descriptor equals Java's, then prints the
+  // "0 failures" sentinel. The canonical snapshot-metadata views are emitted via the shared
+  // SnapshotMetaOracle (emit-snapshot-meta) and byte-diffed by the run script.
+  // =============================================================================================
+
+  static final class ExpireOracle {
+    private ExpireOracle() {}
+
+    /** The fixed epoch anchor for every re-stamped snapshot timestamp (no wall-clock dependence). */
+    static final long T0 = 1_700_000_000_000L;
+
+    /** The five fixtures, each a self-contained expire scenario (see the class banner). */
+    private static final List<String> FIXTURES =
+        java.util.Arrays.asList("linear", "tag_protected", "stats", "deletes", "rewrite");
+
+    static void generate(Path dir) throws IOException {
+      for (String fixture : FIXTURES) {
+        Path fixtureDir = dir.resolve(fixture);
+        Files.createDirectories(fixtureDir);
+        java.util.TreeSet<String> rawDeleted = new java.util.TreeSet<>();
+        TableMetadata before = buildAndExpire(fixture, fixtureDir, rawDeleted);
+        // PATH-INDEPENDENT comparison: Java and Rust write the table at DIFFERENT absolute paths
+        // (random manifest/list UUIDs, different temp roots), so the raw deleted PATHS can never be
+        // compared across sides. Normalize each deleted file to a structural descriptor
+        // `<funnel>@ord<N>` keyed by the ORDINAL (sequence-number order in `before`) of the snapshot
+        // that owns it — the manifest list's owning snapshot, a manifest's `added_snapshot_id`, a
+        // content file's manifest's `added_snapshot_id`, a statistics file's `snapshot_id`. The
+        // ordinal-keyed multiset is identical on both sides because the snapshot GRAPH is logically
+        // identical; the Rust side computes the SAME descriptor from its own report + before-metadata.
+        java.util.List<String> descriptor = normalizeDeleted(before, rawDeleted);
+        writeStringListSorted(fixtureDir.resolve("java_deleted.json"), descriptor);
+        System.out.println(
+            "generate-interop-expire/"
+                + fixture
+                + ": deleted "
+                + rawDeleted.size()
+                + " files -> descriptor "
+                + descriptor);
+      }
+      System.out.println("generate-interop-expire: wrote " + FIXTURES.size() + " fixtures to " + dir);
+    }
+
+    /**
+     * Build the named fixture's table to {@code <fixtureDir>/table} with REAL manifests, re-stamp the
+     * snapshot timestamps deterministically, then run Java's full
+     * {@code expireSnapshots()...cleanExpiredFiles(true).deleteWith(collector).commit()} — collecting
+     * the raw deleted-file paths into {@code deleted} and landing {@code final.metadata.json}.
+     * Returns the PRE-EXPIRE (re-stamped) table metadata so the caller can normalize the deleted
+     * paths to path-independent ordinal-keyed descriptors.
+     */
+    private static TableMetadata buildAndExpire(
+        String fixture, Path fixtureDir, java.util.Set<String> deleted) throws IOException {
+      File tableDir = fixtureDir.resolve("table").toFile();
+      File metadataDir = new File(tableDir, "metadata");
+      if (!metadataDir.isDirectory() && !metadataDir.mkdirs()) {
+        throw new IOException("failed to create metadata dir at " + metadataDir);
+      }
+
+      Schema schema =
+          new Schema(
+              Types.NestedField.required(1, "id", Types.LongType.get()),
+              Types.NestedField.required(2, "category", Types.StringType.get()));
+      PartitionSpec spec = PartitionSpec.builderFor(schema).identity("category").build();
+      Map<String, String> props = new LinkedHashMap<>();
+      props.put(TableProperties.FORMAT_VERSION, "2");
+      TableMetadata seed =
+          TableMetadata.newTableMetadata(
+              schema, spec, SortOrder.unsorted(), tableDir.getAbsolutePath(), props);
+
+      LocalTableOperations ops = new LocalTableOperations(tableDir, metadataDir);
+      ops.commit(null, seed);
+      BaseTable table = new BaseTable(ops, "interop_expire_" + fixture);
+      String dataDir = tableDir.getAbsolutePath() + "/data";
+
+      // The per-fixture commit chain (real fast appends ⇒ real manifests + manifest lists on disk).
+      switch (fixture) {
+        case "linear":
+        case "tag_protected":
+          for (int i = 1; i <= 4; i++) {
+            table.newFastAppend().appendFile(dataFile(table, dataDir, "f" + i, "category=a", 10L)).commit();
+          }
+          break;
+        case "stats":
+          for (int i = 1; i <= 3; i++) {
+            table.newFastAppend().appendFile(dataFile(table, dataDir, "f" + i, "category=a", 10L)).commit();
+          }
+          break;
+        case "deletes":
+          // s1 fast append two data files (one per partition), s2 a position-delete on the cat=a
+          // file (a DELETE manifest that must walk through cleanup when its snapshot expires), s3 a
+          // fast append advancing the head so s1/s2 become age-expirable.
+          table
+              .newFastAppend()
+              .appendFile(dataFile(table, dataDir, "a1", "category=a", 10L))
+              .appendFile(dataFile(table, dataDir, "b1", "category=b", 20L))
+              .commit();
+          DeleteFile posDelete =
+              FileMetadata.deleteFileBuilder(spec)
+                  .ofPositionDeletes()
+                  .withPath(dataDir + "/a1-deletes.parquet")
+                  .withFileSizeInBytes(100L)
+                  .withRecordCount(1L)
+                  .withPartitionPath("category=a")
+                  .withFormat(FileFormat.PARQUET)
+                  .build();
+          table.newRowDelta().addDeletes(posDelete).commit();
+          table.newFastAppend().appendFile(dataFile(table, dataDir, "c1", "category=a", 30L)).commit();
+          break;
+        case "rewrite":
+          // s1 append {D1, D2} in ONE manifest, s2 append D3 (advance), s3 DELETE D1 (copy-on-write:
+          // s1's 2-file manifest is REWRITTEN into a 1-existing(D2) + 1-deleted(D1) manifest — NOT
+          // all-tombstone, so BOTH Java AND Rust's fast-append carry it forward), s4 append D4
+          // (advance head). When s1/s2/s3 expire, D1 (live only in s1's ORIGINAL manifest) + that
+          // ORIGINAL 2-file manifest become expired-only ⇒ both DIE, while the rewritten manifest
+          // (carrying D2 as EXISTING) survives — exercising the CONTENT + MANIFEST deletion funnels
+          // end-to-end (the carried-forward fixtures above only delete lists/stats).
+          //
+          // DESIGN NOTE: the delete deliberately leaves D2 EXISTING in the rewritten manifest. A
+          // delete that EMPTIED the manifest (deleting its sole file) would produce an ALL-TOMBSTONE
+          // manifest, which Java's FastAppend.apply carries forward (`snapshot.allManifests()`, no
+          // filter) but the Rust `FastAppend::existing_manifest` DROPS (it filters to
+          // `has_added_files() || has_existing_files()`) — a REAL FastAppend carry-forward divergence
+          // unrelated to expiry. Keeping D2 existing avoids that separate bug so this fixture pins
+          // ONLY the expire+cleanup surface. (The divergence is reported for its own increment.)
+          table
+              .newFastAppend()
+              .appendFile(dataFile(table, dataDir, "d1", "category=a", 10L))
+              .appendFile(dataFile(table, dataDir, "d2", "category=a", 20L))
+              .commit();
+          table.newFastAppend().appendFile(dataFile(table, dataDir, "d3", "category=a", 30L)).commit();
+          table.newDelete().deleteFile(dataDir + "/d1.parquet").commit();
+          table.newFastAppend().appendFile(dataFile(table, dataDir, "d4", "category=a", 40L)).commit();
+          break;
+        default:
+          throw new IllegalArgumentException("unknown expire fixture: " + fixture);
+      }
+
+      // Re-stamp every snapshot with a deterministic timestamp (T0 + 1000*ordinal), preserving its
+      // REAL manifest-list location, by rebuilding from a fresh seed and re-parsing from disk.
+      TableMetadata current = ops.current();
+      List<Snapshot> ordered = new ArrayList<>(current.snapshots());
+      ordered.sort(java.util.Comparator.comparingLong(Snapshot::sequenceNumber));
+      TableMetadata.Builder rebuilt = TableMetadata.buildFrom(seed);
+      long timestampMs = T0;
+      Long parentId = null;
+      long headId = -1;
+      long secondId = -1; // the second snapshot in sequence order (for the tag_protected fixture)
+      int ordinal = 0;
+      for (Snapshot snapshot : ordered) {
+        timestampMs += 1000;
+        ordinal++;
+        Map<String, String> summary = new LinkedHashMap<>(snapshot.summary());
+        BaseSnapshot restamped =
+            new BaseSnapshot(
+                snapshot.sequenceNumber(),
+                snapshot.snapshotId(),
+                parentId,
+                timestampMs,
+                snapshot.operation(),
+                summary,
+                snapshot.schemaId(),
+                snapshot.manifestListLocation(),
+                null,
+                null,
+                null);
+        rebuilt.setBranchSnapshot(restamped, SnapshotRef.MAIN_BRANCH);
+        parentId = snapshot.snapshotId();
+        headId = snapshot.snapshotId();
+        if (ordinal == 2) {
+          secondId = snapshot.snapshotId();
+        }
+      }
+
+      // Statistics fixture: attach a statistics file to the SECOND snapshot (which the cut will
+      // expire) and one to the head (which survives) — the before-minus-after location diff, both
+      // directions. The statistics files are real on-disk puffins (their bytes are never read by
+      // cleanup; only their LOCATIONS are deleted) so deleteWith collects the expired one.
+      String expiredStatsPath = null;
+      if (fixture.equals("stats")) {
+        expiredStatsPath = tableDir.getAbsolutePath() + "/metadata/stats-expired.puffin";
+        String headStatsPath = tableDir.getAbsolutePath() + "/metadata/stats-head.puffin";
+        writeStatsFile(ops.io(), expiredStatsPath);
+        writeStatsFile(ops.io(), headStatsPath);
+        rebuilt.setStatistics(statisticsFile(secondId, expiredStatsPath));
+        rebuilt.setStatistics(statisticsFile(headId, headStatsPath));
+      }
+
+      // The surviving TAG: forces Java down ReachableFileCleanup AND is the ref-protection element.
+      // - tag_protected: the tag pins the SECOND snapshot (an otherwise age-expirable mid-chain
+      //   snapshot) ⇒ that snapshot + its files SURVIVE.
+      // - every other fixture: the tag pins the HEAD (already retained) ⇒ it only forces Reachable.
+      long tagTarget = fixture.equals("tag_protected") ? secondId : headId;
+      rebuilt.setRef("keep", SnapshotRef.tagBuilder(tagTarget).build());
+
+      TableMetadata restamped = rebuilt.build();
+      File baseFile = new File(metadataDir, "restamped.metadata.json");
+      TableMetadataParser.write(restamped, ops.io().newOutputFile(baseFile.getAbsolutePath()));
+      TableMetadata cleanBase =
+          TableMetadataParser.fromJson(baseFile.getAbsolutePath(), readString(baseFile.toPath()));
+      LocalTableOperations ops2 = new LocalTableOperations(tableDir, metadataDir);
+      ops2.continueVersioningFrom(ops);
+      ops2.commit(null, cleanBase);
+      BaseTable expireTable = new BaseTable(ops2, "interop_expire_" + fixture);
+
+      // The deterministic cut: keep the head, expire what the fixture intends.
+      //   - linear / stats / deletes: cut between snapshot 2 and 3's timestamps ⇒ expire 1 & 2 (and
+      //     for the 4-snapshot fixtures, 3), keep the head; retainLast(1).
+      //   - tag_protected: the same cut, but the tag pins snapshot 2 ⇒ it survives despite being
+      //     below the cut. (This is the ref-protection pin: the cut would expire snapshot 2 but the
+      //     tag keeps it.)
+      long cut = T0 + (long) (ordered.size()) * 1000L - 500L; // 500ms below the head's timestamp
+      // FORCE ReachableFileCleanup (the only strategy the Rust side ports) for EVERY fixture via the
+      // real engine selector `RemoveSnapshots.withIncrementalCleanup(false)` (package-private, same
+      // package; offset-verified vs 1.10.0 bytecode: it pre-sets `incrementalCleanup=FALSE`, so
+      // `cleanExpiredSnapshots` skips its auto-derivation and instantiates ReachableFileCleanup).
+      //
+      // WHY THE SURVIVING TAG IS NOT ENOUGH on its own: Java's auto-selection picks INCREMENTAL when
+      // `!specifiedSnapshotId && !hasRemovedNonMainAncestors(base,current) && !hasNonMainSnapshots
+      // (current)` (1.10.0 bytecode). `hasNonMainSnapshots(current)` is true only when a SURVIVING
+      // snapshot is OFF the post-expiry main ancestry (the head's parent-walk). A tag on the HEAD
+      // (linear/stats/deletes/rewrite) leaves every survivor ON main ⇒ Java auto-picks INCREMENTAL;
+      // only `tag_protected` (tag on a mid-chain survivor) auto-selects Reachable. The two strategies
+      // happen to produce the identical deleted set for these fixture shapes (measured), so the
+      // comparison passed even cross-strategy — but that is a coincidence of shape, not a 1:1 proof
+      // of the Reachable port. Pinning the strategy makes BOTH sides genuinely run ReachableFileCleanup.
+      // The surviving tag is retained as the ref-protection judgment-surface element (it keeps
+      // `tag_protected`'s mid-chain snapshot and forces a non-trivial reachable set everywhere).
+      org.apache.iceberg.ExpireSnapshots expireApi =
+          expireTable
+              .expireSnapshots()
+              .expireOlderThan(cut)
+              .retainLast(1)
+              .cleanExpiredFiles(true)
+              .deleteWith(deleted::add);
+      ((RemoveSnapshots) expireApi).withIncrementalCleanup(false);
+      expireApi.commit();
+
+      // Land the FINAL (post-expire) metadata at the known path for the emitter + the comparison.
+      Path finalMetadata = metadataDir.toPath().resolve("final.metadata.json");
+      OutputFile finalOut =
+          new LocalFileIO().newOutputFile(finalMetadata.toAbsolutePath().toString());
+      TableMetadataParser.write(ops2.current(), finalOut);
+
+      // Return the PRE-EXPIRE (re-stamped) metadata for path-independent normalization.
+      return cleanBase;
+    }
+
+    /**
+     * Normalize a set of raw deleted file PATHS to a path-independent, ordinal-keyed descriptor
+     * MULTISET (one `<funnel>@ord<N>` token per deleted file). The owning snapshot ordinal is the
+     * file's position in {@code before}'s sequence-number order:
+     *
+     * <ul>
+     *   <li>a manifest LIST → the ordinal of the snapshot whose {@code manifestListLocation} equals
+     *       the path;
+     *   <li>a MANIFEST → the ordinal of its {@code addedSnapshotId} (read from the before-snapshots'
+     *       manifest lists);
+     *   <li>a CONTENT file → the ordinal of its manifest's {@code addedSnapshotId};
+     *   <li>a STATISTICS file → the ordinal of its {@code snapshotId}.
+     * </ul>
+     *
+     * Both languages compute the IDENTICAL multiset because the snapshot graph is logically
+     * identical; the absolute paths (UUIDs, temp roots) never enter the comparison.
+     */
+    private static List<String> normalizeDeleted(TableMetadata before, java.util.Set<String> deleted)
+        throws IOException {
+      // ordinal by sequence number.
+      List<Snapshot> ordered = new ArrayList<>(before.snapshots());
+      ordered.sort(java.util.Comparator.comparingLong(Snapshot::sequenceNumber));
+      Map<Long, Integer> ordinalById = new LinkedHashMap<>();
+      for (int i = 0; i < ordered.size(); i++) {
+        ordinalById.put(ordered.get(i).snapshotId(), i);
+      }
+      // path -> "<ordinal>" or "<ordinal>#<discriminator>", for lists / manifests / content files.
+      // The per-FILE discriminator (record count for content, a/e/d file counts for a manifest, file
+      // size for statistics) makes the descriptor INJECTIVE within a fixture: two DIFFERENT files
+      // added by the SAME snapshot (e.g. a 2-file append) share an ordinal, so an ordinal-only token
+      // would let a Rust-deletes-X / Java-deletes-Y swap pass the multiset comparison. A manifest LIST
+      // needs no discriminator (one list per snapshot ⇒ the ordinal is already unique). MUST match
+      // the Rust `interop_expire.rs` `normalize_deleted` token scheme byte-for-byte.
+      Map<String, String> listOwner = new LinkedHashMap<>();
+      Map<String, String> manifestOwner = new LinkedHashMap<>();
+      Map<String, String> contentOwner = new LinkedHashMap<>();
+      LocalFileIO io = new LocalFileIO();
+      for (Snapshot snapshot : ordered) {
+        int ordinal = ordinalById.get(snapshot.snapshotId());
+        if (snapshot.manifestListLocation() != null) {
+          listOwner.put(snapshot.manifestListLocation(), Integer.toString(ordinal));
+        }
+        for (ManifestFile manifest : snapshot.allManifests(io)) {
+          int manifestOrdinal = ordinalById.getOrDefault(manifest.snapshotId(), ordinal);
+          String manifestDiscriminator =
+              "a"
+                  + nullToZero(manifest.addedFilesCount())
+                  + "e"
+                  + nullToZero(manifest.existingFilesCount())
+                  + "d"
+                  + nullToZero(manifest.deletedFilesCount());
+          manifestOwner.putIfAbsent(manifest.path(), manifestOrdinal + "#" + manifestDiscriminator);
+          for (Map.Entry<String, Long> content : contentPaths(before, manifest, io).entrySet()) {
+            contentOwner.putIfAbsent(
+                content.getKey(), manifestOrdinal + "#rc" + content.getValue());
+          }
+        }
+      }
+      // statistics path -> "<ordinal>#sz<file_size>".
+      Map<String, String> statsOwner = new LinkedHashMap<>();
+      for (StatisticsFile stats : before.statisticsFiles()) {
+        Integer ordinal = ordinalById.get(stats.snapshotId());
+        if (ordinal != null) {
+          statsOwner.put(stats.path(), ordinal + "#sz" + stats.fileSizeInBytes());
+        }
+      }
+      for (PartitionStatisticsFile stats : before.partitionStatisticsFiles()) {
+        Integer ordinal = ordinalById.get(stats.snapshotId());
+        if (ordinal != null) {
+          statsOwner.put(stats.path(), ordinal + "#sz" + stats.fileSizeInBytes());
+        }
+      }
+
+      List<String> descriptor = new ArrayList<>();
+      for (String path : deleted) {
+        if (listOwner.containsKey(path)) {
+          descriptor.add("manifest_list@ord" + listOwner.get(path));
+        } else if (manifestOwner.containsKey(path)) {
+          descriptor.add("manifest@ord" + manifestOwner.get(path));
+        } else if (contentOwner.containsKey(path)) {
+          descriptor.add("content@ord" + contentOwner.get(path));
+        } else if (statsOwner.containsKey(path)) {
+          descriptor.add("statistics@ord" + statsOwner.get(path));
+        } else {
+          // A deleted path with no owner in `before` is a fixture/logic bug — surface it loudly
+          // (an unclassifiable token would NOT match the Rust descriptor, failing the comparison).
+          descriptor.add("UNCLASSIFIED:" + path);
+        }
+      }
+      java.util.Collections.sort(descriptor);
+      return descriptor;
+    }
+
+    private static long nullToZero(Integer value) {
+      return value == null ? 0L : value.longValue();
+    }
+
+    /** Every entry's file path -> record count in one manifest (data or delete reader per content). */
+    private static Map<String, Long> contentPaths(
+        TableMetadata metadata, ManifestFile manifest, FileIO io) throws IOException {
+      Map<String, Long> paths = new LinkedHashMap<>();
+      if (manifest.content() == ManifestContent.DATA) {
+        try (ManifestReader<DataFile> reader =
+            ManifestFiles.read(manifest, io, metadata.specsById())) {
+          for (ManifestEntry<DataFile> entry : reader.entries()) {
+            paths.put(entry.file().location(), entry.file().recordCount());
+          }
+        }
+      } else {
+        try (ManifestReader<DeleteFile> reader =
+            ManifestFiles.readDeleteManifest(manifest, io, metadata.specsById())) {
+          for (ManifestEntry<DeleteFile> entry : reader.entries()) {
+            paths.put(entry.file().location(), entry.file().recordCount());
+          }
+        }
+      }
+      return paths;
+    }
+
+    /** A metadata-only {@link DataFile} (no parquet — the path need not exist for the cleanup walk). */
+    private static DataFile dataFile(
+        BaseTable table, String dataDir, String name, String partitionPath, long recordCount) {
+      return DataFiles.builder(table.spec())
+          .withPath(dataDir + "/" + name + ".parquet")
+          .withFileSizeInBytes(recordCount * 100)
+          .withRecordCount(recordCount)
+          .withPartitionPath(partitionPath)
+          .withFormat(FileFormat.PARQUET)
+          .build();
+    }
+
+    private static GenericStatisticsFile statisticsFile(long snapshotId, String path) {
+      return new GenericStatisticsFile(snapshotId, path, 18L, 4L, java.util.Collections.emptyList());
+    }
+
+    /** Write a tiny real statistics file (its bytes are never read by cleanup; only the path is). */
+    private static void writeStatsFile(FileIO io, String path) throws IOException {
+      OutputFile out = io.newOutputFile(path);
+      try (java.io.OutputStream stream = out.create()) {
+        stream.write("interop-expire stats fixture".getBytes(StandardCharsets.UTF_8));
+      }
+    }
+
+    /** Returns the number of failures (0 ⇒ Java agrees with the Rust-expired table both ways). */
+    static int verify(Path dir) throws IOException {
+      int failures = 0;
+      for (String fixture : FIXTURES) {
+        Path fixtureDir = dir.resolve(fixture);
+        Path rustMetadata = fixtureDir.resolve("rust_table/metadata/final.metadata.json");
+        if (!Files.exists(rustMetadata)) {
+          System.out.println("FAIL expire/" + fixture + ": missing rust_table final.metadata.json");
+          failures++;
+          continue;
+        }
+
+        // (a) Java re-reads the RUST-expired table and asserts its surviving-snapshot COUNT + ref
+        //     NAMES match Java's own expiry of the Java fixture. (Snapshot IDS are NOT comparable —
+        //     Rust mints its own ids — so the COUNT + the byte-equal canonical view, diffed by the
+        //     run script, carry the per-snapshot structural match; ref NAMES (`main`, `keep`) ARE
+        //     comparable and prove the tag/branch protection landed identically.)
+        TableMetadata rustExpired =
+            TableMetadataParser.fromJson(rustMetadata.toString(), readString(rustMetadata));
+        Path javaMetadata = fixtureDir.resolve("table/metadata/final.metadata.json");
+        TableMetadata javaExpired =
+            TableMetadataParser.fromJson(javaMetadata.toString(), readString(javaMetadata));
+
+        int rustSurviving = countSnapshots(rustExpired);
+        int javaSurviving = countSnapshots(javaExpired);
+        if (rustSurviving != javaSurviving) {
+          System.out.println(
+              "FAIL expire/"
+                  + fixture
+                  + ": surviving snapshot COUNT differs — java="
+                  + javaSurviving
+                  + " rust="
+                  + rustSurviving);
+          failures++;
+          continue;
+        }
+        if (!rustExpired.refs().keySet().equals(javaExpired.refs().keySet())) {
+          System.out.println(
+              "FAIL expire/"
+                  + fixture
+                  + ": ref names differ — java="
+                  + javaExpired.refs().keySet()
+                  + " rust="
+                  + rustExpired.refs().keySet());
+          failures++;
+          continue;
+        }
+
+        // (b) The Rust-collected deleted-file DESCRIPTOR (rust_deleted.json — path-independent
+        //     `<funnel>@ord<N>` MULTISET) must equal Java's (java_deleted.json) as sorted lists.
+        List<String> javaDeleted = sorted(readStringList(fixtureDir.resolve("java_deleted.json")));
+        Path rustDeletedPath = fixtureDir.resolve("rust_deleted.json");
+        if (!Files.exists(rustDeletedPath)) {
+          System.out.println("FAIL expire/" + fixture + ": missing rust_deleted.json");
+          failures++;
+          continue;
+        }
+        List<String> rustDeleted = sorted(readStringList(rustDeletedPath));
+        if (!javaDeleted.equals(rustDeleted)) {
+          System.out.println(
+              "FAIL expire/"
+                  + fixture
+                  + ": deleted descriptors differ — java="
+                  + javaDeleted
+                  + " rust="
+                  + rustDeleted);
+          failures++;
+          continue;
+        }
+        System.out.println("PASS expire/" + fixture);
+      }
+      return failures;
+    }
+
+    private static int countSnapshots(TableMetadata metadata) {
+      int count = 0;
+      for (Snapshot ignored : metadata.snapshots()) {
+        count++;
+      }
+      return count;
+    }
+
+    private static List<String> sorted(List<String> values) {
+      List<String> copy = new ArrayList<>(values);
+      java.util.Collections.sort(copy);
+      return copy;
+    }
+
+    /** Write a JSON array of the strings, as given (already sorted), one canonical document. */
+    private static void writeStringListSorted(Path out, List<String> strings) throws IOException {
+      List<String> sortedCopy = sorted(strings);
+      String json =
+          JsonUtil.generate(
+              gen -> {
+                gen.writeStartArray();
+                for (String value : sortedCopy) {
+                  gen.writeString(value);
+                }
+                gen.writeEndArray();
+              },
+              false);
+      writeJson(out, json);
+    }
+
+    /** Read a JSON array of strings. */
+    private static List<String> readStringList(Path path) throws IOException {
+      return JsonUtil.parse(
+          readString(path),
+          node -> {
+            List<String> values = new ArrayList<>();
+            node.forEach(element -> values.add(element.asText()));
+            return values;
+          });
+    }
+  }
+
+  // =============================================================================================
   // WriteActionsOracle — the METADATA-LEVEL rewrite-family interop fixture (E2, extended for
   // Increment 4). Performs the SAME chain the Rust GEN test (interop_write_actions_meta.rs)
   // performs, on a V2 table partitioned by identity(category), with IDENTICAL logical constants
@@ -5685,10 +6278,18 @@ public final class InteropOracle {
                 for (Snapshot snap : snapshots) {
                   gen.writeStartObject();
                   gen.writeNumberField("ordinal", ordinals.get(snap.snapshotId()));
-                  if (snap.parentId() == null) {
+                  // parent_ordinal is null when the snapshot has no parent OR when its parent was
+                  // EXPIRED out of the table (a surviving snapshot whose parent is no longer
+                  // in-table has no in-table parent ordinal). The expire fixtures are the first to
+                  // feed this oracle a table where a retained snapshot's parent was removed; the
+                  // earlier fixtures never expire, so this branch is dormant for them (no behavior
+                  // change). The Rust mirror applies the IDENTICAL null-on-absent-parent rule.
+                  Integer parentOrdinal =
+                      snap.parentId() == null ? null : ordinals.get(snap.parentId());
+                  if (parentOrdinal == null) {
                     gen.writeNullField("parent_ordinal");
                   } else {
-                    gen.writeNumberField("parent_ordinal", ordinals.get(snap.parentId()));
+                    gen.writeNumberField("parent_ordinal", parentOrdinal);
                   }
                   gen.writeNumberField("sequence_number", snap.sequenceNumber());
                   gen.writeStringField("operation", snap.operation());
@@ -5942,6 +6543,17 @@ public final class InteropOracle {
     LocalTableOperations(File tableDir, File metadataDir) {
       this.tableDir = tableDir;
       this.metadataDir = metadataDir;
+    }
+
+    /**
+     * Continue the metadata-file version counter and snapshot-id counter past {@code prior}'s — used
+     * by the expire oracle when it re-stamps snapshots into a SECOND ops over the SAME metadata dir,
+     * so the next {@code commit} writes {@code vN+1.metadata.json} rather than clobbering {@code
+     * v0.metadata.json}.
+     */
+    void continueVersioningFrom(LocalTableOperations prior) {
+      this.version = prior.version;
+      this.lastSnapshotId = prior.lastSnapshotId;
     }
 
     @Override

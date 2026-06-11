@@ -30,7 +30,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cfg_if::cfg_if;
 use iceberg::io::{
-    FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
+    FileInfo, FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
     StorageFactory,
 };
 use iceberg::{Error, ErrorKind, Result};
@@ -38,6 +38,20 @@ use opendal::Operator;
 use opendal::layers::RetryLayer;
 use serde::{Deserialize, Serialize};
 use utils::from_opendal_error;
+
+/// Convert an OpenDAL last-modified timestamp into milliseconds since the Unix epoch.
+///
+/// Mirrors how Java's object-store `FileIO` implementations populate `FileInfo.createdAtMillis`
+/// from the object's last-modified time. Converts through `std::time::SystemTime` (an
+/// infallible OpenDAL conversion) so no extra time-library dependency is needed. A timestamp at
+/// or before the epoch clamps to `0` so the reported value stays non-negative.
+fn opendal_timestamp_to_millis(timestamp: opendal::raw::Timestamp) -> i64 {
+    let system_time: std::time::SystemTime = timestamp.into();
+    match system_time.duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+        Err(_) => 0,
+    }
+}
 
 cfg_if! {
     if #[cfg(feature = "opendal-azdls")] {
@@ -400,6 +414,59 @@ impl Storage for OpenDalStorage {
         Ok(op.remove_all(&path).await.map_err(from_opendal_error)?)
     }
 
+    /// Recursively list every file under `prefix`.
+    ///
+    /// # Prefix semantics: object-store / recursive
+    ///
+    /// OpenDAL's lister with `recursive(true)` walks every entry under the prefix, mirroring
+    /// Java's object-store `FileIO` implementations (which list keys under a prefix) and the
+    /// recursive `HadoopFileIO.listPrefix`. Only file entries are reported; directory markers
+    /// are skipped. The prefix is normalized to a trailing-`/` directory boundary (the same
+    /// shape `delete_prefix` removes), so a sibling key `ab2/...` is not reported for prefix
+    /// `ab`.
+    ///
+    /// Each file's authoritative `size` and last-modified time are read via `stat` so the
+    /// reported metadata is correct across every OpenDAL backend (some backends do not
+    /// populate full metadata on a list). A file whose backend reports no last-modified time
+    /// is reported with `created_at_millis = 0`.
+    async fn list(&self, path: &str) -> Result<Vec<FileInfo>> {
+        let (op, relative_path) = self.create_operator(&path)?;
+        // The base is the part of the caller-supplied `path` that precedes the
+        // operator-relative portion, so the entry's relative path can be re-prefixed back
+        // into the scheme-qualified location the caller knows.
+        let base = &path[..path.len() - relative_path.len()];
+
+        let list_root = if relative_path.is_empty() || relative_path.ends_with('/') {
+            relative_path.to_string()
+        } else {
+            format!("{relative_path}/")
+        };
+
+        let entries = op
+            .list_with(&list_root)
+            .recursive(true)
+            .await
+            .map_err(from_opendal_error)?;
+
+        let mut files = Vec::with_capacity(entries.len());
+        for entry in entries {
+            if !entry.metadata().is_file() {
+                continue;
+            }
+            let stat = op.stat(entry.path()).await.map_err(from_opendal_error)?;
+            let created_at_millis = stat
+                .last_modified()
+                .map(opendal_timestamp_to_millis)
+                .unwrap_or(0);
+            files.push(FileInfo::new(
+                format!("{base}{}", entry.path()),
+                stat.content_length(),
+                created_at_millis,
+            ));
+        }
+        Ok(files)
+    }
+
     #[allow(unreachable_code, unused_variables)]
     fn new_input(&self, path: &str) -> Result<InputFile> {
         Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
@@ -456,5 +523,86 @@ mod tests {
     fn test_default_memory_operator() {
         let op = default_memory_operator();
         assert_eq!(op.info().scheme().to_string(), "memory");
+    }
+
+    /// Risk: the OpenDAL listing must return the exact recursive file set, with the right
+    /// scheme-qualified locations and sizes, and must never report a sibling key outside the
+    /// prefix (over-listing is over-deletion in the orphan-file action). Smoke test over the
+    /// in-memory service.
+    #[cfg(feature = "opendal-memory")]
+    #[tokio::test]
+    async fn test_opendal_memory_list_recursive_and_prefix_bounded() {
+        let storage = OpenDalStorage::Memory(memory_config_build().unwrap());
+
+        storage
+            .write("memory:/dir/a.txt", Bytes::from("a"))
+            .await
+            .unwrap();
+        storage
+            .write("memory:/dir/sub/b.txt", Bytes::from("bb"))
+            .await
+            .unwrap();
+        // A sibling key under a different prefix that must NOT appear.
+        storage
+            .write("memory:/dir2/c.txt", Bytes::from("ccc"))
+            .await
+            .unwrap();
+
+        let mut listed = storage.list("memory:/dir").await.unwrap();
+        listed.sort_by(|left, right| left.location.cmp(&right.location));
+
+        let locations: Vec<&str> = listed.iter().map(|f| f.location.as_str()).collect();
+        assert_eq!(locations, vec![
+            "memory:/dir/a.txt",
+            "memory:/dir/sub/b.txt"
+        ]);
+        assert!(!locations.contains(&"memory:/dir2/c.txt"));
+
+        let by_location = |location: &str| listed.iter().find(|f| f.location == location).unwrap();
+        assert_eq!(by_location("memory:/dir/a.txt").size, 1);
+        assert_eq!(by_location("memory:/dir/sub/b.txt").size, 2);
+    }
+
+    /// Risk: a prefix with no matching files must be a legitimate empty answer, not an error
+    /// and not a stale/over-broad listing.
+    #[cfg(feature = "opendal-memory")]
+    #[tokio::test]
+    async fn test_opendal_memory_list_empty_prefix_is_empty() {
+        let storage = OpenDalStorage::Memory(memory_config_build().unwrap());
+        storage
+            .write("memory:/other/a.txt", Bytes::from("a"))
+            .await
+            .unwrap();
+
+        let listed = storage.list("memory:/nothing-here").await.unwrap();
+        assert!(listed.is_empty());
+    }
+
+    /// Risk: a wrong epoch base or a secs/millis mix-up in the OpenDAL last-modified conversion
+    /// would feed A2 nonsense timestamps. Pins the conversion at exact boundaries: epoch -> 0,
+    /// 1 ms -> 1, a pre-epoch instant clamps to 0 (never negative), and a known recent
+    /// millisecond value round-trips exactly (proving milliseconds-since-epoch, not seconds).
+    #[test]
+    fn test_opendal_timestamp_conversion_is_exact_milliseconds_and_clamps_pre_epoch() {
+        let epoch = opendal::raw::Timestamp::from_millisecond(0).unwrap();
+        assert_eq!(opendal_timestamp_to_millis(epoch), 0);
+
+        let one_milli = opendal::raw::Timestamp::from_millisecond(1).unwrap();
+        assert_eq!(opendal_timestamp_to_millis(one_milli), 1);
+
+        let pre_epoch = opendal::raw::Timestamp::from_millisecond(-1000).unwrap();
+        assert_eq!(
+            opendal_timestamp_to_millis(pre_epoch),
+            0,
+            "a pre-epoch timestamp must clamp to 0, never produce a negative value"
+        );
+
+        let known_millis: i64 = 1_700_000_000_000;
+        let known = opendal::raw::Timestamp::from_millisecond(known_millis).unwrap();
+        assert_eq!(
+            opendal_timestamp_to_millis(known),
+            known_millis,
+            "a known recent value must round-trip exactly as milliseconds-since-epoch"
+        );
     }
 }

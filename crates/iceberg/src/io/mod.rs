@@ -45,6 +45,7 @@
 //!
 //! - `delete`: Delete file.
 //! - `delete_prefix`: Delete all files with a given prefix.
+//! - `list`: Recursively list all files under a given prefix.
 //! - `exists`: Check if file exists.
 //! - `new_input`: Create input file for reading.
 //! - `new_output`: Create output file for writing.

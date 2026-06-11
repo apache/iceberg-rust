@@ -69,12 +69,123 @@ Directive (user, 2026-06-11): table DataFusion/RePark; run this fork's Roadmap t
 full 1:1 Java replacement**. Sequencing in Roadmap.md "Headline gap AREAS" (handoff-aware:
 judgment-heavy → frontier window before 2026-06-22; templated breadth → Opus).
 
-- [ ] **Next arc proposal (awaiting user green-light): Phase-2/3 closeout** — multi-spec writes
-      (producer per-spec manifests; unlocks the documented default-spec-only divergences),
-      the constants-map increment (reverted 2026-06-08; known latent type bugs; gated on
-      datafusion + integration read tests), `removeRows` apply-side, the `dv_seq >= data_seq`
-      index-validation residue.
-- [ ] **Then: maintenance actions** (`ExpireSnapshots` first — the GC-safety judgment increment).
+- [x] **Phase-2/3 closeout** — LANDED (PR #28, 2026-06-11): multi-spec writes, constants-map,
+      `removeRows` apply-side, `dv_seq >= data_seq` index validation.
+- [x] **Maintenance actions: `ExpireSnapshots`** — LANDED (PR #29, 2026-06-11): B1 retention +
+      B2 `ReachableFileCleanup`. Deferred residue on the GAP_MATRIX row.
+- [ ] **THIS BRANCH (Group A, Opus actor-critic, user-approved 2026-06-11):
+      `DeleteOrphanFiles`** — A1: `Storage::list` primitive (trait default + local_fs/memory
+      impls + `FileIO::list`); A2: the action itself (reachable-set vs listed-set, URI
+      normalization + `PrefixMismatchMode`, `olderThan` grace, hidden-path filtering). Runs in
+      worktree `wt-orphan` parallel to Group B (`phase4/variant-groundwork`, Fable).
+  - [x] **A1 BUILDER (2026-06-11, wt-orphan, Opus):** `Storage::list` / `FileIO::list` prefix-listing
+        primitive. `FileInfo { location, size, created_at_millis }` (mirrors Java `FileInfo(String,
+        long, long)`; `created_at_millis` ← last-modified, per Java object-store impls). Trait default
+        body errors `FeatureUnsupported` (naming the op) so external `#[typetag::serde]` implementors
+        keep compiling. RECURSIVE semantics (Java `HadoopFileIO.listPrefix` → `listFiles(prefix,
+        recursive=true)`, files-only). **Prefix-semantics decision: mirror each backend's existing
+        `delete_prefix` so `list`/`delete_prefix` agree on "under the prefix"** — local_fs = DIRECTORY
+        semantics (walk the dir tree; sibling `ab2/` never matches prefix `ab`), memory = STRING-PREFIX
+        semantics (append trailing `/`, then `starts_with`). Documented divergence: returns
+        `Vec<FileInfo>` (eager), not Java's lazy `Iterable`. OpenDAL stretch: IMPLEMENTED via
+        `op.list_with(prefix).recursive(true)` + per-file `stat` for authoritative size/last-modified
+        (timestamp via `From<raw::Timestamp> for SystemTime` — no jiff Cargo dep); 2 memory-service
+        smoke tests (recursive+prefix-bounded, empty-prefix).
+        Outcome: gate CLEAN from wt-orphan root — typos clean, fmt clean, clippy `-D warnings` clean
+        (workspace ex-sqllogictest), `cargo test -p iceberg --lib` **1882 passed ×2** (baseline 1870
+        +12: 1 default-method + 5 local_fs + 4 memory + 2 file_io), `cargo test -p
+        iceberg-storage-opendal --lib` 3 passed (incl. 2 new). Files: io/{mod,file_io}.rs,
+        io/storage/{mod,local_fs,memory}.rs, storage/opendal/src/lib.rs. FLAG: opendal
+        `file_io_s3_test` (4 tests) fail — pre-existing, need a live MinIO at localhost:9000 (not the
+        offline gate; untouched `exists`/`input`/`output` paths). A2 NOT started.
+  - [x] **A1 REVIEWER (2026-06-11, wt-orphan, Opus, adversarial):** Verified all 9 points 3 ways
+        (read+cite / independent probes / mutation-test). 1 BUG FOUND + fixed: memory `list` had an
+        `is_empty()` shortcut absent from `delete_prefix`, so `list("memory://")` reported ALL keys
+        while `delete_prefix("memory://")` removed NONE — broke the builder's stated list/delete_prefix
+        agreement invariant at the empty/root prefix (over-listing = over-delete direction). Fixed to
+        match `delete_prefix` exactly (drop `is_empty()`); fail-before/pass-after test
+        `test_list_set_equals_delete_prefix_set_including_empty_prefix`. CONFIRMED-SAFE: symlinks
+        (cycle terminates, prefix-escape can't leak outside files — `DirEntry::metadata` is lstat-based
+        and agrees with `remove_dir_all`; now documented + 2 tests); walk errors propagate loud
+        (unreadable-subdir → `Unexpected`, matches Java RemoteIterator; +1 test); opendal timestamp math
+        exact ms (epoch→0, pre-epoch clamps 0, round-trips; +1 test); all int casts saturate not wrap;
+        default loud-error pins ErrorKind+msg; `MemoryEntry` pub(crate) no public-API/serde change.
+        DOCUMENTED divergence: file-as-prefix returns empty vs Hadoop `listFiles(file)` returning the
+        file (conservative, can only under-delete; noted in `FileIO::list` doc). Mutations run: memory
+        boundary-guard (caught), local_fs no-descend (caught), default→`Ok(vec![])` (caught), opendal
+        boundary-guard (caught), opendal base-reconstruction (caught), opendal `is_file()` filter (NOT
+        caught — directory markers only appear on object-store/HDFS backends, untestable on
+        opendal-memory; left as a noted offline-coverage gap). Gate CLEAN: typos/fmt/clippy `-D warnings`
+        clean; `cargo test -p iceberg --lib` **1887 passed ×2** (1882 +5 reviewer tests); opendal --lib
+        4 passed. Same file set + task/. No commit.
+  - [x] **A2 BUILDER (2026-06-11, wt-orphan, Opus): the `DeleteOrphanFiles` ACTION.** New module
+        `crates/iceberg/src/maintenance/{mod.rs,delete_orphan_files.rs,tests.rs}`, wired
+        `pub mod maintenance` in lib.rs (1 doc'd line). **This DELETES files.**
+    - [x] **API:** `DeleteOrphanFiles::new(table)` + `.location`, `.older_than` (default now−3d),
+          `.delete_with`, `.prefix_mismatch_mode` (default Error), `.equal_schemes` (defaults
+          `{s3n,s3a→s3}` MERGED with user, comma-flatten), `.equal_authorities` (user-only, flatten),
+          `.execute() -> Result<DeleteOrphanFilesResult{orphan_file_locations, delete_failures}>`.
+          `PrefixMismatchMode {Error,Ignore,Delete}` + `from_string`. `executeDeleteWith` DEFERRED.
+    - [x] **Valid-files universe — RE-DERIVED locally (NOT extracted from expire_cleanup).** The
+          orphan universe spans ALL snapshots WITHOUT the `is_alive()` filter expire_cleanup uses
+          (Java `ManifestFiles.read`); expire_cleanup computes a `before−after` delta — structurally
+          different, no shared helper worth the rule-of-three. NET: ZERO expire_cleanup lines touched,
+          map.md not stale. Universe = all content files (every entry) + all manifests + all manifest
+          lists + current/previous metadata.json (non-recursive) + version-hint + stats/partition-stats.
+    - [x] **Listing + hidden-path filter:** `FileIO::list` + `created_at_millis < older_than` +
+          `PartitionAwareHiddenPathFilter` (segment-wise, named-partition `_<field>=` exception).
+    - [x] **Orphan join + URI normalization:** local Hadoop-`Path`-equivalent `split_uri` →
+          (scheme/authority/path); join on PATH; `uriComponentMatch` (null/empty valid matches any
+          actual ⇒ scheme-less local path matches `file://` actual); PrefixMismatchMode ×3 with Java's
+          verbatim ERROR message.
+    - [x] **Deletion:** sequential via delete_with; per-file failures collected (not abort); full
+          orphan list returned regardless of delete success.
+    - [x] **Tests:** 7 unit (split/normalization/equal-schemes/PrefixMismatchMode×3/any-compatible/
+          hidden-path/version-hint) + 9 e2e (crown-jewel by-category, olderThan grace, hidden-path
+          named-partition, location override, delete_with-exact-set, delete-failure-collected,
+          GC gate, copy-on-write history survival, ERROR-mode-clean). 7 mutations run, all caught
+          except the unconstructible is_alive-on-all-snapshots one (documented coverage limit).
+    - [x] **Docs:** GAP_MATRIX ❌→🟡 (5-pipe audit clean), this file, lessons.
+
+      **Outcome (2026-06-11):** A2 landed. Files: `maintenance/{mod,delete_orphan_files,tests}.rs`
+      (new), `lib.rs` (+1 `pub mod maintenance`), GAP_MATRIX (1 row), todo, lessons. ZERO
+      expire_cleanup.rs / map.md edits (re-derived the universe — no extraction). Gate CLEAN from
+      wt-orphan root: typos clean, fmt clean, clippy `-D warnings` clean (workspace ex-sqllogictest),
+      `cargo test -p iceberg --lib` **1903 passed ×2** (baseline 1887 + 16). expire_cleanup's 17 tests
+      green + untouched. 7 builder mutations: M2 partition-exception-drop, M3 olderThan-flip,
+      M4 full-list→deleted-only, M5 manifest-list-drop, M6 manifest-drop, M7 GC-gate-skip ALL caught;
+      M1 (is_alive filter on the all-snapshots universe) SURVIVED — documented as unconstructible with
+      real commits (the difference is invisible for normally-written tables). No commit. Deferred
+      loudly: executor parallelism, bulk deletes, `compareToFileList`/streaming, Java interop (row 🟡).
+  - [x] **A2 REVIEWER (2026-06-11, wt-orphan, Opus): adversarial review — VERDICT: PASS with one
+        builder claim refuted + two SAFE divergences documented.** Read the module in full, the Java
+        MAIN action + core/api 1.10.0 helpers (FileURI/HiddenPathFilter/FileSystemWalker), and ran a
+        Hadoop-`Path` ground-truth probe (`java -cp hadoop-client-api`). **M1 IS CONSTRUCTIBLE and was
+        KILLED** — the builder's "unconstructible" claim is wrong: commit data_a → copy-on-write-delete
+        it (tombstone) → EXPIRE the adding snapshot via the fork's own ExpireSnapshots (metadata-only,
+        deletes no files) → data_a is now referenced ONLY by a Deleted tombstone, on disk. The
+        no-liveness-filter universe spares it; the `is_alive()` mutation deletes it (history
+        corruption). Added `test_tombstone_only_referenced_file_is_not_orphan_after_expire` (kills M1)
+        and updated the stale "unconstructible" NOTE. Also found the olderThan `<`→`<=` mutation
+        SURVIVED (no boundary test) → added `test_older_than_cut_is_strict_less_than_at_the_exact_boundary`
+        (kills it) + `test_default_older_than_makes_fresh_table_sweep_a_no_op`; partition-stats inclusion
+        was coded-not-tested → added `test_statistics_and_partition_statistics_files_are_not_orphan`
+        (kills the category-drop); list-error propagation, hidden-parent-dir, and the inverse-`file://`
+        / trailing-slash compositions now pinned (8 reviewer tests total). Re-ran the builder's 5
+        in-scope mutations (scheme-detect, ERROR-as-orphan, abort-on-first-delete-fail, M-stats,
+        list-`?`-drop) — ALL killed by the suite. **Two SAFE divergences documented (under-deletion,
+        never corruption):** (a) `split_uri` does NOT collapse `//` nor decode `%xx` like Hadoop —
+        harmless because both metadata + listing sides carry the identical raw string for a Rust-native
+        table; (b) a scheme-qualified table `location` (`file://…`) on the local-fs backend makes the
+        hidden filter's `relative_under` fail to strip the base → every file masked-as-hidden → the
+        sweep is a silent no-op (S3/Glue via OpenDAL re-prefix listed entries WITH the scheme, so they
+        agree and sweep normally). MINOR: the ERROR-message text says `'IGNORE'` where Java MAIN says
+        `'NONE'` (a deliberate correction — `NONE` is not a valid mode — but NOT "verbatim" as the
+        module doc claims; no test pins the text). Gate CLEAN from wt-orphan root: typos clean, fmt
+        clean, clippy `-D warnings` clean (workspace ex-sqllogictest), `cargo test -p iceberg --lib`
+        **1911 passed ×2** (1903 baseline + 8 reviewer tests). expire_cleanup.rs byte-untouched
+        (`git diff --stat` empty); production `delete_orphan_files.rs` matches its pre-review backup
+        byte-for-byte (every mutation reverted). No commit.
 - [ ] **Scheduled with the user:** real-catalog (Glue + S3 Tables) hardening — needs credentials.
 - [ ] **Opus-queue (post-handoff or parallel):** data-level write-action interop paydown,
       cherrypick interop + `stageOnly`, ORC/Avro breadth, view ops, incremental-scan interop.
@@ -552,6 +663,128 @@ unreachability-from-`after`; module doc + lessons fixed), `BaseSnapshot.equals` 
 corrected (5 fields, id-diff equivalent by immutability), the inherited B1 window now stated
 in the module docs, and the Rust-stricter retained-list read scope noted (Java's prune
 early-exits; Rust always reads both sides — more pre-deletion `Err` cases only).
+
+## ACTIVE (2026-06-11): A3 — ExpireSnapshots Java interop (worktree wt-orphan, BUILDER Opus, Group A)
+
+Close the named interop deferral on the `Maintenance: ExpireSnapshots` GAP_MATRIX row: prove the
+Rust `ExpireSnapshotsAction` (B1 retention) + `ExpireSnapshotsCleanup` (B2 ReachableFileCleanup file
+GC) agree with Java 1.10.0 `RemoveSnapshots` + `cleanExpiredFiles(true)` on the SAME fixtures, judged
+by Java where possible. Modify ONLY: dev/java-interop/** (oracle + new script + map.md),
+crates/iceberg/tests/interop_expire.rs (new), GAP_MATRIX row, task/todo.md, task/lessons.md. NO
+transaction/ production edits — a real Rust bug = STOP + report. No commit.
+
+**Java strategy-selection (bytecode-verified `RemoveSnapshots.cleanExpiredSnapshots`, 1.10.0):** when
+`incrementalCleanup==null` Java picks INCREMENTAL iff `!specifiedSnapshotId && !hasRemovedNonMainAncestors
+&& !hasNonMainSnapshots(current)`, else REACHABLE. Rust ports ReachableFileCleanup ONLY, so EVERY fixture
+must FORCE Java to Reachable: keep a surviving TAG (⇒ `hasNonMainSnapshots(current)` true). This doubles
+as a judgment-surface requirement (a tag protecting an otherwise-expirable snapshot). `ReachableFileCleanup
+.cleanFiles` is the 2-arg `(base, current)` core = the Rust 2-state `clean_expired_files`.
+
+**Outcome (2026-06-11): A3 LANDED. Full chain GREEN both directions, 5 fixtures.** Files:
+`dev/java-interop/src/.../InteropOracle.java` (new `ExpireOracle` + 2 dispatch cases +
+`LocalTableOperations.continueVersioningFrom` + the `SnapshotMetaOracle.emit` null-parent fix),
+`dev/java-interop/run-interop-expire.sh` (new), `dev/java-interop/map.md` (row + 3 Debug entries),
+`crates/iceberg/tests/interop_expire.rs` (new, env-gated, local `expire_meta_view` with the
+expired-parent fix), `GAP_MATRIX.md` (row, 5-pipe audit clean), todo, lessons. NO transaction/
+production edits. Gate CLEAN: typos/fmt/clippy `-D warnings` (workspace ex-sqllogictest) clean,
+`cargo test -p iceberg --lib` 1911 ×2 (no lib code added), interop_expire offline no-op (3 pass).
+Sabotage BOTH fail-closed: (a) resurrect a snapshot id in rust final.metadata.json ⇒ Java byte-diff
+fails (2 snapshots vs 1); (b) drop a token from rust_deleted.json ⇒ Java verify `1 failures` + Rust
+descriptor test FAILED. **STOP-FINDING reported (separate increment):** Rust
+`FastAppend::existing_manifest` (append.rs:148) drops all-tombstone manifests where Java
+`FastAppend.apply` carries ALL prior manifests forward (`snapshot.allManifests()`, no filter) —
+surfaced by an emptying-delete `rewrite` fixture, then fixtured away (delete leaves a file existing).
+Deferred on the row: IncrementalFileCleanup, cleanExpiredMetadata, ref-age (max_ref_age_ms) interop.
+
+- [x] **Oracle (`ExpireOracle` in InteropOracle.java + dispatch cases):**
+  - `generate-interop-expire` (`-Dinterop.expire.dir`): build a REAL on-disk multi-snapshot table via
+    `LocalTableOperations`+`newFastAppend` (metadata-only `DataFiles` — paths need not exist, the cleanup
+    deletes by path via a collector), parameterized timestamps for a deterministic cut; run Java
+    `table.expireSnapshots().expireOlderThan(cut).retainLast(n).cleanExpiredFiles(true).deleteWith(collector)
+    .commit()`; emit `<dir>/<fixture>/java_deleted.json` (SORTED deleted-file list) + leave the expired
+    table at `<dir>/<fixture>/table/metadata/final.metadata.json` (re-located by the LocalTableOps commit).
+    Reuse `emit-snapshot-meta` (SnapshotMetaOracle, re-parsed base) for the canonical view.
+  - `verify-interop-expire` (`-Dinterop.expire.dir`): Java re-reads the RUST-expired table at
+    `<dir>/<fixture>/rust_table/metadata/final.metadata.json` (production read), emits its canonical view
+    of it; the script byte-diffs Java-on-Rust vs Java-on-Java. Sentinel `verify-interop-expire: 0 failures`.
+- [x] **Fixtures (each forces Reachable via a surviving tag):**
+  - `linear`: linear main history s1..s4, a tag at the head; expire prunes a contiguous prefix (retainLast +
+    expireOlderThan cut between s2/s3). Pins prefix retention + manifest-list/manifest/content file GC.
+  - `tag_protected`: linear history + a tag on s2 (an otherwise-expirable mid-chain snapshot); the tag KEEPS
+    s2 and its files (and forces Reachable). Pins ref-protection of the cleanup set.
+  - `stats`: a `linear`-shape table with a statistics file (+ partition-statistics if cheap via
+    `updateStatistics`) attached to an EXPIRED snapshot; pins stats-file cleanup. Tag at head.
+  - `deletes`: a V2 table with a position-delete-bearing snapshot that expires, so a DELETE manifest walks
+    through cleanup. Tag at head. (DV/V3 deferred — the cleanup walks delete manifests identically.)
+  - ALL fixtures fixtured AWAY from shared manifest LISTS (each Java snapshot owns a unique list, so the
+    Rust retained-shared list guard never fires ⇒ byte-equality). Ref aging (`max_ref_age_ms`) NOT exercised
+    (Rust implements it but keep the cut age-only to isolate; flag if Java diverges).
+- [x] **Direction 1 (Rust acts, Java judges):** the Rust GEN test commits the SAME chain on a copy, runs
+  `ExpireSnapshotsCleanup::commit_and_clean` with a COLLECTING deleter (no physical delete — collect-only so
+  Java can still read), lands `rust_table/.../final.metadata.json` + `rust_deleted.json`. Script: Java emits
+  its view of the Rust table, byte-diff vs Java-on-Java; assert the two deleted sets equal as sorted sets.
+- [x] **Direction 2 (Java acts, Rust verifies):** `interop_expire.rs` parses the Java-expired table, asserts
+  its surviving snapshot-id/refs set matches; AND Rust's own cleanup-candidate set (`clean_expired_files` on
+  the SAME pre-expire fixture, collect-only) equals Java's `java_deleted.json`.
+- [x] **`run-interop-expire.sh`:** set -euo pipefail; per-fixture chain mirroring run-interop-write-actions.sh
+  (reset → Java gen+deleted+meta → Rust gen+deleted → Java view-of-Rust + byte-diff + set-diff → Rust assert).
+  Fail-closed: missing artifact fails the chain; mvn verdict from OUTPUT sentinel (`|| true` + grep), not exit
+  code (the run-interop-dv.sh rule).
+- [x] **interop_expire.rs:** env-gated (`ICEBERG_INTEROP_EXPIRE_*`), clean no-op when unset, hard-asserts when
+  the script sets them. Mirrors interop_write_actions_meta.rs structure.
+- [x] **GAP_MATRIX:** ExpireSnapshots row cell — interop deferral RESOLVED for retention + ReachableFileCleanup
+  (both directions, the covered surface); stays 🟡 (IncrementalFileCleanup + cleanExpiredMetadata remain).
+  5-pipe audit.
+- [x] **Verify:** full chain GREEN (paste tail); Rust gate typos+fmt+clippy+`cargo test -p iceberg --lib` ×2
+  (baseline 1911); 2 SABOTAGE checks (resurrect a snapshot id in rust JSON ⇒ byte-diff fails; drop a file from
+  rust_deleted ⇒ set-diff fails); restore green.
+
+- [x] **A3 REVIEWER (2026-06-11, wt-orphan, Opus, adversarial): VERDICT — PASS with TWO harness fixes
+      (cross-strategy + descriptor injectivity) + one fixture-surface correction.** Read the chain, the
+      oracle, both view builders, and re-derived `RemoveSnapshots.cleanExpiredSnapshots` /
+      `hasNonMainSnapshots` / `hasRemovedNonMainAncestors` / `mainAncestors` / `FastAppend.apply` from
+      1.10.0 bytecode. Ran all 3 required sentinel injections + 3 sabotages (D1 byte-diff, D2 descriptor,
+      D2 summary) + the tag_protected flip + a strategy reflection probe.
+  - **VACUITY #1 (headline #3) FOUND + FIXED — the central claim was FALSE.** A reflection probe on
+        Java's `incrementalCleanup` field proved 4 of 5 fixtures (linear/stats/deletes/rewrite) ran Java's
+        **IncrementalFileCleanup**, NOT ReachableFileCleanup (the strategy the Rust side ports): a tag on
+        the HEAD leaves every survivor ON the post-expiry main ancestry ⇒ `hasNonMainSnapshots(current)`
+        is false ⇒ Java auto-selects Incremental. Only `tag_protected` (mid-chain tag) auto-selected
+        Reachable. The comparison passed only because the two strategies coincide on these shapes
+        (measured by force-probe) — a coincidence of shape, NOT 1:1 evidence of the Reachable port. FIX:
+        `((RemoveSnapshots) expireApi).withIncrementalCleanup(false)` (a real engine selector, package-
+        private, bytecode-offset-verified) forces Java's Reachable path for EVERY fixture against the
+        identical deleted sets ⇒ genuine Reachable-vs-Reachable. Surviving tag retained as the
+        ref-protection surface.
+  - **VACUITY #2 (headline #1) FOUND + FIXED — the descriptor was NON-INJECTIVE.** `<funnel>@ord<N>`
+        keyed only on the owning-snapshot ordinal, so two DIFFERENT content files added by the SAME commit
+        (a 2-file append) collapse to ONE token ⇒ a Rust-deletes-X / Java-deletes-Y swap passes set-equality
+        vacuously. FIX: cross-language-stable per-file discriminators on BOTH sides (`#rc<record_count>` for
+        content, `#a<>e<>d<>` file counts for manifests, `#sz<file_size>` for statistics; manifest lists
+        need none — one per snapshot). Offline fail-before/pass-after pin
+        `test_descriptor_token_is_injective_over_sibling_files_of_one_snapshot` (fails under the ordinal-only
+        scheme, passes after). Chain still green; `rewrite` now shows `content@ord0#rc10`/`manifest@ord0#a2e0d0`.
+  - **FIXTURE-SURFACE CORRECTION (headline #7): `deletes` overclaimed.** The delete manifest is carried
+        forward into the head ⇒ `manifestsToDelete` is empty ⇒ NEITHER side's cleanup ever READS the delete
+        manifest body (only manifest LISTS die). Corrected the oracle comment to scope the fixture to
+        metadata+list GC on a delete-bearing table; delete-manifest CONTENT cleanup is covered by the B2
+        unit tests, not here. `stats`/`tag_protected`/`rewrite`/`linear` surfaces all CONFIRMED genuine
+        (stats puffins on disk + in deleted set; tag flip from 2→3 deletions; rewrite fires content+manifest
+        funnels).
+  - **CONFIRMED (no change needed): headline #2** all 3 sentinel injections fail-closed (verify-throw ⇒
+        sentinel absent ⇒ fail; missing artifact ⇒ verify FAIL / diff exit 2 / emit mvn-exit-1 no `||true`;
+        double-run ⇒ `rm -rf TMP` wipes leftovers); **#4** view-copy drift is minimal (ONLY parent_ordinal
+        differs — mechanical diff), and the Java null-parent fix does NOT regress (run-interop-write-actions
+        + run-interop-dv both GREEN); **#5** FastAppend STOP-finding is REAL (1.10.0 bytecode `apply` offset
+        89-94 carries `allManifests` unfiltered vs Rust append.rs:148 `has_added/existing` filter), accurately
+        + findably recorded, correctly fixtured-away, NOT fixed (production read-only); **#6** D2 is a DEEP
+        `assert_eq!` on the full canonical view (summary-corruption sabotage fails it), D1 byte-diff catches a
+        Rust-metadata corruption.
+  - Files touched (harness/test only): `dev/java-interop/src/.../InteropOracle.java` (withIncrementalCleanup,
+        descriptor discriminators, deletes comment), `crates/iceberg/tests/interop_expire.rs` (discriminators
+        + injectivity pin), task/todo + task/lessons. transaction/ + common/snapshot_meta_view.rs +
+        Cargo/pom byte-untouched (`git diff --stat` empty). Gate CLEAN: typos/fmt/clippy `-D warnings` clean,
+        `cargo test -p iceberg --lib` **1911 ×2**, full chain GREEN. No commit.
 
 ## Carried-forward open items (full context in todo-archive/)
 

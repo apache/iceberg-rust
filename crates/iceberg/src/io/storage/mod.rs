@@ -30,8 +30,8 @@ pub use config::*;
 pub use local_fs::{LocalFsStorage, LocalFsStorageFactory};
 pub use memory::{MemoryStorage, MemoryStorageFactory};
 
-use super::{FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
-use crate::Result;
+use super::{FileInfo, FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
+use crate::{Error, ErrorKind, Result};
 
 /// Trait for storage operations in Iceberg.
 ///
@@ -93,6 +93,38 @@ pub trait Storage: Debug + Send + Sync {
     /// Delete all files with the given prefix
     async fn delete_prefix(&self, path: &str) -> Result<()>;
 
+    /// Recursively list all files under a prefix.
+    ///
+    /// Returns one [`FileInfo`] per file (never a directory) reachable under `prefix`,
+    /// descending into nested subdirectories. This is the read-side sibling of
+    /// [`Self::delete_prefix`] and mirrors Java's
+    /// `SupportsPrefixOperations.listPrefix` (whose Hadoop implementation uses
+    /// `FileSystem.listFiles(prefix, recursive = true)`).
+    ///
+    /// # Prefix semantics
+    ///
+    /// As Java's interface documents, hierarchical filesystems may require the prefix to
+    /// name a directory while key/value object stores allow arbitrary string prefixes. Each
+    /// implementation MUST document which it implements and MUST agree with its own
+    /// [`Self::delete_prefix`] on what falls "under the prefix" — a `list`/`delete_prefix`
+    /// disagreement would let an orphan-file sweep delete a file the listing never reported.
+    ///
+    /// # Default behavior
+    ///
+    /// The default body returns a [`FeatureUnsupported`](ErrorKind::FeatureUnsupported)
+    /// error rather than an empty list. An empty list is a valid "no files under this
+    /// prefix" answer; a backend that simply cannot list MUST fail loudly so a caller never
+    /// mistakes "cannot enumerate" for "nothing here". The defaulted body also keeps
+    /// external `#[typetag::serde]` implementors of this trait compiling without changes.
+    async fn list(&self, prefix: &str) -> Result<Vec<FileInfo>> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            format!(
+                "Storage::list (prefix listing) is not supported by this storage backend (prefix: {prefix})"
+            ),
+        ))
+    }
+
     /// Create a new input file for reading
     fn new_input(&self, path: &str) -> Result<InputFile>;
 
@@ -135,4 +167,85 @@ pub trait StorageFactory: Debug + Send + Sync {
     /// A `Result` containing an `Arc<dyn Storage>` on success, or an error
     /// if the storage could not be created.
     fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use serde::{Deserialize, Serialize};
+
+    use super::*;
+
+    /// A storage backend that overrides every required method but deliberately does NOT
+    /// override `list`, so it exercises the defaulted trait body.
+    #[derive(Debug, Serialize, Deserialize)]
+    struct NoListStorage;
+
+    #[async_trait]
+    #[typetag::serde]
+    impl Storage for NoListStorage {
+        async fn exists(&self, _path: &str) -> Result<bool> {
+            Ok(false)
+        }
+
+        async fn metadata(&self, _path: &str) -> Result<FileMetadata> {
+            Ok(FileMetadata { size: 0 })
+        }
+
+        async fn read(&self, _path: &str) -> Result<Bytes> {
+            Ok(Bytes::new())
+        }
+
+        async fn reader(&self, _path: &str) -> Result<Box<dyn FileRead>> {
+            Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "reader unsupported",
+            ))
+        }
+
+        async fn write(&self, _path: &str, _bs: Bytes) -> Result<()> {
+            Ok(())
+        }
+
+        async fn writer(&self, _path: &str) -> Result<Box<dyn FileWrite>> {
+            Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "writer unsupported",
+            ))
+        }
+
+        async fn delete(&self, _path: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn delete_prefix(&self, _path: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn new_input(&self, path: &str) -> Result<InputFile> {
+            Ok(InputFile::new(Arc::new(NoListStorage), path.to_string()))
+        }
+
+        fn new_output(&self, path: &str) -> Result<OutputFile> {
+            Ok(OutputFile::new(Arc::new(NoListStorage), path.to_string()))
+        }
+    }
+
+    /// Risk: a backend that cannot list must FAIL LOUDLY, not return an empty Vec. Downstream
+    /// (A2) reads an empty listing as "no orphans / everything orphan"; a silent empty answer
+    /// from a backend that simply can't enumerate would corrupt the orphan decision. The
+    /// default trait body MUST error with `FeatureUnsupported`, naming the operation.
+    #[tokio::test]
+    async fn test_default_list_errors_loudly_not_empty() {
+        let storage = NoListStorage;
+        let result = storage.list("memory://anything").await;
+
+        let error = result.expect_err("default list must error, not return an empty Vec");
+        assert_eq!(error.kind(), ErrorKind::FeatureUnsupported);
+        assert!(
+            error.message().contains("list"),
+            "error message must name the unsupported operation, got: {}",
+            error.message()
+        );
+    }
 }
