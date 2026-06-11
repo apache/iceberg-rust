@@ -219,6 +219,75 @@ public final class InteropOracle {
           System.exit(1);
         }
         break;
+      case "generate-interop-dv":
+        // DELETION-VECTOR merge-on-read, DIRECTION 1 — "Rust reads what JAVA writes" (Increment
+        // D1). Writes an unpartitioned V3 table (DVs require format version 3) with TWO real
+        // parquet data files and a REAL Puffin deletion vector (BaseDVFileWriter, the production
+        // DV writer) deleting positions {1,3} of file A, committed via newRowDelta().addDeletes.
+        // Emits java_dv_scan_rows.json (Java's own read with the DV applied = {10,30,50,60,70,80})
+        // for the Rust scan test, PLUS a synthetic high-bits/run-container DV blob
+        // (dv_blob.bin + dv_blob_expected.json) for the byte-level decode pin. The dir is via
+        // -Dinterop.dv.dir.
+        Path dvDir = requireFixturesDir("interop.dv.dir");
+        DvScanOracle.generate(dvDir);
+        break;
+      case "verify-interop-dv-write":
+        // DELETION-VECTOR WRITING, DIRECTION 2 — "JAVA reads what RUST writes" (Increment D2).
+        // The Rust GEN test (env ICEBERG_INTEROP_DV_WRITE_DIR, tests/interop_dv_write.rs) wrote
+        // <dir>/rust_dv.puffin via the production DVFileWriter (one deletion-vector-v1 blob per
+        // referenced data file) + rust_dv_expected.json ({path -> positions + blob coordinates}).
+        // Here Java (1) parses the RUST-written Puffin footer with its real Puffin reader and
+        // checks each blob's type/properties/coordinates against the expected JSON, (2) does the
+        // SAME ranged blob read the production scan does (BaseDeleteLoader.readDV) and decodes it
+        // with PositionDeleteIndex.deserialize (framing + magic + CRC + cardinality validations),
+        // asserting the positions match, and (3) serializes Java's OWN BitmapPositionDeleteIndex
+        // over the SAME position sets (via the production BaseDVFileWriter) into
+        // java_dv_blob_<i>.bin so the Rust byte-parity test can pin rust_bytes == java_bytes.
+        // A failure here is a REAL write-incompatibility finding. NOTE: `mvn exec:java` does not
+        // propagate System.exit to the shell — run-interop-dv.sh greps the "0 failures" sentinel.
+        Path dvWriteDir = requireFixturesDir("interop.dv_write.dir");
+        int dvWriteFailures = DvWriteOracle.verify(dvWriteDir);
+        System.out.println("verify-interop-dv-write: " + dvWriteFailures + " failures");
+        if (dvWriteFailures > 0) {
+          System.exit(1);
+        }
+        break;
+      case "verify-interop-dv-table":
+        // DELETION-VECTOR TABLE-level, DIRECTION 2 — "JAVA reads what RUST writes" (Increment
+        // D4, the headline). The Rust GEN test (env ICEBERG_INTEROP_DV_TABLE_DIR,
+        // tests/interop_dv_table.rs) committed a COMPLETE V3 table to <dir>/rust_table through
+        // the production Rust path: two real parquet data files in two identity(category)
+        // partitions fast_appended at sequence 1, then ONE Puffin holding TWO deletion vectors
+        // (DVFileWriter) committed via row_delta at sequence 2, with final.metadata.json at a
+        // known path + expected_rows.json / expected_dvs.json. Here Java loads that RUST-written
+        // metadata, reads the table with its PRODUCTION scan (IcebergGenerics, which loads BOTH
+        // DVs via BaseDeleteLoader.readDV and applies them), asserts the merge-on-read rows
+        // equal the expected set, AND cross-checks the committed DeleteFile metadata through the
+        // manifest API (content/format/referenced-data-file/content-offset/size/cardinality +
+        // the shared-puffin multi-blob pin). A failure here is a REAL table-level
+        // write-incompatibility finding. NOTE: `mvn exec:java` does not propagate System.exit —
+        // run-interop-dv.sh greps the "0 failures" sentinel.
+        Path dvTableVerifyDir = requireFixturesDir("interop.dv_table.dir");
+        int dvTableFailures = DvTableOracle.verify(dvTableVerifyDir);
+        System.out.println("verify-interop-dv-table: " + dvTableFailures + " failures");
+        if (dvTableFailures > 0) {
+          System.exit(1);
+        }
+        break;
+      case "generate-interop-dv-table":
+        // DELETION-VECTOR METADATA-level chain (Increment D4, the E1-family extension). Writes
+        // the JAVA mirror of the SAME logical chain the Rust GEN test commits — a V3
+        // identity(category) table with two real parquet data files (newFastAppend, mirroring
+        // Rust fast_append) and ONE Puffin holding TWO deletion vectors written by the
+        // production BaseDVFileWriter, committed via newRowDelta().addDeletes at sequence 2 —
+        // under <dir>/table with final.metadata.json. The run script then emits the canonical
+        // snapshot-metadata views of BOTH tables via emit-snapshot-meta (SnapshotMetaOracle) and
+        // byte-diffs Java's view of the Rust table against Java's view of THIS table; the Rust
+        // test (interop_dv_table.rs) asserts its own views of both equal Java's. The dir is via
+        // -Dinterop.dv_table.dir.
+        Path dvTableGenDir = requireFixturesDir("interop.dv_table.dir");
+        DvTableOracle.generate(dvTableGenDir);
+        break;
       case "generate-interop-eq-delete":
         // EQUALITY-DELETE merge-on-read, DIRECTION 1 — "Rust reads what JAVA writes". The sibling of
         // generate-interop-scan-exec, but the merge-on-read mechanism is delete-by-VALUE (an equality
@@ -3961,6 +4030,847 @@ public final class InteropOracle {
             "verify-interop-part-scan OK — Java read the RUST-written PARTITIONED table (real per-partition "
                 + "parquet data + Rust partition-scoped position-delete), merge-on-read live rows = "
                 + "{10,30,40,50}");
+      }
+      return failures;
+    }
+  }
+
+  // =============================================================================================
+  // DELETION-VECTOR scan-execution oracle (Increment D1, Direction 1 — "Rust reads what JAVA
+  // writes"). The V3 sibling of ScanExecOracle: the merge-on-read mechanism is a PUFFIN
+  // DELETION VECTOR (a deletion-vector-v1 blob written by BaseDVFileWriter), not a parquet
+  // position-delete file.
+  //
+  // THE TABLE (under <dir>/table). Unpartitioned V3 (DVs require format version 3), schema
+  // {1 id long required, 2 data string optional}:
+  //   data file 00000-data-a.parquet: rows (10,"a") (20,"b") (30,"c") (40,"d") (50,"e") at
+  //     positions 0..4;
+  //   data file 00000-data-b.parquet: rows (60,"f") (70,"g") (80,"h") — the SIBLING control: a
+  //     DV is FILE-scoped, so file B must come through the scan untouched;
+  //   a REAL Puffin DV written by BaseDVFileWriter deleting positions {1, 3} of file A (ids 20
+  //     and 40), committed via newRowDelta().addDeletes(dv).
+  // Live merge-on-read rows = {10,30,50,60,70,80}. Java materializes its OWN read
+  // (IcebergGenerics → BaseDeleteLoader.readDV applies the DV) into java_dv_scan_rows.json — the
+  // ground truth the Rust scan().to_arrow() must equal.
+  //
+  // THE SYNTHETIC BLOB (dv_blob.bin + dv_blob_expected.json). The scan fixture cannot exercise
+  // positions above 2^32 (no test parquet holds 4 billion rows), so the oracle ALSO serializes a
+  // second, UNCOMMITTED DV via BaseDVFileWriter for a fake data-file path with positions that
+  // span the 32-bit key boundary AND a contiguous run (which Java's serialize() run-length
+  // encodes into RUN containers), then copies the raw blob bytes (at the DeleteFile's
+  // contentOffset/contentSizeInBytes) out of the Puffin file. The env-gated Rust lib test
+  // (delete_vector::tests::test_dv_blob_decodes_java_written_blob_when_env_set) decodes those
+  // REAL Java bytes and asserts the exact position set — the empirical roaring
+  // byte-compatibility + framing pin, including high keys and run containers.
+  // =============================================================================================
+
+  static final class DvScanOracle {
+    private DvScanOracle() {}
+
+    /** The synthetic-blob positions: low values, a run-length-encodable range, and >2^32 keys. */
+    private static List<Long> syntheticBlobPositions() {
+      List<Long> positions = new ArrayList<>();
+      positions.add(0L);
+      positions.add(1L);
+      positions.add(100L);
+      for (long pos = 1000L; pos < 6000L; pos++) {
+        positions.add(pos); // a contiguous run -> a RUN container after runLengthEncode()
+      }
+      positions.add((1L << 32) + 7L); // bitmap key 1
+      positions.add((1L << 33) + 1L); // bitmap key 2
+      return positions;
+    }
+
+    static void generate(Path dir) throws IOException {
+      Files.createDirectories(dir);
+
+      File tableDir = dir.resolve("table").toFile();
+      File metadataDir = new File(tableDir, "metadata");
+      File dataDir = new File(tableDir, "data");
+      if (!metadataDir.isDirectory() && !metadataDir.mkdirs()) {
+        throw new IOException("failed to create metadata dir at " + metadataDir);
+      }
+      if (!dataDir.isDirectory() && !dataDir.mkdirs()) {
+        throw new IOException("failed to create data dir at " + dataDir);
+      }
+
+      Schema schema =
+          new Schema(
+              Types.NestedField.required(1, "id", Types.LongType.get()),
+              Types.NestedField.optional(2, "data", Types.StringType.get()));
+      PartitionSpec spec = PartitionSpec.unpartitioned();
+
+      // FORMAT VERSION 3 — deletion vectors are V3-only (a PUFFIN DeleteFile is rejected on V2
+      // by MergingSnapshotProducer.validateDeleteFileForVersion).
+      Map<String, String> props = new LinkedHashMap<>();
+      props.put(TableProperties.FORMAT_VERSION, "3");
+      TableMetadata seed =
+          TableMetadata.newTableMetadata(
+              schema, spec, SortOrder.unsorted(), tableDir.getAbsolutePath(), props);
+
+      LocalTableOperations ops = new LocalTableOperations(tableDir, metadataDir);
+      ops.commit(null, seed);
+      BaseTable table = new BaseTable(ops, "interop_dv_scan");
+
+      // Two REAL parquet data files: A (the DV target) + B (the sibling control).
+      DataFile dataFileA =
+          writeDataFile(
+              table,
+              schema,
+              spec,
+              new File(dataDir, "00000-data-a.parquet").getAbsolutePath(),
+              new long[] {10L, 20L, 30L, 40L, 50L},
+              new String[] {"a", "b", "c", "d", "e"});
+      DataFile dataFileB =
+          writeDataFile(
+              table,
+              schema,
+              spec,
+              new File(dataDir, "00000-data-b.parquet").getAbsolutePath(),
+              new long[] {60L, 70L, 80L},
+              new String[] {"f", "g", "h"});
+      table.newAppend().appendFile(dataFileA).appendFile(dataFileB).commit();
+
+      // A REAL deletion vector via BaseDVFileWriter (the production DV writer): delete positions
+      // {1, 3} of file A. The writer emits ONE Puffin file holding the deletion-vector-v1 blob
+      // and a DeleteFile carrying contentOffset/contentSizeInBytes/referencedDataFile +
+      // recordCount == cardinality (BaseDVFileWriter.createDV, L145-159). 1.10.0's only ctor
+      // takes an OutputFileFactory (the Supplier overload is post-1.10), so the Puffin file's
+      // name comes from the table's location provider.
+      org.apache.iceberg.io.OutputFileFactory dvFileFactory =
+          org.apache.iceberg.io.OutputFileFactory.builderFor(table, 1, 1L)
+              .format(FileFormat.PUFFIN)
+              .build();
+      org.apache.iceberg.deletes.DVFileWriter dvWriter =
+          new org.apache.iceberg.deletes.BaseDVFileWriter(dvFileFactory, path -> null);
+      dvWriter.delete(dataFileA.location(), 1L, spec, null);
+      dvWriter.delete(dataFileA.location(), 3L, spec, null);
+      dvWriter.close();
+      List<DeleteFile> dvs = dvWriter.result().deleteFiles();
+      if (dvs.size() != 1) {
+        throw new IOException("expected exactly one DV DeleteFile, got " + dvs.size());
+      }
+      RowDelta rowDelta = table.newRowDelta();
+      for (DeleteFile dv : dvs) {
+        rowDelta.addDeletes(dv);
+      }
+      rowDelta.commit();
+
+      Path finalMetadata = metadataDir.toPath().resolve("final.metadata.json");
+      OutputFile finalOut =
+          new LocalFileIO().newOutputFile(finalMetadata.toAbsolutePath().toString());
+      TableMetadataParser.write(ops.current(), finalOut);
+
+      // Java's OWN merge-on-read read (IcebergGenerics applies the DV via
+      // BaseDeleteLoader.readDV) is the ground truth: {10,30,50,60,70,80}, 20/40 deleted.
+      writeJson(dir.resolve("java_dv_scan_rows.json"), readLiveRowsToJson(table));
+
+      // The synthetic high-bits / run-container blob for the byte-level decode pin.
+      emitSyntheticBlob(dir, table, spec);
+
+      System.out.println("generated V3 DV table + java_dv_scan_rows.json + dv_blob.bin to " + dir);
+    }
+
+    /**
+     * Serialize an UNCOMMITTED deletion vector with positions spanning the 32-bit key boundary
+     * plus a contiguous run, copy its raw blob bytes out of the Puffin file via the SAME ranged
+     * read Java's scan uses (contentOffset/contentSizeInBytes, BaseDeleteLoader.readDV), and emit
+     * dv_blob.bin + the expected positions as dv_blob_expected.json.
+     */
+    private static void emitSyntheticBlob(Path dir, BaseTable table, PartitionSpec spec)
+        throws IOException {
+      org.apache.iceberg.io.OutputFileFactory syntheticFactory =
+          org.apache.iceberg.io.OutputFileFactory.builderFor(table, 2, 2L)
+              .format(FileFormat.PUFFIN)
+              .build();
+      org.apache.iceberg.deletes.DVFileWriter dvWriter =
+          new org.apache.iceberg.deletes.BaseDVFileWriter(syntheticFactory, path -> null);
+      List<Long> positions = syntheticBlobPositions();
+      String fakeDataPath = "synthetic://high-bits-data.parquet";
+      for (long pos : positions) {
+        dvWriter.delete(fakeDataPath, pos, spec, null);
+      }
+      dvWriter.close();
+      DeleteFile dv = dvWriter.result().deleteFiles().get(0);
+
+      // The SAME ranged read Java's scan path uses (BaseDeleteLoader.readDV): seek to
+      // contentOffset, read contentSizeInBytes bytes.
+      long offset = dv.contentOffset();
+      int length = dv.contentSizeInBytes().intValue();
+      byte[] blob = new byte[length];
+      InputFile inputFile = new LocalFileIO().newInputFile(dv.location());
+      try (org.apache.iceberg.io.SeekableInputStream in = inputFile.newStream()) {
+        in.seek(offset);
+        org.apache.iceberg.io.IOUtil.readFully(in, blob, 0, length);
+      }
+      Files.write(dir.resolve("dv_blob.bin"), blob);
+
+      String expectedJson =
+          JsonUtil.generate(
+              gen -> {
+                gen.writeStartArray();
+                for (long pos : positions) {
+                  gen.writeNumber(pos);
+                }
+                gen.writeEndArray();
+              },
+              true);
+      writeJson(dir.resolve("dv_blob_expected.json"), expectedJson);
+    }
+
+    /** Write one REAL parquet data file (the ScanExecOracle template, parameterized rows). */
+    private static DataFile writeDataFile(
+        BaseTable table,
+        Schema schema,
+        PartitionSpec spec,
+        String path,
+        long[] ids,
+        String[] values)
+        throws IOException {
+      List<Record> rows = new ArrayList<>();
+      for (int i = 0; i < ids.length; i++) {
+        GenericRecord record = GenericRecord.create(schema);
+        record.setField("id", ids[i]);
+        record.setField("data", values[i]);
+        rows.add(record);
+      }
+
+      GenericAppenderFactory factory = new GenericAppenderFactory(schema, spec);
+      OutputFile out = table.io().newOutputFile(path);
+      DataWriter<Record> writer =
+          factory.newDataWriter(
+              org.apache.iceberg.encryption.EncryptedFiles.encryptedOutput(
+                  out, org.apache.iceberg.encryption.EncryptionKeyMetadata.EMPTY),
+              FileFormat.PARQUET,
+              null);
+      try (Closeable toClose = writer) {
+        writer.write(rows);
+      }
+      return writer.toDataFile();
+    }
+
+    /** Java's own merge-on-read read sorted by id, as a JSON array of {id, data}. */
+    private static String readLiveRowsToJson(BaseTable table) {
+      Map<Long, String> dataById = new LinkedHashMap<>();
+      try (CloseableIterable<Record> records = IcebergGenerics.read(table).build()) {
+        for (Record record : records) {
+          Long id = (Long) record.getField("id");
+          Object data = record.getField("data");
+          dataById.put(id, data == null ? null : data.toString());
+        }
+      } catch (IOException error) {
+        throw new RuntimeException("failed to read live rows via IcebergGenerics", error);
+      }
+
+      List<Long> ids = new ArrayList<>(dataById.keySet());
+      ids.sort(Long::compareTo);
+      return JsonUtil.generate(
+          gen -> {
+            gen.writeStartArray();
+            for (Long id : ids) {
+              gen.writeStartObject();
+              gen.writeNumberField("id", id);
+              String data = dataById.get(id);
+              if (data == null) {
+                gen.writeNullField("data");
+              } else {
+                gen.writeStringField("data", data);
+              }
+              gen.writeEndObject();
+            }
+            gen.writeEndArray();
+          },
+          true);
+    }
+  }
+
+  // =============================================================================================
+  // DvWriteOracle — DELETION-VECTOR WRITING, Direction 2 (Increment D2): Java verifies a
+  // RUST-written Puffin DV file with its production reader machinery, then emits its OWN
+  // serialization of the same position sets for the Rust byte-parity pin. See the
+  // verify-interop-dv-write dispatch comment for the full flow.
+  // =============================================================================================
+
+  static final class DvWriteOracle {
+    private DvWriteOracle() {}
+
+    /** One expected deletion vector parsed from rust_dv_expected.json. */
+    private static final class ExpectedDv {
+      final String referencedDataFile;
+      final List<Long> positions;
+      final long contentOffset;
+      final long contentSizeInBytes;
+      final long recordCount;
+      final long fileSizeInBytes;
+
+      ExpectedDv(com.fasterxml.jackson.databind.JsonNode node) {
+        this.referencedDataFile = node.get("referenced_data_file").asText();
+        this.positions = new ArrayList<>();
+        for (com.fasterxml.jackson.databind.JsonNode position : node.get("positions")) {
+          this.positions.add(position.asLong());
+        }
+        this.contentOffset = node.get("content_offset").asLong();
+        this.contentSizeInBytes = node.get("content_size_in_bytes").asLong();
+        this.recordCount = node.get("record_count").asLong();
+        this.fileSizeInBytes = node.get("file_size_in_bytes").asLong();
+      }
+    }
+
+    static int verify(Path dir) throws IOException {
+      int failures = 0;
+      String puffinPath = dir.resolve("rust_dv.puffin").toAbsolutePath().toString();
+
+      String expectedJson =
+          new String(
+              Files.readAllBytes(dir.resolve("rust_dv_expected.json")), StandardCharsets.UTF_8);
+      List<ExpectedDv> expected = new ArrayList<>();
+      for (com.fasterxml.jackson.databind.JsonNode node :
+          JsonUtil.mapper().readTree(expectedJson)) {
+        expected.add(new ExpectedDv(node));
+      }
+
+      // (1) Parse the RUST-written footer with Java's REAL Puffin reader and index the blob
+      // metadata by referenced data file.
+      InputFile inputFile = new LocalFileIO().newInputFile(puffinPath);
+      org.apache.iceberg.puffin.FileMetadata footer;
+      try (org.apache.iceberg.puffin.PuffinReader reader =
+          org.apache.iceberg.puffin.Puffin.read(inputFile).build()) {
+        footer = reader.fileMetadata();
+      }
+      if (footer.blobs().size() != expected.size()) {
+        System.out.println(
+            "FAIL blob count: footer has " + footer.blobs().size() + ", expected "
+                + expected.size());
+        failures++;
+      }
+      Map<String, org.apache.iceberg.puffin.BlobMetadata> blobsByPath = new LinkedHashMap<>();
+      for (org.apache.iceberg.puffin.BlobMetadata blob : footer.blobs()) {
+        blobsByPath.put(blob.properties().get("referenced-data-file"), blob);
+      }
+
+      for (ExpectedDv dv : expected) {
+        failures += verifyOneDv(puffinPath, inputFile, blobsByPath, dv);
+      }
+
+      // On-disk file size must equal the file_size_in_bytes every DeleteFile recorded.
+      long actualFileSize = inputFile.getLength();
+      for (ExpectedDv dv : expected) {
+        if (dv.fileSizeInBytes != actualFileSize) {
+          System.out.println(
+              "FAIL file size for " + dv.referencedDataFile + ": DeleteFile recorded "
+                  + dv.fileSizeInBytes + ", on-disk Puffin is " + actualFileSize);
+          failures++;
+        }
+      }
+
+      // (3) Emit Java's own serialization of the SAME position sets for the byte-parity pin
+      // (java_dv_blob_<i>.bin, index = the entry's position in rust_dv_expected.json).
+      emitJavaBlobs(dir, expected);
+
+      return failures;
+    }
+
+    /** Verify one expected DV: footer metadata, then the production-style ranged read + decode. */
+    private static int verifyOneDv(
+        String puffinPath,
+        InputFile inputFile,
+        Map<String, org.apache.iceberg.puffin.BlobMetadata> blobsByPath,
+        ExpectedDv dv)
+        throws IOException {
+      int failures = 0;
+      org.apache.iceberg.puffin.BlobMetadata blob = blobsByPath.get(dv.referencedDataFile);
+      if (blob == null) {
+        System.out.println("FAIL no footer blob references " + dv.referencedDataFile);
+        return 1;
+      }
+      if (!org.apache.iceberg.puffin.StandardBlobTypes.DV_V1.equals(blob.type())) {
+        System.out.println(
+            "FAIL blob type for " + dv.referencedDataFile + ": " + blob.type());
+        failures++;
+      }
+      if (blob.offset() != dv.contentOffset || blob.length() != dv.contentSizeInBytes) {
+        System.out.println(
+            "FAIL blob coordinates for " + dv.referencedDataFile + ": footer says ("
+                + blob.offset() + ", " + blob.length() + "), DeleteFile metadata recorded ("
+                + dv.contentOffset + ", " + dv.contentSizeInBytes + ")");
+        failures++;
+      }
+      String cardinality = blob.properties().get("cardinality");
+      if (!String.valueOf(dv.positions.size()).equals(cardinality)) {
+        System.out.println(
+            "FAIL cardinality property for " + dv.referencedDataFile + ": " + cardinality
+                + ", expected " + dv.positions.size());
+        failures++;
+      }
+      List<Integer> expectedFields =
+          java.util.Collections.singletonList(MetadataColumns.ROW_POSITION.fieldId());
+      if (!expectedFields.equals(blob.inputFields())) {
+        System.out.println(
+            "FAIL blob fields for " + dv.referencedDataFile + ": " + blob.inputFields()
+                + ", expected " + expectedFields + " (ROW_POSITION)");
+        failures++;
+      }
+      if (blob.snapshotId() != -1L || blob.sequenceNumber() != -1L) {
+        System.out.println(
+            "FAIL blob snapshot-id/sequence-number for " + dv.referencedDataFile
+                + ": (" + blob.snapshotId() + ", " + blob.sequenceNumber()
+                + "), expected (-1, -1) = inherited");
+        failures++;
+      }
+
+      // (2) The SAME ranged read the production scan path does (BaseDeleteLoader.readDV), then
+      // the production deserialization (PositionDeleteIndex.deserialize -> framing + magic +
+      // CRC + cardinality validations) against a DeleteFile shaped like BaseDVFileWriter.createDV.
+      byte[] blobBytes = readBlob(inputFile, dv.contentOffset, (int) dv.contentSizeInBytes);
+      DeleteFile deleteFile =
+          FileMetadata.deleteFileBuilder(PartitionSpec.unpartitioned())
+              .ofPositionDeletes()
+              .withFormat(FileFormat.PUFFIN)
+              .withPath(puffinPath)
+              .withFileSizeInBytes(dv.fileSizeInBytes)
+              .withReferencedDataFile(dv.referencedDataFile)
+              .withContentOffset(dv.contentOffset)
+              .withContentSizeInBytes(dv.contentSizeInBytes)
+              .withRecordCount(dv.recordCount)
+              .build();
+      List<Long> decoded = new ArrayList<>();
+      try {
+        org.apache.iceberg.deletes.PositionDeleteIndex index =
+            org.apache.iceberg.deletes.PositionDeleteIndex.deserialize(blobBytes, deleteFile);
+        index.forEach(decoded::add);
+      } catch (RuntimeException error) {
+        System.out.println(
+            "FAIL Java could not deserialize the Rust-written DV for " + dv.referencedDataFile
+                + ": " + error);
+        return failures + 1;
+      }
+      if (!dv.positions.equals(decoded)) {
+        System.out.println(
+            "FAIL positions for " + dv.referencedDataFile + ": Java decoded " + decoded.size()
+                + " positions, expected " + dv.positions.size()
+                + " (or the sets differ)");
+        failures++;
+      } else {
+        System.out.println(
+            "PASS " + dv.referencedDataFile + ": " + decoded.size()
+                + " positions decoded by Java's production reader");
+      }
+      return failures;
+    }
+
+    private static byte[] readBlob(InputFile inputFile, long offset, int length)
+        throws IOException {
+      byte[] bytes = new byte[length];
+      try (org.apache.iceberg.io.SeekableInputStream in = inputFile.newStream()) {
+        in.seek(offset);
+        org.apache.iceberg.io.IOUtil.readFully(in, bytes, 0, length);
+      }
+      return bytes;
+    }
+
+    /**
+     * Serialize Java's own BitmapPositionDeleteIndex over the SAME position sets through the
+     * production BaseDVFileWriter (1.10.0's only ctor needs an OutputFileFactory, hence the
+     * throwaway table), and dump each framed blob to java_dv_blob_&lt;i&gt;.bin for the Rust
+     * byte-parity test.
+     */
+    private static void emitJavaBlobs(Path dir, List<ExpectedDv> expected) throws IOException {
+      File tableDir = dir.resolve("java_emit_table").toFile();
+      File metadataDir = new File(tableDir, "metadata");
+      if (!metadataDir.isDirectory() && !metadataDir.mkdirs()) {
+        throw new IOException("failed to create metadata dir at " + metadataDir);
+      }
+      Schema schema = new Schema(Types.NestedField.required(1, "id", Types.LongType.get()));
+      Map<String, String> props = new LinkedHashMap<>();
+      props.put(TableProperties.FORMAT_VERSION, "3");
+      TableMetadata seed =
+          TableMetadata.newTableMetadata(
+              schema,
+              PartitionSpec.unpartitioned(),
+              SortOrder.unsorted(),
+              tableDir.getAbsolutePath(),
+              props);
+      LocalTableOperations ops = new LocalTableOperations(tableDir, metadataDir);
+      ops.commit(null, seed);
+      BaseTable table = new BaseTable(ops, "interop_dv_write_emit");
+
+      org.apache.iceberg.io.OutputFileFactory fileFactory =
+          org.apache.iceberg.io.OutputFileFactory.builderFor(table, 3, 3L)
+              .format(FileFormat.PUFFIN)
+              .build();
+      org.apache.iceberg.deletes.DVFileWriter dvWriter =
+          new org.apache.iceberg.deletes.BaseDVFileWriter(fileFactory, path -> null);
+      for (ExpectedDv dv : expected) {
+        for (long position : dv.positions) {
+          dvWriter.delete(dv.referencedDataFile, position, PartitionSpec.unpartitioned(), null);
+        }
+      }
+      dvWriter.close();
+
+      Map<String, DeleteFile> javaDvsByPath = new LinkedHashMap<>();
+      for (DeleteFile javaDv : dvWriter.result().deleteFiles()) {
+        javaDvsByPath.put(String.valueOf(javaDv.referencedDataFile()), javaDv);
+      }
+      for (int i = 0; i < expected.size(); i++) {
+        ExpectedDv dv = expected.get(i);
+        DeleteFile javaDv = javaDvsByPath.get(dv.referencedDataFile);
+        if (javaDv == null) {
+          throw new IOException("Java DV writer produced no DV for " + dv.referencedDataFile);
+        }
+        byte[] javaBlob =
+            readBlob(
+                new LocalFileIO().newInputFile(javaDv.location()),
+                javaDv.contentOffset(),
+                javaDv.contentSizeInBytes().intValue());
+        Files.write(dir.resolve("java_dv_blob_" + i + ".bin"), javaBlob);
+      }
+      System.out.println(
+          "emitted " + expected.size() + " java_dv_blob_<i>.bin files for the byte-parity pin");
+    }
+  }
+
+  // =============================================================================================
+  // DvTableOracle — DELETION-VECTOR TABLE-level + METADATA-level interop (Increment D4, the
+  // evidence capstone of the DV arc). Two modes over ONE shared fixture shape:
+  //
+  //   verify-interop-dv-table (Direction 2, the headline): Java loads the RUST-COMMITTED V3
+  //   table at <dir>/rust_table (two identity(category) partitions, two real parquet data files,
+  //   ONE Puffin holding TWO DVs committed via Rust's row_delta), reads it with the PRODUCTION
+  //   scan (IcebergGenerics -> DeleteFilter -> BaseDeleteLoader.readDV applies both DVs), and
+  //   asserts the live rows equal <dir>/expected_rows.json = {(10,x),(30,z),(50,q)} (id 20
+  //   deleted from cat=a; ids 40/60 deleted from cat=b). It ALSO cross-checks the committed
+  //   DeleteFile metadata through the manifest API (ManifestFiles.readDeleteManifest) against
+  //   <dir>/expected_dvs.json: content POSITION_DELETES, format PUFFIN, referencedDataFile,
+  //   contentOffset/contentSizeInBytes, recordCount == cardinality, and BOTH DVs sharing ONE
+  //   puffin location (the multi-blob pin).
+  //
+  //   generate-interop-dv-table (the metadata-level mirror): Java performs the SAME logical
+  //   chain on an equivalent V3 table under <dir>/table — newFastAppend (mirroring Rust
+  //   fast_append) of the two partitioned parquet data files at sequence 1, then ONE Puffin with
+  //   TWO DVs via the production BaseDVFileWriter committed by newRowDelta().addDeletes at
+  //   sequence 2 — so the run script can byte-diff Java's canonical snapshot-metadata view
+  //   (SnapshotMetaOracle) of the RUST table against Java's view of THIS table, and the Rust
+  //   test can assert its own views of both. The DV cardinalities DIFFER (1 vs 2) so the
+  //   canonical entry sort never ties before the partition key.
+  // =============================================================================================
+
+  static final class DvTableOracle {
+    private DvTableOracle() {}
+
+    static void generate(Path dir) throws IOException {
+      Files.createDirectories(dir);
+
+      File tableDir = dir.resolve("table").toFile();
+      File metadataDir = new File(tableDir, "metadata");
+      File dataDir = new File(tableDir, "data");
+      if (!metadataDir.isDirectory() && !metadataDir.mkdirs()) {
+        throw new IOException("failed to create metadata dir at " + metadataDir);
+      }
+      if (!dataDir.isDirectory() && !dataDir.mkdirs()) {
+        throw new IOException("failed to create data dir at " + dataDir);
+      }
+
+      Schema schema =
+          new Schema(
+              Types.NestedField.required(1, "id", Types.LongType.get()),
+              Types.NestedField.required(2, "category", Types.StringType.get()),
+              Types.NestedField.optional(3, "data", Types.StringType.get()));
+      PartitionSpec spec = PartitionSpec.builderFor(schema).identity("category").build();
+
+      // FORMAT VERSION 3 — deletion vectors are V3-only.
+      Map<String, String> props = new LinkedHashMap<>();
+      props.put(TableProperties.FORMAT_VERSION, "3");
+      TableMetadata seed =
+          TableMetadata.newTableMetadata(
+              schema, spec, SortOrder.unsorted(), tableDir.getAbsolutePath(), props);
+
+      LocalTableOperations ops = new LocalTableOperations(tableDir, metadataDir);
+      ops.commit(null, seed);
+      BaseTable table = new BaseTable(ops, "interop_dv_table");
+
+      // The two partition values as PartitionData over the spec's partition type.
+      Types.StructType partitionType = spec.partitionType();
+      PartitionData partitionA = new PartitionData(partitionType);
+      partitionA.set(0, "a");
+      PartitionData partitionB = new PartitionData(partitionType);
+      partitionB.set(0, "b");
+
+      // One REAL parquet DATA file PER PARTITION (cat=a: ids 10/20/30; cat=b: ids 40/50/60),
+      // committed together via newFastAppend (mirroring Rust fast_append) at sequence 1.
+      DataFile dataFileA =
+          writePartitionedDataFile(
+              table,
+              schema,
+              spec,
+              partitionA,
+              new File(dataDir, "category=a/00000-a.parquet").getAbsolutePath(),
+              new long[] {10L, 20L, 30L},
+              new String[] {"x", "y", "z"});
+      DataFile dataFileB =
+          writePartitionedDataFile(
+              table,
+              schema,
+              spec,
+              partitionB,
+              new File(dataDir, "category=b/00000-b.parquet").getAbsolutePath(),
+              new long[] {40L, 50L, 60L},
+              new String[] {"p", "q", "r"});
+      table.newFastAppend().appendFile(dataFileA).appendFile(dataFileB).commit();
+
+      // ONE Puffin holding TWO deletion vectors via the production BaseDVFileWriter: positions
+      // {1} of the cat=a file (id 20, cardinality 1) + positions {0, 2} of the cat=b file
+      // (ids 40/60, cardinality 2), each in its own partition context. Committed in ONE
+      // newRowDelta at sequence 2.
+      org.apache.iceberg.io.OutputFileFactory dvFileFactory =
+          org.apache.iceberg.io.OutputFileFactory.builderFor(table, 1, 1L)
+              .format(FileFormat.PUFFIN)
+              .build();
+      org.apache.iceberg.deletes.DVFileWriter dvWriter =
+          new org.apache.iceberg.deletes.BaseDVFileWriter(dvFileFactory, path -> null);
+      dvWriter.delete(dataFileA.location(), 1L, spec, partitionA);
+      dvWriter.delete(dataFileB.location(), 0L, spec, partitionB);
+      dvWriter.delete(dataFileB.location(), 2L, spec, partitionB);
+      dvWriter.close();
+      List<DeleteFile> dvs = dvWriter.result().deleteFiles();
+      if (dvs.size() != 2) {
+        throw new IOException("expected exactly two DV DeleteFiles, got " + dvs.size());
+      }
+      RowDelta rowDelta = table.newRowDelta();
+      for (DeleteFile dv : dvs) {
+        rowDelta.addDeletes(dv);
+      }
+      rowDelta.commit();
+
+      // The FINAL metadata at a KNOWN path for the emit-snapshot-meta step + the Rust view.
+      Path finalMetadata = metadataDir.toPath().resolve("final.metadata.json");
+      OutputFile finalOut =
+          new LocalFileIO().newOutputFile(finalMetadata.toAbsolutePath().toString());
+      TableMetadataParser.write(ops.current(), finalOut);
+
+      System.out.println(
+          "generated the JAVA mirror V3 DV chain (fast-append 2 partitioned data files + one "
+              + "puffin with two DVs via newRowDelta) under " + dir.resolve("table"));
+    }
+
+    /** Write one REAL parquet data file for ONE partition (the PartScanExecOracle template). */
+    private static DataFile writePartitionedDataFile(
+        BaseTable table,
+        Schema schema,
+        PartitionSpec spec,
+        StructLike partition,
+        String path,
+        long[] ids,
+        String[] dataValues)
+        throws IOException {
+      String category = partition.get(0, String.class);
+      List<Record> rows = new ArrayList<>();
+      for (int i = 0; i < ids.length; i++) {
+        GenericRecord record = GenericRecord.create(schema);
+        record.setField("id", ids[i]);
+        record.setField("category", category);
+        record.setField("data", dataValues[i]);
+        rows.add(record);
+      }
+
+      GenericAppenderFactory factory = new GenericAppenderFactory(schema, spec);
+      OutputFile out = table.io().newOutputFile(path);
+      DataWriter<Record> writer =
+          factory.newDataWriter(
+              org.apache.iceberg.encryption.EncryptedFiles.encryptedOutput(
+                  out, org.apache.iceberg.encryption.EncryptionKeyMetadata.EMPTY),
+              FileFormat.PARQUET,
+              partition);
+      try (Closeable toClose = writer) {
+        writer.write(rows);
+      }
+      return writer.toDataFile();
+    }
+
+    /** One expected live row parsed from expected_rows.json. */
+    private static final class ExpectedRow {
+      final long id;
+      final String data;
+
+      ExpectedRow(com.fasterxml.jackson.databind.JsonNode node) {
+        this.id = node.get("id").asLong();
+        com.fasterxml.jackson.databind.JsonNode dataNode = node.get("data");
+        this.data = dataNode == null || dataNode.isNull() ? null : dataNode.asText();
+      }
+    }
+
+    /** One expected committed-DV metadata entry parsed from expected_dvs.json. */
+    private static final class ExpectedDvMeta {
+      final String referencedDataFile;
+      final long recordCount;
+      final long contentOffset;
+      final long contentSizeInBytes;
+
+      ExpectedDvMeta(com.fasterxml.jackson.databind.JsonNode node) {
+        this.referencedDataFile = node.get("referenced_data_file").asText();
+        this.recordCount = node.get("record_count").asLong();
+        this.contentOffset = node.get("content_offset").asLong();
+        this.contentSizeInBytes = node.get("content_size_in_bytes").asLong();
+      }
+    }
+
+    /**
+     * DIRECTION 2 verify, TABLE level — Java's PRODUCTION scan over the RUST-COMMITTED V3+DV
+     * table, plus the manifest-API cross-check of the committed DeleteFile metadata. Mirrors
+     * {@link PartScanExecOracle#verify} for the load + read; the delete mechanism here is two
+     * Puffin deletion vectors in one file.
+     */
+    static int verify(Path dir) throws IOException {
+      int failures = 0;
+      Path finalMetadata =
+          dir.resolve("rust_table").resolve("metadata").resolve("final.metadata.json");
+
+      if (!Files.exists(finalMetadata)) {
+        System.out.println(
+            "FAIL dv-table: missing " + finalMetadata + " (run the Rust GEN path first)");
+        return 1;
+      }
+
+      List<ExpectedRow> expectedRows = new ArrayList<>();
+      for (com.fasterxml.jackson.databind.JsonNode node :
+          JsonUtil.mapper().readTree(readString(dir.resolve("expected_rows.json")))) {
+        expectedRows.add(new ExpectedRow(node));
+      }
+      List<ExpectedDvMeta> expectedDvs = new ArrayList<>();
+      for (com.fasterxml.jackson.databind.JsonNode node :
+          JsonUtil.mapper().readTree(readString(dir.resolve("expected_dvs.json")))) {
+        expectedDvs.add(new ExpectedDvMeta(node));
+      }
+
+      TableMetadata metadata;
+      try {
+        metadata =
+            TableMetadataParser.fromJson(finalMetadata.toString(), readString(finalMetadata));
+      } catch (RuntimeException parseError) {
+        System.out.println(
+            "FAIL dv-table: Java could not parse the Rust-written V3 final.metadata.json: "
+                + parseError);
+        return 1;
+      }
+
+      FileIO io = new LocalFileIO();
+      BaseTable table = new BaseTable(new InMemoryInspectionOperations(metadata, io), "rust_table");
+
+      // (1) The PRODUCTION merge-on-read read: IcebergGenerics loads BOTH Rust-written DVs via
+      // BaseDeleteLoader.readDV and applies them during the scan.
+      Map<Long, String> dataById = new LinkedHashMap<>();
+      try (CloseableIterable<Record> records = IcebergGenerics.read(table).build()) {
+        for (Record record : records) {
+          Long id = (Long) record.getField("id");
+          Object data = record.getField("data");
+          dataById.put(id, data == null ? null : data.toString());
+        }
+      } catch (RuntimeException | IOException readError) {
+        System.out.println(
+            "FAIL dv-table: Java could not READ the Rust-committed V3+DV table via "
+                + "IcebergGenerics (metadata/manifest/DV incompatibility): "
+                + readError);
+        return 1;
+      }
+
+      List<Long> liveIds = new ArrayList<>(dataById.keySet());
+      liveIds.sort(Long::compareTo);
+
+      List<Long> expectedIds = new ArrayList<>();
+      boolean rowsMatch = true;
+      for (ExpectedRow row : expectedRows) {
+        expectedIds.add(row.id);
+        String actual = dataById.get(row.id);
+        if (!dataById.containsKey(row.id)
+            || (row.data == null ? actual != null : !row.data.equals(actual))) {
+          rowsMatch = false;
+        }
+      }
+      if (!liveIds.equals(expectedIds) || !rowsMatch) {
+        System.out.println(
+            "FAIL dv-table: live (id,data) set mismatch — RESURRECTED or missing rows: java-read="
+                + dataById
+                + " expected ids "
+                + expectedIds
+                + " (a dropped/unread DV resurrects its deleted rows)");
+        failures++;
+      } else {
+        System.out.println(
+            "PASS dv-table: Java's production scan applied BOTH Rust-written DVs -> live rows "
+                + dataById);
+      }
+
+      // (2) The manifest-API cross-check: read every committed delete entry back through
+      // ManifestFiles.readDeleteManifest and compare against the metadata Rust recorded.
+      Map<String, DeleteFile> dvsByReferencedFile = new LinkedHashMap<>();
+      Snapshot current = table.currentSnapshot();
+      for (ManifestFile manifest : current.deleteManifests(io)) {
+        try (ManifestReader<DeleteFile> reader =
+            ManifestFiles.readDeleteManifest(manifest, io, metadata.specsById())) {
+          for (DeleteFile deleteFile : reader) {
+            dvsByReferencedFile.put(String.valueOf(deleteFile.referencedDataFile()), deleteFile);
+          }
+        }
+      }
+      if (dvsByReferencedFile.size() != expectedDvs.size()) {
+        System.out.println(
+            "FAIL dv-table: expected " + expectedDvs.size() + " committed DVs, manifests hold "
+                + dvsByReferencedFile.size());
+        failures++;
+      }
+      String sharedPuffinLocation = null;
+      for (ExpectedDvMeta expected : expectedDvs) {
+        DeleteFile dv = dvsByReferencedFile.get(expected.referencedDataFile);
+        if (dv == null) {
+          System.out.println(
+              "FAIL dv-table: no committed DV references " + expected.referencedDataFile);
+          failures++;
+          continue;
+        }
+        if (dv.content() != FileContent.POSITION_DELETES) {
+          System.out.println(
+              "FAIL dv-table: DV content for " + expected.referencedDataFile + ": "
+                  + dv.content());
+          failures++;
+        }
+        if (dv.format() != FileFormat.PUFFIN) {
+          System.out.println(
+              "FAIL dv-table: DV format for " + expected.referencedDataFile + ": " + dv.format());
+          failures++;
+        }
+        if (dv.contentOffset() == null
+            || dv.contentOffset() != expected.contentOffset
+            || dv.contentSizeInBytes() == null
+            || dv.contentSizeInBytes() != expected.contentSizeInBytes) {
+          System.out.println(
+              "FAIL dv-table: DV blob coordinates for " + expected.referencedDataFile
+                  + ": manifest says (" + dv.contentOffset() + ", " + dv.contentSizeInBytes()
+                  + "), Rust recorded (" + expected.contentOffset + ", "
+                  + expected.contentSizeInBytes + ")");
+          failures++;
+        }
+        if (dv.recordCount() != expected.recordCount) {
+          System.out.println(
+              "FAIL dv-table: DV cardinality for " + expected.referencedDataFile + ": "
+                  + dv.recordCount() + ", expected " + expected.recordCount);
+          failures++;
+        }
+        String location = dv.location();
+        if (sharedPuffinLocation == null) {
+          sharedPuffinLocation = location;
+        } else if (!sharedPuffinLocation.equals(location)) {
+          System.out.println(
+              "FAIL dv-table: the two DVs must share ONE puffin file (the multi-blob case), got "
+                  + sharedPuffinLocation + " vs " + location);
+          failures++;
+        }
+      }
+      if (failures == 0) {
+        System.out.println(
+            "PASS dv-table: manifest API cross-check — both DVs PUFFIN position-deletes in one "
+                + "puffin, referenced files + blob coordinates + cardinalities match");
+        System.out.println(
+            "verify-interop-dv-table OK — Java read the RUST-COMMITTED V3 table (2 partitions, "
+                + "one puffin with two DVs), merge-on-read live rows = " + dataById);
       }
       return failures;
     }

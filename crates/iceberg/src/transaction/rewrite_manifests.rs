@@ -732,7 +732,9 @@ mod tests {
         UNASSIGNED_SNAPSHOT_ID,
     };
     use crate::table::Table;
-    use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+    use crate::transaction::tests::{
+        make_v2_minimal_table_in_catalog, make_v3_minimal_table_in_catalog,
+    };
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{Catalog, ErrorKind};
 
@@ -1297,7 +1299,7 @@ mod tests {
     #[tokio::test]
     async fn test_rewrite_manifests_keeps_delete_manifest_and_delete_still_applies() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
 
         // Write a real data file (5 rows, partition x=0) and append it.
         let real_data = write_real_data_file(&table, "rows.parquet", 0, &[

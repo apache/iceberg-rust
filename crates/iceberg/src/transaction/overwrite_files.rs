@@ -722,7 +722,9 @@ mod tests {
         ManifestContentType, ManifestStatus, Operation, Struct,
     };
     use crate::table::Table;
-    use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+    use crate::transaction::tests::{
+        make_v2_minimal_table_in_catalog, make_v3_minimal_table_in_catalog,
+    };
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::writer::base_writer::position_delete_writer::{
         PositionDeleteFileWriterBuilder, PositionDeleteWriterConfig,
@@ -1799,7 +1801,7 @@ mod tests {
     #[tokio::test]
     async fn test_overwrite_rejects_concurrent_delete_for_removed_data_file() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let a = data_file("test/a.parquet", 0);
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![a.clone()]).await;
 
@@ -1860,7 +1862,7 @@ mod tests {
     #[tokio::test]
     async fn test_overwrite_allows_concurrent_delete_in_other_partition() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let a = data_file("test/a.parquet", 0);
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![a.clone()]).await;
 
@@ -1903,7 +1905,7 @@ mod tests {
     #[tokio::test]
     async fn test_overwrite_allows_delete_at_or_before_start() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let a = data_file("test/a.parquet", 0);
         let table = append_files(&catalog, &table, vec![a.clone()]).await;
 
@@ -1975,7 +1977,7 @@ mod tests {
     #[tokio::test]
     async fn test_overwrite_without_deletes_validation_allows_conflicting_delete() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let a = data_file("test/a.parquet", 0);
         let table = append_files(&catalog, &table, vec![a.clone()]).await;
 
@@ -2011,7 +2013,7 @@ mod tests {
     #[tokio::test]
     async fn test_overwrite_path_only_removal_is_not_validated_for_deletes() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let table = append_files(&catalog, &table, vec![data_file("test/a.parquet", 0)]).await;
 
         // Remove A by PATH only (not delete_data_files) — so it is not in the validated set.
@@ -2050,7 +2052,7 @@ mod tests {
     #[tokio::test]
     async fn test_overwrite_rejects_concurrent_delete_using_tx_captured_starting_snapshot() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let a = data_file("test/a.parquet", 0);
         let table = append_files(&catalog, &table, vec![a.clone()]).await;
 
@@ -2617,7 +2619,7 @@ mod tests {
     #[tokio::test]
     async fn test_overwrite_row_filter_rejects_concurrent_added_delete_file_matching_filter() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         // Seed `a` lies OUTSIDE the row filter (y bounds [0,10] < 50) so the row filter keeps it — the
         // conflict is entirely about the CONCURRENT delete file, not the base.
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![data_file_with_y_bounds(
@@ -2765,7 +2767,7 @@ mod tests {
     async fn test_overwrite_row_filter_rejects_concurrent_delete_using_tx_captured_starting_snapshot()
      {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         // Seed `a` outside the row filter so the base does not self-conflict.
         let table = append_files(&catalog, &table, vec![data_file_with_y_bounds(
             "test/a.parquet",
@@ -2816,7 +2818,7 @@ mod tests {
     #[tokio::test]
     async fn test_overwrite_row_filter_without_validation_allows_concurrent_added_delete() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let table = append_files(&catalog, &table, vec![data_file_with_y_bounds(
             "test/a.parquet",
             0,
@@ -2867,7 +2869,7 @@ mod tests {
     #[tokio::test]
     async fn test_overwrite_no_row_filter_skips_branch_a() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let table = append_files(&catalog, &table, vec![data_file_with_y_bounds(
             "test/a.parquet",
             0,
@@ -2923,7 +2925,7 @@ mod tests {
     #[tokio::test]
     async fn test_overwrite_conflict_filter_without_row_filter_skips_branch_a() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let table = append_files(&catalog, &table, vec![data_file_with_y_bounds(
             "test/a.parquet",
             0,
@@ -3123,7 +3125,7 @@ mod tests {
     #[tokio::test]
     async fn test_overwrite_files_preserves_outstanding_delete_manifests_no_resurrection() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
 
         // X in partition 0 with rows y = [10, 20]; Y in partition 1 with rows y = [60, 70].
         let x = write_data_file(&table, "x.parquet", 0, &[(0, 10, 100), (0, 20, 200)]).await;

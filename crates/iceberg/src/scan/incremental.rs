@@ -1693,18 +1693,25 @@ mod tests {
 
     use super::super::{ChangelogOperation, ChangelogScanTask};
 
-    /// A position-delete file (content `PositionDeletes`) routed to partition `x =
-    /// part_value`, used to create a DELETE-content manifest in the range (NOT a real
-    /// parquet file — manifest-only).
+    /// A position-delete file routed to partition `x = part_value`, shaped as a DELETION
+    /// VECTOR (Puffin format + `referenced_data_file` + blob coordinates), used to create a
+    /// DELETE-content manifest in the range (NOT a real puffin file — manifest-only). A DV
+    /// rather than a parquet position delete because the fixture table is V3 and the D3
+    /// format-version gate rejects parquet position deletes on V3 ("Must use DVs for position
+    /// deletes in V3") — the test's subject (a DELETE manifest in the changelog range) is
+    /// content-format-agnostic.
     fn synthetic_position_delete_file(path: &str, part_value: i64) -> DataFile {
         DataFileBuilder::default()
             .content(DataContentType::PositionDeletes)
             .file_path(path.to_string())
-            .file_format(DataFileFormat::Parquet)
+            .file_format(DataFileFormat::Puffin)
             .file_size_in_bytes(100)
             .record_count(1)
             .partition_spec_id(0)
             .partition(Struct::from_iter([Some(Literal::long(part_value))]))
+            .referenced_data_file(Some("a.parquet".to_string()))
+            .content_offset(Some(4))
+            .content_size_in_bytes(Some(40))
             .build()
             .unwrap()
     }

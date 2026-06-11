@@ -252,12 +252,20 @@ impl Transaction {
     }
 
     /// Creates a row-delta action (the merge-on-read write commit): add data files AND add row-level
-    /// DELETE files (position / equality) in ONE snapshot (Java `BaseRowDelta`). The added delete
-    /// files are written into a DELETE manifest alongside the DATA manifest, and inherit the new
-    /// snapshot's sequence number so they apply to data from earlier snapshots. The recorded operation
-    /// is dynamic, matching Java `BaseRowDelta`: adds-data-only → `Append`, adds-deletes-only →
-    /// `Delete`, both → `Overwrite`. Concurrent-commit conflict validation and the deletion-vector
-    /// write path are not yet supported.
+    /// DELETE files (position / equality / deletion vectors) in ONE snapshot (Java `BaseRowDelta`).
+    /// The added delete files are written into a DELETE manifest alongside the DATA manifest, and
+    /// inherit the new snapshot's sequence number so they apply to data from earlier snapshots. The
+    /// recorded operation is dynamic, matching Java `BaseRowDelta`: adds-data-only → `Append`,
+    /// adds-deletes-only → `Delete`, both → `Overwrite`.
+    ///
+    /// Added delete files are FORMAT-VERSION gated at commit (Java `validateDeleteFileForVersion`):
+    /// V1 rejects all deletes, V2 rejects Puffin deletion vectors, V3 REQUIRES position deletes to be
+    /// deletion vectors; equality deletes are exempt at every version. Opt-in concurrent-commit
+    /// conflict validation (`validate_no_conflicting_data_files` / `validate_no_conflicting_delete_files`
+    /// / `validate_data_files_exist`) and the always-on deletion-vector conflict check
+    /// (`validateAddedDVs`) are supported; the previous-deletes MERGE for DVs is deferred — a DV add
+    /// for a data file with a live position-scoped delete is rejected (the fresh-DV-only door, see
+    /// [`row_delta`](crate::transaction::row_delta)).
     pub fn row_delta(&self) -> RowDeltaAction {
         RowDeltaAction::new()
     }
@@ -448,7 +456,19 @@ mod tests {
             .unwrap()
     }
 
-    pub(crate) async fn make_v3_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
+    /// Create a fresh table in `catalog` from a minimal-metadata template (the shared body of
+    /// [`make_v2_minimal_table_in_catalog`] / [`make_v3_minimal_table_in_catalog`]). The
+    /// V2ValidMinimal and V3ValidMinimal templates carry the SAME schema fields (x/y/z longs;
+    /// V3's `x` additionally has `initial-default`/`write-default` = 1, irrelevant to tests that
+    /// write x explicitly) and the IDENTICAL partition spec (`identity(x)`), so a test can pick
+    /// the format version its delete content requires (V2 ⇒ parquet position deletes, V3 ⇒
+    /// deletion vectors — the `validateDeleteFileForVersion` gate) without changing any fixture
+    /// data.
+    async fn make_minimal_table_in_catalog(
+        catalog: &impl Catalog,
+        metadata_template: &str,
+        format_version: crate::spec::FormatVersion,
+    ) -> Table {
         let table_ident =
             TableIdent::from_strs([format!("ns1-{}", uuid::Uuid::new_v4()), "test1".to_string()])
                 .unwrap();
@@ -461,7 +481,7 @@ mod tests {
         let file = File::open(format!(
             "{}/testdata/table_metadata/{}",
             env!("CARGO_MANIFEST_DIR"),
-            "TableMetadataV3ValidMinimal.json"
+            metadata_template
         ))
         .unwrap();
         let reader = BufReader::new(file);
@@ -472,13 +492,34 @@ mod tests {
             .partition_spec((**base_metadata.default_partition_spec()).clone())
             .sort_order((**base_metadata.default_sort_order()).clone())
             .name(table_ident.name().to_string())
-            .format_version(crate::spec::FormatVersion::V3)
+            .format_version(format_version)
             .build();
 
         catalog
             .create_table(table_ident.namespace(), table_creation)
             .await
             .unwrap()
+    }
+
+    /// A fresh V2 table in `catalog` — the fixture for tests that commit PARQUET position deletes
+    /// (V3 requires deletion vectors instead: Java `validateDeleteFileForVersion`, "Must use DVs
+    /// for position deletes in V3"). Same schema/spec as the V3 fixture.
+    pub(crate) async fn make_v2_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
+        make_minimal_table_in_catalog(
+            catalog,
+            "TableMetadataV2ValidMinimal.json",
+            crate::spec::FormatVersion::V2,
+        )
+        .await
+    }
+
+    pub(crate) async fn make_v3_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
+        make_minimal_table_in_catalog(
+            catalog,
+            "TableMetadataV3ValidMinimal.json",
+            crate::spec::FormatVersion::V3,
+        )
+        .await
     }
 
     /// Helper function to create a test table with retry properties

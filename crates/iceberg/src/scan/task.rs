@@ -231,8 +231,20 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
             file_type: ctx.manifest_entry.content_type(),
             partition_spec_id: ctx.partition_spec_id,
             equality_ids: ctx.manifest_entry.data_file.equality_ids.clone(),
+            file_format: ctx.manifest_entry.data_file.file_format,
+            referenced_data_file: ctx.manifest_entry.data_file.referenced_data_file.clone(),
+            content_offset: ctx.manifest_entry.data_file.content_offset,
+            content_size_in_bytes: ctx.manifest_entry.data_file.content_size_in_bytes,
+            record_count: Some(ctx.manifest_entry.data_file.record_count),
         }
     }
+}
+
+/// The format a [`FileScanTaskDeleteFile`] deserialized from a pre-deletion-vector
+/// serialization defaults to: every delete file was a parquet file before Puffin deletion
+/// vectors existed, so absent means parquet.
+fn default_delete_file_format() -> DataFileFormat {
+    DataFileFormat::Parquet
 }
 
 /// A task to scan part of file.
@@ -252,4 +264,37 @@ pub struct FileScanTaskDeleteFile {
 
     /// equality ids for equality deletes (null for anything other than equality-deletes)
     pub equality_ids: Option<Vec<i32>>,
+
+    /// The on-disk format of the delete file. This is the deletion-vector discriminator Java
+    /// uses (`ContentFileUtil.isDV`: `deleteFile.format() == FileFormat.PUFFIN`): a
+    /// position-delete entry whose format is [`DataFileFormat::Puffin`] is a deletion vector and
+    /// must be loaded from its Puffin blob, never the parquet reader.
+    #[serde(default = "default_delete_file_format")]
+    pub file_format: DataFileFormat,
+
+    /// The data file path a deletion vector (or file-scoped position delete) applies to, from
+    /// the manifest entry's `referenced_data_file`. A loaded deletion vector is keyed by THIS
+    /// path — required for deletion vectors.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub referenced_data_file: Option<String>,
+
+    /// Offset of the `deletion-vector-v1` blob within the Puffin file, from the manifest
+    /// entry's `content_offset`; required for deletion vectors.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_offset: Option<i64>,
+
+    /// Length of the `deletion-vector-v1` blob in bytes, from the manifest entry's
+    /// `content_size_in_bytes`; required for deletion vectors.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_size_in_bytes: Option<i64>,
+
+    /// The record count from the manifest entry. For a deletion vector this is its cardinality
+    /// (the number of deleted positions) and is validated against the decoded bitmap, mirroring
+    /// Java `BitmapPositionDeleteIndex.deserializeBitmap`'s "Invalid cardinality" check.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_count: Option<u64>,
 }

@@ -80,6 +80,33 @@ impl BasicDeleteFileLoader {
         Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
     }
 
+    /// Reads `length` bytes at `offset` from `file_path`.
+    ///
+    /// This is the deletion-vector read primitive: Java reads a DV blob with a single ranged
+    /// read at the `DeleteFile`'s `content_offset` / `content_size_in_bytes`
+    /// (`BaseDeleteLoader.readDV`, data/.../BaseDeleteLoader.java L171-183) rather than through
+    /// the Puffin footer — the footer route would take 3+ requests per file (its own doc
+    /// comment, L143-147) and the manifest already carries the exact blob range.
+    pub(crate) async fn read_bytes_range(
+        &self,
+        file_path: &str,
+        offset: u64,
+        length: u64,
+    ) -> Result<bytes::Bytes> {
+        let end = offset.checked_add(length).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid byte range for delete file '{file_path}': offset {offset} + length \
+                     {length} overflows"
+                ),
+            )
+        })?;
+        let input_file = self.file_io.new_input(file_path)?;
+        let reader = input_file.reader().await?;
+        reader.read(offset..end).await
+    }
+
     /// Evolves the schema of the RecordBatches from an equality delete file.
     ///
     /// Per the [Iceberg spec](https://iceberg.apache.org/spec/#equality-delete-files),

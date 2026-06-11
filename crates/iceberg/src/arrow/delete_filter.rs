@@ -384,6 +384,11 @@ pub(crate) mod tests {
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
             equality_ids: None,
+            file_format: DataFileFormat::Parquet,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+            record_count: None,
         };
 
         let pos_del_2 = FileScanTaskDeleteFile {
@@ -397,6 +402,11 @@ pub(crate) mod tests {
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
             equality_ids: None,
+            file_format: DataFileFormat::Parquet,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+            record_count: None,
         };
 
         let pos_del_3 = FileScanTaskDeleteFile {
@@ -410,6 +420,11 @@ pub(crate) mod tests {
             file_type: DataContentType::PositionDeletes,
             partition_spec_id: 0,
             equality_ids: None,
+            file_format: DataFileFormat::Parquet,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+            record_count: None,
         };
 
         let file_scan_tasks = vec![
@@ -467,6 +482,30 @@ pub(crate) mod tests {
         Arc::new(arrow_schema::Schema::new(fields))
     }
 
+    /// Risk pinned: a `FileScanTaskDeleteFile` serialized BEFORE the deletion-vector fields
+    /// existed must still deserialize — the new fields default (format → Parquet, the only
+    /// delete format that existed pre-DV; everything else absent). A breaking serde change here
+    /// would invalidate previously serialized scan tasks.
+    #[test]
+    fn test_delete_file_task_without_dv_fields_deserializes_with_defaults() {
+        let pre_dv_json = r#"{
+            "file_path": "old-delete.parquet",
+            "file_size_in_bytes": 123,
+            "file_type": "PositionDeletes",
+            "partition_spec_id": 0,
+            "equality_ids": null
+        }"#;
+
+        let task: FileScanTaskDeleteFile =
+            serde_json::from_str(pre_dv_json).expect("pre-DV serialization must deserialize");
+
+        assert_eq!(task.file_format, DataFileFormat::Parquet);
+        assert_eq!(task.referenced_data_file, None);
+        assert_eq!(task.content_offset, None);
+        assert_eq!(task.content_size_in_bytes, None);
+        assert_eq!(task.record_count, None);
+    }
+
     #[tokio::test]
     async fn test_build_equality_delete_predicate_case_sensitive() {
         let schema = Arc::new(
@@ -496,6 +535,11 @@ pub(crate) mod tests {
                 file_type: DataContentType::EqualityDeletes,
                 partition_spec_id: 0,
                 equality_ids: None,
+                file_format: DataFileFormat::Parquet,
+                referenced_data_file: None,
+                content_offset: None,
+                content_size_in_bytes: None,
+                record_count: None,
             }],
             partition: None,
             partition_spec: None,

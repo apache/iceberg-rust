@@ -282,7 +282,9 @@ mod tests {
         ManifestStatus, Operation, Struct,
     };
     use crate::table::Table;
-    use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+    use crate::transaction::tests::{
+        make_v2_minimal_table_in_catalog, make_v3_minimal_table_in_catalog,
+    };
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::writer::base_writer::position_delete_writer::{
         PositionDeleteFileWriterBuilder, PositionDeleteWriterConfig,
@@ -1356,7 +1358,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_files_preserves_outstanding_delete_manifests_no_resurrection() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
 
         // X in partition 0 with rows y = [10, 20]; Y in partition 1 with rows y = [60, 70].
         let x = write_data_file(&table, "x.parquet", 0, &[(0, 10, 100), (0, 20, 200)]).await;

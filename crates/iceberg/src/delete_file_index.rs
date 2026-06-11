@@ -25,7 +25,7 @@ use tokio::sync::Notify;
 
 use crate::runtime::spawn;
 use crate::scan::{DeleteFileContext, FileScanTaskDeleteFile};
-use crate::spec::{DataContentType, DataFile, Struct};
+use crate::spec::{DataContentType, DataFile, DataFileFormat, Struct};
 
 /// Index of delete files
 #[derive(Debug, Clone)]
@@ -47,8 +47,22 @@ struct PopulatedDeleteFileIndex {
     pos_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
     // TODO: do we need this?
     // pos_deletes_by_path: HashMap<String, Vec<Arc<DeleteFileContext>>>,
+    /// Deletion vectors keyed by the data file they apply to (the DV's
+    /// `referenced_data_file`), mirroring Java `DeleteFileIndex.dvByPath`
+    /// (`DeleteFileIndex.Builder.build` L500/L505-506: a POSITION_DELETES file with
+    /// `ContentFileUtil.isDV` — format == PUFFIN — is indexed by `referencedDataFile()`).
+    ///
+    /// A valid table has AT MOST ONE DV per data file; Java's `add(dvByPath, dv)` (L528-535)
+    /// raises `ValidationException` ("Can't index multiple DVs for %s") on a duplicate. This
+    /// index's lookup signature is infallible, so duplicates are kept HERE and rejected
+    /// fail-loud at the load door instead (`CachingDeleteFileLoader::load_deletes`).
+    dv_by_path: HashMap<String, Vec<Arc<DeleteFileContext>>>,
+}
 
-    // TODO: Deletion Vector support
+/// Whether a delete file is a deletion vector. Java `ContentFileUtil.isDV` (L142-144):
+/// `deleteFile.format() == FileFormat.PUFFIN`.
+pub(crate) fn is_deletion_vector(data_file: &DataFile) -> bool {
+    data_file.file_format() == DataFileFormat::Puffin
 }
 
 impl DeleteFileIndex {
@@ -122,11 +136,31 @@ impl PopulatedDeleteFileIndex {
             HashMap::default();
         let mut pos_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>> =
             HashMap::default();
+        let mut dv_by_path: HashMap<String, Vec<Arc<DeleteFileContext>>> = HashMap::default();
 
         let mut global_equality_deletes: Vec<Arc<DeleteFileContext>> = vec![];
 
         files.into_iter().for_each(|ctx| {
             let arc_ctx = Arc::new(ctx);
+
+            // A deletion vector is FILE-scoped: it indexes by the data file it references, never
+            // by partition (Java `DeleteFileIndex.Builder.build` L505-506 routes
+            // POSITION_DELETES + `isDV` to `dvByPath` keyed by `referencedDataFile()`). A Puffin
+            // position delete WITHOUT a referenced data file is invalid per the Puffin spec
+            // (`referenced-data-file` is mandatory for `deletion-vector-v1`); it falls through to
+            // the partition map so the loader's DV dispatch rejects it loudly by name instead of
+            // it being silently dropped here.
+            if arc_ctx.manifest_entry.content_type() == DataContentType::PositionDeletes
+                && is_deletion_vector(arc_ctx.manifest_entry.data_file())
+                && let Some(referenced_data_file) =
+                    arc_ctx.manifest_entry.data_file().referenced_data_file()
+            {
+                dv_by_path
+                    .entry(referenced_data_file)
+                    .or_default()
+                    .push(arc_ctx);
+                return;
+            }
 
             let partition = arc_ctx.manifest_entry.data_file().partition();
 
@@ -157,6 +191,7 @@ impl PopulatedDeleteFileIndex {
             global_equality_deletes,
             eq_deletes_by_partition,
             pos_deletes_by_partition,
+            dv_by_path,
         }
     }
 
@@ -189,6 +224,23 @@ impl PopulatedDeleteFileIndex {
                         && data_file.partition_spec_id == delete.partition_spec_id
                 })
                 .for_each(|delete| results.push(delete.as_ref().into()));
+        }
+
+        // A data file with a DELETION VECTOR uses the DV INSTEAD of any parquet position
+        // deletes: Java `DeleteFileIndex.forDataFile` (L156-167) returns
+        // {global eq, partition eq, dv} when `findDV` hits and only consults the
+        // position-delete maps when it does not. The DV lookup is by the data file's PATH
+        // (Java `findDV` L202-216: `dvByPath.get(dataFile.location())`) and is NOT
+        // sequence-filtered — Java instead VALIDATES `dv.dataSequenceNumber() >= seq`
+        // (ValidationException, L209-213). That validation is DEFERRED here: this lookup is
+        // infallible by signature, and the invalid state (a DV older than the data file at the
+        // same path) cannot be produced by a correctly-written table — flagged as residue in
+        // docs/parity/GAP_MATRIX.md. Duplicate DVs for one path (Java's other
+        // ValidationException, L528-535) are all returned so the loader rejects them loudly.
+        if let Some(dvs) = self.dv_by_path.get(data_file.file_path()) {
+            dvs.iter()
+                .for_each(|delete| results.push(delete.as_ref().into()));
+            return results;
         }
 
         // TODO: the spec states that:
@@ -446,6 +498,195 @@ mod tests {
             .file_size_in_bytes(100)
             .build()
             .unwrap()
+    }
+
+    /// Build a deletion vector `DataFile`: a POSITION_DELETES entry in PUFFIN format referencing
+    /// `referenced_data_file`, with blob coordinates (the discriminator Java uses is the format
+    /// — `ContentFileUtil.isDV`).
+    fn build_partitioned_deletion_vector(
+        referenced_data_file: &str,
+        partition: &Struct,
+        spec_id: i32,
+    ) -> DataFile {
+        DataFileBuilder::default()
+            .file_path(format!("{}-deletes.puffin", Uuid::new_v4()))
+            .file_format(DataFileFormat::Puffin)
+            .content(DataContentType::PositionDeletes)
+            .record_count(2)
+            .referenced_data_file(Some(referenced_data_file.to_string()))
+            .content_offset(Some(4))
+            .content_size_in_bytes(Some(40))
+            .partition(partition.clone())
+            .partition_spec_id(spec_id)
+            .file_size_in_bytes(100)
+            .build()
+            .unwrap()
+    }
+
+    /// Risk pinned: Java `DeleteFileIndex.forDataFile` (L156-167) — a data file with a DV gets
+    /// the DV INSTEAD of any parquet position deletes (the DV is the complete position-delete
+    /// state for that file; also returning the parquet deletes would re-apply superseded
+    /// deletes), while equality deletes still apply alongside it.
+    #[test]
+    fn test_dv_supersedes_position_deletes_and_keeps_equality_deletes() {
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let spec_id = 1;
+        let data_file = build_partitioned_data_file(&partition, spec_id);
+
+        let deletes: Vec<ManifestEntry> = vec![
+            build_added_manifest_entry(2, &build_partitioned_eq_delete(&partition, spec_id)),
+            build_added_manifest_entry(2, &build_partitioned_pos_delete(&partition, spec_id)),
+            build_added_manifest_entry(
+                2,
+                &build_partitioned_deletion_vector(data_file.file_path(), &partition, spec_id),
+            ),
+        ];
+        let eq_delete_path = deletes[0].file_path().to_string();
+        let dv_path = deletes[2].file_path().to_string();
+
+        let delete_contexts: Vec<DeleteFileContext> = deletes
+            .into_iter()
+            .map(|entry| DeleteFileContext {
+                manifest_entry: entry.into(),
+                partition_spec_id: spec_id,
+            })
+            .collect();
+        let index = PopulatedDeleteFileIndex::new(delete_contexts);
+
+        let results = index.get_deletes_for_data_file(&data_file, Some(1));
+        let result_paths: Vec<&str> = results.iter().map(|f| f.file_path.as_str()).collect();
+
+        assert_eq!(
+            result_paths,
+            vec![eq_delete_path.as_str(), dv_path.as_str()],
+            "expected the equality delete + the DV, and NO parquet position delete"
+        );
+        assert_eq!(
+            results[1].file_format,
+            DataFileFormat::Puffin,
+            "the DV entry must carry the Puffin format discriminator to the loader"
+        );
+        assert_eq!(
+            results[1].referenced_data_file.as_deref(),
+            Some(data_file.file_path()),
+            "the DV entry must carry the referenced data file for keying"
+        );
+    }
+
+    /// Risk pinned: a DV is FILE-scoped (keyed by `referenced_data_file`, Java `findDV`
+    /// L202-216) — a SIBLING data file in the SAME partition must NOT receive it, and still
+    /// receives the partition-scoped parquet position deletes.
+    #[test]
+    fn test_dv_does_not_apply_to_sibling_file_in_same_partition() {
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let spec_id = 1;
+        let data_file_with_dv = build_partitioned_data_file(&partition, spec_id);
+        let sibling_data_file = build_partitioned_data_file(&partition, spec_id);
+
+        let deletes: Vec<ManifestEntry> = vec![
+            build_added_manifest_entry(2, &build_partitioned_pos_delete(&partition, spec_id)),
+            build_added_manifest_entry(
+                2,
+                &build_partitioned_deletion_vector(
+                    data_file_with_dv.file_path(),
+                    &partition,
+                    spec_id,
+                ),
+            ),
+        ];
+        let pos_delete_path = deletes[0].file_path().to_string();
+        let dv_path = deletes[1].file_path().to_string();
+
+        let delete_contexts: Vec<DeleteFileContext> = deletes
+            .into_iter()
+            .map(|entry| DeleteFileContext {
+                manifest_entry: entry.into(),
+                partition_spec_id: spec_id,
+            })
+            .collect();
+        let index = PopulatedDeleteFileIndex::new(delete_contexts);
+
+        let sibling_results = index.get_deletes_for_data_file(&sibling_data_file, Some(1));
+        let sibling_paths: Vec<&str> = sibling_results
+            .iter()
+            .map(|f| f.file_path.as_str())
+            .collect();
+        assert_eq!(
+            sibling_paths,
+            vec![pos_delete_path.as_str()],
+            "the sibling file gets the partition-scoped parquet position delete, never the DV"
+        );
+
+        let dv_file_results = index.get_deletes_for_data_file(&data_file_with_dv, Some(1));
+        let dv_file_paths: Vec<&str> = dv_file_results
+            .iter()
+            .map(|f| f.file_path.as_str())
+            .collect();
+        assert_eq!(dv_file_paths, vec![dv_path.as_str()]);
+    }
+
+    /// Risk pinned (documented deferral): Java VALIDATES `dv.dataSequenceNumber() >= seq`
+    /// (ValidationException, `findDV` L209-213) instead of seq-FILTERING the DV. This index is
+    /// infallible by signature, so the DV is returned regardless of sequence numbers — this test
+    /// pins that the DV is NOT silently dropped by a sequence filter (dropping it would
+    /// resurrect deleted rows on valid tables where dv_seq >= data_seq always holds; the
+    /// fail-loud half of Java's contract is the deferred residue, see GAP_MATRIX).
+    #[test]
+    fn test_dv_is_not_sequence_filtered() {
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let spec_id = 1;
+        let data_file = build_partitioned_data_file(&partition, spec_id);
+
+        let dv_entry = build_added_manifest_entry(
+            5,
+            &build_partitioned_deletion_vector(data_file.file_path(), &partition, spec_id),
+        );
+        let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
+            manifest_entry: dv_entry.into(),
+            partition_spec_id: spec_id,
+        }]);
+
+        // Same seq (the row-delta case: DV committed in the same snapshot family) and a HIGHER
+        // data seq (the invalid state Java rejects loudly): the DV is returned in both.
+        assert_eq!(
+            index.get_deletes_for_data_file(&data_file, Some(5)).len(),
+            1
+        );
+        assert_eq!(
+            index.get_deletes_for_data_file(&data_file, Some(9)).len(),
+            1
+        );
+    }
+
+    /// Risk pinned: a PUFFIN position delete WITHOUT `referenced_data_file` is invalid (the
+    /// Puffin spec makes the property mandatory for DVs). It must NOT be silently dropped by the
+    /// index — it falls through to the partition map so the loader rejects it by name.
+    #[test]
+    fn test_puffin_delete_without_referenced_file_reaches_loader_for_rejection() {
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let spec_id = 1;
+        let data_file = build_partitioned_data_file(&partition, spec_id);
+
+        let invalid_dv = DataFileBuilder::default()
+            .file_path("orphan-deletes.puffin".to_string())
+            .file_format(DataFileFormat::Puffin)
+            .content(DataContentType::PositionDeletes)
+            .record_count(2)
+            .partition(partition.clone())
+            .partition_spec_id(spec_id)
+            .file_size_in_bytes(100)
+            .build()
+            .unwrap();
+
+        let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
+            manifest_entry: build_added_manifest_entry(2, &invalid_dv).into(),
+            partition_spec_id: spec_id,
+        }]);
+
+        let results = index.get_deletes_for_data_file(&data_file, Some(1));
+        assert_eq!(results.len(), 1, "the invalid DV must reach the loader");
+        assert_eq!(results[0].file_format, DataFileFormat::Puffin);
+        assert_eq!(results[0].referenced_data_file, None);
     }
 
     fn build_unpartitioned_data_file() -> DataFile {

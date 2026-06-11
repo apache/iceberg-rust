@@ -423,7 +423,9 @@ mod tests {
         ManifestStatus, Operation, Struct,
     };
     use crate::table::Table;
-    use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+    use crate::transaction::tests::{
+        make_v2_minimal_table_in_catalog, make_v3_minimal_table_in_catalog,
+    };
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::writer::base_writer::equality_delete_writer::{
         EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
@@ -1477,7 +1479,7 @@ mod tests {
     #[tokio::test]
     async fn test_rewrite_with_preserved_seq_rejects_concurrent_position_delete() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let x = write_data_file(&table, "x.parquet", 0, &[
             (0, 10, 100),
             (0, 20, 200),
@@ -1527,7 +1529,7 @@ mod tests {
     #[tokio::test]
     async fn test_rewrite_conflict_uses_tx_captured_start_without_override() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let x = write_data_file(&table, "x.parquet", 0, &[(0, 10, 100), (0, 20, 200)]).await;
         let x_path = x.file_path().to_string();
         let table = append_files(&catalog, &table, vec![x.clone()]).await;
@@ -1569,7 +1571,7 @@ mod tests {
     #[tokio::test]
     async fn test_rewrite_commits_when_concurrent_delete_targets_disjoint_file() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         // X in partition 0, Y in partition 1 (different partition).
         let x = write_data_file(&table, "x.parquet", 0, &[(0, 10, 100), (0, 20, 200)]).await;
         let y = write_data_file(&table, "y.parquet", 1, &[(1, 60, 600), (1, 70, 700)]).await;

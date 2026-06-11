@@ -19,12 +19,16 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 
-use super::{DataContentType, DataFile, PartitionSpecRef};
+use super::{DataContentType, DataFile, DataFileFormat, PartitionSpecRef};
 use crate::spec::{ManifestContentType, ManifestFile, Operation, SchemaRef, Summary};
 use crate::{Error, ErrorKind, Result};
 
 const ADDED_DATA_FILES: &str = "added-data-files";
 const ADDED_DELETE_FILES: &str = "added-delete-files";
+/// Deletion-vector counters (Java `SnapshotSummary.ADDED_DVS_PROP` / `REMOVED_DVS_PROP` =
+/// `"added-dvs"` / `"removed-dvs"`, 1.10.0-bytecode-verified).
+const ADDED_DVS: &str = "added-dvs";
+const REMOVED_DVS: &str = "removed-dvs";
 const ADDED_EQUALITY_DELETES: &str = "added-equality-deletes";
 const ADDED_FILE_SIZE: &str = "added-files-size";
 const ADDED_POSITION_DELETES: &str = "added-position-deletes";
@@ -204,6 +208,8 @@ struct UpdateMetrics {
     removed_eq_delete_files: u64,
     added_pos_delete_files: u64,
     removed_pos_delete_files: u64,
+    added_dvs: u64,
+    removed_dvs: u64,
     added_delete_files: u32,
     removed_delete_files: u32,
     added_records: u64,
@@ -214,17 +220,53 @@ struct UpdateMetrics {
     removed_eq_deletes: u64,
 }
 
+/// Whether a delete file is a deletion vector — `file_format == Puffin` (Java
+/// `ContentFileUtil.isDV`, 1.10.0-bytecode-verified). Inlined rather than importing
+/// [`crate::delete_file_index::is_deletion_vector`] because `spec` is the bottom layer the index
+/// module builds on (a `spec` → `delete_file_index` import would invert the layering); the two
+/// MUST stay in lockstep — both cite Java `ContentFileUtil.isDV` (format == PUFFIN).
+fn is_deletion_vector(data_file: &DataFile) -> bool {
+    data_file.file_format == DataFileFormat::Puffin
+}
+
+/// The size a file contributes to `added-files-size` / `removed-files-size` — the Rust port of
+/// Java `ScanTaskUtil.contentSizeInBytes` (`api/.../util/ScanTaskUtil.java`,
+/// 1.10.0-bytecode-verified): a deletion vector contributes its BLOB size
+/// (`content_size_in_bytes`), every other file its full file size. A DV shares one Puffin file
+/// with other DVs, so counting the whole Puffin file once per DV would multi-count shared bytes.
+/// Java NPEs on a DV with a null `contentSizeInBytes` (it dereferences `Long.longValue()`); this
+/// infallible summary path falls back to the file size instead (a malformed DV is rejected by the
+/// commit validations, not the summary).
+fn content_size_in_bytes(data_file: &DataFile) -> u64 {
+    if data_file.content_type() == DataContentType::PositionDeletes && is_deletion_vector(data_file)
+    {
+        data_file
+            .content_size_in_bytes
+            .map_or(data_file.file_size_in_bytes, |size| size.max(0) as u64)
+    } else {
+        data_file.file_size_in_bytes
+    }
+}
+
 impl UpdateMetrics {
     fn add_file(&mut self, data_file: &DataFile) {
-        self.added_file_size += data_file.file_size_in_bytes;
+        self.added_file_size += content_size_in_bytes(data_file);
         match data_file.content_type() {
             DataContentType::Data => {
                 self.added_data_files += 1;
                 self.added_records += data_file.record_count;
             }
             DataContentType::PositionDeletes => {
+                // Java `SnapshotSummary.UpdateMetrics.addedFile` (1.10.0-bytecode-verified): a
+                // deletion vector increments `added-dvs` INSTEAD of `added-position-delete-files`,
+                // but still counts toward `added-delete-files` AND `added-position-deletes` (its
+                // record count is deleted positions).
+                if is_deletion_vector(data_file) {
+                    self.added_dvs += 1;
+                } else {
+                    self.added_pos_delete_files += 1;
+                }
                 self.added_delete_files += 1;
-                self.added_pos_delete_files += 1;
                 self.added_pos_deletes += data_file.record_count;
             }
             DataContentType::EqualityDeletes => {
@@ -236,15 +278,24 @@ impl UpdateMetrics {
     }
 
     fn remove_file(&mut self, data_file: &DataFile) {
-        self.removed_file_size += data_file.file_size_in_bytes;
+        self.removed_file_size += content_size_in_bytes(data_file);
         match data_file.content_type() {
             DataContentType::Data => {
                 self.removed_data_files += 1;
                 self.deleted_records += data_file.record_count;
             }
             DataContentType::PositionDeletes => {
+                // Mirror of the `add_file` DV branch (Java `removedFile`): a removed DV increments
+                // `removed-dvs` instead of `removed-position-delete-files`. NOTE: no Rust commit
+                // path REMOVES delete files yet (`RowDelta.removeDeletes` / delete-manifest
+                // filtering are deferred), so this branch is reachable only through direct
+                // collector use — kept for Java parity and pinned by a collector-level unit test.
+                if is_deletion_vector(data_file) {
+                    self.removed_dvs += 1;
+                } else {
+                    self.removed_pos_delete_files += 1;
+                }
                 self.removed_delete_files += 1;
-                self.removed_pos_delete_files += 1;
                 self.removed_pos_deletes += data_file.record_count;
             }
             DataContentType::EqualityDeletes => {
@@ -296,6 +347,8 @@ impl UpdateMetrics {
             self.removed_pos_delete_files,
             REMOVED_POSITION_DELETE_FILES,
         );
+        set_if_positive(&mut properties, self.added_dvs, ADDED_DVS);
+        set_if_positive(&mut properties, self.removed_dvs, REMOVED_DVS);
         set_if_positive(&mut properties, self.added_delete_files, ADDED_DELETE_FILES);
         set_if_positive(
             &mut properties,
@@ -336,6 +389,8 @@ impl UpdateMetrics {
         self.removed_eq_delete_files += other.removed_eq_delete_files;
         self.added_pos_delete_files += other.added_pos_delete_files;
         self.removed_pos_delete_files += other.removed_pos_delete_files;
+        self.added_dvs += other.added_dvs;
+        self.removed_dvs += other.removed_dvs;
         self.added_delete_files += other.added_delete_files;
         self.removed_delete_files += other.removed_delete_files;
         self.added_records += other.added_records;
@@ -1077,5 +1132,186 @@ mod tests {
                 .iter()
                 .all(|(k, _)| !k.starts_with(CHANGED_PARTITION_PREFIX))
         );
+    }
+
+    /// Build the year=identity(name) schema + spec pair the collector tests share.
+    fn dv_test_schema_and_spec() -> (Arc<Schema>, Arc<PartitionSpec>) {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .add_unbound_fields(vec![
+                    UnboundPartitionField::builder()
+                        .source_id(2)
+                        .name("year".to_string())
+                        .transform(Transform::Identity)
+                        .build(),
+                ])
+                .unwrap()
+                .with_spec_id(1)
+                .build()
+                .unwrap(),
+        );
+        (schema, partition_spec)
+    }
+
+    /// A position-delete `DataFile` for the DV summary tests: `is_dv == true` makes it a deletion
+    /// vector (Puffin format + blob coordinates + referenced data file), else a plain parquet
+    /// position delete. `file_size` is the WHOLE container file; a DV's blob is 40 bytes.
+    fn position_delete_file_for_summary(path: &str, record_count: u64, is_dv: bool) -> DataFile {
+        DataFile {
+            content: DataContentType::PositionDeletes,
+            file_path: path.to_string(),
+            file_format: if is_dv {
+                DataFileFormat::Puffin
+            } else {
+                DataFileFormat::Parquet
+            },
+            partition: Struct::from_iter(vec![Some(Literal::string("2024"))]),
+            record_count,
+            file_size_in_bytes: 1000,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: HashMap::new(),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::new(),
+            upper_bounds: HashMap::new(),
+            key_metadata: None,
+            split_offsets: None,
+            equality_ids: None,
+            sort_order_id: None,
+            partition_spec_id: 0,
+            first_row_id: None,
+            referenced_data_file: if is_dv {
+                Some("s3://testbucket/path/to/data.parquet".to_string())
+            } else {
+                None
+            },
+            content_offset: if is_dv { Some(4) } else { None },
+            content_size_in_bytes: if is_dv { Some(40) } else { None },
+        }
+    }
+
+    /// THE DV SUMMARY-KEY PIN (offline — the D4 metadata interop's canonical view compares the
+    /// `added-dvs` count key, so the collector must emit it; the E1 lesson: when the evidence is an
+    /// external harness, pin the keys offline too). Java `SnapshotSummary.UpdateMetrics.addedFile`
+    /// (1.10.0-bytecode-verified): a deletion vector (`ContentFileUtil.isDV` = Puffin format)
+    /// increments `added-dvs` INSTEAD of `added-position-delete-files`, but still increments
+    /// `added-delete-files` AND `added-position-deletes`; its size contribution is the BLOB size
+    /// (`ScanTaskUtil.contentSizeInBytes` → `contentSizeInBytes()`), not the shared Puffin file's
+    /// size. A plain parquet position delete is the control: `added-position-delete-files`, no
+    /// `added-dvs`, full file size.
+    #[test]
+    fn test_added_dv_emits_added_dvs_instead_of_position_delete_files() {
+        let (schema, partition_spec) = dv_test_schema_and_spec();
+
+        // The DV.
+        let mut collector = SnapshotSummaryCollector::default();
+        collector.add_file(
+            &position_delete_file_for_summary("s3://b/dv.puffin", 7, true),
+            schema.clone(),
+            partition_spec.clone(),
+        );
+        let props = collector.build();
+        assert_eq!(props.get(ADDED_DVS).map(String::as_str), Some("1"));
+        assert_eq!(
+            props.get(ADDED_POSITION_DELETE_FILES),
+            None,
+            "a DV must NOT count as a position-delete FILE (Java's instead-of branch)"
+        );
+        assert_eq!(props.get(ADDED_DELETE_FILES).map(String::as_str), Some("1"));
+        assert_eq!(
+            props.get(ADDED_POSITION_DELETES).map(String::as_str),
+            Some("7"),
+            "the DV's cardinality still counts as added position deletes"
+        );
+        assert_eq!(
+            props.get(ADDED_FILE_SIZE).map(String::as_str),
+            Some("40"),
+            "a DV contributes its BLOB size (content_size_in_bytes), not the shared Puffin \
+             file's 1000 bytes (Java ScanTaskUtil.contentSizeInBytes)"
+        );
+        assert_eq!(props.get(REMOVED_DVS), None);
+
+        // The parquet position-delete control.
+        let mut collector = SnapshotSummaryCollector::default();
+        collector.add_file(
+            &position_delete_file_for_summary("s3://b/pos-del.parquet", 7, false),
+            schema.clone(),
+            partition_spec.clone(),
+        );
+        let props = collector.build();
+        assert_eq!(
+            props.get(ADDED_DVS),
+            None,
+            "a parquet position delete is not a DV"
+        );
+        assert_eq!(
+            props.get(ADDED_POSITION_DELETE_FILES).map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(props.get(ADDED_DELETE_FILES).map(String::as_str), Some("1"));
+        assert_eq!(
+            props.get(ADDED_FILE_SIZE).map(String::as_str),
+            Some("1000"),
+            "a non-DV delete contributes its full file size"
+        );
+    }
+
+    /// THE REMOVED-DV PIN + the merge pin. No Rust commit path REMOVES delete files yet
+    /// (`removeDeletes` / delete-manifest filtering are deferred), so `removed-dvs` is reachable
+    /// only through direct collector use — pinned HERE at the collector level so the counter is
+    /// Java-correct the day a removal path lands (Java `SnapshotSummary.UpdateMetrics.removedFile`,
+    /// the mirror branch). The merge half pins that `merge` carries both DV counters (a dropped
+    /// `+=` line would zero a merged collector's DV counts).
+    #[test]
+    fn test_removed_dv_emits_removed_dvs_and_merge_carries_dv_counters() {
+        let (schema, partition_spec) = dv_test_schema_and_spec();
+
+        let mut collector = SnapshotSummaryCollector::default();
+        collector.remove_file(
+            &position_delete_file_for_summary("s3://b/dv.puffin", 5, true),
+            schema.clone(),
+            partition_spec.clone(),
+        );
+        let props = collector.build();
+        assert_eq!(props.get(REMOVED_DVS).map(String::as_str), Some("1"));
+        assert_eq!(
+            props.get(REMOVED_POSITION_DELETE_FILES),
+            None,
+            "a removed DV must NOT count as a removed position-delete FILE"
+        );
+        assert_eq!(
+            props.get(REMOVED_DELETE_FILES).map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            props.get(REMOVED_POSITION_DELETES).map(String::as_str),
+            Some("5")
+        );
+        assert_eq!(
+            props.get(REMOVED_FILE_SIZE).map(String::as_str),
+            Some("40"),
+            "a removed DV contributes its blob size"
+        );
+
+        // Merge: an added-DV collector merged into the removed-DV collector carries BOTH counters.
+        let mut other = SnapshotSummaryCollector::default();
+        other.add_file(
+            &position_delete_file_for_summary("s3://b/dv2.puffin", 3, true),
+            schema.clone(),
+            partition_spec.clone(),
+        );
+        collector.merge(other);
+        let props = collector.build();
+        assert_eq!(props.get(ADDED_DVS).map(String::as_str), Some("1"));
+        assert_eq!(props.get(REMOVED_DVS).map(String::as_str), Some("1"));
     }
 }

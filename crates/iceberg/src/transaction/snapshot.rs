@@ -286,8 +286,21 @@ impl<'a> SnapshotProducer<'a> {
 
     /// Validate the added DELETE files (Java `RowDelta.addDeletes` / `MergingSnapshotProducer.add`):
     /// each must be a `PositionDeletes` or `EqualityDeletes` content file (a `Data` file is rejected —
-    /// it must be added as a row, not a delete), and its partition spec must match the table default.
+    /// it must be added as a row, not a delete), must pass the FORMAT-VERSION gate (see
+    /// [`validate_delete_file_for_version`]), and its partition spec must match the table default.
+    ///
+    /// **Placement (the format-version gate):** Java 1.10.0 runs `validateNewDeleteFile` →
+    /// `validateDeleteFileForVersion` inside `MergingSnapshotProducer.add(DeleteFile)` (bytecode:
+    /// `addInternal` calls `validateNewDeleteFile` first; `apply` does NOT re-validate — the buffered
+    /// re-validation `validateDeleteFilesForVersion(base.formatVersion())` at the top of `apply` is a
+    /// post-1.10.0 MAIN addition guarding a concurrent format upgrade). In this Rust model the action
+    /// builder has no table access at `add_deletes` time, so the gate runs HERE — in the action's
+    /// `commit()` against the REFRESHED base (`do_commit` re-bases before calling `commit`). That is
+    /// exactly MAIN's stronger apply-time placement and subsumes 1.10.0's add-time check: a row delta
+    /// built before a concurrent `upgrade_format_version` commit is re-gated against the upgraded
+    /// version on every retry.
     pub(crate) fn validate_added_delete_files(&self) -> Result<()> {
+        let format_version = self.table.metadata().format_version();
         for delete_file in &self.added_delete_files {
             match delete_file.content_type() {
                 crate::spec::DataContentType::PositionDeletes
@@ -299,6 +312,7 @@ impl<'a> SnapshotProducer<'a> {
                     ));
                 }
             }
+            validate_delete_file_for_version(delete_file, format_version)?;
             if self.table.metadata().default_partition_spec_id() != delete_file.partition_spec_id {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
@@ -1236,6 +1250,87 @@ impl<'a> SnapshotProducer<'a> {
     }
 }
 
+/// Render a delete file in Java's deletion-vector description format — the Rust port of
+/// `ContentFileUtil.dvDesc` (`core/.../util/ContentFileUtil.java` L150-157, 1.10.0-bytecode-verified):
+/// `DV{location=%s, offset=%s, length=%s, referencedDataFile=%s}`. Java formats the nullable
+/// `contentOffset` / `contentSizeInBytes` / `referencedDataFile` with `%s`, which renders a missing
+/// value as `null` — mirrored here (NOT Rust's `Some(..)`/`None` debug rendering), so the
+/// gate/validation messages are byte-identical to Java's.
+pub(crate) fn dv_desc(delete_file: &DataFile) -> String {
+    fn opt_to_java<T: std::fmt::Display>(value: Option<T>) -> String {
+        value.map_or_else(|| "null".to_string(), |v| v.to_string())
+    }
+    format!(
+        "DV{{location={}, offset={}, length={}, referencedDataFile={}}}",
+        delete_file.file_path(),
+        opt_to_java(delete_file.content_offset()),
+        opt_to_java(delete_file.content_size_in_bytes()),
+        opt_to_java(delete_file.referenced_data_file()),
+    )
+}
+
+/// The format-version gate for an added DELETE file — the Rust port of Java
+/// `MergingSnapshotProducer.validateDeleteFileForVersion` (`core/MergingSnapshotProducer.java`
+/// L295-316; verified against the 1.10.0 BYTECODE, where the switch is inlined into
+/// `validateNewDeleteFile` with cases 1-4):
+///
+/// - **V1:** delete files do not exist — `"Deletes are supported in V2 and above"`.
+/// - **V2:** equality deletes OK; a position delete must NOT be a deletion vector
+///   (`!ContentFileUtil.isDV`, i.e. not Puffin format) — `"Must not use DVs for position deletes
+///   in V2: %s"` with [`dv_desc`].
+/// - **V3 (and Java's V4):** equality deletes OK; a position delete MUST be a deletion vector —
+///   `"Must use DVs for position deletes in V%s: %s"` with the format version + the file location.
+///
+/// Equality deletes are exempt at EVERY version ≥ 2 (both arms test
+/// `content() == EQUALITY_DELETES` first). A wrongly-gated DV commit corrupts merge-on-read tables
+/// for every engine: a V2 reader cannot load a Puffin DV, and a V3 table mixing fresh parquet
+/// position deletes with DVs breaks the DV-supersedes-position-deletes read precedence.
+///
+/// Returns a NON-retryable [`ErrorKind::DataInvalid`] (Java throws `IllegalArgumentException` from
+/// `Preconditions.checkArgument` — also non-retryable), so the commit retry loop stops.
+fn validate_delete_file_for_version(
+    delete_file: &DataFile,
+    format_version: FormatVersion,
+) -> Result<()> {
+    use crate::delete_file_index::is_deletion_vector;
+    use crate::spec::DataContentType;
+
+    let is_equality_delete = delete_file.content_type() == DataContentType::EqualityDeletes;
+    match format_version {
+        FormatVersion::V1 => Err(Error::new(
+            ErrorKind::DataInvalid,
+            "Deletes are supported in V2 and above",
+        )),
+        FormatVersion::V2 => {
+            if is_equality_delete || !is_deletion_vector(delete_file) {
+                Ok(())
+            } else {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Must not use DVs for position deletes in V2: {}",
+                        dv_desc(delete_file)
+                    ),
+                ))
+            }
+        }
+        FormatVersion::V3 => {
+            if is_equality_delete || is_deletion_vector(delete_file) {
+                Ok(())
+            } else {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Must use DVs for position deletes in V{}: {}",
+                        format_version as u8,
+                        delete_file.file_path()
+                    ),
+                ))
+            }
+        }
+    }
+}
+
 /// Operations whose snapshots can ADD data files — the only ones a "no conflicting data" validation needs
 /// to inspect (Java `MergingSnapshotProducer.VALIDATE_ADDED_FILES_OPERATIONS = {APPEND, OVERWRITE}`). A
 /// `Delete` / `Replace` snapshot never introduces brand-new conflicting rows.
@@ -1249,6 +1344,58 @@ fn operation_adds_data_files(operation: &Operation) -> bool {
 /// snapshot never adds delete files, while a `Delete` snapshot (a pure merge-on-read delete commit) does.
 fn operation_adds_delete_files(operation: &Operation) -> bool {
     matches!(operation, Operation::Overwrite | Operation::Delete)
+}
+
+/// Operations whose snapshots can ADD deletion vectors — the op set the `validateAddedDVs` walk
+/// inspects (Java `MergingSnapshotProducer.VALIDATE_ADDED_DVS_OPERATIONS = {OVERWRITE, DELETE,
+/// REPLACE}`, L84-85; 1.10.0-bytecode-verified: `ImmutableSet.of("overwrite", "delete",
+/// "replace")`).
+///
+/// NOTE this is STRICTLY WIDER than [`operation_adds_delete_files`] (`{Overwrite, Delete}`): a
+/// REPLACE (compaction) snapshot can rewrite deletion vectors — Java's `RewriteDataFiles` writes
+/// fresh DVs for the compacted data under `DataOperations.REPLACE` — so the DV conflict check must
+/// inspect REPLACE snapshots too. `Operation::Replace` IS representable in Rust (the
+/// `rewrite_files` / `rewrite_manifests` actions record it), so dropping it here would silently
+/// miss a concurrent Java- or future-Rust-written REPLACE snapshot that added a DV for the same
+/// referenced data file.
+fn operation_adds_dvs(operation: &Operation) -> bool {
+    matches!(
+        operation,
+        Operation::Overwrite | Operation::Delete | Operation::Replace
+    )
+}
+
+/// Enumerate the DELETE files ADDED to `table` by snapshots committed AFTER `starting_snapshot_id`,
+/// gated to the operations that can add DELETION VECTORS — the walk behind `RowDelta`'s
+/// `validateAddedDVs` (Java `MergingSnapshotProducer.validateAddedDVs` L835-841 calling
+/// `validationHistory(base, startingSnapshotId, VALIDATE_ADDED_DVS_OPERATIONS,
+/// ManifestContent.DELETES, parent)`).
+///
+/// Same [`files_after`] walk semantics as [`added_delete_files_after`] (DELETE manifests the
+/// snapshot itself wrote, `ManifestStatus::Added` entries, inclusive of the current snapshot,
+/// exclusive of the starting snapshot) — the ONLY difference is the op set:
+/// [`operation_adds_dvs`] = `{Overwrite, Delete, Replace}` instead of `{Overwrite, Delete}`
+/// (Java's `VALIDATE_ADDED_DVS_OPERATIONS` vs `VALIDATE_ADDED_DELETE_FILES_OPERATIONS`). The
+/// caller filters the result to DVs (`is_deletion_vector`) and applies the conflict test; the
+/// non-DV entries a REPLACE snapshot might carry are returned here but never collide (the caller
+/// skips non-Puffin files), mirroring Java reading the whole delete manifest and testing
+/// `ContentFileUtil.isDV` per entry.
+///
+/// No format-version guard: Java's `validateAddedDVs` has none (the caller's
+/// `dvsByReferencedFile.isEmpty()` self-skip means the walk only ever runs when this operation
+/// adds DVs, which the version gate already restricts to V3+ tables).
+pub(crate) async fn added_dv_candidate_delete_files_after(
+    table: &Table,
+    starting_snapshot_id: Option<i64>,
+) -> Result<Vec<DataFile>> {
+    files_after(
+        table,
+        starting_snapshot_id,
+        ManifestContentType::Deletes,
+        operation_adds_dvs,
+        ManifestStatus::Added,
+    )
+    .await
 }
 
 /// Operations whose snapshots can REMOVE data files — the only ones a "data files still exist" validation

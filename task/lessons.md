@@ -984,6 +984,109 @@ How to use it (see the manuals' §2):
   mid-sentence. Raw pipes inside code spans break naive pipe-delimited cell handling. Repaired
   2026-06-10 by rejoining the strand verbatim in the archive (conservation preserved).
 
+### 2026-06-10 (DV arc D1 — deletion-vector scan READ path, BUILDER + REVIEWER Fable)
+- **A GAP_MATRIX ✅ inherited from upstream-sync NOTES is unverified until the OUTERMOST behavior
+  is empirically exercised.** *Why:* the read row claimed "position-deletes + DVs during scan ✅"
+  from the 0.9.1 sync; the `DeleteVector` type and puffin reader existing did NOT mean DVs were
+  scannable — `caching_delete_file_loader` routed every position delete to the PARQUET reader and
+  the DV loader was a literal TODO. A V3+DV scan failed outright. Audit rule: a sync-inherited ✅
+  needs a behavior-level probe (a real scan/commit), not a type-level one. Corrected the row
+  ✅→🟡 with an honesty note.
+- **DV blob facts (settled empirically vs Java 1.10.0):** framing = BE u32 length prefix (magic+
+  bitmap), LE magic `D1 D3 39 64`, BE CRC-32 (the zlib CRC from the existing deflate dependency,
+  identical to `java.util.zip.CRC32`) over magic+bitmap; portable 64-bit roaring DECODE is byte-compatible with `roaring-rs` treemap
+  containers per key — BUT Java's `RoaringPositionBitmap.serialize` writes a DENSE bitmap array
+  including EMPTY gap bitmaps while roaring-rs writes sparse; the decoder tolerates both, the D2
+  WRITER must emit dense + Java's `runLengthEncode()` for byte parity. Read DVs with ONE ranged
+  read via `content_offset`/`content_size_in_bytes` (Java `BaseDeleteLoader.readDV` — the
+  PuffinReader path costs ≥3 requests). Cache/notify key must be `{puffin_path}@{offset}` — one
+  puffin file holds MANY blobs; a bare-path key marks blob 2 "already loaded" = silent
+  under-delete (pinned with a two-DVs-one-file test).
+- **`roaring-rs` 0.11.3 `RoaringBitmap::deserialize_from` is the validating variant and caps the
+  container count (≤65536, ~256KB max pre-read allocation)** — adversarial container-count blobs
+  fail fast without allocation DoS (probed + pinned). Still wrap it per-key with payload-bound
+  checks and an exact-consumption check; reject keys > i32::MAX-1 and non-ascending keys (Java
+  `readKey` L302-308).
+- **Serde-compat defaults on scan-task delete entries: default `file_format` to Parquet.** An old
+  serialization carrying a DV then fails LOUDLY in the parquet reader (pre-D1-equivalent), never
+  silently wrong; rejecting absent fields would break every genuinely-old parquet-delete
+  serialization. Verified no in-repo serializer exists (downstream-API surface only).
+- **Pin fail-loud-on-corruption for any storage-parsed structure:** flip one byte of the
+  Java-written blob → the SCAN must error (CRC named, computed-vs-stored), never silently return
+  unmasked rows. The reviewer ran this against the real harness fixture — make it a standard
+  probe for every future storage decoder.
+
+### 2026-06-10 (DV arc D2 — DV serialization + DVFileWriter, BUILDER + REVIEWER Fable)
+- **The orchestrator's brief cited the WRONG reserved field id (2147483545 = DELETE_FILE_POS) for
+  the DV blob's `fields` list — Java writes `MetadataColumns.ROW_POSITION.fieldId()` =
+  Integer.MAX_VALUE − 2 = 2147483645.** The builder caught it by reading MetadataColumns.java and
+  proving against the live oracle (the Java verify asserts the constant). The recurring rule both
+  directions: the brief is never the spec — and reserved-id constants are exactly the kind of
+  off-by-a-digit a paraphrase corrupts.
+- **roaring-rs 0.11.3 CAN emit run containers (`RoaringBitmap::optimize`) with Java-identical
+  array→run/bitmap→run criteria INCLUDING exact ties** — byte parity with Java holds
+  unconditionally for insert()-built vectors (proven: run/dense-gap/tie fixtures byte-identical
+  69/76/46 B). ONE caveat for D3: a store that is ALREADY Run (a deserialized previous DV being
+  re-serialized after merge) ties differently at `cardinality == 2·runs` (Java keeps run, Rust
+  emits array — readable everywhere, byte-only divergence; documented in delete_vector.rs).
+- **A dense-layout size door must count the ABSENT (gap) entries' bytes, not just present
+  bitmaps** — count = max_key+1 means one position at a high key implies gigabytes of empty
+  8-byte entries. Pinned: 3 GB-by-gaps rejected in ~430 µs BEFORE allocation; the
+  drop-the-absent-term mutation ground a 60+ s dense loop. Java's serializedSizeInBytes iterates
+  its dense array (same accounting, slower); the O(present-keys) closed form is strictly better.
+- **Java `MAX_POSITION = toPosition(2^31−2, Integer.MIN_VALUE)` — the LOW WORD IS 0x8000_0000,
+  not 0xFFFF_FFFF** (0x7FFFFFFE_80000000). The writer-side `set()` door rejects above it while
+  the DESERIALIZER accepts up to the key ceiling — mirror the LAYERING (door on delete(), key-only
+  check in serialize), not a single bound.
+- **When the oracle pins a jar version with no matching local source, verify Java behavior from
+  the JAR's bytecode (javap/decompile), not MAIN-source line numbers** — the D2 reviewer
+  re-derived MAX_POSITION, the run criteria (RoaringBitmap 1.3.0 — the version 1.10.0 actually
+  pulls), and the fields constant from bytecode. MAIN line citations are navigation hints, never
+  proof, across versions.
+
+### 2026-06-10 (DV arc D3 — DV commit path, BUILDER + REVIEWER Fable; 2 reviewer bugs fixed)
+- **A "X is unrepresentable in the Rust enum" claim STALES the day the variant lands — grep for
+  those claims whenever an enum grows.** `validateAddedDVs`' walk had reused the `{Overwrite,
+  Delete}` op set with a comment that REPLACE was unrepresentable; `Operation::Replace` landed
+  with the rewrite actions and the claim silently became a missing-conflict-window bug (1.10.0's
+  `VALIDATE_ADDED_DVS_OPERATIONS` = {overwrite, delete, replace} — bytecode-verified). Fixed +
+  pinned with a Replace-op commit through the production producer.
+- **An applicability door must mirror the READ PATH's resolution exactly: resolve the REFERENCED
+  file's LIVE manifest entry — (spec id, partition, inherited data seq) — never key on the ADDED
+  file's own fields.** The fresh-DV door keyed partition matching on the DV's own (spec,
+  partition): after partition evolution the spec ids never match (UNDER-fire — the DV committed
+  over a still-applying legacy parquet delete = resurrection class), and it had no seq filter
+  (OVER-fire — a predating legacy delete froze all DV writes to that partition). One fix: resolve
+  the live entry, match path-scope OR (spec, partition) against IT, AND `delete_seq >= data_seq`.
+  Both directions pinned (the docs/testing.md mutate-both-directions rule, vindicated again).
+- **`BaseRowDelta.validate` (1.10.0) runs `validateNoConflictingFileAndPositionDeletes`
+  UNCONDITIONALLY** (removed-data-files ∩ new-deletes' referenced files → "Cannot delete data
+  files %s that are referenced by new delete files") — was missing from the Rust validate hook.
+- **Java 1.10.0 summary semantics for DVs (bytecode):** a DV bumps `added-dvs` INSTEAD of
+  `added-position-delete-files`, but BOTH paths bump `added-delete-files` and
+  `added-position-deletes` (+= record_count); size accounting uses `contentSizeInBytes` (the
+  blob), not the shared puffin file size (`ScanTaskUtil.contentSizeInBytes`).
+- **The V3-requires-DV gate breaks every V3 fixture committing parquet position deletes — budget
+  the migration** (56 tests here: subject-preserving fixture swaps to a V2 in-catalog template;
+  the migrated suite then doubles as a 60-test regression pin on the V2 gate arm).
+
+### 2026-06-10 (DV arc D4 — table + metadata DV interop, BUILDER + REVIEWER Fable)
+- **`mvn exec:java` exit-code propagation is MACHINE-DEPENDENT — design run-script verdicts to be
+  exit-code-agnostic and FAIL-CLOSED:** capture with `|| true`, then fail when the success
+  sentinel is ABSENT (not only when a `^FAIL` line is present — the absence branch is what makes
+  an early mvn crash/OOM fail the script). The old "-q exec:java does not propagate System.exit"
+  lesson held on the CI-era machine but NOT here (probed: MVN-EXIT=1) — under `set -e` the
+  un-guarded capture aborted before echoing Java's diagnostics. Verdicts from shell VARIABLES
+  (command substitution), never capture files; reset all temp dirs at step 1.
+- **Distinct per-fixture cardinalities (DV A card 1, DV B card 2) keep the canonical entry sort
+  tie-free for free** — design fixture values so no two entries share a sort tuple (the E2
+  tie lesson, applied at fixture-design time instead of comparator-extension time).
+- **DV arc outcome:** all four levels proven vs Java 1.10.0 — blob bytes (D2), scan Direction-1
+  (D1), table-level Direction-2 + metadata-level 3-way incl. `added-dvs` (D4) — with ZERO
+  canonicalization changes and ZERO production fixes in D4 (the D1-D3 surface held). The
+  DV-writer row stays 🟡 SOLELY for the previous-deletes merge + superseded-delete removal
+  (BaseDVFileWriter L117-126) — the next natural increment (needs apply-side delete-file removal).
+
 ### 2026-06-10 (post-arc logic + security audit, ORCHESTRATOR Fable — two parity bugs found + fixed)
 - **Java's merge `first` is the unconditional STREAM HEAD (`manifestIter.next()`,
   ManifestMergeManager L85), NOT "this commit's new manifest".** For an empty-data merging append

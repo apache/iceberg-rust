@@ -63,8 +63,17 @@ impl PuffinWriter {
         })
     }
 
-    /// Adds blob to Puffin file
-    pub async fn add(&mut self, blob: Blob, compression_codec: CompressionCodec) -> Result<()> {
+    /// Adds blob to Puffin file.
+    ///
+    /// Returns the written blob's [`BlobMetadata`] — its `offset`/`length` are the coordinates a
+    /// deletion vector's `DeleteFile` must record as `content_offset`/`content_size_in_bytes`
+    /// (mirrors Java `PuffinWriter.write(Blob)` returning `BlobMetadata`, consumed by
+    /// `BaseDVFileWriter.write` L161-166).
+    pub async fn add(
+        &mut self,
+        blob: Blob,
+        compression_codec: CompressionCodec,
+    ) -> Result<BlobMetadata> {
         validate_puffin_compression(compression_codec)?;
 
         self.write_header_once().await?;
@@ -73,7 +82,7 @@ impl PuffinWriter {
         let compressed_bytes: Bytes = compression_codec.compress(blob.data)?.into();
         let length = compressed_bytes.len().try_into()?;
         self.write(compressed_bytes).await?;
-        self.written_blobs_metadata.push(BlobMetadata {
+        let blob_metadata = BlobMetadata {
             r#type: blob.r#type,
             fields: blob.fields,
             snapshot_id: blob.snapshot_id,
@@ -82,17 +91,22 @@ impl PuffinWriter {
             length,
             compression_codec,
             properties: blob.properties,
-        });
+        };
+        self.written_blobs_metadata.push(blob_metadata.clone());
 
-        Ok(())
+        Ok(blob_metadata)
     }
 
-    /// Finalizes the Puffin file
-    pub async fn close(mut self) -> Result<()> {
+    /// Finalizes the Puffin file.
+    ///
+    /// Returns the total file size in bytes including the footer (mirrors Java
+    /// `PuffinWriter.fileSize()`, consumed by `BaseDVFileWriter.close` L134 as the
+    /// `file_size_in_bytes` every DV `DeleteFile` in the file shares).
+    pub async fn close(mut self) -> Result<u64> {
         self.write_header_once().await?;
         self.write_footer().await?;
         self.writer.close().await?;
-        Ok(())
+        Ok(self.num_bytes_written)
     }
 
     async fn write(&mut self, bytes: Bytes) -> Result<()> {

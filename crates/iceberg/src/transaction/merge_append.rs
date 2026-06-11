@@ -775,7 +775,9 @@ mod tests {
         ManifestFile, ManifestStatus, Operation, Struct,
     };
     use crate::table::Table;
-    use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+    use crate::transaction::tests::{
+        make_v2_minimal_table_in_catalog, make_v3_minimal_table_in_catalog,
+    };
     use crate::transaction::{ApplyTransactionAction, Transaction};
 
     // -------------------------------------------------------------------------------------------------
@@ -1431,7 +1433,7 @@ mod tests {
     #[tokio::test]
     async fn test_merge_append_carries_delete_manifest_and_delete_still_applies() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let table =
             set_table_property(&catalog, &table, "commit.manifest.min-count-to-merge", "2").await;
 

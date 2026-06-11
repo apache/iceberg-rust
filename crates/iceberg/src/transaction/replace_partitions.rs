@@ -480,7 +480,9 @@ mod tests {
         ManifestStatus, Operation, Struct, TableMetadata,
     };
     use crate::table::Table;
-    use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+    use crate::transaction::tests::{
+        make_v2_minimal_table_in_catalog, make_v3_minimal_table_in_catalog,
+    };
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::writer::base_writer::position_delete_writer::{
         PositionDeleteFileWriterBuilder, PositionDeleteWriterConfig,
@@ -1353,7 +1355,7 @@ mod tests {
     #[tokio::test]
     async fn test_replace_partitions_rejects_concurrent_added_delete_in_replaced_partition() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
 
         // S0: x=0 (a), x=1 (b).
         let table = append_files(&catalog, &table, vec![
@@ -1452,7 +1454,7 @@ mod tests {
     #[tokio::test]
     async fn test_replace_partitions_allows_concurrent_added_delete_in_other_partition() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
 
         let table = append_files(&catalog, &table, vec![
             data_file("test/a.parquet", 0),
@@ -1535,7 +1537,7 @@ mod tests {
     #[tokio::test]
     async fn test_replace_partitions_without_delete_validation_allows_concurrent_delete_default() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
 
         let table = append_files(&catalog, &table, vec![
             data_file("test/a.parquet", 0),
@@ -1579,7 +1581,7 @@ mod tests {
     #[tokio::test]
     async fn test_replace_partitions_rejects_concurrent_added_delete_using_tx_captured_start() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
 
         // S0: x=0 (a), x=1 (b) — the head when the transaction is created below.
         let table = append_files(&catalog, &table, vec![
@@ -1661,7 +1663,7 @@ mod tests {
     #[tokio::test]
     async fn test_replace_partitions_data_validation_does_not_enable_delete_validation() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
 
         let table = append_files(&catalog, &table, vec![
             data_file("test/a.parquet", 0),
@@ -1852,7 +1854,7 @@ mod tests {
     #[tokio::test]
     async fn test_replace_partitions_preserves_outstanding_delete_manifests_no_resurrection() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
 
         // X in partition a=0 with rows y = [10, 20]; Y in partition b=1 with rows y = [60, 70].
         let x = write_data_file(&table, "x.parquet", 0, &[(0, 10, 100), (0, 20, 200)]).await;

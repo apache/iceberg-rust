@@ -88,21 +88,38 @@
 //! `file_format() == DataFileFormat::Puffin` (Java `ContentFileUtil.isDV` = `format() == FileFormat.PUFFIN`),
 //! and its `referenced_data_file` is the data file it covers (a DV MUST set it). When this row delta adds at
 //! least one DV, the commit is rejected if a concurrent commit since the start ALSO added a DV for the SAME
-//! referenced data file — two DVs for one data file is a write-write conflict. The concurrent walk reuses the
-//! existing [`added_delete_files_after`] enumeration: Java's `VALIDATE_ADDED_DVS_OPERATIONS = {OVERWRITE,
-//! DELETE, REPLACE}` (L84-85) reduces to `{Overwrite, Delete}` in Rust because `REPLACE` is unrepresentable in
-//! the [`Operation`] enum (Rust never records a REPLACE snapshot), which is IDENTICAL to the
-//! `VALIDATE_ADDED_DELETE_FILES_OPERATIONS` op-set [`added_delete_files_after`] already walks (its V2 guard is
-//! correct — DVs are V3, so the table is V2+ and the guard never excludes a real DV). The concurrently-added
-//! deletes are filtered to DVs (`file_format() == Puffin`) and rejected on the first whose
+//! referenced data file — two DVs for one data file is a write-write conflict. The concurrent walk is
+//! [`added_dv_candidate_delete_files_after`], gated to Java's `VALIDATE_ADDED_DVS_OPERATIONS = {OVERWRITE,
+//! DELETE, REPLACE}` (L84-85, 1.10.0-bytecode-verified) — note REPLACE: `Operation::Replace` IS
+//! representable in Rust (the rewrite actions record it) and a compaction can rewrite DVs, so the DV walk is
+//! strictly WIDER than the `{Overwrite, Delete}` op set the added-delete-file check uses. The
+//! concurrently-added deletes are filtered to DVs (`file_format() == Puffin`) and rejected on the first whose
 //! `referenced_data_file` collides with this row delta's added-DV set.
+//!
+//! **Format-version gating (`validateDeleteFileForVersion`):** every added delete file is gated by format
+//! version at commit time against the REFRESHED base (see
+//! `SnapshotProducer::validate_added_delete_files`): V1 rejects all deletes, V2 rejects Puffin DVs for
+//! position deletes, V3 REQUIRES position deletes to be DVs; equality deletes are exempt at every version
+//! (Java `MergingSnapshotProducer.validateDeleteFileForVersion`, 1.10.0-bytecode-verified).
+//!
+//! **The fresh-DV-only door (Rust-conservative, NOT a Java check):** a row delta adding a DV is rejected when
+//! the CURRENT snapshot already carries a live position-scoped delete for the same referenced data file —
+//! a live DV for that file, or a legacy parquet position delete that still applies to it (possible on a
+//! V2→V3 upgraded table). Java instead MERGES the previous deletes into the new DV and replaces the old file
+//! (`BaseDVFileWriter.loadPreviousDeletes` L117-126 + `RowDelta.removeDeletes`); that path needs the
+//! apply-side delete-file removal this port defers. Without the door, the second DV would COMMIT and either
+//! make the data file unreadable at the scan's duplicate-DV load door (fail-late) or silently supersede the
+//! parquet delete's positions (resurrection). See [`RowDeltaAction::validate_fresh_dvs_only`].
 //!
 //! **Out of scope (deferred):**
 //! - Equality-delete WRITER end-to-end (the writer exists; the RowDelta-with-equality-deletes scan
 //!   application may have gaps — the end-to-end test focuses on POSITION deletes).
 //! - APPLY-SIDE removal for `remove_data_files` (see above) and `removeDeletes` (removing existing delete
 //!   files) — only the VALIDATION half of `removeRows` lands here.
-//! - The deletion-vector (V3 Puffin) write path.
+//! - The previous-deletes MERGE for deletion vectors (`BaseDVFileWriter.loadPreviousDeletes` +
+//!   `rewrittenDeleteFiles`/`removeDeletes`) — guarded by the fresh-DV-only door above until the apply-side
+//!   delete-file removal lands. (The DV WRITE path itself — `DVFileWriter` → `add_deletes` → commit → scan —
+//!   is supported as of the D2/D3 increments.)
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -110,15 +127,19 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use uuid::Uuid;
 
+use crate::delete_file_index::is_deletion_vector;
 use crate::error::Result;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::{Bind, Predicate};
-use crate::spec::{DataFile, DataFileFormat, ManifestEntry, ManifestFile, Operation};
+use crate::spec::{
+    DataContentType, DataFile, ManifestContentType, ManifestEntry, ManifestFile, Operation, Struct,
+};
 use crate::table::Table;
 use crate::transaction::snapshot::{
-    DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer, added_delete_files_after,
-    deleted_data_files_after, validate_no_conflicting_added_data_files,
-    validate_no_conflicting_added_delete_files, validate_no_new_deletes_for_data_files,
+    DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
+    added_dv_candidate_delete_files_after, deleted_data_files_after, dv_desc,
+    validate_no_conflicting_added_data_files, validate_no_conflicting_added_delete_files,
+    validate_no_new_deletes_for_data_files,
 };
 use crate::transaction::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind};
@@ -362,28 +383,31 @@ impl RowDeltaAction {
         self
     }
 
-    /// Build the set of DATA-file paths this row delta is adding DELETION VECTORS (DVs) for — the Rust port of
-    /// Java `MergingSnapshotProducer.dvsByReferencedFile` (populated at `add` time, `MergingSnapshotProducer
-    /// .java` L280-284, keyed on `file.referencedDataFile()` when `ContentFileUtil.isDV(file)`).
+    /// Build the map of DATA-file path → the added DELETION VECTOR (DV) covering it — the Rust port of
+    /// Java `MergingSnapshotProducer.newDVRefs` (1.10.0; MAIN's `dvsByReferencedFile` — populated at `add`
+    /// time, keyed on `file.referencedDataFile()` when `ContentFileUtil.isDV(file)`).
     ///
     /// A DV is an added delete file whose `file_format() == DataFileFormat::Puffin` (Java
     /// `ContentFileUtil.isDV` = `format() == FileFormat.PUFFIN`). Each DV's `referenced_data_file` is the data
     /// file it covers and is REQUIRED for a DV (the spec mandates it); a Puffin delete file MISSING
     /// `referenced_data_file` is malformed, so this errors (matching Java, which dereferences
-    /// `file.referencedDataFile()` as a non-null map key when populating `dvsByReferencedFile`). Non-Puffin
-    /// deletes (position / equality) are SKIPPED — they are not DVs — so for the common merge-on-read row delta
-    /// (no DVs) this returns an EMPTY set, which makes the always-on `validate_added_dvs` step self-skip.
-    fn added_dv_referenced_files(&self) -> Result<HashSet<String>> {
-        let mut referenced = HashSet::new();
+    /// `file.referencedDataFile()` as a non-null map key when populating the set). Non-Puffin deletes
+    /// (position / equality) are SKIPPED — they are not DVs — so for the common merge-on-read row delta
+    /// (no DVs) this returns an EMPTY map, which makes the always-on `validate_added_dvs` step and the
+    /// fresh-DV-only door self-skip. (The door tests shadow applicability against the referenced data
+    /// file's LIVE manifest entry, not the mapped DV's own partition — see `validate_fresh_dvs_only`;
+    /// the map's [`DataFile`] values are kept for the future previous-deletes merge path.)
+    fn added_dvs_by_referenced_file(&self) -> Result<HashMap<String, &DataFile>> {
+        let mut referenced = HashMap::new();
         for delete_file in &self.added_delete_files {
-            if delete_file.file_format() != DataFileFormat::Puffin {
+            if !is_deletion_vector(delete_file) {
                 // Not a DV (Java `ContentFileUtil.isDV` is false) — a position/equality delete, not indexed
-                // into `dvsByReferencedFile`.
+                // into the DV-reference map.
                 continue;
             }
             match delete_file.referenced_data_file() {
                 Some(path) => {
-                    referenced.insert(path);
+                    referenced.insert(path, delete_file);
                 }
                 None => {
                     return Err(Error::new(
@@ -406,23 +430,24 @@ impl RowDeltaAction {
     ///
     /// **Always-on, self-skipping (Java L831):** unlike the opt-in checks (steps 1-3), this runs on EVERY row
     /// delta — Java calls `validateAddedDVs` unconditionally — but it SELF-SKIPS when this row delta adds no
-    /// DVs (`added_dv_referenced_files` empty ⇔ Java `dvsByReferencedFile.isEmpty()`). The common merge-on-read
-    /// row delta adds NON-Puffin position / equality deletes, so the set is empty and this is a no-op.
+    /// DVs (`added_dvs_by_referenced_file` empty ⇔ Java 1.10.0 `newDVRefs.isEmpty()`). The common
+    /// merge-on-read row delta adds NON-Puffin position / equality deletes, so the set is empty and this is a
+    /// no-op.
     ///
     /// **Concurrent walk (Java L835-841 + L84-85 `VALIDATE_ADDED_DVS_OPERATIONS = {OVERWRITE, DELETE,
-    /// REPLACE}`):** the concurrently-added delete files are enumerated by the SHARED
-    /// [`added_delete_files_after`] walk. Java's DV op-set is `{OVERWRITE, DELETE, REPLACE}`, but `REPLACE` is
-    /// unrepresentable in the Rust [`Operation`] enum (Rust never records a REPLACE snapshot), so it reduces to
-    /// `{Overwrite, Delete}` — IDENTICAL to the `VALIDATE_ADDED_DELETE_FILES_OPERATIONS` op-set
-    /// [`added_delete_files_after`] already uses. Its V2 guard is correct here: DVs are a V3 feature, so a
-    /// table carrying DVs is V2+ and the guard never excludes a real DV.
+    /// REPLACE}`, 1.10.0-bytecode-verified):** the concurrently-added delete files are enumerated by
+    /// [`added_dv_candidate_delete_files_after`] — the DELETE-manifest walk gated to `{Overwrite, Delete,
+    /// Replace}`. REPLACE is in the set because a compaction snapshot can rewrite DVs (Java
+    /// `RewriteDataFiles`); `Operation::Replace` IS representable in Rust (the rewrite actions record it),
+    /// so the DV walk is strictly WIDER than the `{Overwrite, Delete}` op set the added-delete-file conflict
+    /// check uses.
     ///
     /// **DV filter + collision (Java L867-873):** of those concurrently-added deletes, keep only the DVs
     /// (`file_format() == Puffin`); each DV is optionally narrowed by `conflict_filter` (Java passes it into
     /// the manifest scan — a DV whose metrics cannot match cannot conflict), then its `referenced_data_file` is
     /// checked against this row delta's added-DV set. The FIRST collision returns a NON-retryable
-    /// [`ErrorKind::DataInvalid`] error matching Java's message ("Found concurrently added DV for
-    /// {referenced_data_file}: {dv description}"), so the retry loop stops (Java's non-retryable
+    /// [`ErrorKind::DataInvalid`] error matching Java's exact message ("Found concurrently added DV for %s:
+    /// %s" with `ContentFileUtil.dvDesc`), so the retry loop stops (Java's non-retryable
     /// `ValidationException`).
     async fn validate_added_dvs(
         &self,
@@ -430,16 +455,15 @@ impl RowDeltaAction {
         effective_start: Option<i64>,
         conflict_filter: Option<&Predicate>,
     ) -> Result<()> {
-        // Java L831: skip if this operation adds no DVs (`dvsByReferencedFile.isEmpty()`).
-        let added_dv_referenced = self.added_dv_referenced_files()?;
+        // Java L831: skip if this operation adds no DVs (`newDVRefs.isEmpty()`).
+        let added_dv_referenced = self.added_dvs_by_referenced_file()?;
         if added_dv_referenced.is_empty() {
             return Ok(());
         }
 
-        // Java L835-841: the concurrently-added delete files (DELETE-manifest walk + V2 guard, gated to the
-        // `{Overwrite, Delete}` op set — the Rust-representable subset of Java's `{OVERWRITE, DELETE, REPLACE}`
-        // `VALIDATE_ADDED_DVS_OPERATIONS`, identical to the existing added-delete-files op set).
-        let added_deletes = added_delete_files_after(current, effective_start).await?;
+        // Java L835-841: the concurrently-added delete files (DELETE-manifest walk gated to the
+        // `{Overwrite, Delete, Replace}` `VALIDATE_ADDED_DVS_OPERATIONS` op set, 1.10.0-bytecode-verified).
+        let added_deletes = added_dv_candidate_delete_files_after(current, effective_start).await?;
         if added_deletes.is_empty() {
             return Ok(());
         }
@@ -458,7 +482,7 @@ impl RowDeltaAction {
 
         for concurrent in &added_deletes {
             // Java L867: keep only concurrently-added DVs (`ContentFileUtil.isDV` = `format() == PUFFIN`).
-            if concurrent.file_format() != DataFileFormat::Puffin {
+            if !is_deletion_vector(concurrent) {
                 continue;
             }
 
@@ -471,22 +495,207 @@ impl RowDeltaAction {
 
             // Java L867-873: a concurrent DV for a data file THIS row delta also adds a DV for is a conflict.
             // A concurrent DV missing `referenced_data_file` is malformed; it cannot collide with any entry in
-            // the set, so it is skipped (it would never be a valid key in Java's `dvsByReferencedFile`).
+            // the set, so it is skipped (it would never be a valid key in Java's DV-reference set).
             if let Some(referenced) = concurrent.referenced_data_file()
-                && added_dv_referenced.contains(&referenced)
+                && added_dv_referenced.contains_key(&referenced)
             {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
-                        "Found concurrently added DV for {}: DV{{location={}, offset={:?}, length={:?}, referencedDataFile={}}}",
+                        "Found concurrently added DV for {}: {}",
                         referenced,
-                        concurrent.file_path(),
-                        concurrent.content_offset(),
-                        concurrent.content_size_in_bytes(),
-                        referenced
+                        dv_desc(concurrent)
                     ),
                 ));
             }
+        }
+
+        Ok(())
+    }
+
+    /// THE FRESH-DV-ONLY DOOR (Rust-conservative; NOT a Java check — documented divergence). Reject this row
+    /// delta when the CURRENT snapshot already carries a live position-scoped delete for a data file this row
+    /// delta adds a deletion vector for:
+    ///
+    /// - **A live DV for the same `referenced_data_file`.** Committing a second DV would leave TWO live DVs
+    ///   for one data file — an invalid table per the spec, which the scan's duplicate-DV load door
+    ///   ([`crate::arrow::caching_delete_file_loader`], the D1 fail-loud relocation of Java
+    ///   `DeleteFileIndex.add`'s "Can't index multiple DVs") rejects at READ time. Failing the COMMIT here
+    ///   converts that fail-late corruption into a fail-loud rejection.
+    /// - **A live legacy parquet position delete that still APPLIES to that data file** (possible on a V2→V3
+    ///   upgraded table). At read time a DV SUPERSEDES every parquet position delete for its data file (Java
+    ///   `DeleteFileIndex.forDataFile`; the D1 index mirrors it), so committing the DV without merging would
+    ///   silently RESURRECT the parquet delete's positions. "Applies" is the READ-path test
+    ///   (`delete_file_index.rs`), evaluated against the referenced data file's LIVE manifest entry — NOT
+    ///   the added DV's own metadata (the DV always carries the CURRENT default spec, so a referenced file
+    ///   written under an older partition spec would never match it after a partition evolution): a
+    ///   path-scoped delete applies iff it references the same path; a partition-scoped delete applies iff
+    ///   its (spec id, partition) equal the DATA file entry's; both only when `delete_seq >= data_seq` (a
+    ///   delete never applies to a data file added after it). A referenced file with NO live entry is being
+    ///   added in THIS commit and postdates every live delete — nothing applies.
+    ///
+    /// Java has no such door because it never commits a "second" DV: `BaseDVFileWriter.loadPreviousDeletes`
+    /// (L117-126) MERGES the file's previous deletes into the new DV and the superseded delete files are
+    /// removed via `rewrittenDeleteFiles` + `RowDelta.removeDeletes`. That merge-and-replace path needs the
+    /// apply-side delete-file removal this port defers; until it lands, only FRESH DVs (for data files with
+    /// no live position-scoped deletes) can be committed. Equality deletes are NOT superseded by a DV and do
+    /// not trip the door.
+    ///
+    /// Runs in the action's `commit()` against the refreshed base, alongside the producer's added-delete-file
+    /// validation. Self-skips when this row delta adds no DVs.
+    async fn validate_fresh_dvs_only(&self, table: &Table) -> Result<()> {
+        let added_dvs = self.added_dvs_by_referenced_file()?;
+        if added_dvs.is_empty() {
+            return Ok(());
+        }
+
+        let Some(snapshot) = table.metadata().current_snapshot() else {
+            return Ok(());
+        };
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), &table.metadata_ref())
+            .await?;
+
+        // Resolve each referenced data file's LIVE manifest entry — (partition spec id, partition,
+        // data sequence number) — from the snapshot's DATA manifests. Parquet-delete applicability
+        // below is decided against the REFERENCED DATA FILE's entry (the read-path keys:
+        // `delete_file_index.rs` matches a partition-scoped delete on the data file's
+        // (spec id, partition) and seq-filters with `delete_seq >= data_seq`), not against the
+        // added DV's own metadata.
+        let mut live_data_entry_by_path: HashMap<String, (i32, Struct, Option<i64>)> =
+            HashMap::new();
+        for manifest_file in manifest_list.entries() {
+            if manifest_file.content != ManifestContentType::Data {
+                continue;
+            }
+            let manifest = manifest_file.load_manifest(table.file_io()).await?;
+            for entry in manifest.entries() {
+                if !entry.is_alive() {
+                    continue;
+                }
+                let file = entry.data_file();
+                if added_dvs.contains_key(file.file_path()) {
+                    live_data_entry_by_path.insert(
+                        file.file_path().to_string(),
+                        (
+                            file.partition_spec_id,
+                            file.partition().clone(),
+                            entry.sequence_number(),
+                        ),
+                    );
+                }
+            }
+        }
+
+        for manifest_file in manifest_list.entries() {
+            if manifest_file.content != ManifestContentType::Deletes {
+                continue;
+            }
+            let manifest = manifest_file.load_manifest(table.file_io()).await?;
+            for entry in manifest.entries() {
+                if !entry.is_alive() {
+                    continue;
+                }
+                let existing = entry.data_file();
+                if existing.content_type() != DataContentType::PositionDeletes {
+                    // Equality deletes coexist with DVs (a DV supersedes only position deletes).
+                    continue;
+                }
+
+                if is_deletion_vector(existing) {
+                    // A live DV for the same referenced data file ⇒ two DVs per file.
+                    if let Some(referenced) = existing.referenced_data_file()
+                        && added_dvs.contains_key(&referenced)
+                    {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Cannot commit deletion vector for {}: the current snapshot already \
+                                 carries a live deletion vector for that data file ({}). Merging \
+                                 previous deletes into the new DV and removing the old delete file \
+                                 (Java BaseDVFileWriter.loadPreviousDeletes + RowDelta.removeDeletes) \
+                                 is deferred in this port; committing would leave two DVs for one data \
+                                 file, which the scan rejects",
+                                referenced,
+                                dv_desc(existing)
+                            ),
+                        ));
+                    }
+                } else {
+                    // A legacy parquet position delete that still APPLIES to a referenced data file would
+                    // be silently superseded by the new DV at read time (resurrection). The applicability
+                    // test mirrors the READ path (`delete_file_index.rs`) against the referenced file's
+                    // LIVE data entry: path-scoped deletes apply iff they reference the same path;
+                    // partition-scoped deletes apply iff their (spec id, partition) equal the DATA
+                    // entry's; both only when delete_seq >= data_seq. A referenced file with no live
+                    // entry is added in THIS commit (or dangling) — it postdates every live delete.
+                    for referenced in added_dvs.keys() {
+                        let Some((data_spec_id, data_partition, data_seq)) =
+                            live_data_entry_by_path.get(referenced)
+                        else {
+                            continue;
+                        };
+                        let scope_matches = match existing.referenced_data_file() {
+                            Some(path) => &path == referenced,
+                            None => {
+                                existing.partition_spec_id == *data_spec_id
+                                    && existing.partition() == data_partition
+                            }
+                        };
+                        // The read-path sequence filter: a position delete applies iff
+                        // delete_seq >= data_seq. An unknown sequence (None — not produced by the
+                        // post-inheritance `load_manifest` path) is treated as applying: the door
+                        // errs toward rejection.
+                        let applies = scope_matches
+                            && match (entry.sequence_number(), *data_seq) {
+                                (Some(delete_seq), Some(data_seq)) => delete_seq >= data_seq,
+                                _ => true,
+                            };
+                        if applies {
+                            return Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Cannot commit deletion vector for {}: live position delete file \
+                                     {} still applies to that data file and would be silently \
+                                     superseded by the DV at read time. Merging previous deletes into \
+                                     the new DV (Java BaseDVFileWriter.loadPreviousDeletes) is deferred \
+                                     in this port",
+                                    referenced,
+                                    existing.file_path()
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Reject a row delta that REMOVES a data file the added delete files REFERENCE — the Rust port of Java
+    /// `BaseRowDelta.validateNoConflictingFileAndPositionDeletes` (1.10.0-bytecode-verified, called
+    /// UNCONDITIONALLY from `BaseRowDelta.validate` right before `validateAddedDVs`): the intersection of
+    /// `removedDataFiles` paths with `referencedDataFiles` must be empty — a delete file referencing a data
+    /// file removed in the SAME commit is self-contradictory (the delete would apply to nothing, silently).
+    /// Exact Java message: "Cannot delete data files %s that are referenced by new delete files" where `%s`
+    /// is the Java `List` rendering `[path, ...]`.
+    fn validate_no_conflicting_file_and_position_deletes(&self) -> Result<()> {
+        let deleted_files_with_new_deletes: Vec<&str> = self
+            .removed_data_files
+            .iter()
+            .map(|file| file.file_path())
+            .filter(|path| self.referenced_data_files.contains(*path))
+            .collect();
+
+        if !deleted_files_with_new_deletes.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Cannot delete data files [{}] that are referenced by new delete files",
+                    deleted_files_with_new_deletes.join(", ")
+                ),
+            ));
         }
 
         Ok(())
@@ -507,10 +716,17 @@ impl TransactionAction for RowDeltaAction {
 
         // Validate the added data files like fast append (Data content type, partition-spec match,
         // partition-value compatibility) and the added delete files (position/equality content type,
-        // partition-spec match) — mirroring Java `MergingSnapshotProducer.add(DataFile)` /
-        // `add(DeleteFile)`.
+        // the FORMAT-VERSION gate — V1 rejects deletes, V2 rejects DVs, V3 requires DVs for position
+        // deletes — and partition-spec match) — mirroring Java `MergingSnapshotProducer.add(DataFile)` /
+        // `add(DeleteFile)` → `validateNewDeleteFile`. Runs against the REFRESHED base (`do_commit`
+        // re-bases before calling `commit`), so a concurrent format upgrade re-gates the buffered files
+        // (the placement Java MAIN's apply-time `validateDeleteFilesForVersion` adopts).
         snapshot_producer.validate_added_data_files()?;
         snapshot_producer.validate_added_delete_files()?;
+
+        // The fresh-DV-only door (Rust-conservative; see its doc): a DV for a data file that already has
+        // a live position-scoped delete cannot be committed until the previous-delete merge path lands.
+        self.validate_fresh_dvs_only(table).await?;
 
         snapshot_producer
             .commit(
@@ -570,11 +786,17 @@ impl TransactionAction for RowDeltaAction {
     /// flags / the `referencedDataFiles.isEmpty()` guard. (Sub-checks 2a and 2b deliberately share the ONE
     /// `validate_no_conflicting_delete_files` flag — Java's single `validateNewDeleteFiles` gate.)
     ///
-    /// 4. **`validateAddedDVs`** (Java L172 → `MergingSnapshotProducer.validateAddedDVs` L825-895, called
+    /// 4. **`validateNoConflictingFileAndPositionDeletes`** (Java `BaseRowDelta.validate`, called
+    ///    UNCONDITIONALLY right before `validateAddedDVs` — 1.10.0-bytecode-verified): reject when a data
+    ///    file this row delta REMOVES is also REFERENCED by its added delete files (the two validation sets
+    ///    intersect) — a self-contradictory commit. See
+    ///    [`Self::validate_no_conflicting_file_and_position_deletes`].
+    ///
+    /// 5. **`validateAddedDVs`** (Java L172 → `MergingSnapshotProducer.validateAddedDVs` L825-895, called
     ///    UNCONDITIONALLY — NOT gated by any flag): reject if a concurrent commit since the start added a
     ///    deletion vector (DV) for a data file THIS row delta also adds a DV for (two DVs per data file is a
     ///    write-write conflict). SELF-SKIPS when this row delta adds no DVs (Java L831
-    ///    `dvsByReferencedFile.isEmpty()`), so it is a no-op for every non-DV row delta. See
+    ///    `newDVRefs.isEmpty()`), so it is a no-op for every non-DV row delta. See
     ///    [`Self::validate_added_dvs`].
     ///
     /// **Over-scan vs Java (documented):** the delete-file check omits Java's `DeleteFileIndex`
@@ -659,7 +881,13 @@ impl TransactionAction for RowDeltaAction {
             }
         }
 
-        // 4. Concurrently-added deletion-vector conflict (Java `validateAddedDVs`, L172 / L825-895). Called
+        // 4. Removed-data-files vs referenced-data-files self-contradiction (Java
+        //    `validateNoConflictingFileAndPositionDeletes`, called UNCONDITIONALLY right before
+        //    `validateAddedDVs` in `BaseRowDelta.validate` — 1.10.0-bytecode-verified). Self-skips when
+        //    either set is empty.
+        self.validate_no_conflicting_file_and_position_deletes()?;
+
+        // 5. Concurrently-added deletion-vector conflict (Java `validateAddedDVs`, L172 / L825-895). Called
         //    UNCONDITIONALLY (NOT behind any flag, unlike steps 1-3) but SELF-SKIPS when this row delta adds no
         //    DVs. Reuses the same `effective_start` + `conflict_filter`.
         self.validate_added_dvs(current, effective_start, conflict_filter)
@@ -750,7 +978,12 @@ mod tests {
         ManifestContentType, ManifestStatus, Operation, Struct,
     };
     use crate::table::Table;
-    use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+    use crate::transaction::snapshot::{
+        DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
+    };
+    use crate::transaction::tests::{
+        make_v2_minimal_table_in_catalog, make_v3_minimal_table_in_catalog,
+    };
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::writer::base_writer::position_delete_writer::{
         PositionDeleteFileWriterBuilder, PositionDeleteWriterConfig,
@@ -852,7 +1085,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_position_deletes_drop_deleted_rows_from_scan() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
 
         // 1. Write a real parquet data file with 5 rows, all in partition x=0, y = [10,20,30,40,50].
         let data_file = write_data_file(&table, "rows.parquet", 0, &[
@@ -912,7 +1145,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_position_delete_does_not_apply_to_later_data() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
 
         // 1. D1 (seq 1): y = [10,20,30,40,50], partition x=0.
         let d1 = write_data_file(&table, "d1.parquet", 0, &[
@@ -994,7 +1227,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_writes_delete_manifest_with_deletes_content() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let table = append_files(&catalog, &table, vec![synthetic_data_file(
             "test/a.parquet",
             0,
@@ -1044,7 +1277,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_add_data_and_deletes_in_one_snapshot() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let table = append_files(&catalog, &table, vec![synthetic_data_file(
             "test/a.parquet",
             0,
@@ -1121,7 +1354,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_add_deletes_only_allowed() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let table = append_files(&catalog, &table, vec![synthetic_data_file(
             "test/a.parquet",
             0,
@@ -1188,7 +1421,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_summary_reflects_added_data_and_delete_counts() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let table = append_files(&catalog, &table, vec![synthetic_data_file(
             "test/a.parquet",
             0,
@@ -1245,7 +1478,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_added_delete_entry_inherits_new_snapshot_sequence_number() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
 
         // Append data in its own snapshot → it gets data sequence number 1.
         let table = append_files(&catalog, &table, vec![synthetic_data_file(
@@ -1341,7 +1574,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_rejects_partition_spec_mismatch() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let table = append_files(&catalog, &table, vec![synthetic_data_file(
             "test/a.parquet",
             0,
@@ -1607,7 +1840,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_validation_no_concurrent_commit_succeeds() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
             "test/a.parquet",
             0,
@@ -1724,7 +1957,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_allows_concurrent_added_file_excluded_by_filter() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
             "test/a.parquet",
             0,
@@ -1787,7 +2020,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_without_validation_allows_conflicting_concurrent_append() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let table = append_files(&catalog, &table, vec![synthetic_data_file(
             "test/a.parquet",
             0,
@@ -1924,7 +2157,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_validate_from_snapshot_at_head_finds_no_conflict() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
 
         let table = append_files(&catalog, &table, vec![synthetic_data_file(
             "test/a.parquet",
@@ -2129,7 +2362,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_delete_validation_no_concurrent_commit_succeeds() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
             "test/a.parquet",
             0,
@@ -2175,7 +2408,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_rejects_concurrent_added_delete_file_matching_filter() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
             "test/a.parquet",
             0,
@@ -2245,7 +2478,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_allows_concurrent_added_delete_file_excluded_by_filter() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
             "test/a.parquet",
             0,
@@ -2300,7 +2533,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_without_delete_validation_allows_conflicting_concurrent_delete() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let table = append_files(&catalog, &table, vec![synthetic_data_file(
             "test/a.parquet",
             0,
@@ -2354,7 +2587,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_delete_none_filter_treats_any_concurrent_delete_as_conflict() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
             "test/a.parquet",
             0,
@@ -2460,7 +2693,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_delete_check_does_not_run_data_check() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
             "test/a.parquet",
             0,
@@ -2505,7 +2738,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_data_check_does_not_run_delete_check() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
             "test/a.parquet",
             0,
@@ -2624,7 +2857,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_files_exist_no_concurrent_deletion_succeeds() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
             "test/f.parquet",
             0,
@@ -2729,7 +2962,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_files_exist_allows_concurrent_deletion_of_different_file() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         // Two data files: f (referenced) and other (will be concurrently deleted).
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![
             synthetic_data_file("test/f.parquet", 0),
@@ -2788,7 +3021,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_files_exist_without_referenced_set_does_not_check() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let table = append_files(&catalog, &table, vec![synthetic_data_file(
             "test/f.parquet",
             0,
@@ -2843,7 +3076,7 @@ mod tests {
         // --- Half A: DEFAULT (no validate_deleted_files) ⇒ a DELETE-op deletion is EXCLUDED ⇒ COMMITS. ---
         {
             let catalog = new_memory_catalog().await;
-            let table = make_v3_minimal_table_in_catalog(&catalog).await;
+            let table = make_v2_minimal_table_in_catalog(&catalog).await;
             let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
                 "test/f.parquet",
                 0,
@@ -2883,7 +3116,7 @@ mod tests {
         // --- Half B: WITH validate_deleted_files ⇒ the SAME DELETE-op deletion IS a conflict ⇒ REJECTED. ---
         {
             let catalog = new_memory_catalog().await;
-            let table = make_v3_minimal_table_in_catalog(&catalog).await;
+            let table = make_v2_minimal_table_in_catalog(&catalog).await;
             let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
                 "test/f.parquet",
                 0,
@@ -3011,7 +3244,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_removed_data_files_no_concurrent_delete_succeeds() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let a = synthetic_data_file("test/a.parquet", 0);
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![a.clone()]).await;
 
@@ -3053,7 +3286,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_removed_data_files_rejects_concurrent_delete() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let a = synthetic_data_file("test/a.parquet", 0);
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![a.clone()]).await;
 
@@ -3110,7 +3343,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_removed_data_files_allows_concurrent_delete_in_other_partition() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let a = synthetic_data_file("test/a.parquet", 0);
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![a.clone()]).await;
 
@@ -3162,7 +3395,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_removed_data_files_allows_delete_at_or_before_start() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let a = synthetic_data_file("test/a.parquet", 0);
         let table = append_files(&catalog, &table, vec![a.clone()]).await;
 
@@ -3249,7 +3482,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_removed_data_files_without_validation_allows_conflicting_delete() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let a = synthetic_data_file("test/a.parquet", 0);
         let table = append_files(&catalog, &table, vec![a.clone()]).await;
 
@@ -3295,7 +3528,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_no_removed_data_files_skips_removed_check() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
             "test/a.parquet",
             0,
@@ -3405,7 +3638,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_delta_removed_data_files_rejects_using_tx_captured_starting_snapshot() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
         let a = synthetic_data_file("test/a.parquet", 0);
         let table = append_files(&catalog, &table, vec![a.clone()]).await;
 
@@ -3450,9 +3683,10 @@ mod tests {
     // A deletion vector (DV) is a delete file whose `file_format() == DataFileFormat::Puffin` (Java
     // `ContentFileUtil.isDV` = `format() == FileFormat.PUFFIN`); its `referenced_data_file` is the data file it
     // covers. A row delta adding a DV for data file A must be rejected if a concurrent commit since the start
-    // ALSO added a DV for A — two DVs for one data file is a write-write conflict. The concurrent walk reuses
-    // `added_delete_files_after` (Java's `VALIDATE_ADDED_DVS_OPERATIONS = {OVERWRITE, DELETE, REPLACE}` reduces
-    // to `{Overwrite, Delete}` in Rust, REPLACE being unrepresentable — identical to the added-delete op set).
+    // ALSO added a DV for A — two DVs for one data file is a write-write conflict. The concurrent walk is
+    // `added_dv_candidate_delete_files_after`, gated to Java's `VALIDATE_ADDED_DVS_OPERATIONS = {OVERWRITE,
+    // DELETE, REPLACE}` (1.10.0-bytecode-verified) — REPLACE included: `Operation::Replace` is representable
+    // (the rewrite actions record it) and a compaction can rewrite DVs.
     //
     // The race: a `row_delta` adding a DV for A is BUILT against head S0; BEFORE it commits a concurrent
     // `row_delta().add_deletes([DV for A])` lands (S1). On commit `do_commit` refreshes to S1 and runs
@@ -3461,8 +3695,9 @@ mod tests {
 
     /// Commit a CONCURRENT row delta that ADDS the given DVs (Puffin delete files, no data) in its own
     /// snapshot via the catalog. The resulting snapshot's operation is `Delete` (add-deletes-only), which is in
-    /// `VALIDATE_ADDED_DELETE_FILES_OPERATIONS = {OVERWRITE, DELETE}` (= the Rust-representable DV op set) so
-    /// the DV walk enumerates it. Mirrors `commit_concurrent_deletes` but for DVs.
+    /// the DV op set `VALIDATE_ADDED_DVS_OPERATIONS = {OVERWRITE, DELETE, REPLACE}` so the DV walk enumerates
+    /// it (the REPLACE member is exercised separately by the hand-built `ReplaceOpAddDvAction` test). Mirrors
+    /// `commit_concurrent_deletes` but for DVs.
     async fn commit_concurrent_dvs(
         catalog: &impl Catalog,
         table: &Table,
@@ -3640,11 +3875,12 @@ mod tests {
         );
     }
 
-    /// THE NON-DV NO-OP TEST (the always-on/self-skip semantics). A row delta adding ONLY NON-DV deletes (a
-    /// plain position delete, NOT Puffin) commits even when a concurrent DV is present — because this row delta
-    /// adds NO DV, the always-on `validateAddedDVs` SELF-SKIPS (Java L831 `dvsByReferencedFile.isEmpty()`),
-    /// leaving nothing to conflict. This is the load-bearing behavior-preservation pin: the ~30 existing
-    /// RowDelta tests all add non-Puffin deletes, so the DV check is a no-op for every one of them.
+    /// THE NON-DV NO-OP TEST (the always-on/self-skip semantics). A row delta adding ONLY NON-DV deletes (an
+    /// equality delete here — the non-DV content V3's format gate still admits) commits even when a concurrent
+    /// DV is present — because this row delta adds NO DV, the always-on `validateAddedDVs` SELF-SKIPS (Java
+    /// L831 `newDVRefs.isEmpty()`), leaving nothing to conflict. This is the load-bearing
+    /// behavior-preservation pin: the pre-DV RowDelta tests all add non-Puffin deletes, so the DV check is a
+    /// no-op for every one of them.
     ///
     /// Risk pinned: the DV check firing on a non-DV row delta (over-rejecting the common merge-on-read case),
     /// or — worse — the always-on check not actually self-skipping (which would change every existing test).
@@ -3658,11 +3894,17 @@ mod tests {
         )])
         .await;
 
-        // Row delta adds a NON-DV (plain Parquet position) delete — no DV ⇒ the DV check self-skips.
+        // Row delta adds a NON-DV delete — no DV ⇒ the DV check self-skips. On this V3 table the
+        // non-DV delete must be an EQUALITY delete (exempt from the V3-requires-DVs format gate at
+        // every version; a parquet POSITION delete would now be rejected by the gate before the DV
+        // check is ever reached — D3 migration note).
         let tx = Transaction::new(&table);
         let action = tx
             .row_delta()
-            .add_deletes(vec![synthetic_delete_file("test/a-pos-del.parquet", 0)])
+            .add_deletes(vec![synthetic_equality_delete_file(
+                "test/a-eq-del.parquet",
+                0,
+            )])
             .validate_from_snapshot(s0);
         let tx = action.apply(tx).unwrap();
 
@@ -3791,5 +4033,967 @@ mod tests {
             "got: {}",
             err.message()
         );
+    }
+
+    // ============================================================================================
+    // D3: the format-version gate — Java `MergingSnapshotProducer.validateDeleteFileForVersion`
+    // (1.10.0-bytecode-verified; the switch is inlined into `validateNewDeleteFile`). V1 throws,
+    // V2 forbids DVs for position deletes, V3 REQUIRES DVs for position deletes; equality deletes
+    // are exempt at every version. The Rust gate runs in `validate_added_delete_files` (the
+    // action's commit against the REFRESHED base — MAIN's apply-time placement, which subsumes
+    // 1.10.0's add-time placement).
+    //
+    // V2 + parquet position delete OK (the regression direction) is pinned by the whole migrated
+    // V2 suite (e.g. `test_row_delta_position_deletes_drop_deleted_rows_from_scan`); V3 + DV OK is
+    // pinned by `test_row_delta_dv_no_concurrent_commit_succeeds`.
+    // ============================================================================================
+
+    /// V2 REJECTS a deletion vector with Java's exact message ("Must not use DVs for position
+    /// deletes in V2: %s" + `ContentFileUtil.dvDesc`). Risk pinned: a V2 table carrying a Puffin DV
+    /// is unreadable by every V2 reader — the gate must fail the COMMIT, byte-exactly like Java.
+    #[tokio::test]
+    async fn test_row_delta_v2_rejects_deletion_vector_with_exact_java_message() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![synthetic_dv_file(
+            "test/a-dv.puffin",
+            0,
+            "test/a.parquet",
+        )]);
+        let tx = action.apply(tx).unwrap();
+        let err = tx
+            .commit(&catalog)
+            .await
+            .expect_err("a deletion vector must be rejected on a V2 table");
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable(), "the format gate is non-retryable");
+        assert_eq!(
+            err.message(),
+            "Must not use DVs for position deletes in V2: DV{location=test/a-dv.puffin, \
+             offset=4, length=40, referencedDataFile=test/a.parquet}",
+            "the V2 gate message must match Java byte-for-byte (incl. dvDesc)"
+        );
+    }
+
+    /// V3 REJECTS a parquet position delete with Java's exact message ("Must use DVs for position
+    /// deletes in V%s: %s" + the file location). Risk pinned: fresh parquet position deletes on a
+    /// V3 table break the DV-supersedes-position-deletes read precedence — Java refuses them, so
+    /// must Rust.
+    #[tokio::test]
+    async fn test_row_delta_v3_rejects_parquet_position_delete_with_exact_java_message() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/a-pos-del.parquet", 0)]);
+        let tx = action.apply(tx).unwrap();
+        let err = tx
+            .commit(&catalog)
+            .await
+            .expect_err("a parquet position delete must be rejected on a V3 table");
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable(), "the format gate is non-retryable");
+        assert_eq!(
+            err.message(),
+            "Must use DVs for position deletes in V3: test/a-pos-del.parquet",
+            "the V3 gate message must match Java byte-for-byte"
+        );
+    }
+
+    /// V1 rejects EVERY added delete file — position AND equality — with Java's exact message
+    /// ("Deletes are supported in V2 and above"). Unit-level on the producer (no in-catalog V1
+    /// fixture exists; the gate is reached identically through `validate_added_delete_files`).
+    /// Risk pinned: a V1 table must never grow a delete manifest — V1 manifests cannot even encode
+    /// delete content.
+    #[tokio::test]
+    async fn test_v1_producer_rejects_all_added_delete_files() {
+        use crate::transaction::tests::make_v1_table;
+
+        let table = make_v1_table();
+        for delete_file in [
+            synthetic_delete_file("test/a-pos-del.parquet", 0),
+            synthetic_equality_delete_file("test/a-eq-del.parquet", 0),
+        ] {
+            let producer =
+                SnapshotProducer::new(&table, uuid::Uuid::now_v7(), None, HashMap::new(), vec![])
+                    .with_added_delete_files(vec![delete_file]);
+            let err = producer
+                .validate_added_delete_files()
+                .expect_err("a V1 table must reject every added delete file");
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert_eq!(
+                err.message(),
+                "Deletes are supported in V2 and above",
+                "the V1 gate message must match Java byte-for-byte"
+            );
+        }
+    }
+
+    /// EQUALITY deletes are EXEMPT from the format gate at V2 AND V3 (both Java arms test
+    /// `content() == EQUALITY_DELETES` first). Risk pinned: an over-broad V3 gate that demands DVs
+    /// for equality deletes too (Puffin cannot carry equality deletes) would break every V3
+    /// merge-on-read equality-delete commit.
+    #[tokio::test]
+    async fn test_equality_deletes_exempt_from_version_gate_on_v2_and_v3() {
+        let catalog = new_memory_catalog().await;
+        for v3 in [false, true] {
+            let table = if v3 {
+                make_v3_minimal_table_in_catalog(&catalog).await
+            } else {
+                make_v2_minimal_table_in_catalog(&catalog).await
+            };
+            let table = append_files(&catalog, &table, vec![synthetic_data_file(
+                "test/a.parquet",
+                0,
+            )])
+            .await;
+
+            let tx = Transaction::new(&table);
+            let action = tx
+                .row_delta()
+                .add_deletes(vec![synthetic_equality_delete_file(
+                    "test/a-eq-del.parquet",
+                    0,
+                )]);
+            let tx = action.apply(tx).unwrap();
+            tx.commit(&catalog).await.unwrap_or_else(|err| {
+                panic!(
+                    "an equality delete must pass the format gate on a {} table, got: {err}",
+                    if v3 { "V3" } else { "V2" }
+                )
+            });
+        }
+    }
+
+    // ============================================================================================
+    // D3: the fresh-DV-only door (Rust-conservative — see `validate_fresh_dvs_only`). Java MERGES
+    // previous deletes into the new DV (`BaseDVFileWriter.loadPreviousDeletes` L117-126) and
+    // removes the old delete file via `rewrittenDeleteFiles`/`removeDeletes`; that apply-side
+    // removal is deferred, so a DV add for a data file with a LIVE position-scoped delete is
+    // rejected fail-loud at commit instead of corrupting fail-late at scan.
+    // The "fresh DV commits" direction is pinned by `test_row_delta_dv_no_concurrent_commit_
+    // succeeds`.
+    // ============================================================================================
+
+    /// SECOND DV FOR THE SAME FILE REJECTED. DV1 for data file A is committed; a LATER transaction
+    /// (started after DV1 — no concurrent window, so `validateAddedDVs` self-passes) adds DV2 for
+    /// the same A. The door must reject: without it the commit would leave TWO live DVs for A,
+    /// which D1's duplicate-DV load door rejects at SCAN time — fail-late, table unreadable.
+    /// The message must name the referenced file AND the deferral.
+    #[tokio::test]
+    async fn test_row_delta_second_dv_for_same_file_rejected_until_merge_lands() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        // DV1 for A commits (the fresh direction).
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![synthetic_dv_file(
+            "test/a-dv1.puffin",
+            0,
+            "test/a.parquet",
+        )]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // DV2 for the SAME A, in a transaction started AFTER DV1 landed (pre-existing, NOT
+        // concurrent — the door, not validateAddedDVs, is the only guard here).
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![synthetic_dv_file(
+            "test/a-dv2.puffin",
+            0,
+            "test/a.parquet",
+        )]);
+        let tx = action.apply(tx).unwrap();
+        let err = tx
+            .commit(&catalog)
+            .await
+            .expect_err("a second DV for a data file with a live DV must be rejected");
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable());
+        assert!(
+            err.message()
+                .contains("Cannot commit deletion vector for test/a.parquet"),
+            "the door must name the referenced data file, got: {}",
+            err.message()
+        );
+        assert!(
+            err.message().contains("test/a-dv1.puffin"),
+            "the door must describe the existing live DV, got: {}",
+            err.message()
+        );
+        assert!(
+            err.message().contains("deferred"),
+            "the door must name the deferral (previous-delete merge not yet supported), got: {}",
+            err.message()
+        );
+    }
+
+    /// NEGATIVE CONTROL: a DV for a DIFFERENT data file commits even though ANOTHER file has a
+    /// live DV. Risk pinned: an over-broad door keyed on "any live DV exists" (instead of the
+    /// per-referenced-file collision) would freeze all DV writes after the first one.
+    #[tokio::test]
+    async fn test_row_delta_dv_for_different_file_commits_despite_existing_dv() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![
+            synthetic_data_file("test/a.parquet", 0),
+            synthetic_data_file("test/b.parquet", 0),
+        ])
+        .await;
+
+        // DV1 for A commits.
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![synthetic_dv_file(
+            "test/a-dv.puffin",
+            0,
+            "test/a.parquet",
+        )]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // DV2 for B (no live position-scoped delete for B) must commit.
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![synthetic_dv_file(
+            "test/b-dv.puffin",
+            0,
+            "test/b.parquet",
+        )]);
+        let tx = action.apply(tx).unwrap();
+        tx.commit(&catalog)
+            .await
+            .expect("a DV for a different data file must commit — the door is per-file");
+    }
+
+    /// LEGACY-PARQUET SHADOW REJECTED (the V2→V3 upgrade scenario). A V2 table commits a
+    /// partition-scoped PARQUET position delete (partition x=0), is upgraded to V3, and a DV for a
+    /// data file in x=0 is then added. At read time a DV SUPERSEDES every parquet position delete
+    /// for its data file (Java `DeleteFileIndex.forDataFile`; the D1 index mirrors it), so
+    /// committing the DV without merging would silently RESURRECT the parquet delete's positions —
+    /// the door must reject. A DV for a data file in a DIFFERENT partition (x=1, where the parquet
+    /// delete does not apply) must still commit (the in-test negative control).
+    #[tokio::test]
+    async fn test_row_delta_dv_rejected_when_legacy_parquet_position_delete_still_applies() {
+        use crate::spec::FormatVersion;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![
+            synthetic_data_file("test/a.parquet", 0),
+            synthetic_data_file("test/b.parquet", 1),
+        ])
+        .await;
+
+        // A partition-scoped parquet position delete in x=0 (legal on V2).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/x0-pos-del.parquet", 0)]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Upgrade the table to V3 — the parquet position delete stays live (legacy).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .upgrade_table_version()
+            .set_format_version(FormatVersion::V3);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // A DV for A (x=0): the live parquet delete still APPLIES to A and would be silently
+        // superseded — rejected.
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![synthetic_dv_file(
+            "test/a-dv.puffin",
+            0,
+            "test/a.parquet",
+        )]);
+        let tx = action.apply(tx).unwrap();
+        let err = tx.commit(&catalog).await.expect_err(
+            "a DV for a data file a live parquet position delete still applies to must be rejected",
+        );
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message()
+                .contains("Cannot commit deletion vector for test/a.parquet")
+                && err.message().contains("test/x0-pos-del.parquet")
+                && err.message().contains("superseded"),
+            "the door must name the referenced file, the shadowed parquet delete, and the \
+             supersede hazard, got: {}",
+            err.message()
+        );
+
+        // Negative control: a DV for B (x=1) — the x=0 parquet delete does not apply — commits.
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![synthetic_dv_file(
+            "test/b-dv.puffin",
+            1,
+            "test/b.parquet",
+        )]);
+        let tx = action.apply(tx).unwrap();
+        tx.commit(&catalog)
+            .await
+            .expect("a DV in a partition the legacy parquet delete does not cover must commit");
+    }
+
+    // ============================================================================================
+    // D3: the `validateAddedDVs` op set — Java `VALIDATE_ADDED_DVS_OPERATIONS = {OVERWRITE,
+    // DELETE, REPLACE}` (1.10.0-bytecode-verified). REPLACE is the member the generic
+    // added-delete-file op set lacks: a compaction snapshot can rewrite DVs (Java
+    // `RewriteDataFiles`).
+    // ============================================================================================
+
+    /// A test-only action that commits the given DV in a snapshot whose operation is
+    /// `Operation::Replace` — no public Rust action adds delete files under REPLACE yet (Java's
+    /// `RewriteDataFiles` does), so the concurrent-REPLACE-adds-DV window is hand-built through
+    /// the production producer.
+    struct ReplaceOpAddDvAction {
+        dv: DataFile,
+    }
+
+    struct ReplaceOpAddDvOperation;
+
+    impl SnapshotProduceOperation for ReplaceOpAddDvOperation {
+        fn operation(&self) -> Operation {
+            Operation::Replace
+        }
+
+        async fn delete_entries(
+            &self,
+            _snapshot_produce: &SnapshotProducer<'_>,
+        ) -> crate::Result<Vec<crate::spec::ManifestEntry>> {
+            Ok(vec![])
+        }
+
+        async fn delete_files(
+            &self,
+            _snapshot_produce: &SnapshotProducer<'_>,
+        ) -> crate::Result<Vec<DataFile>> {
+            Ok(vec![])
+        }
+
+        async fn existing_manifest(
+            &self,
+            snapshot_produce: &SnapshotProducer<'_>,
+        ) -> crate::Result<Vec<crate::spec::ManifestFile>> {
+            snapshot_produce.current_manifests().await
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::transaction::TransactionAction for ReplaceOpAddDvAction {
+        async fn commit(
+            self: Arc<Self>,
+            table: &Table,
+        ) -> crate::Result<crate::transaction::ActionCommit> {
+            SnapshotProducer::new(table, uuid::Uuid::now_v7(), None, HashMap::new(), vec![])
+                .with_added_delete_files(vec![self.dv.clone()])
+                .commit(ReplaceOpAddDvOperation, DefaultManifestProcess)
+                .await
+        }
+    }
+
+    /// THE REPLACE-OP WALK PIN. A CONCURRENT snapshot with operation REPLACE adds a DV for the
+    /// same referenced data file; `validateAddedDVs` must detect it. Risk pinned: the DV walk
+    /// reusing the generic added-delete op set `{Overwrite, Delete}` (the pre-D3 bug — REPLACE was
+    /// wrongly documented as unrepresentable) would skip the REPLACE snapshot and miss the
+    /// conflict. The assertion is on the WALK's message ("Found concurrently added DV for") — the
+    /// fresh-DV-only door would also reject this state, but with a DIFFERENT message, so the
+    /// message pin isolates the op-set fix.
+    #[tokio::test]
+    async fn test_row_delta_dv_conflict_detected_from_concurrent_replace_snapshot() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let (table, s0) = append_and_snapshot_id(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        // Row delta adds a DV for A, pinned to S0.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_dv_file(
+                "test/a-dv.puffin",
+                0,
+                "test/a.parquet",
+            )])
+            .validate_from_snapshot(s0);
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit: a REPLACE-op snapshot adds a DV for the SAME A.
+        let concurrent_tx = Transaction::new(&table);
+        let concurrent_tx = ReplaceOpAddDvAction {
+            dv: synthetic_dv_file("test/a-dv-replace.puffin", 0, "test/a.parquet"),
+        }
+        .apply(concurrent_tx)
+        .unwrap();
+        let concurrent = concurrent_tx.commit(&catalog).await.unwrap();
+        assert_eq!(
+            concurrent
+                .metadata()
+                .current_snapshot()
+                .unwrap()
+                .summary()
+                .operation,
+            Operation::Replace,
+            "fixture sanity: the concurrent snapshot records REPLACE"
+        );
+
+        let err = tx
+            .commit(&catalog)
+            .await
+            .expect_err("a concurrent REPLACE-op DV for the same referenced file must conflict");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable());
+        assert!(
+            err.message()
+                .contains("Found concurrently added DV for test/a.parquet"),
+            "the WALK (not the door) must catch the REPLACE-op DV — its message pins the op set, \
+             got: {}",
+            err.message()
+        );
+        assert!(
+            err.message().contains("test/a-dv-replace.puffin"),
+            "the message must carry Java's dvDesc of the concurrent DV, got: {}",
+            err.message()
+        );
+    }
+
+    // ============================================================================================
+    // D3: removed-vs-referenced self-contradiction — Java
+    // `BaseRowDelta.validateNoConflictingFileAndPositionDeletes` (1.10.0-bytecode-verified,
+    // always-on).
+    // ============================================================================================
+
+    /// A row delta that REMOVES a data file its added deletes also REFERENCE is rejected with
+    /// Java's message ("Cannot delete data files %s that are referenced by new delete files").
+    /// Risk pinned: committing both leaves a delete file referencing a data file removed in the
+    /// SAME snapshot — a delete that silently applies to nothing.
+    #[tokio::test]
+    async fn test_row_delta_rejects_removing_data_file_referenced_by_added_deletes() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/a-pos-del.parquet", 0)])
+            .validate_data_files_exist(["test/a.parquet"])
+            .remove_rows(synthetic_data_file("test/a.parquet", 0));
+        let tx = action.apply(tx).unwrap();
+        let err = tx
+            .commit(&catalog)
+            .await
+            .expect_err("removing a data file the added deletes reference must be rejected");
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(!err.retryable());
+        assert_eq!(
+            err.message(),
+            "Cannot delete data files [test/a.parquet] that are referenced by new delete files",
+            "the message must match Java's (List rendering of the offending paths)"
+        );
+    }
+
+    /// NEGATIVE CONTROL: disjoint removed/referenced sets commit. The row delta removes A but its
+    /// deletes reference only B — no self-contradiction, the check self-skips. Risk pinned: an
+    /// over-broad check rejecting ANY remove+reference combination.
+    #[tokio::test]
+    async fn test_row_delta_disjoint_removed_and_referenced_files_commit() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![
+            synthetic_data_file("test/a.parquet", 0),
+            synthetic_data_file("test/b.parquet", 0),
+        ])
+        .await;
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/b-pos-del.parquet", 0)])
+            .validate_data_files_exist(["test/b.parquet"])
+            .remove_rows(synthetic_data_file("test/a.parquet", 0));
+        let tx = action.apply(tx).unwrap();
+        tx.commit(&catalog)
+            .await
+            .expect("disjoint removed/referenced sets are not a conflict");
+    }
+
+    // ============================================================================================
+    // D3: the manifest WRITE→READ round-trip pin for a COMMITTED DV's metadata, and the
+    // commit-level summary pin for the DV counters.
+    // ============================================================================================
+
+    /// A Rust-COMMITTED DV's `referenced_data_file` / `content_offset` / `content_size_in_bytes` /
+    /// `record_count` survive the Rust V3 delete-manifest avro WRITE → raw READ round-trip
+    /// (`Manifest::try_from_avro_bytes` on the on-disk bytes). D1 proved only that Rust READS
+    /// Java-written manifests; this pins the Rust WRITER's schema. Risk pinned: a write schema
+    /// dropping the optional DV fields — the scan could then never locate the DV blob (no
+    /// offset/length) nor key it to its data file, table-corrupting for every engine.
+    #[tokio::test]
+    async fn test_committed_dv_metadata_survives_manifest_write_read_round_trip() {
+        use crate::spec::Manifest;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![synthetic_dv_file(
+            "test/a-dv.puffin",
+            0,
+            "test/a.parquet",
+        )]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Locate the committed DELETE manifest and read its RAW avro bytes back.
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = snapshot
+            .load_manifest_list(table.file_io(), table.metadata())
+            .await
+            .unwrap();
+        let delete_manifest = manifest_list
+            .entries()
+            .iter()
+            .find(|m| m.content == ManifestContentType::Deletes)
+            .expect("the row delta committed a DELETE manifest");
+        let bytes = table
+            .file_io()
+            .new_input(&delete_manifest.manifest_path)
+            .unwrap()
+            .read()
+            .await
+            .unwrap();
+        let (_, entries) = Manifest::try_from_avro_bytes(&bytes).unwrap();
+
+        assert_eq!(entries.len(), 1, "exactly the one added DV entry");
+        let dv = entries[0].data_file();
+        assert_eq!(dv.content_type(), DataContentType::PositionDeletes);
+        assert_eq!(dv.file_format(), DataFileFormat::Puffin);
+        assert_eq!(
+            dv.referenced_data_file(),
+            Some("test/a.parquet".to_string()),
+            "referenced_data_file must survive the Rust manifest write→read round-trip"
+        );
+        assert_eq!(
+            dv.content_offset(),
+            Some(4),
+            "content_offset must survive the round-trip (the scan's ranged blob read needs it)"
+        );
+        assert_eq!(
+            dv.content_size_in_bytes(),
+            Some(40),
+            "content_size_in_bytes must survive the round-trip"
+        );
+        assert_eq!(
+            dv.record_count(),
+            1,
+            "record_count (cardinality) must survive"
+        );
+    }
+
+    // ============================================================================================
+    // D3 CROWN JEWEL: the all-Rust deletion-vector end-to-end — D2's writer through D3's commit
+    // into D1's read path.
+    // ============================================================================================
+
+    /// THE D3 DELIVERABLE. V3 table on a real warehouse → fast_append a REAL parquet data file
+    /// (x=0, y=[10,20,30,40,50]) → D2's `DVFileWriter` writes a REAL Puffin DV deleting positions
+    /// {1,3} (y=20, y=40) → `row_delta().add_deletes(dv)` COMMITS (the D3 path: V3 gate passes,
+    /// fresh-DV door passes, summary gains `added-dvs`) → `scan().to_arrow()` returns exactly the
+    /// survivors {10,30,50}.
+    ///
+    /// Risk pinned: any break in the write→commit→read chain silently resurrects deleted rows (the
+    /// merge-on-read corruption class). The MUTATION probe: strip the DV from the commit (or break
+    /// the gate) → y=20/y=40 resurrect → this test fails.
+    ///
+    /// Also pins the COMMIT-LEVEL summary keys offline (the E1 lesson — the D4 interop's canonical
+    /// view compares `added-dvs`): a DV increments `added-dvs` INSTEAD of
+    /// `added-position-delete-files` but still counts in `added-delete-files` +
+    /// `added-position-deletes` (Java `SnapshotSummary.UpdateMetrics.addedFile`,
+    /// 1.10.0-bytecode-verified).
+    #[tokio::test]
+    async fn test_row_delta_deletion_vector_end_to_end_write_commit_scan() {
+        use crate::spec::PartitionKey;
+        use crate::writer::base_writer::deletion_vector_writer::DVFileWriter;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // 1. A real parquet data file: 5 rows in partition x=0, y = [10,20,30,40,50].
+        let data_file = write_data_file(&table, "rows.parquet", 0, &[
+            (0, 10, 100),
+            (0, 20, 200),
+            (0, 30, 300),
+            (0, 40, 400),
+            (0, 50, 500),
+        ])
+        .await;
+        let data_file_path = data_file.file_path().to_string();
+        let table = append_files(&catalog, &table, vec![data_file]).await;
+
+        let before: HashSet<i64> = scan_y_values(&table).await;
+        assert_eq!(before, HashSet::from([10, 20, 30, 40, 50]));
+
+        // 2. D2's DVFileWriter writes a REAL deletion vector for positions {1, 3} (y=20, y=40),
+        //    in the data file's partition context (x=0) so the DeleteFile carries the matching
+        //    partition + spec id.
+        let partition_key = PartitionKey::new(
+            table.metadata().default_partition_spec().as_ref().clone(),
+            table.metadata().current_schema().clone(),
+            Struct::from_iter([Some(Literal::long(0))]),
+        );
+        let dv_path = format!("{}/data/deletes-dv.puffin", table.metadata().location());
+        let output_file = table.file_io().new_output(&dv_path).unwrap();
+        let mut dv_writer = DVFileWriter::new(output_file);
+        dv_writer
+            .delete(&data_file_path, 1, Some(&partition_key))
+            .unwrap();
+        dv_writer
+            .delete(&data_file_path, 3, Some(&partition_key))
+            .unwrap();
+        let dv_files = dv_writer.close().await.unwrap();
+        assert_eq!(dv_files.len(), 1, "one DV (one referenced data file)");
+        assert_eq!(dv_files[0].file_format(), DataFileFormat::Puffin);
+        assert_eq!(
+            dv_files[0].referenced_data_file(),
+            Some(data_file_path.clone())
+        );
+        assert_eq!(
+            dv_files[0].record_count(),
+            2,
+            "cardinality = 2 deleted positions"
+        );
+
+        // 3. The D3 commit: row_delta adds the DV (V3 gate passes — Puffin position delete;
+        //    fresh-DV door passes — no live deletes for the file).
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(dv_files);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // 4. The commit-level summary pin: added-dvs INSTEAD of added-position-delete-files.
+        assert_eq!(
+            summary_prop(&table, "added-dvs").as_deref(),
+            Some("1"),
+            "a committed DV must emit added-dvs (the D4 interop canonical view compares it)"
+        );
+        assert_eq!(
+            summary_prop(&table, "added-position-delete-files"),
+            None,
+            "a DV must NOT count as a position-delete FILE (Java's instead-of branch)"
+        );
+        assert_eq!(
+            summary_prop(&table, "added-delete-files").as_deref(),
+            Some("1"),
+            "a DV still counts as an added delete file"
+        );
+        assert_eq!(
+            summary_prop(&table, "added-position-deletes").as_deref(),
+            Some("2"),
+            "a DV's record count still counts as added position deletes"
+        );
+
+        // 5. D1's read path: the scan drops exactly positions {1,3} of the referenced file.
+        let after: HashSet<i64> = scan_y_values(&table).await;
+        assert_eq!(
+            after,
+            HashSet::from([10, 30, 50]),
+            "the scan must return exactly the DV's survivors — resurrection of y=20/y=40 means \
+             the commit path broke the write→read chain"
+        );
+    }
+
+    // ============================================================================================
+    // D3 review: the fresh-DV-only door's APPLICABILITY discrimination (added in review). The door
+    // must fire exactly when a live parquet position delete would actually apply to the DV's
+    // referenced data file at READ time (`delete_file_index.rs`): equality deletes never trip it;
+    // path-scoped deletes only for the same path; partition-scoped deletes only on the referenced
+    // DATA file's (spec id, partition) — resolved from its live manifest entry, surviving a
+    // partition evolution — and only when delete_seq >= data_seq.
+    // ============================================================================================
+
+    /// OVER-FIRE CONTROL: a live EQUALITY delete in the DV's partition must NOT trip the door —
+    /// a DV supersedes only position deletes; equality deletes coexist with it at read time.
+    #[tokio::test]
+    async fn test_row_delta_dv_commits_despite_live_equality_delete() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_equality_delete_file("test/a-eq.parquet", 0)]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![synthetic_dv_file(
+            "test/a-dv.puffin",
+            0,
+            "test/a.parquet",
+        )]);
+        let tx = action.apply(tx).unwrap();
+        tx.commit(&catalog)
+            .await
+            .expect("a live equality delete must not trip the fresh-DV door");
+    }
+
+    /// OVER-FIRE CONTROL: a live PATH-scoped parquet position delete for a DIFFERENT file (same
+    /// partition) must NOT trip the door — its content holds only the referenced file's positions,
+    /// so the DV supersedes nothing that matters.
+    #[tokio::test]
+    async fn test_row_delta_dv_commits_despite_path_scoped_delete_for_other_file() {
+        use crate::spec::FormatVersion;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![
+            synthetic_data_file("test/a.parquet", 0),
+            synthetic_data_file("test/b.parquet", 0),
+        ])
+        .await;
+
+        let path_scoped = DataFileBuilder::default()
+            .content(DataContentType::PositionDeletes)
+            .file_path("test/b-pos-del.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(0)
+            .partition(Struct::from_iter([Some(Literal::long(0))]))
+            .referenced_data_file(Some("test/b.parquet".to_string()))
+            .build()
+            .unwrap();
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![path_scoped]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx
+            .upgrade_table_version()
+            .set_format_version(FormatVersion::V3);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // DV for A: the live delete is path-scoped to B — must commit.
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![synthetic_dv_file(
+            "test/a-dv.puffin",
+            0,
+            "test/a.parquet",
+        )]);
+        let tx = action.apply(tx).unwrap();
+        tx.commit(&catalog)
+            .await
+            .expect("a path-scoped delete for a different file must not trip the door");
+    }
+
+    /// THE CROSS-SPEC UNDER-FIRE PIN (review fix, the resurrection direction). A legacy
+    /// partition-scoped delete under the OLD spec still applies to its old-spec data file at read
+    /// time (the index matches on the DATA file's spec id, which stays 0 after a partition
+    /// evolution); the added DV is REQUIRED to carry the NEW default spec, so testing the shadow
+    /// against the DV's own spec/partition (the pre-review bug) can never match — the DV would
+    /// commit and silently supersede the legacy delete. The door must resolve the referenced
+    /// file's LIVE entry and reject.
+    #[tokio::test]
+    async fn test_row_delta_dv_rejected_when_cross_spec_legacy_partition_delete_applies() {
+        use crate::spec::FormatVersion;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        // Partition-scoped parquet pos delete, spec 0, part (0) — applies to A at read.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/x0-pos-del.parquet", 0)]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Evolve the partition spec: add identity(y) → new default spec id, shape (x, y).
+        let tx = Transaction::new(&table);
+        let action = tx.update_partition_spec().add_field("y");
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        let new_spec_id = table.metadata().default_partition_spec_id();
+        assert_ne!(new_spec_id, 0, "fixture sanity: the spec evolved");
+
+        // Upgrade to V3.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .upgrade_table_version()
+            .set_format_version(FormatVersion::V3);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // DV for A under the NEW spec (the producer requires the default spec id).
+        let dv = DataFileBuilder::default()
+            .content(DataContentType::PositionDeletes)
+            .file_path("test/a-dv.puffin".to_string())
+            .file_format(DataFileFormat::Puffin)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(new_spec_id)
+            .partition(Struct::from_iter([
+                Some(Literal::long(0)),
+                Some(Literal::long(0)),
+            ]))
+            .referenced_data_file(Some("test/a.parquet".to_string()))
+            .content_offset(Some(4))
+            .content_size_in_bytes(Some(40))
+            .build()
+            .unwrap();
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![dv]);
+        let tx = action.apply(tx).unwrap();
+        let err = tx.commit(&catalog).await.expect_err(
+            "the legacy spec-0 partition delete still applies to A — the DV must be rejected \
+             (silent supersede = resurrection)",
+        );
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    /// THE REFRESHED-BASE GATE PIN (review). A row delta adding a parquet position delete is
+    /// BUILT against a V2 table; a CONCURRENT `upgrade_format_version` to V3 lands before it
+    /// commits. `do_commit` re-loads the table from the catalog, so the format gate must see V3
+    /// and reject the now-illegal parquet position delete — the placement claim in
+    /// `validate_added_delete_files` (1.10.0 gates at add time and would have ACCEPTED this race;
+    /// the commit-time placement matches Java MAIN's apply-time re-validation).
+    #[tokio::test]
+    async fn test_row_delta_parquet_delete_rejected_after_concurrent_format_upgrade() {
+        use crate::spec::FormatVersion;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        // Build the row delta against the V2 base (legal at build time).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/a-pos-del.parquet", 0)]);
+        let tx = action.apply(tx).unwrap();
+
+        // CONCURRENT commit from the same base: upgrade the table to V3.
+        let concurrent_tx = Transaction::new(&table);
+        let concurrent_action = concurrent_tx
+            .upgrade_table_version()
+            .set_format_version(FormatVersion::V3);
+        let concurrent_tx = concurrent_action.apply(concurrent_tx).unwrap();
+        concurrent_tx.commit(&catalog).await.unwrap();
+
+        // The stale row delta must be re-gated against the REFRESHED (V3) base and rejected.
+        let err = tx
+            .commit(&catalog)
+            .await
+            .expect_err("the gate must re-run against the refreshed V3 base");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.message(),
+            "Must use DVs for position deletes in V3: test/a-pos-del.parquet",
+            "the refreshed-base gate must reject with the V3 message"
+        );
+    }
+
+    /// THE SEQUENCE OVER-FIRE PIN (review fix, the legal-commit direction). A legacy
+    /// partition-scoped delete does NOT apply to a data file appended AFTER it (the read-path
+    /// filter: a position delete applies iff delete_seq >= data_seq) — a DV for that newer file
+    /// shadows nothing and must COMMIT. The pre-review door fired on bare partition equality,
+    /// freezing ALL DV writes into any partition carrying a legacy delete.
+    #[tokio::test]
+    async fn test_row_delta_dv_commits_when_legacy_delete_predates_data_file() {
+        use crate::spec::FormatVersion;
+
+        let catalog = new_memory_catalog().await;
+        let table = make_v2_minimal_table_in_catalog(&catalog).await;
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/a.parquet",
+            0,
+        )])
+        .await;
+
+        // Partition-scoped parquet pos delete, part (0) — applies to A only (seq 2 >= seq 1).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .row_delta()
+            .add_deletes(vec![synthetic_delete_file("test/x0-pos-del.parquet", 0)]);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        // Upgrade to V3, then append Y in the SAME partition (seq > delete seq).
+        let tx = Transaction::new(&table);
+        let action = tx
+            .upgrade_table_version()
+            .set_format_version(FormatVersion::V3);
+        let tx = action.apply(tx).unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+        let table = append_files(&catalog, &table, vec![synthetic_data_file(
+            "test/y.parquet",
+            0,
+        )])
+        .await;
+
+        // DV for Y: the legacy delete does NOT apply to Y (delete_seq < Y's data_seq) — no shadow
+        // hazard, must commit.
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_deletes(vec![synthetic_dv_file(
+            "test/y-dv.puffin",
+            0,
+            "test/y.parquet",
+        )]);
+        let tx = action.apply(tx).unwrap();
+        tx.commit(&catalog)
+            .await
+            .expect("the legacy delete does not apply to the newer file — the DV must commit");
     }
 }
