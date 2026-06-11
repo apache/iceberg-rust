@@ -1315,3 +1315,55 @@ How to use it (see the manuals' §2):
   cherry-picking an old-spec staged snapshot after partition evolution rejects where Java succeeds
   (per-spec manifests). Documented + pinned; acceptable until the producer gains multi-spec
   writes.
+### 2026-06-11 (Arc G — carried-forward Phase-1 closeout, BUILDER Opus)
+- **DO NOT apply a carried item's PROPOSED fix without re-deriving it from Java 1.10.0 BYTECODE — a
+  spec-robustness reading can be the OPPOSITE of Java's actual behavior.** *Why:* the carried item
+  said "fix shape: `#[serde(default)]` on `last_sequence_number`" (citing spec line 1978 "default to
+  0"). Bytecode of `TableMetadataParser.fromJson` shows `if (formatVersion <= 1) → 0` else
+  `JsonUtil.getLong("last-sequence-number")`, and `JsonUtil.getLong` does
+  `checkArgument(node.has(field))` ⇒ Java THROWS on an absent V2+ field. Spec line 179 (read it, not
+  just line 1978) explicitly permits this: "a v2 table that is missing `last-sequence-number` can
+  throw an exception" — the "default to 0" rule is for reading a **V1** document as V2. Rust's
+  required-on-V2/V3 serde ALREADY matched Java; adding `#[serde(default)]` would have made Rust ACCEPT
+  malformed V2 metadata Java REJECTS — a divergence, not a fix. The deliverable was verify-then-pin
+  (3 tests; the `#[serde(default)]` mutation fails the V2-strict test), zero production change. When
+  the spec gives readers latitude ("may be more strict… can throw"), Java's bytecode is the authority
+  for which side of the latitude to land on.
+- **DO trust BYTECODE over a "grep of the .java found no checkArgument" claim — the carried item's
+  source grep was simply wrong.** *Why:* the carried retention item said a grep of `SnapshotRef.java`
+  found no positivity `checkArgument`. Bytecode of `SnapshotRef$Builder` (api-1.10.0) shows all three:
+  `minSnapshotsToKeep`/`maxSnapshotAgeMs`/`maxRefAgeMs` each `checkArgument(value == null || value > 0,
+  "<verbatim message>")`. Rust's `manage_snapshots::validate_retention_positive` already reproduced the
+  three messages verbatim. The repo lesson "bytecode outranks MAIN source for version-sensitive claims"
+  extends to "outranks a prior agent's source-grep claim" too.
+- **DO check the PARSE path separately from the write path when settling "does Java enforce X" — a
+  guard on the builder fires on READ if the parser routes through that builder.** *Why:* the retention
+  positivity guards live on `SnapshotRef.Builder`, and `SnapshotRefParser.fromJson` (bytecode:
+  `builderFor → minSnapshotsToKeep → maxSnapshotAgeMs → maxRefAgeMs → build`) routes through it — so
+  Java rejects a stored zero/negative retention ON READ, not just on the write API. Rust had the guard
+  only on the write path (`manage_snapshots`); the serde derive accepted any value (empirical probe:
+  `{"type":"branch","min-snapshots-to-keep":0,...}` parsed Ok). Ported the missing guard into
+  `spec/snapshot.rs` (`SnapshotRetention::validate_positive` run via `SnapshotReference`'s `try_from`
+  deserialize). A `#[serde(try_from = "Raw")]` on a field-flattened struct works, but NOT on the
+  flattened enum itself — `try_from` is incompatible with the inner `#[serde(flatten)]`, so validate at
+  the OUTER struct (`SnapshotReference`) that owns the flatten, the sole production deserialization site.
+- **A guard ported to the PARSE path cannot reject what Java accepts — verify the asymmetry direction
+  before worrying about over-strictness.** *Why:* the risk flagged in the brief was "Rust stricter than
+  Java on read could fail to load a Java table." Here the opposite held: Java's parser ALSO rejects
+  zero/negative retention (it throws), so no Java-written table carries one — porting the guard converges
+  with Java, it cannot diverge. When Rust adds a parse-time guard, the safe-by-construction check is
+  "does Java's parser reject the same input?" — if yes (bytecode), the guard is parity, full stop.
+
+### 2026-06-11 (Arc G — carried-forward closeout, BUILDER + REVIEWER Opus; both items REVERSED)
+- **A carried-forward item's recorded fix is a HYPOTHESIS, not a spec** — both Phase-1 items
+  reversed on evidence: (1) the proposed `#[serde(default)]` for V2 `last-sequence-number` was
+  ANTI-parity (spec L179 permits the strict read; 1.10.0's `JsonUtil.getLong` THROWS on absent;
+  the lenient default is V1-as-V2 only, L1976-1978) — closed with pins, zero production change;
+  (2) "Java may not enforce retention positivity" was wrong — `SnapshotRef$Builder` enforces all
+  three (the bytecode reject-on-non-positive branch) AND `SnapshotRefParser.fromJson` routes through the validating
+  builder, so Java rejects ON READ — the Rust PARSE path was the real gap, now ported
+  (`try_from`-based deserialize; fires through `#[serde(flatten)]` in `SetSnapshotRef` too,
+  probe-verified).
+- **Escalate evidence to a LIVE ORACLE when the jars are present:** the reviewer ran
+  `SnapshotRefParser`/`TableMetadataParser` directly on the disputed documents — reject/accept and
+  messages matched Rust exactly. Bytecode reasoning is good; an executed oracle is proof.

@@ -460,6 +460,11 @@ pub(super) mod _serde {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "kebab-case")]
+// Deserialize routes through `SnapshotReferenceRaw` so the parse path enforces Java's retention
+// positivity guards (see `SnapshotRetention::validate_positive`). `SnapshotRetention` keeps its plain
+// serde derive (it carries an internal `#[serde(flatten)]` that a `try_from` on the enum itself would
+// break), and the validation runs here, the sole production site that deserializes a retention.
+#[serde(try_from = "SnapshotReferenceRaw")]
 /// Iceberg tables keep track of branches and tags using snapshot references.
 pub struct SnapshotReference {
     /// A reference’s snapshot ID. The tagged snapshot or latest snapshot of a branch.
@@ -467,6 +472,28 @@ pub struct SnapshotReference {
     #[serde(flatten)]
     /// Snapshot retention policy
     pub retention: SnapshotRetention,
+}
+
+/// On-the-wire mirror of [`SnapshotReference`] with no validation, used only as the deserialization
+/// source so `TryFrom<SnapshotReferenceRaw>` can apply Java's retention positivity guards on read.
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct SnapshotReferenceRaw {
+    snapshot_id: i64,
+    #[serde(flatten)]
+    retention: SnapshotRetention,
+}
+
+impl TryFrom<SnapshotReferenceRaw> for SnapshotReference {
+    type Error = Error;
+
+    fn try_from(raw: SnapshotReferenceRaw) -> Result<Self> {
+        raw.retention.validate_positive()?;
+        Ok(SnapshotReference {
+            snapshot_id: raw.snapshot_id,
+            retention: raw.retention,
+        })
+    }
 }
 
 impl SnapshotReference {
@@ -518,6 +545,46 @@ pub enum SnapshotRetention {
 }
 
 impl SnapshotRetention {
+    /// Reject any present retention value that is `<= 0`, mirroring Java's parse-path guards.
+    ///
+    /// Java 1.10.0's `SnapshotRefParser.fromJson` (bytecode) builds the ref through the validating
+    /// `SnapshotRef.Builder`, whose `minSnapshotsToKeep` / `maxSnapshotAgeMs` / `maxRefAgeMs` setters
+    /// each call `Preconditions.checkArgument(value == null || value > 0, ...)`. So a metadata JSON
+    /// carrying a zero/negative retention value is REJECTED by Java on READ — not just on the
+    /// write/transaction path. The Rust serde derive accepts any `i32`/`i64`, so this guard restores
+    /// parity (settled Arc G, 2026-06-11). Messages are reproduced verbatim from the Java bytecode. A
+    /// null/absent value is always permitted (it clears the field, deferring to the table-property
+    /// default), matching the `value == null ||` half of each `checkArgument`.
+    fn validate_positive(&self) -> Result<()> {
+        let check = |value: Option<i64>, message: &'static str| -> Result<()> {
+            match value {
+                Some(value) if value <= 0 => Err(Error::new(ErrorKind::DataInvalid, message)),
+                _ => Ok(()),
+            }
+        };
+        match self {
+            SnapshotRetention::Branch {
+                min_snapshots_to_keep,
+                max_snapshot_age_ms,
+                max_ref_age_ms,
+            } => {
+                check(
+                    min_snapshots_to_keep.map(i64::from),
+                    "Min snapshots to keep must be greater than 0",
+                )?;
+                check(
+                    *max_snapshot_age_ms,
+                    "Max snapshot age must be greater than 0 ms",
+                )?;
+                check(*max_ref_age_ms, "Max reference age must be greater than 0")?;
+            }
+            SnapshotRetention::Tag { max_ref_age_ms } => {
+                check(*max_ref_age_ms, "Max reference age must be greater than 0")?;
+            }
+        }
+        Ok(())
+    }
+
     /// Create a new branch retention policy
     pub fn branch(
         min_snapshots_to_keep: Option<i32>,
@@ -540,7 +607,119 @@ mod tests {
 
     use crate::spec::TableMetadata;
     use crate::spec::snapshot::_serde::SnapshotV1;
-    use crate::spec::snapshot::{Operation, Snapshot, Summary};
+    use crate::spec::snapshot::{
+        Operation, Snapshot, SnapshotReference, SnapshotRetention, Summary,
+    };
+
+    /// Risk pinned: Java 1.10.0's `SnapshotRefParser.fromJson` rejects a stored non-positive retention
+    /// on READ (it builds through the validating `SnapshotRef.Builder`); the Rust serde derive accepted
+    /// any `i32`/`i64`, so a Java-rejected metadata JSON parsed silently — a parity divergence. Each
+    /// case below parses a `SnapshotReference` (the sole production deserialization site for a
+    /// retention) with one zero/negative field and asserts the EXACT Java message surfaces. Removing
+    /// `SnapshotRetention::validate_positive` (or the `try_from` wiring) makes every case parse Ok and
+    /// fail this test.
+    #[test]
+    fn test_snapshot_reference_rejects_non_positive_retention_on_parse() {
+        let cases = [
+            (
+                r#"{"snapshot-id":1,"type":"branch","min-snapshots-to-keep":0}"#,
+                "DataInvalid => Min snapshots to keep must be greater than 0",
+            ),
+            (
+                r#"{"snapshot-id":1,"type":"branch","min-snapshots-to-keep":-3}"#,
+                "DataInvalid => Min snapshots to keep must be greater than 0",
+            ),
+            (
+                r#"{"snapshot-id":1,"type":"branch","max-snapshot-age-ms":0}"#,
+                "DataInvalid => Max snapshot age must be greater than 0 ms",
+            ),
+            (
+                r#"{"snapshot-id":1,"type":"branch","max-snapshot-age-ms":-1}"#,
+                "DataInvalid => Max snapshot age must be greater than 0 ms",
+            ),
+            (
+                r#"{"snapshot-id":1,"type":"branch","max-ref-age-ms":0}"#,
+                "DataInvalid => Max reference age must be greater than 0",
+            ),
+            (
+                r#"{"snapshot-id":1,"type":"tag","max-ref-age-ms":-7}"#,
+                "DataInvalid => Max reference age must be greater than 0",
+            ),
+        ];
+
+        for (json, expected_message) in cases {
+            let result = serde_json::from_str::<SnapshotReference>(json);
+            let error = result.expect_err(&format!("expected {json} to be rejected"));
+            assert_eq!(error.to_string(), expected_message, "for input {json}");
+        }
+    }
+
+    /// Risk pinned: the guard must NOT over-fire — a null/absent retention field (Java's `value == null`
+    /// branch) and any strictly-positive value must still parse. Over-broadening `validate_positive` to
+    /// reject `< 0` only (admitting 0) or to reject a `None` would fail this legal-case test, catching an
+    /// over-firing guard the rejection test cannot. The boundary value `1` is the smallest legal input,
+    /// pinning the `<= 0` (not `< 0`) inequality directly.
+    #[test]
+    fn test_snapshot_reference_accepts_null_and_positive_retention_on_parse() {
+        // All-null branch retention (every field absent → defers to table-property defaults).
+        let all_null = r#"{"snapshot-id":1,"type":"branch"}"#;
+        assert!(serde_json::from_str::<SnapshotReference>(all_null).is_ok());
+
+        // Smallest legal values (boundary: 1 must pass, pinning `<= 0` rather than `< 0`).
+        let boundary = r#"{"snapshot-id":1,"type":"branch","min-snapshots-to-keep":1,"max-snapshot-age-ms":1,"max-ref-age-ms":1}"#;
+        let parsed = serde_json::from_str::<SnapshotReference>(boundary).unwrap();
+        assert_eq!(parsed.retention, SnapshotRetention::Branch {
+            min_snapshots_to_keep: Some(1),
+            max_snapshot_age_ms: Some(1),
+            max_ref_age_ms: Some(1),
+        });
+
+        // Tag with a positive max-ref-age-ms.
+        let tag = r#"{"snapshot-id":1,"type":"tag","max-ref-age-ms":500}"#;
+        let parsed_tag = serde_json::from_str::<SnapshotReference>(tag).unwrap();
+        assert_eq!(parsed_tag.retention, SnapshotRetention::Tag {
+            max_ref_age_ms: Some(500),
+        });
+    }
+
+    /// Risk pinned: a valid `SnapshotReference` must survive a serialize → deserialize round-trip
+    /// unchanged — the validating deserialize must not alter or drop a legitimate retention. This guards
+    /// against the raw-mirror rewire silently changing the on-the-wire shape.
+    #[test]
+    fn test_snapshot_reference_retention_round_trip() {
+        let reference = SnapshotReference::new(
+            42,
+            SnapshotRetention::branch(Some(3), Some(1000), Some(2000)),
+        );
+        let json = serde_json::to_string(&reference).unwrap();
+        let round_tripped: SnapshotReference = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, reference);
+    }
+
+    /// Risk pinned: the rejection must propagate end-to-end — a `TableMetadata` whose `refs` map carries
+    /// a non-positive retention must FAIL to parse (Java rejects it too). The top-level error is serde's
+    /// untagged-enum message (`TableMetadataEnum` is `#[serde(untagged)]`, which masks the inner cause —
+    /// the same masking every required-field rejection already shows); the specific message is pinned at
+    /// the `SnapshotReference` layer above. Without the guard this metadata parses Ok.
+    #[test]
+    fn test_table_metadata_refs_reject_non_positive_retention() {
+        let meta =
+            std::fs::read_to_string("testdata/table_metadata/TableMetadataV2Valid.json").unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&meta).unwrap();
+        value["refs"] = serde_json::json!({
+            "bad": {
+                "snapshot-id": 3051729675574597004i64,
+                "type": "branch",
+                "max-snapshot-age-ms": 0
+            }
+        });
+
+        let result = serde_json::from_value::<TableMetadata>(value);
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "data did not match any variant of untagged enum TableMetadataEnum"
+        );
+    }
 
     #[test]
     fn schema() {

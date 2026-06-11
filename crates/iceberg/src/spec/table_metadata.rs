@@ -764,6 +764,17 @@ pub(super) mod _serde {
     pub(super) struct TableMetadataV2V3Shared {
         pub table_uuid: Uuid,
         pub location: String,
+        /// `last-sequence-number` is REQUIRED on a V2/V3 document — deliberately NOT
+        /// `#[serde(default)]`. The spec gives readers latitude here (`format/spec.md` line 179:
+        /// "a v2 table that is missing `last-sequence-number` can throw an exception"); the
+        /// "default to 0" rule at `format/spec.md` line 1978 applies only to reading a **V1**
+        /// document as V2 (a V1 doc has no sequence numbers — handled by `TableMetadataV1`, whose
+        /// conversion sets `last_sequence_number = 0`). Java 1.10.0 is strict for V2+:
+        /// `TableMetadataParser.fromJson` (bytecode) does `if (formatVersion <= 1) → 0` else
+        /// `JsonUtil.getLong("last-sequence-number")`, and `JsonUtil.getLong` throws
+        /// `IllegalArgumentException("Cannot parse missing long: last-sequence-number")` when the
+        /// field is absent. Making this lenient would accept malformed V2 metadata that Java
+        /// rejects — a parity divergence, not a fix. (Settled Arc G, 2026-06-11.)
         pub last_sequence_number: i64,
         pub last_updated_ms: i64,
         pub last_column_id: i32,
@@ -3395,6 +3406,100 @@ mod tests {
             desered.unwrap_err().to_string(),
             "data did not match any variant of untagged enum TableMetadataEnum"
         )
+    }
+
+    /// Risk pinned: a non-Java reader-robustness "fix" (`#[serde(default)]` on
+    /// `last_sequence_number`) would silently accept a V2 document Java 1.10.0 REJECTS, drifting from
+    /// parity. Java's `TableMetadataParser.fromJson` reads `last-sequence-number` for `formatVersion >
+    /// 1` via `JsonUtil.getLong`, which throws `IllegalArgumentException("Cannot parse missing long:
+    /// last-sequence-number")` when absent (`format/spec.md` line 179). Rust must stay strict: a V2 doc
+    /// missing `last-sequence-number` must FAIL to parse. The JSON below is `TableMetadataV2ValidMinimal`
+    /// with ONLY `last-sequence-number` removed, so this isolates that field (remove `last_sequence_number`
+    /// from the serde struct's required set and this test fails: the doc parses with seq 0).
+    #[test]
+    fn test_table_metadata_v2_missing_last_sequence_number_rejected() {
+        let metadata = r#"
+            {
+                "format-version": 2,
+                "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+                "location": "s3://bucket/test/location",
+                "last-updated-ms": 1602638573590,
+                "last-column-id": 3,
+                "current-schema-id": 0,
+                "schemas": [{
+                    "type": "struct",
+                    "schema-id": 0,
+                    "fields": [{ "id": 1, "name": "x", "required": true, "type": "long" }]
+                }],
+                "default-spec-id": 0,
+                "partition-specs": [{ "spec-id": 0, "fields": [] }],
+                "last-partition-id": 1000,
+                "default-sort-order-id": 0,
+                "sort-orders": [{ "order-id": 0, "fields": [] }]
+            }
+        "#;
+
+        let desered: Result<TableMetadata, serde_json::Error> = serde_json::from_str(metadata);
+
+        assert_eq!(
+            desered.unwrap_err().to_string(),
+            "data did not match any variant of untagged enum TableMetadataEnum"
+        )
+    }
+
+    /// Risk pinned: a V1 document has no sequence numbers (`last-sequence-number` is never written for
+    /// V1). The spec mandates default-to-0 when reading V1 metadata (`format/spec.md` line 1978); Java
+    /// 1.10.0 handles this with `if (formatVersion <= 1) → 0` (never reads the field). The Rust
+    /// `TableMetadataV1` serde struct has no `last_sequence_number` field and its conversion seeds 0 — so
+    /// a V1 doc (here `TableMetadataV1Valid.json`, which carries no `last-sequence-number`) must read back
+    /// with `last_sequence_number == 0`, matching Java. This is the V1 side of the read contract; together
+    /// with the V2-strict test above it covers both spec branches.
+    #[test]
+    fn test_table_metadata_v1_last_sequence_number_defaults_to_zero() {
+        let metadata =
+            fs::read_to_string("testdata/table_metadata/TableMetadataV1Valid.json").unwrap();
+
+        let desered: TableMetadata = serde_json::from_str(&metadata)
+            .expect("V1 metadata without last-sequence-number must parse");
+
+        assert_eq!(desered.format_version(), FormatVersion::V1);
+        assert_eq!(
+            desered.last_sequence_number(),
+            0,
+            "V1 metadata has no sequence numbers; last_sequence_number must default to 0"
+        );
+    }
+
+    /// Risk pinned: the WRITE side must ALWAYS emit `last-sequence-number` for V2+ (Java
+    /// `TableMetadataParser.toJson` line 173: `if (formatVersion() > 1) writeNumberField(LAST_SEQUENCE_
+    /// NUMBER, ...)`), even when it is 0 — because the V2 READ side (above) requires it. Were the field
+    /// `skip_serializing_if`-omitted when 0, a Rust-written brand-new V2 table (seq 0) would emit metadata
+    /// neither Rust nor Java could re-read. This serializes a real V2 metadata and asserts the raw JSON
+    /// carries `last-sequence-number`, then round-trips it back. (`skip_serializing_if` on the field would
+    /// fail the raw-JSON assertion; the field has none.)
+    #[test]
+    fn test_table_metadata_v2_write_always_emits_last_sequence_number() {
+        // A V2 table whose last_sequence_number is 0 — the value most at risk of being skipped on write.
+        let metadata = get_test_table_metadata("TableMetadataV2ValidMinimal.json")
+            .into_builder(None)
+            .build()
+            .unwrap()
+            .metadata;
+
+        let serialized = serde_json::to_string(&metadata).unwrap();
+        let raw: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+        assert!(
+            raw.get("last-sequence-number").is_some(),
+            "V2 write must always emit last-sequence-number, even when 0; got: {serialized}"
+        );
+
+        let round_tripped: TableMetadata = serde_json::from_str(&serialized).expect(
+            "V2 metadata we wrote must parse back (proves last-sequence-number was emitted)",
+        );
+        assert_eq!(
+            round_tripped.last_sequence_number(),
+            metadata.last_sequence_number()
+        );
     }
 
     #[test]
