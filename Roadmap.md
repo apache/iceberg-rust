@@ -109,10 +109,15 @@ approved a hardening sprint **before further parity work**. Live plan + checkbox
 4. **Interop-debt budget (sprint increment E).** The 🟡-with-deferred-interop pattern is accepted,
    but the debt is paid down in risk order (RowDelta metadata semantics → the rewrite-family four →
    inspection tables) rather than accumulating indefinitely.
-5. **Open decision — the platform cut line.** Which GAP_MATRIX rows block the downstream
-   algorithmic-trading platform (and whether maintenance actions move ahead of Phase-4 format
-   breadth) was proposed but **not decided**. Do not assume it; ask the user when it becomes
-   load-bearing.
+5. **Platform cut line — RESOLVED-AS-TABLED (2026-06-11).** The user tabled the downstream
+   platform / DataFusion-SQL (RePark) direction to think it over, and redirected this fork's
+   mission to **near-full 1:1 Java `iceberg-core`/`iceberg-api` replacement** — the phases run to
+   completion in dependency-then-value order, NOT re-ranked by platform need. Maintenance actions
+   (Phase 6) slot next after the Phase-2/3 residue on ordinary dependency grounds (their commit
+   primitives now exist), not because of a platform cut. When the user re-opens the
+   DataFusion/RePark discussion, the format-adjacent items it needs (`_file`/`_pos` metadata
+   columns through the TableProvider, DataFusion write-path breadth) are ordinary GAP_MATRIX
+   work that the near-full-parity path covers anyway.
 
 > **Sprint status (2026-06-10):** A (maps), B (lessons compaction), C (todo archival), D (this
 > de-triplication), and E3 (inspection interop) are DONE; E1/E2 (write-action metadata interop)
@@ -196,7 +201,7 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
   residual V3 groundwork (row-lineage fields, remaining `MIN_FORMAT_VERSIONS` types) tracks in the
   GAP_MATRIX. Increment narratives: [task/todo-archive/phase1.md](task/todo-archive/phase1.md).
 
-### Phase 2 — Write engine  ·  **Status: 🟡 far along (the FULL action set built incl. `RewriteManifests` + merge append + seq-preserving rewrite, 2026-06-10; metadata-level interop Java-judged; DV writer + real-catalog hardening + data-level interop outstanding)**
+### Phase 2 — Write engine  ·  **Status: 🟡 nearly complete (the FULL action set + the COMPLETE DV write surface [row ✅ 2026-06-11] + `cherrypick`; metadata-level interop Java-judged throughout. Remaining: real-catalog hardening, multi-spec writes, data-level write-action interop, `stageOnly`/`removeRows` residue)**
 - **Goal:** the full commit/write surface beyond fast-append.
 - **Gates on:** Phase 1.
 - **Key deliverables:** `DeleteFiles`, `OverwriteFiles`, `ReplacePartitions`, `RewriteFiles`,
@@ -261,14 +266,29 @@ detail and live status live in [docs/parity/GAP_MATRIX.md](docs/parity/GAP_MATRI
 
 ## Headline gap AREAS (ranked by effort × value — statuses live in the GAP_MATRIX)
 
-1. **Write engine completion** — DV writer, real-catalog (Glue + S3 Tables) hardening,
-   data-level interop for the write actions (`RewriteManifests` + merge append + the
-   seq-preserving rewrite landed with metadata-level interop 2026-06-10 — see GAP_MATRIX).
-2. **Format & type breadth** — ORC + Avro data files; remaining V3 types (variant, geo, `unknown`).
-3. **Scan completion** — `BatchScan`, CDC-merge, split planning, incremental-scan interop.
-4. **Views in catalogs** (`ViewCatalog` + view operations).
-5. **Maintenance actions** (expire / orphan / compaction / rewrite-deletes / compute-stats / migrate).
-6. **Encryption** (`EncryptionManager`, KMS, encrypted FileIO / manifests).
+Sequenced for the near-full-parity directive (2026-06-11), with the model-tier handoff
+(frontier sessions until 2026-06-22, then Opus) deciding WHO does each: judgment-heavy /
+format-sensitive work front-loads into the frontier window; well-templated breadth follows.
+
+1. **Phase-2/3 closeout (frontier-first):** multi-spec writes (the producer is default-spec-only —
+   unlocks several documented divergences incl. cherrypick replay), the constants-map increment
+   (reverted 2026-06-08 with known latent bugs), `removeRows` apply-side, the `dv_seq >= data_seq`
+   index validation residue. (Real-catalog hardening needs user credentials — scheduled with the
+   user; data-level write-action interop is templated → Opus.)
+2. **Maintenance actions (frontier for the GC semantics):** `ExpireSnapshots` + `DeleteOrphanFiles`
+   (reachability/retention/file-GC safety is the corruption-class judgment), then
+   `RewriteDataFiles`/`RewritePositionDeleteFiles`/`RemoveDanglingDeleteFiles` orchestration over
+   the existing commit primitives, `Compute*Stats`, `SnapshotTable`/`MigrateTable`.
+3. **Format & type breadth:** variant (incl. shredding — frontier; exact-byte class) and
+   geometry/geography + `unknown`; ORC + Avro data files (templated breadth → Opus).
+4. **Scan completion:** `BatchScan`, CDC-merge, split planning, strict-evaluator completion,
+   incremental-scan interop (mostly templated → Opus).
+5. **Views in catalogs** (`ViewCatalog` + view ops, Glue + S3 Tables first) + `SessionCatalog` +
+   `LockManager` (templated CRUD → Opus).
+6. **Encryption** (`EncryptionManager`, KMS, encrypted FileIO / manifests — frontier-grade format
+   work; schedule against the remaining frontier window or accept Opus pace).
+7. **Phase 7 — continuous parity automation** (Java-release tracking, differential conformance in
+   CI) — begins once 1-5 are substantially ✅.
 
 ---
 

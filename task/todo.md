@@ -63,13 +63,30 @@ How to use it (see the manuals' §1):
   (archival pass 1, 2026-06-09, recorded in the archival log), E / E3 (inspection interop
   COMPLETE per the GAP_MATRIX row). None surfaced as live work; preserved unflipped in context.
 
+## ACTIVE (2026-06-11): Near-full-parity direction — next arcs (planning record)
+
+Directive (user, 2026-06-11): table DataFusion/RePark; run this fork's Roadmap to **almost the
+full 1:1 Java replacement**. Sequencing in Roadmap.md "Headline gap AREAS" (handoff-aware:
+judgment-heavy → frontier window before 2026-06-22; templated breadth → Opus).
+
+- [ ] **Next arc proposal (awaiting user green-light): Phase-2/3 closeout** — multi-spec writes
+      (producer per-spec manifests; unlocks the documented default-spec-only divergences),
+      the constants-map increment (reverted 2026-06-08; known latent type bugs; gated on
+      datafusion + integration read tests), `removeRows` apply-side, the `dv_seq >= data_seq`
+      index-validation residue.
+- [ ] **Then: maintenance actions** (`ExpireSnapshots` first — the GC-safety judgment increment).
+- [ ] **Scheduled with the user:** real-catalog (Glue + S3 Tables) hardening — needs credentials.
+- [ ] **Opus-queue (post-handoff or parallel):** data-level write-action interop paydown,
+      cherrypick interop + `stageOnly`, ORC/Avro breadth, view ops, incremental-scan interop.
+
 ## Carried-forward open items (full context in todo-archive/)
 
 **Explicitly NOT decided:** the "platform cut line" through the GAP_MATRIX (which rows block the
 user's trading platform vs continuous-parity backlog, incl. re-ordering maintenance actions ahead of
 Phase-4 format exotica) was proposed but is an **open user decision — do not assume it.**
-  _Status 2026-06-11: about to be decided — the user's DataFusion/SQL platform discussion is the
-  cut line materializing; record the decision in Roadmap.md when made. Originating narrative:
+  _RESOLVED-AS-TABLED 2026-06-11: the user tabled the DataFusion/RePark direction and redirected
+  the fork to near-full 1:1 Java parity — recorded in Roadmap.md (decision record item 5 + the
+  re-sequenced headline areas). Originating narrative:
   [todo-archive/2026-06_ops-hardening.md](todo-archive/2026-06_ops-hardening.md)._
 
 ## Archived increment narratives
