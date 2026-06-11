@@ -1222,3 +1222,96 @@ How to use it (see the manuals' §2):
   deliberately and write the breaking-surface callout.** `pub mod delete_vector` exposes exactly
   `DeleteVector` + its iterator (the `pub use` alternative leaks the same types via `iter()`).
   `#![deny(missing_docs)]` + clippy `len_without_is_empty` cascade onto newly-public types.
+### 2026-06-11 (Arc F — `cherrypick` / WAP publish, BUILDER Opus)
+- **PORT THE FAST-FORWARD PRECEDENCE FROM `apply()`, NOT the case split in `cherrypick(long)`.** Java
+  `CherryPickOperation.apply()` (L193-204) checks `requireFastForward || isFastForward(base)` BEFORE the
+  replay path, so an APPEND (or replace-partitions OVERWRITE) whose `parent == current head` FAST-FORWARDS
+  (publishes the staged snapshot verbatim — NO new id, NO replay), even though `cherrypick(long)` routed it
+  into the APPEND branch at config time. Reading only `cherrypick(long)` (which sets `requireFastForward`
+  ONLY in the else-branch) would make an append-with-parent==head MINT A NEW SNAPSHOT — wrong id, duplicated
+  audit lineage. The Rust dispatch must run the FF check first, unconditionally. Pinned by a snapshot-COUNT
+  assertion (FF = count unchanged); the FF-broken mutation (`if false && is_fast_forward`) fails it.
+- **CHERRYPICK'S CONCURRENT-WINDOW IS `picked.parentId`, NOT the tx-captured `starting_snapshot_id` — the
+  no-override rule is satisfied by re-deriving the window from the PICKED snapshot, not by a captured field.**
+  Java `validateReplacedPartitions` walks `SnapshotUtil.ancestorsBetween(currentSnapshot, picked.parentId)`
+  (inclusive head, exclusive parent — exactly `files_after`'s shape with `starting = picked.parentId`). There
+  is no `validateFromSnapshot` override and the transaction's read point is IRRELEVANT, so the
+  `do_commit`-supplied `starting_snapshot_id` is intentionally UNUSED by cherrypick's validate. State this
+  explicitly (the tx-captured-start no-override pin is N/A for this shape) rather than wiring an unused
+  override — the walk re-derives its window every retry, which is what actually survives a re-base.
+- **STAGE a snapshot for cherrypick by append-then-rollback through the catalog — graft only for the
+  catalog-reload-defeating case.** A STAGED snapshot needs REAL manifests (`added_snapshot_id == staged_id`)
+  so the replay can source its added/removed files; produce them by committing a `fast_append`
+  (`set_snapshot_properties({"wap.id": …})` for the WAP cases) or `replace_partitions`, then
+  `manage_snapshots().set_current_snapshot(parent)` to roll `main` back so the produced snapshot is left
+  dangling. The non-ancestor case (head on a SIBLING line that a single-root MemoryCatalog can't commit) is
+  the exception: build a grafted metadata-only fixture and call the action's `.commit(&table)` DIRECTLY
+  (bypassing `Transaction::commit`'s catalog reload, which would overwrite the graft) — the manage_snapshots
+  `forked_table` direct-commit pattern. A grafted V3 snapshot needs `.with_row_range(next_row_id, 0)` or
+  `add_snapshot` errors "first-row-id is null".
+- **SOURCE the picked snapshot's added/removed files with the SAME manifest filter the concurrent walk uses,
+  scoped to one snapshot.** Java `SnapshotChanges.cacheDataFileChanges` loads the picked snapshot's DATA
+  manifests where `manifest.snapshotId() == snapshot.snapshotId()`, filters `status != EXISTING`, then
+  `ADDED → added` / `DELETED → removed` — identical to `files_after`'s `added_snapshot_id == snapshot_id` +
+  status filter, but for a single snapshot instead of an ancestor walk. The replayed REMOVES go by-PATH
+  through the producer's `resolve_delete_paths` (which IS `failMissingDeletePaths`), so a replayed delete
+  whose target is no longer live errors — matching Java L117.
+- **CHERRYPICK IS A STANDALONE ACTION, not a method on `ManageSnapshotsAction`.** Java exposes it via
+  `ManageSnapshots.cherrypick`, but `CherryPickOperation extends MergingSnapshotProducer` — it needs the full
+  snapshot producer, which the Rust ref-op `ManageSnapshotsAction` (emits only `SetSnapshotRef`/
+  `RemoveSnapshotRef`) does not have. They do not compose cleanly; a delegating method would have to special-
+  case the producer path. The honest shape is a separate `CherryPickAction` + a doc pointer on
+  `ManageSnapshotsAction` — the same call already made for `replace_partitions`/`overwrite_files` (Java reaches
+  those through producer subclasses too).
+
+### 2026-06-11 (Arc F — `cherrypick` REVIEWER Opus)
+- **A dedup/ancestry scan over "CURRENT ancestors only" needs a DANGLING negative control, or the
+  all-snapshots over-broadening passes silently.** Cherry-pick's double-publish dedup
+  (`lookupAncestorBySourceSnapshot`) and the already-ancestor check both walk ONLY the current ancestry chain
+  (Java `currentAncestors(meta)` = `ancestorIds(currentSnapshot)`), NOT `metadata.snapshots()`. Every
+  happy/dedup test had the prior publish ON `main`, so a mutation that scanned ALL snapshots (incl. dangling)
+  passed all of them — the bug only bites after a ROLLBACK leaves a prior publish dangling, where an
+  all-snapshots scan FALSELY blocks a legitimate re-publish. The catching test rolls `main` back past a first
+  publish (leaving it dangling) and re-cherry-picks: ancestry-only succeeds, all-snapshots wrongly rejects.
+  General rule: any "walk current ancestors" port wants a dangling-snapshot negative control, since the common
+  fixtures keep everything live.
+- **The cherrypick precedence matrix is provably equivalent to Java's two-phase form — verify the FF predicate
+  AND the non-eligible-op FF cell.** Java splits the decision across `cherrypick(long)` (config-time) and
+  `apply` (`requireFastForward || isFastForward(base)`); the Rust single-resolution `plan()` runs the FF check
+  FIRST, unconditionally, against the refreshed base. The two land in the same cell for EVERY combination
+  because (a) the FF predicate is identical (`parent==head`, or both null) and (b) Java's else-branch accepts
+  ANY operation if FF-able — so a DELETE with parent==head FAST-FORWARDS in both (publishes verbatim, no
+  replay), and the same delete with parent!=head fails the not-eligible check in both. The concurrent-head-moved
+  cells fall out for free: the action re-plans against the refreshed base, so an append whose parent stopped
+  being head REPLAYS and a delete whose parent stopped being head FAILS — already covered by the replay
+  fixtures (which advance `main` past the staged parent before picking). Pin the delete-with-parent==head FF
+  cell explicitly; the append-FF and not-eligible cells were already pinned.
+- **Cherrypick replaying an OLD-spec snapshot is a fail-loud divergence (the Rust producer is default-spec
+  only).** Java's `add(DataFile)` keeps each file's own `specId()` and writes per-spec manifests, so picking a
+  snapshot whose files predate a spec evolution SUCCEEDS. Rust reuses `validate_added_data_files`
+  (default-spec-only, shared with fast append) + `write_added_manifest` (default spec), so the same replay
+  FAILS-LOUD non-retryably. Fail-loud is the conservative-safe direction (accepting an old-spec file would
+  misplace its partition under the wrong spec); document it in the module header and pin it so a future change
+  cannot silently turn it into corruption. The replay's removed-side `copyWithoutStats` (Java) is immaterial in
+  Rust — the `Deleted` tombstone is rewritten from the LIVE source manifest entry (`rewrite_manifest_with_deletes`),
+  not from the picked snapshot's copy, so the removed file keeps its true spec/stats regardless.
+
+### 2026-06-11 (Arc F — cherrypick, BUILDER + REVIEWER Opus)
+- **Java's cherrypick is FF-FIRST in apply (`requireFastForward || isFastForward(base)`): ANY
+  operation — append, eligible overwrite, even delete — fast-forwards (publishes verbatim, no new
+  snapshot) when the picked snapshot's parent is the current head.** The case split in
+  `cherrypick(long)` is config-time; apply re-checks against the refreshed base (append whose head
+  moved → REPLAY; non-eligible op whose head moved → reject). A Rust single-resolution `plan()`
+  with the FF check first is provably equivalent and retry-safe.
+- **Dedup/ancestor lookups must walk CURRENT ANCESTORS, never all snapshots — and that scope needs
+  its own pin.** The all-snapshots mutation passed the entire original suite; only a
+  rollback-leaves-dangling-publish fixture distinguishes them (a dangling prior publish must NOT
+  block a legitimate re-publish). Same family as the no-override tx-captured pin: the SOURCE of a
+  window/scope is a distinct mutation axis.
+- **Cherrypick's concurrent-window start is the PICKED snapshot's parent (re-derived each retry),
+  not the tx-captured start — the docs/testing.md no-override rule is N/A there and saying so
+  explicitly (with why) is the compliant form.**
+- **Multi-spec replay diverges fail-loud:** the Rust producer is default-spec-only, so
+  cherry-picking an old-spec staged snapshot after partition evolution rejects where Java succeeds
+  (per-spec manifests). Documented + pinned; acceptable until the producer gains multi-spec
+  writes.

@@ -702,6 +702,56 @@ The read path is therefore Increment D1, before any writer work.
       post-probe runs, exit 0).
 
 ## DONE (2026-06-10 overnight): Phase-2 write-engine completion arc (branch `phase2/write-engine-completion`, squash-merged as PR #20)
+## ACTIVE (2026-06-10): Arc F — `cherrypick` (branch `phase2/cherrypick`, BUILDER Opus)
+
+The last Phase-2-gated `ManageSnapshots` item: Java `CherryPickOperation` (288 lines) — write-audit-publish
+(WAP) semantics. Correctness-critical: a wrong replay or a missed dedup publishes staged data twice.
+
+Plan (recorded before writing code):
+- [x] Read all required Rust (`manage_snapshots`/`snapshot`/`append`/`replace_partitions`/`mod`/`spec/snapshot`)
+      + Java `CherryPickOperation`/`WapUtil`/`SnapshotSummary`/`SnapshotChanges` + the two exceptions FULLY.
+      Bytecode-verified all version-sensitive strings (4 summary keys + 2 exception formats + 6 cherrypick
+      messages) against the 1.10.0 jars in `~/.m2` — all match the `/tmp/iceberg-java-ref` source.
+- [x] **API + surface decision:** standalone `CherryPickAction` in new `transaction/cherry_pick.rs` +
+      `Transaction::cherry_pick(snapshot_id)` ctor; a doc pointer on `ManageSnapshotsAction` (NOT a delegating
+      method — the ref-op action only EMITS ref updates and has no snapshot-producing path; cherrypick needs
+      the full `SnapshotProducer`. They do not compose cleanly; standalone is the honest shape, like
+      `replace_partitions`/`overwrite_files`).
+- [x] `cherry_pick.rs`: store `snapshot_id`; resolve everything at commit/validate against the REFRESHED table.
+      Three cases mirroring `cherrypick(long)` L69-141 with the FF-precedence of `apply()` L193-204:
+      APPEND replay / OVERWRITE+replace-partitions replay / else FF-required — but FF (parent==head) takes
+      precedence over replay for BOTH append and overwrite (`requireFastForward || isFastForward(base)`).
+- [x] The `validate` hook (non-FF only, L161-171): `validateNonAncestor` (both variants),
+      `validateReplacedPartitions` (ancestors-between walk since `picked.parent`), WAP re-check.
+- [x] Tests (MemoryCatalog, grafted STAGED snapshots) + mutations. Docs: GAP_MATRIX cell, map.md row,
+      this todo, lessons.
+- Window pin: `validateReplacedPartitions` walks `ancestorsBetween(currentSnapshot, picked.parentId)` —
+      starting id = `picked.parentId`, NOT the tx-captured start. The tx-captured `starting_snapshot_id` is
+      **N/A for cherrypick's shape** (its concurrent window is defined by the picked snapshot's parent, not the
+      transaction's read point) — stated explicitly in the doc comment + report.
+- **Outcome (2026-06-11):** DONE. `transaction/cherry_pick.rs` (new) + mod.rs ctor + manage_snapshots doc
+      pointer. 13 MemoryCatalog tests (builder), all green; 5 mutations run, every one caught (validateNonAncestor
+      disable → ancestor+dedup fail; source-snapshot-id drop → dedup+happy fail; published-wap-id→wap.id swap →
+      WAP-prop test fails; FF-precedence break → both FF snapshot-count pins fail; changed-partition
+      over-broaden → negative control + happy replace fail). All version-sensitive strings bytecode-verified
+      against 1.10.0 jars. Deferred: Java↔Rust interop (🟡), the stage-only WAP write path.
+- **Reviewer (2026-06-11):** VERIFIED + 3 pins added → 16 tests. Precedence matrix confirmed cell-by-cell
+      against Java `cherrypick(long)` L69-141 + `apply` L193-204 + `isFastForward` L173-182 (FF predicate
+      provably equivalent; concurrent-head-moved cells already covered by the replay fixtures — append replays,
+      delete fails, exactly as Java). Found + fixed THREE coverage gaps (each fail-before/pass-after):
+      (1) the double-publish dedup SCOPE was unpinned — a mutation scanning ALL snapshots instead of the
+      current ancestry passed every existing test (a dangling prior-publish would FALSELY block a re-publish);
+      added `test_cherrypick_dangling_prior_publish_does_not_block_republish`. (2) the non-eligible-op
+      fast-forward cell (delete with parent==head FF's verbatim, Java's else-branch accepts any FF-able op) was
+      untested; added `test_cherrypick_delete_with_parent_equal_head_fast_forwards`. (3) the MULTI-SPEC replay
+      divergence (Java preserves per-file specId + per-spec manifests and SUCCEEDS; Rust's
+      `validate_added_data_files` requires the default spec ⇒ FAILS-LOUD non-retryably) was undocumented +
+      untested; documented in the module header + added `test_cherrypick_multispec_replay_fails_loud`. Replay
+      removed-side `copyWithoutStats` divergence is immaterial (the tombstone is rewritten from the live source
+      manifest entry, not the picked copy). Gate clean: typos, fmt, clippy (workspace excl. sqllogictest,
+      -D warnings), lib 1710 ×2 (baseline 1694 + 16). Tree restored, no commit.
+
+## ACTIVE (2026-06-10 overnight): Phase-2 write-engine completion arc (branch `phase2/write-engine-completion`)
 
 Session brief: `../FABLE_SESSION_BRIEF_2026-06-10_phase2-completion.md`. Actor-critic per increment
 (Opus builder → Opus reviewer, orchestrator re-runs the gate + commits). One commit per increment,

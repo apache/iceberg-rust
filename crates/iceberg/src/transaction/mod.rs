@@ -54,6 +54,7 @@ mod action;
 
 pub use action::*;
 mod append;
+mod cherry_pick;
 mod delete_files;
 mod manage_snapshots;
 mod merge_append;
@@ -81,6 +82,7 @@ use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
+use crate::transaction::cherry_pick::CherryPickAction;
 use crate::transaction::delete_files::DeleteFilesAction;
 use crate::transaction::manage_snapshots::ManageSnapshotsAction;
 use crate::transaction::merge_append::MergeAppendAction;
@@ -278,6 +280,18 @@ impl Transaction {
     /// Creates a manage-snapshots action (branch/tag lifecycle, rollback, fast-forward, retention).
     pub fn manage_snapshots(&self) -> ManageSnapshotsAction {
         ManageSnapshotsAction::new()
+    }
+
+    /// Creates a cherry-pick action: PUBLISH a staged snapshot onto `main` (write-audit-publish), mirroring
+    /// Java `CherryPickOperation` (exposed in Java via `ManageSnapshots.cherrypick`). Given the id of a
+    /// snapshot that exists in metadata but is not on `main` (e.g. a WAP audit job's staged snapshot), it
+    /// either fast-forwards `main` to that snapshot (when its parent is the current head — no new snapshot) or
+    /// replays its added (and, for a dynamic-overwrite snapshot, removed) data files into a new published
+    /// snapshot tagged with `source-snapshot-id` / `published-wap-id`. Rejects an already-published snapshot,
+    /// a double cherry-pick (via `source-snapshot-id`), and a duplicate `wap.id`. See
+    /// [`crate::transaction::cherry_pick`] for the full contract.
+    pub fn cherry_pick(&self, snapshot_id: i64) -> CherryPickAction {
+        CherryPickAction::new(snapshot_id)
     }
 
     /// Creates an update-partition-spec action (partition evolution: add/remove/rename fields).

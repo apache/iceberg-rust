@@ -72,9 +72,11 @@ enum SnapshotOp {
 /// rollback-to-time, fast-forward, and ref retention — the engine-agnostic subset of Java's
 /// `ManageSnapshots`.
 ///
-/// `cherrypick` is intentionally not implemented here: Java's `cherrypick` extends
-/// `MergingSnapshotProducer` and replays data files, which belongs to the Phase-2 write engine
-/// (gated on `MergingSnapshotProducer`), not this metadata-only ref-management surface.
+/// `cherrypick` is intentionally NOT a method here: Java's `cherrypick` extends `MergingSnapshotProducer`
+/// and replays data files, which this metadata-only ref-management surface cannot produce. It lives in its
+/// own [`crate::transaction::cherry_pick::CherryPickAction`] (reachable via
+/// [`crate::transaction::Transaction::cherry_pick`]) — the honest shape, since the two do not compose
+/// cleanly (this action only EMITS ref updates; cherry-pick needs the full snapshot producer).
 pub struct ManageSnapshotsAction {
     ops: Vec<SnapshotOp>,
 }
