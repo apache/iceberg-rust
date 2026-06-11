@@ -844,3 +844,117 @@ How to use it (see the manuals' §2):
   (cleanup-not-gated-on-commit-success) needs the failing-catalog fixture to be built on a REAL
   table chain, or the pin passes vacuously — cleanup on a manifest-less fixture errors before
   the recorder is reached.
+
+### 2026-06-11 (Variant arc B1 — variant binary format READ side, BUILDER Fable, wt-variant)
+- **Java string APIs NEVER error on bad UTF-8 — `new String(bytes, UTF_8)` and `Charset.decode`
+  silently substitute U+FFFD.** Any Rust port of a Java byte-parser must CHOOSE error-vs-replace
+  deliberately and document it: the variant reader fails loud (DataInvalid) where Java would
+  silently mangle a dictionary name; safe because Java's writer only emits valid UTF-8. This is a
+  divergence CLASS for every future format port that decodes strings, not a one-off.
+- **When Java binary-searches data that may not honor its sort invariant (untrusted bytes!), port
+  the EXACT probe sequence — `VariantUtil.find` is inclusive-high `mid=(low+high)>>>1` — and the
+  EXACT comparator — `String.compareTo` is UTF-16 code-unit order, NOT byte order.** A "merely
+  equivalent" half-open binary search probes different indexes on unsorted data (hit where Java
+  misses); byte-order comparison flips supplementary-vs-BMP orderings (U+10000 sorts BELOW U+FFFF
+  in UTF-16, above in UTF-8). Both pinned with lying-sorted-dictionary / unsorted-object-fields /
+  supplementary-char tests. A linear-scan "fix" of the miss would be a parity bug.
+- **`VariantUtil.readLittleEndianUnsigned(size=4)` returns a SIGNED Java int — counts/offsets/
+  lengths ≥ 2^31 are unrepresentable (negative → downstream throw).** Mirror the domain in Rust
+  (reject > i32::MAX) or a ≥2GB buffer on 64-bit Rust would accept what Java cannot. Same family:
+  binary/string lengths are signed i32 reads — reject negatives by name.
+- **`SerializedObject.initOffsetsAndLengths` computes field lengths from SORTED-DISTINCT offsets
+  (field order is by NAME, data order is free) and implicitly REJECTS duplicate offsets** (its
+  `sortedOffsets.get(index+1)` throws when distinct-count < n+1); the LAST sorted offset keeps
+  length 0 → empty-slice parse error on access. Arrays use CONSECUTIVE offsets instead. Two
+  different length schemes in one format — porting one for both would corrupt object reads.
+- **B2 note: `Variants.of(BigDecimal)` picks the SMALLEST decimal physical type by precision
+  (≤9 digits → decimal4, ≤18 → decimal8, else decimal16)** — discovered when the intended
+  19-digit "decimal8" fixture came back with a decimal16 header. Fixture-gen for the write side
+  must control precision, not just scale. Also: 1.10.0 write-side classes live in iceberg-CORE
+  (`Variants`, `PrimitiveWrapper`, `ValueArray`, `ShreddedObject`), not api; `ShreddedObject
+  .writeTo` needs slf4j-api on the classpath (CloseableGroup static init).
+- **Eager parsing of a lazily-specified format needs an EXPLICIT recursion budget:** Java's lazy
+  reader never recurses deeper than the caller walks, so it has no depth limit; an eager Rust
+  parse recurses to the data's full depth — a ~4-bytes-per-level array bomb would overflow the
+  stack. `MAX_NESTING_DEPTH = 128` (serde_json's default), boundary-pinned both sides (128 Ok,
+  129 Err, no overflow).
+
+### 2026-06-11 (Variant arc B1 — REVIEWER Fable, wt-variant)
+- **DO probe lazy-vs-eager accepted-set equivalence at the ZERO-COUNT boundaries — a lazy Java
+  reader skips even MANDATORY trailing fields when the element count is 0.** The builder's
+  "eager parse = same accepted set as a full Java traversal" claim was refuted by three
+  degenerate shapes a live 1.10.0 probe ACCEPTED under full traversal: truncated empty object
+  `[02 00]`, truncated empty array `[03 00]` (the constructor skips `initOffsetsAndLengths`
+  when `numElements == 0`), and empty-dict metadata declaring data past the buffer end
+  (`[01 00 05]` — Java keeps the buffer un-truncated when `endOffset >= limit`). Rust keeps the
+  stricter spec-faithful rejection, now as a DOCUMENTED divergence. *Why it matters:* "errors
+  on access" reasoning silently assumes there is something to access.
+- **DO demand a POSITIVE decode test for every header-flag branch, not just hostile-input
+  rejections — both is-large bit transpositions (object 0b1000000 ↔ array 0b10000) SURVIVED the
+  original 57-test suite.** The reject-side tests kept passing because a misread count still
+  failed the bound check; only a well-formed large array (4-byte count) and a well-formed
+  NON-large object with 2-byte field ids (bit 4 set for the size field, not is-large)
+  distinguish the bits. Generated those bytes WITH Java (probes p13/p14) so the pins are
+  oracle-backed.
+- **DO generate comparator-order fixtures WITH Java so the sort order is Java's own:** 1.10.0's
+  `Variants.object` writes fields in `String.compareTo` (UTF-16) order — for names
+  {U+FFFF, U+1F600} that is [😀, ￿], the INVERSE of byte order — and `Variants.metadata`
+  preserves insertion order, setting the sorted flag only when the input already IS
+  compareTo-sorted. A hand-built "sorted" fixture written in Rust byte order would pin the
+  WRONG order and the comparator bug would pass.
+
+### 2026-06-11 (Variant arc B2 — variant binary format WRITE side, BUILDER Fable, wt-variant)
+- **Java 1.10.0 write-side width rules (bytecode-pinned, all matched MAIN):** every width is
+  `VariantUtil.sizeOf(maxValue)` with UNSIGNED thresholds 0xFF/0xFFFF/0xFFFFFF — but the INPUT
+  differs per site: array/object offsets use `sizeOf(dataSize)`, metadata offsets use
+  `sizeOf(dataSize)` (and the dictionary COUNT is written at that same width), and object field
+  ids use `sizeOf(metadata.dictionarySize())` — the dictionary SIZE, not the largest id used, so
+  a 256-name dictionary writes 2-byte ids even though max id 255 fits one byte (fixture-pinned
+  at both 255 and 256). A "minimal width" optimization would be byte-divergent.
+- **`Variants.metadata` writes the dictionary in INSERTION order, never dedups, and sets the
+  sorted flag only for STRICTLY `compareTo`-ascending input** (`last.compareTo(name) >= 0`
+  clears it ⇒ duplicates clear it; single-name input IS sorted; the EMPTY metadata is NOT —
+  Java returns the `01 00 00` EMPTY_V1 buffer whose flag bit is unset, a special case the
+  windows()-based recompute must mirror). compareTo = UTF-16 code units: [U+10000, U+FFFF] is
+  ASCENDING in Java order, DESCENDING in byte order — flag fixture-pinned.
+- **`VariantUtil.writeLittleEndianUnsigned` MASKS oversized values — Java 1.10.0 silently emits
+  CORRUPT metadata for >255 names whose data size still picks a 1-byte width (only reachable
+  via empty names): probe-verified, 256 empty names serialize to `01 00 00`, losing every
+  name.** The Rust door errors by name instead (divergence documented + pinned). When porting a
+  writer, grep for the masking writes — each is a potential silent-corruption door to convert.
+- **`ShreddedObject.writeTo` re-resolves field ids BY NAME at write time (`metadata.id(field)` +
+  `checkState(id >= 0, "Invalid metadata, missing: %s")`) and emits fields via `SortedMerge` of
+  `stream().sorted()` = String natural order = UTF-16.** The Rust split: the BUILDER sorts at
+  `build()` (so serialization emits stored order), and the writer re-resolves ids against the
+  passed metadata — wrong-metadata writes fail with Java's message instead of emitting dangling
+  ids. Re-serializing a PARSED value canonicalizes (Java's SerializedValue copies its buffer
+  verbatim); for everything Java's writer produced the bytes are identical (pinned per fixture).
+- **The short-string spill decision is writeTo-time, by UTF-8 BYTE length ≤ 63
+  (`PrimitiveWrapper.MAX_SHORT_STRING_LENGTH`)** — `Variants.of(String)` always constructs
+  PhysicalType.STRING; the encoding form is not a constructor property. Decimal16 writing
+  (reverse `BigInteger.toByteArray()` + sign-pad to 16) is exactly `i128::to_le_bytes` —
+  pinned incl. i128::MIN (constructible only via the width-explicit factory; the precision
+  factory rejects 39 digits with "Unsupported decimal precision: %s", boundaries 9/10 and
+  18/19 fixture-pinned).
+- **Big write fixtures don't need full hex pins: pin (java.util.zip.CRC32, length, first-64-bytes
+  hex) — the existing deflate dependency's `Crc` computes the identical CRC-32** (the DV-arc
+  discovery reused for byte evidence). Used for the 7 fixtures ≥ 513 bytes incl. the 65535/65536
+  offset-width boundary arrays; everything ≤ ~530 bytes stays full-hex.
+- **B1's classpath lesson extended: `ShreddedObject.writeTo` ALSO needs avro AND caffeine jars**
+  (SortedMerge's `MergeIterator` init touches CloseableGroup/util statics) — slf4j alone gets
+  you primitives/arrays/metadata but the FIRST object write throws NoClassDefFoundError.
+
+### 2026-06-11 (Variant arc B2 — REVIEWER Fable, wt-variant)
+- **An `is_err()` assertion does not pin a fail-fast guard.** Removing the write side's
+  up-front whole-span door (`door_value_span`) survived every undersized-buffer test: the
+  per-write bounds checks still returned Err, but only AFTER partially mutating the caller's
+  buffer. When a guard exists for ATOMICITY (no side effects before the error), the pin must
+  assert the no-side-effect property itself (buffer still all-zero on failure), not just that
+  an error came back. DO byte-compare the untouched buffer in door tests; DO NOT trust
+  mutation-killed status of neighboring `is_err` pins.
+- **CRC+length+prefix pins are acceptable ONLY after a one-time out-of-band full-byte diff.**
+  Review closed B2's CRC gap by having Java dump the COMPLETE bytes of every CRC-pinned
+  fixture to /tmp and end-to-end byte-diffing Rust's output (first-divergence index reported);
+  all 7 matched, so the compact in-repo pins stand. A reviewer of a new CRC-pinned fixture
+  set should repeat that probe rather than trust CRC32 alone (CRC collisions are trivial to
+  miss adversarially).

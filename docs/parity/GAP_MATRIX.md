@@ -65,7 +65,7 @@
 | Area | Status | Java reference | Rust location / note |
 |---|---|---|---|
 | Primitive + nested types | ✅ | `api/.../types/Types.java` | `spec/datatypes.rs` |
-| V3 types: variant | ❌ | `api/.../variants/` | none |
+| V3 types: variant | 🟡 | `api/.../variants/`, `core/.../variants/` | `variant/` — binary format BOTH sides. READ (2026-06-11): metadata dictionary, all 21 primitive type ids, short strings, objects, arrays; eager + bounds-checked (security boundary, divergences in mod.rs doc). WRITE (B2, 2026-06-11): `Variants.metadata`/`Variants.of` factories, `PrimitiveWrapper`/`ValueArray`/`ShreddedObject`-core serialization (`write.rs` — insertion-order dict + compareTo sorted flag, `sizeOf` widths, UTF-16 field sort, 63-byte short-string spill, decimal precision→width) — BYTE-EXACT vs Java-1.10.0-generated fixtures (full-hex + CRC pins incl. 255/256 + 65535/65536 width boundaries) + round-trip vs the B1 reader. Deferred: shredding (incl. `ShreddedObject`'s partial-shred overlay), the `variant` schema-type entry + format-version gate, file-level interop. |
 | V3 types: geometry / geography | ❌ | `api/.../geospatial/` | none |
 | V3 types: timestamp_ns | ✅ | `types/Types.java` | `spec/datatypes.rs` (`PrimitiveType::TimestampNs`/`TimestamptzNs`); **V3-only format-version gate enforced** — `Schema::check_compatibility` rejects a `timestamp_ns`/`timestamptz_ns` field (incl. nested) on a V1/V2 table (Java `Schema.MIN_FORMAT_VERSIONS`, "Invalid type for {col}: timestamp_ns is not supported until v3") |
 | V3 types: unknown | ❌ | `types/Types.java` | none |

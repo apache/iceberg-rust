@@ -78,6 +78,134 @@ judgment-heavy → frontier window before 2026-06-22; templated breadth → Opus
 - [ ] **Scheduled with the user:** real-catalog (Glue + S3 Tables) hardening — needs credentials.
 - [ ] **Opus-queue (post-handoff or parallel):** data-level write-action interop paydown,
       cherrypick interop + `stageOnly`, ORC/Avro breadth, view ops, incremental-scan interop.
+- [ ] **THIS BRANCH (Group B, Fable actor-critic, user-approved 2026-06-11): variant-type
+      groundwork** — B1: the variant binary format read side (`org.apache.iceberg.variants`
+      Serialized* + VariantUtil parity: metadata dictionary, value headers, all primitive
+      physical types, objects, arrays — bounds-checked, no panics on malformed bytes); B2: the
+      write side (`Variants` factory, `PrimitiveWrapper`, `ValueArray`, `ShreddedObject`
+      serialization — byte-exact vs Java). Runs in worktree `wt-variant` parallel to Group A
+      (`phase6/delete-orphan-files`, Opus).
+  - [x] **B1 contract verified vs the 1.10.0 jar (javap):** `BasicType` {PRIMITIVE=0,
+        SHORT_STRING=1, OBJECT=2, ARRAY=3}; `PhysicalType` = the 23-constant set with type-info
+        values 0..=20 (`Primitives` constants + the `from(int)` tableswitch) — MAIN source and
+        1.10.0 bytecode IDENTICAL for the whole read surface (SerializedMetadata /
+        Primitive / ShortString / Object / Array ctor math, `VariantUtil.basicType`,
+        `Variant.from`); no divergence found.
+  - [x] **B1 module:** `crates/iceberg/src/variant/` (mod.rs + types.rs + util.rs + metadata.rs
+        + value.rs + tests.rs + map.md), `pub mod variant` in lib.rs. EAGER parse (documented
+        divergence: Java parses lazily; eager = same accepted set as a full Java traversal,
+        errors surface at parse time), recursion depth explicitly guarded (limit 128).
+        Invalid UTF-8 → Err (documented divergence: Java silently replaces with U+FFFD).
+        Binary-search lookups use Java's exact `VariantUtil.find` probe sequence + UTF-16
+        `String.compareTo` order, not byte order (lying-sorted/unsorted-field misses pinned).
+  - [x] **B1 tests (57):** per-primitive vectors (all 21 type ids, boundary values incl.
+        i64::MIN / i128::MIN / negative + max-scale-255 decimals, exact float bits),
+        short-string 0/1/63 + multibyte UTF-8, metadata offset sizes 1-4 + sorted/unsorted/
+        lying-sorted/empty dict + UTF-16-order lookup, objects (empty/single/2-byte-ids-and-
+        offsets-large/data-order≠field-order/nested obj→arr→obj, get hit+miss, Java
+        binary-search miss parity), arrays (empty/mixed/out-of-range get), MALFORMED suite
+        (every truncation point, offsets past end + descending, duplicate object offsets,
+        dict id past size, field id past dict, bad UTF-8 short+long+dict, hostile/negative
+        lengths, absurd counts fail fast pre-allocation, 129-deep nesting bomb → Err not
+        overflow — all Err, never panic), Java-1.10.0-pinned fixtures (26 hex constants from
+        /tmp/variant-fixture-gen running `Variants.*` on iceberg-core-1.10.0; provenance +
+        exact generator command in tests.rs module doc; Java round-trip-asserted at gen time).
+  - [x] **B1 docs:** GAP_MATRIX variant row ❌→🟡 (read-side decode only; deferrals named:
+        B2 write side, shredding, schema-type entry, interop) + pipe-count audit CLEAN;
+        variant/map.md (new dir, convention present in siblings); this file; lessons entry
+        (UTF-8 replace-vs-error class, find probe-sequence parity, signed-int domain,
+        object-vs-array length schemes, B2 decimal-precision + slf4j notes, depth budget).
+  - [x] **B1 gate:** typos clean, fmt clean, clippy `-D warnings` (workspace ex-sqllogictest)
+        clean, `cargo test -p iceberg --lib` **1927 passed ×2** (baseline 1870 + 57 new) + a
+        third green run after mutation restores. Mutation probes (post-edit snapshots in
+        /tmp/wtB1_*_postedit.rs.bak, restored surgically): (A) find() probe-sequence swap ⇒
+        the lying-sorted + unsorted-object parity tests fail (8 failures); (B) decimal16
+        byte-order flip ⇒ exactly the i128::MIN boundary pin + the Java decimal16 fixture
+        fail. GAP_MATRIX pipe audit clean. No commit (per brief — changes left in tree).
+  - [x] **B1 REVIEW (Fable reviewer, 2026-06-11):** bytecode re-derived (VariantUtil / all
+        Serialized* ctors / PhysicalType+Primitives / Variant.from) — masks, is-large bits
+        (object 64, array 16), find probe sequence, unsigned scale byte all CONFIRMED; 16 live
+        Java 1.10.0 probes (/tmp/variant-probe/VariantProbe.java) incl. a Java-written
+        UTF-16-order object (supplementary-vs-BMP names). Fixture honesty: generator re-run,
+        all 26 hex pins byte-identical. AMENDED the builder's "same accepted set as a full
+        Java traversal" claim: Java lazily ACCEPTS truncated zero-count containers
+        (`02 00`/`03 00`) and an empty-dict metadata with an over-declared data end
+        (`01 00 05`) — Rust deliberately rejects; divergence documented in mod.rs/map.md and
+        test-pinned. 10-mutation sweep: 2 SURVIVORS found (object/array is-large bit
+        transpositions) → killed by new Java-probe tests; 8 tests added, suite 57→65, lib
+        **1935 passed ×2**.
+## ACTIVE (2026-06-11): Variant arc B2 — variant binary format WRITE side (worktree wt-variant, BUILDER Fable, Group B)
+
+Port the Java 1.10.0 write surface (`Variants` factory, `PrimitiveWrapper`, `ValueArray`,
+`ShreddedObject`-as-plain-object-writer, `Variants.metadata`) onto the B1 read module. Byte-exact
+vs Java-generated fixtures is the bar. All write logic in NEW `variant/write.rs`; minimal additive
+constructors in value.rs (private fields); mod.rs mapping table + re-exports; B1 read surface
+otherwise untouched.
+
+- [x] **Bytecode pass (1.10.0 vs MAIN):** javap'd `VariantUtil.{sizeOf,metadataHeader,primitiveHeader,
+      objectHeader,arrayHeader,shortStringHeader,writeLittleEndianUnsigned}`, `Variants.metadata
+      (Collection)` + `of(BigDecimal)` + `of(boolean)`, `PrimitiveWrapper.{ctor,sizeInBytes,writeTo}`
+      (full switch), `ValueArray$SerializationState`, `ShreddedObject$SerializationState` + `put`,
+      `SerializedValue/SerializedMetadata.writeTo` (verbatim buffer copy), `SortedMerge.of`
+      (naturalOrder). NO MAIN-vs-1.10.0 divergence found on the write surface. Pinned rules:
+      metadata dictionary is INSERTION-order, no dedup, sorted flag = strictly-ascending
+      `compareTo` (UTF-16); offset/width selection = `sizeOf(dataSize)` thresholds 0xFF/0xFFFF/
+      0xFFFFFF; short-string spill at UTF-8 len > 63 (`MAX_SHORT_STRING_LENGTH`, writeTo-time);
+      object `fieldIdSize = sizeOf(dictionarySize)` (the SIZE, not max id); is-large = count >
+      0xFF (object bit 6 = 0x40, array bit 4 = 0x10); object fields written name-sorted
+      (UTF-16) with ids re-resolved via `metadata.id(name)` at write time; decimal width by
+      PRECISION ≤9/≤18/≤38 else throw.
+- [x] **write.rs:** width/header helpers (checked; Java's silent `writeLittleEndianUnsigned`
+      mask becomes a named Err door; offset doors prevent hostile-offset wrap);
+      `VariantMetadata::from_field_names` + `to_bytes`; `VariantValue::{size_in_bytes,write_to,
+      to_bytes}` (metadata-threaded — object fieldIdSize needs `dictionarySize` — and
+      depth-guarded with MAX_NESTING_DEPTH on BOTH size and write recursion);
+      `Variants.of`-factory constructors incl. `of_decimal(unscaled i128, scale u8)` precision
+      rule; `VariantObjectBuilder` (ShreddedObject minus the shred overlay — flagged in the
+      module doc); `VariantArray::new/push` + `VariantObject::from_fields`/`from_parts` seams in
+      value.rs/metadata.rs; `PhysicalType::to_type_info` inverse in types.rs; `Variant::to_bytes`.
+- [x] **Fixture generator:** /tmp/variant-fixture-gen/VariantWriteFixtureGen.java against the
+      pinned 1.10.0 jars (needed avro + caffeine jars beyond B1's classpath — ShreddedObject
+      writeTo → SortedMerge statics) — 36 fixtures: every primitive id at boundary values,
+      short-string 0/1/63/64-spill, binary/UUID, arrays (empty/mixed/offset-width 255-vs-256/
+      is-large 256/CRC-pinned 65535-vs-65536), objects (empty/unsorted-puts/UTF-16-order/2-byte
+      ids via 255-vs-256 dict/large-256-fields/nested), metadata (empty/sorted/unsorted/dup/
+      UTF-16-sorted/offset escalation 255-vs-256) + the Java 256-empty-names truncation evidence.
+      Round-trip asserted by Java at generation time; provenance quoted per constant.
+- [x] **Rust tests (+21 → lib 1956):** byte-exact pins for every fixture (shared
+      `assert_write_fixture` also asserts size_in_bytes, B1 decode equality, AND canonical
+      re-serialization); CRC+length+prefix pins with parse round-trips for the 7 large fixtures;
+      round-trip sweep (constructed primitives + nested containers); NaN bit-exact; error paths
+      (unknown put name, missing-name write "Invalid metadata, missing", precision 39, depth
+      128/129 boundary, buffer-too-small/hostile-offset, the 256-empty-names divergence door,
+      non-canonical-metadata canonicalization). 5 mutations all killed by their designated pins
+      (object-is-large bit transposed → large-object CRC; spill 63/64 off-by-one → short-string-63
+      pin; sorted-flag-tolerates-duplicates → duplicate-name metadata pin; byte-order field sort →
+      UTF-16 object pin; fieldIdSize-from-max-id → dict256 pin); restored from
+      /tmp/wtB2_write_postedit.rs.bak, suite green after.
+- [x] **Docs:** mod.rs mapping table + write-side divergence pointer (full list in write.rs's
+      module doc); map.md (contents, intents, 3 new debug rows); GAP_MATRIX variant row (stays
+      🟡, both sides + B2 date; deferrals = shredding, schema-type entry + format-version gate,
+      file-level interop) + pipe audit CLEAN; lessons (durable only).
+- [x] **Gate:** typos clean, fmt clean, clippy `-D warnings` (workspace ex-sqllogictest) clean,
+      `cargo test -p iceberg --lib` **1956 passed ×2** (baseline 1935 + 21 new). No commit.
+- [x] **B2 REVIEW (Fable, 2026-06-11):** APPROVED with 4 test additions (lib 1956 → 1959). CRC gap
+      CLOSED out-of-band: all 7 large fixtures FULL-byte-diffed vs Java 1.10.0's complete on-disk
+      bytes (`/tmp/variant-fixture-gen/ReviewerProbe.java` → `/tmp/variant-review/*.bin`) —
+      byte-identical end-to-end, plus 8 unpinned straddles (object dataSize 65535/65536,
+      array/object/metadata 0xFFFFFF vs 0x1000000 → the 4-byte-offset emission) also identical.
+      Bytecode re-derivation: `dataSize` = sum of element/field `sizeInBytes()` ONLY (no
+      header/offsets) in both `SerializationState`s — Rust matches. Java probes: decimal16
+      sign-padding (−1/−10^20/+1), put-last-wins bytes, case-only names "a"/"A",
+      `metadata.id` on duplicate names = FIRST match (linear scan) — all match Rust;
+      parsed-object-referencing-second-duplicate-id canonicalizes (documented divergence class,
+      now pinned). 10 NEW mutations: 9 killed; 1 SURVIVOR (door_value_span removal — `is_err`
+      pins don't pin fail-fast) → added buffer-untouched-on-failure pin, now killed. 3 random
+      expected-value corruptions all detected (first-run-green is honest). Added tests: object
+      65535/65536 CRC pins, array 16777215/16777216 CRC pins (the only width-4 fixtures),
+      duplicate-name id-resolution pin, M9 pin. House clean (pipes, Cargo, lib.rs, no bare
+      unwrap). Lib **1959 ×2**.
+
 ## DONE (2026-06-11): Multi-spec writes — producer per-spec grouping (BUILDER, Group A, wt-closeout)
 
 Goal: lift the Rust `SnapshotProducer` from DEFAULT-SPEC-ONLY to Java-parity PER-SPEC manifest groups.

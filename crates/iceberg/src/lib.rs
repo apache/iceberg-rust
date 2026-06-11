@@ -100,3 +100,4 @@ pub mod writer;
 pub mod delete_vector;
 pub mod metadata_columns;
 pub mod puffin;
+pub mod variant;
