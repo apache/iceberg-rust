@@ -1147,3 +1147,83 @@ behavior change; NO Cargo/lockfile edits; no `#[ignore]`; no bare `.unwrap()` in
 REVIEWER verifies next.
 
 ---
+
+<!-- Archived by todo-archival pass 2, 2026-06-11 (verbatim moves; see skills/compaction.md §Todo Archival). -->
+
+## Arc G (2026-06-11): close the two carried-forward Phase-1 items (branch `phase1/carried-forward-closeout`)
+
+Delegated builder (1 of 2; Opus reviewer verifies after). Settle both carried items with Java 1.10.0
+BYTECODE evidence (javap from ~/.m2 jars — bytecode outranks MAIN source for version-sensitive claims).
+Modify ONLY `spec/table_metadata.rs`, `spec/snapshot.rs`, `docs/parity/GAP_MATRIX.md`, `task/todo.md`,
+`task/lessons.md`. No Cargo edits. No commit.
+
+PLAN (2026-06-11, builder):
+- [x] **Item 1 — `last-sequence-number` lenient read: SETTLE, do NOT auto-apply the proposed fix.**
+      Bytecode of `TableMetadataParser.fromJson` (core-1.10.0): `if (formatVersion <= 1) → 0` else
+      `JsonUtil.getLong("last-sequence-number")`; `JsonUtil.getLong` does
+      `checkArgument(node.has(field), "Cannot parse missing long: %s")` ⇒ **THROWS** on an absent V2+
+      `last-sequence-number`. Spec line 179 confirms ("a v2 table that is missing `last-sequence-number`
+      can throw an exception"); spec line 1978's "default to 0" applies to reading a **V1 document** for
+      V2, which Java handles by the `formatVersion <= 1` branch (never reads the field). Rust ALREADY
+      matches: `TableMetadataV2V3Shared.last_sequence_number` is required (V2/V3 absent ⇒ parse fails);
+      `TableMetadataV1` has no such field and conversion sets 0. **Conclusion: NO `#[serde(default)]` —
+      adding it would make Rust accept malformed V2 metadata Java REJECTS (a divergence, not parity).**
+      Verify-then-pin (like Increment 11): add tests pinning the strict V2 read + the V1-defaults-to-0
+      read + the write-side-always-emits round-trip; cite the spec line + bytecode in a doc comment.
+- [x] **Item 2 — retention positivity: Rust write path MATCHES Java; the PARSE path is the real gap.**
+      Bytecode of `SnapshotRef$Builder` (api-1.10.0) PROVES the three `checkArgument(value==null ||
+      value>0)` guards exist with messages "Min snapshots to keep must be greater than 0" / "Max
+      snapshot age must be greater than 0 ms" / "Max reference age must be greater than 0" — Rust's
+      `manage_snapshots::validate_retention_positive` reproduces all three verbatim (the carried item's
+      `SnapshotRef.java` source grep missed them; bytecode is authority). BUT `SnapshotRefParser.fromJson`
+      (core-1.10.0) routes through the SAME validating builder (`builderFor → minSnapshotsToKeep →
+      maxSnapshotAgeMs → maxRefAgeMs → build`), so Java REJECTS zero/negative retention ON PARSE. Rust's
+      `SnapshotRetention` serde does NOT validate — empirical probe: `{"type":"branch",
+      "min-snapshots-to-keep":0,"max-snapshot-age-ms":-5,"max-ref-age-ms":0}` parses Ok in Rust, throws
+      in Java. PORT the missing parse-path check into `spec/snapshot.rs` (custom Deserialize for
+      `SnapshotRetention`) with the EXACT Java messages; a real Java table never carries zero retention
+      (Java's own parser would have thrown), so this cannot reject metadata Java accepts. Tests: each
+      field rejected on parse with exact message; null/positive accepted; round-trip preserved.
+- [x] Docs: GAP_MATRIX ManageSnapshots + manifest read/write residual notes; both carried bullets →
+      DONE with evidence; lessons appended; verify gate (typos/fmt/clippy/lib ×2).
+
+OUTCOME (2026-06-11, builder): both carried items SETTLED with Java 1.10.0 bytecode evidence.
+**Item 1 = verify-then-pin, NO production change** — the carried `#[serde(default)]` "fix" would have
+been ANTI-parity (Java THROWS on absent V2+ `last-sequence-number`; Rust already matches). 3 tests in
+`spec/table_metadata.rs`; the `#[serde(default)]` mutation fails the V2-strict test. **Item 2 = a REAL
+gap ported** — Java validates retention positivity on the PARSE path (`SnapshotRefParser`→`SnapshotRef.
+Builder`), Rust's serde did not; added `SnapshotRetention::validate_positive` run via `SnapshotReference`'s
+`try_from` deserialize, exact Java messages; 4 tests, both mutation directions caught. The Rust WRITE path
+(`manage_snapshots::validate_retention_positive`) already matched (untouched). Gate: typos/fmt/clippy clean,
+lib **1701 ×2** (was 1694; +7). Files: `spec/table_metadata.rs`, `spec/snapshot.rs`, `docs/parity/GAP_MATRIX.md`,
+`task/todo.md`, `task/lessons.md` — exactly the allowed set. No Cargo edits, no commit.
+
+## Carried-forward open items (full context in `todo-archive/`)
+
+Genuinely-open follow-ups lifted out of otherwise-shipped phase narratives so they stay visible in
+the live plan. Full originating context is archived verbatim (pointers below). The active sprint's
+own open items (C/D/E) live in the hardening section above, not here.
+
+- [x] **Retention positivity validation — DONE (Arc G, 2026-06-11, `phase1/carried-forward-closeout`).**
+      EVIDENCE (bytecode > MAIN source — the carried `SnapshotRef.java` grep missed them): Java 1.10.0
+      `SnapshotRef$Builder` DOES `checkArgument(value == null || value > 0)` in each of `minSnapshotsToKeep`
+      / `maxSnapshotAgeMs` / `maxRefAgeMs`, messages "Min snapshots to keep must be greater than 0" / "Max
+      snapshot age must be greater than 0 ms" / "Max reference age must be greater than 0". Rust's
+      `manage_snapshots::validate_retention_positive` already reproduced all three VERBATIM on the WRITE
+      path. NEW finding: `SnapshotRefParser.fromJson` routes through that validating builder, so Java rejects
+      zero/negative retention ON PARSE too — Rust's serde did NOT (probe: zero/neg branch+tag retention parsed
+      Ok). PORTED the parse-path guard into `spec/snapshot.rs` (`SnapshotRetention::validate_positive`, run via
+      `SnapshotReference`'s `try_from` deserialize) with the exact Java messages; cannot reject metadata Java
+      accepts (Java's own parser would have thrown). 4 tests + 2-direction mutation. _Originating: [todo-archive/phase1.md](todo-archive/phase1.md) §"Review remediation"._
+- [x] **Table-metadata `last-sequence-number` lenient read — DONE/verify-then-pin (Arc G, 2026-06-11,
+      `phase1/carried-forward-closeout`).** The proposed `#[serde(default)]` fix was WRONG. EVIDENCE
+      (bytecode): Java 1.10.0 `TableMetadataParser.fromJson` reads `last-sequence-number` via `JsonUtil.getLong`
+      (which `checkArgument(node.has(field))` → THROWS on absent) when `formatVersion > 1`, and hard-defaults
+      to 0 when `formatVersion <= 1`. Spec line 179 explicitly permits the V2 throw; the "default to 0" at
+      spec line 1978 is for reading a V1 doc as V2. Rust ALREADY matches: `last_sequence_number` required on
+      V2/V3 (absent ⇒ parse fails); `TableMetadataV1` has no such field, conversion seeds 0. Adding
+      `#[serde(default)]` would accept malformed V2 metadata Java rejects (a divergence). NO production change;
+      3 tests pin the V2-strict read + V1-defaults-to-0 + write-always-emits, with the `#[serde(default)]`
+      mutation caught. _Originating: [todo-archive/phase1.md](todo-archive/phase1.md) §"Increment 10 — tracked follow-up" + §"Increment 11"._
+
+
