@@ -487,3 +487,25 @@ How to use it (see the manuals' §2):
   in-context Reads + the builder transcript (verified: 669 insertions, compiles, chain ×2 green). DO
   revert a temporary probe with the INVERSE edit (or a `.bak` copy), NEVER `git checkout` a file that
   carries uncommitted work.
+
+### 2026-06-12 (I-LANE AUDIT — cross-cutting sweep of the wave6 3-increment branch, Opus)
+- **DO finish the journal/map "same-change" obligations PER INCREMENT when each increment adds a
+  test/script file — the per-increment critics review their own increment in isolation and DON'T
+  catch a sibling increment's omission.** *Finding:* I1 (theta) added `interop_theta.rs` +
+  `run-interop-theta.sh` but never added their rows to `crates/iceberg/tests/map.md` OR
+  `dev/java-interop/map.md`; I3 (wap-data) added its java-interop/map.md row but missed the
+  `tests/map.md` row. Two `map.md` files each had 1 of 3 new entries missing — invisible to the
+  three per-increment critics (each saw only its own map edit). The cross-cutting auditor found it
+  by enumerating every new file × every map.md it belongs in. *Apply:* when auditing a multi-increment
+  branch, grep each new artifact name against every `map.md` that indexes its directory; a per-increment
+  green does not imply the union is complete.
+- **DO scrub the OTHER clauses of a shared status cell when an increment flips a sub-status — a
+  status flip that only APPENDS a "LANDED" note leaves a stale "NEXT-WAVE/deferred" clause that now
+  contradicts it.** *Finding:* I1 appended `I1 THETA-BLOB INTEROP LANDED` to the ComputeTableStats
+  GAP_MATRIX cell but left the cell's earlier `Java-reads-our-theta-blob interop is NEXT-WAVE` clause
+  intact — a self-contradiction inside one cell. Same shape in `task/todo.md`: the "Named next-wave
+  interop items" planning bullet still listed theta/view/WAP as open after all three landed. *Apply:*
+  the de-triplication rule ("edit the cell, link don't duplicate") extends to KILLING the now-false
+  deferral text in the same cell/bullet, not just adding the landing note. (A pre-existing
+  `Java-reads-our-stats-file interop is NEXT-WAVE` contradiction predates this branch and is left for
+  the next phase re-audit — out of this branch's scope.)

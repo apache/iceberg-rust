@@ -135,11 +135,12 @@ Waves 3–5 landed PRs #28–#41 (write-engine closeout, maintenance actions end
 ComputeTable/PartitionStats + the iceberg-sketches crate, the variant arc, stage_only + WAP,
 views end-to-end, and TEN interop chains). Statuses live ONLY in the GAP_MATRIX.
 
-- [ ] **Named next-wave interop items:** the theta-blob interop (Java reads our
-      apache-datasketches-theta-v1 puffin blobs / ndv — the ComputeTableStats row's last residue);
-      view interop (the wire field-order divergence is read-tolerant both ways — byte-order
-      comparison is the open half); variant file-level I/O + interop (the parquet-crate boundary);
-      data-level WAP interop (the cherrypick row's named residue).
+- [ ] **Named next-wave interop items:** theta-blob interop (Java reads our
+      apache-datasketches-theta-v1 puffin blobs / ndv) — **LANDED 2026-06-12 (I1)**;
+      view interop field-SET equality — **LANDED 2026-06-12 (I2)**, with the wire byte-order
+      comparison still the open half; data-level WAP interop — **LANDED 2026-06-12 (I3)**, with
+      data-level FAST-FORWARD + column-vs-stamp routing as named residue. STILL OPEN: variant
+      file-level I/O + interop (the parquet-crate boundary).
 - [ ] **Partition-stats residue:** the INCREMENTAL compute path; time/uuid/fixed/binary partition
       values in stats files (loud errors today).
 - [ ] **The shared-seam concurrency-parity increment** (U1 reviewer): no location-CAS on
