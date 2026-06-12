@@ -325,3 +325,61 @@ When done, run the **§4 Done gate** before declaring complete.
 - **Distrust the Edges** — validate/parse at boundaries; design writes idempotent (Risk-First).
 - **Measure Before Optimizing** — correct and clear first; tune only a profiled bottleneck (§5).
 - **Minimal Impact** — only touch what the plan lists (§6).
+
+---
+
+## Actor-Critic Sub-Agent Duty (addendum, 2026-06-11)
+
+When you run as a BUILDER or REVIEWER sub-agent in this repo's actor-critic loop (your prompt
+will say so), these rules EXTEND the manual above. On any conflict, the orchestrator's brief wins.
+
+### Both roles
+
+- **Tier honesty.** You are running as the Sonnet tier on work pre-classified as TEMPLATED. The
+  named exemplar files are law: copy their structure, idiom, and discipline. A need for novel
+  structure is a STOP-and-report, not an invention.
+- **Lowered escalation threshold.** NEVER decide a semantic parity question yourself (what Java
+  "must" do, which behavior is "obviously right", whether a divergence is acceptable). Quote the
+  1.10.0 bytecode (`javap`) or source line, state the alternatives, and STOP-and-report in your
+  final report. **An escalation is a success of the process, not a failure of yours.**
+- **The gate is verbatim** (chained in ONE `&&`; `set -o pipefail` before any pipe):
+  `typos . && cargo fmt --all -- --check && cargo clippy --all-targets --workspace --exclude
+  iceberg-sqllogictest -- -D warnings && cargo test -p iceberg --lib` — lib tests run TWICE.
+  Paste real output; never summarize a gate you did not run.
+- **Scope is the brief's file list.** Out-of-scope need = STOP-and-report. No commits, no pushes,
+  no branch switches, no Cargo/pom/lock edits, no sub-agents.
+
+### Builder duty
+
+- **Spec-by-example:** read the named Java reference FULLY before writing; cite file:line or
+  javap output for every behavioral decision.
+- **Tests ship with the code**, named for the RISK each pins, not the function it calls.
+- **Self-flag in the final report:** every deferral, assumption, MAIN-vs-1.10.0 fact you could
+  not pin to bytecode, and anything not locally verifiable. Your flags are the reviewer's
+  targets — burying one defeats the loop.
+
+### Reviewer duty
+
+- **Assume a bug exists.** "Looks correct" is not a verdict; a mutation result is.
+- **Mutation mandate:** break each load-bearing behavior one at a time and run the suite. A
+  mutation no test kills = a missing test YOU add (prove fail-with-mutation / pass-without).
+- **Sabotage recipes for harness work** (each must fail closed): corrupt one byte of an expected
+  artifact; delete an intermediate artifact mid-chain; make a verify step crash before printing
+  its sentinel; run the chain twice (stale-artifact hygiene); swap two same-shaped entities
+  (injectivity).
+- **Revert every probe and mutation;** prove the tree clean with `git status` + `git diff` at the
+  end. NEVER `git checkout`/`git restore` a path carrying uncommitted work to revert a probe —
+  snapshot to `/tmp` and copy back (lesson, 2026-06-11).
+
+### Interop-harness rules (paid-for lessons — see dev/java-interop/map.md#debug)
+
+- **Fail-closed sentinels:** `set -euo pipefail`; every step's success explicitly asserted;
+  success = a printed sentinel that is grepped, and the grep's absence FAILS the chain.
+- **Per-run temp dirs wiped at step 1** — no cross-run leftovers can satisfy a later step.
+- **Comparison keys must be injective per fixture** (two different files must never normalize to
+  the same token) and derived from semantically stable order (sequence numbers, never listing
+  order).
+- **Compare deep:** full canonical views byte-for-byte and full sorted sets — never counts or
+  names-only.
+- **Canonical snapshot views materialize from a RE-PARSED base** (the on-disk round-trip), never
+  from the in-memory pre-commit object.

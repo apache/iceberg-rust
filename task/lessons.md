@@ -1461,3 +1461,139 @@ How to use it (see the manuals' §2):
   code buckets the off-spec file under the EMPTY struct (separate), the mutation co-groups them into one qualifying
   group. A mutation-insensitive guard test is worse than none — pick fixture values that make the guard's job
   actually necessary.
+- **_(2026-06-11, S1)_ To prove `data_sequence_number` preservation at the DATA level you MUST use an
+  EQUALITY delete, NOT a position delete.** Position deletes are PATH-BASED: they reference a specific
+  `(file_path, position)` tuple. After `rewriteFiles({A},{A'})`, A' has a NEW path — the position delete
+  on A's path is DANGLING (has no live file to apply to) and never applies to A'. The delete-applicability
+  rule for position deletes does NOT involve `data_sequence_number` at all. Equality deletes ARE
+  seq-based: an equality delete applies to data files with `data_seq STRICTLY LESS THAN` the delete's seq.
+  Therefore `rewriteFiles({A},{A'}, 1L)` stamps A' with `data_seq=1`, and an outstanding equality delete at
+  `seq=2` still applies (`2 > 1`) — this is the invariant `data_sequence_number` preservation tests.
+  The fixture B redesign discovered this the hard way: the original position-delete fixture showed the
+  wrong result (all 4 rows returned — both Java and Rust were CORRECT; the fixture design was wrong).
+  RULE: when constructing a seq-preservation fixture, use equality deletes (seq-governed); a position
+  delete cannot serve as the "outstanding delete" because it is path-governed, not seq-governed.
+
+### 2026-06-11 (S2 — cherrypick METADATA-level interop, BUILDER Sonnet, wt-interop)
+- **DO NOT set `wap.id` on the dedup fixture's staged snapshot — the dedup gate fires via `source-snapshot-id`
+  ANCESTRY, not the WAP-id path.** *Why:* Java `CherryPickOperation` runs two checks before replay:
+  (1) `validateWapPublish` fires when `wap.id` is set — it walks the ancestry looking for any snapshot whose
+  `published-wap-id` equals the staged `wap.id`. If a prior cherrypick published that wap-id, it throws
+  `DuplicateWAPCommitException`. (2) `validateNonAncestor` fires REGARDLESS of `wap.id` — it walks ancestry
+  looking for any snapshot whose summary `source-snapshot-id == staged_id`. If found, it throws
+  `CherrypickAncestorCommitException`. Check (1) fires FIRST. If the dedup staged snapshot has `wap.id`, then
+  after the first cherrypick succeeds (minting `published-wap-id: wap-dedup`), the second attempt triggers
+  `DuplicateWAPCommitException` (WAP path) — not `CherrypickAncestorCommitException` (ancestry path). The
+  interop brief's dedup fixture spec calls for `CherrypickAncestorCommitException`, so the staged snapshot must
+  have NO `wap.id`. Only `validateNonAncestor` then fires, producing the correct exception.
+- **`validate()` fires on `Transaction::commit()`, NOT on `cherry_pick(id).apply(tx)`.** *Why:* `apply()` only
+  records the action into the `Transaction`'s operation list; it does NOT run production validations. A check
+  like `if second_attempt.apply(tx).is_err()` can never detect a cherry-pick conflict. The correct pattern:
+  call `tx.cherry_pick(id).apply(tx)?.commit(&catalog).await` and match on the `commit` result. This mirrors
+  the Java harness where the exception is thrown inside `CherryPickOperation.apply()` which is called from
+  within the `ManageSnapshots.commit()` chain — but the Rust `apply()` is design-different (records, doesn't
+  validate); validation is COMMIT-time. Pin the error at the `commit` await, not at `apply`.
+- **Dedup-fixture verify in Java must use a FRESH temp directory, not the existing `rust_table/` dir.** *Why:*
+  the `LocalTableOperations` version counter starts at -1 and increments to 0 on first commit, writing
+  `v0.metadata.json`. If the dedup verify re-uses the `rust_table/` directory for the second-cherrypick attempt
+  (which already contains a `v0.metadata.json`), the `commit(null, rustMeta)` call fails with "File already
+  exists". The fix: `Files.createTempDirectory(...)` for each verify attempt that needs to commit into a
+  `LocalTableOperations`. A probe table built for verification MUST live in its own directory.
+- **Stage a snapshot via fast_append + set-current rollback, NOT a raw metadata graft, for simple cases.**
+  *Why:* a real fast_append produces real manifest files on disk (`added_snapshot_id == staged_id`), which
+  is required for replay (the cherry-pick sources added/removed files from those manifests). A metadata-only
+  graft skips manifest writes. The rollback (`set_current_snapshot(parent)`) leaves the produced snapshot
+  dangling — `main` points back to the parent while the staged snapshot exists as a dead branch. This is the
+  correct "staged-but-not-published" shape for the WAP pattern in the absence of a real `stageOnly` API.
+
+### 2026-06-11 (S1 DATA-level interop reviewer, Sonnet)
+- **DO use a mutation that removes `data_sequence_number(seq)` from the rewrite commit to prove the
+  fixture is NOT vacuous.** Without it, A' takes the fresh snapshot seq (e.g. 3), making the equality
+  delete (seq=2) inapplicable (2 ≤ 3), and all 5 rows survive — the Rust self-scan assertion fails
+  loud (`[10,20,30,40,50]` ≠ `[10,30,50]`) before Java even runs. A passing self-scan with the mutation
+  means the fixture is vacuous; a fail proves the pin is real. The mutation result here: FAIL-LOUD.
+- **Java interop verify using `LinkedHashMap<Long, String>` keyed by `id` has SET (not MULTISET)
+  semantics — a same-id duplicate from the Rust writer would be silently deduped and the count check
+  would not catch it.** The Rust comparison test uses `Vec.eq()` (multiset) and DOES catch same-id
+  duplicates. Mitigation: same-id duplicates cannot arise from the production write chain (each row
+  written exactly once), and the Rust comparison test is the authoritative multiset guard for the
+  Rust-reads-Java direction. No production code change needed; this is a documented weakness of the
+  Java verify layer specifically for the same-id-duplicate corner case.
+
+### 2026-06-11 (S2 cherrypick metadata interop reviewer, Sonnet)
+- **A harness that checks `commit.is_err()` without asserting the ERROR KIND and MESSAGE is
+  structurally vacuous for the dedup path.** *Why:* `ErrorKind::DataInvalid` (non-retryable) is the
+  Rust equivalent of Java's `CherrypickAncestorCommitException`; they share the same condition
+  (source-snapshot-id ancestry), but different exception hierarchies. A test that only panics on `Ok`
+  could mask a DIFFERENT error kind (e.g. `Unexpected` or a catalog error) silently "passing" the
+  dedup check. Always assert `err.kind() == DataInvalid`, `!err.retryable()`, and a distinctive
+  substring of the error message (here `"already picked to create ancestor"`) for any dedup/conflict
+  rejection test.
+- **`is_some()` on a summary property is insufficient depth — verify the VALUE refers to a real
+  entity.** *Why:* `source-snapshot-id` is set by Rust's cherrypick replay to the staged snapshot's id.
+  A random garbage value (or a typo in the key) passes `is_some()` but fails the `snapshot_by_id`
+  lookup. The value check is a parse-as-i64 + `metadata.snapshot_by_id(val).is_some()` + `val !=
+  current.snapshot_id()`. The same principle applies to any summary property that records an id:
+  check it resolves to the claimed entity, not just that it is present.
+- **FF-vacuity must be checked by COUNT, not just by canonical-view equality.** *Why:* a fast-forward
+  leaves snapshot count UNCHANGED (the staged snapshot IS published verbatim — no new id minted); a
+  replay adds a new snapshot (count + 1). The count assertion in the GEN test (`snapshot_count_after
+  == snapshot_count_before` for FF) is the primary FF guard — the D2 canonical-view comparison cannot
+  catch a replay-instead-of-FF until three snapshots mismatch the expected two. A production-src
+  mutation was blocked by the READ-ONLY constraint, but the STATIC equivalent (FF predicate:
+  `picked.parent == head`, or both None) is trivially verified by inspecting `is_fast_forward()`, and
+  the count assertion in the GEN test provides the runtime guard. When production src is READ-ONLY,
+  use the count/structure assertion as the behavioral anchor and document why the mutation is infeasible.
+- **Sabotage (c) mechanism — a fake-FF artifact causes the verify Java process to CRASH before
+  printing the sentinel, which the `|| true` + sentinel-absence branch correctly catches.** *Why:* the
+  third sabotage injected a new snapshot id into the FF fixture's Rust-produced `final.metadata.json`,
+  making the artifact claim three snapshots where Java expected two. Java's `LocalTableOperations`
+  raised `CommitFailedException: Current snapshot ID does not match main branch` before printing the
+  sentinel line. The script's `|| true` + `grep "verify-interop-cherrypick: 0 failures"` pattern
+  catches this correctly — the absence of the sentinel exits 1. Design rule: the sentinel-presence
+  check is the primary guard, not the `^FAIL` check; a crash before any sentinel emission fails closed.
+
+### 2026-06-11 (Wave-4 Group S — S3 Opus EXIT AUDIT of the Sonnet S1/S2 interop branch)
+- **A row-canonicalization that drops a column is a PROJECTION, not a full-schema compare — and a
+  partition column dropped on BOTH sides is a silent partition-routing blind spot.** *Why:* S1's
+  fixture A (`merge_append`) is a V2 table partitioned by `identity(category)` with schema
+  `{id, category, data}`, but the shared `readLiveRowsToJson(table, "data")` + the Rust `ScanRow{id,
+  data}` only carry `{id, data}` — the `category` (partition) column is serialized on NEITHER side.
+  The auditor's Mutation 1 (route G to `category="b"` instead of `"a"`, id/data unchanged) left the
+  ENTIRE chain GREEN: Java's `IcebergGenerics` read still returned `{(10,a)..(60,g)}` and the Rust
+  compare matched. A real `merge_append` partition-routing divergence (identity-constant materialized
+  to the wrong bucket, a partition-field reorder) would slip through. FIX: pin the partition column
+  directly in the Rust GEN self-scan AND the Rust comparison (`id_to_category_sorted ==
+  expected_merge_append_categories()`), fail-before/pass-after proven. RULE: whenever an interop row
+  compare reuses a `{id, data}` dumper on a PARTITIONED fixture, the partition column is uncompared —
+  pin it separately, or the fixture only proves the non-partition columns.
+- **Reusing a row dumper from an UNPARTITIONED template onto a PARTITIONED fixture inherits the
+  template's projection silently.** *Why:* S1 reused `interop_scan_exec`'s `{id, data}` row shape
+  (designed for the unpartitioned scan-exec fixtures) for the partitioned merge_append fixture without
+  widening it. The dumper was correct for its original fixtures; the gap is in the REUSE onto a richer
+  schema. When a templated harness extends a row compare to a new fixture SHAPE, re-derive what columns
+  the fixture adds and confirm each is in the compare.
+- **A `^FAIL`-line guard is the cheap belt to the sentinel-absence suspenders — keep the two
+  fail-closed triggers consistent across sibling scripts.** *Why:* `run-interop-write-data.sh` checked
+  only `! grep '… 0 failures'` while its siblings `run-interop-expire.sh` / `run-interop-cherrypick.sh`
+  ALSO `grep '^FAIL '`. The single check is fail-closed in the current code (a real failure flips the
+  count sentinel to `: 1 failures`), but it diverges from the established convention and would miss a
+  verify that prints a FAIL line while desyncing its count. Added the `^FAIL` guard to both verify
+  steps. RULE: when a new harness script templates from a sibling, copy its fail-closed pattern
+  VERBATIM — a "simpler" sentinel check is a latent inconsistency, not a cleanup.
+- **The shared `InteropOracle.java` is a cross-chain blast surface — re-run EVERY pre-existing chain
+  after additions.** *Why:* S1/S2 added classes + dispatch arms to the one `InteropOracle.java` that
+  all chains compile. The auditor re-ran write-actions, expire, and rowdelta-meta (all `SnapshotMetaOracle`
+  consumers) plus the two new chains: all green, confirming the additions were purely additive (new
+  `case` arms before the existing ones, no edits to shared methods). A clean `mvn -o -q compile` is a
+  fast first signal (one compile error from the additions breaks every chain), but only a per-chain RUN
+  proves no semantic regression.
+- **TIER NOTE (Sonnet-on-templated-interop):** the Sonnet pairs handled the load-bearing semantics
+  WELL — the seq-preservation fixture B redesign (position→equality delete) was correct and matched the
+  cited lesson, the cherrypick dedup message/kind pins are genuine Java 1.10.0 output, the canonical
+  views are byte-deep and catch summary/seq corruption, and all sabotages fail closed. The miss was a
+  COVERAGE-GRANULARITY gap invisible to "does it fail on corruption" mutation testing: the compare was
+  sound for the columns it covered but silently excluded the partition column. Sonnet's mutation
+  mandate broke load-bearing BEHAVIORS one at a time; it did not ask "what column/field does this
+  compare NOT see?" — the projection-completeness axis. That axis is the Opus-critic's distinctive
+  catch on templated-interop work.

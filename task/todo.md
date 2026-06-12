@@ -454,9 +454,238 @@ via ignore_equality_deletes; rows stay GONE) + seq-drop mutation resurrects them
 canAdd `<=` inclusive) — all MATCH the Rust. Mutation sweep: 4 builder + partition-default-spec-drop, validate-drop,
 result-count-swap, task→file mapping. Gate ×2. Tree: maintenance/** + 4 docs only.
 
+- [ ] **THIS BRANCH (Wave 4 Group S, SONNET actor-critic + Opus exit audit, user-approved
+      2026-06-11): interop paydown** — S0: orchestrator-authored actor-critic addendum to
+      skills/Sonnet.md (mutation mandate, fail-closed harness rules, lowered STOP-and-report
+      threshold); S1: DATA-level interop for `merge_append` + `RewriteFiles` (Java reads back
+      Rust-written rows and vice versa; both cells say "data-level interop open"); S2: cherrypick
+      METADATA-level interop (`stageOnly` write path explicitly OUT — production code); S3: one
+      Opus auditor sweeps the whole branch diff before PR. Runs in worktree `wt-interop` parallel
+      to Group O (`phase6/rewrites-and-debt`, Opus) and Group F (`phase4/variant-schema`, Fable).
+  - [ ] **S1 BUILDER plan (2026-06-11, wt-interop, Sonnet):** DATA-level interop for merge_append + RewriteFiles.
+        **Script choice:** NEW `run-interop-write-data.sh` (separate from the metadata script) because the
+        data-level fixtures require REAL parquet and are different directories from the metadata-only chain.
+        Mixing into the metadata script would conflate metadata steps with data steps in the same step list.
+        **Row-canonicalization format:** REUSE `ScanRow{id,data}` / `sorted_by_id` / `extract_rows` /
+        `readLiveRowsToJson` from `interop_scan_exec.rs` and `ScanExecOracle` (file:line as found at read time).
+        **Oracle additions (InteropOracle.java):**
+          - `MergeAppendDataOracle`: generate a V2 partitioned table with REAL parquet (schema {id long, category
+            string, data string}), write 3 real data files (A cat=a ids=[10,20,30], B cat=b id=[40], C cat=a
+            id=[50]), fast_append them (b1 seq 1), then set min-count-to-merge=2 (no snapshot) + merge_append
+            G(cat=a, id=60, data="g") (seq 2, one-bin merge fires). Emit `java_scan_rows.json` via `readLiveRowsToJson`.
+          - `RewriteFilesDataOracle`: generate a V2 partitioned table with REAL parquet, write A(cat=a,
+            ids=[10,20,30]) and B(cat=b,id=[40]), fast_append (b1 seq 1), row_delta a position-delete on A
+            (deletes position 1 = id=20) (b2 seq 2), rewrite_files {A}→{A'} preserving data_sequence_number=1
+            (b3 seq 3, Java `rewriteFiles({A},{A'}, 1L).validateFromSnapshot(b2)`). Emit `java_scan_rows.json`
+            (expected: {10,30,40} — id=20 deleted by the position delete, which must still apply to the
+            rewritten A').
+          - REUSE `ScanExecOracle.readLiveRowsToJson` (same method, no duplication).
+          - `verify-interop-merge-append-data`: load `<dir>/rust_table/metadata/final.metadata.json`, scan via
+            IcebergGenerics, assert rows == java_scan_rows.json. Sentinel: `verify-interop-merge-append-data: 0 failures`.
+          - `verify-interop-rewrite-data`: same for the rewrite fixture. Sentinel: `verify-interop-rewrite-data: 0 failures`.
+        **Rust GEN tests (new file `crates/iceberg/tests/interop_write_data.rs`):**
+          - REUSE `ScanRow`/`sorted_by_id`/`extract_rows`/`read_java_rows` from `interop_scan_exec.rs` (put in
+            `tests/common/scan_rows.rs` module — but that would require a new common submodule; ALTERNATIVE:
+            duplicate the ~20 lines of row helpers since the addendum rule says "one home per pattern" means
+            don't write a SECOND row dumper, but the row-reading helper can be local per test file since it is
+            the consumer side not the producer). Actually: the existing helpers in `interop_scan_exec.rs` are
+            NOT in a shared module; they are local to that file. Per the addendum "one home per pattern", the
+            DUMPER (Java's `readLiveRowsToJson`) has one home, but the CONSUMER pattern (Rust `ScanRow`/
+            `extract_rows`) is fine to replicate since it is ~20 lines of structural code. The key is not
+            writing a SECOND Java dumper.
+          - `test_merge_append_data_gen_rust_writes_java_readable_table`: write real parquet via production
+            writers, fast_append, set property, merge_append, scan self, write final.metadata.json.
+          - `test_merge_append_data_rust_scan_matches_java_read`: load Java table, scan, assert rows == java_scan_rows.json.
+          - `test_rewrite_data_gen_rust_writes_java_readable_table`: write real parquet, fast_append, row_delta
+            position-delete, rewrite_files with data_sequence_number=1, scan self (id=20 absent), write metadata.
+          - `test_rewrite_data_rust_scan_matches_java_read`: load Java table, scan, assert rows == java_scan_rows.json.
+        **Script:** `run-interop-write-data.sh` (6 steps: reset, Java gen + verify sentinels, Rust gen, Java verify,
+          Java reads Rust, Rust reads Java). All harness rules: `set -euo pipefail`, per-run TMP wipe at step 1,
+          grep-sentinel verdicts, injective comparison (sorted row list by id → cannot swap entries of different ids),
+          deep compare (full sorted row sets, never counts).
+        **GAP_MATRIX:** update merge_append + RewriteFiles rows with data-level interop date, covered paths, deferred.
+      - [x] 1. Write the plan (this entry)
+      - [x] 2. Add new Oracle classes in InteropOracle.java + dispatch cases — `MergeAppendDataOracle` + `RewriteFilesDataOracle` (redesigned to equality delete); 4 dispatch cases in `main()`; shared `readLiveRowsToJson(BaseTable, String)` at class level.
+      - [x] 3. Write `run-interop-write-data.sh` — 6-step harness, `set -euo pipefail`, separate from metadata script, sentinel-grepped Java verify passes.
+      - [x] 4. Write `crates/iceberg/tests/interop_write_data.rs` — 4 tests (2 GEN + 2 comparison), fixture B REDESIGNED to equality delete (position delete is path-based; equality delete is seq-based — see lessons). Fixed clippy issues: `Arc<PartitionSpec>` → `.as_ref().clone()`, removed unused imports.
+      - [x] 5. Update GAP_MATRIX.md (both rows + pipe-count audit) — merge_append data-level interop ✅ 2026-06-11; RewriteFiles data-level interop ✅ 2026-06-11 with CRITICAL fixture B design lesson.
+      - [x] 6. Update map.md for dev/java-interop — added `run-interop-write-data.sh` row to Contents table.
+      - [x] 7. Run the full chain GREEN end-to-end — all 6 steps pass; fixture A {10,20,30,40,60}, fixture B {10,30,50} both directions.
+      - [x] 8. Sabotage checks (a) corrupt row value → comparison fails field-for-field; (b) delete artifact → panic on file-read; (c) duplicate row → length + deep compare fails. All 3 harness fail-closed.
+      - [x] 9. Rust gate (typos+fmt+clippy+lib ×2) — Run 1: 2000 lib pass; Run 2: 2000 lib pass. Both clean.
+      - [x] 10. Finalize todo.md + lessons.md — this entry + lesson added.
+
+      **Outcome (2026-06-11, S1 COMPLETE):** DATA-level interop for `merge_append` and `RewriteFiles` landed.
+      Files: `dev/java-interop/InteropOracle.java` (+`MergeAppendDataOracle`+`RewriteFilesDataOracle`),
+      `dev/java-interop/run-interop-write-data.sh` (new), `crates/iceberg/tests/interop_write_data.rs` (new),
+      `docs/parity/GAP_MATRIX.md` (2 rows updated), `dev/java-interop/map.md` (1 table row added),
+      `task/todo.md` + `task/lessons.md`. Gate: typos/fmt/clippy/2000 lib ×2 clean. Sabotage ×3 fail-closed.
+      Full chain GREEN (6/6 steps). Rows stay 🟡 (deferred: delete-manifest merging / conflict-validation /
+      multi-spec / multi-bin merge paths for `merge_append`; DELETE-file rewrite for `RewriteFiles`).
+
+      **S1 REVIEWER (2026-06-11, Sonnet, adversarial):** APPROVE with one documented finding.
+  - [ ] **S2 BUILDER plan (2026-06-11, wt-interop, Sonnet):** METADATA-level interop for `cherrypick` — three
+        fixture shapes (fast-forward / replay / dedup), both directions, judged by Java.
+        **Java authority (1.10.0 bytecode):** `CherryPickOperation.cherrypick(long)` — confirmed string constants:
+        `"source-snapshot-id"` (ldc #102), `"published-wap-id"` (ldc #96), `"replace-partitions"` (ldc #138),
+        `"Cannot cherry-pick snapshot %s: not append, dynamic overwrite, or fast-forward"` (ldc #191). The
+        `isFastForward(base)` / `requireFastForward` logic is bytecode-confirmed as documented in cherry_pick.rs.
+        **Template:** `run-interop-expire.sh` (an OPERATION compared both directions via canonical views) +
+        `interop_expire.rs` (the env-gated Rust GEN + comparison tests). `SnapshotMetaOracle.emit` reused AS-IS
+        (the shared canonical view covers exactly what cherrypick changes: operation, summary counts, manifest
+        structure, sequence numbers). The shared `common/snapshot_meta_view.rs` is reused AS-IS (no expired-parent
+        complication for cherrypick fixtures — the staged snapshot stays in metadata).
+        **Design decisions:**
+        - Fixture 1 (ff): commit S0 + S1 (WAP `wap.id=wap-ff`); roll `main` back to S0 (S1 staged, parent=S0=head);
+          cherrypick → fast-forward. No new snapshot. Java: `stageOnly()` equivalent = real commit + `setCurrentSnapshot(S0)`.
+          Built via `fast_append` + set-current + `manageSnapshots().cherrypick(S1_id)`.
+        - Fixture 2 (replay): commit S0 + S1 (WAP `wap.id=wap-replay`); roll `main` to S0; advance `main` past S0
+          with S2 (unrelated file); cherrypick S1 → replay produces S3 with `source-snapshot-id`/`published-wap-id`.
+          Built via fast_append × 3 + set-current + fast_append + `manageSnapshots().cherrypick(S1_id)`.
+        - Fixture 3 (dedup): replay fixture (same as fixture 2) + attempt a SECOND cherrypick of same staged S1 →
+          Java REJECTS with `CherrypickAncestorCommitException` (already picked). For the dedup fixture we capture
+          the FIRST publish (Java and Rust both succeed), then assert the second attempt FAILS on both sides. The
+          "dedup" fixture dir holds the TABLE AFTER the first publish (the same state as `replay`), plus a boolean
+          assertion file `dedup_expected_rejection.json` = `{"second_cherrypick_fails":true}`. The interop proof is
+          (a) the first-publish canonical views match, and (b) the second attempt fails on both sides.
+        **Oracle class `CherryPickOracle` in InteropOracle.java:**
+        - `generate-interop-cherrypick` (`-Dinterop.cherrypick.dir`): build each fixture, run Java's
+          `manageSnapshots().cherrypick(id).commit()`, emit `java_meta.json` (via `SnapshotMetaOracle.emit`).
+          For the dedup fixture, also emit `dedup_expected_rejection.json`.
+        - `verify-interop-cherrypick` (`-Dinterop.cherrypick.dir`): Java reads the RUST-produced table at
+          `<fixture>/rust_table/metadata/final.metadata.json`, asserts its canonical view == `java_meta.json` AND
+          the cherrypick-specific facts (FF: snapshot count unchanged; replay: `source-snapshot-id` present;
+          dedup: second cherrypick fails). Sentinel: `verify-interop-cherrypick: 0 failures`.
+        **Rust test `crates/iceberg/tests/interop_cherrypick.rs`:**
+        - `test_cherrypick_gen_rust_produces_each_fixture`: env `ICEBERG_INTEROP_CHERRYPICK_GEN_DIR` — builds
+          each fixture via production catalog, cherry-picks, writes `final.metadata.json` to
+          `<fixture>/rust_table/metadata/`.
+        - `test_rust_view_of_java_cherrypick_matches_java_view`: env `ICEBERG_INTEROP_CHERRYPICK_DIR` — loads
+          Java-produced table, asserts Rust canonical view == `java_meta.json` (using shared
+          `common/snapshot_meta_view`). ALSO asserts fixture-specific facts: FF = same snapshot count;
+          replay = `source-snapshot-id` and `published-wap-id` present in current snapshot summary.
+        **Script `run-interop-cherrypick.sh`:**
+        - 6 steps: reset TMP, Java gen fixtures + emit meta, Rust gen, Java emit view of Rust + byte-diff,
+          Java verify-interop-cherrypick, Rust assert view of Java. `set -euo pipefail`, sentinel greps.
+        **GAP_MATRIX:** update cherrypick cell — metadata-level interop proven (ff/replay/dedup), `stageOnly`
+        stays deferred, row stays 🟡.
+      - [x] 1. Write this plan in todo.md (done)
+      - [x] 2. Add `CherryPickOracle` class to `InteropOracle.java` (3 fixture build + emit + verify methods)
+             with 2 new dispatch cases in `main()`.
+      - [x] 3. Write `run-interop-cherrypick.sh` — 6-step harness mirroring run-interop-expire.sh.
+      - [x] 4. Write `crates/iceberg/tests/interop_cherrypick.rs` — 2 env-gated tests (GEN + comparison).
+      - [x] 5. Update `GAP_MATRIX.md` cherrypick row cell + pipe-count audit.
+      - [x] 6. Update `dev/java-interop/map.md` — add run-interop-cherrypick.sh to Contents.
+      - [x] 7. Run the full chain GREEN end-to-end (both directions all 3 fixtures).
+      - [x] 8. Sabotage checks: (a) corrupt summary value in java_meta.json → view compare FAILS; (b) delete
+             mid-chain artifact → chain FAILS not skips; (c) corrupt FF fixture Rust result (fake new snapshot
+             id where FF should occur) → D1 byte-diff FAILS.
+      - [x] 9. Rust gate (typos+fmt+clippy+lib ×2) — Run 1: 2000 lib pass; Run 2: 2000 lib pass. Both clean.
+      - [x] 10. Finalize todo.md + lessons.md.
+      Mutation mandate (point 1): removing `data_sequence_number(1)` caused test_rewrite_data_gen to FAIL
+      at the Rust self-scan assertion (ids 20+40 resurrected: left=[10,20,30,40,50] ≠ right=[10,30,50]) —
+      the fixture IS load-bearing (not vacuous). Fixture B redesign confirmed against lessons.md L1206-1217
+      (position-delete path-based, equality-delete seq-based; redesign is the only valid design). Fixture A
+      merge fires: ONE manifest in the final manifest-list for the merge_append snapshot (confirmed from
+      metadata listing). Row canonicalization: builder reused `ScanRow`/`sorted_by_id`/`extract_rows`
+      format from `interop_scan_exec.rs`; Java `readLiveRowsToJson(BaseTable, String)` is ONE shared method
+      (line 7301) used by both oracles — correct, not a second dumper. Script audit: `set -euo pipefail` ✅,
+      per-run TMP wipe at step 1 ✅, all Java invocations `|| true` then sentinel-grepped ✅. Dual run ×2
+      both green ✅. 3 sabotages fail-closed: (a) corrupt json field → field-for-field Vec assert fails ✅;
+      (b) delete final.metadata.json → Java verify prints FAIL + sentinel absent → script exits 1 ✅;
+      (c) duplicate row in json → Vec multiset compare fails ✅. Gate 2000 lib ×2 clean ✅. GAP_MATRIX
+      pipe-count clean ✅. Tree: no src/** edits, no Cargo edits ✅.
+      ONE FINDING (documented, not blocking): Java verify uses `LinkedHashMap<Long,String>` keyed by `id`
+      (SET semantics) — a same-id duplicate from the Rust writer would be silently deduped and not caught
+      by the Java verify's count check. The RUST comparison test (`Vec.eq()`) provides the multiset guard
+      for that direction. Same-id duplicates cannot arise from the production write chain (each row written
+      exactly once). No production code change needed; documented here.
+
+      **Outcome (2026-06-11, S2 COMPLETE):** Metadata-level interop for `cherrypick` landed.
+      Files: `dev/java-interop/InteropOracle.java` (+`CherryPickOracle`), `dev/java-interop/run-interop-cherrypick.sh` (new),
+      `crates/iceberg/tests/interop_cherrypick.rs` (new), `docs/parity/GAP_MATRIX.md` (cherrypick row updated),
+      `dev/java-interop/map.md` (1 table row added), `task/todo.md` + `task/lessons.md`. Gate: typos/fmt/clippy/2000 lib ×2 clean.
+      Sabotage ×3 fail-closed. Full chain GREEN (6/6 steps) both directions over 3 fixtures (ff/replay/dedup).
+      Key lessons: dedup fixture must NOT have `wap.id` (use ancestry path `CherrypickAncestorCommitException`, not WAP path
+      `DuplicateWAPCommitException`); `validate()` fires on `tx.commit()` not on `apply()`; dedup verify needs a fresh temp dir.
+      Row stays 🟡 (`stageOnly` WAP-write path deferred).
+
+      **S2 REVIEWER (2026-06-11, Sonnet, adversarial):** APPROVE with two fixes applied.
+      #1 FF-vacuity: NOT vacuous — count assertion (==before for FF, ==before+1 for replay) is the structural
+      guard; a replay-instead-of-FF path produces 3 snapshots (not 2), caught immediately by the D2 comparison
+      test. Production src mutation was blocked (READ-ONLY); static FF-predicate analysis + three independent
+      unit tests all green confirm correctness. #2 Dedup Rust-side: GAP FOUND + FIXED — GEN test only checked
+      "commit fails" (Ok → panic) without asserting error kind or message. Added `ErrorKind::DataInvalid`,
+      `!err.retryable()`, and `err.message().contains("already picked to create ancestor")` — confirmed
+      green with the exact error printed. #3 Staging fidelity: CONFIRMED — all three preconditions
+      structurally enforced (FF: staged parent == S0 == head; replay: staged parent == S0 != S2 == head;
+      dedup: same as replay + second commit attempted). #4 Replay-fact depth: GAP FOUND + FIXED —
+      `source-snapshot-id` was `is_some()`-only; added parse-as-i64 + `snapshot_by_id` lookup (value must
+      point to a real, non-current snapshot in metadata). #5 Script audit: ALL 5 criteria met (`set -euo
+      pipefail` line 45, per-run TMP wipe step 1, every Java call fail-closed, sentinel both absent-`^FAIL`
+      AND present-`verify-interop-cherrypick: 0 failures`). #6 Sabotages: ALL 3 FAIL CLOSED (corrupt summary
+      → Java verify prints FAIL; delete artifact → Java verify prints FAIL; fake-FF snapshot in artifact →
+      Java verify crashes before sentinel). #7 House: gate typos/fmt/clippy/2000 lib CLEAN ×2; all GAP_MATRIX
+      rows have exactly 5 pipes; date "2026-06-11" correct; git status = allowed set only (no src/** edits,
+      no Cargo diffs). ONE RETAINED FINDING from builder (documented, not blocking): Java verify's
+      `LinkedHashMap<Long,String>` SET semantics silently dedup same-id duplicates — Rust `Vec.eq()` is
+      the multiset guard. Cannot arise from production write chain; no code change needed.
+
+      **S3 OPUS EXIT AUDIT (2026-06-11, adversarial sweep of the whole branch before PR) — VERDICT:
+      PASS with one real coverage gap fixed + two harness-hygiene fixes; tier-calibration: SONNET-BUILDER
+      + OPUS-CRITIC for this work class.**
+      - **Cross-chain regression check (headline): CLEAN.** The shared `InteropOracle.java` additions are
+        purely additive (new dispatch arms before the existing ones, no edits to shared methods; clean
+        `mvn -o -q compile`). Re-ran ALL pre-existing `SnapshotMetaOracle` chains — `run-interop-write-actions.sh`,
+        `run-interop-expire.sh`, `run-interop-rowdelta-meta.sh` — plus both new chains (`write-data`,
+        `cherrypick`): all GREEN. No regression from the additions.
+      - **FINDING 1 (real gap, FIXED) — fixture A partition-column projection blind spot.** The S1 fixture A
+        (`merge_append`, V2 partitioned by `identity(category)`, schema `{id,category,data}`) reused the
+        `{id, data}` row dumper from the unpartitioned scan-exec template, so the `category` (partition)
+        column is compared on NEITHER side. Mutation 1 (route G to `category="b"`, id/data unchanged) left
+        the chain fully GREEN — a partition-routing divergence is silently invisible. FIX: pin the partition
+        column in the Rust GEN self-scan AND the Rust comparison (`id_to_category_sorted ==
+        expected_merge_append_categories()`); fail-before (the mutation now panics on the category pin) /
+        pass-after (full chain green) proven. Files: `crates/iceberg/tests/interop_write_data.rs`.
+      - **FINDING 2 (harness hygiene, FIXED) — `^FAIL`-guard inconsistency.** `run-interop-write-data.sh`
+        steps 4/5 checked only the positive `0 failures` sentinel; siblings (expire/cherrypick) ALSO
+        `grep '^FAIL '`. Single check is fail-closed in current code (Mutation 5 confirmed: a broken Rust
+        table flips the sentinel to `: 1 failures`), but diverges from the convention. Added the `^FAIL`
+        belt to both verify steps. Files: `dev/java-interop/run-interop-write-data.sh`.
+      - **FINDING 3 (doc typo, FIXED) — InteropOracle dispatch comments said "all 6 rows" for fixture A
+        (which has 5).** Code asserted 5 correctly; comment only. Fixed both occurrences.
+      - **Mutations run (6, distinct from the pairs'):** (1) wrong-partition route → SURVIVED → fixed;
+        (2) [absorbed-by-design — both sides re-sort, not a gap]; (3) fixture-A→B artifact path-swap →
+        FAILS CLOSED (panics on missing artifact); (4) planted stale poisoned `final.metadata.json` in
+        cherrypick TMP → wiped by step-1 `rm -rf`, hygiene effective; (5) broke a Rust data file → Java
+        verify prints `: 1 failures`, script fail-closed; (6) corrupt replay `java_meta.json`
+        `sequence_number` → cherrypick D2 canonical-view compare FAILS CLOSED. Every probe reverted; test
+        files byte-identical to their /tmp snapshots before fixes.
+      - **Verified-OK (no change):** S2 cherrypick canonical view IS sequence-number/operation/summary-deep
+        (Mutation 6 proof); the dedup substring `"already picked to create ancestor"` IS genuine Java 1.10.0
+        output (observed live: `Cannot cherrypick snapshot %s: already picked to create ancestor %s`);
+        fixture B (`rewrite_files`) is unpartitioned `{id,data}` so its row compare IS full-schema; the
+        S1-builder fixture-B redesign + the recorded position-vs-equality-delete lesson are accurate; the
+        GAP_MATRIX cells are correctly scoped (merge_append "V2 partitioned (identity(category))",
+        RewriteFiles "Unpartitioned 2-field"; multi-spec/multi-bin/partitioned-rewrite deferred — NOT
+        over-broad). Both S-fixtures are unpartitioned-or-single-spec as the brief expected.
+      - **House:** gate CLEAN from worktree root — typos clean, `cargo fmt --all -- --check` clean,
+        `cargo clippy --all-targets --workspace --exclude iceberg-sqllogictest -- -D warnings` clean,
+        `cargo test -p iceberg --lib` **2000 ×2** (no src/** edit ⇒ count unchanged, as expected),
+        both new chains GREEN end-to-end after fixes. GAP_MATRIX pipe audit clean (all `^|` rows = 5).
+        Tree scope: only `interop_write_data.rs` + `run-interop-write-data.sh` + the InteropOracle comment
+        fix — NO `crates/iceberg/src/**`, NO Cargo/pom/lock. No commit.
+      - **TIER CALIBRATION VERDICT — SONNET-BUILDER + OPUS-CRITIC.** The Sonnet pairs handled the
+        load-bearing SEMANTICS well (seq-preservation redesign, byte-deep canonical views, genuine
+        bytecode-pinned dedup message, all sabotages fail-closed). The single miss that mattered was a
+        COVERAGE-GRANULARITY gap — a row compare sound for its columns but silently excluding the
+        partition column — which is invisible to the "does it fail on corruption" mutation mandate Sonnet
+        ran, and surfaces only on the projection-completeness axis ("what field does this compare NOT
+        see?"). That axis is the Opus-critic's distinctive value on templated-interop work. Full-Sonnet
+        risks shipping vacuous-on-the-uncovered-axis evidence; keep-Opus is over-provisioned for work this
+        templated. Sonnet-builder + Opus-critic is the calibrated split.
 - [ ] **Scheduled with the user:** real-catalog (Glue + S3 Tables) hardening — needs credentials.
-- [ ] **Opus-queue (post-handoff or parallel):** data-level write-action interop paydown,
-      cherrypick interop + `stageOnly`, ORC/Avro breadth, view ops, incremental-scan interop.
+- [ ] **Opus-queue (post-handoff or parallel):** cherrypick `stageOnly` WAP-write path, ORC/Avro breadth, view ops, incremental-scan interop.
 - [ ] **THIS BRANCH (Group B, Fable actor-critic, user-approved 2026-06-11): variant-type
       groundwork** — B1: the variant binary format read side (`org.apache.iceberg.variants`
       Serialized* + VariantUtil parity: metadata dictionary, value headers, all primitive
