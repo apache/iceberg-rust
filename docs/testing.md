@@ -107,6 +107,11 @@ mutations of the production code make it fail.
   the unmodified artifact is theater: ask "would this step turn RED if the pin were deleted?" And
   `is_err()` alone never pins a fail-fast/atomicity guard — assert the no-side-effect property
   itself (e.g. the buffer untouched on failure). _Promoted 2026-06-12 from lessons (B2/W1/W2)._
+- **A data-MOVEMENT read of planned `FileScanTask`s must strip the scan residual
+  (`task.predicate = None`).** The residual is a row-level filter belonging to QUERY reads; an
+  action that re-feeds planned tasks to read-for-rewrite/compact/copy silently DISCARDS the
+  non-matching live rows (permanent data loss — the O2 filter-leak). Java's planners call
+  `ignoreResiduals()`. _Promoted 2026-06-12 from lessons (O2)._
 - **Writer-generated fixtures inherit the writer's canonical shape — layout/order correctness
   claims need HAND-BUILT disordered or non-canonical fixtures.** Every fixture a conforming writer
   emits has name-sorted fields, ascending offsets, minimal widths, ascending-id partition tuples —
