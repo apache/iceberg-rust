@@ -37,6 +37,12 @@ const FIELD_ID_PROP: &str = "field-id";
 const KEY_ID: &str = "key-id";
 const VALUE_ID: &str = "value-id";
 const MAP_LOGICAL_TYPE: &str = "map";
+/// The Avro logical-type name Java stamps on a variant record
+/// (`org.apache.iceberg.avro.VariantLogicalType.NAME`, 1.10.0).
+const VARIANT_LOGICAL_TYPE: &str = "variant";
+/// Field names of the Avro variant record (Java `AvroSchemaUtil.isVariantSchema`, 1.10.0).
+const VARIANT_METADATA_FIELD: &str = "metadata";
+const VARIANT_VALUE_FIELD: &str = "value";
 // This const may better to maintain in avro-rs.
 const LOGICAL_TYPE: &str = "logicalType";
 
@@ -145,8 +151,15 @@ impl SchemaVisitor for SchemaToAvroSchema {
         key_value: AvroSchemaOrField,
         value: AvroSchemaOrField,
     ) -> Result<AvroSchemaOrField> {
-        let key_field_schema = key_value.unwrap_left();
+        let mut key_field_schema = key_value.unwrap_left();
         let mut value_field_schema = value.unwrap_left();
+        // A variant key/value record is renamed to Java's `r<fieldId>` (1.10.0 `TypeToSchema`
+        // names every record from its field-id stack; live-Java-probed: a variant map value
+        // converts to a record named `r8` for value-id 8). Without the rename, two variant-valued
+        // maps in one schema would emit two records both named "variant" — an Avro-spec
+        // duplicate-definition that Java's `Schema.Parser` rejects with "Can't redefine: variant".
+        rename_variant_record(&mut key_field_schema, map.key_field.id);
+        rename_variant_record(&mut value_field_schema, map.value_field.id);
         if !map.value_field.required {
             value_field_schema = avro_optional(value_field_schema)?;
         }
@@ -220,6 +233,10 @@ impl SchemaVisitor for SchemaToAvroSchema {
         }
     }
 
+    fn variant(&mut self) -> Result<AvroSchemaOrField> {
+        Ok(Either::Left(avro_variant_schema()?))
+    }
+
     fn primitive(&mut self, p: &PrimitiveType) -> Result<AvroSchemaOrField> {
         let avro_schema = match p {
             PrimitiveType::Boolean => AvroSchema::Boolean,
@@ -269,6 +286,93 @@ fn avro_record_schema(name: &str, fields: Vec<AvroRecordField>) -> Result<AvroSc
         lookup,
         attributes: Default::default(),
     }))
+}
+
+/// Builds the Avro schema Java 1.10.0 emits for an Iceberg `variant` column
+/// (`TypeToSchema.variant`, bytecode-pinned): a record with two REQUIRED `bytes` fields —
+/// `metadata` then `value` — annotated with the logical type `"variant"`
+/// (`VariantLogicalType.NAME`).
+///
+/// The record name here is Java's no-enclosing-field fallback `"variant"`; the rename hooks in
+/// [`SchemaToAvroSchema::field`] / [`SchemaToAvroSchema::list`] (any record) and
+/// [`SchemaToAvroSchema::map`] (via [`rename_variant_record`]) rename it to `r{field_id}`,
+/// matching Java's `r<fieldId>` naming in every placement (Java derives the name from its
+/// field-id stack; this converter renames records after the fact — same resulting name,
+/// live-Java-probed against 1.10.0 `AvroSchemaUtil.convert`).
+///
+/// apache-avro 0.21 carries the unknown logical type as a custom attribute on the record —
+/// verified against the vendored crate: `parse_record` keeps `logicalType` in
+/// `RecordSchema.attributes` (only `fields` is excluded) and `Serialize` writes attributes back,
+/// so the Java-shaped JSON round-trips exactly.
+fn avro_variant_schema() -> Result<AvroSchema> {
+    let metadata_field = AvroRecordField {
+        name: VARIANT_METADATA_FIELD.to_string(),
+        schema: AvroSchema::Bytes,
+        order: RecordFieldOrder::Ignore,
+        position: 0,
+        doc: None,
+        aliases: None,
+        default: None,
+        custom_attributes: Default::default(),
+    };
+    let value_field = AvroRecordField {
+        name: VARIANT_VALUE_FIELD.to_string(),
+        schema: AvroSchema::Bytes,
+        order: RecordFieldOrder::Ignore,
+        position: 1,
+        doc: None,
+        aliases: None,
+        default: None,
+        custom_attributes: Default::default(),
+    };
+
+    let mut avro_schema =
+        avro_record_schema(VARIANT_LOGICAL_TYPE, vec![metadata_field, value_field])?;
+    if let AvroSchema::Record(record) = &mut avro_schema {
+        record.attributes.insert(
+            LOGICAL_TYPE.to_string(),
+            Value::String(VARIANT_LOGICAL_TYPE.to_string()),
+        );
+    }
+    Ok(avro_schema)
+}
+
+/// Renames a variant record (identified by its `"variant"` logical-type attribute) to Java's
+/// `r<fieldId>` recipe name for the enclosing map key/value field.
+///
+/// [`SchemaToAvroSchema::field`] and [`SchemaToAvroSchema::list`] already rename ANY record they
+/// enclose; the map visitor historically renames nothing (a struct map value keeps the `"null"`
+/// placeholder — a pre-existing divergence from Java's `r<fieldId>`), so this hook renames only
+/// the variant record to avoid changing pre-existing struct naming while matching Java's shape
+/// (live-probed: 1.10.0 emits `r8` for a variant map value with value-id 8).
+fn rename_variant_record(schema: &mut AvroSchema, field_id: i32) {
+    if let AvroSchema::Record(record) = schema
+        && record
+            .attributes
+            .get(LOGICAL_TYPE)
+            .and_then(Value::as_str)
+            .is_some_and(|logical_type| logical_type == VARIANT_LOGICAL_TYPE)
+    {
+        record.name = Name::from(format!("r{field_id}").as_str());
+    }
+}
+
+/// Whether an Avro record has the variant SHAPE: exactly two fields, `metadata` and `value`,
+/// both of Avro type `bytes` — the exact checks in Java 1.10.0 `AvroSchemaUtil.isVariantSchema`
+/// (field lookup is by NAME, so field order is not part of the shape check, matching Java's
+/// `getField` calls).
+fn is_variant_record_shape(record: &RecordSchema) -> bool {
+    if record.fields.len() != 2 {
+        return false;
+    }
+    let field_is_bytes = |name: &str| {
+        record
+            .lookup
+            .get(name)
+            .and_then(|&position| record.fields.get(position))
+            .is_some_and(|field| matches!(field.schema, AvroSchema::Bytes))
+    };
+    field_is_bytes(VARIANT_METADATA_FIELD) && field_is_bytes(VARIANT_VALUE_FIELD)
 }
 
 pub(crate) fn avro_fixed_schema(len: usize) -> Result<AvroSchema> {
@@ -332,12 +436,50 @@ pub(crate) trait AvroSchemaVisitor {
     fn map_array(&mut self, array: &RecordSchema, key: Self::T, value: Self::T) -> Result<Self::T>;
 
     fn primitive(&mut self, schema: &AvroSchema) -> Result<Self::T>;
+
+    /// Called for a record annotated with the `variant` logical type (already shape-validated).
+    ///
+    /// Default mirrors Java 1.10.0 `AvroSchemaVisitor.variant`'s
+    /// `UnsupportedOperationException("Unsupported type: variant")`. Unlike Java's 3-arg
+    /// `variant(Schema, T, T)`, the metadata/value child results are not computed — both children
+    /// are statically `bytes` and Java's only overrider (`SchemaToType.variant`) ignores them.
+    fn variant(&mut self, _variant: &RecordSchema) -> Result<Self::T> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Unsupported type: variant",
+        ))
+    }
 }
 
 /// Visit avro schema in post order visitor.
 pub(crate) fn visit<V: AvroSchemaVisitor>(schema: &AvroSchema, visitor: &mut V) -> Result<V::T> {
     match schema {
         AvroSchema::Record(record) => {
+            // A record carrying the `variant` logical type is the schema of an Iceberg variant
+            // column, not a struct. Mirrors Java 1.10.0 `AvroSchemaVisitor.visit`: route through
+            // the shape check (`isVariantSchema`, by-name so field order is irrelevant) to
+            // `variant()`. The malformed-shape rejection uses Java's `Preconditions` message
+            // ("Invalid variant record: %s") but is a DELIBERATE fail-loud divergence
+            // (live-Java-probed by the reviewer): on Java's PARSE path, Avro's registered-factory
+            // `fromSchemaIgnoreInvalid` silently DROPS an invalid variant logical type and reads
+            // the record as a plain struct (Java's in-code precondition is unreachable for parsed
+            // schemas). Silently misreading claimed-variant bytes as a struct is exactly the
+            // corruption this boundary must refuse, so Rust rejects loudly instead.
+            if record
+                .attributes
+                .get(LOGICAL_TYPE)
+                .and_then(Value::as_str)
+                .is_some_and(|logical_type| logical_type == VARIANT_LOGICAL_TYPE)
+            {
+                if !is_variant_record_shape(record) {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid variant record: {}", record.name),
+                    ));
+                }
+                return visitor.variant(record);
+            }
+
             let field_results = record
                 .fields
                 .iter()
@@ -506,6 +648,12 @@ impl AvroSchemaVisitor for AvroSchemaToSchema {
             key_field: key_field.into(),
             value_field: value_field.into(),
         })))
+    }
+
+    /// A shape-validated variant record converts to the Iceberg variant type — Java 1.10.0
+    /// `SchemaToType.variant` returns `Types.VariantType.get()`.
+    fn variant(&mut self, _variant: &RecordSchema) -> Result<Option<Type>> {
+        Ok(Some(Type::Variant))
     }
 
     fn primitive(&mut self, schema: &AvroSchema) -> Result<Option<Type>> {
@@ -1044,6 +1192,407 @@ mod tests {
         };
 
         check_schema_conversion(avro_schema, iceberg_schema);
+    }
+
+    /// Unwraps an optional (`[null, T]`) Avro schema to `T`, then expects a record.
+    fn expect_record_schema(schema: &AvroSchema) -> &RecordSchema {
+        let inner = match schema {
+            AvroSchema::Union(union) => &union.variants()[1],
+            other => other,
+        };
+        match inner {
+            AvroSchema::Record(record) => record,
+            other => panic!("expected an avro record, got {other:?}"),
+        }
+    }
+
+    /// Asserts the Java 1.10.0 variant record shape (`TypeToSchema.variant`, bytecode-pinned):
+    /// two required `bytes` fields `metadata` then `value`, the record named `expected_name`,
+    /// and the `"logicalType": "variant"` attribute present.
+    fn assert_variant_record_shape(record: &RecordSchema, expected_name: &str) {
+        assert_eq!(record.name.name, expected_name, "variant record name");
+        assert_eq!(
+            record.fields.len(),
+            2,
+            "variant record has exactly 2 fields"
+        );
+        assert_eq!(record.fields[0].name, "metadata");
+        assert!(matches!(record.fields[0].schema, AvroSchema::Bytes));
+        assert_eq!(record.fields[1].name, "value");
+        assert!(matches!(record.fields[1].schema, AvroSchema::Bytes));
+        assert_eq!(
+            record.attributes.get(LOGICAL_TYPE).and_then(Value::as_str),
+            Some(VARIANT_LOGICAL_TYPE),
+            "the variant record must carry the variant logical type"
+        );
+    }
+
+    // RISK: the Avro shape of a variant column is Java 1.10.0's on-wire contract
+    // (`TypeToSchema.variant`): a record `r<fieldId>` with REQUIRED bytes fields
+    // `metadata`/`value` and logical type "variant". apache-avro's `Schema` equality ignores
+    // custom attributes (where the logical type lives), so this test asserts the attribute and
+    // shape EXPLICITLY in the Iceberg→Avro direction, for a variant at top level, nested in a
+    // struct, in a list element, and in a (string-keyed) map value.
+    #[test]
+    fn test_variant_to_avro_emits_java_shape_in_all_placements() {
+        let iceberg_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "v", Type::Variant).into(),
+                NestedField::required(
+                    2,
+                    "payload",
+                    Type::Struct(StructType::new(vec![
+                        NestedField::optional(3, "nested_v", Type::Variant).into(),
+                    ])),
+                )
+                .into(),
+                NestedField::required(
+                    4,
+                    "events",
+                    Type::List(ListType {
+                        element_field: NestedField::list_element(5, Type::Variant, false).into(),
+                    }),
+                )
+                .into(),
+                NestedField::required(
+                    6,
+                    "tags",
+                    Type::Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            7,
+                            Type::Primitive(PrimitiveType::String),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(8, Type::Variant, false).into(),
+                    }),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let avro_schema = schema_to_avro_schema("avro_schema", &iceberg_schema).unwrap();
+        let AvroSchema::Record(root) = &avro_schema else {
+            panic!("root must be a record");
+        };
+
+        // Top-level field: record renamed to r1 (Java `r<fieldId>`).
+        assert_variant_record_shape(expect_record_schema(&root.fields[0].schema), "r1");
+
+        // Nested in a struct: the inner field's record is renamed to r3.
+        let payload = expect_record_schema(&root.fields[1].schema);
+        assert_variant_record_shape(expect_record_schema(&payload.fields[0].schema), "r3");
+
+        // List element: renamed to r5.
+        let AvroSchema::Array(array) = &root.fields[2].schema else {
+            panic!("events must be an avro array");
+        };
+        assert_variant_record_shape(expect_record_schema(&array.items), "r5");
+
+        // Map value: renamed to r8, exactly Java's name (live-probed: 1.10.0
+        // `AvroSchemaUtil.convert` emits `"name" : "r8"` for a variant map value with value-id 8).
+        let AvroSchema::Map(map) = &root.fields[3].schema else {
+            panic!("tags must be an avro map");
+        };
+        assert_variant_record_shape(expect_record_schema(&map.types), "r8");
+    }
+
+    // RISK (live-Java-probed, reviewer): two variant-valued maps in one schema must emit two
+    // DISTINCTLY-named records. With a shared fallback name ("variant" twice), the emitted JSON
+    // violates Avro's unique-name rule and Java's `Schema.Parser` rejects it with
+    // "Can't redefine: variant" — a cross-engine read failure for any schema with two or more
+    // map-variant placements.
+    #[test]
+    fn test_two_map_variant_values_get_unique_record_names() {
+        let map_of_variant = |key_id: i32, value_id: i32| {
+            Type::Map(MapType {
+                key_field: NestedField::map_key_element(
+                    key_id,
+                    Type::Primitive(PrimitiveType::String),
+                )
+                .into(),
+                value_field: NestedField::map_value_element(value_id, Type::Variant, false).into(),
+            })
+        };
+        let iceberg_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "tags_a", map_of_variant(2, 3)).into(),
+                NestedField::required(4, "tags_b", map_of_variant(5, 6)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let avro_schema = schema_to_avro_schema("avro_schema", &iceberg_schema).unwrap();
+        let AvroSchema::Record(root) = &avro_schema else {
+            panic!("root must be a record");
+        };
+        let AvroSchema::Map(map_a) = &root.fields[0].schema else {
+            panic!("tags_a must be an avro map");
+        };
+        let AvroSchema::Map(map_b) = &root.fields[1].schema else {
+            panic!("tags_b must be an avro map");
+        };
+        assert_variant_record_shape(expect_record_schema(&map_a.types), "r3");
+        assert_variant_record_shape(expect_record_schema(&map_b.types), "r6");
+
+        // The serialized JSON re-parses (no duplicate definitions) and converts back losslessly.
+        let avro_json = serde_json::to_string(&avro_schema).expect("serialize avro schema");
+        let reparsed = AvroSchema::parse_str(&avro_json).expect("re-parse the avro schema JSON");
+        let round_tripped = avro_schema_to_schema(&reparsed).expect("convert back to iceberg");
+        assert_eq!(iceberg_schema, round_tripped);
+    }
+
+    // RISK (live-Java-probed, reviewer): the variant shape check must be ORDER-INSENSITIVE —
+    // Java 1.10.0 `AvroSchemaUtil.isVariantSchema` looks fields up BY NAME (`getField`), and a
+    // registered-`VariantLogicalType` Java parse accepts a `value`-before-`metadata` record as a
+    // variant column. An index-based Rust check would wrongly reject Java-readable schemas.
+    #[test]
+    fn test_value_before_metadata_variant_record_is_accepted() {
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+{
+    "type": "record",
+    "name": "avro_schema",
+    "fields": [
+        {
+            "name": "v",
+            "type": {
+                "type": "record",
+                "name": "r1",
+                "fields": [
+                    {"name": "value", "type": "bytes"},
+                    {"name": "metadata", "type": "bytes"}
+                ],
+                "logicalType": "variant"
+            },
+            "field-id": 1
+        }
+    ]
+}
+"#,
+        )
+        .unwrap();
+
+        let expected = Schema::builder()
+            .with_fields(vec![NestedField::required(1, "v", Type::Variant).into()])
+            .build()
+            .unwrap();
+        assert_eq!(avro_schema_to_schema(&avro_schema).unwrap(), expected);
+    }
+
+    // RISK: the WIRE round-trip — serializing the converted Avro schema to JSON must keep the
+    // variant logical type (apache-avro writes record attributes back), and re-parsing + the
+    // Avro→Iceberg conversion must land on `Type::Variant` again in every placement. A drop
+    // anywhere in this loop would silently degrade a variant column to a plain 2-field struct
+    // (whose field-id-less fields then fail conversion) on the next reader.
+    #[test]
+    fn test_variant_avro_json_round_trip_back_to_iceberg() {
+        let iceberg_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "v", Type::Variant).into(),
+                NestedField::required(
+                    4,
+                    "events",
+                    Type::List(ListType {
+                        element_field: NestedField::list_element(5, Type::Variant, false).into(),
+                    }),
+                )
+                .into(),
+                NestedField::required(
+                    6,
+                    "tags",
+                    Type::Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            7,
+                            Type::Primitive(PrimitiveType::String),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(8, Type::Variant, false).into(),
+                    }),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let avro_schema = schema_to_avro_schema("avro_schema", &iceberg_schema).unwrap();
+        let avro_json = serde_json::to_string(&avro_schema).expect("serialize avro schema");
+        assert!(
+            avro_json.contains(r#""logicalType":"variant""#),
+            "the serialized avro schema must carry the variant logical type, got: {avro_json}"
+        );
+
+        let reparsed = AvroSchema::parse_str(&avro_json).expect("re-parse the avro schema JSON");
+        let round_tripped = avro_schema_to_schema(&reparsed).expect("convert back to iceberg");
+        assert_eq!(
+            iceberg_schema, round_tripped,
+            "the variant columns must survive the avro JSON round-trip"
+        );
+    }
+
+    // RISK: the Avro→Iceberg direction must read JAVA-written schema JSON (the Java-shaped
+    // document, not our own output): a `[null, record(logicalType=variant)]` field converts to an
+    // optional `Type::Variant` column. Mirrors Java `SchemaToType.variant` returning
+    // `VariantType.get()`.
+    #[test]
+    fn test_java_shaped_variant_avro_schema_converts_to_iceberg() {
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+{
+    "type": "record",
+    "name": "avro_schema",
+    "fields": [
+        {
+            "name": "v",
+            "type": ["null", {
+                "type": "record",
+                "name": "r1",
+                "fields": [
+                    {"name": "metadata", "type": "bytes"},
+                    {"name": "value", "type": "bytes"}
+                ],
+                "logicalType": "variant"
+            }],
+            "default": null,
+            "field-id": 1
+        }
+    ]
+}
+"#,
+        )
+        .unwrap();
+
+        let expected = Schema::builder()
+            .with_fields(vec![NestedField::optional(1, "v", Type::Variant).into()])
+            .build()
+            .unwrap();
+        assert_eq!(avro_schema_to_schema(&avro_schema).unwrap(), expected);
+    }
+
+    // RISK: a record CLAIMING the variant logical type but with the wrong shape must be rejected
+    // with Java's message text ("Invalid variant record: %s" — `AvroSchemaVisitor.visit` /
+    // `VariantLogicalType.validate`), never silently treated as a struct or as a variant.
+    // Deliberate fail-loud divergence: live Java's PARSE path drops the invalid logical type
+    // (`fromSchemaIgnoreInvalid`) and silently reads a struct — see the `visit()` comment.
+    #[test]
+    fn test_malformed_variant_record_is_rejected() {
+        // Wrong field count (missing `value`).
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+{
+    "type": "record",
+    "name": "avro_schema",
+    "fields": [
+        {
+            "name": "v",
+            "type": {
+                "type": "record",
+                "name": "r1",
+                "fields": [
+                    {"name": "metadata", "type": "bytes"}
+                ],
+                "logicalType": "variant"
+            },
+            "field-id": 1
+        }
+    ]
+}
+"#,
+        )
+        .unwrap();
+        let error = avro_schema_to_schema(&avro_schema)
+            .expect_err("a one-field variant record must be rejected");
+        assert!(
+            error.message().contains("Invalid variant record: r1"),
+            "must carry Java's Invalid-variant-record message, got: {}",
+            error.message()
+        );
+
+        // Right field names, wrong field type (`value` is a string, not bytes).
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+{
+    "type": "record",
+    "name": "avro_schema",
+    "fields": [
+        {
+            "name": "v",
+            "type": {
+                "type": "record",
+                "name": "r1",
+                "fields": [
+                    {"name": "metadata", "type": "bytes"},
+                    {"name": "value", "type": "string"}
+                ],
+                "logicalType": "variant"
+            },
+            "field-id": 1
+        }
+    ]
+}
+"#,
+        )
+        .unwrap();
+        let error = avro_schema_to_schema(&avro_schema)
+            .expect_err("a non-bytes value field must be rejected");
+        assert!(
+            error.message().contains("Invalid variant record: r1"),
+            "must carry Java's Invalid-variant-record message, got: {}",
+            error.message()
+        );
+    }
+
+    // RISK (no false positive): a PLAIN record that merely happens to have `metadata`/`value`
+    // bytes fields — but NO variant logical type — must stay a struct. Java only routes through
+    // `variant()` when `getLogicalType() instanceof VariantLogicalType`; shape alone must not
+    // reclassify a user struct.
+    #[test]
+    fn test_plain_metadata_value_record_stays_a_struct() {
+        let avro_schema = AvroSchema::parse_str(
+            r#"
+{
+    "type": "record",
+    "name": "avro_schema",
+    "fields": [
+        {
+            "name": "v",
+            "type": {
+                "type": "record",
+                "name": "r1",
+                "fields": [
+                    {"name": "metadata", "type": "bytes", "field-id": 2},
+                    {"name": "value", "type": "bytes", "field-id": 3}
+                ]
+            },
+            "field-id": 1
+        }
+    ]
+}
+"#,
+        )
+        .unwrap();
+
+        let expected = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "v",
+                    Type::Struct(StructType::new(vec![
+                        NestedField::required(
+                            2,
+                            "metadata",
+                            Type::Primitive(PrimitiveType::Binary),
+                        )
+                        .into(),
+                        NestedField::required(3, "value", Type::Primitive(PrimitiveType::Binary))
+                            .into(),
+                    ])),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        assert_eq!(avro_schema_to_schema(&avro_schema).unwrap(), expected);
     }
 
     #[test]

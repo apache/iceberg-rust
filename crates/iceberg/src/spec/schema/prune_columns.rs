@@ -238,6 +238,13 @@ impl SchemaVisitor for PruneColumn {
     fn primitive(&mut self, _p: &PrimitiveType) -> Result<Option<Type>> {
         Ok(None)
     }
+
+    /// Leaf, like a primitive — Java 1.10.0 `PruneColumns.variant` returns null. A SELECTED
+    /// variant column is handled by [`Self::field`]'s non-nested branch (variant is not a
+    /// nested type), exactly like Java's `PruneColumns.field`.
+    fn variant(&mut self) -> Result<Option<Type>> {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -759,5 +766,43 @@ mod tests {
         let result = prune_columns(&schema, selected, true);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), Type::Struct(schema.as_struct().clone()));
+    }
+
+    // RISK: a SELECTED variant column must project like a primitive leaf — Java 1.10.0
+    // `PruneColumns.variant` returns null and `PruneColumns.field` returns the field's type via
+    // the non-nested branch (variant is not a nested type). Without the visitor override, pruning
+    // ANY schema containing a variant column would error ("Unsupported type: variant"); without
+    // the non-nested behavior, selecting the column would be rejected like a bare list/map.
+    #[test]
+    fn test_prune_columns_selects_variant_column_as_leaf() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, "v", Type::Variant).into(),
+            ])
+            .build()
+            .unwrap();
+
+        // Selecting the variant column projects it (select_full_types = false exercises the
+        // field()-non-nested branch).
+        let selected: HashSet<i32> = HashSet::from([2]);
+        let result = prune_columns(&schema, selected, false).expect("prune selecting variant");
+        assert_eq!(
+            result,
+            Type::Struct(StructType::new(vec![
+                NestedField::optional(2, "v", Type::Variant).into(),
+            ]))
+        );
+
+        // Selecting a SIBLING only: the variant leaf contributes nothing (the variant() override
+        // returns None) and the projection keeps just the sibling.
+        let selected: HashSet<i32> = HashSet::from([1]);
+        let result = prune_columns(&schema, selected, false).expect("prune around variant");
+        assert_eq!(
+            result,
+            Type::Struct(StructType::new(vec![
+                NestedField::required(1, "id", Primitive(PrimitiveType::Long)).into(),
+            ]))
+        );
     }
 }

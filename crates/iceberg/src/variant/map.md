@@ -24,12 +24,20 @@
 The Iceberg V3 **variant binary format** — a Rust port of Java 1.10.0
 `org.apache.iceberg.variants`: the READ side (`SerializedMetadata` / `SerializedPrimitive` /
 `SerializedShortString` / `SerializedObject` / `SerializedArray` / `Variant`, parsed EAGERLY
-and bounds-checked as a security boundary — untrusted file bytes; errors, never panics) and
-the WRITE side (`Variants.metadata`/`Variants.of` factories, `PrimitiveWrapper`, `ValueArray`,
-`ShreddedObject`'s plain object-writing core — byte-exact vs Java-1.10.0-generated fixtures).
-Shredding, the `variant` schema-type entry, and file-level interop are deferred. The Java→Rust
-mapping and every deliberate divergence are documented in [mod.rs](mod.rs)'s module doc
-(read-side list) and [write.rs](write.rs)'s module doc (write-side list).
+and bounds-checked as a security boundary — untrusted file bytes; errors, never panics), the
+WRITE side (`Variants.metadata`/`Variants.of` factories, `PrimitiveWrapper`, `ValueArray`,
+`ShreddedObject`'s plain object-writing core — byte-exact vs Java-1.10.0-generated fixtures),
+the SHREDDING OVERLAY (F2, 2026-06-11 — `ShreddedObject`'s partial-shred surface over an
+unshredded backing with the `SerializedObject.sliceValue` verbatim-copy contract), and the
+`VariantVisitor` traversal utility (F2 — the entry point shredded parquet writers build on).
+The `variant` SCHEMA-type entry landed 2026-06-11 (F1) and lives OUTSIDE this module:
+`Type::Variant` + serde in `spec/datatypes.rs`, the V3 gate in `spec/schema/mod.rs`, Avro/Arrow
+conversion in `avro/schema.rs` / `arrow/schema.rs`. Shredded-parquet FILE I/O + file-level
+interop are deferred (the pinned parquet 57.1 boundary). The Java→Rust mapping and every
+deliberate divergence are documented in [mod.rs](mod.rs)'s module doc (read-side list),
+[write.rs](write.rs)'s module doc (write-side list), [shredded.rs](shredded.rs)'s module doc
+(overlay list incl. the two probe-verified 1.10.0 bugs this port does not mirror), and
+[visitor.rs](visitor.rs)'s module doc (visitor list).
 
 ## Contents
 
@@ -41,7 +49,9 @@ mapping and every deliberate divergence are documented in [mod.rs](mod.rs)'s mod
 | `metadata.rs` | `VariantMetadata` — the dictionary: header, offset table, UTF-8 strings, sorted/linear `id()` lookup |
 | `value.rs` | `VariantValue::parse` dispatch + `VariantPrimitive`/`VariantObject`/`VariantArray`/`Variant`; the depth guard `MAX_NESTING_DEPTH`; `VariantArray::new/push` (Java `ValueArray`) |
 | `write.rs` | the write side: `VariantMetadata::from_field_names`/`to_bytes`, the `VariantValue::of_*` factories (incl. the decimal precision→width rule), `size_in_bytes`/`write_to`/`to_bytes`, `VariantObjectBuilder`, `Variant::to_bytes`; width/header helpers (`sizeOf`, `metadataHeader`, `objectHeader`, `arrayHeader`, `shortStringHeader`) |
-| `tests.rs` | hand-built per-layout vectors, the malformed-input suite, the Java-1.10.0-generated READ fixture pins, and the WRITE byte-exactness suite (full-hex + CRC-32 pins; provenance in the module doc) |
+| `shredded.rs` | the shredding overlay: `ShreddedObject` (`new`/`over_serialized_object`/`over_object` + `put`/`remove`/`get`/`field_names`/`num_fields` + `size_in_bytes`/`write_to`/`to_bytes`) — untouched serialized-backing fields serialize as VERBATIM byte slices (Java `sliceValue`) |
+| `visitor.rs` | `VariantVisitor` trait + `visit_variant`/`visit_value` drivers — Java's exact traversal order (stored-order fields via name lookup, indexed elements, `finally`-style after-hooks), depth-guarded |
+| `tests.rs` | hand-built per-layout vectors, the malformed-input suite, the Java-1.10.0-generated READ fixture pins, the WRITE byte-exactness suite, the OVERLAY fixture suite, and the visitor traversal-order pins (full-hex + CRC-32 pins; provenance in the module doc) |
 
 ## I want to...
 
@@ -52,13 +62,16 @@ mapping and every deliberate divergence are documented in [mod.rs](mod.rs)'s mod
 | Build metadata from field names | `VariantMetadata::from_field_names` in [write.rs](write.rs) |
 | Construct values (`Variants.of` equivalents) | the `VariantValue::of_*` constructors in [write.rs](write.rs) |
 | Build an object / array | `VariantObjectBuilder` ([write.rs](write.rs)) / `VariantArray::new`+`push` ([value.rs](value.rs)) |
+| Partially rewrite a serialized object (override/add/remove fields) | `ShreddedObject::over_serialized_object` + `put`/`remove` in [shredded.rs](shredded.rs) — untouched fields stay byte-verbatim |
+| Walk a decoded value tree | implement `VariantVisitor`, run `visit_value`/`visit_variant` in [visitor.rs](visitor.rs) |
 | Serialize a value / metadata / whole variant | `VariantValue::to_bytes` / `VariantMetadata::to_bytes` / `Variant::to_bytes` in [write.rs](write.rs) |
 | Check a layout against Java | the cited `Serialized*.java` / `Variants.java` lines + `javap` notes above each fn and test |
 
 ## Pointers
 
 - **Up:** [crates/iceberg/src/](../) — wired as `pub mod variant` in `lib.rs`.
-- **Related:** `spec/datatypes.rs` (where the `variant` SCHEMA type will land — not part of B1);
+- **Related:** `spec/datatypes.rs` (`Type::Variant`, the schema-type entry — landed F1
+  2026-06-11) and `spec/schema/mod.rs` (`min_format_version`, the V3 gate);
   `docs/parity/GAP_MATRIX.md` "V3 types: variant" row (status + deferrals).
 
 ## Debug
@@ -72,13 +85,15 @@ mapping and every deliberate divergence are documented in [mod.rs](mod.rs)'s mod
 | "nesting depth exceeds" on legitimate data | `MAX_NESTING_DEPTH` (128) is a Rust-side DoS guard with no Java equivalent — raising it is a deliberate decision, not a bug fix (it bounds the WRITE recursion too) |
 | A decoded number is wrong by byte order | All payloads are little-endian EXCEPT the 16-byte UUID (big-endian RFC 4122); decimal16 is `i128::from_le_bytes` (Java reverses into a big-endian `BigInteger` — same value) |
 | Written bytes differ from Java's | Re-derive against write.rs's pinned rules: dictionary INSERTION order + strictly-compareTo-ascending sorted flag; widths = `sizeOf(dataSize)` (object field ids: `sizeOf(dictionarySize)`, NOT the max id); object fields name-sorted in UTF-16 order; short-string spill at UTF-8 length > 63; is-large at count > 0xFF (object bit 6, array bit 4) |
-| Re-serialized bytes differ from the PARSED input | Expected for NON-canonical input only (write.rs module doc): Java copies the original buffer verbatim, this writer re-encodes with canonical widths; canonical (Java-written) input re-serializes byte-identically (pinned) |
+| Re-serialized bytes differ from the PARSED input | Expected for NON-canonical input only (write.rs module doc): Java copies the original buffer verbatim, this writer re-encodes with canonical widths; canonical (Java-written) input re-serializes byte-identically (pinned). To PRESERVE a non-canonical object's untouched field bytes through a partial rewrite, use the `ShreddedObject` overlay (shredded.rs) — that is the verbatim path |
 | "does not fit ... Java would silently truncate" on metadata build | The >255-empty-names pathology — Java 1.10.0 emits corrupt metadata for it (probe: 256 empty names → `01 00 00`); the Rust door refuses. Not a bug — do not widen the width selection |
+| Overlay bytes differ from a live-1.10.0 `ShreddedObject` run | Check whether the Java run hits one of the two probe-verified 1.10.0 bugs the port deliberately does NOT mirror (shredded.rs module doc): `sizeInBytes()` before `remove()` serializes the STALE cached state; the FIRST serialization over a constructed (non-`SerializedObject`) backing is corrupt (parameter shadowing, fixed on MAIN). Rust always reflects the current overlay |
+| Overlay `get`/`num_fields` disagree with the serialized output | Java's contract after remove-then-put of the same name: the views exclude the name, serialization includes the re-put value — mirrored deliberately, do not "fix" one side |
 
 ### First checks
 
 1. `cargo test -p iceberg --lib variant` — the fixture pins localize which layout drifted.
-2. Compare against the 1.10.0 BYTECODE (`javap -p -c -classpath ~/.m2/.../iceberg-api-1.10.0.jar org.apache.iceberg.variants.<Class>`; the WRITE classes — `Variants`, `PrimitiveWrapper`, `ValueArray`, `ShreddedObject` — live in `iceberg-core-1.10.0.jar`), not MAIN source — the jar is the pin.
+2. Compare against the 1.10.0 BYTECODE (`javap -p -c -classpath ~/.m2/.../iceberg-api-1.10.0.jar org.apache.iceberg.variants.<Class>`; the WRITE classes — `Variants`, `PrimitiveWrapper`, `ValueArray`, `ShreddedObject`, `VariantVisitor` — live in `iceberg-core-1.10.0.jar`), not MAIN source — the jar is the pin. For `ShreddedObject` specifically, MAIN and 1.10.0 DIFFER (the two bugs in shredded.rs's module doc) — re-derive from the JAR.
 
 ### Escalate to
 

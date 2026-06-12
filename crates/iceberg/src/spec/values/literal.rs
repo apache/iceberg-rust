@@ -595,6 +595,19 @@ impl Literal {
                     ))
                 }
             }
+            // Java 1.10.0 `SingleValueParser.fromJson` returns null for a null/absent node (any
+            // type), and its switch has no VARIANT case — a non-null variant default falls to the
+            // default branch's `UnsupportedOperationException("Type: %s is not supported")`.
+            Type::Variant => {
+                if value.is_null() {
+                    Ok(None)
+                } else {
+                    Err(Error::new(
+                        crate::ErrorKind::FeatureUnsupported,
+                        "Type: variant is not supported",
+                    ))
+                }
+            }
         }
     }
 

@@ -4075,6 +4075,212 @@ mod tests {
         );
     }
 
+    /// Build an EVOLVED schema: the base `x`/`y`/`z` columns plus a new variant column `v`
+    /// (id 4) — the shape an `UpdateSchema.add_column(variant)` commit lands at this choke point.
+    fn schema_with_variant_column() -> Schema {
+        Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(3, "z", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(4, "v", Type::Variant).into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    // RISK: a schema-evolution commit that introduces a VARIANT column on a V1/V2 table must be
+    // rejected at the `add_schema` choke point with Java's message (1.10.0 `MIN_FORMAT_VERSIONS`
+    // gates VARIANT at 3). Without it, Rust would commit V2 metadata Java refuses to read —
+    // schema corruption for every reader.
+    #[test]
+    fn test_add_schema_with_variant_rejected_on_v1_and_v2() {
+        for format_version in [FormatVersion::V1, FormatVersion::V2] {
+            let builder = builder_without_changes(format_version);
+            let error = builder
+                .add_schema(schema_with_variant_column())
+                .expect_err("a sub-v3 table must reject a variant column");
+            assert_eq!(error.kind(), ErrorKind::DataInvalid);
+            assert!(
+                error
+                    .message()
+                    .contains("Invalid type for v: variant is not supported until v3"),
+                "message must mirror Java's not-supported-until-v3, got: {}",
+                error.message()
+            );
+        }
+    }
+
+    // RISK: the SAME evolved schema must be ACCEPTED on a V3 table (over-firing would make the V3
+    // type unusable), and the variant column must survive a full TableMetadata JSON round-trip —
+    // the serde proof that every metadata-bearing path (catalog commits, inspect/metadata readers)
+    // renders and re-parses the type without special handling.
+    #[test]
+    fn test_add_schema_with_variant_allowed_on_v3_and_round_trips() {
+        let builder = builder_without_changes(FormatVersion::V3);
+        let result = builder
+            .add_schema(schema_with_variant_column())
+            .expect("a V3 table must accept a variant column")
+            .set_current_schema(-1)
+            .expect("set the added schema current")
+            .build()
+            .expect("build metadata with a variant column");
+
+        // Full metadata JSON round-trip: serialize and re-parse, then compare the schema.
+        let json = serde_json::to_string(&result.metadata).expect("serialize table metadata");
+        assert!(
+            json.contains(r#""type":"variant""#),
+            "the serialized metadata must carry the bare-string variant type, got: {json}"
+        );
+        let reparsed: TableMetadata = serde_json::from_str(&json).expect("re-parse table metadata");
+        let field = reparsed
+            .current_schema()
+            .field_by_name("v")
+            .expect("variant column after round-trip");
+        assert_eq!(
+            *field.field_type,
+            Type::Variant,
+            "the variant column must survive a metadata JSON round-trip"
+        );
+    }
+
+    // RISK (gate completeness — the CREATION path): `TableMetadataBuilder::new` routes its schema
+    // through `add_current_schema` → `add_schema`, so creating a table with a variant column must
+    // hit the SAME gate as evolution. Live-Java-probed: 1.10.0
+    // `TableMetadata.newTableMetadata(schema-with-variant, ..., formatVersion=2)` throws
+    // "Invalid schema for v2:\n- Invalid type for v: variant is not supported until v3", and the
+    // same call at v3 succeeds. A creation-path hole would let catalog create-table flows mint
+    // V1/V2 metadata Java refuses.
+    #[test]
+    fn test_create_table_metadata_with_variant_gated_by_format_version() {
+        let creation_schema = || {
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(2, "v", Type::Variant).into(),
+                ])
+                .build()
+                .expect("build creation schema")
+        };
+
+        for format_version in [FormatVersion::V1, FormatVersion::V2] {
+            let error = TableMetadataBuilder::new(
+                creation_schema(),
+                PartitionSpec::unpartition_spec(),
+                SortOrder::unsorted_order(),
+                TEST_LOCATION.to_string(),
+                format_version,
+                HashMap::new(),
+            )
+            .expect_err("creating a sub-v3 table with a variant column must fail");
+            assert!(
+                error
+                    .message()
+                    .contains("Invalid type for v: variant is not supported until v3"),
+                "got: {}",
+                error.message()
+            );
+        }
+
+        let metadata = TableMetadataBuilder::new(
+            creation_schema(),
+            PartitionSpec::unpartition_spec(),
+            SortOrder::unsorted_order(),
+            TEST_LOCATION.to_string(),
+            FormatVersion::V3,
+            HashMap::new(),
+        )
+        .expect("a v3 create with a variant column succeeds")
+        .build()
+        .expect("build v3 metadata");
+        assert_eq!(
+            *metadata
+                .metadata
+                .current_schema()
+                .field_by_name("v")
+                .expect("variant column")
+                .field_type,
+            Type::Variant
+        );
+    }
+
+    // RISK (read tolerance, live-Java-probed): Java 1.10.0 `TableMetadataParser.fromJson` runs NO
+    // `Schema.checkCompatibility` — a (corrupt/foreign-written) V1/V2 metadata JSON whose schema
+    // already contains a variant column PARSES on both sides; the gate fires only on the next
+    // `add_schema`. Rejecting on read would strand every such table un-openable (Java can open it
+    // to repair/upgrade); the probe also confirmed Java accepts upgrading that metadata to v3.
+    #[test]
+    fn test_v1_v2_metadata_with_existing_variant_parses_read_tolerantly() {
+        for format_version in [1u8, 2u8] {
+            let json = format!(
+                r#"{{"format-version":{format_version},"table-uuid":"9c12d441-03fe-4693-9a96-a0705ddf69c1",
+"location":"s3://bucket/test/location","last-sequence-number":0,"last-updated-ms":1602638573590,
+"last-column-id":1,"current-schema-id":0,
+"schemas":[{{"type":"struct","schema-id":0,"fields":[
+{{"id":1,"name":"v","required":false,"type":"variant"}}]}}],
+"default-spec-id":0,"partition-specs":[{{"spec-id":0,"fields":[]}}],
+"last-partition-id":999,"default-sort-order-id":0,
+"sort-orders":[{{"order-id":0,"fields":[]}}],"properties":{{}},
+"current-snapshot-id":-1,"snapshots":[],"snapshot-log":[],"metadata-log":[]}}"#
+            );
+            let metadata: TableMetadata = serde_json::from_str(&json)
+                .expect("v1/v2 metadata with an existing variant column must read-tolerate");
+            assert_eq!(
+                *metadata
+                    .current_schema()
+                    .field_by_name("v")
+                    .expect("variant column")
+                    .field_type,
+                Type::Variant
+            );
+
+            // The Java-probed upgrade path: buildFrom(v2-with-variant).upgradeFormatVersion(3)
+            // succeeds (no re-check of pre-existing schemas).
+            if format_version == 2 {
+                let upgraded = metadata
+                    .into_builder(None)
+                    .upgrade_format_version(FormatVersion::V3)
+                    .expect("upgrade v2-with-variant to v3")
+                    .build()
+                    .expect("build upgraded metadata");
+                assert_eq!(upgraded.metadata.format_version, FormatVersion::V3);
+            }
+        }
+    }
+
+    // RISK (the Identity-transform door on the READ path, live-Java-probed): metadata whose
+    // partition spec uses `identity` over a variant source must FAIL to parse — Java 1.10.0
+    // rejects it while binding the spec ("Unsupported type for identity: variant", the
+    // `Identity.UNSUPPORTED_TYPES` door; Rust's equivalent door is
+    // `Transform::result_type`'s identity arm). Silently accepting it would admit a partition
+    // layout no engine can evaluate. (Message texts differ — both pre-existing shapes — but the
+    // reject-on-read BEHAVIOR is the parity contract pinned here.)
+    #[test]
+    fn test_v3_metadata_with_identity_partition_on_variant_rejected_on_parse() {
+        let json = r#"{"format-version":3,"table-uuid":"9c12d441-03fe-4693-9a96-a0705ddf69c1",
+"location":"s3://bucket/test/location","last-sequence-number":0,"last-updated-ms":1602638573590,
+"last-column-id":2,"current-schema-id":0,
+"schemas":[{"type":"struct","schema-id":0,"fields":[
+{"id":1,"name":"id","required":true,"type":"long"},
+{"id":2,"name":"v","required":false,"type":"variant"}]}],
+"default-spec-id":0,"partition-specs":[{"spec-id":0,"fields":[
+{"name":"v_part","transform":"identity","source-id":2,"field-id":1000}]}],
+"last-partition-id":1000,"default-sort-order-id":0,
+"sort-orders":[{"order-id":0,"fields":[]}],"properties":{},
+"current-snapshot-id":-1,"snapshots":[],"snapshot-log":[],
+"metadata-log":[],"next-row-id":0}"#;
+        let error = serde_json::from_str::<TableMetadata>(json)
+            .expect_err("an identity partition over a variant source must fail to parse");
+        assert!(
+            error
+                .to_string()
+                .contains("variant is not a valid input type of identity transform"),
+            "the identity-transform door must reject the variant source, got: {error}"
+        );
+    }
+
     // RISK (write_default is NOT gated — Java only checks `initialDefault`): a v2 schema add where a
     // field carries ONLY a `write_default` (no initial default) must succeed. Gating `write_default`
     // here would wrongly reject a legal v1/v2 write default.

@@ -518,6 +518,9 @@ impl<'a> SchemaEvolution<'a> {
     fn assign_fresh_ids(&mut self, field_type: Type) -> Result<Type> {
         match field_type {
             Type::Primitive(primitive) => Ok(Type::Primitive(primitive)),
+            // Leaf, like a primitive — Java 1.10.0 `AssignFreshIds.variant` returns the type
+            // unchanged (variant has no nested ids to assign).
+            Type::Variant => Ok(Type::Variant),
             Type::Struct(struct_type) => {
                 let fields = struct_type.fields();
                 // Pass 1: assign fresh ids for every immediate field (level-order), before recursing.
@@ -1030,6 +1033,9 @@ impl<'a> SchemaEvolution<'a> {
     fn rebuild_type(&self, owner_id: i32, field_type: &Type) -> Result<Type> {
         match field_type {
             Type::Primitive(primitive) => Ok(Type::Primitive(primitive.clone())),
+            // Leaf, like a primitive — Java 1.10.0 `SchemaUpdate$ApplyChanges.variant` returns
+            // the type unchanged (bytecode: `aload_1; areturn`).
+            Type::Variant => Ok(Type::Variant),
             Type::Struct(struct_type) => {
                 Ok(Type::Struct(self.rebuild_struct(struct_type, owner_id)?))
             }
@@ -1107,6 +1113,9 @@ fn index_parents(struct_type: &StructType, parent_id: Option<i32>, out: &mut Has
 fn index_parents_in_type(owner_id: i32, field_type: &Type, out: &mut HashMap<i32, i32>) {
     match field_type {
         Type::Primitive(_) => {}
+        // Leaf, like a primitive — variant has no nested fields to parent-link (Java 1.10.0
+        // `IndexParents.variant` returns the map unchanged).
+        Type::Variant => {}
         Type::Struct(struct_type) => index_parents(struct_type, Some(owner_id), out),
         Type::List(list_type) => {
             let element = &list_type.element_field;
@@ -1379,6 +1388,9 @@ impl SchemaEvolution<'_> {
                 self.union_nested_member(full_name, value)?;
             }
             Type::Primitive(_) => {}
+            // Leaf, like a primitive — variant has no nested fields to merge into (Java 1.10.0
+            // `UnionByNameVisitor.variant` only partner-compares; it never recurses).
+            Type::Variant => {}
         }
         Ok(())
     }
@@ -3327,5 +3339,164 @@ mod tests {
             .expect("w in new current schema");
         assert_eq!(field.initial_default, Some(Literal::long(5)));
         assert_eq!(field.write_default, Some(Literal::long(5)));
+    }
+
+    /// A from-scratch **V3** table with `id` (long, required), `v` (variant, required), and `vo`
+    /// (variant, optional) — the exact schema the reviewer's live-Java probe drove through 1.10.0
+    /// `SchemaUpdate` to pin the variant evolution behaviors below.
+    fn v3_variant_table() -> Table {
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "v", Type::Variant).into(),
+                NestedField::optional(3, "vo", Type::Variant).into(),
+            ])
+            .build()
+            .expect("build v3 variant base schema");
+
+        let metadata = crate::spec::TableMetadataBuilder::new(
+            schema,
+            crate::spec::PartitionSpec::unpartition_spec(),
+            crate::spec::SortOrder::unsorted_order(),
+            "s3://bucket/v3-variant".to_string(),
+            crate::spec::FormatVersion::V3,
+            std::collections::HashMap::new(),
+        )
+        .expect("build v3 variant metadata builder")
+        .build()
+        .expect("build v3 variant metadata")
+        .metadata;
+
+        v2_table().with_metadata(Arc::new(metadata))
+    }
+
+    // RISK (the compile-forced `ApplyChanges`/`rebuild_type` variant arms, live-Java-probed):
+    // rename / make-optional / require / doc-update / move / delete on a VARIANT column must each
+    // behave exactly like 1.10.0 `SchemaUpdate` (probed: every op succeeds, the column keeps
+    // `variant` and its id). A wrong rebuild arm would corrupt the type or drop the column during
+    // any unrelated evolution of a variant-bearing schema.
+    #[tokio::test]
+    async fn test_variant_column_evolution_ops_mirror_java() {
+        let table = v3_variant_table();
+
+        // rename: id 2 keeps the variant type under the new name (Java probe: rename -> v2name).
+        let updates = run(
+            UpdateSchemaAction::new().rename_column("v", "v2name"),
+            &table,
+        )
+        .await;
+        let schema = added_schema(&updates);
+        let field = schema.field_by_name("v2name").expect("renamed variant");
+        assert_eq!(field.id, 2);
+        assert_eq!(field.field_type.as_ref(), &Type::Variant);
+
+        // make optional (Java probe: makeColumnOptional succeeds on a required variant).
+        let updates = run(UpdateSchemaAction::new().make_column_optional("v"), &table).await;
+        assert!(
+            !added_schema(&updates)
+                .field_by_name("v")
+                .expect("v")
+                .required
+        );
+
+        // require with the incompatible-changes flag (Java probe: allowIncompatibleChanges +
+        // requireColumn succeeds on an optional variant).
+        let updates = run(
+            UpdateSchemaAction::new()
+                .allow_incompatible_changes()
+                .require_column("vo"),
+            &table,
+        )
+        .await;
+        assert!(
+            added_schema(&updates)
+                .field_by_name("vo")
+                .expect("vo")
+                .required
+        );
+
+        // doc update (Java probe: updateColumnDoc stamps the doc, type untouched).
+        let updates = run(
+            UpdateSchemaAction::new().update_column_doc("v", Some("docs!")),
+            &table,
+        )
+        .await;
+        let schema = added_schema(&updates);
+        let field = schema.field_by_name("v").expect("v");
+        assert_eq!(field.doc.as_deref(), Some("docs!"));
+        assert_eq!(field.field_type.as_ref(), &Type::Variant);
+
+        // move first (Java probe: moveFirst reorders to v, id, vo).
+        let updates = run(UpdateSchemaAction::new().move_first("v"), &table).await;
+        let schema = added_schema(&updates);
+        let names: Vec<_> = schema
+            .as_struct()
+            .fields()
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["v", "id", "vo"]);
+
+        // delete (Java probe: deleteColumn removes the variant column, siblings keep their ids).
+        let updates = run(UpdateSchemaAction::new().delete_column("v"), &table).await;
+        let schema = added_schema(&updates);
+        assert!(schema.field_by_name("v").is_none());
+        assert_eq!(schema.field_by_name("vo").expect("vo").id, 3);
+    }
+
+    // RISK (the `assign_fresh_ids` variant arm, live-Java-probed): adding a variant column — and
+    // a struct that NESTS one — must assign fresh ids level-order exactly like 1.10.0
+    // `SchemaUpdate.addColumn` (probed: top-level add gets id 4; a struct add gets 4 with its
+    // inner variant at 5), with the variant type passing through unchanged.
+    #[tokio::test]
+    async fn test_add_variant_column_assigns_fresh_ids_like_java() {
+        let table = v3_variant_table();
+
+        let updates = run(
+            UpdateSchemaAction::new().add_column("v_new", Type::Variant),
+            &table,
+        )
+        .await;
+        let schema = added_schema(&updates);
+        let field = schema.field_by_name("v_new").expect("v_new");
+        assert_eq!(field.id, 4, "fresh id after last_column_id 3");
+        assert_eq!(field.field_type.as_ref(), &Type::Variant);
+        assert!(!field.required, "plain add is optional");
+
+        let updates = run(
+            UpdateSchemaAction::new().add_column(
+                "s",
+                Type::Struct(StructType::new(vec![
+                    NestedField::optional(99, "inner_v", Type::Variant).into(),
+                ])),
+            ),
+            &table,
+        )
+        .await;
+        let schema = added_schema(&updates);
+        let s_field = schema.field_by_name("s").expect("struct s");
+        assert_eq!(s_field.id, 4);
+        let inner = schema.field_by_name("s.inner_v").expect("nested variant");
+        assert_eq!(
+            inner.id, 5,
+            "level-order fresh id, the placeholder 99 discarded"
+        );
+        assert_eq!(inner.field_type.as_ref(), &Type::Variant);
+    }
+
+    // RISK (no type change away from variant, live-Java-probed): 1.10.0
+    // `SchemaUpdate.updateColumn(v, string)` throws "Cannot change column type: v: variant ->
+    // string" — `update_column` only accepts primitive→primitive promotions, and variant is not a
+    // primitive. Allowing it would silently re-type every existing data file's column.
+    #[tokio::test]
+    async fn test_update_variant_column_type_rejected() {
+        let table = v3_variant_table();
+        let error = Arc::new(UpdateSchemaAction::new().update_column("v", PrimitiveType::String))
+            .commit(&table)
+            .await
+            .map(drop)
+            .expect_err("variant -> string must be rejected");
+        assert_data_invalid(&error, "Cannot change column type: v: variant -> string");
     }
 }

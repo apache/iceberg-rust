@@ -19,6 +19,8 @@
 //! `SerializedPrimitive` / `SerializedShortString` / `SerializedObject` / `SerializedArray`
 //! classes, plus the `Variant` / `VariantData` container. Parsed EAGERLY (see the module doc).
 
+use std::ops::Range;
+
 use crate::Result;
 use crate::variant::metadata::VariantMetadata;
 use crate::variant::types::{BasicType, PhysicalType};
@@ -410,9 +412,42 @@ fn parse_value(metadata: &VariantMetadata, bytes: &[u8], depth: usize) -> Result
     match BasicType::from_header(header) {
         BasicType::Primitive => parse_primitive(bytes, header).map(VariantValue::Primitive),
         BasicType::ShortString => parse_short_string(bytes, header).map(VariantValue::Primitive),
-        BasicType::Object => parse_object(metadata, bytes, header, depth),
+        BasicType::Object => {
+            parse_object(metadata, bytes, header, depth, None).map(VariantValue::Object)
+        }
         BasicType::Array => parse_array(metadata, bytes, header, depth),
     }
+}
+
+/// Parses a top-level object value AND records each stored-order field's value byte range
+/// within `bytes` — the seam the shredding overlay (`shredded.rs`) uses to mirror Java
+/// `SerializedObject.sliceValue(index)` verbatim-slice reuse (the range of field `i` is
+/// exactly the slice Java's `sliceValue(i)` returns: `dataOffset + offsets[i]` for
+/// `lengths[i]` bytes, lengths derived from the sorted-distinct-offsets scheme).
+///
+/// Non-object bytes are rejected with Java's `asObject()` contract ("Not an object: %s") —
+/// the typed `Variants.object(VariantMetadata, VariantObject)` signature makes the case
+/// unrepresentable in Java; parsing raw bytes and then casting hits exactly `asObject()`.
+///
+/// # Errors
+///
+/// Any [`VariantValue::parse`] error, plus the non-object rejection above.
+pub(super) fn parse_object_with_value_ranges(
+    metadata: &VariantMetadata,
+    bytes: &[u8],
+) -> Result<(VariantObject, Vec<Range<usize>>)> {
+    let header = util::read_u8(bytes, 0)
+        .map_err(|error| error.with_context("context", "variant value header"))?;
+    if BasicType::from_header(header) != BasicType::Object {
+        let value = parse_value(metadata, bytes, 0)?;
+        return Err(util::invalid(format!(
+            "Not an object: {:?}",
+            value.physical_type()
+        )));
+    }
+    let mut value_ranges = Vec::new();
+    let object = parse_object(metadata, bytes, header, 0, Some(&mut value_ranges))?;
+    Ok((object, value_ranges))
 }
 
 /// Decodes a primitive value (Java `SerializedPrimitive.from` + its `read()` payload layouts;
@@ -513,12 +548,16 @@ fn decode_utf8<'a>(raw: &'a [u8], what: &str) -> Result<&'a str> {
 
 /// Decodes an object (Java `SerializedObject`): header field sizes, a field count, a field-id
 /// list, an offset list (one extra entry holding the data length), then the field values.
+/// `record_value_ranges`, when given, receives each stored-order field's value byte range
+/// within `bytes` (the [`parse_object_with_value_ranges`] seam — `None` everywhere else, so
+/// nested objects never pay for it).
 fn parse_object(
     metadata: &VariantMetadata,
     bytes: &[u8],
     header: u8,
     depth: usize,
-) -> Result<VariantValue> {
+    mut record_value_ranges: Option<&mut Vec<Range<usize>>>,
+) -> Result<VariantObject> {
     let offset_size = 1 + usize::from((header & OFFSET_SIZE_MASK) >> OFFSET_SIZE_SHIFT);
     let field_id_size = 1 + usize::from((header & FIELD_ID_SIZE_MASK) >> FIELD_ID_SIZE_SHIFT);
     let num_elements_size = if header & OBJECT_IS_LARGE == OBJECT_IS_LARGE {
@@ -604,7 +643,11 @@ fn parse_object(
         let start = data_offset
             .checked_add(offset)
             .ok_or_else(|| util::invalid("Invalid variant object: field offset overflows"))?;
-        let field_bytes = util::slice(bytes, start, length_of(offset))?;
+        let length = length_of(offset);
+        let field_bytes = util::slice(bytes, start, length)?;
+        if let Some(ranges) = record_value_ranges.as_deref_mut() {
+            ranges.push(start..start + length);
+        }
         let value = parse_value(metadata, field_bytes, depth + 1)?;
         fields.push(VariantObjectField {
             field_id,
@@ -613,7 +656,7 @@ fn parse_object(
         });
     }
 
-    Ok(VariantValue::Object(VariantObject { fields }))
+    Ok(VariantObject { fields })
 }
 
 /// Decodes an array (Java `SerializedArray`): an element count, then `count + 1` offsets

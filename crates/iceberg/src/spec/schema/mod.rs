@@ -145,20 +145,21 @@ fn build_lowercase_name_index(
 
 /// The minimum table format version a field's type requires, or `None` if it is valid at every version.
 ///
-/// Mirrors Java `org.apache.iceberg.Schema.MIN_FORMAT_VERSIONS` (a `TypeID → minVersion` map): a handful
-/// of types were only introduced in format version 3 and must be rejected on an older table. Only the
-/// nanosecond timestamp types are representable in Rust today; both `timestamp_ns` and `timestamptz_ns`
-/// map to Java's single `TIMESTAMP_NANO` type id and require v3.
+/// Mirrors Java 1.10.0 `org.apache.iceberg.Schema.MIN_FORMAT_VERSIONS` (a `TypeID → minVersion`
+/// map; static-initializer bytecode): `{TIMESTAMP_NANO: 3, VARIANT: 3, UNKNOWN: 3, GEOMETRY: 3,
+/// GEOGRAPHY: 3}` — these types were only introduced in format version 3 and must be rejected on
+/// an older table. Both `timestamp_ns` and `timestamptz_ns` map to Java's single `TIMESTAMP_NANO`
+/// type id; `variant` is the [`Type::Variant`] arm below.
 ///
-/// Java also gates `variant`, `unknown`, `geometry`, and `geography` at v3 in the same map, but those
-/// types are not yet representable in the Rust `Type`/`PrimitiveType` enums. When they land, add a
-/// one-line `PrimitiveType::Variant => Some(FormatVersion::V3)` arm each here — the helper is shaped so
-/// each new V3-only type is a single addition.
+/// Java also gates `unknown`, `geometry`, and `geography` at v3 in the same map, but those types
+/// are not yet representable in the Rust `Type`/`PrimitiveType` enums. When they land, add a
+/// one-line arm each here — the helper is shaped so each new V3-only type is a single addition.
 fn min_format_version(ty: &Type) -> Option<FormatVersion> {
     match ty {
         Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs) => {
             Some(FormatVersion::V3)
         }
+        Type::Variant => Some(FormatVersion::V3),
         _ => None,
     }
 }
@@ -497,8 +498,8 @@ impl Schema {
     ///
     /// - **V3-only types** — a field whose type requires a later format version than the table's
     ///   (see [`min_format_version`]) is rejected. Today that is `timestamp_ns` / `timestamptz_ns`
-    ///   (Java `TIMESTAMP_NANO`), which require v3; Java also gates `variant`/`unknown`/`geometry`/
-    ///   `geography` at v3, but those are not yet representable in Rust.
+    ///   (Java `TIMESTAMP_NANO`) and `variant`, which require v3; Java also gates
+    ///   `unknown`/`geometry`/`geography` at v3, but those are not yet representable in Rust.
     /// - **Column initial-defaults** — a non-null
     ///   [`initial_default`](NestedField::initial_default) on any field is only valid at format
     ///   version [`DEFAULT_VALUES_MIN_FORMAT_VERSION`] (v3) or later. Only `initial_default` is gated
@@ -577,7 +578,7 @@ impl Schema {
     /// The minimum table format version this schema requires.
     ///
     /// Returns the highest format version any field demands: `v3` if a field uses a v3-only type
-    /// (`timestamp_ns`/`timestamptz_ns`) or carries a non-null `initial_default`, otherwise `v1`. A
+    /// (`timestamp_ns`/`timestamptz_ns`/`variant`) or carries a non-null `initial_default`, otherwise `v1`. A
     /// table whose `format_version` is below this is rejected by
     /// [`check_compatibility`](Self::check_compatibility), so a caller building a new table from this
     /// schema can use it to pick a format version that accommodates the schema's types.
@@ -1660,6 +1661,157 @@ table {
                 "Invalid type for payload.captured_at: timestamp_ns is not supported until v3"
             ),
             "message must carry the dotted path to the nested column, got: {}",
+            error.message()
+        );
+    }
+
+    // RISK: the `variant` arm of the SAME gate (Java 1.10.0 `MIN_FORMAT_VERSIONS` maps VARIANT -> 3
+    // exactly like TIMESTAMP_NANO). A V1/V2 schema with a variant column must be rejected with the
+    // Java-format message; missing this arm would let Rust emit V2 metadata Java refuses to read.
+    #[test]
+    fn test_check_compatibility_rejects_variant_below_v3() {
+        use crate::spec::table_metadata::FormatVersion;
+
+        let schema = schema_with_top_level_type("v", Type::Variant);
+        for format_version in [FormatVersion::V1, FormatVersion::V2] {
+            let error = schema
+                .check_compatibility(format_version)
+                .expect_err("variant must be rejected below v3");
+            assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+            assert!(
+                error
+                    .message()
+                    .contains("Invalid type for v: variant is not supported until v3"),
+                "got: {}",
+                error.message()
+            );
+            assert!(
+                error
+                    .message()
+                    .contains(&format!("Invalid schema for {format_version}")),
+                "message must carry the format-version header, got: {}",
+                error.message()
+            );
+        }
+    }
+
+    // RISK: the gate must NOT over-fire — a variant column is legal at v3, where the type was
+    // introduced. Blocking it would make the V3 type unusable.
+    #[test]
+    fn test_check_compatibility_allows_variant_at_v3() {
+        use crate::spec::table_metadata::FormatVersion;
+
+        let schema = schema_with_top_level_type("v", Type::Variant);
+        assert!(
+            schema.check_compatibility(FormatVersion::V3).is_ok(),
+            "variant is allowed at v3",
+        );
+    }
+
+    // RISK: the gate must reach a variant NESTED in a struct (Java iterates all of
+    // `lazyIdToField()`), and the message must carry the dotted path.
+    #[test]
+    fn test_check_compatibility_rejects_nested_variant_below_v3() {
+        use crate::spec::table_metadata::FormatVersion;
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(
+                    2,
+                    "payload",
+                    Type::Struct(StructType::new(vec![
+                        NestedField::optional(3, "raw", Type::Variant).into(),
+                    ])),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let error = schema
+            .check_compatibility(FormatVersion::V2)
+            .expect_err("a nested variant must be rejected below v3");
+        assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+        assert!(
+            error
+                .message()
+                .contains("Invalid type for payload.raw: variant is not supported until v3"),
+            "message must carry the dotted path to the nested column, got: {}",
+            error.message()
+        );
+    }
+
+    // RISK (one gate, not two): `variant` and `timestamp_ns` must flow through the SAME
+    // `min_format_version` mechanism — a V2 schema carrying both must report both type problems in
+    // ONE combined error (the shared accumulator), and `min_format_version()` must report v3 for a
+    // variant schema. If variant grew its own side-gate, the combined report (and any future gate
+    // fix) would silently cover only one of the two.
+    #[test]
+    fn test_variant_and_timestamp_ns_share_the_same_v3_gate() {
+        use crate::spec::table_metadata::FormatVersion;
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, "event_time", Type::Primitive(PrimitiveType::TimestampNs))
+                    .into(),
+                NestedField::optional(3, "v", Type::Variant).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let error = schema
+            .check_compatibility(FormatVersion::V2)
+            .expect_err("both V3-only types must be rejected on V2");
+        assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+        assert!(
+            error
+                .message()
+                .contains("Invalid type for event_time: timestamp_ns is not supported until v3"),
+            "the timestamp_ns problem must be reported, got: {}",
+            error.message()
+        );
+        assert!(
+            error
+                .message()
+                .contains("Invalid type for v: variant is not supported until v3"),
+            "the variant problem must be reported in the SAME combined error, got: {}",
+            error.message()
+        );
+
+        // The same mechanism feeds `min_format_version`.
+        assert_eq!(
+            schema_with_top_level_type("v", Type::Variant).min_format_version(),
+            FormatVersion::V3,
+            "a variant schema must demand v3"
+        );
+    }
+
+    // RISK: a variant identifier field must be rejected by the existing non-primitive door with
+    // Java's message family (`Schema.validateIdentifierField`, 1.10.0: "Cannot add field %s as an
+    // identifier field: not a primitive type field") — variant is NOT a primitive type, so the
+    // SAME branch that rejects struct/list/map must reject it. Silently allowing it would let a
+    // schema declare row identity on a type with no comparator.
+    #[test]
+    fn test_variant_identifier_field_rejected() {
+        let result = Schema::builder()
+            .with_schema_id(0)
+            .with_identifier_field_ids(vec![2])
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "v", Type::Variant).into(),
+            ])
+            .build();
+        let error = result.expect_err("a variant identifier field must be rejected");
+        assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+        assert!(
+            error
+                .message()
+                .contains("Cannot add field v as an identifier field: not a primitive type field"),
+            "must reject via the non-primitive identifier door, got: {}",
             error.message()
         );
     }

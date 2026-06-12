@@ -452,6 +452,37 @@ mod tests {
         )
     }
 
+    // RISK: a variant column must not be a sort key — Java 1.10.0 `SortOrder.checkCompatibility`
+    // rejects it at the non-primitive door ("Cannot sort by non-primitive source field: %s";
+    // variant is not a primitive and has no comparator). Allowing it would record a sort order no
+    // engine can honor, and the rendered type name must be Java's "variant".
+    #[test]
+    fn test_build_should_return_err_if_source_field_is_variant() {
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![NestedField::required(1, "v", Type::Variant).into()])
+            .build()
+            .unwrap();
+
+        let sort_order_builder_result = SortOrder::builder()
+            .with_sort_field(
+                SortField::builder()
+                    .source_id(1)
+                    .direction(SortDirection::Ascending)
+                    .null_order(NullOrder::First)
+                    .transform(Transform::Identity)
+                    .build(),
+            )
+            .build(&schema);
+
+        assert_eq!(
+            sort_order_builder_result
+                .expect_err("a variant sort key must be rejected")
+                .message(),
+            "Cannot sort by non-primitive source field: variant"
+        )
+    }
+
     #[test]
     fn test_build_should_return_err_if_source_field_type_is_not_supported_by_transform() {
         let schema = Schema::builder()

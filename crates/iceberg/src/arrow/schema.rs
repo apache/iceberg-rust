@@ -608,6 +608,23 @@ impl SchemaVisitor for ToArrowSchemaConverter {
         )))
     }
 
+    /// Iceberg `variant` has no Arrow representation here — fail loudly, never fall back.
+    ///
+    /// Java parity: `ArrowSchemaUtil`'s converter does not override the visitor default, so Java
+    /// throws `UnsupportedOperationException("Unsupported type: variant")` (the 1.10.0
+    /// `TypeUtil.SchemaVisitor.variant` default) on the same conversion. This override exists
+    /// only to NAME the Rust-side limitation: the pinned arrow-rs 57.1 / parquet 57.1 crates
+    /// expose no variant extension type this fork could emit without a dependency change. A
+    /// silent fallback (e.g. binary or a metadata/value struct) would let a scan or writer treat
+    /// variant bytes as a plain column and corrupt the on-disk contract.
+    fn variant(&mut self) -> crate::Result<ArrowSchemaOrFieldOrType> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Unsupported type: variant (Iceberg-to-Arrow conversion: the pinned arrow-rs 57.1 \
+             has no variant extension type; file-level variant I/O is deferred)",
+        ))
+    }
+
     fn primitive(
         &mut self,
         p: &crate::spec::PrimitiveType,
@@ -1898,6 +1915,47 @@ mod tests {
         let schema = iceberg_schema_for_schema_to_arrow_schema();
         let converted_arrow_schema = schema_to_arrow_schema(&schema).unwrap();
         assert_eq!(converted_arrow_schema, arrow_schema);
+    }
+
+    // RISK: variant has NO Arrow representation under the pinned arrow-rs 57.1 — the conversion
+    // must ERROR LOUDLY (Java parity: `ArrowSchemaUtil` inherits the 1.10.0
+    // `TypeUtil.SchemaVisitor.variant` default throw "Unsupported type: variant"), never fall
+    // back to binary/struct. A silent fallback would let scans/writes treat raw variant bytes as
+    // a plain column. This is also the door that makes a variant equality-delete config fail
+    // loudly: `EqualityDeleteWriterConfig::new` converts the full table schema through this path.
+    #[test]
+    fn test_variant_to_arrow_errors_loudly() {
+        // Bare type conversion.
+        let error = type_to_arrow_type(&Type::Variant)
+            .expect_err("variant must not convert to an Arrow type");
+        assert_eq!(error.kind(), crate::ErrorKind::FeatureUnsupported);
+        assert!(
+            error.message().starts_with("Unsupported type: variant"),
+            "message must start with Java's visitor-default text, got: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("arrow-rs 57.1"),
+            "message must NAME the pinned-crate limitation, got: {}",
+            error.message()
+        );
+
+        // Whole-schema conversion (the scan/write/equality-delete entry point) — a variant
+        // ANYWHERE in the schema fails the conversion.
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, "v", Type::Variant).into(),
+            ])
+            .build()
+            .unwrap();
+        let error = schema_to_arrow_schema(&schema)
+            .expect_err("a schema containing variant must not convert to Arrow");
+        assert!(
+            error.message().starts_with("Unsupported type: variant"),
+            "got: {}",
+            error.message()
+        );
     }
 
     #[test]

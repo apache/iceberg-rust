@@ -69,12 +69,26 @@ pub trait SchemaVisitor {
     fn map(&mut self, map: &MapType, key_value: Self::T, value: Self::T) -> Result<Self::T>;
     /// Called when see a primitive type.
     fn primitive(&mut self, p: &PrimitiveType) -> Result<Self::T>;
+    /// Called when a `variant` type is visited.
+    ///
+    /// The default mirrors Java 1.10.0 `TypeUtil.SchemaVisitor.variant(VariantType)`, which
+    /// throws `UnsupportedOperationException("Unsupported type: variant")` — a visitor that does
+    /// not opt in fails loudly instead of silently mishandling the type. Structural visitors
+    /// (indexing, pruning, id reassignment) override this as a leaf, exactly like their Java
+    /// counterparts (`IndexByName`/`IndexById`/`IndexParents`/`PruneColumns` all override it).
+    fn variant(&mut self) -> Result<Self::T> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Unsupported type: variant",
+        ))
+    }
 }
 
 /// Visiting a type in post order.
 pub(crate) fn visit_type<V: SchemaVisitor>(r#type: &Type, visitor: &mut V) -> Result<V::T> {
     match r#type {
         Type::Primitive(p) => visitor.primitive(p),
+        Type::Variant => visitor.variant(),
         Type::List(list) => {
             visitor.before_list_element(&list.element_field)?;
             let value = visit_type(&list.element_field.field_type, visitor)?;
@@ -185,6 +199,19 @@ pub trait SchemaWithPartnerVisitor<P> {
     ) -> Result<Self::T>;
     /// Called when see a primitive type.
     fn primitive(&mut self, p: &PrimitiveType, partner: &P) -> Result<Self::T>;
+    /// Called when a `variant` type is visited.
+    ///
+    /// Default mirrors Java 1.10.0 `TypeUtil.SchemaVisitor.variant`'s
+    /// `UnsupportedOperationException("Unsupported type: variant")` — see
+    /// [`SchemaVisitor::variant`]. Variant column DATA handling (Arrow value conversion, NaN
+    /// counting, equality-delete projection) is file-level variant I/O, which is deferred — the
+    /// loud default is the correct behavior for every current partner visitor.
+    fn variant(&mut self, _partner: &P) -> Result<Self::T> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Unsupported type: variant",
+        ))
+    }
 }
 
 /// Accessor used to get child partner from parent partner.
@@ -210,6 +237,7 @@ pub(crate) fn visit_type_with_partner<P, V: SchemaWithPartnerVisitor<P>, A: Part
 ) -> Result<V::T> {
     match r#type {
         Type::Primitive(p) => visitor.primitive(p, partner),
+        Type::Variant => visitor.variant(partner),
         Type::List(list) => {
             let list_element_partner = accessor.list_element_partner(partner)?;
             visitor.before_list_element(&list.element_field, list_element_partner)?;

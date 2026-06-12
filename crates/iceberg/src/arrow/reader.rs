@@ -778,6 +778,13 @@ impl ArrowReader {
             Type::Primitive(_) => {
                 field_ids.push(field.id);
             }
+            // A variant column is a leaf in the schema tree (its nested ids, if any, belong to
+            // the F2+ shredding overlay). Reading variant DATA is deferred: a scan projecting a
+            // variant column fails loudly earlier, in the Iceberg→Arrow schema conversion
+            // (`ToArrowSchemaConverter::variant`), before this projection mask is consulted.
+            Type::Variant => {
+                field_ids.push(field.id);
+            }
             Type::Struct(struct_type) => {
                 for nested_field in struct_type.fields() {
                     Self::include_leaf_field_id(nested_field, field_ids);
@@ -5477,6 +5484,25 @@ message schema {
             expected_micros,
             "INT96 in map: got {}, expected {expected_micros}",
             ts_array.value(0)
+        );
+    }
+
+    // RISK (the compile-forced reader leaf arm): a variant column contributes its OWN field id to
+    // the parquet projection-mask leaf set, exactly like a primitive — its nested parquet column
+    // ids (if any) belong to the F2+ shredding overlay, and Java's pruning treats the variant
+    // column as one selectable unit (1.10.0 `TypeUtil.select` keeps it whole; live-Java-probed).
+    // This arm is unreachable through a real scan today (the Iceberg→Arrow conversion errors
+    // first), so this direct unit test is the only thing pinning its semantics: dropping the
+    // `field_ids.push` would silently project variant columns out once the arrow door opens.
+    #[test]
+    fn test_include_leaf_field_id_treats_variant_as_leaf() {
+        let variant_field: NestedField = NestedField::optional(7, "v", Type::Variant);
+        let mut field_ids = vec![];
+        ArrowReader::include_leaf_field_id(&variant_field, &mut field_ids);
+        assert_eq!(
+            field_ids,
+            vec![7],
+            "a variant column is one projectable leaf (its own field id)"
         );
     }
 }

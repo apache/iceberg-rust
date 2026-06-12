@@ -80,7 +80,15 @@ mod _decimal {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-/// All data types are either primitives or nested types, which are maps, lists, or structs.
+/// All data types are either primitives or nested types, which are maps, lists, or structs —
+/// plus `variant`, which is its own category.
+///
+/// `Variant` mirrors Java 1.10.0 `org.apache.iceberg.types.Types.VariantType`, which implements
+/// the `Type` interface directly: it is **neither** a `Type.PrimitiveType` **nor** a
+/// `Type.NestedType` (`isPrimitiveType()` and `isNestedType()` are both false). Placing it as its
+/// own `Type` variant (not a `PrimitiveType`) preserves every Java non-primitive door for free:
+/// variant is rejected as a partition source, sort key, and identifier field by the same
+/// `is_primitive()` checks Java uses.
 pub enum Type {
     /// Primitive types
     Primitive(PrimitiveType),
@@ -90,6 +98,11 @@ pub enum Type {
     List(ListType),
     /// Map type
     Map(MapType),
+    /// Variant type (format version 3+): semi-structured data as a (metadata, value) binary pair.
+    ///
+    /// The binary encoding lives in [`crate::variant`]; this enum entry is the schema-level type.
+    /// Like Java's singleton `Types.VariantType`, it carries no parameters.
+    Variant,
 }
 
 impl fmt::Display for Type {
@@ -99,6 +112,8 @@ impl fmt::Display for Type {
             Type::Struct(s) => write!(f, "{s}"),
             Type::List(_) => write!(f, "list"),
             Type::Map(_) => write!(f, "map"),
+            // Java `VariantType.toString()` returns exactly "variant".
+            Type::Variant => write!(f, "variant"),
         }
     }
 }
@@ -117,9 +132,20 @@ impl Type {
     }
 
     /// Whether the type is nested type.
+    ///
+    /// `variant` is NOT a nested type (Java `Type.isNestedType()` defaults to false and
+    /// `VariantType` does not override it).
     #[inline(always)]
     pub fn is_nested(&self) -> bool {
         matches!(self, Type::Struct(_) | Type::List(_) | Type::Map(_))
+    }
+
+    /// Whether the type is the variant type.
+    ///
+    /// Mirrors Java `Type.isVariantType()` (false everywhere except `Types.VariantType`).
+    #[inline(always)]
+    pub fn is_variant(&self) -> bool {
+        matches!(self, Type::Variant)
     }
 
     /// Convert Type to reference of PrimitiveType
@@ -704,13 +730,57 @@ impl ListType {
 /// Module for type serialization/deserialization.
 pub(super) mod _serde {
     use std::borrow::Cow;
+    use std::fmt;
 
+    use serde::{Deserializer, Serializer};
     use serde_derive::{Deserialize, Serialize};
 
     use crate::spec::datatypes::Type::Map;
     use crate::spec::datatypes::{
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
     };
+
+    /// Marker that (de)serializes exactly the JSON string `"variant"`.
+    ///
+    /// Java `SchemaParser.toJson` writes variant the same way it writes primitives — as the bare
+    /// string `type.toString()` (`"variant"`) — and `typeFromJson` parses any textual node through
+    /// `Types.fromTypeName`, whose TYPES map contains `"variant" -> VariantType` (1.10.0
+    /// bytecode). The marker rejects every other string so the untagged [`SerdeType`] falls
+    /// through to [`SerdeType::Primitive`] for real primitive names.
+    pub(super) struct VariantTypeName;
+
+    impl serde::Serialize for VariantTypeName {
+        fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+        where S: Serializer {
+            serializer.serialize_str("variant")
+        }
+    }
+
+    impl<'de> serde::Deserialize<'de> for VariantTypeName {
+        fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+        where D: Deserializer<'de> {
+            struct VariantTypeNameVisitor;
+
+            impl serde::de::Visitor<'_> for VariantTypeNameVisitor {
+                type Value = VariantTypeName;
+
+                fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("the string 'variant'")
+                }
+
+                fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+                where E: serde::de::Error {
+                    if value == "variant" {
+                        Ok(VariantTypeName)
+                    } else {
+                        Err(E::custom(format!("expected 'variant', got '{value}'")))
+                    }
+                }
+            }
+
+            deserializer.deserialize_str(VariantTypeNameVisitor)
+        }
+    }
 
     /// List type for serialization and deserialization
     #[derive(Serialize, Deserialize)]
@@ -736,6 +806,13 @@ pub(super) mod _serde {
             value_required: bool,
             value: Cow<'a, Type>,
         },
+        // The exact string "variant" lands here; `VariantTypeName` rejects everything else,
+        // letting genuine primitive names fall through to `Primitive`. Correctness does NOT
+        // depend on this arm's position: untagged serde tries arms until one succeeds, and the
+        // `PrimitiveType` deserializer independently rejects "variant" (pinned by
+        // `variant_is_rejected_as_a_primitive_type_string`), so either order parses identically
+        // (mutation-verified by the reviewer).
+        Variant(VariantTypeName),
         Primitive(PrimitiveType),
     }
 
@@ -774,6 +851,7 @@ pub(super) mod _serde {
                 SerdeType::Struct { r#type: _, fields } => {
                     Self::Struct(StructType::new(fields.into_owned()))
                 }
+                SerdeType::Variant(_) => Self::Variant,
                 SerdeType::Primitive(p) => Self::Primitive(p),
             }
         }
@@ -800,6 +878,7 @@ pub(super) mod _serde {
                     r#type: "struct".to_string(),
                     fields: Cow::Borrowed(&s.fields),
                 },
+                Type::Variant => SerdeType::Variant(VariantTypeName),
                 Type::Primitive(p) => SerdeType::Primitive(p.clone()),
             }
         }
@@ -1214,6 +1293,160 @@ mod tests {
         for (ty, literal) in pairs {
             assert!(ty.compatible(&literal));
         }
+    }
+
+    // RISK: the variant SCHEMA-JSON contract is the on-disk format — Java `SchemaParser.toJson`
+    // writes variant as the bare string "variant" (the `isPrimitiveType() || isVariantType()`
+    // branch) and `typeFromJson` parses it via `Types.fromTypeName` (1.10.0 bytecode). A wrong
+    // serialization here corrupts schema round-trips for every V3 table. Covers all four
+    // placements: top-level field, nested struct, list element, map value.
+    #[test]
+    fn variant_type_serde_round_trip_in_all_placements() {
+        let record = r#"
+        {
+            "type": "struct",
+            "fields": [
+                {"id": 1, "name": "v", "required": false, "type": "variant"},
+                {
+                    "id": 2,
+                    "name": "payload",
+                    "required": true,
+                    "type": {
+                        "type": "struct",
+                        "fields": [
+                            {"id": 3, "name": "nested_v", "required": false, "type": "variant"}
+                        ]
+                    }
+                },
+                {
+                    "id": 4,
+                    "name": "events",
+                    "required": true,
+                    "type": {
+                        "type": "list",
+                        "element-id": 5,
+                        "element-required": false,
+                        "element": "variant"
+                    }
+                },
+                {
+                    "id": 6,
+                    "name": "tags",
+                    "required": true,
+                    "type": {
+                        "type": "map",
+                        "key-id": 7,
+                        "key": "string",
+                        "value-id": 8,
+                        "value-required": false,
+                        "value": "variant"
+                    }
+                }
+            ]
+        }
+        "#;
+
+        check_type_serde(
+            record,
+            Type::Struct(StructType::new(vec![
+                NestedField::optional(1, "v", Type::Variant).into(),
+                NestedField::required(
+                    2,
+                    "payload",
+                    Type::Struct(StructType::new(vec![
+                        NestedField::optional(3, "nested_v", Type::Variant).into(),
+                    ])),
+                )
+                .into(),
+                NestedField::required(
+                    4,
+                    "events",
+                    Type::List(ListType {
+                        element_field: NestedField::list_element(5, Type::Variant, false).into(),
+                    }),
+                )
+                .into(),
+                NestedField::required(
+                    6,
+                    "tags",
+                    Type::Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            7,
+                            Type::Primitive(PrimitiveType::String),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(8, Type::Variant, false).into(),
+                    }),
+                )
+                .into(),
+            ])),
+        )
+    }
+
+    // RISK: "variant" must NOT parse as a PrimitiveType — Java `Types.fromPrimitiveString`
+    // throws "Cannot parse type string: variant is not a primitive type" (1.10.0 bytecode, the
+    // literal constant). Accepting it would let variant sneak through every primitive-only door
+    // (promotion targets, accessors, partition literals).
+    #[test]
+    fn variant_is_rejected_as_a_primitive_type_string() {
+        let result = serde_json::from_str::<PrimitiveType>(r#""variant""#);
+        assert!(
+            result.is_err(),
+            "'variant' must not deserialize as a PrimitiveType"
+        );
+    }
+
+    // RISK (case posture, live-Java-probed by the reviewer): this parser is CASE-SENSITIVE for
+    // every type name — `"Variant"`/`"VARIANT"` are rejected exactly like `"STRING"` is. Java
+    // 1.10.0 `Types.fromTypeName` lowercases its input (`toLowerCase(Locale.ROOT)`), so Java's
+    // `SchemaParser` accepts `"Variant"`; Rust's pre-existing posture is uniformly
+    // case-sensitive (its `PrimitiveType` serde is lowercase-exact), and the variant arm follows
+    // that posture rather than becoming the single case-insensitive name. In practice both
+    // writers only ever emit lowercase (`Type.toString()` / `Display`), so the divergence is
+    // read-tolerance of foreign-cased JSON only — pinned here so a future global
+    // case-insensitivity fix flips ALL names at once, never just one.
+    #[test]
+    fn variant_type_name_parsing_is_case_sensitive_like_every_other_name() {
+        for cased in ["Variant", "VARIANT", "vArIaNt", " variant", "variant2"] {
+            let json = format!(r#""{cased}""#);
+            assert!(
+                serde_json::from_str::<Type>(&json).is_err(),
+                "'{cased}' must not parse as a type (case-sensitive posture)"
+            );
+        }
+        // The same posture for a primitive name, proving variant is not special-cased.
+        assert!(serde_json::from_str::<Type>(r#""STRING""#).is_err());
+        // Exact lowercase parses.
+        assert_eq!(
+            serde_json::from_str::<Type>(r#""variant""#).expect("lowercase variant parses"),
+            Type::Variant
+        );
+    }
+
+    // RISK: the Java type-hierarchy placement — `Types.VariantType implements Type` directly, so
+    // `isPrimitiveType()`, `isNestedType()` are FALSE and `isVariantType()` is TRUE, and
+    // `toString()` is exactly "variant". Every legality door (partition/sort/identifier) keys off
+    // these predicates; a wrong category flips all of them at once.
+    #[test]
+    fn variant_type_category_mirrors_java_hierarchy() {
+        let variant = Type::Variant;
+        assert!(!variant.is_primitive(), "variant is not a primitive type");
+        assert!(!variant.is_nested(), "variant is not a nested type");
+        assert!(!variant.is_struct(), "variant is not a struct type");
+        assert!(variant.is_variant(), "is_variant must report true");
+        assert!(
+            variant.as_primitive_type().is_none(),
+            "variant has no primitive view"
+        );
+        assert_eq!(
+            variant.to_string(),
+            "variant",
+            "Display must match Java VariantType.toString()"
+        );
+        assert!(
+            !Type::Primitive(PrimitiveType::String).is_variant(),
+            "non-variant types must not report is_variant"
+        );
     }
 
     #[test]

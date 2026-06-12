@@ -80,11 +80,14 @@
 //!   but they CAN be constructed manually (each nesting level is an explicit `push`/`put`
 //!   call), and an unbounded write recursion over such a value would overflow the stack.
 //!   Java has no limit (its writer recursion equals the constructed depth).
-//! - **`ShreddedObject`'s shredding overlay is NOT ported** (the `unshredded` backing object,
-//!   buffer-slice reuse via `SerializedObject.sliceValue`, `remove()`/`removedFields`, and
-//!   `Variants.object(metadata, object)` re-wrapping). [`VariantObjectBuilder`] is the plain
-//!   writer (`Variants.object(metadata)` + `put`) only; shredding is deferred with the rest
-//!   of the shredding surface (see `docs/parity/GAP_MATRIX.md`).
+//! - **The canonicalization above is BOUNDED by the shredding overlay** (`shredded.rs`,
+//!   Wave-4 F2): `ShreddedObject`'s partial-shred surface (the `unshredded` backing,
+//!   `SerializedObject.sliceValue` verbatim buffer reuse, `remove()`/`removedFields`, the
+//!   `Variants.object(metadata, object)` re-wrap) is ported there, and an overlay over a
+//!   serialized backing preserves untouched fields' original bytes VERBATIM — exactly the
+//!   place Java's verbatim-copy behavior is load-bearing. [`VariantObjectBuilder`] remains
+//!   the plain writer (`Variants.object(metadata)` + `put`) producing a nestable
+//!   [`VariantObject`](crate::variant::VariantObject) value.
 //! - **ISO-string convenience factories are not ported** (`Variants.ofIsoDate` /
 //!   `ofIsoTimestamptz` / ... are `DateTimeUtil` parsing conveniences, not format surface);
 //!   the numeric `of_date`/`of_timestamptz`/... constructors are the byte-format-bearing
@@ -113,7 +116,7 @@ const MAX_SHORT_STRING_LENGTH: usize = 63;
 /// Java's `int` ceiling: every serialized size, length, count, and offset must fit a signed
 /// 32-bit integer (Java buffers and `sizeInBytes()` are `int`-addressed). Values beyond it
 /// are unrepresentable in Java and are rejected here by name.
-const JAVA_INT_MAX: usize = i32::MAX as usize;
+pub(super) const JAVA_INT_MAX: usize = i32::MAX as usize;
 
 /// The basic-type tag of an object header (Java `VariantUtil.BASIC_TYPE_OBJECT`, the low two
 /// bits of `objectHeader`).
@@ -126,7 +129,7 @@ const BASIC_TYPE_SHORT_STRING: u8 = 0b01;
 /// Width selection — the number of bytes needed to store `max_value` unsigned: the exact
 /// Java `VariantUtil.sizeOf` thresholds (1 for <= 0xFF, 2 for <= 0xFFFF, 3 for <= 0xFFFFFF,
 /// else 4). Callers door their inputs at [`JAVA_INT_MAX`] first.
-fn size_of_unsigned(max_value: usize) -> usize {
+pub(super) fn size_of_unsigned(max_value: usize) -> usize {
     if max_value <= 0xFF {
         1
     } else if max_value <= 0xFFFF {
@@ -140,7 +143,7 @@ fn size_of_unsigned(max_value: usize) -> usize {
 
 /// Writes the byte at `offset`, bounds-checked (Java `VariantUtil.writeByte` relies on
 /// `ByteBuffer`'s unchecked exception).
-fn write_u8(buffer: &mut [u8], offset: usize, value: u8) -> Result<()> {
+pub(super) fn write_u8(buffer: &mut [u8], offset: usize, value: u8) -> Result<()> {
     let buffer_len = buffer.len();
     let slot = buffer.get_mut(offset).ok_or_else(|| {
         util::invalid(format!(
@@ -152,7 +155,7 @@ fn write_u8(buffer: &mut [u8], offset: usize, value: u8) -> Result<()> {
 }
 
 /// Copies `data` to `offset`, bounds-checked (Java `VariantUtil.writeBufferAbsolute`).
-fn write_bytes(buffer: &mut [u8], offset: usize, data: &[u8]) -> Result<()> {
+pub(super) fn write_bytes(buffer: &mut [u8], offset: usize, data: &[u8]) -> Result<()> {
     let end = offset.checked_add(data.len()).ok_or_else(|| {
         util::invalid(format!(
             "Invalid variant write: byte range {offset}+{} overflows",
@@ -177,7 +180,12 @@ fn write_bytes(buffer: &mut [u8], offset: usize, data: &[u8]) -> Result<()> {
 /// corrupting anything too large; here an oversized value is a named error (see the module
 /// doc — by construction every internal caller selects the width with [`size_of_unsigned`],
 /// so this door only fires on the count-wider-than-data pathology).
-fn write_le_unsigned(buffer: &mut [u8], value: usize, offset: usize, size: usize) -> Result<()> {
+pub(super) fn write_le_unsigned(
+    buffer: &mut [u8],
+    value: usize,
+    offset: usize,
+    size: usize,
+) -> Result<()> {
     debug_assert!(
         (1..=4).contains(&size),
         "width selection yields sizes 1..=4"
@@ -195,7 +203,12 @@ fn write_le_unsigned(buffer: &mut [u8], value: usize, offset: usize, size: usize
 /// Doors a container write up front: `offset + total_size` must fit the buffer (checked
 /// math, so a hostile offset cannot wrap). After this door every interior offset is bounded
 /// by `buffer.len() <= isize::MAX` and plain offset arithmetic cannot overflow.
-fn door_value_span(buffer: &[u8], offset: usize, total_size: usize, what: &str) -> Result<()> {
+pub(super) fn door_value_span(
+    buffer: &[u8],
+    offset: usize,
+    total_size: usize,
+    what: &str,
+) -> Result<()> {
     let fits = offset
         .checked_add(total_size)
         .is_some_and(|end| end <= buffer.len());
@@ -229,7 +242,7 @@ fn metadata_header(is_sorted: bool, offset_size: usize) -> u8 {
 
 /// Builds an object header byte (Java `VariantUtil.objectHeader`:
 /// `(isLarge ? 0b1000000 : 0) | ((fieldIdSize - 1) << 4) | ((offsetSize - 1) << 2) | 0b10`).
-fn object_header(is_large: bool, field_id_size: usize, offset_size: usize) -> u8 {
+pub(super) fn object_header(is_large: bool, field_id_size: usize, offset_size: usize) -> u8 {
     (if is_large { OBJECT_IS_LARGE } else { 0 })
         | (width_bits(field_id_size) << FIELD_ID_SIZE_SHIFT)
         | (width_bits(offset_size) << OFFSET_SIZE_SHIFT)
@@ -645,7 +658,11 @@ impl Variant {
 /// `ValueArray.SerializationState` / `ShreddedObject.SerializationState`). Depth-bounded by
 /// [`MAX_NESTING_DEPTH`] — the format is genuinely recursive and the bound is checked before
 /// any child walk, so stack usage is provably capped (see the module doc).
-fn value_size(value: &VariantValue, metadata: &VariantMetadata, depth: usize) -> Result<usize> {
+pub(super) fn value_size(
+    value: &VariantValue,
+    metadata: &VariantMetadata,
+    depth: usize,
+) -> Result<usize> {
     if depth > MAX_NESTING_DEPTH {
         return Err(util::invalid(format!(
             "Invalid variant: nesting depth exceeds the supported maximum {MAX_NESTING_DEPTH}"
@@ -792,7 +809,7 @@ fn array_layout(
 }
 
 /// Accumulates a child size into a container data size, doored at Java's `int` domain.
-fn checked_data_size(accumulated: usize, child_size: usize) -> Result<usize> {
+pub(super) fn checked_data_size(accumulated: usize, child_size: usize) -> Result<usize> {
     accumulated
         .checked_add(child_size)
         .filter(|size| *size <= JAVA_INT_MAX)
@@ -805,7 +822,7 @@ fn checked_data_size(accumulated: usize, child_size: usize) -> Result<usize> {
 
 /// Recursive write dispatch (the `writeTo` side of the three serialization states). The depth
 /// bound mirrors [`value_size`].
-fn write_value(
+pub(super) fn write_value(
     value: &VariantValue,
     metadata: &VariantMetadata,
     buffer: &mut [u8],

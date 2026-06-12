@@ -2353,3 +2353,986 @@ fn test_write_duplicate_name_dictionary_resolves_first_id_like_java() {
         "the re-resolved field id is the FIRST duplicate's"
     );
 }
+
+// ===== shredding overlay: Java 1.10.0 byte-exact fixtures (Wave-4 F2) ======================
+// Provenance: /tmp/variant-fixture-gen/VariantShredFixtureGen.java against the pinned 1.10.0
+// jars (generated 2026-06-11; classpath recipe in the module doc above — the shred generator
+// uses the same CPW with avro + caffeine). Every overlay constant is the EXACT serialized
+// output of iceberg-core 1.10.0's `ShreddedObject.writeTo`, round-trip re-read by Java at
+// generation time; the probe lines quoted per test are the same program's output.
+
+/// Java's `f_base_sorted` — `Variants.object(mdAbcd)` + put a=Variants.of(1) (int32),
+/// b=Variants.of("x"), c=Variants.of(true), over `Variants.metadata("a","b","c","d")`.
+const JAVA_SHRED_BASE_SORTED: &str = "0203000102000507081401000000057804";
+
+/// The metadata every sorted-base fixture uses (`Variants.metadata("a","b","c","d")`).
+fn shred_metadata_abcd() -> VariantMetadata {
+    VariantMetadata::from_field_names(["a", "b", "c", "d"]).expect("4-name dictionary")
+}
+
+/// Rebuilds the shared sorted backing through the Rust plain writer and pins it against
+/// Java's bytes — every overlay fixture then runs over a PROVEN-identical backing.
+fn shred_sorted_base_bytes(metadata: &VariantMetadata) -> Vec<u8> {
+    let mut builder = VariantObjectBuilder::new(metadata);
+    builder
+        .put("a", VariantValue::of_int32(1))
+        .expect("a is in the metadata");
+    builder
+        .put("b", VariantValue::of_string("x"))
+        .expect("b is in the metadata");
+    builder
+        .put("c", VariantValue::of_boolean(true))
+        .expect("c is in the metadata");
+    let bytes = VariantValue::Object(builder.build())
+        .to_bytes(metadata)
+        .expect("the base must serialize");
+    assert_eq!(
+        bytes,
+        hex(JAVA_SHRED_BASE_SORTED),
+        "the Rust-built backing must equal Java's f_base_sorted before any overlay runs"
+    );
+    bytes
+}
+
+/// Asserts an overlay serializes EXACTLY to Java's bytes (size, write, and a B1 re-parse of
+/// the output as the read-back sanity check).
+fn assert_overlay_fixture(
+    name: &str,
+    metadata: &VariantMetadata,
+    overlay: &ShreddedObject<'_>,
+    java_hex: &str,
+) -> VariantValue {
+    let java_bytes = hex(java_hex);
+    assert_eq!(
+        overlay
+            .size_in_bytes()
+            .unwrap_or_else(|error| panic!("{name}: must size: {error}")),
+        java_bytes.len(),
+        "{name}: size_in_bytes must equal Java's sizeInBytes"
+    );
+    let written = overlay
+        .to_bytes()
+        .unwrap_or_else(|error| panic!("{name}: must serialize: {error}"));
+    assert_eq!(
+        written, java_bytes,
+        "{name}: the overlay must serialize byte-for-byte to Java's output"
+    );
+    VariantValue::parse(metadata, &java_bytes)
+        .unwrap_or_else(|error| panic!("{name}: the overlay output must re-parse: {error}"))
+}
+
+/// Risk pinned: the core merge semantics in one fixture — a `put` OVERRIDES the backing's
+/// field, a new `put` is merged in, `remove` excludes the backing's field, and the
+/// header/ids/offsets are recomputed over the MERGED set. A wrong merge silently rewrites
+/// object content for every shredded write.
+#[test]
+fn test_overlay_override_add_remove_matches_java_bytes() {
+    let metadata = shred_metadata_abcd();
+    let base = shred_sorted_base_bytes(&metadata);
+    let mut overlay =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    overlay
+        .put("b", VariantValue::of_string("yy"))
+        .expect("override");
+    overlay.put("d", VariantValue::of_int8(2)).expect("add");
+    overlay.remove("a");
+    let parsed = assert_overlay_fixture(
+        "f_overlay_override_add_remove",
+        &metadata,
+        &overlay,
+        "020301020300030406097979040c02",
+    );
+    let object = parsed.as_object().expect("an object");
+    assert_eq!(object.num_fields(), 3);
+    assert_eq!(
+        object.get("b"),
+        Some(&VariantValue::of_string("yy")),
+        "the shredded override must win"
+    );
+    assert!(object.get("a").is_none(), "the removed field must be gone");
+}
+
+/// Risk pinned: over an UNSORTED dictionary with a duplicate name, write-time field-id
+/// re-resolution is Java's linear scan (FIRST matching id) — and the untouched field stays
+/// verbatim. A sorted-assuming or last-match resolution diverges from Java's bytes.
+#[test]
+fn test_overlay_over_unsorted_duplicate_name_metadata_matches_java() {
+    let metadata =
+        VariantMetadata::from_field_names(["b", "a", "b"]).expect("duplicates are legal");
+    // Java's f_base_unsorted_dup: Variants.object(mdDup) + a=(byte)34, b="zz".
+    let mut builder = VariantObjectBuilder::new(&metadata);
+    builder.put("a", VariantValue::of_int8(34)).expect("a");
+    builder.put("b", VariantValue::of_string("zz")).expect("b");
+    let base = VariantValue::Object(builder.build())
+        .to_bytes(&metadata)
+        .expect("base");
+    assert_eq!(base, hex("020201000002050c22097a7a"), "f_base_unsorted_dup");
+
+    let mut overlay =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    overlay
+        .put("a", VariantValue::of_int8(35))
+        .expect("override a");
+    assert_overlay_fixture(
+        "f_overlay_unsorted_dup_metadata",
+        &metadata,
+        &overlay,
+        "020201000002050c23097a7a",
+    );
+}
+
+/// Java's hand-built NON-CANONICAL backing: field `a` is a LONG-form string "hi" (the
+/// canonical writer would use the short form) and the object header declares an OVERSIZED
+/// 2-byte offset width; field `b` is int8 7.
+const JAVA_SHRED_BASE_NON_CANONICAL: &str = "06020001000007000900400200000068690c07";
+/// The long-form "hi" encoding inside it — the byte run that must survive verbatim.
+const LONG_FORM_HI: &str = "40020000006869"; // header, 4-byte length, "hi"
+
+/// Risk pinned: THE divergence-class pin. Untouched unshredded fields must serialize as
+/// VERBATIM slices of the original buffer (Java `SerializedObject.sliceValue`) — a
+/// re-encode through the canonicalizing writer would shrink the long-form string to the
+/// short form and silently produce different bytes than Java for every third-party
+/// non-canonical input.
+#[test]
+fn test_overlay_preserves_non_canonical_unshredded_field_bytes_verbatim() {
+    let metadata = shred_metadata_abcd();
+    let base = hex(JAVA_SHRED_BASE_NON_CANONICAL);
+    let mut overlay =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    overlay.put("c", VariantValue::of_boolean(true)).expect("c");
+    let java_hex = "02030001020007090a400200000068690c0704";
+    assert_overlay_fixture(
+        "f_overlay_noncanonical_put_c",
+        &metadata,
+        &overlay,
+        java_hex,
+    );
+    assert!(
+        java_hex.contains(LONG_FORM_HI),
+        "the fixture itself must carry the long-form encoding verbatim"
+    );
+    // The canonical writer would have emitted the SHORT form instead — prove the
+    // re-encoding path really differs, so the fixture pins verbatim copy, not a no-op.
+    let parsed = VariantValue::parse(&metadata, &base).expect("must parse");
+    let canonical = parsed.to_bytes(&metadata).expect("must re-serialize");
+    assert_ne!(
+        canonical, base,
+        "re-encoding canonicalizes; only the overlay preserves the original bytes"
+    );
+}
+
+/// Risk pinned: an EMPTY overlay over a non-canonical backing re-encodes the outer
+/// header/ids/offsets canonically (Java recomputes them) while every field VALUE byte stays
+/// verbatim — pinning exactly which bytes Java preserves and which it rewrites.
+#[test]
+fn test_empty_overlay_over_non_canonical_backing_reheaders_but_preserves_field_bytes() {
+    let metadata = shred_metadata_abcd();
+    let base = hex(JAVA_SHRED_BASE_NON_CANONICAL);
+    let overlay =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    let java_hex = "02020001000709400200000068690c07";
+    assert_overlay_fixture(
+        "f_overlay_noncanonical_empty",
+        &metadata,
+        &overlay,
+        java_hex,
+    );
+    assert_ne!(
+        hex(java_hex),
+        base,
+        "the oversized offset width must be re-headered away"
+    );
+    assert!(
+        java_hex.contains(LONG_FORM_HI),
+        "the long-form field value must survive the re-header verbatim"
+    );
+}
+
+/// Risk pinned: an EMPTY overlay over a CANONICAL Java-written backing is byte-identical to
+/// the backing (Java probe: `probe_empty_overlay_equals_base true`) — the overlay must not
+/// perturb already-canonical data.
+#[test]
+fn test_empty_overlay_over_canonical_backing_is_byte_identical_to_the_backing() {
+    let metadata = shred_metadata_abcd();
+    let base = shred_sorted_base_bytes(&metadata);
+    let overlay =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    assert_overlay_fixture(
+        "f_overlay_empty_canonical",
+        &metadata,
+        &overlay,
+        JAVA_SHRED_BASE_SORTED,
+    );
+}
+
+/// Risk pinned: an add-only overlay keeps every backing field verbatim and merges the new
+/// field in UTF-16 name order.
+#[test]
+fn test_overlay_add_only_matches_java_bytes() {
+    let metadata = shred_metadata_abcd();
+    let base = shred_sorted_base_bytes(&metadata);
+    let mut overlay =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    overlay.put("d", VariantValue::of_int8(2)).expect("add d");
+    assert_overlay_fixture(
+        "f_overlay_add_only",
+        &metadata,
+        &overlay,
+        "020400010203000507080a14010000000578040c02",
+    );
+}
+
+/// Risk pinned: a remove-only overlay drops exactly the removed field and recomputes the
+/// widths over the SHRUNK set (a stale dataSize would misplace every offset).
+#[test]
+fn test_overlay_remove_only_matches_java_bytes() {
+    let metadata = shred_metadata_abcd();
+    let base = shred_sorted_base_bytes(&metadata);
+    let mut overlay =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    overlay.remove("b");
+    let parsed = assert_overlay_fixture(
+        "f_overlay_remove_only",
+        &metadata,
+        &overlay,
+        "02020002000506140100000004",
+    );
+    assert_eq!(parsed.as_object().expect("object").num_fields(), 2);
+}
+
+/// Risk pinned: Java's remove-then-put contract is INCONSISTENT on purpose — `put` does not
+/// clear `removedFields`, so the views (`get` → null, `numFields`/`fieldNames` exclude the
+/// name) disagree with serialization (which INCLUDES the new value). Java probe:
+/// `probe_remove_then_put_view numFields=2 get_b=null`, yet the bytes carry b=9. Mirroring
+/// only the views (or only the bytes) silently diverges.
+#[test]
+fn test_overlay_remove_then_put_same_name_serializes_but_views_exclude_it() {
+    let metadata = shred_metadata_abcd();
+    let base = shred_sorted_base_bytes(&metadata);
+    let mut overlay =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    overlay.remove("b");
+    overlay
+        .put("b", VariantValue::of_int8(9))
+        .expect("re-put b");
+    assert_eq!(overlay.get("b"), None, "removed wins in get, like Java");
+    assert_eq!(overlay.num_fields(), 2, "the views exclude the name");
+    assert_eq!(overlay.field_names(), vec!["a", "c"]);
+    let parsed = assert_overlay_fixture(
+        "f_overlay_remove_then_put_same",
+        &metadata,
+        &overlay,
+        "02030001020005070814010000000c0904",
+    );
+    assert_eq!(
+        parsed.as_object().expect("object").get("b"),
+        Some(&VariantValue::of_int8(9)),
+        "serialization includes the re-put value, like Java"
+    );
+}
+
+/// Java's `f_overlay_data_255` — merged dataSize exactly 255 keeps 1-byte offsets.
+const SHRED_DATA_255_HEX: &str = "02040001020300050708ff14010000000578043cf200000000070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b82899097";
+
+/// Java's `f_overlay_data_256` — merged dataSize 256 escalates to 2-byte offsets.
+const SHRED_DATA_256_HEX: &str = "0604000102030000050007000800000114010000000578043cf300000000070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979e";
+
+/// Risk pinned: the offset width is selected over the MERGED data size — crossing 255 bytes
+/// flips every offset entry from 1 to 2 bytes (Java probe fixtures straddle the boundary).
+#[test]
+fn test_overlay_merged_data_size_width_escalation_at_255_boundary() {
+    let metadata = shred_metadata_abcd();
+    let base = shred_sorted_base_bytes(&metadata);
+    // Base dataSize is 8; a binary put adds 5 + N — N = 242/243 lands dataSize 255/256.
+    for (n, java_hex, expected_offset_size) in [
+        (242usize, SHRED_DATA_255_HEX, 1usize),
+        (243usize, SHRED_DATA_256_HEX, 2usize),
+    ] {
+        let mut overlay =
+            ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+        overlay
+            .put("d", VariantValue::of_binary(java_binary_payload(n)))
+            .expect("put d");
+        let parsed = assert_overlay_fixture(
+            &format!("f_overlay_data_{}", 13 + n),
+            &metadata,
+            &overlay,
+            java_hex,
+        );
+        assert_eq!(parsed.as_object().expect("object").num_fields(), 4);
+        let header = hex(java_hex)[0];
+        assert_eq!(
+            1 + usize::from((header & 0b1100) >> 2),
+            expected_offset_size,
+            "dataSize {} must select {expected_offset_size}-byte offsets",
+            13 + n
+        );
+    }
+}
+
+/// Risk pinned: the 65535→65536 crossing flips offsets from 2 to 3 bytes; pinned as
+/// CRC32+length+prefix like the other large write fixtures (full-byte diffed out-of-band at
+/// generation time by Java's own round-trip read).
+#[test]
+fn test_overlay_merged_data_size_width_escalation_at_65535_boundary() {
+    let metadata = shred_metadata_abcd();
+    let base = shred_sorted_base_bytes(&metadata);
+    for (n, expected_crc, expected_len, expected_prefix) in [
+        (
+            65522usize,
+            1698129659u32,
+            65551usize,
+            "0604000102030000050007000800ffff14010000000578043cf2ff000000070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7ee",
+        ),
+        (
+            65523usize,
+            1883417984u32,
+            65557usize,
+            "0a040001020300000005000007000008000000000114010000000578043cf3ff000000070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cb",
+        ),
+    ] {
+        let mut overlay =
+            ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+        overlay
+            .put("d", VariantValue::of_binary(java_binary_payload(n)))
+            .expect("put d");
+        let bytes = overlay.to_bytes().expect("must serialize");
+        assert_eq!(bytes.len(), expected_len, "length for n={n}");
+        assert_eq!(crc32(&bytes), expected_crc, "Java CRC32 for n={n}");
+        assert_eq!(
+            &bytes[..64],
+            hex(expected_prefix).as_slice(),
+            "prefix for n={n}"
+        );
+        VariantValue::parse(&metadata, &bytes).expect("the output must re-parse");
+    }
+}
+
+/// Risk pinned: on a name collision the SHREDDED value wins (Java: a replaced backing field
+/// never enters the unshredded map) — flipping the precedence would resurrect overwritten
+/// data.
+#[test]
+fn test_overlay_shredded_value_wins_collision_matches_java() {
+    let metadata = shred_metadata_abcd();
+    let base = shred_sorted_base_bytes(&metadata);
+    let mut overlay =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    overlay
+        .put("c", VariantValue::of_boolean(false))
+        .expect("override c");
+    let parsed = assert_overlay_fixture(
+        "f_overlay_shredded_wins",
+        &metadata,
+        &overlay,
+        "0203000102000507081401000000057808",
+    );
+    assert_eq!(
+        parsed.as_object().expect("object").get("c"),
+        Some(&VariantValue::of_boolean(false)),
+        "the shredded false must win over the backing's true"
+    );
+}
+
+/// Risk pinned: `fieldIdSize = sizeOf(metadata.dictionarySize())` — the dictionary SIZE,
+/// not the largest id used; a 256-name dictionary forces 2-byte field ids in the overlay
+/// output even though every used id fits one byte.
+#[test]
+fn test_overlay_field_id_width_follows_dictionary_size_not_max_id() {
+    let names: Vec<String> = (0..256).map(|index| format!("k{index:03}")).collect();
+    let metadata = VariantMetadata::from_field_names(names).expect("256-name dictionary");
+    let mut builder = VariantObjectBuilder::new(&metadata);
+    builder
+        .put("k000", VariantValue::of_int32(1))
+        .expect("k000");
+    builder.put("k001", VariantValue::of_int8(2)).expect("k001");
+    let base = VariantValue::Object(builder.build())
+        .to_bytes(&metadata)
+        .expect("base");
+    assert_eq!(base, hex("12020000010000050714010000000c02"), "f_base_wide");
+    let mut overlay =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    overlay
+        .put("k002", VariantValue::of_boolean(true))
+        .expect("k002");
+    assert_overlay_fixture(
+        "f_overlay_fieldid_width_dict256",
+        &metadata,
+        &overlay,
+        "12030000010002000005070814010000000c0204",
+    );
+}
+
+/// Risk pinned: duplicate resolved field names in the backing reject at serialization time
+/// (Java's ImmutableMap throws "Multiple entries with same key") UNLESS the duplicated name
+/// is replaced/removed — then BOTH occurrences leave the unshredded side and the overlay
+/// serializes (Java fixture). An eager constructor-time rejection would over-reject.
+#[test]
+fn test_overlay_duplicate_backing_field_names_reject_unless_replaced() {
+    let metadata =
+        VariantMetadata::from_field_names(["b", "a", "b"]).expect("duplicates are legal");
+    // Java's f_base_dup_field: ids ["b", "a", "b"] -> int8 1 / 2 / 3.
+    let base = hex("0203000102000204060c010c020c03");
+    let unreplaced =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    let error = unreplaced
+        .size_in_bytes()
+        .expect_err("surviving duplicate names must reject");
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate unshredded field name: b"),
+        "the error must name the duplicate, got: {error}"
+    );
+
+    let mut replaced =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    replaced
+        .put("b", VariantValue::of_int8(9))
+        .expect("replace b");
+    assert_overlay_fixture(
+        "f_overlay_dup_field_replaced",
+        &metadata,
+        &replaced,
+        "020201000002040c020c09",
+    );
+
+    // REMOVING the duplicated name also drops both occurrences and serializes — Java probe
+    // (ReviewerShredProbe r5): `r5_dup_removed 02010100020c02`.
+    let mut removed =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    removed.remove("b");
+    assert_overlay_fixture("r5_dup_removed", &metadata, &removed, "02010100020c02");
+
+    // The VIEWS over the unreplaced dup backing dedup the name and resolve `get` through the
+    // backing's binary probe — Java probe: `r5_dup_views numFields=2 fieldNames=[a, b]
+    // get_b=Variant(type=INT8, value=3)` (the THIRD stored field wins the probe).
+    let views = ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    assert_eq!(views.num_fields(), 2);
+    assert_eq!(views.field_names(), vec!["a", "b"]);
+    assert_eq!(
+        views.get("b"),
+        Some(&VariantValue::of_int8(3)),
+        "Java's binary probe resolves the third stored field"
+    );
+}
+
+// Reviewer probe provenance (2026-06-11): /tmp/variant-probe/ReviewerShredProbe.java against
+// the same pinned-1.10.0 CPW classpath as VariantShredFixtureGen; the r*_ hex lines quoted
+// below are that program's verbatim output.
+
+/// Risk pinned: THE slice-range-math pin — a backing whose field DATA order differs from
+/// field-name order with DISTINCT value widths (fields a/b/c stored in name order, data
+/// placed c-first/a-second/b-third at widths 2/7/5). B1's sorted-distinct-offsets length
+/// scheme gives each untouched field its true span; an adjacent-field-subtraction or
+/// off-by-one range recorder would copy the WRONG bytes for every disordered third-party
+/// object (silent value corruption Java reads as different data). Java probe r1.
+#[test]
+fn test_overlay_disordered_backing_preserves_untouched_fields_verbatim() {
+    let metadata = shred_metadata_abcd();
+    // r1_base: ids a,b,c with offsets a@2, b@9, c@0 — a is LONG-form "hi" (7 bytes), b is
+    // int32 42 (5 bytes), c is int8 7 (2 bytes); data length 14.
+    let base = hex("02030001020209000e0c0740020000006869142a000000");
+    let mut overlay =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    overlay
+        .put("b", VariantValue::of_int8(9))
+        .expect("replace b");
+    let java_hex = "02030001020007090b400200000068690c090c07";
+    let parsed = assert_overlay_fixture("r1_overlay_put_b", &metadata, &overlay, java_hex);
+    assert!(
+        java_hex.contains(LONG_FORM_HI),
+        "untouched a must keep its long-form bytes verbatim"
+    );
+    assert_eq!(
+        parsed.as_object().expect("object").get("c"),
+        Some(&VariantValue::of_int8(7)),
+        "untouched c must keep its value"
+    );
+
+    // The EMPTY overlay re-orders the scrambled data into name order (offsets recomputed)
+    // while every field's VALUE bytes stay verbatim — incl. b's int32 run "142a000000".
+    let empty = ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    let java_empty_hex = "020300010200070c0e40020000006869142a0000000c07";
+    assert_overlay_fixture("r1_overlay_empty", &metadata, &empty, java_empty_hex);
+    assert!(
+        java_empty_hex.contains("142a000000"),
+        "untouched b's int32 bytes must survive the re-ordering verbatim"
+    );
+}
+
+/// Risk pinned: a NESTED object with a non-minimal (2-byte) offset width as an untouched
+/// field VALUE survives a sibling replacement byte-verbatim — the verbatim contract must
+/// hold for whole non-canonical subtrees, not just leaf encodings. Java probe r2.
+#[test]
+fn test_overlay_preserves_nested_non_canonical_object_field_verbatim() {
+    let metadata = shred_metadata_abcd();
+    // r2_base: a = int8 1, b = the inner object {c: int8 5} with OVERSIZED 2-byte offsets.
+    let base = hex("0202000100020b0c01060102000002000c05");
+    let mut overlay =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    overlay
+        .put("a", VariantValue::of_int8(2))
+        .expect("replace a");
+    let java_hex = "0202000100020b0c02060102000002000c05";
+    assert_overlay_fixture("r2_overlay_put_a", &metadata, &overlay, java_hex);
+    assert!(
+        java_hex.contains("060102000002000c05"),
+        "the nested object's oversized-width encoding must survive verbatim"
+    );
+    // The canonical writer would re-encode the inner object with 1-byte offsets.
+    let parsed = VariantValue::parse(&metadata, &base).expect("must parse");
+    let canonical = parsed.to_bytes(&metadata).expect("must re-serialize");
+    assert_ne!(
+        canonical, base,
+        "re-encoding canonicalizes the inner widths; only the overlay preserves them"
+    );
+}
+
+/// Risk pinned: a backing with 4-byte OUTER offsets carrying small data parses, records the
+/// wide-offset slice ranges correctly, and re-headers to canonical widths while the field
+/// values (incl. a long-form string) stay verbatim. Java probe r3.
+#[test]
+fn test_overlay_over_4_byte_offset_backing_re_headers_and_preserves_values() {
+    let metadata = shred_metadata_abcd();
+    // r3_base: header 0x0e (offsetSize 4), a = LONG-form "hi", b = int8 7.
+    let base = hex("0e020001000000000700000009000000400200000068690c07");
+    let mut overlay =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    overlay.put("c", VariantValue::of_boolean(true)).expect("c");
+    assert_overlay_fixture(
+        "r3_overlay_put_c",
+        &metadata,
+        &overlay,
+        "02030001020007090a400200000068690c0704",
+    );
+}
+
+/// Risk pinned (DOCUMENTED DIVERGENCE, not parity): a backing with a MALFORMED untouched
+/// field — lazy Java slices it blind and `writeTo` SUCCEEDS, copying the bad bytes verbatim
+/// (probe r4: `r4_overlay_untouched_malformed 020200010002030c02fc`; only a later
+/// `get("b")` throws `UnsupportedOperationException: Unknown primitive physical type: 63`).
+/// The eager Rust door rejects at `over_serialized_object` for the untouched AND the
+/// replaced-field twin (Java serializes the replaced twin fine too: probe
+/// `r4_overlay_replaced_malformed 020200010002040c010c09`) — the accepted-set divergence
+/// the module doc declares; loud-vs-blind, never silent corruption.
+#[test]
+fn test_overlay_rejects_malformed_untouched_field_where_java_serializes_blind() {
+    let metadata = shred_metadata_abcd();
+    // r4_base: a = int8 1, b = the undefined primitive type id 63 (header 0xFC).
+    let base = hex("020200010002030c01fc");
+    let error = ShreddedObject::over_serialized_object(&metadata, &base)
+        .expect_err("the eager parse must reject the malformed field");
+    assert!(
+        error
+            .to_string()
+            .contains("Unknown primitive physical type"),
+        "the rejection must name the malformed field's type, got: {error}"
+    );
+}
+
+/// Risk pinned: the constructed (non-serialized) backing branch materializes untouched
+/// fields consistently for size AND write — MAIN's semantics. 1.10.0's FIRST serialization
+/// of this shape is corrupt (probe p1: the SerializationState ctor merges into the caller's
+/// live map but writeTo iterates the pre-merge copy; re-read fails with
+/// IndexOutOfBoundsException); the pinned bytes are Java's SELF-HEALED second serialization
+/// (`f_overlay_constructed_backing`), which equals what MAIN emits directly.
+#[test]
+fn test_overlay_constructed_backing_matches_java_self_healed_output() {
+    let metadata = shred_metadata_abcd();
+    let mut builder = VariantObjectBuilder::new(&metadata);
+    builder.put("a", VariantValue::of_int32(1)).expect("a");
+    builder.put("b", VariantValue::of_string("x")).expect("b");
+    let mut overlay = ShreddedObject::over_object(&metadata, builder.build());
+    overlay.put("c", VariantValue::of_boolean(true)).expect("c");
+    assert_overlay_fixture(
+        "f_overlay_constructed_backing",
+        &metadata,
+        &overlay,
+        "0203000102000507081401000000057804",
+    );
+}
+
+/// Risk pinned: `put` of a name outside the metadata dictionary rejects with Java's exact
+/// precondition message (probe: `IllegalArgumentException: Cannot find field name in
+/// metadata: zzz`) — silently accepting it would emit a dangling field id.
+#[test]
+fn test_overlay_put_unknown_name_rejects_with_javas_message() {
+    let metadata = shred_metadata_abcd();
+    let base = shred_sorted_base_bytes(&metadata);
+    let mut overlay =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    let error = overlay
+        .put("zzz", VariantValue::of_int32(1))
+        .expect_err("unknown names must reject");
+    assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+    assert!(
+        error
+            .to_string()
+            .contains("Cannot find field name in metadata: zzz"),
+        "the error must carry Java's message, got: {error}"
+    );
+}
+
+/// Risk pinned: `remove` of a name present nowhere is a harmless no-op (Java has no
+/// precondition; probe: `probe_remove_nonexistent_equals_base true`) — the serialization
+/// still equals the untouched backing.
+#[test]
+fn test_overlay_remove_nonexistent_name_is_a_no_op() {
+    let metadata = shred_metadata_abcd();
+    let base = shred_sorted_base_bytes(&metadata);
+    let mut overlay =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    overlay.remove("zzz");
+    assert_eq!(
+        overlay.to_bytes().expect("must serialize"),
+        base,
+        "removing an absent name must not change the output"
+    );
+}
+
+/// Risk pinned: overlaying non-object bytes rejects with Java's `asObject()` contract
+/// ("Not an object: %s") — Java's typed signature makes the case unrepresentable, so the
+/// byte-taking Rust door mirrors the closest runtime contract (documented in shredded.rs).
+#[test]
+fn test_overlay_over_non_object_bytes_rejects() {
+    let metadata = shred_metadata_abcd();
+    let error = ShreddedObject::over_serialized_object(&metadata, &[0x0C, 0x07])
+        .expect_err("an int8 value is not an object");
+    assert!(
+        error.to_string().contains("Not an object: Int8"),
+        "the error must mirror asObject(), got: {error}"
+    );
+    // An array is not an object either ([true] — header 0x03, count 1, offsets [0, 1]).
+    let error = ShreddedObject::over_serialized_object(&metadata, &[0x03, 0x01, 0x00, 0x01, 0x04])
+        .expect_err("an array value is not an object");
+    assert!(
+        error.to_string().contains("Not an object: Array"),
+        "the error must mirror asObject(), got: {error}"
+    );
+}
+
+/// Risk pinned: like Java, sizing does NOT resolve field ids but writing does — over a
+/// LYING-sorted dictionary (get(0) resolves a name the sorted-path id() lookup cannot
+/// re-find) `size_in_bytes` succeeds and `write_to` fails with Java's checkState message
+/// (probe: `IllegalStateException: Invalid metadata, missing: c`).
+#[test]
+fn test_overlay_write_time_id_resolution_fails_like_java_on_lying_sorted_dictionary() {
+    // ["c", "a", "b"] with the sorted flag SET — id("c") binary-search misses.
+    let metadata = VariantMetadata::parse(&hex("110300010203636162")).expect("must parse");
+    let overlay = ShreddedObject::over_serialized_object(&metadata, &hex("02010000020c05"))
+        .expect("the backing parses (get(0) resolves the name)");
+    let size = overlay
+        .size_in_bytes()
+        .expect("sizing must succeed, like Java (no id resolution)");
+    let mut buffer = vec![0u8; size];
+    let error = overlay
+        .write_to(&mut buffer, 0)
+        .expect_err("write-time id re-resolution must fail");
+    assert!(
+        error.to_string().contains("Invalid metadata, missing: c"),
+        "the error must carry Java's checkState message, got: {error}"
+    );
+}
+
+/// Risk pinned: the up-front span door is about ATOMICITY — an undersized buffer must
+/// reject BEFORE any byte is written (the B2 reviewer rule: pin the no-side-effect
+/// property, not just `is_err`).
+#[test]
+fn test_overlay_write_to_undersized_buffer_leaves_buffer_untouched() {
+    let metadata = shred_metadata_abcd();
+    let base = shred_sorted_base_bytes(&metadata);
+    let overlay =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    let size = overlay.size_in_bytes().expect("must size");
+    let mut buffer = vec![0u8; size - 1];
+    assert!(overlay.write_to(&mut buffer, 0).is_err());
+    assert!(
+        buffer.iter().all(|byte| *byte == 0),
+        "the buffer must be untouched after the door rejects"
+    );
+}
+
+/// Risk pinned: the overlay's serialization recursion is depth-guarded — a manually built
+/// arrays-within-arrays bomb as a shredded value must error, never overflow the stack
+/// (Java recurses unbounded; same guard family as write.rs).
+#[test]
+fn test_overlay_serialization_depth_guard_rejects_nesting_bombs() {
+    let metadata = shred_metadata_abcd();
+    let mut bomb = VariantValue::Array(VariantArray::new());
+    for _ in 0..(MAX_NESTING_DEPTH + 2) {
+        let mut outer = VariantArray::new();
+        outer.push(bomb);
+        bomb = VariantValue::Array(outer);
+    }
+    let mut overlay = ShreddedObject::new(&metadata);
+    overlay.put("a", bomb).expect("a is in the metadata");
+    let error = overlay
+        .size_in_bytes()
+        .expect_err("a nesting bomb must be rejected");
+    assert!(
+        error.to_string().contains("nesting depth"),
+        "the error must name the depth guard, got: {error}"
+    );
+}
+
+/// Risk pinned: the read-side views follow Java's exact precedence — removed FIRST, then
+/// shredded, then the backing lookup; `field_names` is the UTF-16-sorted dedup of the
+/// merged set (Java's TreeSet `nameSet()`).
+#[test]
+fn test_overlay_get_and_field_names_follow_javas_precedence() {
+    let metadata = shred_metadata_abcd();
+    let base = shred_sorted_base_bytes(&metadata);
+    let mut overlay =
+        ShreddedObject::over_serialized_object(&metadata, &base).expect("base must parse");
+    overlay
+        .put("b", VariantValue::of_string("yy"))
+        .expect("override b");
+    overlay.put("d", VariantValue::of_int8(2)).expect("add d");
+    overlay.remove("a");
+    assert_eq!(overlay.get("a"), None, "removed wins");
+    assert_eq!(
+        overlay.get("b"),
+        Some(&VariantValue::of_string("yy")),
+        "shredded beats the backing"
+    );
+    assert_eq!(
+        overlay.get("c"),
+        Some(&VariantValue::of_boolean(true)),
+        "the backing answers untouched names"
+    );
+    assert_eq!(overlay.get("zzz"), None, "unknown names miss");
+    assert_eq!(overlay.field_names(), vec!["b", "c", "d"]);
+    assert_eq!(overlay.num_fields(), 3);
+}
+
+// ===== VariantVisitor: traversal order, defaults, finally, depth ===========================
+// The traversal-order oracle is the Java 1.10.0 event log printed by
+// VariantShredFixtureGen's LoggingVisitor over the f_visit_value fixture (provenance above).
+
+/// Java's `f_visit_value`: `{ arr: [int8 1, "s", {x: true}], prim: int32 3 }` over
+/// `Variants.metadata("arr", "prim", "x")`, parsed from serialized bytes so the field order
+/// is the stored order.
+const JAVA_VISIT_VALUE: &str = "0202000100101503030002040a0c0105730201020001041403000000";
+
+/// A recording visitor mirroring the Java generator's `LoggingVisitor` line format.
+#[derive(Default)]
+struct LoggingVisitor {
+    log: Vec<String>,
+}
+
+/// Java `PhysicalType.name()` for the types the visit fixture touches.
+fn java_physical_type_name(physical_type: PhysicalType) -> &'static str {
+    match physical_type {
+        PhysicalType::Int8 => "INT8",
+        PhysicalType::Int32 => "INT32",
+        PhysicalType::String => "STRING",
+        PhysicalType::BooleanTrue => "BOOLEAN_TRUE",
+        other => panic!("the visit fixture does not contain {other:?}"),
+    }
+}
+
+impl VariantVisitor for LoggingVisitor {
+    type Output = String;
+
+    fn object(
+        &mut self,
+        _object: &VariantObject,
+        field_names: &[&str],
+        field_results: Vec<Option<String>>,
+    ) -> Option<String> {
+        let results: Vec<String> = field_results
+            .into_iter()
+            .map(|result| result.unwrap_or_else(|| "null".to_string()))
+            .collect();
+        self.log.push(format!(
+            "object(names=[{}], results=[{}])",
+            field_names.join(", "),
+            results.join(", ")
+        ));
+        Some("OBJ".to_string())
+    }
+
+    fn array(
+        &mut self,
+        _array: &VariantArray,
+        element_results: Vec<Option<String>>,
+    ) -> Option<String> {
+        let results: Vec<String> = element_results
+            .into_iter()
+            .map(|result| result.unwrap_or_else(|| "null".to_string()))
+            .collect();
+        self.log
+            .push(format!("array(results=[{}])", results.join(", ")));
+        Some("ARR".to_string())
+    }
+
+    fn primitive(&mut self, primitive: &VariantPrimitive) -> Option<String> {
+        let name = java_physical_type_name(primitive.physical_type());
+        self.log.push(format!("primitive({name})"));
+        Some(name.to_string())
+    }
+
+    fn before_array_element(&mut self, index: usize) {
+        self.log.push(format!("beforeArrayElement({index})"));
+    }
+
+    fn after_array_element(&mut self, index: usize) {
+        self.log.push(format!("afterArrayElement({index})"));
+    }
+
+    fn before_object_field(&mut self, field_name: &str) {
+        self.log.push(format!("beforeObjectField({field_name})"));
+    }
+
+    fn after_object_field(&mut self, field_name: &str) {
+        self.log.push(format!("afterObjectField({field_name})"));
+    }
+}
+
+/// Risk pinned: the traversal ORDER — object fields in stored order with hooks around each,
+/// array elements by index, results threaded post-order — must match Java's bytecode-pinned
+/// sequence exactly (the Java-generated event log is the oracle); a reordering silently
+/// changes every traversal-built artifact (shredded parquet writers build on this).
+#[test]
+fn test_visitor_traversal_order_matches_javas_event_log() {
+    let metadata =
+        VariantMetadata::from_field_names(["arr", "prim", "x"]).expect("3-name dictionary");
+    let value = VariantValue::parse(&metadata, &hex(JAVA_VISIT_VALUE))
+        .expect("the visit fixture must parse");
+    let mut visitor = LoggingVisitor::default();
+    let result = visit_value(&value, &mut visitor).expect("the traversal must succeed");
+    assert_eq!(result, Some("OBJ".to_string()), "Java: visitresult OBJ");
+    let expected: Vec<&str> = vec![
+        "beforeObjectField(arr)",
+        "beforeArrayElement(0)",
+        "primitive(INT8)",
+        "afterArrayElement(0)",
+        "beforeArrayElement(1)",
+        "primitive(STRING)",
+        "afterArrayElement(1)",
+        "beforeArrayElement(2)",
+        "beforeObjectField(x)",
+        "primitive(BOOLEAN_TRUE)",
+        "afterObjectField(x)",
+        "object(names=[x], results=[BOOLEAN_TRUE])",
+        "afterArrayElement(2)",
+        "array(results=[INT8, STRING, OBJ])",
+        "afterObjectField(arr)",
+        "beforeObjectField(prim)",
+        "primitive(INT32)",
+        "afterObjectField(prim)",
+        "object(names=[arr, prim], results=[ARR, INT32])",
+    ];
+    assert_eq!(
+        visitor.log, expected,
+        "the event sequence must equal Java's"
+    );
+}
+
+/// Risk pinned: every default matches Java's — the callbacks return `null` (`None`) and the
+/// hooks no-op, so a defaults-only visitor traverses any tree and yields `None`.
+#[test]
+fn test_visitor_defaults_match_javas_nulls() {
+    struct DefaultsOnly;
+    impl VariantVisitor for DefaultsOnly {
+        type Output = u32;
+    }
+    let metadata =
+        VariantMetadata::from_field_names(["arr", "prim", "x"]).expect("3-name dictionary");
+    let value = VariantValue::parse(&metadata, &hex(JAVA_VISIT_VALUE)).expect("must parse");
+    let result = visit_value(&value, &mut DefaultsOnly).expect("must traverse");
+    assert_eq!(result, None, "Java's defaults return null at every level");
+}
+
+/// Risk pinned: `visit_variant` delegates to the value exactly like Java's
+/// `visit(Variant, visitor)` overload.
+#[test]
+fn test_visitor_visit_variant_delegates_to_the_value() {
+    let metadata =
+        VariantMetadata::from_field_names(["arr", "prim", "x"]).expect("3-name dictionary");
+    let value = VariantValue::parse(&metadata, &hex(JAVA_VISIT_VALUE)).expect("must parse");
+    let variant = Variant::of(metadata, value);
+    let mut by_variant = LoggingVisitor::default();
+    let mut by_value = LoggingVisitor::default();
+    let variant_result = visit_variant(&variant, &mut by_variant).expect("must traverse");
+    let value_result = visit_value(variant.value(), &mut by_value).expect("must traverse");
+    assert_eq!(variant_result, value_result);
+    assert_eq!(by_variant.log, by_value.log);
+}
+
+/// Risk pinned: Java recurses into `object.get(fieldName)` — the NAME LOOKUP — and a
+/// non-name-sorted object's unfindable field makes it throw a NullPointerException; the
+/// Rust driver must fail LOUD with a named error, and (Java `finally`) the after-hook must
+/// still run for the failing field before the error propagates.
+#[test]
+fn test_visitor_lookup_miss_errors_where_java_npes_and_after_hook_still_runs() {
+    // Stored order ["b", "a"] is NOT name-sorted: find("b") hits at index 0, find("a")
+    // probes index 0 ("b"), walks left, and misses — exactly Java's binary-search miss.
+    let object = VariantObject::from_fields(vec![
+        VariantObjectField {
+            field_id: 1,
+            name: "b".to_string(),
+            value: VariantValue::of_int8(1),
+        },
+        VariantObjectField {
+            field_id: 0,
+            name: "a".to_string(),
+            value: VariantValue::of_int8(2),
+        },
+    ]);
+    let value = VariantValue::Object(object);
+    let mut visitor = LoggingVisitor::default();
+    let error = visit_value(&value, &mut visitor).expect_err("the miss must fail loud");
+    assert!(
+        error.to_string().contains("field a cannot be re-found"),
+        "the error must name the field, got: {error}"
+    );
+    assert_eq!(
+        visitor.log,
+        vec![
+            "beforeObjectField(b)",
+            "primitive(INT8)",
+            "afterObjectField(b)",
+            "beforeObjectField(a)",
+            "afterObjectField(a)", // Java finally: the after-hook fires on the error path
+        ],
+        "the after-hook must run for the failing field, like Java's finally"
+    );
+}
+
+/// Risk pinned: the visit recursion shares the parser's depth budget — a constructed
+/// 130-deep bomb errors (never a stack overflow) while a tree at the parser's maximum depth
+/// is visitable (the accepted sets must stay equal so every parseable value can be
+/// visited).
+#[test]
+fn test_visitor_depth_guard_matches_the_parsers_budget() {
+    // 130 nesting levels: rejected.
+    let mut bomb = VariantValue::Array(VariantArray::new());
+    for _ in 0..(MAX_NESTING_DEPTH + 2) {
+        let mut outer = VariantArray::new();
+        outer.push(bomb);
+        bomb = VariantValue::Array(outer);
+    }
+    struct DefaultsOnly;
+    impl VariantVisitor for DefaultsOnly {
+        type Output = ();
+    }
+    let error = visit_value(&bomb, &mut DefaultsOnly).expect_err("a bomb must be rejected");
+    assert!(
+        error.to_string().contains("nesting depth"),
+        "the error must name the depth guard, got: {error}"
+    );
+
+    // A tree the PARSER accepts (depth == MAX_NESTING_DEPTH) must be visitable: build the
+    // deepest parseable shape — nested arrays — through the writer and re-parse it.
+    let metadata = empty_metadata();
+    let mut deepest = VariantValue::of_int8(7);
+    for _ in 0..MAX_NESTING_DEPTH {
+        let mut outer = VariantArray::new();
+        outer.push(deepest);
+        deepest = VariantValue::Array(outer);
+    }
+    let bytes = deepest.to_bytes(&metadata).expect("the writer accepts it");
+    let parsed = VariantValue::parse(&metadata, &bytes).expect("the parser accepts it");
+    visit_value(&parsed, &mut DefaultsOnly).expect("the visitor must accept what parse accepts");
+}

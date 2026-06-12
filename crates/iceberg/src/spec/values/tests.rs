@@ -1352,3 +1352,39 @@ fn test_date_from_json_as_number() {
 
     // Both formats should produce the same Literal value
 }
+
+// RISK: a variant column can carry NO default value — Java 1.10.0 `SingleValueParser.fromJson`
+// has no VARIANT case (default branch throws "Type: %s is not supported"), while a JSON null
+// parses to "no default" for every type (the up-front null return). Silently accepting a variant
+// default would write metadata Java cannot parse back.
+#[test]
+fn test_variant_default_value_json_is_rejected_but_null_is_none() {
+    use serde_json::json;
+
+    // Null parses to None (no default), like every other type.
+    let null_result = Literal::try_from_json(JsonValue::Null, &Type::Variant)
+        .expect("a JSON null is 'no default' for variant too");
+    assert_eq!(null_result, None);
+
+    // Any non-null default is rejected with Java's message.
+    let error = Literal::try_from_json(json!({"a": 1}), &Type::Variant)
+        .expect_err("a non-null variant default must be rejected");
+    assert_eq!(error.kind(), crate::ErrorKind::FeatureUnsupported);
+    assert_eq!(error.message(), "Type: variant is not supported");
+}
+
+// RISK: the WRITE direction must also fail loudly — no `Literal` can represent a variant value
+// (there is no variant literal in either language; Java's `SingleValueParser.toJson` default
+// throws too). The catch-all must not silently render some other literal under a variant type.
+#[test]
+fn test_variant_literal_to_json_is_rejected() {
+    let error = Literal::Primitive(PrimitiveLiteral::Long(7))
+        .try_into_json(&Type::Variant)
+        .expect_err("no literal fits the variant type");
+    assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+    assert!(
+        error.message().contains("variant"),
+        "the rejection must name the variant type, got: {}",
+        error.message()
+    );
+}

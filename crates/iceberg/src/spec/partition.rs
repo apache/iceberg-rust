@@ -1142,6 +1142,74 @@ mod tests {
             .unwrap_err();
     }
 
+    /// A two-column schema whose second column `v` (id 2) is variant — input for the variant
+    /// partition-source rejection pins.
+    fn schema_with_variant_column() -> Schema {
+        Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(crate::spec::PrimitiveType::Int))
+                    .into(),
+                NestedField::optional(2, "v", Type::Variant).into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    // RISK: a variant column must NOT be a partition source for ANY value-producing transform —
+    // Java 1.10.0 `PartitionSpec.checkCompatibility` rejects it at the non-primitive door
+    // ("Cannot partition by non-primitive source field: %s", firing BEFORE canTransform), and
+    // `Identity.UNSUPPORTED_TYPES` explicitly lists VARIANT. Partitioning by variant would write
+    // partition tuples with no single-value representation — silent layout corruption.
+    #[test]
+    fn test_variant_rejected_as_partition_source_for_identity_and_bucket() {
+        for transform in [
+            Transform::Identity,
+            Transform::Bucket(16),
+            Transform::Truncate(4),
+            Transform::Year,
+            Transform::Month,
+            Transform::Day,
+            Transform::Hour,
+        ] {
+            let error = PartitionSpec::builder(schema_with_variant_column())
+                .add_unbound_field(UnboundPartitionField {
+                    source_id: 2,
+                    field_id: None,
+                    name: "v_part".to_string(),
+                    transform,
+                })
+                .expect_err("a variant partition source must be rejected");
+            assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+            assert!(
+                error
+                    .message()
+                    .contains("Cannot partition by non-primitive source field: 'variant'"),
+                "{transform} must reject variant at the non-primitive door (Java fires it before \
+                 canTransform), got: {}",
+                error.message()
+            );
+        }
+    }
+
+    // RISK: the VOID transform must still ACCEPT a variant source — Java's checkCompatibility
+    // skips `alwaysNull()` fields entirely (it is how V1 drops a partition field in place).
+    // Over-firing here would break partition-field removal on a schema that contains variant.
+    #[test]
+    fn test_variant_accepted_as_void_partition_source() {
+        let spec = PartitionSpec::builder(schema_with_variant_column())
+            .add_unbound_field(UnboundPartitionField {
+                source_id: 2,
+                field_id: None,
+                name: "v_void".to_string(),
+                transform: Transform::Void,
+            })
+            .expect("void on a variant source is legal (Java skips alwaysNull)")
+            .build()
+            .expect("build the spec");
+        assert_eq!(spec.fields().len(), 1);
+        assert_eq!(spec.fields()[0].transform, Transform::Void);
+    }
+
     #[test]
     fn test_builder_disallow_duplicate_field_ids() {
         let schema = Schema::builder()

@@ -66,6 +66,9 @@ impl ReassignFieldIds {
     fn reassign_ids_visit_type(&mut self, field_type: Type) -> Result<Type> {
         match field_type {
             Type::Primitive(s) => Ok(Type::Primitive(s)),
+            // Leaf, like a primitive — Java 1.10.0 `AssignFreshIds.variant` returns the type
+            // unchanged (it carries no nested ids to reassign).
+            Type::Variant => Ok(Type::Variant),
             Type::Struct(s) => {
                 let new_fields = self.reassign_field_ids(s.fields().to_vec())?;
                 Ok(Type::Struct(StructType::new(new_fields)))
@@ -190,6 +193,41 @@ mod tests {
 
         pretty_assertions::assert_eq!(expected, reassigned_schema);
         assert_eq!(reassigned_schema.highest_field_id(), 2);
+    }
+
+    // RISK: id reassignment over a schema containing a variant column must treat variant as a
+    // LEAF (Java 1.10.0 `AssignFreshIds.variant` returns the type unchanged): the column's own id
+    // is reassigned like any field, the type passes through, and SIBLING ids after it stay in
+    // sequence. A missing arm would make `with_reassigned_field_ids` (used by catalog
+    // create-table flows) fail on every variant schema.
+    #[test]
+    fn test_reassign_ids_passes_variant_through() {
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::optional(7, "v", Type::Variant).into(),
+                NestedField::required(5, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let reassigned_schema = schema
+            .into_builder()
+            .with_reassigned_field_ids(0)
+            .build()
+            .unwrap();
+
+        let expected = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::optional(0, "v", Type::Variant).into(),
+                NestedField::required(1, "bar", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        pretty_assertions::assert_eq!(expected, reassigned_schema);
+        assert_eq!(reassigned_schema.highest_field_id(), 1);
     }
 
     #[test]

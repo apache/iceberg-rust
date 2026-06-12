@@ -1062,3 +1062,57 @@ enum AdjustedProjection {
     Single(Datum),
     Set(FnvHashSet<Datum>),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // RISK: variant must not be transformable by any VALUE-PRODUCING transform — Java 1.10.0
+    // `Identity.UNSUPPORTED_TYPES` explicitly lists VARIANT (with GEOMETRY/GEOGRAPHY), and
+    // bucket/truncate/year/month/day/hour all reject non-primitive inputs in `canTransform`. A
+    // transform that accepted variant would produce partition/sort values from a type with no
+    // single-value representation.
+    #[test]
+    fn test_variant_rejected_by_value_producing_transforms() {
+        for transform in [
+            Transform::Identity,
+            Transform::Bucket(16),
+            Transform::Truncate(4),
+            Transform::Year,
+            Transform::Month,
+            Transform::Day,
+            Transform::Hour,
+        ] {
+            let error = transform
+                .result_type(&Type::Variant)
+                .expect_err("variant must not be a transform input");
+            assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+            assert!(
+                error.message().contains("variant"),
+                "{transform} rejection must name the variant input, got: {}",
+                error.message()
+            );
+        }
+    }
+
+    // RISK: VOID and UNKNOWN must keep ACCEPTING variant — Java `VoidTransform.canTransform` and
+    // `UnknownTransform.canTransform` both return true for every type (void is how V1 drops a
+    // partition field; unknown preserves forward compatibility). Over-firing would break spec
+    // evolution on variant-bearing schemas. Result types mirror Java: void returns the source
+    // type, unknown returns string.
+    #[test]
+    fn test_variant_accepted_by_void_and_unknown_transforms() {
+        assert_eq!(
+            Transform::Void
+                .result_type(&Type::Variant)
+                .expect("void accepts any source type"),
+            Type::Variant,
+        );
+        assert_eq!(
+            Transform::Unknown
+                .result_type(&Type::Variant)
+                .expect("unknown accepts any source type"),
+            Type::Primitive(PrimitiveType::String),
+        );
+    }
+}

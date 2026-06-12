@@ -380,4 +380,19 @@ mod tests {
         assert_rejected(&sample_list(), &PrimitiveType::Int);
         assert_rejected(&sample_map(), &PrimitiveType::Int);
     }
+
+    /// `variant -> anything` is forbidden: Java 1.10.0 `TypeUtil.isPromotionAllowed` switches only
+    /// on INTEGER/FLOAT/DECIMAL (default false), and `Type::Variant` is not even a primitive, so
+    /// it takes the same up-front rejection as struct/list/map. The REVERSE direction
+    /// (`anything -> variant`) is unrepresentable in both languages — the `to` parameter is
+    /// `PrimitiveType` here exactly as in Java's signature, so no test can (or need) express it.
+    /// Risk: a "variant absorbs any value" intuition would let a column be silently re-typed,
+    /// changing how every existing data file is read.
+    #[test]
+    fn rejects_variant_promotion_to_any_primitive() {
+        assert_rejected(&Type::Variant, &PrimitiveType::Int);
+        assert_rejected(&Type::Variant, &PrimitiveType::Long);
+        assert_rejected(&Type::Variant, &PrimitiveType::String);
+        assert_rejected(&Type::Variant, &PrimitiveType::Binary);
+    }
 }

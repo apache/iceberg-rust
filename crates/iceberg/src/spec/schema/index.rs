@@ -53,6 +53,11 @@ pub fn index_by_id(r#struct: &StructType) -> Result<HashMap<i32, NestedFieldRef>
         fn primitive(&mut self, _: &PrimitiveType) -> Result<Self::T> {
             Ok(())
         }
+
+        /// Leaf, like a primitive — Java 1.10.0 `IndexById.variant` returns null.
+        fn variant(&mut self) -> Result<Self::T> {
+            Ok(())
+        }
     }
 
     let mut index = IndexById(HashMap::new());
@@ -143,6 +148,11 @@ pub fn index_parents(r#struct: &StructType) -> Result<HashMap<i32, i32>> {
         }
 
         fn primitive(&mut self, _p: &PrimitiveType) -> Result<Self::T> {
+            Ok(())
+        }
+
+        /// Leaf, like a primitive — Java 1.10.0 `IndexParents.variant` returns the parent map.
+        fn variant(&mut self) -> Result<Self::T> {
             Ok(())
         }
     }
@@ -291,6 +301,13 @@ impl SchemaVisitor for IndexByName {
     }
 
     fn primitive(&mut self, _p: &PrimitiveType) -> Result<Self::T> {
+        Ok(())
+    }
+
+    /// Leaf, like a primitive — Java 1.10.0 `IndexByName.variant` returns the accumulated
+    /// name-to-id map. Without this override, building any schema containing a variant column
+    /// would fail in the name-index pass.
+    fn variant(&mut self) -> Result<Self::T> {
         Ok(())
     }
 }

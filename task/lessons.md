@@ -1597,3 +1597,172 @@ How to use it (see the manuals' §2):
   mandate broke load-bearing BEHAVIORS one at a time; it did not ask "what column/field does this
   compare NOT see?" — the projection-completeness axis. That axis is the Opus-critic's distinctive
   catch on templated-interop work.
+### 2026-06-11 (Wave-4 F1 — `variant` schema-type entry, BUILDER Fable, wt-vschema)
+- **Java's `VariantType` sits in NEITHER hierarchy branch — `Types$VariantType implements Type`
+  directly (1.10.0 bytecode), so the Rust mirror is a new `Type::Variant` enum variant, NOT a
+  `PrimitiveType`.** *Why it pays:* every non-primitive door then fires for free with Java's exact
+  semantics — partition ("Cannot partition by non-primitive source field"), sort ("Cannot sort by
+  non-primitive source field"), identifier ("not a primitive type field"), and promotion (the
+  `let Type::Primitive(..) else return false` up-front rejection). The only Java-side EXPLICIT
+  variant rejection is `Identity.UNSUPPORTED_TYPES = {VARIANT, GEOMETRY, GEOGRAPHY}` — redundant
+  with the non-primitive door for variant, so no Rust-side special case is needed.
+- **`SchemaParser` serializes variant like a primitive — `if (isPrimitiveType() || isVariantType())
+  writeString(toString())` — so the JSON schema serde needs a string-shaped arm in the untagged
+  type enum, placed BEFORE the primitive arm with a marker that accepts ONLY the exact string
+  "variant".** `Types.fromPrimitiveString("variant")` throws a literally HARDCODED message
+  ("Cannot parse type string: variant is not a primitive type" — an ldc constant, because variant
+  is the only non-primitive in the TYPES map); the Rust `PrimitiveType` deserializer must keep
+  rejecting the string.
+- **The visitor-default trick: Java's `TypeUtil.SchemaVisitor.variant` DEFAULT throws
+  ("Unsupported type: variant") and only the structural visitors override it as a leaf — porting
+  that as a DEFAULTED Rust trait method made the crate-wide ripple small and fail-loud.** Every
+  `SchemaVisitor`/`SchemaWithPartnerVisitor` implementor that must not see variant (arrow value
+  conversion, NaN counter, eq-delete projector, parquet writer) inherits the Java-shaped error;
+  only index/prune/reassign (+ avro) override — exactly the set Java overrides (each pinned from
+  bytecode: IndexByName/IndexById/IndexParents/PruneColumns/AssignFreshIds/ApplyChanges return
+  leaf values). The compile-forced direct-match ripple was 7 sites; each took a leaf arm with the
+  Java citation.
+- **Java 1.10.0 HAS an Avro shape for variant (don't assume "no engine shape"):**
+  `TypeToSchema.variant` emits a record `r<fieldId>` (fallback name "variant") with two REQUIRED
+  bytes fields `metadata`,`value` plus logical type "variant" (`VariantLogicalType.NAME`);
+  `AvroSchemaVisitor.visit` routes logicalType-variant records through `isVariantSchema`
+  (record + exactly-2-fields + both bytes, looked up BY NAME) with "Invalid variant record: %s",
+  and `SchemaToType.variant` returns the singleton. apache-avro 0.21 can carry it: unknown
+  logical types pass through to the underlying record and `parse_record` keeps `logicalType` in
+  `RecordSchema.attributes` (only "fields" is excluded), which `Serialize` writes back.
+- **apache-avro `Schema` equality is canonical-form-based with `include_attributes: false` — an
+  `assert_eq!` on schemas can NEVER pin a logical-type attribute.** The variant logicalType (and
+  the existing field-id/element-id attributes) are invisible to schema equality; the avro shape
+  tests must fish the record out and assert `attributes` explicitly, plus pin the serialized JSON
+  string. The drop-the-stamping mutation passed schema equality and was caught only by the
+  explicit attribute pins.
+- **Arrow verdict: loud error IS Java parity.** `ArrowSchemaUtil` (MAIN; no iceberg-arrow 1.10.0
+  jar locally) does not override `variant`, so Java throws the visitor default on the same
+  conversion; arrow-rs 57.1 has no variant extension type. The Rust override keeps Java's message
+  prefix and NAMES the pinned-crate limitation. Eq-delete fields: Java 1.10.0 core has NO explicit
+  eq-delete type door — the Rust rejection happens structurally (`EqualityDeleteWriterConfig::new`
+  converts the FULL table schema through `schema_to_arrow_schema`, which errors on any variant
+  column), pinned at the arrow layer.
+
+### 2026-06-11 (Wave-4 F1 — REVIEWER Fable, wt-vschema)
+- **A bytecode-derived Avro claim is incomplete without the REGISTRATION story: Java only attaches
+  `VariantLogicalType` to PARSED schemas after `org.apache.iceberg.avro.Avro`'s static init runs
+  `LogicalTypes.register("variant", ...)`, and Avro's `fromSchemaIgnoreInvalid` then silently DROPS
+  the logical type when `validate` (= `isVariantSchema`) fails.** *Consequence:* Java's in-code
+  "Invalid variant record: %s" precondition is UNREACHABLE for parsed schemas — live Java reads a
+  malformed claimed-variant record as a plain struct (with a logged warning). The Rust loud
+  rejection is a deliberate fail-loud divergence (B1 house precedent), now documented at `visit()`.
+  A live probe that forgets `Class.forName("org.apache.iceberg.avro.Avro")` measures the
+  UNREGISTERED behavior — probe both.
+- **`isVariantSchema` is by-NAME (`getField`) ⇒ order-insensitive: live Java (registered) accepts
+  `value`-before-`metadata`; Rust's `lookup`-based check matches.** Pinned with a value-first test
+  after the swap-to-positional mutation SURVIVED the builder's suite — shape-check order
+  insensitivity needs its own pin.
+- **The map-value fallback name was a real cross-engine failure, not just a cosmetic divergence:
+  two variant-valued maps in one schema emitted two records both named "variant", and Java's
+  `Schema.Parser` rejects duplicate definitions ("Can't redefine: variant").** Fixed by renaming
+  variant records in `map()` to Java's `r<fieldId>` (live-probed: `r8` for value-id 8); Java now
+  reads the fixed output byte-identically to its own shape. PRE-EXISTING sibling bug left in place
+  and flagged: a STRUCT map value keeps the `"null"` placeholder name (Java emits `r<id>`), so two
+  struct-valued maps still collide — converter-wide naming fix is out of F1 scope.
+- **Java's `Types.fromTypeName` lowercases (`toLowerCase(Locale.ROOT)`) — `SchemaParser` accepts
+  "Variant"/"VARIANT"/"vArIaNt" (and "STRING") where Rust's serde is lowercase-exact for EVERY
+  type name.** Pre-existing whole-parser divergence (read-tolerance of foreign-cased JSON only;
+  both writers emit lowercase). Pinned the uniform case-sensitive posture so a future fix flips
+  all names at once, never just variant.
+- **Read-tolerance verdict (live-probed): Java `TableMetadataParser.fromJson` runs NO
+  `checkCompatibility` — V1/V2 metadata with an existing variant column parses fine on both sides,
+  and `buildFrom(v2-with-variant)` + unrelated edits or `upgradeFormatVersion(3)` commit without
+  re-checking old schemas. The gate is add-schema-only in BOTH languages (creation +
+  `TableUpdate::AddSchema` + evolution all funnel there; views ungated in both).** But the
+  IDENTITY-TRANSFORM door DOES fire on Java's parse: metadata with `identity(variant)` in a
+  partition spec or sort order fails to read ("Unsupported type for identity: variant" —
+  `Identity.UNSUPPORTED_TYPES` is NOT redundant; it is the reachable door on bind paths, firing
+  BEFORE the non-primitive `checkCompatibility` messages, which are unreachable for variant).
+  Rust matches for partition specs (bound on parse → rejected); Rust sort orders are stored
+  unbound and read-tolerated — pre-existing posture difference, flagged not fixed.
+- **The untagged `SerdeType` arm order is NOT load-bearing — the swap-after-Primitive mutation
+  survives because untagged serde tries arms until success and `PrimitiveType` independently
+  rejects "variant".** The real guard is the PrimitiveType-rejection pin; the comment now says so
+  instead of claiming the position matters.
+- **A compile-forced arm unreachable through the public surface still needs a DIRECT unit test:**
+  the `include_leaf_field_id` variant arm survived a full-suite mutation (scans die earlier at the
+  arrow door), so its leaf semantics are pinned by calling the private fn directly — otherwise the
+  arm's behavior is unspecified the day the arrow door opens.
+
+### 2026-06-11 (Wave-4 F2 — variant shredding overlay + VariantVisitor, BUILDER Fable, wt-vschema)
+- **1.10.0 `ShreddedObject` DIVERGES from MAIN twice — both found in bytecode and confirmed by live
+  probe (`/tmp/variant-probe/ShredProbe.java`), and both are BUGS the port must not mirror:** (1)
+  `remove()` lacks MAIN's `this.serializationState = null`, so `sizeInBytes()` → `remove(x)` →
+  `writeTo` serializes the STALE cached state with x still present; (2) the `SerializationState`
+  ctor's non-`SerializedObject` branch compiles to `aload_3` (the PARAMETER map = the overlay's
+  LIVE `shreddedFields`) for the materializing merge while `this.shreddedFields` keeps the
+  pre-merge COPY that `writeTo` iterates — the FIRST serialization over a constructed backing
+  writes count/dataSize for the merged set but only the copy's fields ⇒ CORRUPT bytes (probe:
+  re-read throws IndexOutOfBoundsException); a later state rebuild self-heals because the live map
+  was polluted. MAIN fixed both (the param was renamed). The Rust port is STATELESS (plan computed
+  fresh per call) and MAIN-consistent; the constructed-backing oracle is Java's SELF-HEALED second
+  serialization (puts → sizeInBytes → re-put to reset the cache → serialize). LESSON: a
+  source-vs-bytecode diff can hide in PARAMETER NAMING — `javap` shows `aload_<n>` vs `getfield`,
+  which no source read reveals; for any stateful Java class, probe the mutate-after-size sequence.
+- **The verbatim-slice contract is what makes the overlay safe over third-party data:**
+  `SerializedObject.sliceValue(index)` spans are exactly B1's sorted-distinct-offsets field
+  ranges, so `parse_object` grew an optional range recorder (one parser, no duplication) and the
+  overlay copies untouched fields' ORIGINAL bytes — only ids/offsets/header recompute (ids
+  re-resolve BY NAME at write time even for verbatim fields, Java `metadata.id` + "Invalid
+  metadata, missing: %s"). The designated mutation (verbatim → canonical re-encode) is killed
+  ONLY by the non-canonical fixtures (long-form string that fits short form; oversized offset
+  width) — canonical-input fixtures pass under the mutation, so a fixture set without a
+  non-canonical backing would NOT pin the contract at all.
+- **Java's remove-then-put contract is deliberately inconsistent — mirror BOTH sides:** `put`
+  does not clear `removedFields`, so after `remove(x)` + `put(x, v)` the views (`get` → null,
+  `numFields`/`fieldNames` exclude x — removedFields filters them) DISAGREE with serialization
+  (which includes x=v: the SerializationState's shredded map still carries it). Probe-pinned
+  (`probe_remove_then_put_view numFields=2 get_b=null` + bytes containing b=9). Fixing either
+  side to be "consistent" diverges from Java.
+- **Duplicate backing-field names: the rejection is REPLACEMENT-SENSITIVE, so door at
+  serialization time, not construction.** Java's ImmutableMap throws only when the duplicate
+  SURVIVES the replaced/removed filter; putting or removing the duplicated name skips both
+  occurrences and serializes fine (fixture-pinned both ways). An eager constructor-time door
+  would over-reject vs Java. Constructed-backing duplicates collapse SILENTLY instead (HashMap
+  put semantics) — two different dup behaviors in one class.
+- **`VariantVisitor` facts (1.10.0 == MAIN, bytecode-verified):** drivers are `visit(Variant,
+  visitor)` + `visit(VariantValue, visitor)` — the brief's `visit(VariantMetadata, VariantValue,
+  VariantVisitor)` signature DOES NOT EXIST in 1.10.0 (brief ≠ spec, again); object traversal
+  iterates `fieldNames()` (stored order) but recurses into `object.get(name)` — the NAME LOOKUP —
+  so a non-name-sorted object NPEs in Java (Rust: named Err, after-hook still fired); after-hooks
+  run in `finally` (pinned by asserting the hook fired on the error path); all defaults return
+  null (Rust `Option::None`) and the result lists carry nulls. A Java-generated event log (the
+  generator's LoggingVisitor) is a cheap, exact traversal-order oracle — pin the SEQUENCE, not
+  properties of it.
+
+### 2026-06-11 (Wave-4 F2 — REVIEWER Fable, wt-vschema)
+- **A verbatim-slice fixture set whose backings ALL have data-order == field-order cannot pin the
+  sorted-distinct-offsets length scheme — the adjacent-offset-subtraction mutation survived the
+  builder's entire 17-fixture suite.** Every Java-WRITTEN base is canonical (name-sorted fields,
+  ascending data), so adjacent subtraction == sorted-distinct on all of them; only a HAND-BUILT
+  backing with data placed out of field order at distinct widths (fields a/b/c stored in name
+  order, data c-first/a-second/b-third, widths 2/7/5) distinguishes the schemes — and Java
+  happily overlays such a backing (ReviewerShredProbe r1, output pinned). RULE: when a port's
+  correctness claim is "lengths from sorted-distinct offsets, NOT adjacent subtraction," the
+  fixture set MUST include a disordered-data backing, because every writer-generated fixture is
+  structurally incapable of catching the swap. Same family as B1's "positive decode test per
+  header-flag branch": generator-produced fixtures inherit the generator's canonical shape.
+- **Lazy Java `ShreddedObject.writeTo` serializes a MALFORMED untouched backing field BLIND —
+  probe-verified, not just reasoned:** r4 shows `writeTo` succeeds and copies the bad bytes
+  (undefined primitive type id 63) verbatim into the output; only a later `get()` on the field
+  throws (`UnsupportedOperationException: Unknown primitive physical type: 63`), and Java even
+  re-reads the corrupt output as an object (the re-read is lazy too). When documenting a
+  lazy-vs-eager accepted-set divergence on a WRITE path, probe whether the lazy side actually
+  SUCCEEDS end-to-end (here it does — the divergence is real and the ledger must say "Java
+  serializes blind," not "Java fails later"). The malformed-REPLACED-field twin also serializes
+  fine in Java (skipped before slicing) while Rust still rejects at the door (the door parses
+  the whole backing before puts exist) — both directions now in shredded.rs's module doc.
+- **Both builder-claimed 1.10.0 ShreddedObject bugs CONFIRMED independently** (javap: `remove`
+  has no `serializationState` reset while `put` does; the `$SerializationState` ctor's
+  constructed branch does `aload_3.put(...)` into the live parameter map while `writeTo`
+  iterates the `getfield` pre-merge copy; live ShredProbe re-run reproduces stale-state and
+  corrupt-first-serialization outputs; MAIN has both fixes — param renamed `shredded`, reset
+  added). MAIN also RETAINS the remove-then-put view/serialization inconsistency (put never
+  clears removedFields), so the Rust pins follow 1.10.0 AND MAIN alike — noted in the module doc
+  so nobody "fixes" one side.
