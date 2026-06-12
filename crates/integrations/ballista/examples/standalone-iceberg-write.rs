@@ -21,22 +21,19 @@
 //! from a standalone Ballista cluster.
 //!
 //! This example requires a running Iceberg REST catalog and MinIO. The easiest
-//! way is to use the docker fixture shipped with `iceberg-rust`:
+//! way is to use the docker fixture shipped with `iceberg-rust`. From the
+//! `iceberg-rust` workspace root:
 //!
 //! ```bash
-//! cd ../iceberg-rust && make docker-up
-//! ```
-//!
-//! Then run:
-//!
-//! ```bash
-//! cargo run --example standalone-iceberg-write
+//! make docker-up
+//! cargo run -p iceberg-ballista --example standalone-iceberg-write
 //! ```
 //!
 //! Endpoints can be overridden with the `ICEBERG_REST_URI` and
 //! `ICEBERG_S3_ENDPOINT` environment variables.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use ballista::datafusion::{
     common::Result,
@@ -69,7 +66,7 @@ fn catalog_props() -> HashMap<String, String> {
 /// Creates the demo namespace and table in the catalog if they do not exist.
 async fn ensure_table(props: &HashMap<String, String>) -> Result<(NamespaceIdent, String)> {
     let catalog = RestCatalogBuilder::default()
-        .with_storage_factory(std::sync::Arc::new(OpenDalStorageFactory::S3 {
+        .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
             customized_credential_load: None,
         }))
         .load("rest", props.clone())
@@ -147,12 +144,6 @@ async fn main() -> Result<()> {
     // Read it back through the distributed scan.
     println!("== SELECT ==");
     ctx.sql("SELECT id, name FROM events ORDER BY id")
-        .await?
-        .show()
-        .await?;
-
-    println!("== COUNT ==");
-    ctx.sql("SELECT count(*) AS n FROM events")
         .await?
         .show()
         .await?;

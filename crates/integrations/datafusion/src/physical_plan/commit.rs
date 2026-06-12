@@ -621,6 +621,7 @@ mod tests {
 
         let iceberg_table_provider = IcebergTableProvider::try_new(
             catalog.clone(),
+            None,
             namespace.clone(),
             table_name.to_string(),
         )

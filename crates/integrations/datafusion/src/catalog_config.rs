@@ -34,14 +34,12 @@ use std::collections::HashMap;
 pub struct IcebergCatalogConfig {
     /// The catalog type, e.g. `"rest"`, `"sql"`, `"glue"`.
     pub r#type: String,
-    /// The catalog name.
     pub name: String,
     /// Catalog connection and storage properties.
     pub props: HashMap<String, String>,
 }
 
 impl IcebergCatalogConfig {
-    /// Creates a new catalog config from a type, name, and property map.
     pub fn new(
         r#type: impl Into<String>,
         name: impl Into<String>,

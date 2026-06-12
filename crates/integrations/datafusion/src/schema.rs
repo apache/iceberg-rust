@@ -35,22 +35,6 @@ use crate::IcebergCatalogConfig;
 use crate::table::IcebergTableProvider;
 use crate::to_datafusion_error;
 
-/// Builds a table provider, threading the catalog config through when present so
-/// the provider (and the plan nodes it produces) can be distributed.
-async fn build_table_provider(
-    catalog: Arc<dyn Catalog>,
-    config: Option<IcebergCatalogConfig>,
-    namespace: NamespaceIdent,
-    name: impl Into<String>,
-) -> Result<IcebergTableProvider> {
-    match config {
-        Some(config) => {
-            IcebergTableProvider::try_new_with_config(catalog, config, namespace, name).await
-        }
-        None => IcebergTableProvider::try_new(catalog, namespace, name).await,
-    }
-}
-
 /// Represents a [`SchemaProvider`] for the Iceberg [`Catalog`], managing
 /// access to table providers within a specific namespace.
 #[derive(Debug)]
@@ -78,25 +62,10 @@ impl IcebergSchemaProvider {
     /// This method retrieves a list of table names
     /// attempts to create a table provider for each table name, and
     /// collects these providers into a `HashMap`.
+    ///
+    /// When `config` is present it is threaded into every table provider this
+    /// schema creates, so the tables can be queried by a distributed engine.
     pub(crate) async fn try_new(
-        client: Arc<dyn Catalog>,
-        namespace: NamespaceIdent,
-    ) -> Result<Self> {
-        Self::try_new_impl(client, None, namespace).await
-    }
-
-    /// Like [`try_new`](Self::try_new), but threads a serializable
-    /// [`IcebergCatalogConfig`] into every table provider it creates, so the
-    /// tables in this schema can be queried by a distributed engine.
-    pub(crate) async fn try_new_with_config(
-        client: Arc<dyn Catalog>,
-        config: IcebergCatalogConfig,
-        namespace: NamespaceIdent,
-    ) -> Result<Self> {
-        Self::try_new_impl(client, Some(config), namespace).await
-    }
-
-    async fn try_new_impl(
         client: Arc<dyn Catalog>,
         config: Option<IcebergCatalogConfig>,
         namespace: NamespaceIdent,
@@ -116,7 +85,7 @@ impl IcebergSchemaProvider {
             table_names
                 .iter()
                 .map(|name| {
-                    build_table_provider(
+                    IcebergTableProvider::try_new(
                         client.clone(),
                         config.clone(),
                         namespace.clone(),
@@ -240,7 +209,7 @@ impl SchemaProvider for IcebergSchemaProvider {
 
                 // Create a new table provider using the catalog reference,
                 // carrying the config so it stays distributable.
-                let table_provider = build_table_provider(
+                let table_provider = IcebergTableProvider::try_new(
                     catalog.clone(),
                     config.clone(),
                     namespace.clone(),
@@ -366,7 +335,7 @@ mod tests {
             .await
             .unwrap();
 
-        let provider = IcebergSchemaProvider::try_new(Arc::new(catalog), namespace)
+        let provider = IcebergSchemaProvider::try_new(Arc::new(catalog), None, namespace)
             .await
             .unwrap();
 
@@ -419,7 +388,7 @@ mod tests {
         // With config: the table provider carries it (and is therefore distributable).
         let config = crate::IcebergCatalogConfig::new("memory", "memory", HashMap::new());
         let with_config =
-            IcebergSchemaProvider::try_new_with_config(catalog.clone(), config, namespace.clone())
+            IcebergSchemaProvider::try_new(catalog.clone(), Some(config), namespace.clone())
                 .await
                 .unwrap();
         let provider = with_config.table("t").await.unwrap().expect("table provider");
@@ -433,7 +402,7 @@ mod tests {
         );
 
         // Without config: providers stay config-less (legacy behavior).
-        let without_config = IcebergSchemaProvider::try_new(catalog.clone(), namespace.clone())
+        let without_config = IcebergSchemaProvider::try_new(catalog.clone(), None, namespace.clone())
             .await
             .unwrap();
         let provider = without_config

@@ -27,6 +27,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use ballista_core::serde::BallistaPhysicalExtensionCodec;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::DataFusionError;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::PhysicalExpr;
@@ -37,14 +38,16 @@ use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::expr::Predicate;
 use iceberg::inspect::MetadataTableType;
 use iceberg::spec::{PartitionSpec, Schema};
+use iceberg::table::Table;
 use iceberg_datafusion::IcebergMetadataTableProvider;
 use iceberg_datafusion::physical_plan::{
     IcebergCommitExec, IcebergMetadataScan, IcebergTableScan, IcebergWriteExec, PartitionExpr,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::serde::{
-    CatalogConfigProto, TAG_DELEGATED, TAG_ICEBERG, get_catalog, load_table, to_df_err,
+use crate::bridge::{
+    CatalogConfigProto, TAG_DELEGATED, TAG_ICEBERG, encode_blob, get_catalog, load_table,
+    split_tagged, to_df_err,
 };
 
 /// Wire representation of an Iceberg physical plan node.
@@ -119,11 +122,11 @@ fn missing_config_err(node: &str) -> DataFusionError {
     ))
 }
 
-fn write_blob(buf: &mut Vec<u8>, node: &IcebergPhysicalNode) -> Result<(), DataFusionError> {
-    buf.push(TAG_ICEBERG);
-    let json = serde_json::to_vec(node).map_err(to_df_err)?;
-    buf.extend_from_slice(&json);
-    Ok(())
+/// Arrow schema of the table's current Iceberg schema.
+fn arrow_schema_of(table: &Table) -> Result<SchemaRef, DataFusionError> {
+    Ok(Arc::new(
+        schema_to_arrow_schema(table.metadata().current_schema()).map_err(to_df_err)?,
+    ))
 }
 
 impl PhysicalExtensionCodec for IcebergPhysicalCodec {
@@ -133,12 +136,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
         inputs: &[Arc<dyn ExecutionPlan>],
         ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-        let Some((&tag, rest)) = buf.split_first() else {
-            return Err(DataFusionError::Internal(
-                "empty iceberg physical codec buffer".to_string(),
-            ));
-        };
-        // Not one of ours? Hand the inner payload back to the inner codec.
+        let (tag, rest) = split_tagged(buf, "iceberg physical codec")?;
         if tag == TAG_DELEGATED {
             return self.inner.try_decode(rest, inputs, ctx);
         }
@@ -161,10 +159,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
             } => {
                 let config = catalog.into();
                 let table_obj = load_table(&config, &table)?;
-                let arrow_schema = Arc::new(
-                    schema_to_arrow_schema(table_obj.metadata().current_schema())
-                        .map_err(to_df_err)?,
-                );
+                let arrow_schema = arrow_schema_of(&table_obj)?;
                 // Map the projected column names back to indices in the table
                 // schema. A name that doesn't resolve is a hard error: the
                 // executor reloads table metadata independently of the scheduler,
@@ -188,9 +183,6 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
                             .collect::<Result<Vec<usize>, _>>()
                     })
                     .transpose()?;
-                // Restore the pushed-down predicate so Iceberg file pruning runs on
-                // the remote node too. DataFusion still re-applies it above the scan
-                // (pushdown is reported Inexact), so correctness holds regardless.
                 let scan = IcebergTableScan::new(
                     table_obj,
                     snapshot_id,
@@ -206,10 +198,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
             IcebergPhysicalNode::Write { catalog, table } => {
                 let config = catalog.into();
                 let table_obj = load_table(&config, &table)?;
-                let arrow_schema = Arc::new(
-                    schema_to_arrow_schema(table_obj.metadata().current_schema())
-                        .map_err(to_df_err)?,
-                );
+                let arrow_schema = arrow_schema_of(&table_obj)?;
                 let input = single_input(inputs, "IcebergWriteExec")?;
                 let write = IcebergWriteExec::new(table_obj, input, arrow_schema)
                     .with_catalog_config(Some(config));
@@ -218,12 +207,8 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
             IcebergPhysicalNode::Commit { catalog, table } => {
                 let config = catalog.into();
                 let cat = get_catalog(&config)?;
-                let table_obj =
-                    crate::serde::block_on(cat.load_table(&table)).map_err(to_df_err)?;
-                let arrow_schema = Arc::new(
-                    schema_to_arrow_schema(table_obj.metadata().current_schema())
-                        .map_err(to_df_err)?,
-                );
+                let table_obj = load_table(&config, &table)?;
+                let arrow_schema = arrow_schema_of(&table_obj)?;
                 let input = single_input(inputs, "IcebergCommitExec")?;
                 let commit = IcebergCommitExec::new(table_obj, cat, input, arrow_schema)
                     .with_catalog_config(Some(config));
@@ -271,7 +256,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
                 limit: scan.limit(),
                 predicates: scan.predicates().cloned(),
             };
-            return write_blob(buf, &proto);
+            return encode_blob(buf, &proto);
         }
 
         if let Some(write) = node.as_any().downcast_ref::<IcebergWriteExec>() {
@@ -282,7 +267,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
                 catalog: config.into(),
                 table: write.table().identifier().clone(),
             };
-            return write_blob(buf, &proto);
+            return encode_blob(buf, &proto);
         }
 
         if let Some(commit) = node.as_any().downcast_ref::<IcebergCommitExec>() {
@@ -293,7 +278,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
                 catalog: config.into(),
                 table: commit.table().identifier().clone(),
             };
-            return write_blob(buf, &proto);
+            return encode_blob(buf, &proto);
         }
 
         if let Some(meta) = node.as_any().downcast_ref::<IcebergMetadataScan>() {
@@ -306,7 +291,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
                 table: provider.table().identifier().clone(),
                 metadata_type: provider.metadata_type().as_str().to_string(),
             };
-            return write_blob(buf, &proto);
+            return encode_blob(buf, &proto);
         }
 
         buf.push(TAG_DELEGATED);
@@ -325,9 +310,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
                 partition_spec: expr.partition_spec().as_ref().clone(),
                 schema: expr.table_schema().as_ref().clone(),
             };
-            buf.push(TAG_ICEBERG);
-            buf.extend_from_slice(&serde_json::to_vec(&proto).map_err(to_df_err)?);
-            return Ok(());
+            return encode_blob(buf, &proto);
         }
         buf.push(TAG_DELEGATED);
         self.inner.try_encode_expr(node, buf)
@@ -338,11 +321,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
         buf: &[u8],
         inputs: &[Arc<dyn PhysicalExpr>],
     ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
-        let Some((&tag, rest)) = buf.split_first() else {
-            return Err(DataFusionError::Internal(
-                "empty iceberg physical expr buffer".to_string(),
-            ));
-        };
+        let (tag, rest) = split_tagged(buf, "iceberg physical expr")?;
         match tag {
             TAG_DELEGATED => self.inner.try_decode_expr(rest, inputs),
             TAG_ICEBERG => {
@@ -391,7 +370,7 @@ mod tests {
 
     fn roundtrip(node: &IcebergPhysicalNode) -> IcebergPhysicalNode {
         let mut buf = Vec::new();
-        super::write_blob(&mut buf, node).expect("encode");
+        encode_blob(&mut buf, node).expect("encode");
         assert_eq!(buf[0], TAG_ICEBERG, "blob must carry the iceberg tag");
         serde_json::from_slice(&buf[1..]).expect("decode")
     }

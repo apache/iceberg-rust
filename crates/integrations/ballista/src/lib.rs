@@ -54,9 +54,9 @@
 //! # }
 //! ```
 
+mod bridge;
 mod logical_codec;
 mod physical_codec;
-mod serde;
 
 use std::sync::Arc;
 
@@ -67,7 +67,6 @@ use iceberg::NamespaceIdent;
 
 pub use crate::logical_codec::IcebergLogicalCodec;
 pub use crate::physical_codec::IcebergPhysicalCodec;
-// Re-export the config type users need from the iceberg integration crate.
 pub use iceberg_datafusion::IcebergCatalogConfig;
 
 /// Installs the Iceberg logical and physical extension codecs onto a
@@ -96,12 +95,12 @@ pub async fn register_iceberg_table(
     namespace: NamespaceIdent,
     table: impl Into<String>,
 ) -> Result<(), DataFusionError> {
-    let catalog = serde::build_catalog(&config).await?;
+    let catalog = bridge::build_catalog(&config).await?;
     let provider = iceberg_datafusion::IcebergTableProvider::try_new_with_config(
         catalog, config, namespace, table,
     )
     .await
-    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    .map_err(bridge::to_df_err)?;
     ctx.register_table(register_name, Arc::new(provider))?;
     Ok(())
 }
@@ -119,11 +118,11 @@ pub async fn register_iceberg_catalog(
     register_name: &str,
     config: IcebergCatalogConfig,
 ) -> Result<(), DataFusionError> {
-    let catalog = serde::build_catalog(&config).await?;
+    let catalog = bridge::build_catalog(&config).await?;
     let provider =
         iceberg_datafusion::IcebergCatalogProvider::try_new_with_config(catalog, config)
             .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            .map_err(bridge::to_df_err)?;
     ctx.register_catalog(register_name, Arc::new(provider));
     Ok(())
 }

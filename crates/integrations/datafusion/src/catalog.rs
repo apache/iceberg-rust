@@ -26,21 +26,6 @@ use iceberg::{Catalog, NamespaceIdent, Result};
 use crate::IcebergCatalogConfig;
 use crate::schema::IcebergSchemaProvider;
 
-/// Builds a schema provider, threading the catalog config through when present so
-/// the schema's tables (and the plan nodes they produce) can be distributed.
-async fn build_schema_provider(
-    client: Arc<dyn Catalog>,
-    config: Option<IcebergCatalogConfig>,
-    namespace: NamespaceIdent,
-) -> Result<IcebergSchemaProvider> {
-    match config {
-        Some(config) => {
-            IcebergSchemaProvider::try_new_with_config(client, config, namespace).await
-        }
-        None => IcebergSchemaProvider::try_new(client, namespace).await,
-    }
-}
-
 /// Provides an interface to manage and access multiple schemas
 /// within an Iceberg [`Catalog`].
 ///
@@ -95,7 +80,7 @@ impl IcebergCatalogProvider {
             schema_names
                 .iter()
                 .map(|name| {
-                    build_schema_provider(
+                    IcebergSchemaProvider::try_new(
                         client.clone(),
                         config.clone(),
                         NamespaceIdent::new(name.clone()),

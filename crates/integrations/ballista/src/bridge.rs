@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Serialization helpers and runtime bridges shared by the Ballista Iceberg
-//! logical and physical extension codecs.
+//! Bridge between Ballista's synchronous, serialization-oriented codec API and
+//! Iceberg's asynchronous, live-handle world, shared by the logical and
+//! physical extension codecs.
 //!
 //! The central problem this module solves is that Ballista serializes physical
 //! and logical plans to ship them to remote nodes, but the Iceberg plan nodes
@@ -27,7 +28,9 @@
 //! catalog from the config and loading the table from it.
 //!
 //! Reconstruction is asynchronous (catalog clients and table loads do I/O) but
-//! the codec entry points are synchronous, so [`block_on`] bridges the two.
+//! the codec entry points are synchronous, so [`block_on`] bridges the two by
+//! running every catalog future on [`CATALOG_RT`], a dedicated process-lived
+//! runtime.
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
@@ -45,18 +48,32 @@ pub(crate) fn to_df_err<E: std::error::Error + Send + Sync + 'static>(e: E) -> D
     DataFusionError::External(Box::new(e))
 }
 
-/// Runs an async future to completion from a synchronous context, whatever
-/// runtime (if any) the caller happens to be on.
+/// Dedicated process-lived runtime that drives all Iceberg catalog I/O.
 ///
-/// - **Multi-threaded runtime** (the normal case on a Ballista executor or
-///   scheduler): [`tokio::task::block_in_place`] hands this worker thread back
-///   to the scheduler while we block on `fut`, so the rest of the runtime keeps
-///   making progress.
-/// - **Current-thread runtime**: blocking the sole worker is not allowed
-///   (`block_in_place` panics and re-entering `block_on` deadlocks), so `fut`
-///   runs on a dedicated thread with its own runtime and we wait for it.
-/// - **No runtime** (e.g. some unit tests): a temporary current-thread runtime
-///   on this thread is enough; no extra thread needed.
+/// A catalog's HTTP/connection pool is bound to the runtime that drives it, so
+/// running every catalog future here — instead of on whatever runtime the codec
+/// caller happens to be on — means a cached catalog can never reference an
+/// already-dropped runtime, no matter which thread or test asks for it later.
+/// Catalog operations only happen at plan encode/decode time, so one worker is
+/// plenty.
+static CATALOG_RT: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .thread_name("iceberg-catalog")
+        .enable_all()
+        .build()
+        .expect("failed to build iceberg catalog runtime")
+});
+
+/// Runs an async future to completion on [`CATALOG_RT`] from a synchronous
+/// context, whatever runtime (if any) the caller happens to be on.
+///
+/// The future runs on a scoped helper thread (entering another runtime's
+/// `block_on` is forbidden from inside a runtime context, and the helper thread
+/// also lets `fut` borrow from the caller). If the caller is itself on a
+/// multi-thread runtime worker, [`tokio::task::block_in_place`] tells that
+/// scheduler the worker is parked so the rest of its runtime keeps making
+/// progress.
 pub(crate) fn block_on<F>(fut: F) -> F::Output
 where
     F: Future + Send,
@@ -64,85 +81,30 @@ where
 {
     use tokio::runtime::{Handle, RuntimeFlavor};
 
-    match Handle::try_current() {
-        Ok(handle) if matches!(handle.runtime_flavor(), RuntimeFlavor::MultiThread) => {
-            tokio::task::block_in_place(move || handle.block_on(fut))
-        }
-        // Inside a single-threaded (or otherwise non-multi-thread) runtime we
-        // must get off the runtime's worker thread entirely.
-        Ok(_) => run_on_dedicated_thread(fut),
-        Err(_) => build_temp_runtime().block_on(fut),
+    let wait = move || {
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| CATALOG_RT.block_on(fut))
+                .join()
+                .expect("iceberg catalog access thread panicked")
+        })
+    };
+
+    match Handle::try_current().map(|h| h.runtime_flavor()) {
+        Ok(RuntimeFlavor::MultiThread) => tokio::task::block_in_place(wait),
+        _ => wait(),
     }
 }
 
-/// Runs `fut` to completion on a freshly spawned OS thread with its own
-/// current-thread runtime. Used when the caller is already on a runtime whose
-/// worker thread we are not allowed to block.
-fn run_on_dedicated_thread<F>(fut: F) -> F::Output
-where
-    F: Future + Send,
-    F::Output: Send,
-{
-    std::thread::scope(|scope| {
-        scope
-            .spawn(|| build_temp_runtime().block_on(fut))
-            .join()
-            .expect("iceberg catalog access thread panicked")
-    })
-}
-
-fn build_temp_runtime() -> tokio::runtime::Runtime {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("failed to build temporary tokio runtime for iceberg catalog access")
-}
-
-/// Whether this thread is on a durable (multi-thread) tokio runtime — one that
-/// outlives the current call.
-///
-/// This is exactly the case where [`block_on`] runs the future on the caller's
-/// own long-lived runtime (via `block_in_place`). On a current-thread runtime,
-/// or with no runtime at all, `block_on` instead builds a temporary runtime that
-/// is dropped when the call returns — so anything bound to it (a catalog's
-/// HTTP/connection pool) must not be cached and reused later.
-fn on_durable_runtime() -> bool {
-    use tokio::runtime::{Handle, RuntimeFlavor};
-
-    matches!(
-        Handle::try_current().map(|h| h.runtime_flavor()),
-        Ok(RuntimeFlavor::MultiThread)
-    )
-}
-
-/// Process-wide cache of reconstructed catalogs, keyed by runtime + config.
+/// Process-wide cache of reconstructed catalogs, keyed by config.
 ///
 /// Building a catalog client (and its underlying HTTP/connection pool) is
 /// relatively expensive, and the codec may decode many plan nodes that share
-/// one catalog, so we cache by config. The cache only serves callers on a
-/// durable runtime (see [`on_durable_runtime`]); on an ephemeral runtime
-/// `get_catalog` bypasses it so a catalog can never outlive the runtime its
-/// connection pool is bound to.
-///
-/// The key includes the caller's runtime id: a catalog's connection pool is
-/// bound to the runtime it was built on, so an entry must never be served to a
-/// different runtime (whose predecessor may already be shut down — requests
-/// would then fail or hang). With multiple durable runtimes in one process
-/// (e.g. several `#[tokio::test]`s), each gets its own entry.
-static CATALOGS: LazyLock<Mutex<HashMap<String, Arc<dyn Catalog>>>> =
+/// one catalog, so we cache by config. Every cached catalog lives on
+/// [`CATALOG_RT`], which never shuts down, so entries stay valid for the life
+/// of the process and can be served to any caller.
+static CATALOGS: LazyLock<Mutex<HashMap<CatalogConfigProto, Arc<dyn Catalog>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// Cache key for the runtime this thread is on. Only call on a durable
-/// runtime (after [`on_durable_runtime`]), where a current handle exists.
-fn catalog_cache_key(config: &IcebergCatalogConfig) -> String {
-    let runtime_id = tokio::runtime::Handle::current().id();
-    // BTreeMap gives a stable ordering for the props so the key is deterministic.
-    let props: BTreeMap<_, _> = config.props.iter().collect();
-    format!(
-        "{runtime_id}|{}|{}|{:?}",
-        config.r#type, config.name, props
-    )
-}
 
 /// Builds a catalog from its config.
 ///
@@ -163,18 +125,11 @@ pub(crate) async fn build_catalog(
         .map_err(to_df_err)
 }
 
-/// Returns a catalog built from `config`, cached when on a durable runtime.
+/// Returns a catalog built from `config`, cached process-wide.
 pub(crate) fn get_catalog(
     config: &IcebergCatalogConfig,
 ) -> Result<Arc<dyn Catalog>, DataFusionError> {
-    // On an ephemeral runtime the catalog would be bound to a runtime that is
-    // dropped when this call returns, so bypass the cache entirely (both read and
-    // write) and build a fresh, short-lived catalog instead.
-    if !on_durable_runtime() {
-        return block_on(build_catalog(config));
-    }
-
-    let key = catalog_cache_key(config);
+    let key = CatalogConfigProto::from(config);
     if let Some(catalog) = CATALOGS.lock().unwrap().get(&key) {
         return Ok(catalog.clone());
     }
@@ -207,13 +162,37 @@ pub(crate) const TAG_DELEGATED: u8 = 0;
 /// Tag for a payload owned by this crate's Iceberg codecs (JSON follows).
 pub(crate) const TAG_ICEBERG: u8 = 1;
 
+/// Frames `payload` as an Iceberg-owned blob: [`TAG_ICEBERG`] then JSON.
+pub(crate) fn encode_blob<T: Serialize>(
+    buf: &mut Vec<u8>,
+    payload: &T,
+) -> Result<(), DataFusionError> {
+    buf.push(TAG_ICEBERG);
+    buf.extend_from_slice(&serde_json::to_vec(payload).map_err(to_df_err)?);
+    Ok(())
+}
+
+/// Splits a codec blob into its leading tag byte and payload.
+pub(crate) fn split_tagged<'a>(
+    buf: &'a [u8],
+    context: &str,
+) -> Result<(u8, &'a [u8]), DataFusionError> {
+    match buf.split_first() {
+        Some((&tag, rest)) => Ok((tag, rest)),
+        None => Err(DataFusionError::Internal(format!(
+            "empty {context} buffer"
+        ))),
+    }
+}
+
 /// Serializable mirror of [`IcebergCatalogConfig`] (which is intentionally not
 /// serde-aware in the iceberg crate to avoid a serde dependency there).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub(crate) struct CatalogConfigProto {
     pub r#type: String,
     pub name: String,
-    // BTreeMap keeps a stable field order so encode→decode→encode round-trips.
+    // BTreeMap (not HashMap) so the struct can derive Hash for the catalog
+    // cache, and so encode→decode→encode round-trips to identical bytes.
     pub props: BTreeMap<String, String>,
 }
 

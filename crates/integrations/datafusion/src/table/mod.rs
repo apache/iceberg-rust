@@ -91,6 +91,7 @@ impl IcebergTableProvider {
     /// reference for future metadata refreshes on each operation.
     pub(crate) async fn try_new(
         catalog: Arc<dyn Catalog>,
+        config: Option<crate::IcebergCatalogConfig>,
         namespace: NamespaceIdent,
         name: impl Into<String>,
     ) -> Result<Self> {
@@ -104,7 +105,7 @@ impl IcebergTableProvider {
             catalog,
             table_ident,
             schema,
-            config: None,
+            config,
             snapshot_id: None,
         })
     }
@@ -122,18 +123,7 @@ impl IcebergTableProvider {
         namespace: NamespaceIdent,
         name: impl Into<String>,
     ) -> Result<Self> {
-        let table_ident = TableIdent::new(namespace, name.into());
-
-        let table = catalog.load_table(&table_ident).await?;
-        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
-
-        Ok(IcebergTableProvider {
-            catalog,
-            table_ident,
-            schema,
-            config: Some(config),
-            snapshot_id: None,
-        })
+        Self::try_new(catalog, Some(config), namespace, name).await
     }
 
     /// Pins reads to a specific snapshot for time-travel. `None` (the default)
@@ -166,7 +156,6 @@ impl IcebergTableProvider {
     ) -> Result<IcebergMetadataTableProvider> {
         // Load fresh table metadata for metadata table access
         let table = self.catalog.load_table(&self.table_ident).await?;
-        // Propagate the config so metadata-table queries can run distributed too.
         Ok(IcebergMetadataTableProvider::new(table, r#type)
             .with_catalog_config(self.config.clone()))
     }
@@ -596,7 +585,7 @@ mod tests {
 
         // Test creating a catalog-backed provider
         let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+            IcebergTableProvider::try_new(catalog.clone(), None, namespace.clone(), table_name.clone())
                 .await
                 .unwrap();
 
@@ -612,7 +601,7 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
         let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+            IcebergTableProvider::try_new(catalog.clone(), None, namespace.clone(), table_name.clone())
                 .await
                 .unwrap();
 
@@ -638,7 +627,7 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
         let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+            IcebergTableProvider::try_new(catalog.clone(), None, namespace.clone(), table_name.clone())
                 .await
                 .unwrap();
 
@@ -665,7 +654,7 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
         let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+            IcebergTableProvider::try_new(catalog.clone(), None, namespace.clone(), table_name.clone())
                 .await
                 .unwrap();
 
@@ -790,7 +779,7 @@ mod tests {
             get_partitioned_test_catalog_and_table(Some(true)).await;
 
         let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+            IcebergTableProvider::try_new(catalog.clone(), None, namespace.clone(), table_name.clone())
                 .await
                 .unwrap();
 
@@ -822,7 +811,7 @@ mod tests {
             get_partitioned_test_catalog_and_table(Some(false)).await;
 
         let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+            IcebergTableProvider::try_new(catalog.clone(), None, namespace.clone(), table_name.clone())
                 .await
                 .unwrap();
 
@@ -882,7 +871,7 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
         let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+            IcebergTableProvider::try_new(catalog.clone(), None, namespace.clone(), table_name.clone())
                 .await
                 .unwrap();
 
@@ -943,7 +932,7 @@ mod tests {
 
         // Default provider reads the current snapshot (None in the scan).
         let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+            IcebergTableProvider::try_new(catalog.clone(), None, namespace.clone(), table_name.clone())
                 .await
                 .unwrap();
         assert_eq!(provider.snapshot_id(), None);

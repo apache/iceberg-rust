@@ -41,8 +41,9 @@ use iceberg::inspect::MetadataTableType;
 use iceberg_datafusion::{IcebergMetadataTableProvider, IcebergTableProvider};
 use serde::{Deserialize, Serialize};
 
-use crate::serde::{
-    CatalogConfigProto, TAG_DELEGATED, TAG_ICEBERG, block_on, get_catalog, load_table, to_df_err,
+use crate::bridge::{
+    CatalogConfigProto, TAG_DELEGATED, TAG_ICEBERG, block_on, encode_blob, get_catalog,
+    load_table, split_tagged, to_df_err,
 };
 
 /// Wire representation of an Iceberg table provider. Carries enough to rebuild
@@ -110,11 +111,7 @@ impl LogicalExtensionCodec for IcebergLogicalCodec {
         schema: SchemaRef,
         ctx: &TaskContext,
     ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
-        let Some((&tag, rest)) = buf.split_first() else {
-            return Err(DataFusionError::Internal(
-                "empty iceberg logical table-provider buffer".to_string(),
-            ));
-        };
+        let (tag, rest) = split_tagged(buf, "iceberg logical table-provider")?;
         match tag {
             TAG_DELEGATED => self
                 .inner
@@ -180,9 +177,7 @@ impl LogicalExtensionCodec for IcebergLogicalCodec {
                 table: provider.table_ident().clone(),
                 snapshot_id: provider.snapshot_id(),
             };
-            buf.push(TAG_ICEBERG);
-            buf.extend_from_slice(&serde_json::to_vec(&proto).map_err(to_df_err)?);
-            return Ok(());
+            return encode_blob(buf, &proto);
         }
         if let Some(provider) = node.as_any().downcast_ref::<IcebergMetadataTableProvider>() {
             let config = provider.catalog_config().ok_or_else(|| {
@@ -198,9 +193,7 @@ impl LogicalExtensionCodec for IcebergLogicalCodec {
                 table: provider.table().identifier().clone(),
                 metadata_type: provider.metadata_type().as_str().to_string(),
             };
-            buf.push(TAG_ICEBERG);
-            buf.extend_from_slice(&serde_json::to_vec(&proto).map_err(to_df_err)?);
-            return Ok(());
+            return encode_blob(buf, &proto);
         }
         buf.push(TAG_DELEGATED);
         self.inner.try_encode_table_provider(table_ref, node, buf)

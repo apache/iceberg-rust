@@ -23,7 +23,7 @@
 //!
 //! ```bash
 //! cd iceberg-rust && make docker-up
-//! cargo test -p iceberg-ballista --test distributed_write
+//! cargo test -p iceberg-ballista --test distributed_read_write
 //! ```
 //!
 //! The endpoints can be overridden with the `ICEBERG_REST_URI` and
@@ -33,9 +33,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use arrow::array::{AsArray, Int64Array};
+use arrow::array::{AsArray, Int64Array, RecordBatch};
 use arrow::datatypes::Int32Type;
-use ballista::datafusion::execution::SessionStateBuilder;
+use ballista::datafusion::execution::{SessionState, SessionStateBuilder};
 use ballista::datafusion::prelude::{SessionConfig, SessionContext};
 use ballista::prelude::{SessionConfigExt, SessionContextExt};
 use ballista_core::serde::protobuf::scheduler_grpc_client::SchedulerGrpcClient;
@@ -61,6 +61,54 @@ use tokio::sync::Mutex;
 /// to the catalog at the same time, so the suite is robust under a parallel test
 /// harness (`cargo test`, `nextest`) without relying on `--test-threads=1`.
 static CATALOG_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+/// Table name unique per run, so reruns don't collide in the shared catalog.
+fn unique_table_name(prefix: &str) -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    format!("{prefix}_{millis}")
+}
+
+/// Session state with the Iceberg codecs installed.
+fn iceberg_session_state(config: SessionConfig) -> SessionState {
+    SessionStateBuilder::new()
+        .with_config(register_iceberg_codecs(config))
+        .with_default_features()
+        .build()
+}
+
+/// Runs a SQL statement to completion and returns its batches.
+async fn run_sql(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
+    ctx.sql(sql)
+        .await
+        .expect("plan sql")
+        .collect()
+        .await
+        .expect("run sql")
+}
+
+/// Extracts the single `i64` value of the first column (a COUNT result).
+fn single_i64(batches: &[RecordBatch]) -> i64 {
+    batches
+        .iter()
+        .find_map(|b| {
+            b.column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .map(|a| a.value(0))
+        })
+        .expect("i64 column")
+}
+
+/// Flattens the first column of every batch into a `Vec<i32>`.
+fn i32_values(batches: &[RecordBatch]) -> Vec<i32> {
+    batches
+        .iter()
+        .flat_map(|b| b.column(0).as_primitive::<Int32Type>().values().to_vec())
+        .collect()
+}
 
 fn catalog_props() -> HashMap<String, String> {
     let rest_uri =
@@ -91,8 +139,6 @@ async fn build_rest_catalog(props: &HashMap<String, String>) -> impl Catalog + u
 /// (tests run in parallel and share this namespace).
 async fn ensure_namespace(catalog: &impl Catalog) -> NamespaceIdent {
     let namespace = NamespaceIdent::new("ballista_it".to_string());
-    // Create the namespace if missing, tolerating a concurrent creator: only fail
-    // if it still doesn't exist after a failed create.
     if !catalog.namespace_exists(&namespace).await.unwrap()
         && let Err(e) = catalog.create_namespace(&namespace, HashMap::new()).await
         && !catalog.namespace_exists(&namespace).await.unwrap()
@@ -179,87 +225,34 @@ async fn distributed_insert_and_read() {
     let _catalog_guard = CATALOG_GUARD.lock().await;
 
     let props = catalog_props();
-    // Unique table name so reruns don't collide.
-    let suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    let table_name = format!("events_{suffix}");
+    let table_name = unique_table_name("events");
     let namespace = create_table(&props, &table_name).await;
 
-    // Start standalone Ballista with the Iceberg codecs installed.
-    let config = register_iceberg_codecs(
+    let state = iceberg_session_state(
         SessionConfig::new_with_ballista()
             .with_target_partitions(2)
             .with_ballista_standalone_parallelism(2),
     );
-    let state = SessionStateBuilder::new()
-        .with_config(config)
-        .with_default_features()
-        .build();
     let ctx = SessionContext::standalone_with_state(state)
         .await
         .expect("start standalone ballista");
 
     let catalog_config = IcebergCatalogConfig::new("rest", "rest", props.clone());
-    register_iceberg_table(
+    register_iceberg_table(&ctx, "events", catalog_config, namespace, table_name.clone())
+        .await
+        .expect("register iceberg table");
+
+    run_sql(
         &ctx,
-        "events",
-        catalog_config,
-        namespace,
-        table_name.clone(),
+        "INSERT INTO events VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')",
     )
-    .await
-    .expect("register iceberg table");
+    .await;
 
-    // Distributed INSERT.
-    ctx.sql("INSERT INTO events VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')")
-        .await
-        .expect("plan insert")
-        .collect()
-        .await
-        .expect("run insert");
-
-    // Distributed read-back.
-    let batches = ctx
-        .sql("SELECT count(*) AS n FROM events")
-        .await
-        .expect("plan count")
-        .collect()
-        .await
-        .expect("run count");
-
-    let count = batches
-        .iter()
-        .find_map(|b| {
-            b.column(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .map(|a| a.value(0))
-        })
-        .expect("count column");
+    let count = single_i64(&run_sql(&ctx, "SELECT count(*) AS n FROM events").await);
     assert_eq!(count, 3, "expected 3 rows after distributed insert");
 
-    // Verify the actual values round-trip.
-    let rows = ctx
-        .sql("SELECT id, name FROM events ORDER BY id")
-        .await
-        .expect("plan select")
-        .collect()
-        .await
-        .expect("run select");
-    let total: usize = rows.iter().map(|b| b.num_rows()).sum();
-    assert_eq!(total, 3);
-    let ids: Vec<i32> = rows
-        .iter()
-        .flat_map(|b| {
-            b.column(0)
-                .as_primitive::<arrow::datatypes::Int32Type>()
-                .values()
-                .to_vec()
-        })
-        .collect();
-    assert_eq!(ids, vec![1, 2, 3]);
+    let rows = run_sql(&ctx, "SELECT id, name FROM events ORDER BY id").await;
+    assert_eq!(i32_values(&rows), vec![1, 2, 3]);
 
     // Catalog-level registration: mount the whole Iceberg catalog and read the
     // same table as `<catalog>.<namespace>.<table>`. The providers built through
@@ -268,24 +261,13 @@ async fn distributed_insert_and_read() {
     register_iceberg_catalog(&ctx, "ice", IcebergCatalogConfig::new("rest", "rest", props))
         .await
         .expect("register iceberg catalog");
-    let batches = ctx
-        .sql(&format!(
-            "SELECT count(*) AS n FROM ice.ballista_it.{table_name}"
-        ))
-        .await
-        .expect("plan catalog-qualified count")
-        .collect()
-        .await
-        .expect("run catalog-qualified count");
-    let count = batches
-        .iter()
-        .find_map(|b| {
-            b.column(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .map(|a| a.value(0))
-        })
-        .expect("count column");
+    let count = single_i64(
+        &run_sql(
+            &ctx,
+            &format!("SELECT count(*) AS n FROM ice.ballista_it.{table_name}"),
+        )
+        .await,
+    );
     assert_eq!(count, 3, "catalog-qualified distributed read");
 }
 
@@ -294,8 +276,7 @@ async fn distributed_insert_and_read() {
 ///
 /// Where [`distributed_insert_and_read`] uses standalone Ballista (one in-process
 /// executor) and an unpartitioned table, this stands up a single scheduler with
-/// **several in-process executors** (each a distinct Ballista executor service
-/// pulling tasks over gRPC) and writes a table partitioned by `region`. A
+/// **several in-process executors** and writes a table partitioned by `region`. A
 /// partitioned write injects a partition-value expression (`PartitionExpr`) into
 /// the physical plan, so this exercises that expression's serialization through
 /// the codec on top of the plan-node serialization — and fans the rows out to one
@@ -319,22 +300,13 @@ async fn parallel_multi_executor_insert_commits_all_rows() {
     const TOTAL_ROWS: i32 = 12;
 
     let props = catalog_props();
-    // Unique table name so reruns don't collide.
-    let suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    let table_name = format!("parallel_events_{suffix}");
+    let table_name = unique_table_name("parallel_events");
     let namespace = create_partitioned_table(&props, &table_name).await;
 
     // --- Bring up one scheduler + N executors in-process (real multi-executor) ---
-    let config = register_iceberg_codecs(
+    let state = iceberg_session_state(
         SessionConfig::new_with_ballista().with_target_partitions(WRITE_PARTITIONS),
     );
-    let state = SessionStateBuilder::new()
-        .with_config(config)
-        .with_default_features()
-        .build();
 
     let scheduler_addr = new_standalone_scheduler_from_state(&state)
         .await
@@ -384,12 +356,7 @@ async fn parallel_multi_executor_insert_commits_all_rows() {
         })
         .collect::<Vec<_>>()
         .join(", ");
-    ctx.sql(&format!("INSERT INTO target VALUES {values}"))
-        .await
-        .expect("plan insert")
-        .collect()
-        .await
-        .expect("run insert");
+    run_sql(&ctx, &format!("INSERT INTO target VALUES {values}")).await;
 
     // (1) The distributed write committed exactly once (a single atomic
     // snapshot), not one commit per task. Checked straight from the catalog so
@@ -430,35 +397,10 @@ async fn parallel_multi_executor_insert_commits_all_rows() {
     );
 
     // (3) Every row landed exactly once.
-    let batches = ctx
-        .sql("SELECT count(*) AS n FROM target")
-        .await
-        .expect("plan count")
-        .collect()
-        .await
-        .expect("run count");
-    let count = batches
-        .iter()
-        .find_map(|b| {
-            b.column(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .map(|a| a.value(0))
-        })
-        .expect("count column");
+    let count = single_i64(&run_sql(&ctx, "SELECT count(*) AS n FROM target").await);
     assert_eq!(count as i32, TOTAL_ROWS, "row count after parallel insert");
 
-    let rows = ctx
-        .sql("SELECT id FROM target ORDER BY id")
-        .await
-        .expect("plan select")
-        .collect()
-        .await
-        .expect("run select");
-    let ids: Vec<i32> = rows
-        .iter()
-        .flat_map(|b| b.column(0).as_primitive::<Int32Type>().values().to_vec())
-        .collect();
+    let ids = i32_values(&run_sql(&ctx, "SELECT id FROM target ORDER BY id").await);
     assert_eq!(
         ids,
         (1..=TOTAL_ROWS).collect::<Vec<_>>(),
@@ -468,17 +410,13 @@ async fn parallel_multi_executor_insert_commits_all_rows() {
     // (4) Predicate pushdown survives serialization: a WHERE clause is pushed into
     // the distributed scan (and re-applied above it), and the result is correct.
     let half = TOTAL_ROWS / 2;
-    let filtered = ctx
-        .sql(&format!("SELECT id FROM target WHERE id <= {half} ORDER BY id"))
-        .await
-        .expect("plan filtered select")
-        .collect()
-        .await
-        .expect("run filtered select");
-    let filtered_ids: Vec<i32> = filtered
-        .iter()
-        .flat_map(|b| b.column(0).as_primitive::<Int32Type>().values().to_vec())
-        .collect();
+    let filtered_ids = i32_values(
+        &run_sql(
+            &ctx,
+            &format!("SELECT id FROM target WHERE id <= {half} ORDER BY id"),
+        )
+        .await,
+    );
     assert_eq!(
         filtered_ids,
         (1..=half).collect::<Vec<_>>(),
