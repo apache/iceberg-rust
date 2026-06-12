@@ -286,8 +286,10 @@ fn resolve_nan_preserving_reference(expr: &Expr) -> Option<Reference> {
 /// resolve to the *same* column (`x + y` cannot be expressed as a single
 /// `col IS NAN`) and the operator combination itself to be NaN-preserving:
 /// `(x + 1) * (x - 2)` is NaN iff `x` is NaN, but `(x + 1) - (x - 2)` is NaN
-/// for `x = inf` (`inf - inf`) even though `x` is not. Left for a potential
-/// follow-up, tracked in <https://github.com/apache/iceberg-rust/issues/2154>.
+/// for `x = inf` (`inf - inf`) even though `x` is not.
+///
+/// TODO(<https://github.com/apache/iceberg-rust/issues/2154>): support
+/// NaN-preserving expressions with column references on both sides.
 fn resolve_nan_preserving_binary(binary: &BinaryExpr) -> Option<Reference> {
     let (left, right) = (&binary.left, &binary.right);
     match binary.op {
