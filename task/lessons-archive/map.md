@@ -30,6 +30,7 @@ in the active file, in exactly one archive file, or promoted with a stub here.
 
 | File | Covers | Entries |
 |---|---|---|
+| `2026-06_wave3-wave4-overnight.md` | Pass 3 (2026-06-12, size trigger): the 2026-06-08→10 entries pass 2 kept live (residual scan-wiring, E1/Inc4 interop, the DV arc D1–D4, the post-arc audit, Arc E/F/G) + Waves 3–4 (multi-spec writes, constants-map activation, removeRows, ExpireSnapshots B1/B2 + A3 interop, DeleteOrphanFiles A1/A2, variant B1/B2 + F1/F2 builder halves, O1–O3 builder halves, the S1–S3 Sonnet arc, V2 builder, W1/W2 process halves). 3 rules promoted (stubs inline). | 47 |
 | `2026-06_phase2-completion.md` | Pass 2 (2026-06-11, size trigger): the Phase-2 write-engine completion arc (RewriteManifests, RewriteFiles seq preservation, the delete-manifest-carry fix, MergeAppend, the 8-step interop extension, the matrix repair, PR #20) + the E1/E2 metadata-interop sprint + the 2026-06-08/09 scan, metrics, and conflict-validation increments. 6 rules promoted (stubs inline). | 25 |
 | `2026-06_phase1-phase3.md` | Pass 1 (2026-06-09, size trigger): Phase 0 reset + Phase 1 evolution actions (ManageSnapshots / UpdatePartitionSpec / UpdateSchema, increments 1–11) + Phase 2 write-engine increments (DeleteFiles / OverwriteFiles / ReplacePartitions / RewriteFiles / PositionDeleteWriter) + Phase 3 inspection tables, residual evaluator, incremental scans — BUILDER/REVIEWER narratives dated 2026-06-07 → 2026-06-09 | 52 (31 with promotion stubs, 21 plain) |
 

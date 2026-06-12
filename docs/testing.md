@@ -101,6 +101,18 @@ mutations of the production code make it fail.
 - **Verify-then-fix may land zero production changes.** The deliverable is per-case empirical proof
   plus mutation-verified regression tests. Convert throwaway probes into named regression tests —
   never ship a probe, never delete one without a replacement.
+- **A sabotage/guard pin must corrupt the artifact UNDER TEST, run a clean CONTROL first, and be
+  proven able to fire.** A corruption that the parser tolerates (e.g. trailing JSON tokens —
+  Jackson never enables FAIL_ON_TRAILING_TOKENS) or a step that greps a hard-coded PASS string on
+  the unmodified artifact is theater: ask "would this step turn RED if the pin were deleted?" And
+  `is_err()` alone never pins a fail-fast/atomicity guard — assert the no-side-effect property
+  itself (e.g. the buffer untouched on failure). _Promoted 2026-06-12 from lessons (B2/W1/W2)._
+- **Writer-generated fixtures inherit the writer's canonical shape — layout/order correctness
+  claims need HAND-BUILT disordered or non-canonical fixtures.** Every fixture a conforming writer
+  emits has name-sorted fields, ascending offsets, minimal widths, ascending-id partition tuples —
+  so a mutation that substitutes the simpler-but-wrong scheme (adjacent-offset subtraction,
+  index-by-position instead of remap-by-id) passes the whole generated suite. _Promoted 2026-06-12
+  from lessons (B1/F2/X1)._
 - **Write-action suites need three specific pins:** (1) the post-commit scan LIVE SET (what a scan
   would read), not just emitted updates; (2) cross-snapshot PROVENANCE — surviving/carried-forward
   entries keep their ORIGINAL snapshot id + sequence numbers (re-stamping is the silent-corruption
