@@ -287,7 +287,7 @@ fn resolve_nan_preserving_reference(expr: &Expr) -> Option<Reference> {
 /// `col IS NAN`) and the operator combination itself to be NaN-preserving:
 /// `(x + 1) * (x - 2)` is NaN iff `x` is NaN, but `(x + 1) - (x - 2)` is NaN
 /// for `x = inf` (`inf - inf`) even though `x` is not. Left for a potential
-/// follow-up.
+/// follow-up, tracked in <https://github.com/apache/iceberg-rust/issues/2154>.
 fn resolve_nan_preserving_binary(binary: &BinaryExpr) -> Option<Reference> {
     let (left, right) = (&binary.left, &binary.right);
     match binary.op {
