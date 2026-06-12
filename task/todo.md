@@ -51,6 +51,56 @@ How to use it (see the manuals' §1):
 
 **Outcome (2026-06-12):** I1 theta-blob interop COMPLETE — bidirectional, chain ×2, sabotage 4 closed. `ComputeTableStats` is now fully proven through end-to-end Java/Rust interop.
 
+## ACTIVE (2026-06-12): I2 — view metadata interop (LANDED)
+
+**Plan (pre-code, 7 bullets per manual §1):**
+- [x] **Step 1 (Java ViewOracle — D1 generate):** Add `ViewOracle` static inner class to
+  `InteropOracle.java`. `generate` mode: use `InMemoryCatalog.buildView(ident)` to create a
+  view with schema + 2 SQL representations (spark+trino dialects), then `replace()` with a
+  DIFFERENT SQL so `reuseOrCreateNewViewVersionId` creates version 2 (distinct — not identical).
+  Write `ViewMetadataParser.toJson(metadata)` to `rust_view_metadata.json`. Emit companion
+  `expected.json` (view-uuid, format-version, location, schema field list, current-version-id,
+  version count, version-log count, all per-version field values). Dispatch via
+  `-Dinterop.view.dir` + `generate-interop-view`. Key fix: cast `View` → `BaseView` for
+  `operations().current()`.
+- [x] **Step 2 (Java ViewOracle — D1 verify + D2 generate):** `verify-interop-view` mode:
+  reads `rust_view_metadata.json` (Rust-written) via `ViewMetadataParser.fromJson`, asserts
+  field-by-field against values Rust emitted into `rust_view_expected.json`. `generate-java-to-rust`
+  mode: Java builds a view metadata object via `InMemoryCatalog`, writes via
+  `ViewMetadataParser.toJson` to `java_view_metadata.json`, emits `java_view_expected.json`.
+  Dispatch the three modes from the main switch.
+- [x] **Step 3 (Rust interop test):** `crates/iceberg/tests/interop_view.rs`. Three tests:
+  `test_view_gen` (D1 GEN: Rust creates view + ReplaceViewVersionAction commit → 2 versions,
+  writes `rust_view_metadata.json` via `ViewMetadata::write_to` + `rust_view_expected.json`);
+  `test_view_d2_rust_reads_java` (D2: reads `java_view_metadata.json` via
+  `ViewMetadata::read_from`, asserts all fields vs `java_view_expected.json`);
+  `test_view_tolerance_controls` (control: permuted-field-order JSON still parses on Rust
+  side; empty-properties omission tolerated both ways). Fixed clippy::never_loop in
+  `first_sql_repr` helper.
+- [x] **Step 4 (Chain script):** `dev/java-interop/run-interop-view.sh` — 6-step chain ×2:
+  (1) reset tmp; (2) Rust GEN test writes `rust_view_metadata.json`; (3) Java verify-interop-view
+  reads Rust metadata, 0 failures sentinel; (4) Java generate-java-to-rust writes
+  `java_view_metadata.json`; (5) Rust D2 reads Java metadata; (6) sabotage battery 5 closed
+  (6a alter SQL→Java D1 FAIL; 6b drop default-namespace→Rust parse FAIL; 6c dangling
+  current-version-id=99→Rust FAIL; 6d alter SQL in java metadata→Rust assert FAIL; 6e tolerance
+  control both sides PASS).
+- [x] **Step 5 (Tolerance controls):** The field-order control and empty-properties control
+  documented in `test_view_tolerance_controls` and confirmed in the chain script (6e). Java's
+  omit-empty-properties (read by Rust) and Rust's always-emit-empty (read by Java) are pinned
+  as COSMETIC ONLY — byte-level byte-order is a NEXT-WAVE item.
+- [x] **Step 6 (GAP_MATRIX update):** Re-audited ViewCatalog row. Row stays 🟡 because: (a)
+  MemoryCatalog `update_view` has no base-location CAS (O1 on other branch); (b) Glue/S3Tables
+  views need credentialed sprint; (c) SessionCatalog/LockManager separate. Residue text updated
+  precisely; I2 interop landing noted. Pipe-count audit clean (61 rows all 5 pipes).
+- [x] **Step 7 (Gate + journal):** `typos` PASS, `cargo fmt --check` PASS, `cargo clippy` PASS
+  (0 warnings), `cargo test -p iceberg --lib` 2210 tests, 0 failures (exact baseline). Plus
+  run-interop-view.sh ×2 green, taplo check (pre-existing 4 failures, 0 new). Lessons appended.
+
+**Outcome (2026-06-12):** I2 view metadata interop COMPLETE — bidirectional, chain ×2, sabotage
+5 closed. `ViewMetadata::read_from`/`write_to` proven against Java `ViewMetadataParser` through
+real catalog operations (`MemoryCatalog` + `InMemoryCatalog`). Wire-format field-order divergence
+pinned as cosmetic-only; byte-exact view round-trip is next-wave.
+
 ## ACTIVE (2026-06-12): Near-full-parity direction — open queue (planning record)
 
 Directive (user, 2026-06-11): run this fork's Roadmap to **almost the full 1:1 Java replacement**.

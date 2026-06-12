@@ -745,6 +745,34 @@ public final class InteropOracle {
         Path thetaJavaGenDir = requireFixturesDir("interop.theta.dir");
         ThetaBlobOracle.generateJavaToRust(thetaJavaGenDir);
         break;
+
+      case "verify-interop-view":
+        // VIEW METADATA interop (increment I2), DIRECTION 1 — "Rust writes, Java judges".
+        // The Rust GEN test (env ICEBERG_INTEROP_VIEW_GEN_DIR) wrote rust_view_metadata.json
+        // (via ViewMetadata::write_to) and rust_view_expected.json (the expected field values).
+        // This mode reads rust_view_metadata.json via Java's PRODUCTION ViewMetadataParser.fromJson
+        // and asserts field-by-field against rust_view_expected.json.
+        Path viewVerifyDir = requireFixturesDir("interop.view.dir");
+        int viewVerifyFailures = ViewOracle.verifyRustMetadata(viewVerifyDir);
+        System.out.println("verify-interop-view: " + viewVerifyFailures + " failures");
+        if (viewVerifyFailures > 0) {
+          System.exit(1);
+        }
+        break;
+
+      case "generate-interop-view-java-to-rust":
+        // VIEW METADATA interop (increment I2), DIRECTION 2 — "Java writes, Rust reads".
+        // Java builds a multi-version view (create + replace via InMemoryCatalog.buildView) so
+        // reuseOrCreateNewViewVersionId produces 2 DISTINCT versions and a 2-entry version-log.
+        // Emits:
+        //   java_view_metadata.json  — the Java-written view metadata (ViewMetadataParser.toJson)
+        //   java_view_expected.json  — the expected field values for the Rust D2 test
+        // The Rust test (test_view_d2_rust_reads_java) reads java_view_metadata.json via
+        // ViewMetadata::read_from and asserts all fields against java_view_expected.json.
+        Path viewJavaGenDir = requireFixturesDir("interop.view.dir");
+        ViewOracle.generateJavaToRust(viewJavaGenDir);
+        break;
+
       default:
         System.err.println("unknown mode: " + mode + " (expected generate|verify)");
         System.exit(2);
@@ -11490,6 +11518,556 @@ public final class InteropOracle {
       writeJson(dir.resolve("java_stats_expected.json"), json);
       System.out.println(
           "generate-interop-theta-java-to-rust: java_stats_expected.json written");
+    }
+  }
+
+  // ===========================================================================================
+  // ViewOracle — I2 view metadata interop
+  // ===========================================================================================
+
+  /**
+   * Bidirectional view-metadata interop oracle (increment I2).
+   *
+   * <p>Two directions:
+   * <ul>
+   *   <li><b>D1 (Rust writes, Java judges):</b> the Rust GEN test creates a view via MemoryCatalog,
+   *       performs a ReplaceViewVersionAction so there are {@code ≥ 2} distinct versions, and
+   *       writes {@code rust_view_metadata.json} via {@code ViewMetadata::write_to} plus
+   *       {@code rust_view_expected.json} (the expected field values).  Java reads the metadata
+   *       via the PRODUCTION {@code ViewMetadataParser.fromJson} and checks every field against
+   *       the expected JSON ({@link #verifyRustMetadata}).</li>
+   *   <li><b>D2 (Java writes, Rust reads):</b> Java creates a multi-version view via the
+   *       production {@code InMemoryCatalog.buildView(...).create()} +
+   *       {@code .replace()} path so {@code reuseOrCreateNewViewVersionId} produces 2 distinct
+   *       versions, serializes via {@code ViewMetadataParser.toJson} to
+   *       {@code java_view_metadata.json}, and emits {@code java_view_expected.json}.  The Rust
+   *       test ({@link test_view_d2_rust_reads_java}) reads via
+   *       {@code ViewMetadata::read_from} ({@link #generateJavaToRust}).</li>
+   * </ul>
+   *
+   * <p><b>Tolerance contract (field-SET, NOT byte-order):</b> Java writes fields in the order
+   * {@code view-uuid, format-version, location, [properties if non-empty], schemas,
+   * current-version-id, versions, version-log}; Rust writes {@code format-version} first and
+   * always emits {@code "properties":{}}.  Both sides parse each other's output because all
+   * readers are order-insensitive and treat missing {@code properties} as empty.  This class
+   * confirms the tolerance by reading Rust-ordered bytes on the Java side and Java-ordered bytes
+   * on the Rust side — field-SET equality is the contract, NOT byte equality.
+   */
+  static final class ViewOracle {
+    private ViewOracle() {}
+
+    // ===========================================================================================
+    // Fixture constants — agreed by both sides (anti-circular).
+    // ===========================================================================================
+
+    /** Format version for the view fixture. */
+    private static final int FORMAT_VERSION = 1;
+    /** Schema id used for both versions. */
+    private static final int SCHEMA_ID = 0;
+    /**
+     * SQL for the FIRST view version (create).
+     * The Rust and Java GEN tests use this exact string so the expected JSONs are stable.
+     */
+    static final String SQL_V1 = "SELECT id, name FROM events WHERE id > 0";
+    /** Dialect for the first version. */
+    static final String DIALECT_V1 = "spark";
+    /**
+     * SQL for the SECOND view version (replace).
+     * MUST be different from SQL_V1 so reuseOrCreateNewViewVersionId does NOT reuse version 1.
+     */
+    static final String SQL_V2 = "SELECT id, name FROM events WHERE id > 100";
+    /** Dialect for the second version. */
+    static final String DIALECT_V2 = "spark";
+    /** Expected version count after create + replace. */
+    static final int EXPECTED_VERSION_COUNT = 2;
+    /** Expected version-log length after create + replace. */
+    static final int EXPECTED_VERSION_LOG_COUNT = 2;
+    /** The current-version-id after one replace (builder assigns max+1 = 2). */
+    static final int EXPECTED_CURRENT_VERSION_ID = 2;
+    /** Schema field names used by both sides. */
+    static final String[] SCHEMA_FIELD_NAMES = {"id", "name"};
+
+    // ===========================================================================================
+    // D1: verifyRustMetadata — Java reads Rust-written rust_view_metadata.json.
+    // ===========================================================================================
+
+    /**
+     * Reads {@code rust_view_metadata.json} + {@code rust_view_expected.json} from {@code dir},
+     * parses the metadata via Java's PRODUCTION {@code ViewMetadataParser.fromJson}, and checks
+     * every field against the expected values.
+     *
+     * <p>Checks (all integer/string-exact, no tolerances):
+     * <ol>
+     *   <li>{@code format-version} == {@link #FORMAT_VERSION}</li>
+     *   <li>{@code view-uuid} is non-null and equals the expected uuid</li>
+     *   <li>{@code location} is non-empty and equals the expected location</li>
+     *   <li>{@code schemas} count == 1; field names == {@link #SCHEMA_FIELD_NAMES}</li>
+     *   <li>{@code current-version-id} == {@link #EXPECTED_CURRENT_VERSION_ID}</li>
+     *   <li>Versions count == {@link #EXPECTED_VERSION_COUNT}</li>
+     *   <li>Version 1: schema-id, sql, dialect match the expected values</li>
+     *   <li>Version 2: schema-id, sql, dialect match the expected values</li>
+     *   <li>{@code version-log} length == {@link #EXPECTED_VERSION_LOG_COUNT}</li>
+     *   <li>{@code version-log[0].version-id} == 1, {@code version-log[1].version-id} == 2</li>
+     * </ol>
+     *
+     * @return the number of assertion failures (0 = PASS)
+     */
+    static int verifyRustMetadata(Path dir) throws IOException {
+      int failures = 0;
+
+      Path metaPath = dir.resolve("rust_view_metadata.json");
+      if (!java.nio.file.Files.exists(metaPath)) {
+        System.out.println(
+            "FAIL verify-interop-view: missing " + metaPath
+                + " — run the Rust GEN test first");
+        return 1;
+      }
+
+      Path expectedPath = dir.resolve("rust_view_expected.json");
+      if (!java.nio.file.Files.exists(expectedPath)) {
+        System.out.println(
+            "FAIL verify-interop-view: missing " + expectedPath
+                + " — run the Rust GEN test first");
+        return 1;
+      }
+
+      // Read expected values from the Rust GEN step.
+      com.fasterxml.jackson.databind.JsonNode expectedNode =
+          JsonUtil.mapper().readTree(expectedPath.toFile());
+
+      // Parse the Rust-written metadata via Java's PRODUCTION ViewMetadataParser.
+      String metaJson = new String(java.nio.file.Files.readAllBytes(metaPath), StandardCharsets.UTF_8);
+      org.apache.iceberg.view.ViewMetadata metadata =
+          org.apache.iceberg.view.ViewMetadataParser.fromJson(metaJson);
+
+      // 1. format-version
+      if (metadata.formatVersion() != FORMAT_VERSION) {
+        System.out.println(
+            "FAIL format-version: expected=" + FORMAT_VERSION
+                + " actual=" + metadata.formatVersion());
+        failures++;
+      }
+
+      // 2. view-uuid — non-null and matches expected
+      String expectedUuid = expectedNode.path("view_uuid").asText(null);
+      String actualUuid = metadata.uuid();
+      if (actualUuid == null || actualUuid.isEmpty()) {
+        System.out.println("FAIL view-uuid: null or empty");
+        failures++;
+      } else if (expectedUuid != null && !expectedUuid.equals(actualUuid)) {
+        System.out.println(
+            "FAIL view-uuid: expected=" + expectedUuid + " actual=" + actualUuid);
+        failures++;
+      }
+
+      // 3. location — non-empty and matches expected
+      String expectedLocation = expectedNode.path("location").asText(null);
+      String actualLocation = metadata.location();
+      if (actualLocation == null || actualLocation.isEmpty()) {
+        System.out.println("FAIL location: null or empty");
+        failures++;
+      } else if (expectedLocation != null && !expectedLocation.equals(actualLocation)) {
+        System.out.println(
+            "FAIL location: expected=" + expectedLocation + " actual=" + actualLocation);
+        failures++;
+      }
+
+      // 4. schemas count == 1; field names match
+      java.util.List<org.apache.iceberg.Schema> schemas = metadata.schemas();
+      if (schemas.size() != 1) {
+        System.out.println(
+            "FAIL schemas count: expected=1 actual=" + schemas.size());
+        failures++;
+      } else {
+        org.apache.iceberg.Schema schema = schemas.get(0);
+        java.util.List<String> actualFieldNames = new java.util.ArrayList<>();
+        for (org.apache.iceberg.types.Types.NestedField field : schema.columns()) {
+          actualFieldNames.add(field.name());
+        }
+        java.util.List<String> expectedFieldNames = java.util.Arrays.asList(SCHEMA_FIELD_NAMES);
+        if (!expectedFieldNames.equals(actualFieldNames)) {
+          System.out.println(
+              "FAIL schema field names: expected=" + expectedFieldNames
+                  + " actual=" + actualFieldNames);
+          failures++;
+        }
+        // Schema field TYPE + required flag — load-bearing correctness fields. Compare each
+        // field's type string + required flag against rust_view_expected.json (keyed by name).
+        com.fasterxml.jackson.databind.JsonNode schemaFieldsNode = expectedNode.path("schema_fields");
+        if (schemaFieldsNode.isArray()) {
+          for (com.fasterxml.jackson.databind.JsonNode fieldExpected : schemaFieldsNode) {
+            String expectedName = fieldExpected.path("name").asText();
+            String expectedType = fieldExpected.path("type").asText();
+            boolean expectedRequired = fieldExpected.path("required").asBoolean();
+            org.apache.iceberg.types.Types.NestedField actualField = schema.findField(expectedName);
+            if (actualField == null) {
+              System.out.println("FAIL schema field " + expectedName + ": missing");
+              failures++;
+              continue;
+            }
+            if (!expectedType.equals(actualField.type().toString())) {
+              System.out.println(
+                  "FAIL schema field " + expectedName + " type: expected=" + expectedType
+                      + " actual=" + actualField.type());
+              failures++;
+            }
+            if (expectedRequired != actualField.isRequired()) {
+              System.out.println(
+                  "FAIL schema field " + expectedName + " required: expected=" + expectedRequired
+                      + " actual=" + actualField.isRequired());
+              failures++;
+            }
+          }
+        }
+      }
+
+      // 5. current-version-id
+      int expectedCurrentVersionId = expectedNode.path("current_version_id").asInt(EXPECTED_CURRENT_VERSION_ID);
+      if (metadata.currentVersionId() != expectedCurrentVersionId) {
+        System.out.println(
+            "FAIL current-version-id: expected=" + expectedCurrentVersionId
+                + " actual=" + metadata.currentVersionId());
+        failures++;
+      }
+
+      // 6. versions count
+      java.util.List<org.apache.iceberg.view.ViewVersion> versions = metadata.versions();
+      int expectedVersionCount = expectedNode.path("version_count").asInt(EXPECTED_VERSION_COUNT);
+      if (versions.size() != expectedVersionCount) {
+        System.out.println(
+            "FAIL versions count: expected=" + expectedVersionCount
+                + " actual=" + versions.size());
+        failures++;
+      }
+
+      // 7 + 8. Per-version assertions
+      // Find version by id to handle any iteration order.
+      java.util.Map<Integer, org.apache.iceberg.view.ViewVersion> versionById = new java.util.LinkedHashMap<>();
+      for (org.apache.iceberg.view.ViewVersion version : versions) {
+        versionById.put(version.versionId(), version);
+      }
+
+      // Version 1
+      org.apache.iceberg.view.ViewVersion v1 = versionById.get(1);
+      if (v1 == null) {
+        System.out.println("FAIL version 1: not present");
+        failures++;
+      } else {
+        failures += checkVersion(v1, 1, SCHEMA_ID, SQL_V1, DIALECT_V1, "version[1]");
+      }
+
+      // Version 2
+      org.apache.iceberg.view.ViewVersion v2 = versionById.get(EXPECTED_CURRENT_VERSION_ID);
+      if (v2 == null) {
+        System.out.println("FAIL version " + EXPECTED_CURRENT_VERSION_ID + ": not present");
+        failures++;
+      } else {
+        failures += checkVersion(v2, EXPECTED_CURRENT_VERSION_ID, SCHEMA_ID, SQL_V2, DIALECT_V2,
+            "version[" + EXPECTED_CURRENT_VERSION_ID + "]");
+      }
+
+      // 9. version-log length
+      java.util.List<org.apache.iceberg.view.ViewHistoryEntry> history = metadata.history();
+      int expectedLogCount = expectedNode.path("version_log_count").asInt(EXPECTED_VERSION_LOG_COUNT);
+      if (history.size() != expectedLogCount) {
+        System.out.println(
+            "FAIL version-log count: expected=" + expectedLogCount
+                + " actual=" + history.size());
+        failures++;
+      }
+
+      // 10. version-log entry version-ids (must be [1, 2] in creation order).
+      if (history.size() == 2) {
+        if (history.get(0).versionId() != 1) {
+          System.out.println(
+              "FAIL version-log[0].version-id: expected=1 actual=" + history.get(0).versionId());
+          failures++;
+        }
+        if (history.get(1).versionId() != EXPECTED_CURRENT_VERSION_ID) {
+          System.out.println(
+              "FAIL version-log[1].version-id: expected=" + EXPECTED_CURRENT_VERSION_ID
+                  + " actual=" + history.get(1).versionId());
+          failures++;
+        }
+      }
+
+      // 11. Version-log entry timestamps in order — pins that a version-log timestamp is not
+      // silently mutated. Each entry's timestamp-ms must equal the value Rust recorded.
+      com.fasterxml.jackson.databind.JsonNode versionLogNode = expectedNode.path("version_log");
+      if (versionLogNode.isArray() && versionLogNode.size() == history.size()) {
+        for (int i = 0; i < history.size(); i++) {
+          long expectedTimestamp = versionLogNode.get(i).path("timestamp_ms").asLong();
+          if (history.get(i).timestampMillis() != expectedTimestamp) {
+            System.out.println(
+                "FAIL version-log[" + i + "].timestamp-ms: expected=" + expectedTimestamp
+                    + " actual=" + history.get(i).timestampMillis());
+            failures++;
+          }
+        }
+      }
+
+      // 12. Per-version timestamp-ms (keyed by version-id) — pins that a NON-current version's
+      // timestamp is not silently mutated.
+      com.fasterxml.jackson.databind.JsonNode versionTimestampsNode =
+          expectedNode.path("version_timestamps");
+      if (versionTimestampsNode.isArray()) {
+        for (com.fasterxml.jackson.databind.JsonNode vtNode : versionTimestampsNode) {
+          int versionId = vtNode.path("version_id").asInt();
+          long expectedTimestamp = vtNode.path("timestamp_ms").asLong();
+          org.apache.iceberg.view.ViewVersion version = versionById.get(versionId);
+          if (version == null) {
+            System.out.println("FAIL version-timestamp[" + versionId + "]: version missing");
+            failures++;
+          } else if (version.timestampMillis() != expectedTimestamp) {
+            System.out.println(
+                "FAIL version[" + versionId + "].timestamp-ms: expected=" + expectedTimestamp
+                    + " actual=" + version.timestampMillis());
+            failures++;
+          }
+        }
+      }
+
+      if (failures == 0) {
+        System.out.println(
+            "PASS verify-interop-view: all checks passed (uuid=" + actualUuid
+                + " versions=" + versions.size()
+                + " current-version-id=" + metadata.currentVersionId() + ")");
+      }
+      return failures;
+    }
+
+    /**
+     * Check a version's schema-id, sql, and dialect; returns the failure count.
+     *
+     * <p>For the SQL representation we take the FIRST representation (both sides produce exactly
+     * one).  The check is an EXACT string comparison — no whitespace normalization.
+     */
+    private static int checkVersion(
+        org.apache.iceberg.view.ViewVersion version,
+        int expectedVersionId,
+        int expectedSchemaId,
+        String expectedSql,
+        String expectedDialect,
+        String label) {
+      int failures = 0;
+
+      if (version.versionId() != expectedVersionId) {
+        System.out.println(
+            "FAIL " + label + " version-id: expected=" + expectedVersionId
+                + " actual=" + version.versionId());
+        failures++;
+      }
+
+      if (version.schemaId() != expectedSchemaId) {
+        System.out.println(
+            "FAIL " + label + " schema-id: expected=" + expectedSchemaId
+                + " actual=" + version.schemaId());
+        failures++;
+      }
+
+      // Representations: expect exactly one SQL representation.
+      java.util.List<org.apache.iceberg.view.ViewRepresentation> representations = version.representations();
+      if (representations.isEmpty()) {
+        System.out.println("FAIL " + label + ": no representations");
+        failures++;
+      } else {
+        org.apache.iceberg.view.ViewRepresentation rep = representations.get(0);
+        if (!(rep instanceof org.apache.iceberg.view.SQLViewRepresentation)) {
+          System.out.println("FAIL " + label + ": first representation is not SQL: " + rep.getClass().getSimpleName());
+          failures++;
+        } else {
+          org.apache.iceberg.view.SQLViewRepresentation sqlRep =
+              (org.apache.iceberg.view.SQLViewRepresentation) rep;
+          if (!expectedSql.equals(sqlRep.sql())) {
+            System.out.println(
+                "FAIL " + label + " sql: expected=\"" + expectedSql
+                    + "\" actual=\"" + sqlRep.sql() + "\"");
+            failures++;
+          }
+          if (!expectedDialect.equals(sqlRep.dialect())) {
+            System.out.println(
+                "FAIL " + label + " dialect: expected=\"" + expectedDialect
+                    + "\" actual=\"" + sqlRep.dialect() + "\"");
+            failures++;
+          }
+        }
+      }
+
+      return failures;
+    }
+
+    // ===========================================================================================
+    // D2: generateJavaToRust — Java builds a multi-version view and writes it.
+    // ===========================================================================================
+
+    /**
+     * Build a multi-version view via the PRODUCTION {@code InMemoryCatalog.buildView} path,
+     * serialize it via {@code ViewMetadataParser.toJson} to {@code java_view_metadata.json}, and
+     * emit {@code java_view_expected.json} for the Rust D2 test.
+     *
+     * <p>The view is created with one SQL representation ({@link #SQL_V1} / {@link #DIALECT_V1})
+     * then REPLACED with a DIFFERENT SQL ({@link #SQL_V2} / {@link #DIALECT_V2}) so
+     * {@code reuseOrCreateNewViewVersionId} assigns version-id 2 (not reuse version 1), giving
+     * exactly {@link #EXPECTED_VERSION_COUNT} versions and a {@link #EXPECTED_VERSION_LOG_COUNT}
+     * -entry version-log.
+     *
+     * <p>The emitted {@code java_view_expected.json} records the view-uuid, location,
+     * current-version-id, version count, version-log count, and per-version field values — the
+     * same structure that {@link #verifyRustMetadata} reads for D1.
+     */
+    static void generateJavaToRust(Path dir) throws IOException {
+      java.nio.file.Files.createDirectories(dir);
+
+      // Build a transient InMemoryCatalog to host the view (no persistent storage needed).
+      org.apache.iceberg.inmemory.InMemoryCatalog catalog = new org.apache.iceberg.inmemory.InMemoryCatalog();
+      catalog.initialize("interop-view-oracle", new java.util.HashMap<>());
+
+      org.apache.iceberg.catalog.Namespace namespace =
+          org.apache.iceberg.catalog.Namespace.of("interop");
+      catalog.createNamespace(namespace);
+
+      org.apache.iceberg.catalog.TableIdentifier viewIdent =
+          org.apache.iceberg.catalog.TableIdentifier.of(namespace, "java_view");
+
+      // Schema: {1: id long required, 2: name string required} — matches the Rust GEN schema.
+      org.apache.iceberg.Schema schema = new org.apache.iceberg.Schema(
+          org.apache.iceberg.types.Types.NestedField.required(1, "id",
+              org.apache.iceberg.types.Types.LongType.get()),
+          org.apache.iceberg.types.Types.NestedField.required(2, "name",
+              org.apache.iceberg.types.Types.StringType.get()));
+
+      String viewLocation = "file:///tmp/interop-view-oracle/java_view";
+
+      // Step 1: create the view with SQL_V1 (produces version 1).
+      catalog
+          .buildView(viewIdent)
+          .withSchema(schema)
+          .withDefaultNamespace(namespace)
+          .withQuery(DIALECT_V1, SQL_V1)
+          .withLocation(viewLocation)
+          .create();
+
+      // Step 2: replace with SQL_V2 — DIFFERENT from SQL_V1 so reuseOrCreateNewViewVersionId
+      // assigns a NEW version-id (2), not reuse version 1.
+      catalog
+          .buildView(viewIdent)
+          .withSchema(schema)
+          .withDefaultNamespace(namespace)
+          .withQuery(DIALECT_V2, SQL_V2)
+          .withLocation(viewLocation)
+          .replace();
+
+      // Reload to get the final committed metadata.  Cast to BaseView to reach operations().
+      org.apache.iceberg.view.View finalView = catalog.loadView(viewIdent);
+      org.apache.iceberg.view.ViewMetadata metadata =
+          ((org.apache.iceberg.view.BaseView) finalView).operations().current();
+
+      // Sanity-check the builder's output before writing any file.
+      if (metadata.versions().size() != EXPECTED_VERSION_COUNT) {
+        throw new RuntimeException(
+            "D2 sanity: expected " + EXPECTED_VERSION_COUNT + " versions, got "
+                + metadata.versions().size()
+                + " — SQL_V1 and SQL_V2 may be identical (reuseOrCreateNewViewVersionId dedup)");
+      }
+      if (metadata.currentVersionId() != EXPECTED_CURRENT_VERSION_ID) {
+        throw new RuntimeException(
+            "D2 sanity: expected current-version-id=" + EXPECTED_CURRENT_VERSION_ID
+                + " got " + metadata.currentVersionId());
+      }
+      if (metadata.history().size() != EXPECTED_VERSION_LOG_COUNT) {
+        throw new RuntimeException(
+            "D2 sanity: expected version-log count=" + EXPECTED_VERSION_LOG_COUNT
+                + " got " + metadata.history().size());
+      }
+
+      // Write java_view_metadata.json via Java's PRODUCTION ViewMetadataParser.toJson.
+      String metaJson = org.apache.iceberg.view.ViewMetadataParser.toJson(metadata, true);
+      writeJson(dir.resolve("java_view_metadata.json"), metaJson);
+      System.out.println(
+          "generate-interop-view-java-to-rust: java_view_metadata.json written ("
+              + metaJson.length() + " chars, uuid=" + metadata.uuid()
+              + " versions=" + metadata.versions().size() + ")");
+
+      // Emit java_view_expected.json — the field values the Rust D2 test will compare against.
+      String expectedJson = JsonUtil.generate(
+          gen -> {
+            gen.writeStartObject();
+            gen.writeNumberField("format_version", metadata.formatVersion());
+            gen.writeStringField("view_uuid", metadata.uuid());
+            gen.writeStringField("location", metadata.location());
+            gen.writeNumberField("current_version_id", metadata.currentVersionId());
+            gen.writeNumberField("version_count", metadata.versions().size());
+            gen.writeNumberField("version_log_count", metadata.history().size());
+            // Schema: field names in column order.
+            gen.writeArrayFieldStart("schema_field_names");
+            for (org.apache.iceberg.types.Types.NestedField field : metadata.schema().columns()) {
+              gen.writeString(field.name());
+            }
+            gen.writeEndArray();
+            // Schema: per-field name/type/required — load-bearing correctness fields the Rust D2
+            // test pins so a type or required-flag divergence is caught field-by-field.
+            gen.writeArrayFieldStart("schema_fields");
+            for (org.apache.iceberg.types.Types.NestedField field : metadata.schema().columns()) {
+              gen.writeStartObject();
+              gen.writeStringField("name", field.name());
+              gen.writeStringField("type", field.type().toString());
+              gen.writeBooleanField("required", field.isRequired());
+              gen.writeEndObject();
+            }
+            gen.writeEndArray();
+            // Per-version SQL and dialect (keyed by version-id).
+            gen.writeArrayFieldStart("versions");
+            for (org.apache.iceberg.view.ViewVersion version : metadata.versions()) {
+              gen.writeStartObject();
+              gen.writeNumberField("version_id", version.versionId());
+              gen.writeNumberField("schema_id", version.schemaId());
+              // First (and only) SQL representation.
+              java.util.List<org.apache.iceberg.view.ViewRepresentation> reps = version.representations();
+              if (!reps.isEmpty() && reps.get(0) instanceof org.apache.iceberg.view.SQLViewRepresentation) {
+                org.apache.iceberg.view.SQLViewRepresentation sqlRep =
+                    (org.apache.iceberg.view.SQLViewRepresentation) reps.get(0);
+                gen.writeStringField("sql", sqlRep.sql());
+                gen.writeStringField("dialect", sqlRep.dialect());
+              }
+              gen.writeEndObject();
+            }
+            gen.writeEndArray();
+            // Per-version timestamp-ms (keyed by version-id) — pins a non-current version's
+            // timestamp against silent mutation.
+            gen.writeArrayFieldStart("version_timestamps");
+            for (org.apache.iceberg.view.ViewVersion version : metadata.versions()) {
+              gen.writeStartObject();
+              gen.writeNumberField("version_id", version.versionId());
+              gen.writeNumberField("timestamp_ms", version.timestampMillis());
+              gen.writeEndObject();
+            }
+            gen.writeEndArray();
+            // Version-log entry version-ids in order.
+            gen.writeArrayFieldStart("version_log_ids");
+            for (org.apache.iceberg.view.ViewHistoryEntry entry : metadata.history()) {
+              gen.writeNumber(entry.versionId());
+            }
+            gen.writeEndArray();
+            // Version-log entries with timestamps in order — pins each version-log timestamp.
+            gen.writeArrayFieldStart("version_log");
+            for (org.apache.iceberg.view.ViewHistoryEntry entry : metadata.history()) {
+              gen.writeStartObject();
+              gen.writeNumberField("version_id", entry.versionId());
+              gen.writeNumberField("timestamp_ms", entry.timestampMillis());
+              gen.writeEndObject();
+            }
+            gen.writeEndArray();
+            gen.writeEndObject();
+          },
+          true);
+
+      writeJson(dir.resolve("java_view_expected.json"), expectedJson);
+      System.out.println(
+          "generate-interop-view-java-to-rust: java_view_expected.json written "
+              + "(current-version-id=" + metadata.currentVersionId()
+              + " version-log=" + metadata.history().size() + " entries)");
+
+      catalog.close();
     }
   }
 

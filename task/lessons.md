@@ -320,3 +320,86 @@ How to use it (see the manuals' §2):
   Registration IS unit-covered (`compute_table_stats.rs` re-parses the committed `StatisticsFile`), so
   this is a minor interop-completeness gap, not a correctness hole. DO consider a `statisticsFiles()`
   read on the Java side in a follow-up to close the registration dimension at the interop level.
+
+### 2026-06-12 (I2 — view metadata interop, BUILDER Fable/Sonnet, wt-interop6)
+- **Java's `View` interface does NOT expose `operations()` — cast to `BaseView` to access the
+  committed `ViewMetadata`.** `InMemoryCatalog.loadView(ident)` returns `View`; `View` has no
+  `operations()`. Cast: `((org.apache.iceberg.view.BaseView) loadedView).operations().current()`.
+  Same pattern applies after `buildView(...).create()` or `.replace()` — store the returned `View`
+  reference and cast. *Why:* `BaseView` is the concrete abstract class that wires the operations
+  handle; the interface intentionally hides it. `grep 'extends BaseView'` in `iceberg-core` to find
+  other concrete view impls that may need the same cast.
+- **Java's `reuseOrCreateNewViewVersionId` deduplicates VIEW VERSIONS with identical SQL — the
+  two SQL strings MUST be DIFFERENT (not just syntactically but character-exact) for version count
+  to grow to 2.** *Why:* `BaseViewVersionReplace` (bytecode-verified) compares representations via
+  `sameViewVersion` — if the replacement representations are character-identical to the current
+  version's, it reuses the existing version-id and the version-log count stays at 1. Use
+  `SQL_V1 = "... WHERE id > 0"` and `SQL_V2 = "... WHERE id > 100"` — any string difference
+  works, but the constants must be agreed between Java oracle and Rust test (anti-circular).
+- **View metadata wire format FIELD-ORDER DIVERGENCE is tolerated at parse time on BOTH sides;
+  do NOT attempt byte-exact equality for view metadata JSON.** Java `ViewMetadataParser.toJson`
+  writes `view-uuid` first; Rust's `_serde::ViewMetadataV1` writes `format-version` first. Java
+  omits `"properties"` when empty; Rust always emits `"properties":{}`. Both serde parsers
+  (Jackson and serde_json) are key-order-insensitive; Rust's `properties` field is
+  `Option<HashMap<...>>` deserialized with `unwrap_or_default()`. Pin the FIELD SET, not bytes.
+  Nail this with a dedicated `test_view_tolerance_controls` that feeds a Java-ordered no-properties
+  JSON into Rust's `read_from` and confirms the parse succeeds + properties map is empty.
+- **For D2 sabotage (Rust reads Java-written metadata), verify via the RUST TEST's exit code + the
+  expected stdout pattern, NOT the Java oracle.** The D2 test (`test_view_d2_rust_reads_java`)
+  runs via `cargo test --exact --nocapture`; on an injected mismatch it panics with `assert_eq!` 
+  and `cargo test` exits non-zero. The sabotage check pattern: `|| true` catch + `grep -q
+  "test test_view_d2_rust_reads_java ... ok"` absent → PASS (failure confirmed). Do NOT look for
+  `'^FAIL '` patterns on the Rust side — those are Java sentinel patterns.
+- **Dropping a REQUIRED field from a version JSON (`default-namespace`) causes Rust `read_from`
+  to fail with a deserialization error — no need for an explicit guard.** Rust's
+  `_serde::ViewVersionV1.default_namespace` is non-`Option` (direct `NamespaceIdent`), so serde
+  returns an error immediately if the field is absent. This makes 6b a clean structural-failure
+  sabotage, not a semantic one. Java `ViewVersionParser` likewise throws on a missing
+  `default-namespace`. Pin both via the chain script: a modified `java_view_metadata.json` with
+  one version's `default-namespace` removed must make Rust's D2 test fail.
+- **A dangling `current-version-id` (pointing to a non-existent version) causes Rust
+  `ViewMetadata::read_from` to return an error at METADATA BUILD TIME, not at access time.**
+  *Why:* the view metadata builder validates that `current_version_id` refers to a version in
+  the `versions` map; if the id has no corresponding version, it returns
+  `Err(ErrorKind::DataInvalid)`. This is clean fail-closed behavior (no delayed panic). Pin it
+  as 6c in the sabotage battery: `current-version-id: 99` with no version 99 in `versions`.
+- **`clippy::never_loop` fires on `for repr in iter { irrefutable-pattern; return ... }` — use
+  `iter.next()` with a `let Some(...) else { panic! }` guard instead.** The `for`-loop form looks
+  right but clippy sees it as "loop body always executes at most once" because the return exits
+  before the next iteration. The idiomatic fix: `let Some(repr) = iter.next() else { panic!(...) };`
+  followed by the irrefutable destructure. This applies to any helper that extracts the first
+  element from a known-non-empty iterator via a pattern.
+- **An `irrefutable if let` or irrefutable single-arm `match` on an enum with ONE variant triggers
+  both a clippy lint and a compiler warning — use a bare destructure `let Pattern = value;`.**
+  *Why:* `if let ViewRepresentation::Sql(r) = repr { ... }` on a value that IS always
+  `ViewRepresentation::Sql` compiles but warns. Use `let ViewRepresentation::Sql(r) = repr;`
+  directly (a refutable pattern is only needed when the enum has multiple arms).
+
+#### I2 REVIEWER corrections (2026-06-12, wt-interop6) — adversarial kill-list against the comparators
+- **A field-by-field interop comparator that checks schema field NAMES but not field TYPE or the
+  required flag has a real PROJECTION GAP — corrupting `id` from long→string passed BOTH the Java
+  D1 oracle and the Rust D2 test silently.** The kill-list (corrupt one field of the SOURCE
+  metadata, re-run the production reader, confirm it fails) found four unpinned fields on EACH
+  side: (1) non-current version `timestamp-ms`, (2) version-log entry `timestamp-ms`, (3) schema
+  field `type`, (4) schema field `required`. SQL/dialect/field-names/version-log-id-order WERE
+  pinned. FIX (this pass): both emitters now write `schema_fields` (name/type/required),
+  `version_timestamps`, and `version_log` (id+timestamp); both comparators assert them. Post-fix
+  kill-list: all four PINNED on both directions. DO run the corrupt-one-field kill-list against
+  EVERY field a "field-by-field" oracle claims — names-only schema checks are the classic gap.
+- **The view metadata `type` string is cross-language byte-identical for primitives — Rust
+  `Type::Display` and Java `Type.toString()` both emit `long`/`string`/`int`/… so the comparator
+  can compare them as plain strings.** (Decimal is `decimal(p,s)` on both; fixed is `fixed(n)`.)
+  No normalization needed for the fixture's `long`/`string`.
+- **`ViewMetadata::read_from` does NOT call `validate()` directly — validation runs inside
+  `TryFrom<ViewMetadataV1>` (`view_metadata.validate()?` at the end of the conversion), which serde
+  invokes during `from_slice`.** So a dangling `current-version-id` is rejected at DESERIALIZE
+  time (parse error wraps `No version exists with the current version id N`), not at a later
+  access. This is why sabotage 6c fails cleanly at the `read_from` `.expect`, and 6d (valid parse,
+  wrong SQL value) fails LATER at the `assert_eq!` — distinct failure sites prove distinct
+  provenance.
+- **Interop test env-dir paths MUST be absolute when invoking `cargo test` by hand — a relative
+  `ICEBERG_INTEROP_VIEW_DIR` resolves against the test process CWD (workspace root), not your
+  shell CWD, so the `metadata_path.exists()` guard fires and every sabotage "passes" for the WRONG
+  reason (missing file, not the injected corruption).** The chain script is correct (it builds an
+  absolute `${TMP}` from `${SCRIPT_DIR}`); only ad-hoc reviewer commands hit this. Always echo the
+  resolved path and confirm a CLEAN run passes before trusting a sabotage's failure.
