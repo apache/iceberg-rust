@@ -40,6 +40,194 @@ How to use it (see the manuals' §1):
 > phase files). Procedure: [skills/compaction.md](../skills/compaction.md) §Todo Archival.
 > Archives are not read by default.
 
+## ACTIVE (2026-06-12): Z2 — multi-spec metadata-level interop fixture (BUILDER Sonnet, wt-interop3)
+
+**Structure choice:** SIBLING script `dev/java-interop/run-interop-multi-spec.sh` (separate from
+`run-interop-write-actions.sh`) so the new multi-spec steps do not disturb the existing metadata
+chains. New Rust test `crates/iceberg/tests/interop_multi_spec.rs`.
+
+**Single multi-spec commit constructibility verdict:**
+CONSTRUCTIBLE on BOTH sides. Java `newFastAppend().appendFile(f0).appendFile(f1).commit()` where
+f0 carries spec_id=0 partition and f1 carries spec_id=1 partition routes to `newDataFilesBySpec`
+(a `Map<Integer, DataFileSet>`) in `MergingSnapshotProducer.add()` which `newDataFilesAsManifests`
+iterates to produce one manifest per spec group — bytecode-verified. Rust `fast_append().
+add_data_files(vec![f0, f1])` routes through `group_files_by_spec` → one writer per spec group
+→ two manifests with different `partition_spec_id` values. Both sides produce TWO manifests in the
+single multi-spec commit snapshot.
+
+**Tie-shaping proof:** F0 and F1 have IDENTICAL record count (10), so the two manifests produced
+in the multi-spec commit tie on ALL 9 prior sort keys (content=data, seq=same, min_seq=same,
+added_files_count=1, existing_files_count=0, deleted_files_count=0, added_rows=10, existing_rows=0,
+deleted_rows=0) and differ ONLY on `partition_spec_id` (0 vs 1). The spec-id tiebreaker (position
+10, W3 ruling) is the ONLY disambiguator — assert this property explicitly in the fixture.
+
+**Plan:**
+
+- [x] Record plan (this section).
+- [x] **Step 1: Java `MultiSpecOracle` (new inner class in InteropOracle.java).** Operations:
+  create table partitioned by identity(a) → append F1(spec 0) → evolve spec: add identity(b)
+  (spec 1) → append F2(spec 1) → ONE multi-spec fast_append carrying both F0-spec0 and F1-spec1
+  stamped files. Emit `java_meta.json` (canonical view). Add `generate-interop-multi-spec` and
+  `verify-interop-multi-spec` dispatch cases to `main()`. Key fix: Java oracle builds spec 0
+  directly (not from unpartitioned default) so spec_ids align with Rust (0=identity(a),
+  1=identity(a)+identity(b)).
+- [x] **Step 2: Rust interop test `crates/iceberg/tests/interop_multi_spec.rs`.** GEN test (performs
+  the same chain via Rust production write paths), READ parity test (Rust view of Java chain ==
+  java_meta.json), WRITE parity test (Rust view of Rust chain == java_meta.json). Tie-shaping
+  assertion: F0.record_count == F3.record_count == 10; different partition tuple arities prove
+  different spec ids (1 vs 2 fields).
+- [x] **Step 3: Shell script `dev/java-interop/run-interop-multi-spec.sh`.** 5-step chain + sabotage
+  battery (structural corruption + control + spec-id-swap mutation). SB2 refs-aware snapshot
+  stripping (update current-snapshot-id AND refs["main"]["snapshot-id"] to ms3). SB4 Python-driven
+  subprocess spec-id swap in the canonical view JSON; fixed cwd path depth (fixture_dir + 3 levels
+  up to reach pom.xml, not 2).
+- [x] **Step 4: map.md updates** (dev/java-interop/map.md, crates/iceberg/tests/map.md).
+- [x] **Step 5: GAP_MATRIX.md update** (multi-spec interop cells — landed, scoped).
+- [x] **Step 6: Run full chain ×2, paste output; run verbatim gate ×2.**
+  Full chain ×2 green (5 steps + SB1/SB2/SB3/SB4 all PASS). Gate: typos clean, fmt clean,
+  clippy clean (fixed doc_overindented_list_items), 2168 lib tests ×2.
+- [x] **Step 7: task/lessons.md update.**
+
+**Outcome:** Z2 multi-spec interop fixture landed 2026-06-12. Single multi-spec fast-append
+commit constructible on both sides (CONFIRMED). Spec-id tiebreaker is the sole disambiguator for
+tie-shaped ms4 manifests. 4-sabotage battery all closed. Verbatim gate ×2 green (2168 lib tests).
+
+- [x] **REVIEWER (Opus 2-of-2, 2026-06-12):** Cold-start verified. Chain ×2 green incl. genuine D1
+  (step 4/5: Java judges the Rust-written table via emit+diff). Tie decoded from the emitted JSON:
+  the two ms4 manifests are byte-identical on all 9 prior sort keys (content/seq=3/min_seq=3/added=1/
+  existing=0/deleted=0/added_rows=10/existing_rows=0/deleted_rows=0), differ ONLY on
+  partition_spec_id 0 vs 1; their entries render `{1000:q}` (spec-0, 1-field) vs `{1000:r,1001:s}`
+  (spec-1, 2-field) per the file's-own-spec rule (Rust + Java both render under the manifest's own
+  spec). **STRENGTHENED SB4:** the builder's original SB4 only post-edited the spec_id INTEGER in the
+  emitted view JSON (proved the field is in the comparison key, but NOT the per-own-spec rendering it
+  claimed). Rewrote SB4 to swap the spec-0/spec-1 FIELD DEFINITIONS in the SOURCE metadata and
+  RE-EMIT → the partition tuples re-render under the wrong-arity spec (`1001:s` drops) and the view
+  diverges — now a true artifact-level, re-derived fail-closed proof. Updated dev map.md + GAP_MATRIX
+  SB4 wording to match. Cell scoping HONEST (both ✅ cells scoped to multi-spec FAST-APPEND metadata
+  interop; merge_append/deletes/replay-cherrypick interop correctly stay open in their own rows).
+  Cross-chain ×1 green (write-actions, staged-wap, cherrypick — shared oracle untouched by Z2). Gate
+  ×2 green (2168). Tree clean. Flagged: dead `verify-interop-multi-spec` Java dispatch (unused;
+  builder-owned, left in place).
+
+## ACTIVE (2026-06-12): Z3 — partition-stats file interop (BUILDER Sonnet, wt-interop3)
+
+**Structure choice:** SIBLING script `dev/java-interop/run-interop-partition-stats.sh` + new Rust
+test `crates/iceberg/tests/interop_partition_stats.rs`. Oracle inner class `PartitionStatsOracle`
+added to `InteropOracle.java`.
+
+**Fixture:** V2 table `identity(category)` {id long, category string, data string optional},
+S1 fast-append (cat=a 3rec 300B + cat=b 2rec 200B), S2 row-delta pos-delete (cat=a 1rec 50B).
+
+**Key discoveries:**
+- `DataFiles.Builder` has NO `withContent()` — position-delete files must use
+  `FileMetadata.deleteFileBuilder(spec).ofPositionDeletes()` (class is `org.apache.iceberg.FileMetadata`).
+- `PartitionStatisticsFile.statisticsPath()` does NOT exist — the method is `path()` (confirmed
+  via `javap` of the 1.10.0 api jar).
+- `PartitionStats.partition()` returns `StructLike` (not `PartitionData`) when decoded via
+  `readPartitionStatsFile` (the reader instantiates a `GenericRecord` / `StructProjection`, not a
+  `PartitionData`). The oracle uses `StructLike.get(0, Object.class)` without casting.
+
+**Plan:**
+
+- [x] Record plan (this section).
+- [x] **Step 1: Java `PartitionStatsOracle` (new inner class in InteropOracle.java).** Fixture
+  build + `PartitionStatsHandler.computeAndWriteStatsFile(table)` + register +
+  `readPartitionStatsFile` read-back + emit `java_stats.json` + `table/metadata/final.metadata.json`.
+  `verify()` reads `rust_table/metadata/final.metadata.json`, locates the registered stats path via
+  `partitionStatisticsFiles()`, decodes with `readPartitionStatsFile`, compares against `expected_stats.json`.
+  Fix: `withContent(FileContent.POSITION_DELETES)` → `FileMetadata.deleteFileBuilder(spec).ofPositionDeletes()`;
+  `statisticsPath()` → `path()`; `(PartitionData)` cast → `StructLike.get(0, Object)`.
+- [x] **Step 2: Rust interop test `crates/iceberg/tests/interop_partition_stats.rs`.** Three tests:
+  GEN (build fixture, compute+write+register, emit expected_stats.json + final.metadata.json),
+  D2 (read Java stats parquet, compare against java_stats.json), cross-version (V2 file vs V3 schema
+  — `project_struct_type_to_batch` null-fills dv_count to 0).
+- [x] **Step 3: Shell script `dev/java-interop/run-interop-partition-stats.sh`.** 8 steps, chain ×2.
+  Sabotage 4: truncate Rust parquet (7a), SOURCE byte-edit counter + re-read (7b, Z2 lesson), truncate
+  Java parquet (7c), remove partition-statistics from metadata (7d).
+- [x] **Step 4: map.md updates** (dev/java-interop/map.md, crates/iceberg/tests/map.md).
+- [x] **Step 5: GAP_MATRIX.md update** — Z3 interop landed cell, pipe audit.
+- [x] **Step 6: Run full chain ×2, paste output; run verbatim gate ×2.**
+  Chain ×2 green (D1 0 failures both chains; D2 2/2 rows; cross-version dv_count=0;
+  sabotage 7a/7b/7c/7d all closed). Gate: typos/fmt/clippy/lib all clean (2168 lib tests ×2).
+- [x] **Step 7: task/lessons.md update.**
+
+**Outcome:** Z3 partition-stats file interop landed 2026-06-12. Bidirectional: D1 (Rust writes,
+Java's `readPartitionStatsFile` judges, 0 failures both chains) + D2 (Java writes, Rust reads,
+all rows match) + cross-version V2→V3 projection (dv_count null-filled to 0). 4-sabotage battery
+all closed (SOURCE byte-edit re-derive for 7b, per Z2 lesson). Verbatim gate ×2 green (2168).
+
+- [x] **REVIEWER (Opus 2-of-2, 2026-06-12): cold-start verify + STOP-grade harness fix.** Chain ×2
+  re-run green (D1/D2/cross-version PASS, sabotage 7a-7d closed). **Found + fixed a false-green in the
+  sabotage battery:** the Java `verify` rebuilds a `Table` via `LocalTableOperations.commit(null,meta)`
+  which writes `v0.metadata.json` with non-overwriting `create()`; the clean D1 step writes it first, so
+  every later verify (7a/7b/7d) crashed on "File already exists" BEFORE reading the stats parquet — the
+  sabotage check (`! grep '0 failures'`) misread that crash as a fail-closed. PROVEN: 3 clean verifies
+  pre-fix collided on #2/#3 (an UNcorrupted file "passed" sabotage). FIX (scoped to
+  `PartitionStatsOracle.buildTableFromMetadata`): clear leftover `vN.metadata.json` before each commit.
+  Post-fix: 3 clean verifies all "0 failures"; patched chain ×2 still green. **Decode-depth independently
+  proven** via parquet-aware per-field rewrites (the byte-search in 7b merely structurally corrupts):
+  mutating `data_record_count`/`position_delete_record_count`/`last_updated_snapshot_id` each yields the
+  exact `FAIL row … <field> expected=X actual=Y` line. Anti-circularity: D1 `expected_stats.json` is
+  gated by the GEN test's hard `assert_eq!` against hand-declared constants before emission; D2
+  `java_stats.json` anchored to the same constants via fixture construction (`withRecordCount(...)`).
+  `last_updated_at` (wall-clock millis) intentionally uncompared (snapshot_id is its stable proxy).
+  Cross-chain (multi-spec + staged-wap) re-run green — shared oracle classes untouched. Gate ×2 green
+  (2168). Tree = allowed set.
+
+## ACTIVE (2026-06-12): Z1 — staged-WAP interop fixture (BUILDER Sonnet, wt-interop3)
+
+**Structure choice:** a SIBLING script `dev/java-interop/run-interop-staged-wap.sh` (separate from
+`run-interop-cherrypick.sh`) so the new staged-state-comparison steps do not disturb the existing
+3-fixture chain that is already green.
+
+**Java-emitter enumeration verdict (PRE-DECIDED CAVEAT):** `SnapshotMetaOracle.emit()` at line
+6479 iterates `metadata.snapshots()` — the FULL metadata snapshot list, NOT `currentAncestors` or
+`history`. A staged ref-less snapshot IS included. Confirmed all-snapshots — no STOP needed.
+
+**Plan:**
+
+- [x] Record plan (this section).
+- [x] **Step 1: Java `StagedWapOracle` (new inner class in InteropOracle.java).** Three fixtures
+  (S-ff / S-replay / S-dedup). Java uses REAL `stageOnly()`. S-dedup redesigned to the
+  `testDuplicateCherrypick` same-parent pattern (stage BOTH w3 off S0 before any cherry-pick;
+  first cherry-pick FF, second cherry-pick REPLAY → validate_wap_publish → DuplicateWAPCommitException).
+  Both views per fixture + `wap_dedup_expected_rejection.json`. `generate-interop-staged-wap` +
+  `verify-interop-staged-wap` modes landed.
+- [x] **Step 2: Rust interop test `crates/iceberg/tests/interop_staged_wap.rs`.** Both directions,
+  both views. S-dedup redesigned to match Java's same-parent pattern. Direction 2 assertions updated
+  (staged count=3, final count=3, no source-snapshot-id on FF current, wap.id=w3 on current).
+- [x] **Step 3: Shell script `dev/java-interop/run-interop-staged-wap.sh`.** 7 steps landed.
+  Sabotage 7d redesigned from "inject main ref" (ineffective — canonical view omits refs) to
+  "remove staged snapshot from metadata" (canonical view loses 1 ordinal → diverges → PASS).
+- [x] **Step 4: map.md updates** (dev/java-interop/map.md, crates/iceberg/tests/map.md).
+- [x] **Step 5: GAP_MATRIX.md update** (cherrypick row — staged-WAP interop ✅ 2026-06-12 landed).
+- [x] **Step 6: Run full chain ×2, paste output; run verbatim gate ×2.**
+  Full chain ×2 green (0 failures, all 4 sabotages closed). Verbatim gate ×2: 2168 lib tests.
+- [x] **Step 7: task/lessons.md update.** Three lessons added: S-dedup same-parent pattern,
+  canonical view does not include refs/current-snapshot-id (sabotage redesign), `cargo fmt` order.
+
+**Outcome:** Z1 staged-WAP interop fixture landed 2026-06-12. Three fixtures × two views × two
+directions green. The S-dedup same-parent correction was the key insight; the sabotage redesign
+was secondary.
+
+**Z1 OPUS REVIEWER (2 of 2), 2026-06-12 — cold-start verification:**
+
+- [x] Cold-start required reading (CLAUDE.md, Opus.md + Sonnet addendum, lessons, git diff full,
+      the three new/changed pieces, the canonical view, cherry_pick.rs + stage_only surface).
+- [x] RUN the chain ×2 + 4-sabotage battery (both green; 7a/7b/7c/7d closed). Ref-state on BOTH
+      sides: D1 verify + D2 test both assert it; FOUND S-replay D2 staged current loose → tightened.
+- [x] S-dedup rejection arm: verbatim "Duplicate request to cherry pick wap id..." + DataInvalid +
+      non-retryable on BOTH sides; FF-first (count unchanged) → REPLAY-second fires dedup. Confirmed.
+- [x] wap.id coverage: canonical view excludes it; FOUND D1 value-pin missing (corruption passed) →
+      added expectedStagedWapId pin + FF current-wap pin; mutation now fails closed BOTH directions.
+- [x] ROW-STATUS JUDGMENT (headline): verdict = ✅-scoping HONEST (surface-scoped, row stays 🟡,
+      data-level residue named); made airtight by the D1 wap.id-value pin I added.
+- [x] 5 mutations beyond the battery: wap.id-value (D1+D2), ordinal/seq perturbation, current-id move
+      (ref-state), cross-fixture swap — all fail closed.
+- [x] Verbatim gate ×2 (2168 lib tests ×2, typos/fmt/clippy clean). Cross-chain: cherrypick + expire
+      green; write-data running.
+- [x] GAP_MATRIX pipe audit clean (5 pipes/row). Tier-ledger data point recorded in final report.
+
 ## ACTIVE (2026-06-12): Near-full-parity direction — open queue (planning record)
 
 Directive (user, 2026-06-11): run this fork's Roadmap to **almost the full 1:1 Java replacement**;
@@ -48,10 +236,12 @@ constants-map, ExpireSnapshots + interop, DeleteOrphanFiles, RewriteDataFiles,
 RemoveDanglingDeleteFiles, the variant arc end-to-end, stage_only + WAP dedup, ComputePartitionStats,
 data-level interop fixtures A–G, cherrypick interop). Statuses live ONLY in the GAP_MATRIX.
 
-- [ ] **Named next-wave interop items:** the staged-WAP fixture (V1's machinery + the harness; the
-      Java oracle must enumerate ALL metadata snapshots, not ancestry, when it lands — exit-audit
-      caveat); the multi-spec fixture (comparator groundwork RESOLVED in W3 — spec_id is the final
-      tiebreaker on all three view copies); Java-reads-our-partition-stats-file.
+- [x] **THIS BRANCH (Wave 5 Group Z, SONNET-builder + OPUS-critic per the calibrated split,
+      user-approved 2026-06-12): the named interop items.** Z1: staged-WAP fixture DONE (2026-06-12).
+      Z2: multi-spec fixture DONE (2026-06-12). Z3: partition-stats file interop DONE (2026-06-12) —
+      bidirectional D1+D2 + cross-version V2→V3 projection + 4-sabotage battery. Worktree
+      `wt-interop3`, parallel to Group Y (`phase6/compute-table-stats`, Opus) and Group U
+      (`phase5/view-ops`, Opus).
 - [ ] **Partition-stats residue:** the INCREMENTAL compute path; time/uuid/fixed/binary partition
       values in stats files (loud errors today).
 - [ ] **`ComputeTableStats` (NDV/theta sketches) — DEPENDENCY-GATED, user decision:** needs a

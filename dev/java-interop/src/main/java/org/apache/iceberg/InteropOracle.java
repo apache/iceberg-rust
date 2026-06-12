@@ -52,6 +52,7 @@ import org.apache.iceberg.deletes.PositionDelete;
 import org.apache.iceberg.deletes.PositionDeleteWriter;
 import org.apache.iceberg.exceptions.CherrypickAncestorCommitException;
 import org.apache.iceberg.exceptions.CommitFailedException;
+import org.apache.iceberg.exceptions.DuplicateWAPCommitException;
 import org.apache.iceberg.expressions.Expression;
 import org.apache.iceberg.expressions.Expressions;
 import org.apache.iceberg.expressions.Literal;
@@ -361,6 +362,31 @@ public final class InteropOracle {
         Path rewriteSeqDir = requireFixturesDir("interop.rewrite_seq.dir");
         RewriteSeqOracle.generate(rewriteSeqDir);
         break;
+      case "generate-interop-multi-spec":
+        // MULTI-SPEC metadata-level interop fixture (Z2). Creates a V2 table partitioned by
+        // identity(a) (spec 0), appends F1 under spec 0, evolves the partition spec to add
+        // identity(b) (spec 1), appends F2 under spec 1, then commits ONE multi-spec fast-append
+        // carrying both a spec-0-stamped AND a spec-1-stamped DataFile. The snapshot containing the
+        // multi-spec commit has TWO manifests with DIFFERENT partition_spec_id values, exercising
+        // the W3 spec-id tiebreaker. Emits java_meta.json (via SnapshotMetaOracle.emit). The dir
+        // is supplied via -Dinterop.multi_spec.dir.
+        Path multiSpecGenDir = requireFixturesDir("interop.multi_spec.dir");
+        MultiSpecOracle.generate(multiSpecGenDir);
+        break;
+      case "verify-interop-multi-spec":
+        // MULTI-SPEC interop, DIRECTION 2 — "Java verifies what RUST wrote". The Rust GEN test
+        // (env ICEBERG_INTEROP_MULTI_SPEC_GEN_DIR, tests/interop_multi_spec.rs) performed the SAME
+        // chain, writing the table to <dir>/rust_table. Here Java reads that RUST-produced table
+        // and emits its canonical snapshot-metadata view, which the run script byte-diffs against
+        // java_meta.json. NOTE: `mvn exec:java` does not propagate System.exit — the run script
+        // greps the "0 failures" sentinel.
+        Path multiSpecVerifyDir = requireFixturesDir("interop.multi_spec.dir");
+        int multiSpecFailures = MultiSpecOracle.verify(multiSpecVerifyDir);
+        System.out.println("verify-interop-multi-spec: " + multiSpecFailures + " failures");
+        if (multiSpecFailures > 0) {
+          System.exit(1);
+        }
+        break;
       case "generate-interop-expire":
         // EXPIRE-SNAPSHOTS interop (increment A3). Builds four fixtures (linear / tag_protected /
         // stats / deletes), each a real-manifest table with deterministically re-stamped snapshot
@@ -619,6 +645,64 @@ public final class InteropOracle {
         failures += SnapshotOracle.verify(snapshotFixturesDir);
         System.out.println("verify (all capabilities): " + failures + " failures");
         if (failures > 0) {
+          System.exit(1);
+        }
+        break;
+      case "generate-interop-partition-stats":
+        // PARTITION-STATS FILE interop (increment Z3). Builds a V2 table partitioned by
+        // identity(category) with two snapshots: S1 fast-appends two data files (A: cat=a,
+        // 3 records, 300 bytes; B: cat=b, 2 records, 200 bytes); S2 adds a position-delete
+        // file scoped to cat=a (1 deleted record, 50 bytes). Calls Java's PRODUCTION
+        // PartitionStatsHandler.computeAndWriteStatsFile(table, snapshotId), registers the
+        // resulting PartitionStatisticsFile in the table, then reads it back with
+        // readPartitionStatsFile and emits java_stats.json (canonical partition-stats rows)
+        // for the cross-language comparison. The dir is via -Dinterop.partition_stats.dir.
+        Path partitionStatsGenDir = requireFixturesDir("interop.partition_stats.dir");
+        PartitionStatsOracle.generate(partitionStatsGenDir);
+        break;
+      case "verify-interop-partition-stats":
+        // PARTITION-STATS FILE interop, DIRECTION 1 — "Java reads what RUST writes".
+        // The Rust GEN test (env ICEBERG_INTEROP_PARTITION_STATS_GEN_DIR,
+        // tests/interop_partition_stats.rs) ran compute_and_write_stats_file on its table,
+        // registered the file, and landed the table at <dir>/rust_table + the stats parquet
+        // at its registered path + expected_stats.json (the hand-declared expected rows from
+        // the computed PartitionStats objects). Here Java reads the Rust-written stats parquet
+        // with PartitionStatsHandler.readPartitionStatsFile and compares the decoded rows
+        // against expected_stats.json.
+        Path partitionStatsVerifyDir = requireFixturesDir("interop.partition_stats.dir");
+        int partitionStatsFailures = PartitionStatsOracle.verify(partitionStatsVerifyDir);
+        System.out.println(
+            "verify-interop-partition-stats: " + partitionStatsFailures + " failures");
+        if (partitionStatsFailures > 0) {
+          System.exit(1);
+        }
+        break;
+      case "generate-interop-staged-wap":
+        // STAGED-WAP metadata-level interop (increment Z1). Builds three fixtures (S-ff / S-replay /
+        // S-dedup) on a V2 table using REAL Java `stageOnly()` (the production API), stages each
+        // snapshot, emits TWO canonical snapshot-metadata views per fixture:
+        //   java_staged_meta.json — staged-but-unpublished state (the new coverage: a metadata view
+        //                           containing a staged ref-less snapshot, compared cross-language).
+        //   java_final_meta.json  — post-publish state (mirrors the existing cherrypick interop).
+        // Also emits wap_dedup_expected_rejection.json for the S-dedup fixture.
+        // The dir is supplied via -Dinterop.staged_wap.dir on the CLI.
+        Path stagedWapGenDir = requireFixturesDir("interop.staged_wap.dir");
+        StagedWapOracle.generate(stagedWapGenDir);
+        break;
+      case "verify-interop-staged-wap":
+        // STAGED-WAP interop, DIRECTION 2 — "Java verifies what RUST staged and cherry-picked".
+        // The Rust GEN test (env ICEBERG_INTEROP_STAGED_WAP_GEN_DIR, tests/interop_staged_wap.rs)
+        // staged each fixture via REAL stage_only(), then cherry-picked, landing
+        // rust_staged_table/metadata/final.metadata.json (staged state) and
+        // rust_final_table/metadata/final.metadata.json (post-publish). Here Java reads BOTH
+        // Rust-produced tables, asserts (a) canonical views == java_{staged,final}_meta.json
+        // byte-equal, and (b) fixture-specific facts (staged state: current-snapshot-id unchanged,
+        // staged snapshot in snapshots list with wap.id; published state: published-wap-id present
+        // for ff/replay; S-dedup: second cherrypick raises DuplicateWAPCommitException).
+        Path stagedWapVerifyDir = requireFixturesDir("interop.staged_wap.dir");
+        int stagedWapFailures = StagedWapOracle.verify(stagedWapVerifyDir);
+        System.out.println("verify-interop-staged-wap: " + stagedWapFailures + " failures");
+        if (stagedWapFailures > 0) {
           System.exit(1);
         }
         break;
@@ -6406,6 +6490,181 @@ public final class InteropOracle {
   }
 
   // =============================================================================================
+  // MultiSpecOracle — MULTI-SPEC metadata-level interop fixture (Z2).
+  //
+  // THE CHAIN (V2 table; NO parquet — the fixture only reads/writes MANIFESTS):
+  //
+  //   ms1: fast_append   F1(a="x", record_count=10)   spec 0 [identity(a)]    seq 1, op append
+  //   ms2: update_spec   add identity(b)               NO snapshot             → spec 1 becomes default
+  //   ms3: fast_append   F2(a="y",b="z", record_count=10)  spec 1            seq 2, op append
+  //   ms4: fast_append   F0(a="q", rc=10) spec 0 + F3(a="r",b="s", rc=10) spec 1
+  //                                                                             seq 3, op append
+  //        ↑ THE MULTI-SPEC COMMIT: TWO manifests in ONE snapshot, spec_id=0 AND spec_id=1.
+  //          TIE-SHAPING: F0 and F3 have IDENTICAL record_count=10, so the two manifests produced
+  //          by this commit tie on ALL 9 prior sort-tuple keys (content=data, seq=3, min_seq=3,
+  //          added_files_count=1, existing_files_count=0, deleted_files_count=0, added_rows=10,
+  //          existing_rows=0, deleted_rows=0) and differ ONLY on partition_spec_id (0 vs 1).
+  //          The W3 spec-id tiebreaker (position 10) is the ONLY disambiguator. This exercises
+  //          the same-arity masking lesson: without the spec-id tiebreaker the two manifests
+  //          would tie completely and produce indeterminate ordering.
+  //
+  // SINGLE-COMMIT CONSTRUCTIBILITY (BOTH sides):
+  //   Java: newFastAppend().appendFile(f0).appendFile(f3).commit() — MergingSnapshotProducer.add()
+  //         routes each file by spec id into newDataFilesBySpec (Map<Integer, DataFileSet>), and
+  //         newDataFilesAsManifests iterates that map to produce one manifest per spec bucket.
+  //         Bytecode: field newDataFilesBySpec:Ljava/util/Map; with lambda$newDataFilesAsManifests$19.
+  //   Rust: fast_append().add_data_files(vec![f0, f3]) — group_files_by_spec routes by
+  //         file.partition_spec_id and write_added_manifests produces one writer per spec group.
+  //
+  // COMPARISON (via the SnapshotMetaOracle canonical view):
+  //   java_meta.json = Java's canonical view of the Java-written chain.
+  //   Rust test D1: Rust's view of the Java chain == java_meta.json.
+  //   Script step: Java's view of the Rust chain byte-diffed against java_meta.json.
+  //   Rust test D2: Rust's view of the Rust chain == java_meta.json.
+  //
+  // Sabotage battery (in the run script):
+  //   SB1: truncate one manifest file → the load fails (structural corruption).
+  //   SB2: replace the final.metadata.json with a copy that omits the ms4 snapshot entirely
+  //        (drop the multi-spec commit snapshot) → the view has 2 instead of 3 ordinals → FAIL.
+  //   SB3: control — run D1 on the clean java chain → must pass → SB1/SB2 proved non-trivial.
+  //   SB4: spec-id swap mutation — in the rust_table's manifest list, swap the partition_spec_id
+  //        values of the two ms4 manifests (0↔1) → the view's ms4 manifests now carry spec_id=1
+  //        and spec_id=0 in the wrong order, diverging from java_meta.json's ms4 → FAIL.
+  //        This proves the emitted spec_id field is load-bearing, not decorative.
+  // =============================================================================================
+
+  static final class MultiSpecOracle {
+    private MultiSpecOracle() {}
+
+    /**
+     * Perform the four-commit multi-spec chain on a V2 table (NO parquet — metadata-only DataFiles)
+     * and emit {@code java_meta.json} (the canonical snapshot-metadata view) into {@code dir}.
+     *
+     * <p>Schema: {@code {1 a string required, 2 b string optional}} — b is optional so a spec-0
+     * partition tuple (which has only "a") round-trips without a null-fill error.
+     *
+     * <p>Spec 0: {@code identity(a)} built directly with {@code PartitionSpec.builderFor(schema).
+     * identity("a")} (partition field id 1000, name "a"). Spec 1: produced by
+     * {@code table.updateSpec().addField("b")} — adds {@code identity(b)} (field id 1001, name
+     * "b"). The default spec after ms2 is spec 1. This mirrors the {@link WriteActionsOracle}
+     * pattern of building spec 0 directly and then driving updateSpec() for the evolution.
+     */
+    static void generate(Path dir) throws IOException {
+      Files.createDirectories(dir);
+      File tableDir = dir.resolve("table").toFile();
+      File metadataDir = new File(tableDir, "metadata");
+      if (!metadataDir.isDirectory() && !metadataDir.mkdirs()) {
+        throw new IOException("failed to create metadata dir at " + metadataDir);
+      }
+
+      // Schema: {a string required, b string optional}.
+      Schema schema =
+          new Schema(
+              Types.NestedField.required(1, "a", Types.StringType.get()),
+              Types.NestedField.optional(2, "b", Types.StringType.get()));
+
+      // Spec 0: identity(a) built directly — the table is CREATED with spec 0, exactly like
+      // WriteActionsOracle.generate() which builds spec 0 with PartitionSpec.builderFor(schema).
+      // The partition field name for identity(a) is "a" (Java PartitionNameGenerator convention).
+      // Field id assigned by PartitionSpec.builderFor is 1000 (the first sequential id starting
+      // from lastPartitionId=999, the default for a new table).
+      Map<String, String> props = new LinkedHashMap<>();
+      props.put(TableProperties.FORMAT_VERSION, "2");
+      PartitionSpec spec0seed = PartitionSpec.builderFor(schema).identity("a").build();
+      TableMetadata seed =
+          TableMetadata.newTableMetadata(
+              schema, spec0seed, SortOrder.unsorted(),
+              tableDir.getAbsolutePath(), props);
+      LocalTableOperations ops = new LocalTableOperations(tableDir, metadataDir);
+      ops.commit(null, seed);
+      BaseTable table = new BaseTable(ops, "interop_multi_spec");
+
+      // Spec 0 (identity(a)) is the initial default spec.
+      PartitionSpec spec0 = table.spec();
+      String dataDir = tableDir.getAbsolutePath() + "/data";
+
+      // ms1: fast_append F1 under spec 0.
+      DataFile fileF1 = fakeDataFile(spec0, dataDir + "/s0_f1.parquet", "a=x", 10L);
+      table.newFastAppend().appendFile(fileF1).commit();
+
+      // ms2: updateSpec() adds identity(b) via addField("b") — auto-names the partition field "b"
+      // (Java PartitionNameGenerator: identity → column name). Assigns field id 1001 (next after
+      // spec 0's 1000). This is a NO-SNAPSHOT metadata commit; the new spec 1 becomes default.
+      table.updateSpec().addField("b").commit();
+      PartitionSpec spec1 = table.spec();
+      // Snapshot ms3: append F2 under spec 1. Partition fields named "a" and "b".
+      DataFile fileF2 = fakeDataFile(spec1, dataDir + "/s1_f2.parquet", "a=y/b=z", 10L);
+      table.newFastAppend().appendFile(fileF2).commit();
+
+      // Snapshot ms4: the MULTI-SPEC commit — ONE fast-append carrying BOTH a spec-0-stamped file
+      // (F0, built under spec0) AND a spec-1-stamped file (F3, built under spec1). Java's
+      // MergingSnapshotProducer.add() routes by spec id into newDataFilesBySpec so one manifest
+      // per spec group is produced: two manifests with partition_spec_id=0 and partition_spec_id=1
+      // respectively. TIE-SHAPED: both record_count=10 so the two manifests tie on all 9 prior
+      // sort-tuple keys, exercising the spec-id tiebreaker (W3, position 10) as the ONLY
+      // disambiguator.
+      DataFile fileF0 = fakeDataFile(spec0, dataDir + "/s0_f0.parquet", "a=q", 10L);
+      DataFile fileF3 = fakeDataFile(spec1, dataDir + "/s1_f3.parquet", "a=r/b=s", 10L);
+      table.newFastAppend().appendFile(fileF0).appendFile(fileF3).commit();
+
+      // The FINAL metadata at a known path for the emitter + the Rust test.
+      Path finalMetadata = metadataDir.toPath().resolve("final.metadata.json");
+      OutputFile finalOut =
+          new LocalFileIO().newOutputFile(finalMetadata.toAbsolutePath().toString());
+      TableMetadataParser.write(ops.current(), finalOut);
+
+      // Emit java_meta.json (the canonical snapshot-metadata view).
+      SnapshotMetaOracle.emit(finalMetadata, dir.resolve("java_meta.json"));
+      System.out.println("generated multi-spec table to " + dir);
+    }
+
+    /**
+     * Direction 2 — "Java judges what RUST wrote." Reads the Rust-produced
+     * {@code rust_table/metadata/final.metadata.json}, emits its canonical view, and byte-diffs
+     * it against {@code java_meta.json}. Returns the failure count (0 = pass).
+     */
+    static int verify(Path dir) throws IOException {
+      Path javaMetaPath = dir.resolve("java_meta.json");
+      Path rustMetadataPath = dir.resolve("rust_table/metadata/final.metadata.json");
+      if (!Files.exists(rustMetadataPath)) {
+        System.out.println("FAIL verify-interop-multi-spec: missing " + rustMetadataPath);
+        return 1;
+      }
+
+      // Emit the canonical view of the Rust-written table.
+      Path rustViewPath = dir.resolve("java_view_rust_meta.json");
+      SnapshotMetaOracle.emit(rustMetadataPath, rustViewPath);
+
+      String javaView = readString(javaMetaPath);
+      String rustView = readString(rustViewPath);
+      if (javaView.equals(rustView)) {
+        System.out.println("verify-interop-multi-spec: Rust chain == Java semantics OK");
+        return 0;
+      } else {
+        System.out.println("FAIL verify-interop-multi-spec: Rust canonical view diverges:");
+        System.out.println("  expected: " + javaMetaPath);
+        System.out.println("  actual:   " + rustViewPath);
+        return 1;
+      }
+    }
+
+    /**
+     * A metadata-only {@link DataFile} built under a SPECIFIC {@link PartitionSpec} (not the
+     * table's current default). The path need not exist — the fixture only reads manifests.
+     */
+    private static DataFile fakeDataFile(
+        PartitionSpec spec, String path, String partitionPath, long recordCount) {
+      return DataFiles.builder(spec)
+          .withPath(path)
+          .withFileSizeInBytes(recordCount * 100)
+          .withRecordCount(recordCount)
+          .withPartitionPath(partitionPath)
+          .withFormat(FileFormat.PARQUET)
+          .build();
+    }
+  }
+
+  // =============================================================================================
   // SnapshotMetaOracle — the METADATA-LEVEL row-delta interop (E1). Emits a CANONICAL "snapshot
   // metadata view" of ANY on-disk table (Java-written or Rust-written): per snapshot (ordered by
   // sequence number) the operation, the COUNT-only summary, and the manifest-list -> manifest-entry
@@ -9473,6 +9732,1150 @@ public final class InteropOracle {
 
         if (!fixture.equals("ff") && !fixture.equals("replay") && !fixture.equals("dedup")) {
           System.out.println("PASS cherrypick/" + fixture);
+        }
+      }
+
+      return failures;
+    }
+
+    private static int countSnapshots(TableMetadata metadata) {
+      int count = 0;
+      for (Snapshot ignored : metadata.snapshots()) {
+        count++;
+      }
+      return count;
+    }
+  }
+
+  // StagedWapOracle — the STAGED-WAP WRITE + CHERRYPICK interop oracle (increment Z1).
+  // Three fixtures (S-ff / S-replay / S-dedup), BOTH sides using REAL staging APIs.
+  // Java uses the production `stageOnly()` method; Rust uses `stage_only()` on `FastAppendAction`.
+  // TWO metadata views are compared per fixture: the staged-but-unpublished state (NEW COVERAGE)
+  // and the post-publish state. The staged view confirms a staged ref-less snapshot appears
+  // identically in `metadata.snapshots()` on both sides without moving `main`.
+  //
+  // PRE-DECIDED CAVEAT (exit-audit ruling, 2026-06-12): `SnapshotMetaOracle.emit()` iterates
+  // `metadata.snapshots()` — the FULL metadata snapshot list — so a staged ref-less snapshot IS
+  // enumerated and gets an ordinal like any other. This matches the Rust canonical view exactly.
+  // =============================================================================================
+
+  /**
+   * The StagedWAP oracle. Three fixture shapes, committed to real local-filesystem tables with
+   * REAL AVRO manifests + manifest-lists, judged by canonical snapshot-metadata views via
+   * {@link SnapshotMetaOracle#emit}.
+   *
+   * <ul>
+   *   <li><b>S-ff</b> — Java: {@code newFastAppend().set("wap.id","w1").stageOnly().commit()} with
+   *       parent == current head → cherry-pick fast-forwards. Staged state: current-snapshot-id
+   *       unchanged, staged snapshot in {@code snapshots} list, {@code wap.id} present. Published
+   *       state: main moved to the staged snapshot AS-IS (FF: no new snapshot, no
+   *       {@code published-wap-id}).
+   *   <li><b>S-replay</b> — stage w2, advance main with an unrelated append, cherry-pick → replay;
+   *       staged state view + post-publish view both compared; {@code published-wap-id} present
+   *       post-replay.
+   *   <li><b>S-dedup</b> — publish w3 via cherry-pick (succeeds), then stage ANOTHER snapshot with
+   *       {@code wap.id=w3} and cherry-pick → BOTH sides reject
+   *       ({@link DuplicateWAPCommitException} on Java; Rust {@code DataInvalid} + verbatim message
+   *       substring). Table unchanged after rejection (re-parse). The staged view before the second
+   *       attempt is also compared.
+   * </ul>
+   */
+  // ===========================================================================================
+  // PartitionStatsOracle — Z3 partition-stats file interop
+  //
+  // Fixture: V2 table identity(category) {id long, category string, data string}.
+  //   S1: fast-append file A (cat=a, 3 records, 300 bytes) + file B (cat=b, 2 records, 200 bytes).
+  //   S2: row-delta adds position-delete PD (cat=a, 1 record deleted, 50 bytes).
+  //
+  // Expected stats rows (sorted by partition tuple = category string, ascending):
+  //   Row 0 — partition {cat=a}: spec_id=0, data_records=3, data_files=1, size=300,
+  //     pos_del_records=1, pos_del_files=1, eq_del_records=0, eq_del_files=0,
+  //     total_records=null, last_updated_snapshot_id=S2.id (pos-delete at S2 > A added at S1),
+  //     dv_count=0.
+  //   Row 1 — partition {cat=b}: spec_id=0, data_records=2, data_files=1, size=200,
+  //     pos_del_records=0, pos_del_files=0, eq_del_records=0, eq_del_files=0,
+  //     total_records=null, last_updated_snapshot_id=S1.id (B added at S1 only),
+  //     dv_count=0.
+  //
+  // Direction 1 (Java judges Rust): Rust computes + writes the stats parquet → Java reads it
+  // with the PRODUCTION readPartitionStatsFile → compares decoded rows against
+  // expected_stats.json (written by Rust from the computed PartitionStats objects).
+  //
+  // Direction 2 (Rust verifies Java): Java computes + writes the stats parquet → Rust reads it
+  // via read_partition_stats_file and compares against the same expected row set.
+  //
+  // Both sides use the SAME hand-declared COUNTER VALUES (data/pos_del record + file counts,
+  // total_data_file_size_in_bytes). Snapshot IDs and timestamps are resolved from the actual
+  // written metadata (the "last_updated" fields reference a named snapshot, not a hard-coded id)
+  // by comparing which snapshot_id appears in the stats vs what S1/S2 IDs are in the table.
+  // ===========================================================================================
+
+  static final class PartitionStatsOracle {
+    private PartitionStatsOracle() {}
+
+    // Hand-declared counter values (anti-circular — same on both sides regardless of which
+    // language wrote the file). These are the ONLY values that change the stats semantics;
+    // snapshot IDs and timestamps are derived from the actual table after writing.
+
+    /** Category-a partition: 3 data records across 1 data file. */
+    static final long A_DATA_RECORDS = 3L;
+    /** Category-a data file size in bytes. */
+    static final long A_DATA_FILE_SIZE = 300L;
+    /** Category-a: 1 position-delete record in 1 position-delete file. */
+    static final long A_POS_DEL_RECORDS = 1L;
+
+    /** Category-b partition: 2 data records across 1 data file. */
+    static final long B_DATA_RECORDS = 2L;
+    /** Category-b data file size in bytes. */
+    static final long B_DATA_FILE_SIZE = 200L;
+
+    /** Position-delete file size in bytes (cat=a, 1 record). */
+    static final long PD_FILE_SIZE = 50L;
+
+    /** Table schema: {1 id long required, 2 category string required, 3 data string optional}. */
+    private static Schema schema() {
+      return new Schema(
+          Types.NestedField.required(1, "id", Types.LongType.get()),
+          Types.NestedField.required(2, "category", Types.StringType.get()),
+          Types.NestedField.optional(3, "data", Types.StringType.get()));
+    }
+
+    /**
+     * Build the fixture: S1 (fast_append A+B) + S2 (row_delta pos-delete PD in cat=a), then
+     * call the PRODUCTION {@code PartitionStatsHandler.computeAndWriteStatsFile(table, snapshotId)},
+     * register the returned {@link PartitionStatisticsFile}, and emit:
+     * <ul>
+     *   <li>{@code java_stats.json} — the decoded partition-stats rows (canonical JSON), for the
+     *       cross-language D2 comparison (Rust reads the Java-written parquet + verifies against
+     *       this reference).
+     *   <li>{@code final.metadata.json} under {@code table/metadata/} — the table metadata AFTER
+     *       registration (for Rust to load the table and locate the stats file).
+     * </ul>
+     */
+    static void generate(Path dir) throws IOException {
+      Files.createDirectories(dir);
+      Path tableDir = dir.resolve("table");
+      Path metadataDir = tableDir.resolve("metadata");
+      Files.createDirectories(metadataDir);
+
+      Schema schema = schema();
+      PartitionSpec spec =
+          PartitionSpec.builderFor(schema).identity("category").build();
+      Map<String, String> props = new LinkedHashMap<>();
+      props.put(TableProperties.FORMAT_VERSION, "2");
+      TableMetadata seed =
+          TableMetadata.newTableMetadata(
+              schema, spec, SortOrder.unsorted(), tableDir.toAbsolutePath().toString(), props);
+
+      LocalTableOperations ops = new LocalTableOperations(tableDir.toFile(), metadataDir.toFile());
+      ops.commit(null, seed);
+      BaseTable table = new BaseTable(ops, "interop_partition_stats");
+      String dataDir = tableDir.toAbsolutePath() + "/data";
+
+      // S1: fast-append file A (cat=a) + file B (cat=b).
+      PartitionData partA = new PartitionData(spec.partitionType());
+      partA.set(0, "a");
+      PartitionData partB = new PartitionData(spec.partitionType());
+      partB.set(0, "b");
+
+      DataFile fileA =
+          DataFiles.builder(spec)
+              .withPath(dataDir + "/file_a.parquet")
+              .withFileSizeInBytes(A_DATA_FILE_SIZE)
+              .withRecordCount(A_DATA_RECORDS)
+              .withFormat(FileFormat.PARQUET)
+              .withPartition(partA)
+              .build();
+      DataFile fileB =
+          DataFiles.builder(spec)
+              .withPath(dataDir + "/file_b.parquet")
+              .withFileSizeInBytes(B_DATA_FILE_SIZE)
+              .withRecordCount(B_DATA_RECORDS)
+              .withFormat(FileFormat.PARQUET)
+              .withPartition(partB)
+              .build();
+
+      table.newFastAppend().appendFile(fileA).appendFile(fileB).commit();
+      long s1Id = table.currentSnapshot().snapshotId();
+
+      // S2: row-delta — add a position-delete file scoped to partition cat=a.
+      // Use FileMetadata.deleteFileBuilder (DataFiles.Builder has no withContent/ofPositionDeletes).
+      DeleteFile posDeleteA =
+          FileMetadata.deleteFileBuilder(spec)
+              .ofPositionDeletes()
+              .withPath(dataDir + "/pos_delete_a.parquet")
+              .withFileSizeInBytes(PD_FILE_SIZE)
+              .withRecordCount(A_POS_DEL_RECORDS)
+              .withFormat(FileFormat.PARQUET)
+              .withPartition(partA)
+              .build();
+
+      table.newRowDelta().addDeletes(posDeleteA).commit();
+      long s2Id = table.currentSnapshot().snapshotId();
+
+      // Compute and write the stats file using the PRODUCTION API — this is the Direction-2
+      // oracle (Java's own output). The stats file path and size are embedded in the returned
+      // PartitionStatisticsFile; we register it in the table to complete the metadata chain.
+      PartitionStatisticsFile statsFile =
+          PartitionStatsHandler.computeAndWriteStatsFile(table);
+      if (statsFile == null) {
+        throw new RuntimeException("computeAndWriteStatsFile returned null — fixture is wrong");
+      }
+
+      // Register the stats file so final.metadata.json carries the partition_statistics entry.
+      table
+          .updatePartitionStatistics()
+          .setPartitionStatistics(statsFile)
+          .commit();
+
+      // Read the stats back and emit java_stats.json — this is the D2 ground truth that Rust
+      // will compare its decoded rows against.
+      Schema statsSchema =
+          PartitionStatsHandler.schema(
+              Partitioning.partitionType(table),
+              TableUtil.formatVersion(table));
+      InputFile statsInputFile =
+          table.io().newInputFile(statsFile.path());
+      List<PartitionStats> statsRows = new ArrayList<>();
+      try (CloseableIterable<PartitionStats> rows =
+          PartitionStatsHandler.readPartitionStatsFile(statsSchema, statsInputFile)) {
+        for (PartitionStats row : rows) {
+          statsRows.add(row);
+        }
+      }
+
+      String statsJson = statsRowsToJson(statsRows, table, s1Id, s2Id);
+      writeJson(dir.resolve("java_stats.json"), statsJson);
+      System.out.println("generate-interop-partition-stats: java_stats.json written to " + dir);
+
+      // Also emit final.metadata.json so Rust can locate the stats parquet by reading the
+      // registered PartitionStatisticsFile path from the metadata.
+      Path finalMetadataPath = metadataDir.resolve("final.metadata.json");
+      OutputFile finalOut =
+          new LocalFileIO().newOutputFile(finalMetadataPath.toAbsolutePath().toString());
+      TableMetadataParser.write(ops.current(), finalOut);
+      System.out.println(
+          "generate-interop-partition-stats: final.metadata.json written to " + finalMetadataPath);
+    }
+
+    /**
+     * Direction 1 — "Java reads what RUST writes."
+     *
+     * <p>The Rust GEN test wrote its table to {@code <dir>/rust_table} and emitted
+     * {@code expected_stats.json} (the decoded {@code PartitionStats} rows from the computed
+     * stats objects). Here Java reads the stats parquet at the path registered in the table's
+     * {@code final.metadata.json} using the PRODUCTION {@link PartitionStatsHandler#readPartitionStatsFile},
+     * then compares the decoded rows against {@code expected_stats.json}.
+     *
+     * @return the number of failures (0 = all pass).
+     */
+    static int verify(Path dir) throws IOException {
+      int failures = 0;
+      Path rustTableMetadata =
+          dir.resolve("rust_table/metadata/final.metadata.json");
+      if (!Files.exists(rustTableMetadata)) {
+        System.out.println(
+            "FAIL partition-stats/verify: missing rust_table/metadata/final.metadata.json"
+                + " — run the Rust GEN step first");
+        return 1;
+      }
+
+      // Load the Rust-produced table metadata to find the registered stats file path.
+      TableMetadata rustMeta =
+          TableMetadataParser.fromJson(
+              rustTableMetadata.toString(), readString(rustTableMetadata));
+
+      // Locate the registered partition statistics file for the current snapshot.
+      long currentSnapshotId = rustMeta.currentSnapshot() == null
+          ? -1L : rustMeta.currentSnapshot().snapshotId();
+      if (currentSnapshotId == -1L) {
+        System.out.println(
+            "FAIL partition-stats/verify: Rust table has no current snapshot");
+        return 1;
+      }
+
+      PartitionStatisticsFile registeredFile = null;
+      for (PartitionStatisticsFile file : rustMeta.partitionStatisticsFiles()) {
+        if (file.snapshotId() == currentSnapshotId) {
+          registeredFile = file;
+          break;
+        }
+      }
+      if (registeredFile == null) {
+        System.out.println(
+            "FAIL partition-stats/verify: no PartitionStatisticsFile registered for snapshot "
+                + currentSnapshotId + " in the Rust table metadata");
+        return 1;
+      }
+
+      String statsPath = registeredFile.path();
+      System.out.println(
+          "partition-stats/verify: reading Rust stats file at " + statsPath);
+
+      // Read the Rust-written stats parquet with Java's PRODUCTION readPartitionStatsFile.
+      // The schema argument must match the file's format version — derive from the table metadata.
+      Types.StructType unifiedPartType = Partitioning.partitionType(
+          // Build a minimal Table view using the Rust metadata's partition specs + schema.
+          buildTableFromMetadata(rustMeta, rustTableMetadata));
+      Schema statsSchema =
+          PartitionStatsHandler.schema(
+              unifiedPartType,
+              rustMeta.formatVersion());
+
+      InputFile statsInputFile = new LocalFileIO().newInputFile(statsPath);
+      List<PartitionStats> decodedRows = new ArrayList<>();
+      try (CloseableIterable<PartitionStats> rows =
+          PartitionStatsHandler.readPartitionStatsFile(statsSchema, statsInputFile)) {
+        for (PartitionStats row : rows) {
+          decodedRows.add(row);
+        }
+      }
+
+      // Load the expected stats from the Rust-emitted expected_stats.json.
+      Path expectedPath = dir.resolve("expected_stats.json");
+      if (!Files.exists(expectedPath)) {
+        System.out.println(
+            "FAIL partition-stats/verify: missing expected_stats.json — "
+                + "run the Rust GEN step first");
+        return 1;
+      }
+      String expectedJson = readString(expectedPath);
+      com.fasterxml.jackson.databind.JsonNode expectedNode =
+          new com.fasterxml.jackson.databind.ObjectMapper().readTree(expectedJson);
+
+      // Compare the decoded rows count.
+      int expectedCount = expectedNode.size();
+      if (decodedRows.size() != expectedCount) {
+        System.out.println(
+            "FAIL partition-stats/verify: decoded "
+                + decodedRows.size()
+                + " rows, expected "
+                + expectedCount);
+        failures++;
+        return failures;
+      }
+
+      // Compare each row against the expected row from expected_stats.json.
+      // The expected JSON is sorted by partition tuple (cat=a first, then cat=b).
+      // Rows from readPartitionStatsFile are in file order (the stats file is already sorted
+      // by the writer). We compare them positionally.
+      for (int i = 0; i < decodedRows.size(); i++) {
+        PartitionStats row = decodedRows.get(i);
+        com.fasterxml.jackson.databind.JsonNode expected = expectedNode.get(i);
+        String partition = expected.path("partition_category").asText();
+        failures += compareStatsRow(row, expected, "row " + i + " (partition cat=" + partition + ")");
+      }
+
+      if (failures == 0) {
+        System.out.println(
+            "PASS partition-stats/verify: all "
+                + decodedRows.size()
+                + " rows decoded by Java's readPartitionStatsFile match expected_stats.json");
+      }
+      return failures;
+    }
+
+    /**
+     * Compare one decoded {@link PartitionStats} row against its expected JSON node.
+     * Returns the number of field-level failures.
+     */
+    private static int compareStatsRow(
+        PartitionStats row,
+        com.fasterxml.jackson.databind.JsonNode expected,
+        String label) {
+      int failures = 0;
+
+      // The partition category string (field 0 in the partition struct).
+      String expectedCategory = expected.path("partition_category").asText();
+      String actualCategory = partitionCategoryString(row);
+      if (!expectedCategory.equals(actualCategory)) {
+        System.out.println(
+            "FAIL " + label + ": partition_category expected="
+                + expectedCategory + " actual=" + actualCategory);
+        failures++;
+      }
+
+      failures += assertLong(label, "spec_id", expected.path("spec_id").asLong(), row.specId());
+      failures +=
+          assertLong(
+              label, "data_record_count",
+              expected.path("data_record_count").asLong(),
+              row.dataRecordCount());
+      failures +=
+          assertLong(
+              label, "data_file_count",
+              expected.path("data_file_count").asLong(),
+              row.dataFileCount());
+      failures +=
+          assertLong(
+              label, "total_data_file_size_in_bytes",
+              expected.path("total_data_file_size_in_bytes").asLong(),
+              row.totalDataFileSizeInBytes());
+      failures +=
+          assertLong(
+              label, "position_delete_record_count",
+              expected.path("position_delete_record_count").asLong(),
+              row.positionDeleteRecordCount());
+      failures +=
+          assertLong(
+              label, "position_delete_file_count",
+              expected.path("position_delete_file_count").asLong(),
+              row.positionDeleteFileCount());
+      failures +=
+          assertLong(
+              label, "equality_delete_record_count",
+              expected.path("equality_delete_record_count").asLong(),
+              row.equalityDeleteRecordCount());
+      failures +=
+          assertLong(
+              label, "equality_delete_file_count",
+              expected.path("equality_delete_file_count").asLong(),
+              row.equalityDeleteFileCount());
+      failures +=
+          assertLong(label, "dv_count", expected.path("dv_count").asLong(), row.dvCount());
+
+      // last_updated_snapshot_id — must match the expected snapshot id value.
+      long expectedSnapshotId = expected.path("last_updated_snapshot_id").asLong(-1L);
+      Long actualSnapshotId = row.lastUpdatedSnapshotId();
+      if (actualSnapshotId == null || actualSnapshotId != expectedSnapshotId) {
+        System.out.println(
+            "FAIL " + label + ": last_updated_snapshot_id expected="
+                + expectedSnapshotId + " actual=" + actualSnapshotId);
+        failures++;
+      }
+
+      // total_record_count must be null (Java never computes it in the full-compute path).
+      if (row.totalRecords() != null) {
+        System.out.println(
+            "FAIL " + label
+                + ": total_record_count must be null (never computed), got "
+                + row.totalRecords());
+        failures++;
+      }
+
+      return failures;
+    }
+
+    /** Extract the category string from the partition struct (field 0).
+     * The partition() return type is {@link StructLike} — the generate path produces a
+     * {@link PartitionData}, but the readPartitionStatsFile path decodes to a generic record
+     * (GenericRecord / StructProjection). We use {@code StructLike.get(0, Object.class)} to avoid
+     * a ClassCastException.
+     */
+    private static String partitionCategoryString(PartitionStats row) {
+      StructLike partition = row.partition();
+      Object val = partition.get(0, Object.class);
+      return val == null ? "null" : val.toString();
+    }
+
+    /** Assert two long values are equal; returns 0 on success, 1 on failure. */
+    private static int assertLong(String label, String field, long expected, long actual) {
+      if (expected != actual) {
+        System.out.println(
+            "FAIL " + label + ": " + field + " expected=" + expected + " actual=" + actual);
+        return 1;
+      }
+      return 0;
+    }
+
+    /**
+     * Serialize the decoded {@link PartitionStats} rows to canonical JSON, resolving the
+     * last_updated_snapshot_id to the known S1/S2 snapshot ids from the freshly-written table.
+     *
+     * <p>JSON shape (array, one object per row):
+     * <pre>
+     * [
+     *   {
+     *     "partition_category": "a",
+     *     "spec_id": 0,
+     *     "data_record_count": 3,
+     *     "data_file_count": 1,
+     *     "total_data_file_size_in_bytes": 300,
+     *     "position_delete_record_count": 1,
+     *     "position_delete_file_count": 1,
+     *     "equality_delete_record_count": 0,
+     *     "equality_delete_file_count": 0,
+     *     "dv_count": 0,
+     *     "last_updated_snapshot_id": &lt;s2Id&gt;,
+     *     "last_updated_at": &lt;s2.timestampMs&gt;,
+     *     "total_record_count_null": true
+     *   },
+     *   ...
+     * ]
+     * </pre>
+     */
+    private static String statsRowsToJson(
+        List<PartitionStats> rows,
+        BaseTable table,
+        long s1Id,
+        long s2Id)
+        throws IOException {
+      return JsonUtil.generate(
+          gen -> {
+            gen.writeStartArray();
+            for (PartitionStats row : rows) {
+              gen.writeStartObject();
+              // partition — the category string value.
+              gen.writeStringField(
+                  "partition_category", partitionCategoryString(row));
+              gen.writeNumberField("spec_id", row.specId());
+              gen.writeNumberField("data_record_count", row.dataRecordCount());
+              gen.writeNumberField("data_file_count", row.dataFileCount());
+              gen.writeNumberField(
+                  "total_data_file_size_in_bytes", row.totalDataFileSizeInBytes());
+              gen.writeNumberField(
+                  "position_delete_record_count", row.positionDeleteRecordCount());
+              gen.writeNumberField(
+                  "position_delete_file_count", row.positionDeleteFileCount());
+              gen.writeNumberField(
+                  "equality_delete_record_count", row.equalityDeleteRecordCount());
+              gen.writeNumberField(
+                  "equality_delete_file_count", row.equalityDeleteFileCount());
+              gen.writeNumberField("dv_count", row.dvCount());
+              // last_updated_snapshot_id — the actual id from the written table.
+              Long lastUpdatedId = row.lastUpdatedSnapshotId();
+              if (lastUpdatedId != null) {
+                gen.writeNumberField("last_updated_snapshot_id", lastUpdatedId);
+              } else {
+                gen.writeNullField("last_updated_snapshot_id");
+              }
+              // total_record_count — must be null in the full-compute path.
+              gen.writeBooleanField("total_record_count_null", row.totalRecords() == null);
+              gen.writeEndObject();
+            }
+            gen.writeEndArray();
+          },
+          true);
+    }
+
+    /**
+     * Build a minimal {@link Table} view from a {@link TableMetadata} backed by a
+     * {@link LocalFileIO} — needed to call {@link Partitioning#partitionType(Table)} without a
+     * live catalog. Uses {@link LocalTableOperations} in read-only mode (no commit).
+     */
+    private static Table buildTableFromMetadata(
+        TableMetadata metadata, Path metadataFilePath) throws IOException {
+      File tableDir = metadataFilePath.getParent().getParent().toFile();
+      File metadataDir = metadataFilePath.getParent().toFile();
+      LocalTableOperations ops = new LocalTableOperations(tableDir, metadataDir);
+      // ops.commit(null, metadata) writes vN.metadata.json via LocalOutputFile.create(), which
+      // REFUSES to overwrite ("File already exists"). The verify path is invoked MULTIPLE times
+      // against the same dir (the clean D1 step + each sabotage re-run); without clearing the
+      // helper's own prior vN.metadata.json artifacts, the 2nd+ call throws BEFORE reading the
+      // stats parquet — masking sabotage as a false fail-closed. Delete any leftover vN.metadata.json
+      // (this helper's exclusive artifact; the Rust table uses 00000-*.metadata.json + final.metadata.json)
+      // so each call commits cleanly and reaches the real stats decode.
+      File[] stale = metadataDir.listFiles((d, name) -> name.matches("v\\d+\\.metadata\\.json"));
+      if (stale != null) {
+        for (File f : stale) {
+          if (!f.delete()) {
+            throw new IOException("failed to delete stale verify-helper metadata file " + f);
+          }
+        }
+      }
+      // Seed the ops with the pre-loaded metadata (version 0 so the next commit writes v1).
+      ops.commit(null, metadata);
+      // After ops.commit(null, metadata), ops.current() == the pinned metadata.
+      return new BaseTable(ops, "interop_rust_table");
+    }
+  }
+
+  static final class StagedWapOracle {
+    private StagedWapOracle() {}
+
+    private static final List<String> FIXTURES =
+        java.util.Arrays.asList("S-ff", "S-replay", "S-dedup");
+
+    /** Schema: {1 id long required, 2 data string required} — small, unpartitioned (V2). */
+    private static Schema schema() {
+      return new Schema(
+          Types.NestedField.required(1, "id", Types.LongType.get()),
+          Types.NestedField.required(2, "data", Types.StringType.get()));
+    }
+
+    /** A metadata-only DataFile (no parquet on disk — the oracle only reads manifests). */
+    private static DataFile dataFile(BaseTable table, String dataDir, String name, long count) {
+      return DataFiles.builder(table.spec())
+          .withPath(dataDir + "/" + name + ".parquet")
+          .withFileSizeInBytes(count * 100)
+          .withRecordCount(count)
+          .withFormat(FileFormat.PARQUET)
+          .build();
+    }
+
+    static void generate(Path dir) throws IOException {
+      Files.createDirectories(dir);
+
+      for (String fixture : FIXTURES) {
+        Path fixtureDir = dir.resolve(fixture);
+        Files.createDirectories(fixtureDir);
+        buildFixture(fixture, fixtureDir);
+        System.out.println("generate-interop-staged-wap/" + fixture + ": written to " + fixtureDir);
+      }
+
+      System.out.println(
+          "generate-interop-staged-wap: wrote " + FIXTURES.size() + " fixtures to " + dir);
+    }
+
+    /**
+     * Build one fixture's tables using REAL {@code stageOnly()} staging on both the staged and
+     * published states. Emits:
+     * <ul>
+     *   <li>{@code java_staged_meta.json} — canonical view of the table AFTER staging but BEFORE
+     *       cherry-pick (new coverage: a metadata view containing a staged ref-less snapshot).
+     *   <li>{@code java_final_meta.json} — canonical view of the table AFTER cherry-pick.
+     *   <li>{@code wap_dedup_expected_rejection.json} — for the S-dedup fixture only.
+     * </ul>
+     *
+     * <p><b>HOW STAGING WORKS (REAL stageOnly()):</b> {@code newFastAppend().set("wap.id", wapId).
+     * stageOnly().commit()} calls the production {@link SnapshotProducer#stageOnly()} which gates
+     * the metadata-builder update: {@code stageOnly ? builder.addSnapshot(snapshot) :
+     * builder.setBranchSnapshot(snapshot, branch)} — so only {@code AddSnapshot} fires, leaving
+     * {@code current-snapshot-id}, {@code main} ref, and {@code snapshot-log} untouched. The staged
+     * snapshot consumes a sequence number exactly like a normal commit (1.10.0 bytecode: {@code apply()}
+     * at offsets 18-24 reads {@code base.nextSequenceNumber()} unconditionally, independent of
+     * {@code stageOnly}).
+     */
+    private static void buildFixture(String fixture, Path fixtureDir) throws IOException {
+      File tableDir = fixtureDir.resolve("table").toFile();
+      File metadataDir = new File(tableDir, "metadata");
+      if (!metadataDir.isDirectory() && !metadataDir.mkdirs()) {
+        throw new IOException("failed to create metadata dir at " + metadataDir);
+      }
+
+      Schema schema = schema();
+      PartitionSpec spec = PartitionSpec.unpartitioned();
+      Map<String, String> props = new LinkedHashMap<>();
+      props.put(TableProperties.FORMAT_VERSION, "2");
+      TableMetadata seed =
+          TableMetadata.newTableMetadata(
+              schema, spec, SortOrder.unsorted(), tableDir.getAbsolutePath(), props);
+
+      LocalTableOperations ops = new LocalTableOperations(tableDir, metadataDir);
+      ops.commit(null, seed);
+      BaseTable table = new BaseTable(ops, "interop_staged_wap_" + fixture);
+      String dataDir = tableDir.getAbsolutePath() + "/data";
+
+      // S0: the initial snapshot (always committed — it is the parent of the staged snapshot).
+      table.newFastAppend().appendFile(dataFile(table, dataDir, "s0", 10L)).commit();
+      long s0Id = table.currentSnapshot().snapshotId();
+
+      switch (fixture) {
+        case "S-ff": {
+          // Stage w1 (parent == current head S0) via REAL stageOnly() — the production API.
+          // After this: current-snapshot-id is STILL s0 (unchanged), staged snapshot in
+          // metadata.snapshots() with wap.id=w1, main ref unchanged.
+          table.newFastAppend()
+              .appendFile(dataFile(table, dataDir, "s1", 20L))
+              .set("wap.id", "w1")
+              .stageOnly()
+              .commit();
+          long stagedId = findStagedSnapshotId(table, s0Id, "w1");
+
+          // Emit the STAGED state (new coverage: canonical view of the table with a staged
+          // ref-less snapshot — current-snapshot-id unchanged, staged snapshot in snapshots list).
+          Path stagedMeta = writeFinalMetadata(ops, fixtureDir.resolve("java_staged_table"));
+          SnapshotMetaOracle.emit(stagedMeta, fixtureDir.resolve("java_staged_meta.json"));
+          System.out.println(
+              "generate-interop-staged-wap/S-ff: java_staged_meta.json written");
+
+          // Cherry-pick: FF (parent == head) → main moves to staged snapshot AS-IS.
+          table.manageSnapshots().cherrypick(stagedId).commit();
+
+          // Emit the FINAL state (post-publish).
+          Path finalMeta = writeFinalMetadata(ops, fixtureDir.resolve("java_final_table"));
+          SnapshotMetaOracle.emit(finalMeta, fixtureDir.resolve("java_final_meta.json"));
+          System.out.println(
+              "generate-interop-staged-wap/S-ff: java_final_meta.json written");
+          break;
+        }
+
+        case "S-replay": {
+          // Stage w2 (parent == S0, NOT yet head after S2 below).
+          table.newFastAppend()
+              .appendFile(dataFile(table, dataDir, "s1", 20L))
+              .set("wap.id", "w2")
+              .stageOnly()
+              .commit();
+          long stagedId = findStagedSnapshotId(table, s0Id, "w2");
+
+          // Advance main past S0 with an unrelated append S2 (now S1.parent != head).
+          table.newFastAppend().appendFile(dataFile(table, dataDir, "s2", 30L)).commit();
+
+          // Emit the STAGED state: S0 + S1-staged + S2 all in snapshots, main at S2.
+          Path stagedMeta = writeFinalMetadata(ops, fixtureDir.resolve("java_staged_table"));
+          SnapshotMetaOracle.emit(stagedMeta, fixtureDir.resolve("java_staged_meta.json"));
+          System.out.println(
+              "generate-interop-staged-wap/S-replay: java_staged_meta.json written");
+
+          // Cherry-pick: REPLAY (parent S0 != head S2) → new snapshot with source-snapshot-id +
+          // published-wap-id.
+          table.manageSnapshots().cherrypick(stagedId).commit();
+
+          // Emit the FINAL state.
+          Path finalMeta = writeFinalMetadata(ops, fixtureDir.resolve("java_final_table"));
+          SnapshotMetaOracle.emit(finalMeta, fixtureDir.resolve("java_final_meta.json"));
+          System.out.println(
+              "generate-interop-staged-wap/S-replay: java_final_meta.json written");
+          break;
+        }
+
+        case "S-dedup": {
+          // Stage BOTH w3 snapshots off S0 (same parent = S0 = current head) BEFORE any
+          // cherry-pick. This mirrors TestWapWorkflow.testDuplicateCherrypick.
+          //
+          // Pattern:
+          //   S0 (main)
+          //   ├── stage w3-first  (parent=S0, seq=2)
+          //   └── stage w3-second (parent=S0, seq=3)
+          //
+          // Cherry-pick w3-first → FF (parent==head S0) → main = w3-first.
+          // Cherry-pick w3-second → REPLAY (parent=S0 != head w3-first)
+          //   → validateWapPublish fires → finds wap.id=w3 on ancestor w3-first
+          //   → DuplicateWAPCommitException ✓
+          //
+          // Staged state (before any cherry-pick): S0 + w3-first + w3-second = 3 snapshots.
+          // Final state (after rejection): still S0 + w3-first (main) + w3-second (staged) = 3.
+
+          // Stage w3-first off S0 (parent = S0 = current head).
+          table.newFastAppend()
+              .appendFile(dataFile(table, dataDir, "s1", 20L))
+              .set("wap.id", "w3")
+              .stageOnly()
+              .commit();
+          long firstStagedId = findStagedSnapshotId(table, s0Id, "w3");
+
+          // Stage w3-second ALSO off S0 (still the current head — no cherry-pick yet).
+          table.newFastAppend()
+              .appendFile(dataFile(table, dataDir, "s2", 30L))
+              .set("wap.id", "w3")
+              .stageOnly()
+              .commit();
+          // secondStagedId: the staged snapshot that is NOT firstStagedId.
+          long secondStagedId = -1L;
+          for (Snapshot snap : table.snapshots()) {
+            if ("w3".equals(snap.summary().get("wap.id"))
+                && snap.snapshotId() != table.currentSnapshot().snapshotId()
+                && snap.snapshotId() != firstStagedId) {
+              secondStagedId = snap.snapshotId();
+            }
+          }
+          if (secondStagedId == -1L) {
+            throw new RuntimeException(
+                "S-dedup fixture: could not find secondStagedId after second stageOnly()");
+          }
+
+          // Emit the STAGED state: S0 (main) + w3-first (staged) + w3-second (staged) = 3.
+          Path stagedMeta = writeFinalMetadata(ops, fixtureDir.resolve("java_staged_table"));
+          SnapshotMetaOracle.emit(stagedMeta, fixtureDir.resolve("java_staged_meta.json"));
+          System.out.println(
+              "generate-interop-staged-wap/S-dedup: java_staged_meta.json written");
+
+          // FIRST cherry-pick: FF (parent=S0=head) → main moves to w3-first verbatim.
+          table.manageSnapshots().cherrypick(firstStagedId).commit();
+
+          // SECOND cherry-pick: REPLAY (parent=S0 != head=w3-first) → validateWapPublish fires
+          // → finds wap.id=w3 on ancestor w3-first → DuplicateWAPCommitException.
+          boolean thrown = false;
+          try {
+            table.manageSnapshots().cherrypick(secondStagedId).commit();
+          } catch (DuplicateWAPCommitException ex) {
+            thrown = true;
+            System.out.println(
+                "generate-interop-staged-wap/S-dedup: second cherry-pick rejected as expected "
+                    + "DuplicateWAPCommitException: "
+                    + ex.getMessage());
+          }
+          if (!thrown) {
+            throw new RuntimeException(
+                "S-dedup fixture: second cherry-pick of secondStagedId "
+                    + secondStagedId
+                    + " did NOT throw DuplicateWAPCommitException — fixture is wrong");
+          }
+
+          // Emit the FINAL state (unchanged after the rejection — main still at w3-first).
+          // Snapshots: S0 + w3-first (main via FF) + w3-second (still staged) = 3.
+          Path finalMeta = writeFinalMetadata(ops, fixtureDir.resolve("java_final_table"));
+          SnapshotMetaOracle.emit(finalMeta, fixtureDir.resolve("java_final_meta.json"));
+          System.out.println(
+              "generate-interop-staged-wap/S-dedup: java_final_meta.json written");
+
+          // Emit wap_dedup_expected_rejection.json.
+          String rejectionJson =
+              JsonUtil.generate(
+                  gen -> {
+                    gen.writeStartObject();
+                    gen.writeBooleanField("second_cherrypick_fails", true);
+                    gen.writeStringField("exception_type", "DuplicateWAPCommitException");
+                    gen.writeStringField(
+                        "message_substring",
+                        "Duplicate request to cherry pick wap id that was published already");
+                    gen.writeEndObject();
+                  },
+                  false);
+          writeJson(fixtureDir.resolve("wap_dedup_expected_rejection.json"), rejectionJson);
+          System.out.println(
+              "generate-interop-staged-wap/S-dedup: wap_dedup_expected_rejection.json written");
+          break;
+        }
+
+        default:
+          throw new IllegalArgumentException("unknown fixture: " + fixture);
+      }
+    }
+
+    /**
+     * Find the staged snapshot id — the snapshot in {@code table.metadata().snapshots()} that is
+     * NOT the current snapshot AND carries {@code wap.id == wapId}. When {@code parentId >= 0},
+     * also asserts the staged snapshot's parent is {@code parentId}.
+     */
+    private static long findStagedSnapshotId(BaseTable table, long parentId, String wapId) {
+      for (Snapshot snap : table.snapshots()) {
+        Map<String, String> props = snap.summary();
+        if (wapId.equals(props.get("wap.id")) && snap.snapshotId() != table.currentSnapshot().snapshotId()) {
+          // When parentId >= 0 verify parent.
+          if (parentId >= 0 && snap.parentId() != null && snap.parentId() != parentId) {
+            throw new RuntimeException(
+                "findStagedSnapshotId: staged snapshot "
+                    + snap.snapshotId()
+                    + " has parent "
+                    + snap.parentId()
+                    + " but expected "
+                    + parentId);
+          }
+          return snap.snapshotId();
+        }
+      }
+      throw new RuntimeException(
+          "findStagedSnapshotId: no staged snapshot with wap.id="
+              + wapId
+              + " found in table (current="
+              + table.currentSnapshot().snapshotId()
+              + ")");
+    }
+
+    /**
+     * Write the table's CURRENT metadata as {@code final.metadata.json} under
+     * {@code <tableDir>/metadata/} and return the path to the written file. The {@code tableDir}
+     * directory is created if it does not exist.
+     */
+    private static Path writeFinalMetadata(LocalTableOperations ops, Path tableDir)
+        throws IOException {
+      Files.createDirectories(tableDir.resolve("metadata"));
+      Path out = tableDir.resolve("metadata/final.metadata.json");
+      OutputFile outputFile = new LocalFileIO().newOutputFile(out.toAbsolutePath().toString());
+      TableMetadataParser.write(ops.current(), outputFile);
+      return out;
+    }
+
+    /**
+     * Verify each fixture in DIRECTION 2: Java reads the RUST-produced staged + final tables,
+     * asserts canonical views byte-equal, and asserts fixture-specific facts. Returns the failure
+     * count.
+     */
+    static int verify(Path dir) throws IOException {
+      int failures = 0;
+
+      for (String fixture : FIXTURES) {
+        Path fixtureDir = dir.resolve(fixture);
+
+        // Both states must be present.
+        Path rustStagedMeta =
+            fixtureDir.resolve("rust_staged_table/metadata/final.metadata.json");
+        Path rustFinalMeta =
+            fixtureDir.resolve("rust_final_table/metadata/final.metadata.json");
+
+        if (!Files.exists(rustStagedMeta)) {
+          System.out.println(
+              "FAIL staged-wap/" + fixture + ": missing rust_staged_table final.metadata.json");
+          failures++;
+          continue;
+        }
+        if (!Files.exists(rustFinalMeta)) {
+          System.out.println(
+              "FAIL staged-wap/" + fixture + ": missing rust_final_table final.metadata.json");
+          failures++;
+          continue;
+        }
+
+        // (a) Canonical view of the RUST staged state must equal java_staged_meta.json.
+        Path javaStagedPath = fixtureDir.resolve("java_staged_meta.json");
+        if (!Files.exists(javaStagedPath)) {
+          System.out.println(
+              "FAIL staged-wap/" + fixture + ": missing java_staged_meta.json — run generate first");
+          failures++;
+          continue;
+        }
+        Path rustStagedViewPath = fixtureDir.resolve("rust_view_of_rust_staged_meta.json");
+        SnapshotMetaOracle.emit(rustStagedMeta, rustStagedViewPath);
+        String javaStagedView = readString(javaStagedPath);
+        String rustStagedView = readString(rustStagedViewPath);
+        if (!javaStagedView.equals(rustStagedView)) {
+          System.out.println(
+              "FAIL staged-wap/"
+                  + fixture
+                  + ": Java's canonical view of the RUST STAGED table diverges from Java's own "
+                  + "staged view");
+          failures++;
+          continue;
+        }
+        System.out.println(
+            "PASS staged-wap/" + fixture + "/staged: canonical view byte-equal OK");
+
+        // (b) Canonical view of the RUST final state must equal java_final_meta.json.
+        Path javaFinalPath = fixtureDir.resolve("java_final_meta.json");
+        if (!Files.exists(javaFinalPath)) {
+          System.out.println(
+              "FAIL staged-wap/" + fixture + ": missing java_final_meta.json — run generate first");
+          failures++;
+          continue;
+        }
+        Path rustFinalViewPath = fixtureDir.resolve("rust_view_of_rust_final_meta.json");
+        SnapshotMetaOracle.emit(rustFinalMeta, rustFinalViewPath);
+        String javaFinalView = readString(javaFinalPath);
+        String rustFinalView = readString(rustFinalViewPath);
+        if (!javaFinalView.equals(rustFinalView)) {
+          System.out.println(
+              "FAIL staged-wap/"
+                  + fixture
+                  + ": Java's canonical view of the RUST FINAL table diverges from Java's own "
+                  + "final view");
+          failures++;
+          continue;
+        }
+        System.out.println(
+            "PASS staged-wap/" + fixture + "/final: canonical view byte-equal OK");
+
+        // (c) Fixture-specific facts on the Rust STAGED table.
+        TableMetadata rustStagedMeta2 =
+            TableMetadataParser.fromJson(
+                rustStagedMeta.toString(), readString(rustStagedMeta));
+        int rustStagedSnapshotCount = countSnapshots(rustStagedMeta2);
+
+        // The staged state must contain S0 + the staged snapshot (at minimum 2 for S-ff and S-replay
+        // where no advance has happened yet; 3 for S-dedup which stages TWO w3 snapshots off S0).
+        int expectedStagedCount = fixture.equals("S-dedup") ? 3 : 2;
+        if (rustStagedSnapshotCount < expectedStagedCount) {
+          System.out.println(
+              "FAIL staged-wap/"
+                  + fixture
+                  + "/staged: expected at least "
+                  + expectedStagedCount
+                  + " snapshots in staged metadata, got "
+                  + rustStagedSnapshotCount);
+          failures++;
+          continue;
+        }
+
+        // Current-snapshot-id in the staged state must be the S0 id (unchanged by staging).
+        // For S-dedup the current is the published S3 (after first cherry-pick + S2 advance).
+        // We simply verify the staged snapshot is NOT the current snapshot — i.e. staging
+        // did not move main.
+        long rustStagedCurrent =
+            rustStagedMeta2.currentSnapshot() == null
+                ? -1L
+                : rustStagedMeta2.currentSnapshot().snapshotId();
+        // HAND-DECLARED wap.id VALUE pin (anti-circular, Z1 reviewer 2026-06-12): the canonical
+        // SnapshotMetaOracle view EXCLUDES wap.id from its summary allowlist, so a corrupted
+        // staged wap.id VALUE rides PAST the byte-equal view diff (step 4). The earlier check here
+        // only required SOME non-empty wap.id — a corruption of the staged wap.id (e.g. "w1" →
+        // "CORRUPTED") passed silently in the D1 direction. Pin the EXACT value the fixture staged:
+        // S-ff → w1, S-replay → w2, S-dedup → w3. (D2 already pins the value via the Rust test's
+        // `.find(wap.id == "w1")`.)
+        String expectedStagedWapId =
+            fixture.equals("S-ff") ? "w1" : (fixture.equals("S-replay") ? "w2" : "w3");
+        // Find the staged snapshot: has the EXPECTED wap.id in summary but is not the current.
+        long stagedSnapId = -1L;
+        for (Snapshot snap : rustStagedMeta2.snapshots()) {
+          String wapId = snap.summary().get("wap.id");
+          if (expectedStagedWapId.equals(wapId) && snap.snapshotId() != rustStagedCurrent) {
+            // Pick the LAST one added — the one we just staged (the dedup fixture also has w3
+            // from the first publish chain, but that one IS on main via cherry-pick, so it IS
+            // the current or an ancestor; the newly staged one is not current).
+            stagedSnapId = snap.snapshotId();
+          }
+        }
+        if (stagedSnapId == -1L) {
+          System.out.println(
+              "FAIL staged-wap/"
+                  + fixture
+                  + "/staged: no staged snapshot with wap.id="
+                  + expectedStagedWapId
+                  + " found in Rust staged metadata (a corrupted wap.id value would land here)");
+          failures++;
+          continue;
+        }
+        System.out.println(
+            "PASS staged-wap/"
+                + fixture
+                + "/staged: staged snapshot "
+                + stagedSnapId
+                + " present with wap.id="
+                + expectedStagedWapId
+                + ", current="
+                + rustStagedCurrent
+                + " (unchanged) OK");
+
+        // (d) Fixture-specific facts on the Rust FINAL table.
+        TableMetadata rustFinalMeta2 =
+            TableMetadataParser.fromJson(
+                rustFinalMeta.toString(), readString(rustFinalMeta));
+        int rustFinalSnapshotCount = countSnapshots(rustFinalMeta2);
+
+        switch (fixture) {
+          case "S-ff":
+            // FF: cherry-pick fast-forwarded — main moved to the staged snapshot AS-IS.
+            // Snapshots: S0 + the staged snapshot (now main). Count == 2.
+            if (rustFinalSnapshotCount != 2) {
+              System.out.println(
+                  "FAIL staged-wap/S-ff/final: expected 2 snapshots after FF, got "
+                      + rustFinalSnapshotCount);
+              failures++;
+              continue;
+            }
+            // The current snapshot must be the staged one (FF moves main to it verbatim).
+            Snapshot ffCurrent = rustFinalMeta2.currentSnapshot();
+            if (ffCurrent == null) {
+              System.out.println("FAIL staged-wap/S-ff/final: no current snapshot after FF");
+              failures++;
+              continue;
+            }
+            // No source-snapshot-id / published-wap-id — FF does NOT tag the published snapshot.
+            String ffSourceId = ffCurrent.summary().get("source-snapshot-id");
+            if (ffSourceId != null) {
+              System.out.println(
+                  "FAIL staged-wap/S-ff/final: FF cherry-pick must NOT set source-snapshot-id, "
+                      + "got: "
+                      + ffSourceId);
+              failures++;
+              continue;
+            }
+            // HAND-DECLARED current==staged-id pin (anti-circular, Z1 reviewer 2026-06-12): FF moves
+            // main to the staged snapshot VERBATIM, so the current snapshot must carry the staged
+            // wap.id=w1. This pins "main == the staged snapshot" via the wap.id proxy (only the
+            // staged snapshot carries w1), matching the D2 Rust test's `wap.id=w1 on current` check.
+            // Without it the canonical view (which excludes wap.id) and the count/source-id checks
+            // would not catch a FF that moved main to the WRONG snapshot of the right shape.
+            String ffCurrentWapId = ffCurrent.summary().get("wap.id");
+            if (!"w1".equals(ffCurrentWapId)) {
+              System.out.println(
+                  "FAIL staged-wap/S-ff/final: FF current must carry the staged wap.id=w1 "
+                      + "(main moved to the staged snapshot verbatim), got: "
+                      + ffCurrentWapId);
+              failures++;
+              continue;
+            }
+            System.out.println(
+                "PASS staged-wap/S-ff/final: snapshot count=2, wap.id=w1 on current (FF verbatim), "
+                    + "no source-snapshot-id OK");
+            break;
+
+          case "S-replay":
+            // REPLAY: S0 + S1-staged + S2-advance + S3-published = 4 snapshots.
+            if (rustFinalSnapshotCount != 4) {
+              System.out.println(
+                  "FAIL staged-wap/S-replay/final: expected 4 snapshots after replay, got "
+                      + rustFinalSnapshotCount);
+              failures++;
+              continue;
+            }
+            Snapshot replayCurrent = rustFinalMeta2.currentSnapshot();
+            if (replayCurrent == null) {
+              System.out.println(
+                  "FAIL staged-wap/S-replay/final: no current snapshot after replay");
+              failures++;
+              continue;
+            }
+            String replaySourceId = replayCurrent.summary().get("source-snapshot-id");
+            String replayPublishedWap = replayCurrent.summary().get("published-wap-id");
+            if (replaySourceId == null) {
+              System.out.println(
+                  "FAIL staged-wap/S-replay/final: current snapshot missing source-snapshot-id");
+              failures++;
+              continue;
+            }
+            if (!"w2".equals(replayPublishedWap)) {
+              System.out.println(
+                  "FAIL staged-wap/S-replay/final: published-wap-id must be 'w2', got: "
+                      + replayPublishedWap);
+              failures++;
+              continue;
+            }
+            System.out.println(
+                "PASS staged-wap/S-replay/final: snapshot count=4, source-snapshot-id="
+                    + replaySourceId
+                    + ", published-wap-id=w2 OK");
+            break;
+
+          case "S-dedup":
+            // S-dedup final: S0 + w3-first (main via FF) + w3-second (still staged) = 3 snapshots.
+            // The second cherry-pick was REJECTED (DuplicateWAPCommitException), so table is
+            // unchanged after the rejection. The first cherry-pick was FF (parent=S0=head), so:
+            //   - current snapshot = w3-first (carries wap.id=w3, NO source-snapshot-id — FF path)
+            //   - w3-second is still in snapshots but NOT current
+            // We verify count==3, current is non-null, NO source-snapshot-id (FF not REPLAY),
+            // and the Rust GEN rejection artifact confirms the second cherry-pick failed.
+            if (rustFinalSnapshotCount != 3) {
+              System.out.println(
+                  "FAIL staged-wap/S-dedup/final: expected exactly 3 snapshots "
+                      + "(S0 + w3-first-FF-main + w3-second-still-staged), got "
+                      + rustFinalSnapshotCount);
+              failures++;
+              continue;
+            }
+            Snapshot dedupCurrent = rustFinalMeta2.currentSnapshot();
+            if (dedupCurrent == null) {
+              System.out.println("FAIL staged-wap/S-dedup/final: no current snapshot");
+              failures++;
+              continue;
+            }
+            // FF cherry-pick must NOT set source-snapshot-id (that is the REPLAY path only).
+            String dedupSourceId = dedupCurrent.summary().get("source-snapshot-id");
+            if (dedupSourceId != null) {
+              System.out.println(
+                  "FAIL staged-wap/S-dedup/final: FF cherry-pick must NOT set source-snapshot-id, "
+                      + "got: " + dedupSourceId);
+              failures++;
+              continue;
+            }
+            // The current snapshot must carry wap.id=w3 (the FF published it verbatim).
+            String dedupWapId = dedupCurrent.summary().get("wap.id");
+            if (!"w3".equals(dedupWapId)) {
+              System.out.println(
+                  "FAIL staged-wap/S-dedup/final: current snapshot must carry wap.id=w3 (FF), "
+                      + "got: " + dedupWapId);
+              failures++;
+              continue;
+            }
+            // Read the dedup rejection confirmation from the Rust-emitted artifact.
+            Path dedupRejectionPath =
+                fixtureDir.resolve("rust_wap_dedup_rejection.json");
+            if (!Files.exists(dedupRejectionPath)) {
+              System.out.println(
+                  "FAIL staged-wap/S-dedup/final: missing rust_wap_dedup_rejection.json — "
+                      + "Rust GEN must emit this after the rejected second cherry-pick");
+              failures++;
+              continue;
+            }
+            String dedupRejectionRaw = readString(dedupRejectionPath);
+            com.fasterxml.jackson.databind.JsonNode dedupNode =
+                new com.fasterxml.jackson.databind.ObjectMapper().readTree(dedupRejectionRaw);
+            if (!dedupNode.path("second_cherrypick_fails").asBoolean(false)) {
+              System.out.println(
+                  "FAIL staged-wap/S-dedup/final: rust_wap_dedup_rejection.json must have "
+                      + "second_cherrypick_fails=true");
+              failures++;
+              continue;
+            }
+            System.out.println(
+                "PASS staged-wap/S-dedup/final: count=3, wap.id=w3 on current (FF), "
+                    + "no source-snapshot-id, rust rejection confirmed OK");
+            break;
+
+          default:
+            System.out.println("FAIL staged-wap/" + fixture + "/final: unknown fixture");
+            failures++;
+            continue;
         }
       }
 

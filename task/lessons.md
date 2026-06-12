@@ -799,3 +799,201 @@ How to use it (see the manuals' §2):
   (mutation: remove `ViewRepresentations::new` ⇒ the SQL test target fails E0599).** The probe couldn't
   name `uuid::Uuid` (not a SQL-crate dep) — used `ViewRequirement::NotExist` (unit variant) + pattern
   matches instead. Result: SQL 62→64, REST 51→52, iceberg 2188 unchanged; gate ×2 green.
+### 2026-06-12 (Z1 — staged-WAP interop fixture, BUILDER Sonnet, wt-interop3)
+
+- **The WAP-dedup `testDuplicateCherrypick` pattern REQUIRES both staged snapshots to share the SAME
+  parent (S0) — if the second staged snapshot is committed AFTER the first cherry-pick, the second
+  snapshot's parent becomes the current head (= w3-first after FF), the second cherry-pick FAST-FORWARDS
+  (parent == head), and `validate_wap_publish` is NEVER reached.** *Why:* `CherryPickAction.validate`
+  early-returns `Ok(())` for the fast-forward plan (Java `if (!isFastForward(base))` gates the whole
+  validate block). The ONLY way to force the REPLAY path (which runs `validate_wap_publish`) is to ensure
+  the second staged snapshot's parent IS NOT the current head — i.e., the first cherry-pick must have
+  advanced `main` past S0 BEFORE the second staged snapshot inherits S0 as parent. Concretely: stage w3-first
+  off S0, stage w3-second ALSO off S0 (still head, no cherry-pick yet), THEN cherry-pick w3-first (FF →
+  main = w3-first), THEN cherry-pick w3-second (parent=S0 ≠ w3-first=head → REPLAY → dedup fires). Any
+  design that commits the second staged snapshot AFTER the first cherry-pick stages it off the NEW head and
+  silently skips the dedup check. Verified against 1.10.0 bytecode of `CherryPickOperation.apply` and
+  `TestWapWorkflow.testDuplicateCherrypick` in the m2 jar — this is the exact pattern Java's own test uses.
+
+- **The canonical `SnapshotMetaOracle.emit()` view does NOT include `current-snapshot-id` or `refs` — it
+  covers ONLY `metadata.snapshots()` ordinals, sequence numbers, operations, summary counts, and manifest
+  tuples.** *Why it matters:* sabotage 7d was originally designed to inject a `main` ref pointing at the
+  staged snapshot AND advance `current-snapshot-id` to the staged id. The view produced by the injected
+  metadata was IDENTICAL to `java_staged_meta.json` because neither refs nor current-snapshot-id appear in
+  the output. The correct staged-state-specific sabotage is to REMOVE the staged snapshot from
+  `metadata.snapshots()` entirely — the canonical view then has 1 ordinal instead of 2, diverges from
+  `java_staged_meta.json`, and proves the view IS testing `metadata.snapshots()` coverage. Rule: when
+  designing a sabotage for a metadata-view-based interop test, first read what the view ACTUALLY emits (the
+  oracle's JSON keys); then design the corruption around a field that IS in the view.
+
+- **`cargo fmt` reformats method chains that exceed line-width limits — always run `cargo fmt --all` BEFORE
+  `cargo fmt --all -- --check` at the gate, not instead of it.** *Why:* after writing multi-line assertion
+  bodies, the formatter may split a one-line `.expect("msg")` call into a two-line chain. `cargo fmt` fixes
+  this automatically; running `-- --check` first without running `cargo fmt` causes a spurious gate failure
+  that requires a separate fix commit. Pattern: always `cargo fmt --all && cargo fmt --all -- --check`
+  (or just `cargo fmt --all` and rely on `-- --check` in the gate chain).
+
+### 2026-06-12 (Z1 — staged-WAP interop, OPUS REVIEWER, wt-interop3)
+
+- **A field the canonical view EXCLUDES must be VALUE-pinned (not just presence-pinned) in the per-fixture
+  verify, on BOTH directions — and the pin must be HAND-DECLARED (anti-circular).** *Found in review:* the
+  `SnapshotMetaOracle`/`snapshot_meta_view` summary allowlist excludes `wap.id`, so a corrupted staged
+  `wap.id` value rides PAST the byte-equal view diff. The Java `verify()` (D1, Java-judges-Rust) only required
+  SOME non-empty `wap.id` on the staged snapshot — corrupting `"w1" → "CORRUPTED"` in the Rust artifact
+  passed silently (0 failures). The D2 (Rust-verifies-Java) side already hand-declared `wap.id == "w1"`.
+  Mutation proof: corrupt the staged `wap.id` value → D1 must `FAIL`. *Fix:* added an `expectedStagedWapId`
+  (S-ff→w1 / S-replay→w2 / S-dedup→w3) value pin to the Java staged-state verify, plus a FF `current` wap.id
+  pin (S-ff final must carry wap.id=w1 — the verbatim-publish proxy for `current == staged-id`). Rule: for any
+  fact the shared view omits (refs, current-snapshot-id, wap.id, source/published-wap-id values), run the
+  corruption mutation on BOTH the producer-side artifact (D1) AND the oracle-side artifact (D2); a pin that
+  only exists on one side is half-closed.
+
+- **Ref-state (current-snapshot-id) is invisible to the canonical view, so a "published when it should be
+  staged" corruption is caught ONLY by the per-fixture `staged != current` check — and that check is loose
+  when >2 snapshots exist.** *Verified by mutation:* moving `current-snapshot-id` onto the staged snapshot in
+  an S-ff artifact left the canonical view BYTE-IDENTICAL (view omits refs) yet the per-fixture verify caught
+  it (the `staged != current` filter found no qualifying staged snapshot). But for S-replay (3 snapshots: S0,
+  staged-w2, S2-advance) `staged != current` allowed `current ∈ {S0, S2}` — it did NOT hand-declare
+  `current == S2`. *Fix:* added a hand-declared ref-state pin to the D2 S-replay staged check (current is the
+  S2 advance: no `wap.id` AND non-root). Rule (W1 lesson, re-confirmed): when the view can't see ref state,
+  the per-fixture verify must HAND-DECLARE the expected current-snapshot-id identity, not just "≠ staged".
+
+### 2026-06-12 (Z2 — multi-spec metadata-level interop fixture, BUILDER Sonnet, wt-interop3)
+
+- **Spec-id alignment across languages requires BOTH sides to start from the SAME initial spec.**
+  *Why:* Java's `TableMetadata.newTableMetadata` with `PartitionSpec.unpartitioned()` as the seed
+  assigns spec_id=0 to unpartitioned, so `updateSpec().addField("a")` creates spec_id=1 for
+  identity(a) and a further `addField("b")` creates spec_id=2. Rust's seed-from-spec-0 approach
+  (`with_spec_id(0)` + identity(a) directly) assigns spec_id=0 to identity(a) and spec_id=1 to
+  identity(a)+identity(b). FIX: build Java's seed spec DIRECTLY (not from unpartitioned default):
+  `PartitionSpec.builderFor(schema).identity("a").build()` then ONLY use `updateSpec().addField("b")`
+  for evolution. This makes both sides produce spec_id=0=identity(a), spec_id=1=identity(a)+identity(b).
+  Rule: when a cross-language fixture involves spec evolution, BUILD the initial spec explicitly on
+  BOTH sides so the first `updateSpec()` call creates spec_id=1, not spec_id=0.
+
+- **SB2 snapshot-stripping must also update `refs["main"]["snapshot-id"]` — Java's metadata parser
+  rejects a ref pointing at a non-existent snapshot ID.** *Why:* the Python script stripped ms4 from
+  `metadata.snapshots` but left `refs["main"]["snapshot-id"]` = ms4_id, causing Java to error:
+  "Snapshot for reference SnapshotRef{snapshotId=…} does not exist in the existing snapshots list."
+  FIX: after stripping, also set `refs["main"]["snapshot-id"] = ms3_id` AND
+  `current-snapshot-id = ms3_id`. Rule: when stripping a snapshot from metadata JSON for a
+  sabotage test, update ALL three ref points (snapshots array, current-snapshot-id, AND any branch
+  refs) atomically or the Java parser rejects the file before the interop check can run.
+
+- **SB4 subprocess `cwd` must point to the Maven project directory — not to the fixture sub-path.**
+  *Why:* the Python subprocess in SB4 called `mvn` with `cwd = fixture_dir + "/../.."` but
+  `fixture_dir` = `.../dev/java-interop/target/interop-multi-spec/fixture`, making `"../.."` =
+  `.../dev/java-interop/target/interop-multi-spec/` (no pom.xml). The correct depth is `"../../.."` =
+  `.../dev/java-interop/`. Rule: when a shell helper script embeds a Python subprocess that calls
+  `mvn`, compute the Maven cwd by counting directory levels from the shell variable — use `realpath`
+  or count levels manually against the known fixture path structure.
+
+- **The `clippy::doc_overindented_list_items` lint fires on multi-line `//!` list continuations
+  indented beyond 2 spaces.** *Why:* a `//!` bullet continuation of the form `//!        text`
+  (8-space indent) was flagged by clippy as over-indented (wants 2 spaces). Fix: rewrite the
+  multi-line bullet as a single line, or use exactly `//!   ` (2-space continuation indent).
+  Rule: after writing `//!` doc blocks with multi-line bullets, run `cargo clippy --all-targets
+  --workspace -- -D warnings` to catch this lint before the gate.
+
+- **Tie-shaping proof belongs in the GEN test, not only in the shell script comment.** *Why:* the
+  spec-id tiebreaker's effectiveness (the ONLY disambiguator for the two ms4 manifests) is only
+  meaningful if the fixture data actually satisfies the tie condition (identical record counts).
+  Asserting `file_f0.record_count() == file_f3.record_count()` AND different partition-tuple arities
+  (1 vs 2 fields as the proxy for different spec ids, since `partition_spec_id()` is `pub(crate)`)
+  IN THE TEST makes the tie-shaping property machine-checked, not just documented. Rule: whenever
+  a fixture depends on a tie-shaping invariant (X == Y across two artifacts), assert it in the code,
+  not only in prose.
+
+### 2026-06-12 (Z2 — multi-spec interop fixture, REVIEWER Opus 2-of-2, wt-interop3)
+
+- **A sabotage step that POST-EDITS the emitted view JSON does NOT prove the property it claims to
+  re-derive — mutate the ARTIFACT and RE-EMIT.** *Why:* the builder's original SB4 emitted the Rust
+  table's canonical view normally, then in Python swapped the `partition_spec_id` INTEGER on the two
+  ms4 manifests IN THE OUTPUT JSON and diffed. Its comment claimed this was the "wrong-spec-rendering
+  corruption — partition tuples rendered under the WRONG spec," but the partition TUPLES were never
+  touched (they were carried through from the clean emit); only the integer moved. That proved the
+  spec_id field is in the comparison KEY (a valid injectivity check) but NOT that partition tuples are
+  rendered under each manifest's OWN spec (the file's-own-spec rule — the multi-spec arc's whole
+  point). FIX: SB4 now swaps the spec-0/spec-1 FIELD DEFINITIONS in the SOURCE `final.metadata.json`
+  (ids unchanged) and RE-EMITS via Java — the ms4 spec-0 manifest's 1-field tuple is then projected
+  under the 2-field spec (and vice versa: spec-1's `{1000:r,1001:s}` renders as `{1000:r}`, the
+  `1001:s` field DROPS), so the re-derived view genuinely diverges. Rule (reviewer mutation mandate):
+  a fail-closed sabotage must mutate the on-disk artifact and re-run the production view builder, never
+  post-edit the builder's output — the latter can pass while the property under test is broken.
+
+- **The per-own-spec partition rendering IS exercised by the multi-spec fixture's POSITIVE
+  comparisons, independent of SB4.** *Why:* `snapshot_meta_view.rs` (Rust) renders each entry's
+  partition under `manifest_meta.partition_spec.partition_type(&schema)` and Java's `entryView` under
+  `metadata.specsById().get(file.specId()).partitionType()` — both the file's OWN spec. The clean ms4
+  manifests render spec-0 → `{1000:q}` (1-field) and spec-1 → `{1000:r,1001:s}` (2-field), and those
+  exact tuples must byte-match Java in D1 + D2. So the own-spec rule is load-bearing in the positive
+  path; SB4 (re-derived) is the explicit fail-closed pin. Verified by an independent reviewer probe
+  (swap spec field-defs in metadata, re-emit → view diverges with `1001:s` dropped).
+
+- **A genuine D1 step exists for multi-spec (Java judges the Rust-written chain) — the 'both
+  directions' claim holds.** Script step [4/5] runs `emit-snapshot-meta` on the Rust-produced
+  `rust_table/.../final.metadata.json` → `java_view_rust_meta.json` and `diff`s it against
+  `java_meta.json` (Java-on-Java). This matches the cherrypick/staged-WAP house D1 pattern. Note: the
+  Java `MultiSpecOracle.verify()` method + its `verify-interop-multi-spec` dispatch case are written
+  but NEVER invoked by the run script (D1 is done inline via emit+diff instead) — harmless redundancy,
+  flagged not removed (builder-owned code, no correctness impact).
+
+### 2026-06-12 (Z3 — partition-stats file interop, BUILDER Sonnet, wt-interop3)
+
+- **`DataFiles.Builder` has NO `withContent(FileContent)` method — it only builds DATA files.**
+  *Why it matters:* the Java oracle code to build a position-delete file for a row-delta commit
+  must use `FileMetadata.deleteFileBuilder(spec).ofPositionDeletes()`, NOT
+  `DataFiles.builder(spec).withContent(FileContent.POSITION_DELETES)`. The `DataFiles.Builder`
+  API has no `withContent` method; using it produces a compile error (`cannot find symbol: method
+  withContent(org.apache.iceberg.FileContent)`). Rule: when building a delete file in Java oracle
+  code, always use `FileMetadata.deleteFileBuilder(spec)` — confirmed via `javap` of the 1.10.0
+  api jar.
+
+- **`PartitionStatisticsFile` in the 1.10.0 jar has `path()`, NOT `statisticsPath()`.**
+  *Why it matters:* calling `.statisticsPath()` produces a compile error
+  (`cannot find symbol: method statisticsPath()`). The 1.10.0 api jar's
+  `PartitionStatisticsFile.class` exposes `path()`, `snapshotId()`, and `fileSizeInBytes()` —
+  confirmed via `javap -p`. Rule: for any 1.10.0 API class whose method signature is uncertain,
+  run `javap -p ~/.m2/…/iceberg-api-1.10.0.jar!/…` BEFORE writing the call, not after the
+  compile fails.
+
+- **`PartitionStats.partition()` returns `StructLike`, NOT `PartitionData`, when decoded via
+  `readPartitionStatsFile`.** *Why:* the `generate()` path builds `PartitionData` instances
+  directly (via `PartitionData.put()`), but `readPartitionStatsFile` deserializes the partition
+  struct from the parquet file as a `GenericRecord` / `StructProjection` — the runtime type is
+  NOT `PartitionData`. Casting `row.partition()` to `PartitionData` produces a
+  `ClassCastException: GenericRecord cannot be cast to PartitionData`. Rule: always use
+  `StructLike partition = row.partition()` (the declared return type) and access fields with
+  `partition.get(0, Object.class)` without a downcast — the concrete type is decoder-dependent.
+
+### 2026-06-12 (Z3 — partition-stats file interop, REVIEWER Opus 2-of-2, wt-interop3)
+
+- **A re-invoked Java verify that rebuilds a `Table` via `LocalTableOperations.commit(null, meta)` was
+  CRASHING on `v0.metadata.json` "File already exists" — which the sabotage check misread as a
+  fail-closed.** *Why (STOP-grade, caught by cold-start):* the Z3 sabotage steps 7a/7b/7d call
+  `verify-interop-partition-stats` a SECOND/THIRD/FOURTH time against the SAME dir. The verify path
+  builds a `Table` from the Rust metadata (to get `Partitioning.partitionType`) via
+  `buildTableFromMetadata` → `ops.commit(null, meta)`, which writes `v0.metadata.json` with
+  `LocalOutputFile.create()` (REFUSES to overwrite). The clean D1 step (step 4) writes `v0.metadata.json`
+  first; every later verify call then throws "File already exists" BEFORE reading the stats parquet. The
+  script's pass test is `! grep 'verify…: 0 failures'` — ANY exception (including the unrelated v0
+  collision) satisfies it, so 7a/7b/7d "passed" on a file that was never even read. PROVEN by running 3
+  consecutive CLEAN verifies: pre-fix #2/#3 collided (no "0 failures"); a wholly-UNcorrupted file thus
+  "passed" the sabotage check. FIX (harness, scoped to `PartitionStatsOracle.buildTableFromMetadata`):
+  delete any leftover `v\d+\.metadata\.json` (this helper's exclusive artifact — the Rust table uses
+  `00000-*.metadata.json` + `final.metadata.json`) before each commit, so every verify reaches the real
+  decode. Post-fix: 3 clean verifies all report "0 failures"; the sabotage check now means something.
+  Rule (reviewer mandate): for a sabotage that asserts "the run FAILED," confirm the run failed for the
+  RIGHT reason — re-run the SAME step on an UNcorrupted artifact and require it to PASS; a fail-closed
+  that also "fails" clean is testing the wrong exception (the W2 false-green pattern).
+- **The exact-field decode-depth check needs a parquet-AWARE rewrite, not a byte-search.** *Why:* 7b's
+  byte-search for the int64-LE `0x0300000000000000` finds 4 occurrences (data page + footer min/max
+  stats) and mutates the FIRST (offset 105), which structurally CORRUPTS the parquet — Java fails via a
+  decode EXCEPTION, not a clean field mismatch (proves "garbage rejected," not "wrong counter caught at
+  the right column"). To prove the field-level comparison is load-bearing, read the stats parquet, mutate
+  ONE Int64 column's row-0 value preserving the field-id schema, rewrite, and re-verify: Java then emits
+  `FAIL row 0 (partition cat=a): position_delete_record_count expected=1 actual=7` — confirming the exact
+  column is compared. Reviewer-verified for `data_record_count`, `position_delete_record_count`,
+  `last_updated_snapshot_id` (each fails on exactly its own line). The only stats field NEVER compared is
+  `last_updated_at` (wall-clock millis, run-variant — `last_updated_snapshot_id` is its stable proxy);
+  defensible omission, not a gap.
