@@ -97,6 +97,22 @@ impl PuffinWriter {
         Ok(blob_metadata)
     }
 
+    /// Returns the size in bytes of the footer that [`Self::close`] will write — the leading magic,
+    /// the (possibly compressed) footer payload, the fixed footer struct (payload-length + flags +
+    /// trailing magic). Mirrors Java `PuffinWriter.footerSize()`, consumed as a
+    /// [`StatisticsFile`](crate::spec::StatisticsFile)'s `file_footer_size_in_bytes` (Java
+    /// `ComputeTableStatsSparkAction` builds `GenericStatisticsFile(..., writer.fileSize(),
+    /// writer.footerSize(), ...)`).
+    ///
+    /// Deterministic given the blobs added so far; call it after the final [`Self::add`] and before
+    /// (or after) [`Self::close`] — both yield the same value because no blob is added in between.
+    pub fn footer_size(&self) -> Result<u64> {
+        let footer_payload_length = self.footer_payload_bytes()?.len() as u64;
+        Ok(u64::from(FileMetadata::MAGIC_LENGTH)
+            + footer_payload_length
+            + u64::from(FileMetadata::FOOTER_STRUCT_LENGTH))
+    }
+
     /// Finalizes the Puffin file.
     ///
     /// Returns the total file size in bytes including the footer (mirrors Java

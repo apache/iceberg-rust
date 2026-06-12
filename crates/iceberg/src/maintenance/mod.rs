@@ -45,6 +45,12 @@
 //!   field ids 1..=13 stamped; [`register_partition_stats_file`] commits it into the table metadata
 //!   (`SetPartitionStatistics`); [`read_partition_stats_file`] decodes a written file back into rows. See
 //!   [`partition_stats`] for the schema + traversal + on-disk format.
+//! - [`ComputeTableStats`] — per-column NDV (number of distinct values) via Apache DataSketches theta
+//!   sketches (the [`iceberg_sketches`] crate), written as one `apache-datasketches-theta-v1` Puffin
+//!   blob per column into a single statistics file and registered through the existing
+//!   [`UpdateStatisticsAction`](crate::transaction::Transaction::update_statistics). The Rust port of
+//!   Java's `ComputeTableStats` action; each value is fed to the sketch in Iceberg single-value
+//!   serialization form (`Conversions.toByteBuffer`). See [`compute_table_stats`].
 //!
 //! # Relationship to `transaction::expire_cleanup`
 //!
@@ -56,6 +62,7 @@
 //! [`DeleteOrphanFiles`] for why this module re-derives the *full* reachable set instead of
 //! reusing `expire_cleanup`'s delta machinery).
 
+mod compute_table_stats;
 mod delete_orphan_files;
 pub mod partition_stats;
 mod remove_dangling_delete_files;
@@ -64,6 +71,7 @@ mod rewrite_data_files;
 #[cfg(test)]
 mod tests;
 
+pub use compute_table_stats::{ComputeTableStats, ComputeTableStatsResult};
 pub use delete_orphan_files::{DeleteOrphanFiles, DeleteOrphanFilesResult, PrefixMismatchMode};
 pub use partition_stats::{
     PartitionStats, compute_and_write_stats_file, compute_partition_stats, partition_stats_schema,

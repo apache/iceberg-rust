@@ -3286,6 +3286,7 @@ dependencies = [
  "flate2",
  "fnv",
  "futures",
+ "iceberg-sketches",
  "iceberg_test_utils",
  "itertools 0.13.0",
  "minijinja",
@@ -3496,6 +3497,10 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
 ]
+
+[[package]]
+name = "iceberg-sketches"
+version = "0.9.1"
 
 [[package]]
 name = "iceberg-sqllogictest"

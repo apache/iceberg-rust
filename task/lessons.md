@@ -997,3 +997,242 @@ How to use it (see the manuals' §2):
   `last_updated_snapshot_id` (each fails on exactly its own line). The only stats field NEVER compared is
   `last_updated_at` (wall-clock millis, run-variant — `last_updated_snapshot_id` is its stable proxy);
   defensible omission, not a gap.
+### 2026-06-12 (Wave-5 Group Y / Y1 — theta-sketch foundation, BUILDER Opus, wt-tstats)
+- **DataSketches' MurmurHash3 is NOT the canonical byte-stream MurmurHash3 — DO port from the jar
+  bytecode, never reuse the `murmur3` crate, even though it ships `murmur3_x64_128`.** *Why:* the
+  crate streams bytes with a `u32` seed and XORs the running byte count; DataSketches'
+  `MurmurHash3$HashState` (1.10.0 jar) processes the input as 16-byte BLOCKS of two LE `u64`s with a
+  64-bit seed, the long-array path passes `len*8` (not `len`) as lengthBytes to `finalMix128`, and it
+  REJECTS zero-length input (`checkPositive` throws). Constants: C1=0x87c37b911142_53d5,
+  C2=0x4cf5ad4327_45937f, block adds 0x52dce729/0x38495ab5, fmix64 standard. The seed-hash for the
+  Iceberg default seed 9001 is `computeSeedHash(9001) = hash([9001L],0)[0] & 0xFFFF = 37836` (0x93cc).
+  A single divergent bit makes every NDV blob incompatible with all other engines — so the hash is
+  pinned against Java vectors for byte-tail lengths 1..=18 AND representative longs.
+- **The estimation-mode CompactSketch is byte-reproducible WITHOUT the C++ library if you port
+  `HeapQuickSelectSketch.hashUpdate` + `quickSelectAndRebuild` faithfully — and the retained SET is
+  probe-order-INDEPENDENT, so a simple stride-1 reproduction confirms the algorithm before porting the
+  real `getStride`.** *Why:* I reproduced the lib's exact retained set (24 hashes) + theta
+  (266783384329207353) for "1000 longs at lgK=4" in pure Java first. Keys are `hash[0] >>> 1` (63-bit);
+  `theta = selectExcludingZeros(cache, curCount, 2^lgK + 1)` = the (2^lgK)-th smallest non-zero hash
+  (0-based index 2^lgK); initial `lgArrLongs = startingSubMultiple(lgK+1, 3, 5)`; threshold =
+  `floor((lgArr<=lgNom?0.5:0.9375) * 2^lgArr)`; on overflow grow if `lgArr<=lgNom` else quickselect.
+  The real probe is `getStride = 2*((hash>>>lgArr)&127)+1` (odd) — ported for fidelity, but the SET is
+  the same regardless of probe order, so a quick stride-1 Java repro is a cheap pre-port sanity oracle.
+- **The COMPACT serialized form ZEROES bytes 3-4 (lgNomLongs/lgArrLongs) — those are update-only
+  state, NOT part of the cross-engine contract.** *Why:* a decoded compact sketch reported lgNom=0
+  lgArr=0 even at lgK=4. The compact contract is only: preamble (preLongs 1/2/3) + theta (stored only
+  when preLongs=3 / theta<MAX) + the ascending hashes; count at b8-11, P=1.0f at b12-15. Empty stores
+  NO seed hash (b6-7=0); single-item uses preLongs=1 + SINGLEITEM flag (0x20) + one hash, theta=MAX.
+- **A new in-workspace crate can be ZERO-dependency (std-only) and is `cargo machete`-clean by
+  construction — flag that explicitly when machete/taplo aren't installed locally.** *Why:* the
+  theta hash + serialization are pure arithmetic + byte layout; no external crate is needed (the
+  `murmur3` crate would be WRONG anyway). The crate's `[dependencies]` table is empty, so there is
+  nothing for machete to flag; the Cargo.lock entry has no dependency list. Stated in the report
+  since neither tool was runnable in this environment.
+
+### 2026-06-12 (Wave-5 Group Y / Y1 — theta-sketch foundation, REVIEWER Opus, wt-tstats)
+- **A "byte-exact vs Java" estimate pin with a `< 1e-6` tolerance is NOT a regression pin — it hides a
+  real 1-ULP formula divergence. For any cross-engine numeric, assert `f64::to_bits()`, never a
+  tolerance.** *Why:* the builder computed NDV `estimate` as `count / (theta / MAX)`; Java
+  `Sketch.estimate(long thetaLong, int curCount)` (bytecode) is `curCount * (9.223372036854776E18 /
+  thetaLong)` — i.e. `count * (2^63_f64 / theta)`. The two are algebraically equal but round ONE ULP
+  apart on the lgK=4 fixture (Java `829.7403132548839` bits `…142c`; the builder's form `…142d`). The
+  builder's own test asserted `(est - 829.7403132548839).abs() < 1e-6` → it PASSED on the wrong value.
+  Fixed to Java's exact order-of-operations + pinned `to_bits()`. RULE: derive the estimator's exact
+  expression from `getEstimate`'s bytecode and reproduce the OPERATION ORDER, not just the algebra; the
+  constant `2^63` (Java's literal) equals `i64::MAX as f64` to the bit, so `MAX_THETA as f64` is right.
+- **A compact-sketch parser that branches on `preLongs` MUST special-case `preLongs==1`, or a hostile
+  8-byte blob panics on `bytes[8..12]`.** *Why (Java `CompactOperations.memoryToCompact` bytecode):*
+  curCount is read from bytes 8-11 ONLY for `preLongs > 1`; a 1-long preamble that is neither EMPTY nor
+  single carries curCount=0 (no count field — the buffer is only 8 bytes). The builder's reader fell
+  through to the multi-entry path for `preLongs==1` and index-panicked (range end 12 > len 8). Java
+  reads it as a 0-entry sketch (heapify-probed). Two sub-cases: ALSO single-item when `flags & 31 == 26`
+  (READ_ONLY|COMPACT|ORDERED, no bit-32 — the LEGACY single encoding `otherCheckForSingleItem`), reading
+  the hash at byte 8. Fixed both; pinned no-panic + Java-parity. RULE: a deserializer's "required-bytes"
+  guard must be keyed off the SAME field shape the body-reader assumes — a length check that passes
+  `8 < 8` does not protect a read of bytes 8-11.
+- **Update-overload equivalence (`hash(long[]{v}) == hash(LE8(v))`) is a provable IDENTITY, not a
+  coincidence — but verify the per-overload Java path from bytecode before trusting it.** *Why:* the
+  headline cross-engine question for Y2 is whether feeding a long column via `update_u64` (long-array
+  path) matches Java's `UpdateSketch.update(long)`. Bytecode: `update(long v)` builds `long[]{v}` and
+  hashes via `MurmurHash3.hash([J,J)` then `>>> 1`; `update(byte[])` hashes the raw bytes via
+  `hash([B,J)`. For a single long both reduce to `finalMix128(k1=v, k2=0, lengthBytes=8)` — identical.
+  Confirmed EQ=true for all 17 edge values against datasketches-java-3.3.0. So `update_u64` is
+  Java-faithful for long columns; a Y2 caller may feed either form for longs. (String/binary columns go
+  through the byte path with their own bytes — no equivalence claim needed there.)
+- **The DataSketches serial-version reader posture: Java accepts v1/v2/v3 (`CompactSketch.heapify` →
+  `ForwardCompatibility.heapify{1,2}to3`); a v3-ONLY Rust reader is defensible because every Iceberg
+  theta blob is v3, but it IS a documented reader gap — say so in the code + map, don't leave it
+  implicit.** Likewise Java CAN emit UNORDERED compact (`compact(false,…)`, ORDERED flag clear, flags
+  0x0a); the reader must accept it verbatim (Java only records the flag, never re-validates ordering).
+  Both pinned. Positive divergence found + kept: a `count=i32::MAX` allocation-bomb blob errors
+  (TruncatedInput) in Rust BEFORE allocating, where Java's heapify trusts curCount and throws
+  OutOfMemoryError — Rust's fail-closed-before-alloc is strictly safer and still loud.
+- **Reviewer probe hygiene: drive the crate's PUBLIC API from a throwaway `crates/<c>/tests/*.rs`
+  integration file to compare against Java, then DELETE the dir before the gate.** Each probe test
+  output was cross-checked line-by-line against a fresh Java oracle (`AdversarialOracle.java` +
+  `HeapifyProbe.java`, compiled against the m2 jar) — `cargo test --nocapture` interleaves stdout when
+  multiple `println!` race, so run each probe test with `--exact` individually for clean capture, or it
+  silently drops lines and looks like a divergence.
+
+### 2026-06-12 (Wave-5 Group Y / Y2 — ComputeTableStats action, BUILDER Opus, wt-tstats)
+- **The theta-sketch VALUE→bytes contract IS `Datum::to_bytes()` — verify it byte-for-byte against
+  `Conversions.toByteBuffer` bytecode before trusting it, then feed via `update_bytes`.** *Why:* the
+  puffin spec says "values converted to bytes using Iceberg's single-value serialization"; `javap -c`
+  on `iceberg-api-1.10.0` `Conversions.toByteBuffer` confirms per type — int/date=`allocate(4).order(LE)
+  .putInt`, long/time/timestamp(tz)(Ns)=`allocate(8).order(LE).putLong`, float/double=LE, string=
+  `CharBuffer.wrap → UTF-8 encoder` (unprefixed), uuid=16B BE, fixed/binary=raw, decimal=
+  `unscaledValue().toByteArray()` (BE two's-complement minimal). `Datum::to_bytes()` matches all of
+  these. A per-type byte-form unit pin (hand-declared bytes) is mandatory: the crown-jewel NDV-count
+  test alone does NOT catch a wrong byte form (the display/JSON form yields the SAME distinct count) —
+  only the byte pins fail when `to_bytes()` is swapped for `to_string()`. Proven by mutation.
+- **The `ndv` blob property is `String.valueOf((long) sketch.getEstimate())` — `f64 as i64` TRUNCATION
+  toward zero, NOT `round()`.** *Why:* `NDVSketchUtil` (spark, MAIN-only) + the puffin spec ("non-negative
+  integer ... decimal digits, no leading/trailing spaces"). Rust `estimate() as i64` is the identical
+  truncation. Don't reach for `.round()`.
+- **Java `ComputeTableStats` defaults: columns = all TOP-LEVEL PRIMITIVE columns (skip nested), snapshot
+  = current.** *Why:* `ComputeTableStatsSparkAction` filters `schema.columns().filter(type.isPrimitiveType())`
+  and `validateColumns` rejects non-existent ("Can't find column %s") + non-primitive ("Can't compute stats
+  on non-primitive type column"); the `ComputeTableStats` javadoc says "by default all columns are chosen".
+- **The spark `theta_sketch_agg` / `NDVSketchUtil` feeding behavior is MAIN-only (lives in `iceberg-spark`,
+  NOT in the m2 `iceberg-{api,core,data}` jars) — pin the action against the puffin SPEC + `Conversions`
+  bytecode, and flag the agg as MAIN-only.** *Why:* the cross-engine contract is the BYTES + the blob/
+  property shape, all derivable from core + the spec; the spark UDAF only orchestrates `update(byte[])`.
+- **`PuffinWriter::close()` returns total size only — Java's `StatisticsFile` also needs `footerSize()`.**
+  *Why:* `ComputeTableStatsSparkAction` builds `GenericStatisticsFile(..., writer.fileSize(),
+  writer.footerSize(), ...)`. Add a non-breaking `footer_size()` accessor (MAGIC + footer_payload +
+  FOOTER_STRUCT) rather than changing `close()`'s signature (3 in-crate callers). The existing
+  `UpdateStatisticsAction` already covers `SetStatistics` — reuse it (do NOT rebuild a registration path
+  like X2 had to for partition stats, which has no transaction action).
+
+### 2026-06-12 (Wave-5 Group Y / Y2 — ComputeTableStats action, REVIEWER Opus, wt-tstats)
+- **STOP-GRADE: Java's NDV pipeline builds an ALPHA-family sketch; the Y1 port is QUICKSELECT — do NOT
+  dismiss the puffin spec's "Alpha" as a doc nit.** *Why:* three independent sources agree —
+  `format/puffin-spec.md` ("constructing **Alpha family sketch**"), Spark `ThetaSketchAgg
+  .createAggregationBuffer` MAIN source (`UpdateSketch.builder.setFamily(Family.ALPHA).build()`, all of
+  spark v3.5/4.0/4.1 + the class doc), and `datasketches-java-3.3.0` bytecode (`UpdateSketchBuilder`'s
+  DEFAULT family is QuickSelect, so the explicit `.setFamily(ALPHA)` is load-bearing — it overrides the
+  default the Y1 port matches). Consequence (Java probe, lgK12/seed9001): **exact mode (≲ a few thousand
+  distinct, theta==MAX) Alpha and QuickSelect are byte-identical + same ndv; estimation mode (≳7k) they
+  DIVERGE** (n=1M → Alpha 1004032 vs QS 1002714, different retained set + bytes — Alpha switches to a
+  sampling estimate `nominal*MAX/theta`). A test suite that feeds only ≤6 distinct values per column
+  CANNOT see this — the divergence is SILENT. Lesson: when the headline is a sketch-FAMILY question, the
+  crown-jewel hand-count test is necessary but NOT sufficient — add an explicit estimation-mode value pin
+  (large distinct input) that documents the QuickSelect↔Alpha gap, so the next agent porting Alpha has a
+  visible, citable pin (flip it to assert-equal-with-Alpha when the family lands). DON'T fix Y1's crate
+  from Y2 (committed byte surface) — STOP-report the family verdict in the module doc + matrix cell.
+- **The `footer_size <= file_size` invariant is too weak — a `footer_size == total` mutation SURVIVES it.**
+  *Why:* a real Puffin stats file always has the leading MAGIC + the blob payloads BEFORE the footer, so
+  `footer < total` STRICTLY; Java readers locate the blob region as `fileSize - footerSize`, so a footer
+  that equals/exceeds the data is corrupt. Pin `<` not `<=`. (Verified the seam IS correct otherwise:
+  Rust `footer_size()` == Java `PuffinWriter.footerSize()` byte-for-byte = MAGIC(4) + payload +
+  FOOTER_STRUCT(12) = payload+16, the exact bytes `write_footer` appends.)
+- **The 4 byte-form pins (long/date/string/decimal) skip the dangerous edges — add them.** *Why:*
+  negative/zero decimals (Java `BigInteger.toByteArray` minimal two's-complement: -1→`ff`, 0→`00`,
+  -300→`fe d4`), uuid (16B BE), float/double NaN + -0.0 (Java `putFloat`/`putDouble` write RAW bits, no
+  NaN canonicalization — Rust `to_le_bytes` matches), and boolean (1 byte) all have distinct failure modes
+  a long/string pin can't catch. `Datum::to_bytes` matches Java for ALL of them (verified vs a Java probe).
+- **Spark agg/UDAF source IS available at `/tmp/iceberg-java-ref/spark/v{3.5,4.0,4.1}` even though no
+  iceberg-spark JAR is in `~/.m2`.** *Why:* the orchestrator believed datasketches came in via a spark jar
+  in m2 — it did NOT (only `datasketches-java`/`-memory` jars are there). For spark-action provenance read
+  the MAIN source tree, not m2 bytecode; for the FAMILY question that source (`setFamily(ALPHA)`) is the
+  authoritative oracle, cross-checked against the datasketches jar's builder-default bytecode.
+
+### 2026-06-12 (Wave-5 Group Y / Y3 — Alpha-family update sketch, BUILDER Opus, wt-tstats)
+- **THE ndv-source ruling: Iceberg's `ndv` reads the COMPACT sketch's `getEstimate`, NOT the Alpha
+  update sketch's. The two genuinely DIFFER in estimation mode — derive which object from
+  `NDVSketchUtil.toBlob`, never assume "the sketch's estimate".** *Why (decisive — spark v3.5/4.0/4.1
+  `NDVSketchUtil.java` identical):* `Sketch sketch = CompactSketch.wrap(Memory.wrap(bytes)); ... ndv =
+  String.valueOf((long) sketch.getEstimate())`. `sketch` is the COMPACT sketch reparsed from the
+  serialized bytes — its `getEstimate` is the family-COMPACT STANDARD estimator `retained*(2^63/theta)`.
+  The live Alpha UPDATE sketch's `getEstimate` (`HeapAlphaSketch.getEstimate` bytecode) is family-aware:
+  `theta>split1` → standard, `theta<=split1` → SAMPLING `nominal*(2^63/theta)`. Java probe (lgK12/seed9001,
+  n=1M): UPDATE sampling estimate = 1002319 but COMPACT estimate = 1004032 — and **1004032 is the prompt's
+  pinned ndv**. So the action must do `CompactThetaSketch::deserialize(&payload).estimate()`, exactly
+  Java's `CompactSketch.wrap(bytes).getEstimate()`. Pinning BOTH values (the compact one as the ndv, the
+  update one as "NOT the ndv") makes the object-selection load-bearing. The prompt framed `nominal*MAX/theta`
+  as "the Alpha estimator the Y2 probe saw" — true of the UPDATE sketch, but the ndv uses the COMPACT one;
+  a builder who wired `alpha.estimate()` would emit 1002319 and silently diverge from every engine.
+- **`HeapAlphaSketch.compact()` is family-COMPACT, not family-ALPHA — the on-disk form REUSES the
+  QuickSelect serializer verbatim; only the UPDATE-side retention/theta differs.** *Why:* `toByteArray()`
+  on the live Alpha sketch writes a family-ALPHA preamble, but Iceberg serializes via `UpdateSketch.compact()`
+  → `componentsToCompact(thetaLong, getRetainedEntries(true), seedHash, isEmpty, ..., cache)` → `compactCache`
+  keeps cache entries `0<h<theta`, `Arrays.sort` ascending, `loadCompactMemory` writes the family-COMPACT (id 3)
+  preamble. So `AlphaSketch::serialize_compact()` = the Y1 `serialize_compact_from_parts(is_empty, theta,
+  sorted_below_theta_hashes, seed)` UNCHANGED — one path, no fork. The reused retained count is
+  `getRetainedEntries(true)` (the DIRTY-aware `countPart` = the below-theta cache count), NOT the raw
+  `curCount_` (which over-counts dirty stale slots). Make the shared helpers `pub(crate)` rather than
+  duplicating the serializer.
+- **The Alpha dirty-phase insert (`enhancedHashInsert`) reuses stale (≥theta) slots WITHOUT a count
+  bump and does NOT rebuild every insert — port it faithfully or the retained set drifts by an element.**
+  *Why:* once `theta<=split1` the table accumulates above-theta entries; a new insert probes, and on the
+  FIRST stale slot it reuses it in place (`InsertedCountNotIncremented`), decays theta, sets dirty; only a
+  truly-empty slot bumps `curCount` and may trigger `rebuildDirty` (a same-size purge; if nothing purged,
+  grow by 1). A naive "rebuild on every dirty insert" or "always land in an empty slot" port produced a
+  retained SET that differed from Java by ONE borderline hash near theta — invisible to retained-count and
+  theta pins (both matched) but caught by the BYTE-EXACT fixture. Lesson: for a stateful Java sketch, the
+  byte-exact estimation fixture is the only pin that catches a single-element set drift; pin retained+theta
+  AND the full bytes.
+- **A byte-exact `*_HEX` const transcribed by hand into Rust is error-prone — generate it, then REPLACE
+  the const programmatically from the verified-equal Rust/Java output, never retype a 8000-char hex.**
+  *Why:* my first paste of the lgK9/520 fixture had 2 extra hex chars at byte 1880; the retained SET and
+  theta were byte-identical (proven by dumping both sets — zero diff), so the bug was purely a transcription
+  typo in the const, not the algorithm. A `python3 re.sub` replacing the const with the Java-generated hex
+  (after confirming the live Rust `serialize_compact()` == the Java hex) fixed it in one shot. DO diff the
+  retained SETS first when an estimation fixture fails — if the sets match, the bug is in the const, not the
+  sketch.
+- **`setHashTableThreshold(lgNom, lgArr)` uses the 0.5 fraction when `lgArr <= lgNom` (NOT 0.9375).** *Why:*
+  the initial Alpha table at lgK12 has lgArr=7 (`startingSubMultiple(13,3,5)=7`), and 7<=12 ⇒ threshold =
+  `floor(0.5*2^7)=64`, not 120. I twice wrongly asserted the 0.9375 branch; it only applies once the table
+  has grown PAST nominal. Read the `if_icmpgt` direction in the bytecode, don't assume the resize-phase fraction.
+
+### 2026-06-12 (Wave-5 Group Y / Y3 — Alpha-family update sketch, REVIEWER Opus, wt-tstats)
+- **HEADLINE — the real bug was at the ACTION level, not in the dirty-path sketch: NO test pinned that
+  PRODUCTION `write_stats_file` reads the COMPACT estimate (1004032), not the Alpha UPDATE sampling
+  estimate (1002319). The headline `ndv` re-pin RECONSTRUCTED the path inline (`AlphaSketch` →
+  `serialize_compact` → `CompactThetaSketch::deserialize().estimate()`) and never called
+  `write_stats_file`; the crown jewel calls `execute()` but only on ≤6-distinct EXACT-mode data where
+  the two estimators COINCIDE.** *Proof:* mutating `write_stats_file` to `let ndv = sketch.estimate()`
+  (the update form) SURVIVED all 21 compute_table_stats tests. FIX: added
+  `test_write_stats_file_ndv_property_reads_compact_estimate_in_estimation_mode` — mints a real snapshot,
+  feeds a 1M-distinct `AlphaSketch`, drives the PRODUCTION `write_stats_file`, reopens the puffin, and
+  asserts the on-disk `ndv` PROPERTY == 1004032 (≠ 1002319). Fail-before (1002319) / pass-after (1004032)
+  verified. RULE: a pin that reconstructs the code path inline does NOT pin production — drive the real
+  fn, and put the discriminating input (estimation-mode, where the two objects diverge) through it, or the
+  object-selection decision is unguarded where it actually lives.
+- **The dirty-path stale-slot machinery (`enhancedHashInsert` reuse, `rebuildDirty` grow-if-nothing-purged,
+  count-on-empty-vs-reuse) is byte-output-EQUIVALENT to a naive clean-path port — so the byte-exact
+  fixtures CANNOT catch most dirty-path mutations.** *Why:* theta decays exactly once per successful
+  insert in BOTH paths (same decay count ⇒ same theta trajectory); the retained set is `{0<h<theta}`,
+  invariant under table size and probe layout; rebuilds purge stale entries + re-sync count but never
+  change theta or the below-theta set. Verified: `if false` (never take the dirty path), `current_count
+  += 1` on stale reuse, and flipping `rebuildDirty`'s grow condition ALL produced byte-identical output on
+  a 200k-element adversarial pseudo-random sequence (Rust == Java FNV-of-bytes identical). The ONE
+  dirty-path mutation that bites is "reuse the EMPTY slot instead of the stale slot" — it leaves stale
+  entries forever, the table fills, and the inner stale-search loop (no `loop_index` guard, faithful to
+  Java) SPINS FOREVER (test hangs at 100% CPU). So the stale-slot reuse is load-bearing for LIVENESS, not
+  for the bytes. LESSON: for a stateful sketch where the serialized form is a pure function of (theta,
+  below-theta set), byte fixtures pin the OUTPUT contract but NOT the internal state machine; to pin the
+  machine you need a differential oracle (run both candidate algorithms, diff) or a liveness/timeout pin —
+  the prompt's worry "a subtle miss hides DESPITE byte-exact fixtures" is real, but it lives in the ACTION
+  object-selection, not the cache mechanics.
+- **The three trickiest bytecode facts RE-DERIVED independently and CONFIRMED against alpha.rs:**
+  (a) `enhancedHashInsert` tracks the FIRST stale (`>= theta`) slot (`deleteIndex`, local 10) and reuses
+  it in place WITHOUT a count bump (`InsertedCountNotIncremented`, offsets 154-179); a truly-empty slot
+  bumps count + may `rebuildDirty` (offsets 272-318). The probe order is first-stale-wins (the inner loop
+  at 89-119 only breaks on hash-found or empty, never on a later stale). (b) `rebuildDirty` (offsets 0-22):
+  `prev=curCount; forceRebuildDirtyCache(); if (prev == curCount) forceResizeCleanCache(1)` — grow ONLY
+  when NOTHING was purged (`prev == curCount`). (c) `getRetainedEntries(true)` = `(curCount>0 && arg &&
+  isDirty()) ? HashOperations.countPart(cache,lgArr,theta) : curCount`; `countPart` counts `!continueCondition`
+  = `{0<h<theta}`; `UpdateSketch.compact(b,mem)` feeds `getRetainedEntries(true)` (NOT raw curCount) to
+  `componentsToCompact`, and `compactCache` THROWS "curCount parameter is incorrect" if the below-theta
+  count `< curCount` — so a port that fed raw curCount when dirty would error in Java. Rust's
+  `retained_entries()` (dirty ⇒ `below_theta_hashes().len()`) + `serialize_compact` (direct below-theta
+  filter) match all three. The "raw curCount" mutation IS caught by the `retained_entries()` assertions.
+- **Seam fixtures at the dirty-state-machine transitions (n=nominal/nominal+1/nominal+2 at lgK9; stale-reuse
+  checkpoints n=600/1000/5000 with dup-interleave; mid-size lgK12/n=10000) are all byte-EXACT vs fresh
+  datasketches-java-3.3.0 — but they catch nothing the existing endpoint fixtures miss** (per the
+  equivalence finding above). Generated + verified them as a probe, then DELETED rather than bloat the
+  suite with multi-KB redundant hex (the lesson's transcription-hazard warning). The benign `>` vs `>=`
+  split1-comparison mutations also survive (boundary `theta == split1` is measure-zero) — not gaps; the
+  estimator BRANCH-DIRECTION flip IS caught by the n=7000/1M sampling-estimate pins (6973/1002319).
