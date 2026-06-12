@@ -280,6 +280,14 @@ fn resolve_nan_preserving_reference(expr: &Expr) -> Option<Reference> {
 /// Resolves the column reference from an arithmetic expression that combines a
 /// single column with a finite literal while preserving NaN-ness. See
 /// [`resolve_nan_preserving_reference`] for the soundness argument.
+///
+/// Expressions with column references on both sides (e.g. `(x + 1) * (x - 2)`)
+/// are not supported. Handling them safely would require both operands to
+/// resolve to the *same* column (`x + y` cannot be expressed as a single
+/// `col IS NAN`) and the operator combination itself to be NaN-preserving:
+/// `(x + 1) * (x - 2)` is NaN iff `x` is NaN, but `(x + 1) - (x - 2)` is NaN
+/// for `x = inf` (`inf - inf`) even though `x` is not. Left for a potential
+/// follow-up.
 fn resolve_nan_preserving_binary(binary: &BinaryExpr) -> Option<Reference> {
     let (left, right) = (&binary.left, &binary.right);
     match binary.op {
