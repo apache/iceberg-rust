@@ -897,11 +897,16 @@ pub mod tests {
             let data_file_manifest = writer.write_manifest_file().await.unwrap();
 
             // Write to manifest list
+            let manifest_list_writer = self
+                .table
+                .file_io()
+                .new_output(current_snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap();
             let mut manifest_list_write = ManifestListWriter::v2(
-                self.table
-                    .file_io()
-                    .new_output(current_snapshot.manifest_list())
-                    .unwrap(),
+                manifest_list_writer,
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
@@ -1128,11 +1133,16 @@ pub mod tests {
             let data_file_manifest = writer.write_manifest_file().await.unwrap();
 
             // Write to manifest list
+            let manifest_list_writer = self
+                .table
+                .file_io()
+                .new_output(current_snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap();
             let mut manifest_list_write = ManifestListWriter::v2(
-                self.table
-                    .file_io()
-                    .new_output(current_snapshot.manifest_list())
-                    .unwrap(),
+                manifest_list_writer,
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
@@ -1219,11 +1229,16 @@ pub mod tests {
 
             // Write to manifest list - DATA FIRST then DELETE
             // This order is crucial for reproduction
+            let manifest_list_writer = self
+                .table
+                .file_io()
+                .new_output(current_snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap();
             let mut manifest_list_write = ManifestListWriter::v2(
-                self.table
-                    .file_io()
-                    .new_output(current_snapshot.manifest_list())
-                    .unwrap(),
+                manifest_list_writer,
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
@@ -1854,41 +1869,31 @@ pub mod tests {
                 .build()
                 .unwrap(),
         );
-        let task = FileScanTask {
-            data_file_path: "data_file_path".to_string(),
-            file_size_in_bytes: 0,
-            start: 0,
-            length: 100,
-            project_field_ids: vec![1, 2, 3],
-            predicate: None,
-            schema: schema.clone(),
-            record_count: Some(100),
-            data_file_format: DataFileFormat::Parquet,
-            deletes: vec![],
-            partition: None,
-            partition_spec: None,
-            name_mapping: None,
-            case_sensitive: false,
-        };
+        let task = FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(0)
+            .with_start(0)
+            .with_length(100)
+            .with_project_field_ids(vec![1, 2, 3])
+            .with_schema(schema.clone())
+            .with_record_count(Some(100))
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_case_sensitive(false)
+            .build();
         test_fn(task);
 
         // with predicate
-        let task = FileScanTask {
-            data_file_path: "data_file_path".to_string(),
-            file_size_in_bytes: 0,
-            start: 0,
-            length: 100,
-            project_field_ids: vec![1, 2, 3],
-            predicate: Some(BoundPredicate::AlwaysTrue),
-            schema,
-            record_count: None,
-            data_file_format: DataFileFormat::Avro,
-            deletes: vec![],
-            partition: None,
-            partition_spec: None,
-            name_mapping: None,
-            case_sensitive: false,
-        };
+        let task = FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(0)
+            .with_start(0)
+            .with_length(100)
+            .with_project_field_ids(vec![1, 2, 3])
+            .with_predicate(Some(BoundPredicate::AlwaysTrue))
+            .with_schema(schema)
+            .with_data_file_format(DataFileFormat::Avro)
+            .with_case_sensitive(false)
+            .build();
         test_fn(task);
     }
 
