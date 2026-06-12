@@ -403,3 +403,87 @@ How to use it (see the manuals' §2):
   reason (missing file, not the injected corruption).** The chain script is correct (it builds an
   absolute `${TMP}` from `${SCRIPT_DIR}`); only ad-hoc reviewer commands hit this. Always echo the
   resolved path and confirm a CLEAN run passes before trusting a sabotage's failure.
+
+### 2026-06-12 (I3 — data-level WAP interop, BUILDER Sonnet)
+
+- **`updateProperties().set(...).commit()` in BOTH Java and Rust does NOT create a snapshot — only
+  emits a `SetProperties`/`RemoveProperties` table update with no `AddSnapshot`.** Using it to
+  "bump" main in a REPLAY-shape chain means the table's `current-snapshot-id` is UNCHANGED after
+  the "bump", so `staged.parent == current` → the cherry-pick takes the FAST-FORWARD path (no new
+  snapshot, no `source-snapshot-id`/`published-wap-id` tags). DO use a REAL data fast-append for
+  the bump (write an actual parquet file); even one row with a known id (e.g. id=99 category=a
+  data="bump") is sufficient and the row becomes part of the expected fixture.
+- **S-replay order: stage FIRST while `current = base`, THEN advance main with the bump commit.**
+  The REPLAY shape requires `staged.parent ≠ current head at cherry-pick time`. Stage the WAP
+  append BEFORE the bump so `staged.parent = base`. After the bump, `current = bump ≠ base =
+  staged.parent` → REPLAY guaranteed. If you stage AFTER the bump, `staged.parent = bump = head`
+  → FAST-FORWARD → no `source-snapshot-id`/`published-wap-id`. The sequence is: (1) fast-append
+  base, (2) `stage_only()` WAP append, (3) verify `current_snapshot_id == base_snapshot_id`,
+  (4) fast-append bump. Confirm REPLAY by asserting the staged snapshot is NOT reachable from the
+  current ancestry (`staged_id ∉ walk_from(current_snapshot)`).
+- **`LocalTableOperations.commit(null, metadata)` always writes `v0.metadata.json` to its metadata
+  directory — repeated calls to `verifyRustTable` fail with "File already exists".** Fix: use
+  `Files.createTempDirectory(parent, prefix)` per verify call to create a fresh directory per run.
+  Rebuild the `TableMetadata` with the temp dir as location (via `TableMetadata.buildFrom(meta)
+  .discardChanges().setLocation(tempDir.toString()).build()`), then seed `LocalTableOperations`
+  with the temp dir. Data files referenced by the manifests use absolute paths so they resolve to
+  the original parquet files regardless of the temp dir location.
+- **`TableMetadata.Builder.withLocation()` does NOT exist in iceberg-core 1.10.0; the correct
+  method is `setLocation(String)`.** Always verify Java API names by running `javap` on the target
+  class in `~/.m2` before writing oracle code that calls an API method.
+- **Semantic sabotage for WAP interop must target the WAP-ID chain, not file paths or partition
+  directories.** Swapping file paths or directory names in manifests (even in-place binary edits)
+  does not corrupt the `category` column values stored in the parquet data — IcebergGenerics reads
+  the actual Arrow column values from the parquet files, which are immutable. The correct semantic
+  sabotage: corrupt the staged snapshot's `wap.id` in the metadata JSON (change `"w1"` →
+  `"w1-CORRUPTED"`). The metadata still parses, the staged snapshot is still present, Java
+  cherry-picks it and produces a snapshot with `published-wap-id="w1-CORRUPTED"` → the
+  `published-wap-id == "w1"` assertion fires. This is the WAP chain semantic pin, not a partition
+  routing pin.
+  _Partially corrected 2026-06-12 (I3 REVIEWER): the claim "IcebergGenerics reads the actual column
+  values, which are immutable" is RIGHT for NON-partition columns but WRONG for the identity-PARTITION
+  column — that value is PROJECTED from the manifest partition STAMP, so even a writer that bakes the
+  wrong category into the parquet column reads back as the stamp. See the I3 REVIEWER block below._
+
+#### I3 REVIEWER corrections (2026-06-12, wt-interop6) — adversarial data-move kill-list
+- **A "row-content pin" whose EXPECTED set is loaded from the OTHER side's own read of the SAME
+  table is CIRCULAR — it catches only a Rust-vs-Java READER disagreement, never a wrong VALUE.**
+  *Why (proven):* the D2 test compared `actual_rows` (Rust read) against `expected_rows` loaded from
+  `java_cherrypick_rows.json` (Java's read of the same table). A `data`-value move injected at the
+  Java WRITER (id=50/60 `data` "e"/"f"→"X") flowed into BOTH `java_cherrypick_rows.json` AND the
+  parquet, so Rust-reads-X == Java-reads-X and the pin PASSED on a corrupted artifact. FIX (this
+  pass): added a hand-declared `ground_truth_rows` vec (10→a … 99→bump) asserted independently of the
+  Java-derived expected — the probe now FAILS at the anti-circular `assert_eq!` (fail-before/pass-
+  after confirmed). DO pin at least ONE side of an interop row-content comparator against a
+  hardcoded fixture, never derive BOTH the actual and the expected from the same physical table.
+- **An identity-partition column read back through a scan is PROJECTED from the manifest partition
+  STAMP, not read from the parquet column — so an `id→category` "routing pin" canNOT detect a
+  rows-in-wrong-partition DATA move where the stored column disagrees with the stamp.** *Why
+  (proven both legs' probes):* a Java writer that put `category="b"` rows into the partition-`a` file
+  (stamp stays "a") was read back by Rust `to_arrow()` as `category="a"` — the projection masked the
+  "b" column entirely; the routing pin reported `a={...50,60...}` and PASSED. This is INHERENT Iceberg
+  behavior (neither Java `IcebergGenerics` nor Rust validates stored-column == partition-stamp; a
+  "garbage in" gap), so it is NAMED RESIDUE, not a fixable assertion. The data-VALUE move is caught
+  by the anti-circular ground-truth pin (on the non-partition `data` column); the column-vs-stamp case
+  is documented in the test + matrix.
+- **A literal parquet file SWAP and an in-place same-length byte patch BOTH trip a STRUCTURAL belt
+  before any semantic pin — do NOT rely on a file-swap to exercise a row-content pin.** *Why
+  (proven):* swapping two staged files of different sizes crashes the reader on `file_size_in_bytes`
+  buffer-fill (manifest records the size); a same-length category-byte flip corrupts the gzip page
+  checksum (`corrupt gzip stream does not have a matching checksum`). Both are parse crashes (the
+  fail-closed structural belt), NOT the routing/content pin. To exercise a row-content pin with a
+  PARSE-CLEAN data move you must drive the WRITER to emit a valid-but-wrong file — a post-hoc file
+  edit cannot. The I1 critic's "swap two staged files" sabotage does NOT translate to a partitioned
+  identity table: the swap is structurally rejected, and even a clean move is projection-masked.
+- **CONFIRMED both lesson-7 bytecode claims against 1.10.0 jars:** `TableMetadata$Builder` has
+  `setLocation(String)` + `withMetadataLocation(String)` but NO `withLocation` (javap);
+  `PropertiesUpdate` (impl of `UpdateProperties`) calls `TableMetadata.replaceProperties` and contains
+  NO `addSnapshot`/`newSnapshot` — so `updateProperties().commit()` creates no snapshot. Both builder
+  lessons are correct.
+- **CRITIC PROCESS SCAR: `git checkout <file>` on an UNCOMMITTED working-tree file reverts it to
+  HEAD, DESTROYING the uncommitted work — it does not "undo my probe edit."** *Why:* I `git checkout`ed
+  `InteropOracle.java` to drop a temporary probe, but I3 was uncommitted on top of HEAD, so the
+  checkout wiped all 669 lines of the builder's WapDataOracle. Recovered by reconstructing from the
+  in-context Reads + the builder transcript (verified: 669 insertions, compiles, chain ×2 green). DO
+  revert a temporary probe with the INVERSE edit (or a `.bak` copy), NEVER `git checkout` a file that
+  carries uncommitted work.

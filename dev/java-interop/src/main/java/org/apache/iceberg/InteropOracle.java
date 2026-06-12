@@ -773,6 +773,51 @@ public final class InteropOracle {
         ViewOracle.generateJavaToRust(viewJavaGenDir);
         break;
 
+      case "generate-interop-wap-data":
+        // WAP DATA-LEVEL interop (increment I3), DIRECTION 1 — "Rust stages, Java cherry-picks".
+        // Builds a V2 partitioned table (identity(category), schema {id long, category string, data
+        // string}), commits base data (REAL parquet: cat=a 10/20/30, cat=b 40), then stages a WAP
+        // append (REAL parquet: cat=a 50/60, cat=b 70) via REAL stageOnly(). Emits:
+        //   java_base_rows.json          — rows present BEFORE cherry-pick (base data only)
+        //   java_staged_snapshot_id.json — the staged snapshot id (for Rust to target)
+        //   java_expected_final_rows.json — expected rows AFTER cherry-pick (base + staged)
+        //   java_wap_table/              — the staged-state table Rust will cherry-pick
+        // The dir is supplied via -Dinterop.wap_data.dir.
+        Path wapDataGenDir = requireFixturesDir("interop.wap_data.dir");
+        WapDataOracle.generate(wapDataGenDir);
+        break;
+
+      case "verify-interop-wap-data":
+        // WAP DATA-LEVEL interop (increment I3), DIRECTION 1 verify — Java cherry-picks the
+        // RUST-staged table and reads via IcebergGenerics, asserting exact rows + WAP semantics.
+        // The Rust GEN test (env ICEBERG_INTEROP_WAP_DATA_GEN_DIR) wrote:
+        //   rust_table/                  — the staged-state table (staged snapshot present, not main)
+        //   rust_staged_snapshot_id.json — the staged snapshot id to cherry-pick
+        // This mode loads the Rust-written table, cherry-picks via manageSnapshots().cherrypick(),
+        // reads via IcebergGenerics, asserts rows == java_expected_final_rows.json, and asserts
+        // WAP summary semantics (published-wap-id / source-snapshot-id) on the cherry-pick snapshot.
+        // Prints "verify-interop-wap-data: 0 failures" sentinel on success.
+        Path wapDataVerifyDir = requireFixturesDir("interop.wap_data.dir");
+        int wapDataFailures = WapDataOracle.verifyRustTable(wapDataVerifyDir);
+        System.out.println("verify-interop-wap-data: " + wapDataFailures + " failures");
+        if (wapDataFailures > 0) {
+          System.exit(1);
+        }
+        break;
+
+      case "generate-interop-wap-data-java-table":
+        // WAP DATA-LEVEL interop (increment I3), DIRECTION 2 — "Java stages + cherry-picks, Rust reads".
+        // Java creates the same partitioned V2 table, commits base data (REAL parquet), stages WAP
+        // append (REAL parquet) via REAL stageOnly(), cherry-picks via manageSnapshots().cherrypick(),
+        // then reads via IcebergGenerics. Emits:
+        //   java_cherrypick_table/metadata/final.metadata.json — the cherry-picked Java table
+        //   java_cherrypick_rows.json    — the expected rows for Rust to assert (base + staged)
+        //   java_cherrypick_snapshot_summary.json — WAP summary facts (published-wap-id/source-snapshot-id)
+        // The dir is supplied via -Dinterop.wap_data.dir.
+        Path wapDataJavaTableDir = requireFixturesDir("interop.wap_data.dir");
+        WapDataOracle.generateJavaTable(wapDataJavaTableDir);
+        break;
+
       default:
         System.err.println("unknown mode: " + mode + " (expected generate|verify)");
         System.exit(2);
@@ -12068,6 +12113,630 @@ public final class InteropOracle {
               + " version-log=" + metadata.history().size() + " entries)");
 
       catalog.close();
+    }
+  }
+
+  // ===========================================================================================
+  // WapDataOracle — I3 DATA-LEVEL WAP interop (both directions).
+  //
+  // THE TABLE (under <dir>/java_wap_table or <dir>/rust_table). V2 partitioned by
+  //   identity(category), schema {1 id long required, 2 category string required,
+  //   3 data string optional}
+  //
+  // DIRECTION 1 (Rust stages, Java cherry-picks + verifies):
+  //   Java GEN (generate):
+  //     Writes a partitioned V2 table with REAL parquet BASE data:
+  //       cat=a: (10,"a"), (20,"b"), (30,"c")   [wdata-base-a.parquet]
+  //       cat=b: (40,"d")                        [wdata-base-b.parquet]
+  //     Then stages WAP append (wap.id="w1") with REAL parquet STAGED data:
+  //       cat=a: (50,"e"), (60,"f")              [wdata-staged-a.parquet]
+  //       cat=b: (70,"g")                        [wdata-staged-b.parquet]
+  //     REPLAY shape: after base commit a "bump" commit is made (no data, just a property change)
+  //     so staged.parent (base) != current head (bump). This forces a REPLAY cherry-pick that
+  //     produces a NEW snapshot with source-snapshot-id + published-wap-id in the summary.
+  //     Emits:
+  //       java_wap_table/metadata/final.metadata.json  — staged-state table for Rust to read
+  //       java_staged_snapshot_id.json                 — the staged snapshot id
+  //       java_base_rows.json                          — rows present BEFORE cherry-pick
+  //       java_expected_final_rows.json                — expected rows AFTER cherry-pick (7 rows)
+  //
+  //   Java VERIFY (verifyRustTable):
+  //     Loads Rust-written <dir>/rust_table/, reads rust_staged_snapshot_id.json, cherry-picks
+  //     the staged snapshot via manageSnapshots().cherrypick(), reads via IcebergGenerics,
+  //     asserts 7 rows {10,20,30,40,50,60,70}, asserts WAP summary semantics on the cherry-pick
+  //     snapshot: source-snapshot-id == staged_id, published-wap-id == "w1".
+  //
+  // DIRECTION 2 (Java stages + cherry-picks, Rust reads):
+  //   generateJavaTable: creates a NEW identical table, commits base data, stages WAP append
+  //   (same REPLAY shape — bump commit between base and stage), cherry-picks via
+  //   manageSnapshots().cherrypick(), reads via IcebergGenerics (7 rows), emits:
+  //     java_cherrypick_table/metadata/final.metadata.json — the post-cherry-pick table
+  //     java_cherrypick_rows.json     — 7-row expected set (base + staged)
+  //     java_cherrypick_snapshot_summary.json — {source_snapshot_id, published_wap_id}
+  // ===========================================================================================
+
+  static final class WapDataOracle {
+    private WapDataOracle() {}
+
+    /** Schema: {1 id long required, 2 category string required, 3 data string optional}. */
+    private static Schema schema() {
+      return new Schema(
+          Types.NestedField.required(1, "id", Types.LongType.get()),
+          Types.NestedField.required(2, "category", Types.StringType.get()),
+          Types.NestedField.optional(3, "data", Types.StringType.get()));
+    }
+
+    /** Build a LocalTableOperations + BaseTable over a fresh temp directory. */
+    private static BaseTable createTable(File tableDir, File metadataDir, File dataDir)
+        throws IOException {
+      if (!metadataDir.isDirectory() && !metadataDir.mkdirs()) {
+        throw new IOException("failed to create metadata dir at " + metadataDir);
+      }
+      if (!dataDir.isDirectory() && !dataDir.mkdirs()) {
+        throw new IOException("failed to create data dir at " + dataDir);
+      }
+      Schema schema = schema();
+      PartitionSpec spec = PartitionSpec.builderFor(schema).identity("category").build();
+      Map<String, String> props = new LinkedHashMap<>();
+      props.put(TableProperties.FORMAT_VERSION, "2");
+      TableMetadata seed =
+          TableMetadata.newTableMetadata(
+              schema, spec, SortOrder.unsorted(), tableDir.getAbsolutePath(), props);
+      LocalTableOperations ops = new LocalTableOperations(tableDir, metadataDir);
+      ops.commit(null, seed);
+      return new BaseTable(ops, "interop_wap_data");
+    }
+
+    /** Build the staged-table commit chain for both direction setups.
+     *
+     * <p>The sequence (S-replay pattern: stage FIRST, THEN bump — so staged.parent ≠ head):
+     * <ol>
+     *   <li>fast-append BASE files (cat=a rows 10/20/30, cat=b row 40) — seq 1; current=base.
+     *   <li>stageOnly WAP append (cat=a rows 50/60, cat=b row 70, wap.id=w1) — seq 2 (staged).
+     *       Current still = base (seq 1). Staged.parent = base.
+     *   <li>BUMP fast-append (cat=a row 99, data="bump") — seq 3; current = bump.
+     *       Now staged.parent (base=seq1) ≠ current head (bump=seq3) → REPLAY cherry-pick shape.
+     * </ol>
+     *
+     * <p>REPLAY cherry-pick produces a NEW snapshot with {@code source-snapshot-id} = staged id
+     * and {@code published-wap-id} = "w1".
+     *
+     * <p>After cherry-pick: 8 live rows: base (10,20,30,40) + bump (99) + staged (50,60,70).
+     */
+    private static long buildStagedTable(BaseTable table, File dataDir) throws IOException {
+      Schema schema = schema();
+      PartitionSpec spec = table.spec();
+      Types.StructType partitionType = spec.partitionType();
+
+      PartitionData partitionA = new PartitionData(partitionType);
+      partitionA.set(0, "a");
+      PartitionData partitionB = new PartitionData(partitionType);
+      partitionB.set(0, "b");
+
+      // 1. Write base parquet files.
+      File catADir = new File(dataDir, "category=a");
+      if (!catADir.isDirectory() && !catADir.mkdirs()) throw new IOException("mkdir category=a");
+      File catBDir = new File(dataDir, "category=b");
+      if (!catBDir.isDirectory() && !catBDir.mkdirs()) throw new IOException("mkdir category=b");
+
+      String baseAPath = new File(catADir, "wdata-base-a.parquet").getAbsolutePath();
+      DataFile baseA =
+          MergeAppendDataOracle.writePartitionedDataFile(
+              table, schema, spec, partitionA, baseAPath,
+              new long[] {10L, 20L, 30L}, new String[] {"a", "b", "c"});
+
+      String baseBPath = new File(catBDir, "wdata-base-b.parquet").getAbsolutePath();
+      DataFile baseB =
+          MergeAppendDataOracle.writePartitionedDataFile(
+              table, schema, spec, partitionB, baseBPath,
+              new long[] {40L}, new String[] {"d"});
+
+      // 2. Commit base files — seq 1; this is staged-snapshot's parent.
+      table.newFastAppend().appendFile(baseA).appendFile(baseB).commit();
+      long baseSnapshotId = table.currentSnapshot().snapshotId();
+
+      // 3. Write staged parquet files.
+      String stagedAPath = new File(catADir, "wdata-staged-a.parquet").getAbsolutePath();
+      DataFile stagedA =
+          MergeAppendDataOracle.writePartitionedDataFile(
+              table, schema, spec, partitionA, stagedAPath,
+              new long[] {50L, 60L}, new String[] {"e", "f"});
+
+      String stagedBPath = new File(catBDir, "wdata-staged-b.parquet").getAbsolutePath();
+      DataFile stagedB =
+          MergeAppendDataOracle.writePartitionedDataFile(
+              table, schema, spec, partitionB, stagedBPath,
+              new long[] {70L}, new String[] {"g"});
+
+      // 4. Stage the WAP append BEFORE the bump (S-replay pattern).
+      //    staged.parent = base (seq 1). Current still = base.
+      //    REAL stageOnly(): only AddSnapshot fires, no SetSnapshotRef.
+      table.newFastAppend()
+          .appendFile(stagedA)
+          .appendFile(stagedB)
+          .set("wap.id", "w1")
+          .stageOnly()
+          .commit();
+      long stagedId = findStagedSnapshotId(table, baseSnapshotId, "w1");
+
+      // 5. BUMP fast-append: advance main so staged.parent (base) ≠ current head (bump).
+      //    The bump row (id=99, cat=a, data="bump") is a known fixture row.
+      //    REPLAY cherry-pick shape: when cherry-pick fires, current=bump, staged.parent=base.
+      String bumpPath = new File(catADir, "wdata-bump.parquet").getAbsolutePath();
+      DataFile bumpFile =
+          MergeAppendDataOracle.writePartitionedDataFile(
+              table, schema, spec, partitionA, bumpPath,
+              new long[] {99L}, new String[] {"bump"});
+      table.newFastAppend().appendFile(bumpFile).commit();
+      long bumpSnapshotId = table.currentSnapshot().snapshotId();
+
+      System.out.println(
+          "WapDataOracle.buildStagedTable: base=" + baseSnapshotId
+              + " staged=" + stagedId + " bump=" + bumpSnapshotId
+              + " (REPLAY shape: staged.parent=" + baseSnapshotId
+              + " ≠ head=" + bumpSnapshotId + ")");
+      return stagedId;
+    }
+
+    /**
+     * Find the staged snapshot id — the snapshot in {@code table.metadata().snapshots()} that is
+     * NOT the current snapshot AND carries {@code wap.id == wapId}. When {@code parentId >= 0},
+     * also asserts the staged snapshot's parent is {@code parentId}.
+     */
+    private static long findStagedSnapshotId(BaseTable table, long parentId, String wapId) {
+      for (Snapshot snap : table.snapshots()) {
+        Map<String, String> props = snap.summary();
+        if (wapId.equals(props.get("wap.id"))
+            && snap.snapshotId() != table.currentSnapshot().snapshotId()) {
+          if (parentId >= 0 && snap.parentId() != null && snap.parentId() != parentId) {
+            throw new RuntimeException(
+                "WapDataOracle.findStagedSnapshotId: staged snapshot "
+                    + snap.snapshotId()
+                    + " has parent "
+                    + snap.parentId()
+                    + " but expected "
+                    + parentId);
+          }
+          return snap.snapshotId();
+        }
+      }
+      throw new RuntimeException(
+          "WapDataOracle.findStagedSnapshotId: no staged snapshot with wap.id="
+              + wapId
+              + " found (current="
+              + table.currentSnapshot().snapshotId()
+              + ")");
+    }
+
+    /** Write the table's current metadata as {@code final.metadata.json} to {@code tableDir}. */
+    private static void writeFinalMetadata(LocalTableOperations ops, Path tableDir)
+        throws IOException {
+      Files.createDirectories(tableDir.resolve("metadata"));
+      Path out = tableDir.resolve("metadata/final.metadata.json");
+      OutputFile outputFile = new LocalFileIO().newOutputFile(out.toAbsolutePath().toString());
+      TableMetadataParser.write(ops.current(), outputFile);
+    }
+
+    /** Read live rows as a JSON array with {id, data} objects (sorted by id).
+     *  Reads all three fields but serializes only id + data (matching the shared helper).
+     */
+    private static String readLiveWapRowsToJson(BaseTable table) {
+      Map<Long, String> dataById = new LinkedHashMap<>();
+      try (CloseableIterable<Record> records = IcebergGenerics.read(table).build()) {
+        for (Record record : records) {
+          Long id = (Long) record.getField("id");
+          Object data = record.getField("data");
+          dataById.put(id, data == null ? null : data.toString());
+        }
+      } catch (IOException error) {
+        throw new RuntimeException("WapDataOracle: failed to read live rows via IcebergGenerics", error);
+      }
+      List<Long> ids = new ArrayList<>(dataById.keySet());
+      ids.sort(Long::compareTo);
+      return JsonUtil.generate(
+          gen -> {
+            gen.writeStartArray();
+            for (Long id : ids) {
+              gen.writeStartObject();
+              gen.writeNumberField("id", id);
+              String data = dataById.get(id);
+              if (data == null) {
+                gen.writeNullField("data");
+              } else {
+                gen.writeStringField("data", data);
+              }
+              gen.writeEndObject();
+            }
+            gen.writeEndArray();
+          },
+          true);
+    }
+
+    /**
+     * DIRECTION 1 GEN — Java writes the staged-state table artifacts for Rust to use.
+     *
+     * <p>Creates a partitioned V2 table under {@code <dir>/java_wap_table}, commits REAL parquet
+     * base data, stages a WAP append (REAL parquet, wap.id=w1) via {@code stageOnly()}, and emits:
+     * <ul>
+     *   <li>{@code java_wap_table/metadata/final.metadata.json} — the staged-state table
+     *   <li>{@code java_staged_snapshot_id.json} — {@code {"staged_snapshot_id": NNN}}
+     *   <li>{@code java_base_rows.json} — 5 rows present before cherry-pick (base + bump)
+     *   <li>{@code java_expected_final_rows.json} — 8 rows expected after cherry-pick
+     * </ul>
+     */
+    static void generate(Path dir) throws IOException {
+      Files.createDirectories(dir);
+
+      Path tableRootPath = dir.resolve("java_wap_table");
+      File tableDir = tableRootPath.toFile();
+      File metadataDir = new File(tableDir, "metadata");
+      File dataDir = new File(tableDir, "data");
+
+      BaseTable table = createTable(tableDir, metadataDir, dataDir);
+      LocalTableOperations ops = (LocalTableOperations) table.operations();
+
+      // Build: base data + bump + staged WAP.
+      long stagedId = buildStagedTable(table, dataDir);
+
+      // Emit the staged-state table (current = bump, staged = WAP w1).
+      writeFinalMetadata(ops, tableRootPath);
+
+      // Emit the staged snapshot id for Rust to target.
+      String stagedIdJson =
+          JsonUtil.generate(
+              gen -> {
+                gen.writeStartObject();
+                gen.writeNumberField("staged_snapshot_id", stagedId);
+                gen.writeEndObject();
+              },
+              false);
+      writeJson(dir.resolve("java_staged_snapshot_id.json"), stagedIdJson);
+
+      // Emit java_base_rows.json — read CURRENT live rows (base only, staged not published).
+      String baseRowsJson = readLiveWapRowsToJson(table);
+      writeJson(dir.resolve("java_base_rows.json"), baseRowsJson);
+
+      // Emit java_expected_final_rows.json — what rows should be present AFTER cherry-pick.
+      // 8 rows: base (10,20,30,40) + bump (99) + staged (50,60,70).
+      // The bump row (id=99, data="bump") is on main before cherry-pick (it's what creates the
+      // REPLAY shape); the cherry-pick REPLAYS the staged files onto main, so all bump files
+      // remain in the live set.
+      Map<Long, String> expectedFinal = new LinkedHashMap<>();
+      expectedFinal.put(10L, "a"); expectedFinal.put(20L, "b"); expectedFinal.put(30L, "c");
+      expectedFinal.put(40L, "d"); expectedFinal.put(50L, "e"); expectedFinal.put(60L, "f");
+      expectedFinal.put(70L, "g"); expectedFinal.put(99L, "bump");
+      String expectedJson =
+          JsonUtil.generate(
+              gen -> {
+                gen.writeStartArray();
+                for (Map.Entry<Long, String> entry : expectedFinal.entrySet()) {
+                  gen.writeStartObject();
+                  gen.writeNumberField("id", entry.getKey());
+                  gen.writeStringField("data", entry.getValue());
+                  gen.writeEndObject();
+                }
+                gen.writeEndArray();
+              },
+              true);
+      writeJson(dir.resolve("java_expected_final_rows.json"), expectedJson);
+
+      System.out.println(
+          "generate-interop-wap-data: staged table + artifacts written to " + dir
+              + " (staged_snapshot_id=" + stagedId + ")");
+    }
+
+    /**
+     * DIRECTION 1 VERIFY — Java cherry-picks the Rust-staged table and verifies rows + WAP semantics.
+     *
+     * <p>Loads {@code <dir>/rust_table/metadata/final.metadata.json}, reads
+     * {@code rust_staged_snapshot_id.json} to get the staged id, cherry-picks via
+     * {@code manageSnapshots().cherrypick()}, reads all rows via {@link IcebergGenerics}, asserts
+     * rows == {@code java_expected_final_rows.json}, and asserts WAP summary semantics on the
+     * produced cherry-pick snapshot (source-snapshot-id == staged_id, published-wap-id == "w1").
+     */
+    static int verifyRustTable(Path dir) throws IOException {
+      int failures = 0;
+
+      // 1. Load the Rust-written staged table.
+      Path finalMetadataPath =
+          dir.resolve("rust_table").resolve("metadata").resolve("final.metadata.json");
+      if (!Files.exists(finalMetadataPath)) {
+        System.out.println(
+            "FAIL wap-data-d1: missing "
+                + finalMetadataPath
+                + " (run the Rust GEN test first)");
+        return 1;
+      }
+
+      TableMetadata metadata;
+      try {
+        metadata =
+            TableMetadataParser.fromJson(
+                finalMetadataPath.toString(), readString(finalMetadataPath));
+      } catch (RuntimeException | IOException parseError) {
+        System.out.println(
+            "FAIL wap-data-d1: Java could not parse Rust-written final.metadata.json: "
+                + parseError);
+        return 1;
+      }
+
+      // 2. Load the staged snapshot id that Rust wrote.
+      Path stagedIdPath = dir.resolve("rust_staged_snapshot_id.json");
+      if (!Files.exists(stagedIdPath)) {
+        System.out.println(
+            "FAIL wap-data-d1: missing " + stagedIdPath + " (run the Rust GEN test first)");
+        return 1;
+      }
+      long stagedSnapshotId;
+      try {
+        String json = readString(stagedIdPath);
+        com.fasterxml.jackson.databind.JsonNode node =
+            new com.fasterxml.jackson.databind.ObjectMapper().readTree(json);
+        stagedSnapshotId = node.get("staged_snapshot_id").asLong();
+      } catch (Exception parseError) {
+        System.out.println(
+            "FAIL wap-data-d1: could not parse rust_staged_snapshot_id.json: " + parseError);
+        return 1;
+      }
+
+      // 3. Load expected final rows.
+      Path expectedPath = dir.resolve("java_expected_final_rows.json");
+      if (!Files.exists(expectedPath)) {
+        System.out.println(
+            "FAIL wap-data-d1: missing " + expectedPath
+                + " (run generate-interop-wap-data first)");
+        return 1;
+      }
+      // 8 rows: base (10,20,30,40) + bump (99) + staged (50,60,70).
+      Map<Long, String> expectedRows = new LinkedHashMap<>();
+      expectedRows.put(10L, "a"); expectedRows.put(20L, "b"); expectedRows.put(30L, "c");
+      expectedRows.put(40L, "d"); expectedRows.put(50L, "e"); expectedRows.put(60L, "f");
+      expectedRows.put(70L, "g"); expectedRows.put(99L, "bump");
+
+      // 4. Build a mutable BaseTable over the Rust metadata for cherry-pick.
+      //    Use a unique temp directory per verify run so idempotent reruns don't collide on
+      //    v0.metadata.json. The data files are referenced by ABSOLUTE paths in the manifests;
+      //    they live in the original rust_table/data/ and don't need to be copied.
+      File rustTableDir = dir.resolve("rust_table").toFile();
+      Path verifyTempDir = Files.createTempDirectory(dir, "wap_verify_");
+      Files.createDirectories(verifyTempDir.resolve("metadata"));
+      // Rebuild metadata pointing at the temp dir location (manifests are written there).
+      // Data-file paths in manifests are absolute — they resolve to the original parquet files.
+      TableMetadata tempMetadata =
+          TableMetadata.buildFrom(metadata)
+              .discardChanges()
+              .setLocation(verifyTempDir.toAbsolutePath().toString())
+              .build();
+
+      LocalTableOperations mutableOps =
+          new LocalTableOperations(verifyTempDir.toFile(), verifyTempDir.resolve("metadata").toFile());
+      mutableOps.commit(null, tempMetadata); // writes v0.metadata.json in the fresh temp dir
+
+      // Read-only view for the ancestry check (uses the original metadata location).
+      FileIO io = new LocalFileIO();
+      BaseTable table =
+          new BaseTable(new InMemoryInspectionOperations(metadata, io), "rust_wap_data");
+      BaseTable mutableTable = new BaseTable(mutableOps, "rust_wap_data_mutable");
+
+      try {
+        mutableTable.manageSnapshots().cherrypick(stagedSnapshotId).commit();
+      } catch (RuntimeException cherryPickError) {
+        System.out.println(
+            "FAIL wap-data-d1: cherry-pick of staged snapshot "
+                + stagedSnapshotId
+                + " FAILED: "
+                + cherryPickError);
+        return failures + 1;
+      }
+
+      // 7. Read all live rows via IcebergGenerics.
+      Map<Long, String> dataById = new LinkedHashMap<>();
+      try (CloseableIterable<Record> records = IcebergGenerics.read(mutableTable).build()) {
+        for (Record record : records) {
+          Long id = (Long) record.getField("id");
+          Object data = record.getField("data");
+          dataById.put(id, data == null ? null : data.toString());
+        }
+      } catch (RuntimeException | IOException readError) {
+        System.out.println(
+            "FAIL wap-data-d1: IcebergGenerics read after cherry-pick FAILED: " + readError);
+        return failures + 1;
+      }
+
+      List<Long> liveIds = new ArrayList<>(dataById.keySet());
+      liveIds.sort(Long::compareTo);
+
+      // 8a. Exactly 8 live rows (base 4 + bump 1 + staged 3).
+      if (liveIds.size() != 8) {
+        System.out.println(
+            "FAIL wap-data-d1: expected 8 live rows after cherry-pick, got "
+                + liveIds.size() + " " + liveIds);
+        failures++;
+      } else {
+        System.out.println(
+            "PASS wap-data-d1: 8 live rows after cherry-pick (base 4 + bump 1 + staged 3)");
+      }
+
+      // 8b. All expected ids present and data values match.
+      boolean valuesMatch = true;
+      for (Map.Entry<Long, String> entry : expectedRows.entrySet()) {
+        Long id = entry.getKey();
+        String wantData = entry.getValue();
+        if (!dataById.containsKey(id)) {
+          System.out.println("FAIL wap-data-d1: id " + id + " missing from live rows " + liveIds);
+          failures++;
+          valuesMatch = false;
+        } else {
+          String gotData = dataById.get(id);
+          if (!wantData.equals(gotData)) {
+            System.out.println(
+                "FAIL wap-data-d1: id=" + id + " expected data=" + wantData
+                    + " but got=" + gotData);
+            failures++;
+            valuesMatch = false;
+          }
+        }
+      }
+      if (valuesMatch && liveIds.size() == 8) {
+        System.out.println(
+            "PASS wap-data-d1: all 8 rows correct {10=a,20=b,30=c,40=d,50=e,60=f,70=g,99=bump}");
+      }
+
+      // 9. WAP summary semantics: the cherry-pick snapshot must carry source-snapshot-id +
+      //    published-wap-id (REPLAY shape: staged.parent was bump, not the current head when
+      //    cherry-pick fired, so a NEW snapshot is produced with these tags).
+      Snapshot cherryPickSnapshot = mutableTable.currentSnapshot();
+      if (cherryPickSnapshot == null) {
+        System.out.println("FAIL wap-data-d1: no current snapshot after cherry-pick");
+        failures++;
+      } else {
+        String sourceId = cherryPickSnapshot.summary().get("source-snapshot-id");
+        String publishedWapId = cherryPickSnapshot.summary().get("published-wap-id");
+
+        if (sourceId == null) {
+          System.out.println(
+              "FAIL wap-data-d1: cherry-pick snapshot missing source-snapshot-id "
+                  + "(expected REPLAY shape)");
+          failures++;
+        } else if (!String.valueOf(stagedSnapshotId).equals(sourceId)) {
+          System.out.println(
+              "FAIL wap-data-d1: cherry-pick snapshot source-snapshot-id=" + sourceId
+                  + " but expected " + stagedSnapshotId);
+          failures++;
+        } else {
+          System.out.println(
+              "PASS wap-data-d1: source-snapshot-id=" + sourceId + " OK");
+        }
+
+        if (publishedWapId == null) {
+          System.out.println(
+              "FAIL wap-data-d1: cherry-pick snapshot missing published-wap-id");
+          failures++;
+        } else if (!"w1".equals(publishedWapId)) {
+          System.out.println(
+              "FAIL wap-data-d1: cherry-pick snapshot published-wap-id=" + publishedWapId
+                  + " but expected w1");
+          failures++;
+        } else {
+          System.out.println(
+              "PASS wap-data-d1: published-wap-id=" + publishedWapId + " OK");
+        }
+      }
+
+      // 10. Partition routing pin (S3 partition-projection lesson): cat=a-rows are {10,20,30,50,60}
+      //     and cat=b-rows are {40,70}. We verify category column via IcebergGenerics.
+      Map<Long, String> categoryById = new LinkedHashMap<>();
+      try (CloseableIterable<Record> records = IcebergGenerics.read(mutableTable).build()) {
+        for (Record record : records) {
+          Long id = (Long) record.getField("id");
+          Object cat = record.getField("category");
+          categoryById.put(id, cat == null ? null : cat.toString());
+        }
+      } catch (RuntimeException | IOException catError) {
+        System.out.println("FAIL wap-data-d1: category scan failed: " + catError);
+        failures++;
+      }
+
+      // Category routing: a={10,20,30,50,60,99(bump)}, b={40,70}.
+      Map<Long, String> expectedCategory = new LinkedHashMap<>();
+      expectedCategory.put(10L, "a"); expectedCategory.put(20L, "a"); expectedCategory.put(30L, "a");
+      expectedCategory.put(40L, "b"); expectedCategory.put(50L, "a"); expectedCategory.put(60L, "a");
+      expectedCategory.put(70L, "b"); expectedCategory.put(99L, "a");
+      boolean catOk = true;
+      for (Map.Entry<Long, String> entry : expectedCategory.entrySet()) {
+        Long id = entry.getKey();
+        String wantCat = entry.getValue();
+        String gotCat = categoryById.get(id);
+        if (!wantCat.equals(gotCat)) {
+          System.out.println(
+              "FAIL wap-data-d1: id=" + id + " expected category=" + wantCat
+                  + " but got=" + gotCat + " (partition routing error)");
+          failures++;
+          catOk = false;
+        }
+      }
+      if (catOk) {
+        System.out.println("PASS wap-data-d1: partition routing OK — a={10,20,30,50,60,99} b={40,70}");
+      }
+
+      if (failures == 0) {
+        System.out.println(
+            "verify-interop-wap-data OK — Java cherry-picked the Rust-staged snapshot; "
+                + "8 rows correct; WAP semantics (source-snapshot-id + published-wap-id) present");
+      }
+      return failures;
+    }
+
+    /**
+     * DIRECTION 2 GEN — Java stages + cherry-picks its own table; Rust reads.
+     *
+     * <p>Creates a partitioned V2 table under {@code <dir>/java_cherrypick_table}, commits base
+     * data + bump (REPLAY shape), stages WAP append via {@code stageOnly()}, cherry-picks via
+     * {@code manageSnapshots().cherrypick()}, reads via {@link IcebergGenerics}, and emits:
+     * <ul>
+     *   <li>{@code java_cherrypick_table/metadata/final.metadata.json} — the post-cherry-pick table
+     *   <li>{@code java_cherrypick_rows.json} — 8 expected rows (base 4 + bump 1 + staged 3)
+     *   <li>{@code java_cherrypick_snapshot_summary.json} —
+     *       {@code {"source_snapshot_id": NNN, "published_wap_id": "w1"}}
+     * </ul>
+     */
+    static void generateJavaTable(Path dir) throws IOException {
+      Files.createDirectories(dir);
+
+      Path tableRootPath = dir.resolve("java_cherrypick_table");
+      File tableDir = tableRootPath.toFile();
+      File metadataDir = new File(tableDir, "metadata");
+      File dataDir = new File(tableDir, "data");
+
+      BaseTable table = createTable(tableDir, metadataDir, dataDir);
+      LocalTableOperations ops = (LocalTableOperations) table.operations();
+
+      // Build the staged table (base + bump + staged WAP w1).
+      long stagedId = buildStagedTable(table, dataDir);
+      long bumpId = table.currentSnapshot().snapshotId();
+
+      // Cherry-pick the staged WAP — REPLAY shape produces new snapshot with WAP semantics.
+      table.manageSnapshots().cherrypick(stagedId).commit();
+      Snapshot cherryPickSnap = table.currentSnapshot();
+
+      String sourceId = cherryPickSnap.summary().get("source-snapshot-id");
+      String publishedWapId = cherryPickSnap.summary().get("published-wap-id");
+
+      if (sourceId == null || publishedWapId == null) {
+        throw new RuntimeException(
+            "generateJavaTable: cherry-pick snapshot missing WAP summary semantics: "
+                + "source-snapshot-id=" + sourceId
+                + " published-wap-id=" + publishedWapId);
+      }
+      System.out.println(
+          "WapDataOracle.generateJavaTable: cherry-pick snapshot "
+              + cherryPickSnap.snapshotId()
+              + " source-snapshot-id=" + sourceId
+              + " published-wap-id=" + publishedWapId);
+
+      // Emit the post-cherry-pick table.
+      writeFinalMetadata(ops, tableRootPath);
+
+      // Emit rows JSON.
+      String rowsJson = readLiveWapRowsToJson(table);
+      writeJson(dir.resolve("java_cherrypick_rows.json"), rowsJson);
+
+      // Emit snapshot summary JSON.
+      String summaryJson =
+          JsonUtil.generate(
+              gen -> {
+                gen.writeStartObject();
+                gen.writeStringField("source_snapshot_id", sourceId);
+                gen.writeStringField("published_wap_id", publishedWapId);
+                gen.writeEndObject();
+              },
+              false);
+      writeJson(dir.resolve("java_cherrypick_snapshot_summary.json"), summaryJson);
+
+      System.out.println(
+          "generate-interop-wap-data-java-table: cherry-picked table + artifacts written to " + dir
+              + " (7 rows, source_snapshot_id=" + sourceId
+              + ", published_wap_id=" + publishedWapId + ")");
     }
   }
 

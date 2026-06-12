@@ -101,6 +101,33 @@ How to use it (see the manuals' §1):
 real catalog operations (`MemoryCatalog` + `InMemoryCatalog`). Wire-format field-order divergence
 pinned as cosmetic-only; byte-exact view round-trip is next-wave.
 
+## ACTIVE (2026-06-12): I3 — data-level WAP interop (LANDED)
+
+**Plan (pre-code, 7 bullets per manual §1):**
+- [x] **Step 1 (Java WapDataOracle — D1 generate + D2 verify):** Added `WapDataOracle` static inner
+  class to `InteropOracle.java`. S-replay order: base→stage→bump so staged.parent≠head → REPLAY.
+  Uses REAL parquet via `MergeAppendDataOracle.writePartitionedDataFile`. Bump row id=99 is a real
+  data fast-append (not updateProperties which doesn't create a snapshot — key lesson). verifyRustTable
+  uses `Files.createTempDirectory` per call to avoid v0.metadata.json collision on repeated runs.
+- [x] **Step 2 (Rust interop test):** `crates/iceberg/tests/interop_wap_data.rs`. Two tests:
+  `test_wap_data_gen_rust_writes_staged_table` (D1 GEN: S-replay order, asserts staged_id≠current
+  after stage_only(), writes final.metadata.json + rust_staged_snapshot_id.json);
+  `test_wap_data_d2_rust_reads_java_cherrypick_table` (D2: reads java_cherrypick_table, 8 rows,
+  WAP semantics, partition routing a/b pinned).
+- [x] **Step 3 (Chain script):** `dev/java-interop/run-interop-wap-data.sh` — 7-step chain ×2
+  green. Step 5 sentinel "verify-interop-wap-data: 0 failures", Step 7 sabotage battery 4 closed.
+- [x] **Step 4 (Sabotage battery):** 4 closed: 7a STRUCTURAL truncate metadata; 7b STRUCTURAL bogus
+  manifest-list path; 7c SEMANTIC corrupt wap.id w1→w1-CORRUPTED (cherry-pick emits wrong
+  published-wap-id → pin fires); 7d STRUCTURAL remove staged snapshot entirely.
+- [x] **Step 5 (Dedup):** deferred — inflates scope; recorded as next-wave residue in GAP_MATRIX.
+- [x] **Step 6 (GAP_MATRIX update):** cherry-pick/WAP row residue updated; I3 landing noted; pipe-count audit clean.
+- [x] **Step 7 (Gate + journal):** typos/fmt/clippy/lib-tests (2210/0)/chain×2/taplo all PASS. Lessons appended.
+
+**Outcome (2026-06-12):** I3 data-level WAP interop COMPLETE — bidirectional REPLAY-shape, REAL
+parquet, 8-row fixture (base 4 + bump 1 + staged 3), chain ×2, sabotage 4 closed. Key lessons:
+S-replay order (stage before bump); updateProperties does not create a snapshot; LocalTableOperations
+v0.metadata.json collision fixed with Files.createTempDirectory.
+
 ## ACTIVE (2026-06-12): Near-full-parity direction — open queue (planning record)
 
 Directive (user, 2026-06-11): run this fork's Roadmap to **almost the full 1:1 Java replacement**.
