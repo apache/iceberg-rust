@@ -83,6 +83,21 @@
       <artifactId>hadoop-client-runtime</artifactId>
       <version>3.3.6</version>
     </dependency>
+    <!--
+      I1 THETA-BLOB INTEROP (increment I1): datasketches-java 3.3.0 + datasketches-memory 2.1.0
+      are needed to build and deserialize Apache DataSketches theta sketches in ThetaBlobOracle.
+      These are TEST-ORACLE deps ONLY — the Rust crate's Cargo files are untouched.
+    -->
+    <dependency>
+      <groupId>org.apache.datasketches</groupId>
+      <artifactId>datasketches-java</artifactId>
+      <version>3.3.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.datasketches</groupId>
+      <artifactId>datasketches-memory</artifactId>
+      <version>2.1.0</version>
+    </dependency>
   </dependencies>
 
   <build>

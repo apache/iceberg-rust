@@ -38,6 +38,19 @@ How to use it (see the manuals' §1):
 > lines → the wave3-wave4 file), 2026-06-11 (pass 2), 2026-06-09 (pass 1). Procedure:
 > [skills/compaction.md](../skills/compaction.md) §Todo Archival.
 
+## ACTIVE (2026-06-12): I1 — theta-blob interop (LANDED)
+
+**Plan (pre-code, 3–7 bullets per manual §1):**
+- [x] **Step 1 (Oracle Java):** Added `ThetaBlobOracle` static inner class to `InteropOracle.java` with `generate-interop-theta`, `verify-interop-theta`, `generate-interop-theta-java-to-rust`. Added datasketches-java/memory deps to pom.xml.
+- [x] **Step 2 (Oracle dispatch):** Wired all three modes into the InteropOracle main switch via `-Dinterop.theta.dir`.
+- [x] **Step 3 (Rust test):** `crates/iceberg/tests/interop_theta.rs` — `test_theta_gen` (GEN: real 2-file table, `ComputeTableStats::execute`, `rust_stats.puffin` + `rust_stats_expected.json`) + `test_theta_d2_rust_reads_java_puffin` (D2: `java_stats.puffin` via `PuffinReader`+`CompactThetaSketch::deserialize`). Fixed: `BlobMetadata` fields are private (use methods); `FileIO::from_path` doesn't exist (use `FileIO::new_with_fs()`).
+- [x] **Step 4 (Run script):** `dev/java-interop/run-interop-theta.sh` — 6-step chain ×2, sabotage battery 4 closed (6a truncate puffin; 6b Puffin-footer-parsed SOURCE corrupt; 6c truncate Java puffin; 6d corrupt ndv JSON). Puffin footer structure: `[data][footer_magic(4)][footer_json(N)][payload_len(4 LE u32)][flags(4)][trailing_magic(4)]` with blob offsets absolute from file start.
+- [x] **Step 5 (GAP_MATRIX update):** ComputeTableStats row updated, I1 interop noted, pipe-count audit clean (all 61 `^|` rows have 5 pipes).
+- [x] **Step 6 (Gate):** typos/fmt/clippy/lib-tests/run-interop-theta.sh/taplo all PASS. 2210 lib tests pass.
+- [x] **Step 7 (journal):** Lessons appended to task/lessons.md.
+
+**Outcome (2026-06-12):** I1 theta-blob interop COMPLETE — bidirectional, chain ×2, sabotage 4 closed. `ComputeTableStats` is now fully proven through end-to-end Java/Rust interop.
+
 ## ACTIVE (2026-06-12): Near-full-parity direction — open queue (planning record)
 
 Directive (user, 2026-06-11): run this fork's Roadmap to **almost the full 1:1 Java replacement**.

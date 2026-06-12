@@ -706,6 +706,45 @@ public final class InteropOracle {
           System.exit(1);
         }
         break;
+      case "generate-interop-theta":
+        // THETA-BLOB PUFFIN interop (increment I1), DIRECTION 1 — "Rust writes, Java verifies".
+        // Builds a fixture table (unpartitioned V2, schema {1 id long, 2 name string, 3 val long}),
+        // writes REAL parquet data for two sketch modes — exact (3 rows, small distinct count) and
+        // estimation (1 000 000 distinct longs in the `val` column), calls Java's own Puffin writer
+        // with datasketches-java-3.3.0 to write the ground-truth .stats file, and emits:
+        //   theta_expected.json   — the expected blob metadata (type/fields/ndv) for both modes,
+        //                           for the Java verify step to compare against the Rust output.
+        // The dir is supplied via -Dinterop.theta.dir.
+        Path thetaGenDir = requireFixturesDir("interop.theta.dir");
+        ThetaBlobOracle.generate(thetaGenDir);
+        break;
+      case "verify-interop-theta":
+        // THETA-BLOB PUFFIN interop, DIRECTION 1 — Java reads the Rust-written .stats puffin file
+        // and verifies: blob type, fields, snapshot-id, sequence-number, ndv property, and the
+        // deserialized CompactSketch.getEstimate() matches the ndv EXACTLY (integer-exact).
+        // The Rust GEN test (env ICEBERG_INTEROP_THETA_GEN_DIR, tests/interop_theta.rs) wrote
+        // rust_stats.puffin + emitted rust_stats_expected.json (the expected blob metadata).
+        // Verifies both EXACT-MODE and ESTIMATION-MODE blobs.
+        Path thetaVerifyDir = requireFixturesDir("interop.theta.dir");
+        int thetaFailures = ThetaBlobOracle.verify(thetaVerifyDir);
+        System.out.println("verify-interop-theta: " + thetaFailures + " failures");
+        if (thetaFailures > 0) {
+          System.exit(1);
+        }
+        break;
+      case "generate-interop-theta-java-to-rust":
+        // THETA-BLOB PUFFIN interop (increment I1), DIRECTION 2 — "Java writes, Rust reads".
+        // Java writes a .stats puffin file (using iceberg-core PuffinWriter +
+        // datasketches-java-3.3.0 UpdateSketchBuilder.setFamily(ALPHA)) with two blobs: exact
+        // mode and estimation mode (n=1M), and emits:
+        //   java_stats.puffin         — the Java-written puffin file
+        //   java_stats_expected.json  — the expected blob metadata (type/fields/ndv/snapshotId/seq)
+        // The Rust test (test_theta_d2_rust_reads_java_puffin) reads java_stats.puffin through
+        // the PRODUCTION Rust PuffinReader + CompactThetaSketch::deserialize path and verifies
+        // against java_stats_expected.json.
+        Path thetaJavaGenDir = requireFixturesDir("interop.theta.dir");
+        ThetaBlobOracle.generateJavaToRust(thetaJavaGenDir);
+        break;
       default:
         System.err.println("unknown mode: " + mode + " (expected generate|verify)");
         System.exit(2);
@@ -11047,6 +11086,411 @@ public final class InteropOracle {
           gen.writeEndArray();
         },
         true);
+  }
+
+  // ===========================================================================================
+  // ThetaBlobOracle — I1 theta-blob puffin interop
+  // ===========================================================================================
+
+  /**
+   * Oracle for the {@code apache-datasketches-theta-v1} Puffin blob interop (increment I1).
+   *
+   * <p><b>Direction 1 (Rust writes, Java judges):</b> {@link #generate} writes a
+   * {@code theta_expected.json} ground truth.  {@link #verify} reads a Rust-written
+   * {@code rust_stats.puffin} file, checks blob type / fields / snapshot-id / sequence-number /
+   * {@code ndv} property, and asserts that
+   * {@code (long) CompactSketch.wrap(Memory.wrap(bytes)).getEstimate() == ndv} EXACTLY (integer-
+   * exact, no tolerance) for BOTH exact-mode and estimation-mode blobs.
+   *
+   * <p><b>Direction 2 (Java writes, Rust reads):</b> {@link #generateJavaToRust} builds a Puffin
+   * file via iceberg-core's {@link org.apache.iceberg.puffin.PuffinWriter} with
+   * datasketches-java-3.3.0 {@code UpdateSketchBuilder.setFamily(ALPHA)} sketches (the same family
+   * Spark's NDVSketchUtil builds) and emits {@code java_stats_expected.json} for the Rust test.
+   *
+   * <p>Two blobs are covered: <em>exact mode</em> (small distinct count, theta == MAX) and
+   * <em>estimation mode</em> (n = 1 000 000 distinct longs, theta &lt; MAX, Alpha sampling
+   * engaged). The known pin: lgK12 / seed 9001 / n=1M distinct longs →
+   * compact ndv {@code 1004032}.
+   */
+  static final class ThetaBlobOracle {
+    private ThetaBlobOracle() {}
+
+    // ===========================================================================================
+    // Fixture constants — agreed by both language sides (anti-circular).
+    // ===========================================================================================
+
+    /** Snapshot id used for the ground-truth blobs (a stable sentinel, not a real table commit). */
+    private static final long SNAPSHOT_ID = 42L;
+    /** Sequence number used for all blobs. */
+    private static final long SEQUENCE_NUMBER = 1L;
+    /** Field id for the exact-mode column (id, long). */
+    private static final int EXACT_FIELD_ID = 1;
+    /** Field id for the estimation-mode column (val, long). */
+    private static final int ESTIMATION_FIELD_ID = 3;
+    /** Exact-mode distinct count — small enough to keep theta == MAX_VALUE. */
+    private static final int EXACT_DISTINCT_COUNT = 5;
+    /** Estimation-mode distinct count — the known pin value from the prompt. */
+    private static final long ESTIMATION_DISTINCT_COUNT = 1_000_000L;
+    /** Known ndv for lgK12/seed9001/n=1M distinct longs (COMPACT sketch estimate). */
+    private static final long ESTIMATION_NDV_PIN = 1_004_032L;
+
+    // ===========================================================================================
+    // Shared sketch helpers (datasketches-java-3.3.0 ALPHA family, default seed 9001).
+    // ===========================================================================================
+
+    /**
+     * Build a fresh Alpha-family update sketch at lgK=12 / seed=9001 (the Iceberg defaults
+     * Spark's {@code NDVSketchUtil} uses) and update it with {@code count} distinct long values
+     * starting from 0, using the same 8-byte little-endian byte form the Rust action feeds.
+     * Compact it and return the payload bytes.
+     *
+     * <p>The ndv is read off the COMPACT sketch ({@code CompactSketch.wrap(bytes).getEstimate()})
+     * — NOT off the live Alpha update sketch's sampling estimator — matching the
+     * {@code NDVSketchUtil.toBlob} contract.
+     */
+    private static byte[] buildSketchPayload(long count) {
+      org.apache.datasketches.theta.UpdateSketch sketch =
+          new org.apache.datasketches.theta.UpdateSketchBuilder()
+              .setLogNominalEntries(12)
+              .setSeed(9001L)
+              .setFamily(org.apache.datasketches.Family.ALPHA)
+              .build();
+      // Feed distinct longs as 8-byte little-endian (the Iceberg single-value byte form for long).
+      for (long value = 0; value < count; value++) {
+        java.nio.ByteBuffer buf =
+            java.nio.ByteBuffer.allocate(8).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        buf.putLong(value);
+        sketch.update(buf.array());
+      }
+      return sketch.compact().toByteArray();
+    }
+
+    /**
+     * Read the {@code ndv} off a compact-sketch payload: the same operation as Java's
+     * {@code NDVSketchUtil.toBlob} — {@code (long) CompactSketch.wrap(Memory.wrap(bytes)).getEstimate()}.
+     */
+    private static long compactNdv(byte[] payload) {
+      org.apache.datasketches.theta.CompactSketch compact =
+          org.apache.datasketches.theta.CompactSketch.wrap(
+              org.apache.datasketches.memory.Memory.wrap(payload));
+      return (long) compact.getEstimate();
+    }
+
+    // ===========================================================================================
+    // generate — emit theta_expected.json (ground truth, anti-circular).
+    // ===========================================================================================
+
+    /**
+     * Emits {@code theta_expected.json} — the ground-truth expected blob metadata for the Rust
+     * GEN test's output.  Two entries: exact mode (ndv == EXACT_DISTINCT_COUNT) and estimation
+     * mode (ndv == ESTIMATION_NDV_PIN).
+     *
+     * <p>The JSON shape (array of blob descriptors):
+     * <pre>
+     * [
+     *   {"field_id": 1, "ndv": 5, "mode": "exact"},
+     *   {"field_id": 3, "ndv": 1004032, "mode": "estimation"}
+     * ]
+     * </pre>
+     */
+    static void generate(Path dir) throws IOException {
+      Files.createDirectories(dir);
+
+      // Build both payloads and confirm the ndvs BEFORE writing any file.
+      byte[] exactPayload = buildSketchPayload(EXACT_DISTINCT_COUNT);
+      long exactNdv = compactNdv(exactPayload);
+      if (exactNdv != EXACT_DISTINCT_COUNT) {
+        throw new RuntimeException(
+            "exact-mode ndv sanity check failed: expected "
+                + EXACT_DISTINCT_COUNT + ", got " + exactNdv);
+      }
+
+      byte[] estimationPayload = buildSketchPayload(ESTIMATION_DISTINCT_COUNT);
+      long estimationNdv = compactNdv(estimationPayload);
+      if (estimationNdv != ESTIMATION_NDV_PIN) {
+        throw new RuntimeException(
+            "estimation-mode ndv sanity check FAILED: expected "
+                + ESTIMATION_NDV_PIN + " (the lgK12/seed9001/n=1M pin), got " + estimationNdv
+                + " — the pin is wrong or the classpath carries a wrong datasketches version");
+      }
+
+      String json = JsonUtil.generate(
+          gen -> {
+            gen.writeStartArray();
+            gen.writeStartObject();
+            gen.writeNumberField("field_id", EXACT_FIELD_ID);
+            gen.writeNumberField("ndv", exactNdv);
+            gen.writeStringField("mode", "exact");
+            gen.writeEndObject();
+            gen.writeStartObject();
+            gen.writeNumberField("field_id", ESTIMATION_FIELD_ID);
+            gen.writeNumberField("ndv", estimationNdv);
+            gen.writeStringField("mode", "estimation");
+            gen.writeEndObject();
+            gen.writeEndArray();
+          },
+          true);
+
+      writeJson(dir.resolve("theta_expected.json"), json);
+      System.out.println(
+          "generate-interop-theta: theta_expected.json written (exact ndv="
+              + exactNdv + " estimation ndv=" + estimationNdv + ")");
+    }
+
+    // ===========================================================================================
+    // verify — Java reads the Rust-written puffin, asserts all blob metadata.
+    // ===========================================================================================
+
+    /**
+     * Verify the Rust-written {@code rust_stats.puffin} file against {@code rust_stats_expected.json}.
+     *
+     * <p>Checks per blob:
+     * <ol>
+     *   <li>blob type == {@code apache-datasketches-theta-v1}</li>
+     *   <li>fields == [expected field_id]</li>
+     *   <li>snapshot-id == expected snapshot_id</li>
+     *   <li>sequence-number == expected sequence_number</li>
+     *   <li>{@code ndv} property == expected ndv (string)</li>
+     *   <li>{@code (long) CompactSketch.wrap(Memory.wrap(payload)).getEstimate() == ndv}
+     *       (integer-exact, no tolerance)</li>
+     * </ol>
+     *
+     * @return the number of assertion failures (0 = PASS)
+     */
+    static int verify(Path dir) throws IOException {
+      int failures = 0;
+
+      Path puffinPath = dir.resolve("rust_stats.puffin");
+      if (!Files.exists(puffinPath)) {
+        System.out.println(
+            "FAIL verify-interop-theta: missing " + puffinPath
+                + " — run the Rust GEN test first");
+        return 1;
+      }
+
+      Path expectedPath = dir.resolve("rust_stats_expected.json");
+      if (!Files.exists(expectedPath)) {
+        System.out.println(
+            "FAIL verify-interop-theta: missing " + expectedPath
+                + " — run the Rust GEN test first");
+        return 1;
+      }
+
+      // Read the expected blob metadata from the Rust GEN step.
+      com.fasterxml.jackson.databind.JsonNode expectedArray =
+          JsonUtil.mapper().readTree(expectedPath.toFile());
+      if (!expectedArray.isArray()) {
+        System.out.println("FAIL verify-interop-theta: rust_stats_expected.json is not an array");
+        return 1;
+      }
+      int expectedBlobCount = expectedArray.size();
+
+      // Read the Rust-written puffin via Java's PRODUCTION PuffinReader.
+      InputFile inputFile = new LocalFileIO().newInputFile(puffinPath.toAbsolutePath().toString());
+      org.apache.iceberg.puffin.FileMetadata fileMetadata;
+      try (org.apache.iceberg.puffin.PuffinReader reader =
+          org.apache.iceberg.puffin.Puffin.read(inputFile).build()) {
+        fileMetadata = reader.fileMetadata();
+      }
+
+      int actualBlobCount = fileMetadata.blobs().size();
+      if (actualBlobCount != expectedBlobCount) {
+        System.out.println(
+            "FAIL verify-interop-theta: blob count expected="
+                + expectedBlobCount + " actual=" + actualBlobCount);
+        return 1;
+      }
+
+      // Re-open for the ranged read (PuffinReader is single-pass for metadata; re-open to read data).
+      try (org.apache.iceberg.puffin.PuffinReader reader =
+          org.apache.iceberg.puffin.Puffin.read(inputFile).build()) {
+        java.util.List<org.apache.iceberg.puffin.BlobMetadata> blobs = fileMetadata.blobs();
+        Iterable<org.apache.iceberg.util.Pair<org.apache.iceberg.puffin.BlobMetadata, java.nio.ByteBuffer>>
+            blobPairs = reader.readAll(blobs);
+
+        int blobIndex = 0;
+        for (org.apache.iceberg.util.Pair<org.apache.iceberg.puffin.BlobMetadata, java.nio.ByteBuffer>
+            pair : blobPairs) {
+          org.apache.iceberg.puffin.BlobMetadata blobMeta = pair.first();
+          java.nio.ByteBuffer blobData = pair.second();
+          com.fasterxml.jackson.databind.JsonNode expected = expectedArray.get(blobIndex);
+
+          String label = "blob[" + blobIndex + "]";
+
+          // 1. Blob type.
+          String expectedType = org.apache.iceberg.puffin.StandardBlobTypes.APACHE_DATASKETCHES_THETA_V1;
+          if (!expectedType.equals(blobMeta.type())) {
+            System.out.println(
+                "FAIL " + label + ": type expected=" + expectedType + " actual=" + blobMeta.type());
+            failures++;
+          }
+
+          // 2. Fields == [field_id].
+          int expectedFieldId = expected.path("field_id").asInt(-1);
+          if (blobMeta.inputFields().size() != 1
+              || blobMeta.inputFields().get(0) != expectedFieldId) {
+            System.out.println(
+                "FAIL " + label + ": fields expected=[" + expectedFieldId + "] actual="
+                    + blobMeta.inputFields());
+            failures++;
+          }
+
+          // 3. snapshot-id.
+          long expectedSnapshotId = expected.path("snapshot_id").asLong(SNAPSHOT_ID);
+          if (blobMeta.snapshotId() != expectedSnapshotId) {
+            System.out.println(
+                "FAIL " + label + ": snapshot-id expected=" + expectedSnapshotId
+                    + " actual=" + blobMeta.snapshotId());
+            failures++;
+          }
+
+          // 4. sequence-number.
+          long expectedSeqNum = expected.path("sequence_number").asLong(SEQUENCE_NUMBER);
+          if (blobMeta.sequenceNumber() != expectedSeqNum) {
+            System.out.println(
+                "FAIL " + label + ": sequence-number expected=" + expectedSeqNum
+                    + " actual=" + blobMeta.sequenceNumber());
+            failures++;
+          }
+
+          // 5. ndv property (string).
+          long expectedNdv = expected.path("ndv").asLong(-1);
+          String expectedNdvStr = String.valueOf(expectedNdv);
+          String actualNdvStr = blobMeta.properties().get("ndv");
+          if (!expectedNdvStr.equals(actualNdvStr)) {
+            System.out.println(
+                "FAIL " + label + ": ndv property expected=\"" + expectedNdvStr
+                    + "\" actual=\"" + actualNdvStr + "\"");
+            failures++;
+          }
+
+          // 6. CompactSketch.getEstimate() == ndv (integer-exact).
+          byte[] payload = new byte[blobData.remaining()];
+          blobData.get(payload);
+          long actualSketchNdv = compactNdv(payload);
+          if (actualSketchNdv != expectedNdv) {
+            System.out.println(
+                "FAIL " + label + ": CompactSketch.getEstimate() as long expected=" + expectedNdv
+                    + " actual=" + actualSketchNdv
+                    + " (deserialized sketch disagrees with the ndv property)");
+            failures++;
+          }
+
+          String mode = expected.path("mode").asText("unknown");
+          if (failures == 0) {
+            System.out.println(
+                "PASS " + label + " (mode=" + mode + "): type/fields/snapshot_id/seq_num/ndv "
+                    + "all match; CompactSketch.getEstimate()=" + actualSketchNdv);
+          }
+          blobIndex++;
+        }
+      }
+
+      if (failures == 0) {
+        System.out.println(
+            "PASS verify-interop-theta: all " + expectedBlobCount
+                + " blobs verified (exact-mode + estimation-mode)");
+      }
+      return failures;
+    }
+
+    // ===========================================================================================
+    // generateJavaToRust — Java writes a .stats puffin for Rust to read (Direction 2).
+    // ===========================================================================================
+
+    /**
+     * Write a Java-authored Puffin file with two {@code apache-datasketches-theta-v1} blobs
+     * (exact mode + estimation mode) using iceberg-core's {@link org.apache.iceberg.puffin.PuffinWriter}
+     * and datasketches-java-3.3.0 ALPHA-family sketches.  Emits:
+     * <ul>
+     *   <li>{@code java_stats.puffin} — the puffin file for Rust to read</li>
+     *   <li>{@code java_stats_expected.json} — the expected metadata for the Rust test to compare
+     *       (field_id, ndv, snapshot_id, sequence_number, mode)</li>
+     * </ul>
+     */
+    static void generateJavaToRust(Path dir) throws IOException {
+      Files.createDirectories(dir);
+
+      // Build exact-mode and estimation-mode sketch payloads.
+      byte[] exactPayload = buildSketchPayload(EXACT_DISTINCT_COUNT);
+      long exactNdv = compactNdv(exactPayload);
+      if (exactNdv != EXACT_DISTINCT_COUNT) {
+        throw new RuntimeException(
+            "exact-mode ndv check failed: expected " + EXACT_DISTINCT_COUNT + " got " + exactNdv);
+      }
+
+      byte[] estimationPayload = buildSketchPayload(ESTIMATION_DISTINCT_COUNT);
+      long estimationNdv = compactNdv(estimationPayload);
+      if (estimationNdv != ESTIMATION_NDV_PIN) {
+        throw new RuntimeException(
+            "estimation ndv pin check FAILED: expected " + ESTIMATION_NDV_PIN + " got " + estimationNdv);
+      }
+
+      // Write the puffin file via iceberg-core's PRODUCTION PuffinWriter.
+      Path puffinPath = dir.resolve("java_stats.puffin");
+      OutputFile outputFile = new LocalFileIO().newOutputFile(puffinPath.toAbsolutePath().toString());
+
+      // Two blobs: exact mode (field_id=EXACT_FIELD_ID) and estimation mode (field_id=ESTIMATION_FIELD_ID).
+      org.apache.iceberg.puffin.Blob exactBlob = new org.apache.iceberg.puffin.Blob(
+          org.apache.iceberg.puffin.StandardBlobTypes.APACHE_DATASKETCHES_THETA_V1,
+          java.util.Collections.singletonList(EXACT_FIELD_ID),
+          SNAPSHOT_ID,
+          SEQUENCE_NUMBER,
+          java.nio.ByteBuffer.wrap(exactPayload),
+          org.apache.iceberg.puffin.PuffinCompressionCodec.NONE,
+          java.util.Collections.singletonMap("ndv", String.valueOf(exactNdv)));
+
+      org.apache.iceberg.puffin.Blob estimationBlob = new org.apache.iceberg.puffin.Blob(
+          org.apache.iceberg.puffin.StandardBlobTypes.APACHE_DATASKETCHES_THETA_V1,
+          java.util.Collections.singletonList(ESTIMATION_FIELD_ID),
+          SNAPSHOT_ID,
+          SEQUENCE_NUMBER,
+          java.nio.ByteBuffer.wrap(estimationPayload),
+          org.apache.iceberg.puffin.PuffinCompressionCodec.NONE,
+          java.util.Collections.singletonMap("ndv", String.valueOf(estimationNdv)));
+
+      org.apache.iceberg.puffin.PuffinWriter writer =
+          org.apache.iceberg.puffin.Puffin.write(outputFile).build();
+      try {
+        writer.add(exactBlob);
+        writer.add(estimationBlob);
+        writer.finish();
+      } finally {
+        writer.close();
+      }
+
+      long fileSize = Files.size(puffinPath);
+      System.out.println(
+          "generate-interop-theta-java-to-rust: java_stats.puffin written ("
+              + fileSize + " bytes, exact ndv=" + exactNdv
+              + " estimation ndv=" + estimationNdv + ")");
+
+      // Emit java_stats_expected.json for the Rust test.
+      String json = JsonUtil.generate(
+          gen -> {
+            gen.writeStartArray();
+            gen.writeStartObject();
+            gen.writeNumberField("field_id", EXACT_FIELD_ID);
+            gen.writeNumberField("ndv", exactNdv);
+            gen.writeNumberField("snapshot_id", SNAPSHOT_ID);
+            gen.writeNumberField("sequence_number", SEQUENCE_NUMBER);
+            gen.writeStringField("mode", "exact");
+            gen.writeEndObject();
+            gen.writeStartObject();
+            gen.writeNumberField("field_id", ESTIMATION_FIELD_ID);
+            gen.writeNumberField("ndv", estimationNdv);
+            gen.writeNumberField("snapshot_id", SNAPSHOT_ID);
+            gen.writeNumberField("sequence_number", SEQUENCE_NUMBER);
+            gen.writeStringField("mode", "estimation");
+            gen.writeEndObject();
+            gen.writeEndArray();
+          },
+          true);
+
+      writeJson(dir.resolve("java_stats_expected.json"), json);
+      System.out.println(
+          "generate-interop-theta-java-to-rust: java_stats_expected.json written");
+    }
   }
 
   // ===========================================================================================

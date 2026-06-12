@@ -257,3 +257,66 @@ How to use it (see the manuals' §2):
   the initial Alpha table at lgK12 has lgArr=7 (`startingSubMultiple(13,3,5)=7`), and 7<=12 ⇒ threshold =
   `floor(0.5*2^7)=64`, not 120. I twice wrongly asserted the 0.9375 branch; it only applies once the table
   has grown PAST nominal. Read the `if_icmpgt` direction in the bytecode, don't assume the resize-phase fraction.
+
+### 2026-06-12 (I1 — theta-blob puffin interop, BUILDER Fable/Sonnet, wt-interop6)
+- **`BlobMetadata` fields in the Rust iceberg crate are PRIVATE — use accessor methods, not field
+  access.** `blob_type()`, `fields()`, `snapshot_id()`, `sequence_number()`, `properties()` are
+  the correct calls; `blob_metadata.r#type` / `.fields` / etc. will not compile.
+  *Why:* the struct fields are `pub(crate)` only. The `Blob` struct returned by `reader.blob()`
+  has the same accessor names and IS public.
+- **`FileIO::from_path(...)` does not exist — use `FileIO::new_with_fs()` for local filesystem
+  access in tests.** The correct API for a no-config local FileIO is `FileIO::new_with_fs()`;
+  the builder pattern is `FileIOBuilder::new(Arc::new(LocalFsStorageFactory)).build()`.
+  *Why:* `from_path` is a pattern from other Iceberg crate versions; the fork's `FileIO` does not
+  have it. Always `grep -n "pub fn"` the `FileIO` impl before assuming a constructor exists.
+- **Puffin file structure (Iceberg spec): footer layout is `[data-blobs][footer-magic(4)][footer-json(N)][footer-struct: payload_len(4 LE u32)|flags(4)|trailing-magic(4)]`.** Blob offsets in the footer JSON are ABSOLUTE from the file start (blob[0].offset = 4, right after the leading magic). To read the footer from Python: `payload_len = struct.unpack('<I', data[file_len-12:file_len-8])[0]`; `footer_json_start = file_len - 12 - payload_len - 4` (skip the footer's own leading magic). DO NOT search for the sketch preamble bytes by pattern — parse the footer JSON for blob offsets and corrupt those bytes directly.
+  *Why:* a pattern search for compact-sketch family byte `0x03` in the raw file hit a byte in the
+  Puffin wire framing, not the sketch payload, so the corrupt byte had no effect on Java's
+  `CompactSketch.wrap()`. The footer-parse approach is deterministic and works for any blob count
+  or order.
+- **When the sabotage battery's `|| true` catch-all pattern is used on a Rust test failure, verify
+  the check logic doesn't produce false-greens.** The partition-stats template's `7c` pattern
+  checks `grep -q "^test.*ok$"` combined with `grep -qiE "error|panicked|FAILED"` — a truncated
+  puffin that panics at the file-metadata read will not emit `^test.*ok$` at all, so the pattern
+  needs a second pass. A simpler invariant: the truncated file MUST NOT allow the Rust test to
+  exit 0 normally. For Rust `cargo test`, the process exit code is non-zero on FAILED/error, so
+  `|| true` plus absence of "ok" is sufficient.
+
+#### I1 REVIEWER corrections (2026-06-12, wt-interop6) — adversarial pass
+- **A theta sketch's `getEstimate()` is INSENSITIVE to a single-byte flip in the hash-entry region —
+  it depends ONLY on `theta` and the retained ENTRY COUNT, not on the entry values. So a "corrupt a
+  payload data byte" sabotage is a SILENT NO-OP on the ndv-vs-estimate cross-check.** *Why (probed):*
+  the builder's 6b zeroed blob0's first 8 bytes — that corrupts the compact-sketch PREAMBLE
+  (preLongs/serVer/family), which makes `CompactSketch.wrap()` THROW, so 6b "passed" only as a PARSE
+  CRASH (the same failure class as a truncation), NOT via the estimate cross-check the increment's
+  headline depends on. I probed flipping a byte deep inside the sorted-hash region (offset+1000): the
+  file parsed AND `getEstimate()` returned the UNCHANGED 1004032 — the verify PASSED on a corrupted
+  artifact. The genuinely SEMANTIC mutation is to corrupt `theta` itself (the LE long at compact-
+  estimation payload offset +16): the preamble stays valid so the file PARSES, but `getEstimate() =
+  retained * 2^63 / theta` changes (halving theta → estimate doubles 1004032→2008064), which ONLY the
+  cross-check catches. FIX (this pass): rewrote 6b to halve `theta` via the footer-parsed SOURCE
+  offset, with an estimation-mode precondition guard (exact-mode theta==MAX is inert) and a belt that
+  asserts the FAIL came from the `getEstimate() as long expected=` cross-check line (not a parse
+  crash) — so a future degeneration of the semantic mutation into a structural one fails closed. DO,
+  for any statistic-bearing blob, pin a sabotage that mutates the STATISTIC (theta/count) while
+  keeping the container parseable — a payload-data-byte flip proves nothing about the estimator.
+- **A `SKIP` branch in a sabotage step is a false-green: it lets the chain continue without the
+  corruption ever landing.** *Why:* the builder's 6b printed "6b SKIP" and continued on a magic-detect
+  failure (exit 42). A sabotage that cannot be applied has proven nothing and MUST hard-fail. FIX:
+  converted the 6b skip-exits (42 framing / 43 not-estimation-mode) into `exit 1` with a restore.
+- **CONFIRMED the crown-jewel family pin is load-bearing both ways (mutation-tested).** Swapping the
+  Java oracle's `setFamily(Family.ALPHA)` → `QUICKSELECT` in `buildSketchPayload` makes the Java D2
+  generate THROW immediately at its own `ESTIMATION_NDV_PIN` sanity check (`estimation ndv pin check
+  FAILED: expected 1004032 got 1002714`) — the n=1M estimation blob is genuinely large-n, the family
+  is unpinned-detecting, and the chain fails closed. The Rust D2 estimation pin (`expected_ndv ==
+  ESTIMATION_NDV_PIN` for field_id=3) is an independent second guard. Reverted after.
+- **Integer-exactness CONFIRMED both directions:** Rust compares `sketch.estimate() as i64` via
+  `assert_eq!` (no tolerance/abs/epsilon anywhere in `interop_theta.rs`); Java compares `(long)
+  compact.getEstimate()` via `!=`. The Puffin footer-layout lesson (trailing magic, payload_len u32
+  LE, absolute blob offsets) is accurate against `puffin/writer.rs::write_footer`.
+- **COVERAGE NOTE (not fixed — named):** the interop layer proves the blob byte round-trip but does
+  NOT assert the stats file's REGISTRATION entry (snapshot-id/statistics-path) on the committed table
+  metadata — the Java verify reads the loose copied `rust_stats.puffin`, not `final.metadata.json`.
+  Registration IS unit-covered (`compute_table_stats.rs` re-parses the committed `StatisticsFile`), so
+  this is a minor interop-completeness gap, not a correctness hole. DO consider a `statisticsFiles()`
+  read on the Java side in a follow-up to close the registration dimension at the interop level.
