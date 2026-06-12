@@ -1463,9 +1463,9 @@ fn test_datum_to_decimal_widens_precision_when_scale_matches() {
 fn test_datum_to_decimal_rejects_precision_too_narrow() {
     let target_type = Type::Primitive(PrimitiveType::Decimal {
         precision: 1,
-        scale: 2,
+        scale: 1,
     });
-    let datum = Datum::decimal_from_str("123.45").unwrap();
+    let datum = Datum::decimal_from_str("1.5").unwrap();
 
     let result = datum.to(&target_type);
 
@@ -1477,9 +1477,9 @@ fn test_datum_to_decimal_rejects_precision_too_narrow() {
 fn test_datum_to_decimal_rejects_value_that_fits_storage_bytes_but_not_precision() {
     let target_type = Type::Primitive(PrimitiveType::Decimal {
         precision: 1,
-        scale: 2,
+        scale: 1,
     });
-    let datum = Datum::decimal_from_str("0.42").unwrap();
+    let datum = Datum::decimal_from_str("4.2").unwrap();
 
     let result = datum.to(&target_type);
 
@@ -1491,15 +1491,15 @@ fn test_datum_to_decimal_rejects_value_that_fits_storage_bytes_but_not_precision
 fn test_datum_to_decimal_accepts_single_digit_mantissa_for_precision_one() {
     let target_type = Type::Primitive(PrimitiveType::Decimal {
         precision: 1,
-        scale: 2,
+        scale: 1,
     });
-    let datum = Datum::decimal_from_str("0.05").unwrap();
+    let datum = Datum::decimal_from_str("0.5").unwrap();
 
     let converted = datum.to(&target_type).unwrap();
 
     assert_eq!(converted.data_type(), &PrimitiveType::Decimal {
         precision: 1,
-        scale: 2,
+        scale: 1,
     });
     assert_eq!(converted.literal(), &PrimitiveLiteral::Int128(5));
 }
@@ -1514,11 +1514,11 @@ fn test_datum_decimal_with_precision_rejects_value_that_exceeds_digit_precision(
 
 #[test]
 fn test_datum_decimal_with_precision_accepts_value_that_fits_digit_precision() {
-    let datum = Datum::decimal_with_precision(decimal_from_i128_with_scale(5, 2), 1).unwrap();
+    let datum = Datum::decimal_with_precision(decimal_from_i128_with_scale(5, 1), 1).unwrap();
 
     assert_eq!(datum.data_type(), &PrimitiveType::Decimal {
         precision: 1,
-        scale: 2,
+        scale: 1,
     });
     assert_eq!(datum.literal(), &PrimitiveLiteral::Int128(5));
 }
@@ -1532,7 +1532,12 @@ fn test_datum_to_decimal_rejects_scale_change() {
     let datum = Datum::decimal_from_str("123.45").unwrap();
 
     let result = datum.to(&target_type);
-
     assert!(result.is_err(), "expect error but got {result:?}");
-    assert_eq!(result.unwrap_err().kind(), ErrorKind::DataInvalid);
+
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    assert!(
+        err.to_string()
+            .contains("Decimal scale conversion is not supported")
+    );
 }

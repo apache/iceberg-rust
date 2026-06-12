@@ -1053,7 +1053,7 @@ impl Datum {
         let scale = decimal_scale(&value);
         let mantissa = decimal_mantissa(&value);
 
-        Self::decimal_from_mantissa(mantissa, precision, scale, value)
+        Self::decimal_from_mantissa(mantissa, precision, scale)
     }
 
     fn i64_to_i32<T: Into<i64> + PartialOrd<i64>>(val: T) -> Datum {
@@ -1092,14 +1092,10 @@ impl Datum {
         })
     }
 
-    fn decimal_from_mantissa<T: Display>(
-        mantissa: i128,
-        precision: u32,
-        scale: u32,
-        value: T,
-    ) -> Result<Self> {
+    fn decimal_from_mantissa(mantissa: i128, precision: u32, scale: u32) -> Result<Self> {
         let r#type = Type::decimal(precision, scale)?;
         if decimal_precision(mantissa) > precision {
+            let value = decimal_from_i128_with_scale(mantissa, scale);
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!("Decimal value {value} is too large for precision {precision}"),
@@ -1146,13 +1142,28 @@ impl Datum {
                             precision,
                             scale: target_scale,
                         },
-                    ) if self_scale == target_scale => Datum::decimal_from_mantissa(
-                        *val,
-                        *precision,
-                        *target_scale,
-                        self.to_human_string(),
-                    ),
-
+                    ) if self_scale == target_scale => {
+                        Datum::decimal_from_mantissa(*val, *precision, *target_scale)
+                    }
+                    // Java's DecimalLiteral.to() is a no-op for decimal targets, even when scales
+                    // differ. We intentionally do not mirror that here: the same mantissa with a
+                    // different scale represents a different value, so scale conversion needs
+                    // explicit rescaling.
+                    (
+                        PrimitiveLiteral::Int128(_),
+                        PrimitiveType::Decimal {
+                            scale: self_scale, ..
+                        },
+                        PrimitiveType::Decimal {
+                            scale: target_scale,
+                            ..
+                        },
+                    ) => Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Decimal scale conversion is not supported: source scale {self_scale}, target scale {target_scale}"
+                        ),
+                    )),
                     (PrimitiveLiteral::String(val), _, PrimitiveType::Boolean) => {
                         Datum::bool_from_str(val)
                     }

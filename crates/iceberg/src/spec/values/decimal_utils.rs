@@ -121,8 +121,13 @@ pub fn decimal_mantissa(d: &Decimal) -> i128 {
 }
 
 /// Get the decimal digit precision of a mantissa.
+///
+/// A mantissa of 0 has a precision of 1.
 pub fn decimal_precision(mantissa: i128) -> u32 {
-    mantissa.unsigned_abs().to_string().len() as u32
+    mantissa
+        .unsigned_abs()
+        .checked_ilog10()
+        .map_or(1, |x| x + 1)
 }
 
 /// Get the scale (number of digits after decimal point).
@@ -243,10 +248,25 @@ mod tests {
         assert_eq!(decimal_precision(5), 1);
         assert_eq!(decimal_precision(42), 2);
         assert_eq!(decimal_precision(-42), 2);
+        // power-of-10 boundaries, where off-by-one bugs in log10 logic live
+        assert_eq!(decimal_precision(9), 1);
+        assert_eq!(decimal_precision(10), 2);
+        assert_eq!(decimal_precision(99), 2);
+        assert_eq!(decimal_precision(100), 3);
+
+        // max Iceberg decimal precision
         assert_eq!(
             decimal_precision(99999999999999999999999999999999999999),
             38
         );
+        assert_eq!(
+            decimal_precision(-99999999999999999999999999999999999999),
+            38
+        );
+
+        // i128 extremes
+        assert_eq!(decimal_precision(i128::MAX), 39);
+        assert_eq!(decimal_precision(i128::MIN), 39);
     }
 
     #[test]
