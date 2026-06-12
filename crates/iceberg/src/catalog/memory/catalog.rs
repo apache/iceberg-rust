@@ -26,11 +26,12 @@ use itertools::Itertools;
 
 use super::namespace_state::NamespaceState;
 use crate::io::{FileIO, FileIOBuilder, MemoryStorageFactory, StorageFactory};
-use crate::spec::{TableMetadata, TableMetadataBuilder};
+use crate::spec::{TableMetadata, TableMetadataBuilder, ViewMetadata, ViewMetadataBuilder};
 use crate::table::Table;
+use crate::view::{View, ViewCommit};
 use crate::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
-    TableCommit, TableCreation, TableIdent,
+    TableCommit, TableCreation, TableIdent, ViewCreation,
 };
 
 /// Memory catalog warehouse location
@@ -149,6 +150,23 @@ impl MemoryCatalog {
 
         Table::builder()
             .identifier(table_ident.clone())
+            .metadata(metadata)
+            .metadata_location(metadata_location.to_string())
+            .file_io(self.file_io.clone())
+            .build()
+    }
+
+    /// Loads a view from the locked namespace state.
+    async fn load_view_from_locked_state(
+        &self,
+        view_ident: &TableIdent,
+        root_namespace_state: &MutexGuard<'_, NamespaceState>,
+    ) -> Result<View> {
+        let metadata_location = root_namespace_state.get_existing_view_location(view_ident)?;
+        let metadata = ViewMetadata::read_from(&self.file_io, metadata_location).await?;
+
+        View::builder()
+            .identifier(view_ident.clone())
             .metadata(metadata)
             .metadata_location(metadata_location.to_string())
             .file_io(self.file_io.clone())
@@ -393,6 +411,108 @@ impl Catalog for MemoryCatalog {
         let updated_table = root_namespace_state.commit_table_update(staged_table)?;
 
         Ok(updated_table)
+    }
+
+    async fn list_views(&self, namespace_ident: &NamespaceIdent) -> Result<Vec<TableIdent>> {
+        let root_namespace_state = self.root_namespace_state.lock().await;
+
+        let view_names = root_namespace_state.list_views(namespace_ident)?;
+
+        let views = view_names
+            .into_iter()
+            .map(|view_name| TableIdent::new(namespace_ident.clone(), view_name.clone()))
+            .collect_vec();
+
+        Ok(views)
+    }
+
+    async fn create_view(
+        &self,
+        namespace_ident: &NamespaceIdent,
+        view_creation: ViewCreation,
+    ) -> Result<View> {
+        let mut root_namespace_state = self.root_namespace_state.lock().await;
+
+        let view_name = view_creation.name.clone();
+        let view_ident = TableIdent::new(namespace_ident.clone(), view_name);
+        let location = view_creation.location.clone();
+
+        let metadata = ViewMetadataBuilder::from_view_creation(view_creation)?
+            .build()?
+            .metadata;
+        let metadata_location = MetadataLocation::new_with_table_location(location).to_string();
+
+        metadata.write_to(&self.file_io, &metadata_location).await?;
+
+        root_namespace_state.insert_new_view(&view_ident, metadata_location.clone())?;
+
+        View::builder()
+            .file_io(self.file_io.clone())
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .identifier(view_ident)
+            .build()
+    }
+
+    async fn load_view(&self, view_ident: &TableIdent) -> Result<View> {
+        let root_namespace_state = self.root_namespace_state.lock().await;
+
+        self.load_view_from_locked_state(view_ident, &root_namespace_state)
+            .await
+    }
+
+    async fn drop_view(&self, view_ident: &TableIdent) -> Result<()> {
+        let mut root_namespace_state = self.root_namespace_state.lock().await;
+
+        let _ = root_namespace_state.remove_existing_view(view_ident)?;
+
+        Ok(())
+    }
+
+    async fn view_exists(&self, view_ident: &TableIdent) -> Result<bool> {
+        let root_namespace_state = self.root_namespace_state.lock().await;
+
+        root_namespace_state.view_exists(view_ident)
+    }
+
+    async fn rename_view(
+        &self,
+        src_view_ident: &TableIdent,
+        dst_view_ident: &TableIdent,
+    ) -> Result<()> {
+        let mut root_namespace_state = self.root_namespace_state.lock().await;
+
+        let mut new_root_namespace_state = root_namespace_state.clone();
+        let metadata_location = new_root_namespace_state
+            .get_existing_view_location(src_view_ident)?
+            .clone();
+        new_root_namespace_state.remove_existing_view(src_view_ident)?;
+        new_root_namespace_state.insert_new_view(dst_view_ident, metadata_location)?;
+        *root_namespace_state = new_root_namespace_state;
+
+        Ok(())
+    }
+
+    async fn update_view(&self, commit: ViewCommit) -> Result<View> {
+        let mut root_namespace_state = self.root_namespace_state.lock().await;
+
+        let current_view = self
+            .load_view_from_locked_state(commit.identifier(), &root_namespace_state)
+            .await?;
+
+        // Apply the commit (checks requirements + applies updates, bumping the version).
+        let staged_view = commit.apply(current_view)?;
+        let new_metadata_location = staged_view.metadata_location_result()?.to_string();
+
+        // Write the new metadata file before flipping the catalog pointer.
+        staged_view
+            .metadata()
+            .write_to(staged_view.file_io(), &new_metadata_location)
+            .await?;
+
+        root_namespace_state.commit_view_update(staged_view.identifier(), new_metadata_location)?;
+
+        Ok(staged_view)
     }
 }
 
@@ -1934,5 +2054,290 @@ pub(crate) mod tests {
             .file_io(file_io)
             .build()
             .unwrap()
+    }
+
+    // ========================================================================
+    // View CRUD lifecycle tests (the MemoryCatalog view surface).
+    // ========================================================================
+
+    fn simple_view_schema() -> Schema {
+        Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::optional(1, "event_count", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    fn sql_representations(sql: &str) -> crate::spec::ViewRepresentations {
+        crate::spec::ViewRepresentations(vec![crate::spec::ViewRepresentation::Sql(
+            crate::spec::SqlViewRepresentation {
+                sql: sql.to_string(),
+                dialect: "spark".to_string(),
+            },
+        )])
+    }
+
+    async fn create_view<C: Catalog>(catalog: &C, view_ident: &TableIdent, sql: &str) -> View {
+        let location = format!("{}/{}", temp_path(), view_ident.name());
+        catalog
+            .create_view(
+                &view_ident.namespace,
+                ViewCreation::builder()
+                    .name(view_ident.name().to_string())
+                    .location(location)
+                    .schema(simple_view_schema())
+                    .default_namespace(view_ident.namespace.clone())
+                    .representations(sql_representations(sql))
+                    .build(),
+            )
+            .await
+            .unwrap()
+    }
+
+    // RISK: a fully separate view namespace — creating/loading/listing views must NOT collide with
+    // tables of the same name and must round-trip the view metadata through FileIO.
+    #[tokio::test]
+    async fn test_view_create_load_and_list() {
+        let catalog = new_memory_catalog().await;
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let view_ident = TableIdent::new(namespace_ident.clone(), "v1".into());
+
+        let view = create_view(&catalog, &view_ident, "SELECT 1 AS event_count").await;
+        assert_eq!(view.identifier(), &view_ident);
+        assert_eq!(view.metadata().current_version_id(), 1);
+
+        assert!(catalog.view_exists(&view_ident).await.unwrap());
+        let loaded = catalog.load_view(&view_ident).await.unwrap();
+        assert_eq!(loaded.metadata().uuid(), view.metadata().uuid());
+        assert_eq!(loaded.metadata().versions().count(), 1);
+
+        let views = catalog.list_views(&namespace_ident).await.unwrap();
+        assert_eq!(views, vec![view_ident]);
+    }
+
+    // RISK: creating a view that already exists must fail loudly (Java AlreadyExistsException).
+    #[tokio::test]
+    async fn test_view_create_duplicate_fails() {
+        let catalog = new_memory_catalog().await;
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let view_ident = TableIdent::new(namespace_ident, "v1".into());
+
+        create_view(&catalog, &view_ident, "SELECT 1 AS event_count").await;
+        let location = format!("{}/{}", temp_path(), "v1");
+        let error = catalog
+            .create_view(
+                &view_ident.namespace,
+                ViewCreation::builder()
+                    .name("v1".to_string())
+                    .location(location)
+                    .schema(simple_view_schema())
+                    .default_namespace(view_ident.namespace.clone())
+                    .representations(sql_representations("SELECT 1"))
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ViewAlreadyExists);
+    }
+
+    // RISK: the full create→update→load→rename→drop lifecycle — a replace must flip the current
+    // version, append the version log, and KEEP the old version intact; rename must move the
+    // pointer; drop must remove it. This is the load-bearing catalog-CRUD e2e.
+    #[tokio::test]
+    async fn test_view_full_lifecycle_replace_rename_drop() {
+        let catalog = new_memory_catalog().await;
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let view_ident = TableIdent::new(namespace_ident.clone(), "v1".into());
+
+        let view = create_view(&catalog, &view_ident, "SELECT 1 AS event_count").await;
+        let original_uuid = view.metadata().uuid();
+        let original_location = view.metadata_location().unwrap().to_string();
+
+        // Replace the version with a genuinely different query.
+        let commit = view
+            .replace_version()
+            .with_query("spark", "SELECT 2 AS event_count")
+            .with_schema(simple_view_schema())
+            .with_default_namespace(namespace_ident.clone())
+            .to_commit()
+            .unwrap();
+        let updated = catalog.update_view(commit).await.unwrap();
+
+        // The metadata-file pointer advanced.
+        assert_ne!(updated.metadata_location().unwrap(), original_location);
+        // UUID is preserved across the replace.
+        assert_eq!(updated.metadata().uuid(), original_uuid);
+
+        // Loading shows the NEW current version, the appended log, and the OLD version intact.
+        let loaded = catalog.load_view(&view_ident).await.unwrap();
+        assert_eq!(loaded.metadata().current_version_id(), 2);
+        assert_eq!(loaded.metadata().versions().count(), 2);
+        assert!(loaded.metadata().version_by_id(1).is_some());
+        assert_eq!(
+            loaded
+                .metadata()
+                .history()
+                .iter()
+                .map(|entry| entry.version_id())
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+
+        // Rename the view, then confirm the source is gone and the destination loads.
+        let renamed_ident = TableIdent::new(namespace_ident.clone(), "v2".into());
+        catalog
+            .rename_view(&view_ident, &renamed_ident)
+            .await
+            .unwrap();
+        assert!(!catalog.view_exists(&view_ident).await.unwrap());
+        assert!(catalog.view_exists(&renamed_ident).await.unwrap());
+        let renamed = catalog.load_view(&renamed_ident).await.unwrap();
+        assert_eq!(renamed.metadata().uuid(), original_uuid);
+        assert_eq!(renamed.metadata().current_version_id(), 2);
+
+        // Drop the view; it is then gone and a re-load fails.
+        catalog.drop_view(&renamed_ident).await.unwrap();
+        assert!(!catalog.view_exists(&renamed_ident).await.unwrap());
+        let error = catalog.load_view(&renamed_ident).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ViewNotFound);
+    }
+
+    // RISK: an update_properties commit must persist properties through the catalog round-trip.
+    #[tokio::test]
+    async fn test_view_update_properties_through_catalog() {
+        let catalog = new_memory_catalog().await;
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let view_ident = TableIdent::new(namespace_ident, "v1".into());
+
+        let view = create_view(&catalog, &view_ident, "SELECT 1 AS event_count").await;
+        let commit = view
+            .update_properties()
+            .set("comment", "daily counts")
+            .unwrap()
+            .to_commit()
+            .unwrap();
+        catalog.update_view(commit).await.unwrap();
+
+        let loaded = catalog.load_view(&view_ident).await.unwrap();
+        assert_eq!(
+            loaded.metadata().properties().get("comment"),
+            Some(&"daily counts".to_string())
+        );
+    }
+
+    // RISK: committing the SAME version twice through the catalog must REUSE the existing version —
+    // Java reuses rather than minting a new id, so the version count stays constant.
+    #[tokio::test]
+    async fn test_view_replace_identical_version_reuses() {
+        let catalog = new_memory_catalog().await;
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let view_ident = TableIdent::new(namespace_ident.clone(), "v1".into());
+
+        let view = create_view(&catalog, &view_ident, "SELECT 1 AS event_count").await;
+        // Replace with the IDENTICAL representation already at version 1.
+        let commit = view
+            .replace_version()
+            .with_query("spark", "SELECT 1 AS event_count")
+            .with_schema(simple_view_schema())
+            .with_default_namespace(namespace_ident)
+            .to_commit()
+            .unwrap();
+        catalog.update_view(commit).await.unwrap();
+
+        let loaded = catalog.load_view(&view_ident).await.unwrap();
+        assert_eq!(loaded.metadata().versions().count(), 1);
+        assert_eq!(loaded.metadata().current_version_id(), 1);
+    }
+
+    // RISK: a catalog without view support inherits the default trait methods that error rather
+    // than silently no-op — pin that a load on a non-existent view errors (ViewNotFound), proving
+    // the MemoryCatalog override is wired (not the FeatureUnsupported default).
+    #[tokio::test]
+    async fn test_view_load_missing_errors_view_not_found() {
+        let catalog = new_memory_catalog().await;
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let view_ident = TableIdent::new(namespace_ident, "absent".into());
+
+        let error = catalog.load_view(&view_ident).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ViewNotFound);
+        assert!(!catalog.view_exists(&view_ident).await.unwrap());
+    }
+
+    // RISK: tables and views share ONE name space in a catalog (Java InMemoryCatalog). Creating a
+    // view where a TABLE already exists — or a table where a VIEW exists — must be REJECTED, not
+    // silently coexist. A shadowing pair lets a later `loadTable`/`loadView` resolve the wrong kind.
+    #[tokio::test]
+    async fn test_view_and_table_name_collision_rejected_both_directions() {
+        let catalog = new_memory_catalog().await;
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        // A TABLE exists; creating a VIEW with the same name is rejected ("Table with same name").
+        let table_ident = TableIdent::new(namespace_ident.clone(), "shared_a".into());
+        create_table(&catalog, &table_ident).await;
+        let view_over_table = catalog
+            .create_view(
+                &namespace_ident,
+                ViewCreation::builder()
+                    .name("shared_a".to_string())
+                    .location(format!("{}/shared_a_view", temp_path()))
+                    .schema(simple_view_schema())
+                    .default_namespace(namespace_ident.clone())
+                    .representations(sql_representations("SELECT 1"))
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(view_over_table.kind(), ErrorKind::TableAlreadyExists);
+        // The view was NOT created.
+        assert!(!catalog.view_exists(&table_ident).await.unwrap());
+
+        // A VIEW exists; creating a TABLE with the same name is rejected ("View with same name").
+        let view_ident = TableIdent::new(namespace_ident.clone(), "shared_b".into());
+        create_view(&catalog, &view_ident, "SELECT 1 AS event_count").await;
+        let table_over_view = catalog
+            .create_table(
+                &namespace_ident,
+                TableCreation::builder()
+                    .name("shared_b".to_string())
+                    .location(format!("{}/shared_b", temp_path()))
+                    .schema(simple_view_schema())
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(table_over_view.kind(), ErrorKind::ViewAlreadyExists);
+        assert!(!catalog.table_exists(&view_ident).await.unwrap());
+    }
+
+    // RISK: a rename must also respect the shared name space — renaming a view onto a name a TABLE
+    // already holds must be rejected (Java InMemoryCatalog.renameView checks `tables.containsKey`).
+    #[tokio::test]
+    async fn test_rename_view_onto_existing_table_rejected() {
+        let catalog = new_memory_catalog().await;
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let view_ident = TableIdent::new(namespace_ident.clone(), "v_src".into());
+        create_view(&catalog, &view_ident, "SELECT 1 AS event_count").await;
+        let table_ident = TableIdent::new(namespace_ident.clone(), "t_dst".into());
+        create_table(&catalog, &table_ident).await;
+
+        let error = catalog
+            .rename_view(&view_ident, &table_ident)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::TableAlreadyExists);
+        // The source view is untouched and the table is intact.
+        assert!(catalog.view_exists(&view_ident).await.unwrap());
+        assert!(catalog.table_exists(&table_ident).await.unwrap());
     }
 }

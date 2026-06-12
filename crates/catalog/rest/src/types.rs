@@ -19,9 +19,12 @@
 
 use std::collections::HashMap;
 
-use iceberg::spec::{Schema, SortOrder, TableMetadata, UnboundPartitionSpec};
+use iceberg::spec::{
+    Schema, SortOrder, TableMetadata, UnboundPartitionSpec, ViewMetadata, ViewVersion,
+};
 use iceberg::{
     Error, ErrorKind, Namespace, NamespaceIdent, TableIdent, TableRequirement, TableUpdate,
+    ViewRequirement, ViewUpdate,
 };
 use serde_derive::{Deserialize, Serialize};
 
@@ -311,6 +314,67 @@ pub struct RegisterTableRequest {
     pub overwrite: Option<bool>,
 }
 
+// ============================================================================
+// View request/response shapes — mirror the Iceberg REST OpenAPI view routes
+// (`POST/GET /namespaces/{ns}/views`, `GET/POST/DELETE/HEAD .../views/{view}`,
+// `POST /views/rename`) and Java's `CreateViewRequest` / `LoadViewResponse` /
+// `UpdateTableRequest` (reused for the view replace/commit) wire formats.
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+/// Request to create a new view in a namespace.
+///
+/// Mirrors Java `org.apache.iceberg.rest.requests.CreateViewRequest` — the wire fields are
+/// `name`, `location`, `view-version` (the initial [`ViewVersion`]), `schema`, and `properties`.
+pub struct CreateViewRequest {
+    /// Name of the view to create
+    pub name: String,
+    /// Optional view location. If not provided, the server will choose a location.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    /// The initial view version (one representation per SQL dialect, schema id, default namespace).
+    pub view_version: ViewVersion,
+    /// View schema
+    pub schema: Schema,
+    /// Optional properties to set on the view
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub properties: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+/// Result returned when a view is successfully loaded or created.
+///
+/// Mirrors Java `org.apache.iceberg.rest.responses.LoadViewResponse` — `metadata-location`,
+/// `metadata` (the [`ViewMetadata`] JSON), and a view-specific `config` map.
+pub struct LoadViewResult {
+    /// Location of the view metadata file
+    pub metadata_location: String,
+    /// The view's full metadata
+    pub metadata: ViewMetadata,
+    /// View-specific configuration overriding catalog configuration
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub config: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+/// Request to commit updates to a view (the replace/update-properties path).
+///
+/// Java reuses `UpdateTableRequest.create(identifier, requirements, updates)` for the view commit,
+/// so the wire shape is `identifier`, `requirements`, `updates` — but carrying VIEW requirements
+/// and VIEW updates (from `UpdateRequirements.forReplaceView`), not table ones.
+pub struct CommitViewRequest {
+    /// View identifier to update
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identifier: Option<TableIdent>,
+    /// List of requirements that must be satisfied before committing changes
+    pub requirements: Vec<ViewRequirement>,
+    /// List of updates to apply to the view metadata
+    pub updates: Vec<ViewUpdate>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,5 +418,162 @@ mod tests {
             serde_json::to_value(&ns_response_no_props).expect("Serialization failed"),
             json_no_props
         );
+    }
+
+    // RISK: the LoadViewResult wire shape must match Java's `LoadViewResponse`
+    // (`metadata-location` / `metadata` / `config`). A wrong key (e.g. snake_case `metadata_location`)
+    // would silently fail to deserialize a real server's load-view / create-view response, and the
+    // embedded `metadata` must parse as a full `ViewMetadata` (versions, schemas, version-log).
+    #[test]
+    fn test_load_view_result_serde() {
+        let json = serde_json::json!({
+            "metadata-location": "s3://bucket/warehouse/default.db/event_agg/metadata/00001-abc.metadata.json",
+            "metadata": {
+                "view-uuid": "fa6506c3-7681-40c8-86dc-e36561f83385",
+                "format-version": 1,
+                "location": "s3://bucket/warehouse/default.db/event_agg",
+                "current-version-id": 1,
+                "properties": { "comment": "Daily event counts" },
+                "versions": [ {
+                    "version-id": 1,
+                    "timestamp-ms": 1573518431292i64,
+                    "schema-id": 1,
+                    "default-namespace": [ "default" ],
+                    "summary": { "engine-name": "Spark" },
+                    "representations": [ {
+                        "type": "sql",
+                        "sql": "SELECT 1 AS event_count",
+                        "dialect": "spark"
+                    } ]
+                } ],
+                "schemas": [ {
+                    "schema-id": 1,
+                    "type": "struct",
+                    "fields": [ {
+                        "id": 1,
+                        "name": "event_count",
+                        "required": false,
+                        "type": "int"
+                    } ]
+                } ],
+                "version-log": [ {
+                    "timestamp-ms": 1573518431292i64,
+                    "version-id": 1
+                } ]
+            },
+            "config": { "key": "value" }
+        });
+
+        let result: LoadViewResult =
+            serde_json::from_value(json).expect("LoadViewResult deserialization failed");
+        assert_eq!(
+            result.metadata_location,
+            "s3://bucket/warehouse/default.db/event_agg/metadata/00001-abc.metadata.json"
+        );
+        assert_eq!(
+            result.metadata.uuid().to_string(),
+            "fa6506c3-7681-40c8-86dc-e36561f83385"
+        );
+        assert_eq!(result.metadata.current_version_id(), 1);
+        assert_eq!(result.metadata.versions().count(), 1);
+        assert_eq!(result.config.get("key"), Some(&"value".to_string()));
+
+        // Round-trips back to a value with the same kebab-case keys.
+        let reserialized =
+            serde_json::to_value(&result).expect("LoadViewResult serialization failed");
+        assert!(reserialized.get("metadata-location").is_some());
+        assert!(reserialized.get("metadata").is_some());
+        assert!(reserialized.get("config").is_some());
+    }
+
+    // RISK: the CreateViewRequest wire shape must match Java's `CreateViewRequest`
+    // (`name` / `location` / `view-version` / `schema` / `properties`). The `view-version` field
+    // (kebab-case) carries a full `ViewVersion`; a snake_case `view_version` or a missing field
+    // would be rejected by a real server.
+    #[test]
+    fn test_create_view_request_serde() {
+        let json = serde_json::json!({
+            "name": "event_agg",
+            "location": "s3://bucket/warehouse/default.db/event_agg",
+            "view-version": {
+                "version-id": 1,
+                "timestamp-ms": 1573518431292i64,
+                "schema-id": 1,
+                "default-namespace": [ "default" ],
+                "summary": {},
+                "representations": [ {
+                    "type": "sql",
+                    "sql": "SELECT 1 AS event_count",
+                    "dialect": "spark"
+                } ]
+            },
+            "schema": {
+                "schema-id": 1,
+                "type": "struct",
+                "fields": [ {
+                    "id": 1,
+                    "name": "event_count",
+                    "required": false,
+                    "type": "int"
+                } ]
+            },
+            "properties": { "comment": "daily" }
+        });
+
+        let request: CreateViewRequest =
+            serde_json::from_value(json.clone()).expect("CreateViewRequest deserialization failed");
+        assert_eq!(request.name, "event_agg");
+        assert_eq!(
+            request.location.as_deref(),
+            Some("s3://bucket/warehouse/default.db/event_agg")
+        );
+        assert_eq!(request.view_version.version_id(), 1);
+        assert_eq!(request.schema.schema_id(), 1);
+        assert_eq!(
+            request.properties.get("comment"),
+            Some(&"daily".to_string())
+        );
+
+        // Round-trip is value-stable (kebab-case `view-version` survives).
+        let reserialized =
+            serde_json::to_value(&request).expect("CreateViewRequest serialization failed");
+        assert_eq!(reserialized, json);
+    }
+
+    // RISK: the CommitViewRequest reuses Java's `UpdateTableRequest` shape
+    // (`identifier` / `requirements` / `updates`) but carries VIEW requirements/updates. The view
+    // requirement tag (`assert-view-uuid`) and the view update action tags must serialize per the
+    // REST spec; a table-requirement leak would make a real server reject the commit.
+    #[test]
+    fn test_commit_view_request_serde() {
+        let json = serde_json::json!({
+            "identifier": { "namespace": ["default"], "name": "event_agg" },
+            "requirements": [ {
+                "type": "assert-view-uuid",
+                "uuid": "fa6506c3-7681-40c8-86dc-e36561f83385"
+            } ],
+            "updates": [ {
+                "action": "set-properties",
+                "updates": { "comment": "daily counts" }
+            } ]
+        });
+
+        let request: CommitViewRequest =
+            serde_json::from_value(json.clone()).expect("CommitViewRequest deserialization failed");
+        assert_eq!(request.requirements.len(), 1);
+        assert!(matches!(
+            request.requirements[0],
+            ViewRequirement::UuidMatch { .. }
+        ));
+        assert_eq!(request.updates.len(), 1);
+        assert!(matches!(
+            request.updates[0],
+            ViewUpdate::SetProperties { .. }
+        ));
+
+        // Round-trip is value-stable (view tags `assert-view-uuid` / `set-properties` survive).
+        let reserialized =
+            serde_json::to_value(&request).expect("CommitViewRequest serialization failed");
+        assert_eq!(reserialized, json);
     }
 }

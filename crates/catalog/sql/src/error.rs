@@ -46,3 +46,37 @@ pub fn table_already_exists_err<T>(table_ident: &TableIdent) -> Result<T> {
         format!("Table {table_ident:?} already exists."),
     ))
 }
+
+pub fn no_such_view_err<T>(view_ident: &TableIdent) -> Result<T> {
+    Err(Error::new(
+        ErrorKind::ViewNotFound,
+        format!("No such view: {view_ident:?}"),
+    ))
+}
+
+pub fn view_already_exists_err<T>(view_ident: &TableIdent) -> Result<T> {
+    Err(Error::new(
+        ErrorKind::ViewAlreadyExists,
+        format!("View {view_ident:?} already exists."),
+    ))
+}
+
+/// A table already occupies the name a view is trying to take. Mirrors Java
+/// `JdbcViewOperations.doCommit` (offset 89): `AlreadyExistsException("Table with same name already
+/// exists: %s")` — tables and views share one name space in a JDBC catalog.
+pub fn table_with_same_name_err<T>(view_ident: &TableIdent) -> Result<T> {
+    Err(Error::new(
+        ErrorKind::TableAlreadyExists,
+        format!("Table with same name already exists: {view_ident}"),
+    ))
+}
+
+/// A view already occupies the name a table is trying to take. Mirrors Java
+/// `JdbcCatalog$ViewAwareTableBuilder` (offset 27): `AlreadyExistsException("View with same name
+/// already exists: %s")`.
+pub fn view_with_same_name_err<T>(table_ident: &TableIdent) -> Result<T> {
+    Err(Error::new(
+        ErrorKind::ViewAlreadyExists,
+        format!("View with same name already exists: {table_ident}"),
+    ))
+}

@@ -42,9 +42,11 @@ use crate::io::StorageFactory;
 use crate::spec::{
     EncryptedKey, FormatVersion, PartitionStatisticsFile, Schema, SchemaId, Snapshot,
     SnapshotReference, SortOrder, StatisticsFile, TableMetadata, TableMetadataBuilder,
-    UnboundPartitionSpec, ViewFormatVersion, ViewRepresentations, ViewVersion,
+    UnboundPartitionSpec, ViewFormatVersion, ViewMetadata, ViewMetadataBuilder, ViewRepresentation,
+    ViewRepresentations, ViewVersion,
 };
 use crate::table::Table;
+use crate::view::{View, ViewCommit};
 use crate::{Error, ErrorKind, Result};
 
 /// The catalog API for Iceberg Rust.
@@ -109,6 +111,73 @@ pub trait Catalog: Debug + Sync + Send {
 
     /// Update a table to the catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table>;
+
+    /// List views from a namespace.
+    ///
+    /// Mirrors Java `ViewCatalog.listViews`. The default implementation returns
+    /// [`ErrorKind::FeatureUnsupported`] so that catalogs without view support need not
+    /// implement the view surface.
+    async fn list_views(&self, _namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
+        Err(views_unsupported())
+    }
+
+    /// Create a new view inside the namespace.
+    ///
+    /// Mirrors Java `ViewCatalog.buildView(...).create()`.
+    async fn create_view(
+        &self,
+        _namespace: &NamespaceIdent,
+        _creation: ViewCreation,
+    ) -> Result<View> {
+        Err(views_unsupported())
+    }
+
+    /// Load a view from the catalog.
+    ///
+    /// Mirrors Java `ViewCatalog.loadView`.
+    async fn load_view(&self, _view: &TableIdent) -> Result<View> {
+        Err(views_unsupported())
+    }
+
+    /// Drop a view from the catalog, or returns an error if it doesn't exist.
+    ///
+    /// Mirrors Java `ViewCatalog.dropView`.
+    async fn drop_view(&self, _view: &TableIdent) -> Result<()> {
+        Err(views_unsupported())
+    }
+
+    /// Check if a view exists in the catalog.
+    ///
+    /// Mirrors Java `ViewCatalog.viewExists`.
+    async fn view_exists(&self, _view: &TableIdent) -> Result<bool> {
+        Err(views_unsupported())
+    }
+
+    /// Rename a view in the catalog.
+    ///
+    /// Mirrors Java `ViewCatalog.renameView`.
+    async fn rename_view(&self, _src: &TableIdent, _dest: &TableIdent) -> Result<()> {
+        Err(views_unsupported())
+    }
+
+    /// Update a view in the catalog.
+    ///
+    /// Mirrors how Java `BaseViewOperations.commit(base, metadata)` is driven by a
+    /// `ReplaceViewVersion` / `UpdateViewProperties` pending update: the [`ViewCommit`]
+    /// carries the requirement set (`[AssertViewUUID]`) and the metadata updates.
+    async fn update_view(&self, _commit: ViewCommit) -> Result<View> {
+        Err(views_unsupported())
+    }
+}
+
+/// The error returned by the default (no-op) view methods on the [`Catalog`] trait. A catalog
+/// that does not support views inherits these defaults; one that does overrides every view
+/// method.
+fn views_unsupported() -> Error {
+    Error::new(
+        ErrorKind::FeatureUnsupported,
+        "This catalog does not support views",
+    )
 }
 
 /// Common interface for all catalog builders.
@@ -936,6 +1005,18 @@ pub struct ViewCreation {
     pub summary: HashMap<String, String>,
 }
 
+impl ViewRepresentations {
+    /// Construct a list of view representations from the given representations.
+    ///
+    /// The tuple constructor of [`ViewRepresentations`] is crate-private; this public constructor
+    /// lets out-of-crate catalog implementations (the SQL / REST / Glue / S3 Tables catalogs) build
+    /// the [`ViewCreation::representations`] field, which is otherwise unconstructable outside the
+    /// `iceberg` crate.
+    pub fn new(representations: Vec<ViewRepresentation>) -> Self {
+        Self(representations)
+    }
+}
+
 /// ViewUpdate represents an update to a view in the catalog.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case")]
@@ -993,6 +1074,91 @@ pub enum ViewUpdate {
         /// View version id to set as current, or -1 to set last added version
         view_version_id: i32,
     },
+}
+
+impl ViewUpdate {
+    /// Applies the update to the view metadata builder.
+    ///
+    /// Mirrors Java `ViewMetadata.Builder` update application (the `MetadataUpdate.ViewUpdate`
+    /// visitor in `BaseViewOperations`/`ViewMetadata.Builder`). Each arm forwards to the
+    /// corresponding [`crate::spec::ViewMetadataBuilder`] method, which carries the version-id
+    /// assignment, identical-version reuse, schema interning, and history rules.
+    pub fn apply(self, builder: ViewMetadataBuilder) -> Result<ViewMetadataBuilder> {
+        match self {
+            ViewUpdate::AssignUuid { uuid } => Ok(builder.assign_uuid(uuid)),
+            ViewUpdate::UpgradeFormatVersion { format_version } => {
+                builder.upgrade_format_version(format_version)
+            }
+            ViewUpdate::AddSchema { schema, .. } => Ok(builder.add_schema(schema)),
+            ViewUpdate::SetLocation { location } => Ok(builder.set_location(location)),
+            ViewUpdate::SetProperties { updates } => builder.set_properties(updates),
+            ViewUpdate::RemoveProperties { removals } => Ok(builder.remove_properties(&removals)),
+            ViewUpdate::AddViewVersion { view_version } => builder.add_version(view_version),
+            ViewUpdate::SetCurrentViewVersion { view_version_id } => {
+                builder.set_current_version_id(view_version_id)
+            }
+        }
+    }
+}
+
+/// ViewRequirement represents a requirement for a view in the catalog.
+///
+/// Mirrors Java `UpdateRequirement` for views. Java emits these from
+/// `UpdateRequirements.forReplaceView(base, updates)`, which seeds exactly one
+/// [`ViewRequirement::UuidMatch`] (`AssertViewUUID`) and applies the per-update dispatch — but
+/// no view update contributes an additional requirement (the dispatch `Builder` is constructed
+/// with a `null` table base, so even the shared `AddSchema` arm is a no-op). The result is that
+/// a view replace commit carries `[UuidMatch]` alone. The `NotExist` variant gates a create.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum ViewRequirement {
+    /// The view must not already exist; used for create transactions.
+    #[serde(rename = "assert-create")]
+    NotExist,
+    /// The view UUID must match the requirement (Java `AssertViewUUID`).
+    #[serde(rename = "assert-view-uuid")]
+    UuidMatch {
+        /// Uuid of the original view.
+        uuid: Uuid,
+    },
+}
+
+impl ViewRequirement {
+    /// Check that the requirement is met by the view metadata.
+    ///
+    /// Provide metadata as `None` if the view does not exist. Mirrors Java
+    /// `AssertViewUUID.validate(ViewMetadata)` (case-insensitive uuid compare) and the
+    /// create-time `assert-create` precondition.
+    pub fn check(&self, metadata: Option<&ViewMetadata>) -> Result<()> {
+        match (self, metadata) {
+            (ViewRequirement::NotExist, None) => Ok(()),
+            (ViewRequirement::NotExist, Some(metadata)) => Err(Error::new(
+                ErrorKind::CatalogCommitConflicts,
+                format!(
+                    "Requirement failed: view with id {} already exists",
+                    metadata.uuid()
+                ),
+            )
+            .with_retryable(true)),
+            (ViewRequirement::UuidMatch { uuid }, Some(metadata)) => {
+                if &metadata.uuid() != uuid {
+                    return Err(Error::new(
+                        ErrorKind::CatalogCommitConflicts,
+                        "Requirement failed: view UUID does not match",
+                    )
+                    .with_context("expected", uuid.to_string())
+                    .with_context("found", metadata.uuid().to_string())
+                    .with_retryable(true));
+                }
+                Ok(())
+            }
+            (ViewRequirement::UuidMatch { .. }, None) => Err(Error::new(
+                ErrorKind::CatalogCommitConflicts,
+                "Requirement failed: view does not exist",
+            )
+            .with_retryable(true)),
+        }
+    }
 }
 
 mod _serde_set_statistics {
@@ -1054,7 +1220,7 @@ mod tests {
     use serde::de::DeserializeOwned;
     use uuid::uuid;
 
-    use super::ViewUpdate;
+    use super::{ViewRequirement, ViewUpdate};
     use crate::io::FileIO;
     use crate::spec::{
         BlobMetadata, EncryptedKey, FormatVersion, MAIN_BRANCH, NestedField, NullOrder, Operation,
@@ -2189,6 +2355,61 @@ mod tests {
         "#,
             ViewUpdate::SetCurrentViewVersion { view_version_id: 1 },
         );
+    }
+
+    // RISK: the view requirement wire format must match Java's `UpdateRequirement` JSON tags —
+    // `assert-create` (NotExist) and `assert-view-uuid` (AssertViewUUID). A wrong tag would make a
+    // REST view commit's requirement set unreadable by a Java server.
+    #[test]
+    fn test_view_requirement_serde() {
+        test_serde_json(
+            r#"
+{
+    "type": "assert-create"
+}
+        "#,
+            ViewRequirement::NotExist,
+        );
+
+        test_serde_json(
+            r#"
+{
+    "type": "assert-view-uuid",
+    "uuid": "2cd22b57-5127-4198-92ba-e4e67c79821b"
+}
+        "#,
+            ViewRequirement::UuidMatch {
+                uuid: uuid!("2cd22b57-5127-4198-92ba-e4e67c79821b"),
+            },
+        );
+    }
+
+    // RISK: ViewUpdate::apply must forward each arm to the correct builder method — a wrongly wired
+    // arm would silently drop a metadata change on the catalog commit path.
+    #[test]
+    fn test_view_update_apply_set_properties_and_location() {
+        use crate::spec::ViewMetadata;
+
+        let metadata: ViewMetadata = serde_json::from_str(
+            &std::fs::read_to_string("testdata/view_metadata/ViewMetadataV1Valid.json").unwrap(),
+        )
+        .unwrap();
+
+        let builder = metadata.into_builder();
+        let builder = ViewUpdate::SetProperties {
+            updates: HashMap::from_iter([("k".to_string(), "v".to_string())]),
+        }
+        .apply(builder)
+        .unwrap();
+        let builder = ViewUpdate::SetLocation {
+            location: "s3://bucket/new-loc".to_string(),
+        }
+        .apply(builder)
+        .unwrap();
+
+        let result = builder.build().unwrap().metadata;
+        assert_eq!(result.properties().get("k"), Some(&"v".to_string()));
+        assert_eq!(result.location(), "s3://bucket/new-loc");
     }
 
     #[test]

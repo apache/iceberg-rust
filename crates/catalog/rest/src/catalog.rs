@@ -25,9 +25,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
 use iceberg::table::Table;
+use iceberg::view::{View, ViewCommit};
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit,
-    TableCreation, TableIdent,
+    TableCreation, TableIdent, ViewCreation,
 };
 use itertools::Itertools;
 use reqwest::header::{
@@ -41,9 +42,10 @@ use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
 use crate::types::{
-    CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
-    CreateTableRequest, ListNamespaceResponse, ListTablesResponse, LoadTableResult,
-    NamespaceResponse, RegisterTableRequest, RenameTableRequest,
+    CatalogConfig, CommitTableRequest, CommitTableResponse, CommitViewRequest,
+    CreateNamespaceRequest, CreateTableRequest, CreateViewRequest, ListNamespaceResponse,
+    ListTablesResponse, LoadTableResult, LoadViewResult, NamespaceResponse, RegisterTableRequest,
+    RenameTableRequest,
 };
 
 /// REST catalog URI
@@ -204,6 +206,23 @@ impl RestCatalogConfig {
             &table.namespace.to_url_string(),
             "tables",
             &table.name,
+        ])
+    }
+
+    fn views_endpoint(&self, ns: &NamespaceIdent) -> String {
+        self.url_prefixed(&["namespaces", &ns.to_url_string(), "views"])
+    }
+
+    fn rename_view_endpoint(&self) -> String {
+        self.url_prefixed(&["views", "rename"])
+    }
+
+    fn view_endpoint(&self, view: &TableIdent) -> String {
+        self.url_prefixed(&[
+            "namespaces",
+            &view.namespace.to_url_string(),
+            "views",
+            &view.name,
         ])
     }
 
@@ -443,6 +462,34 @@ impl RestCatalog {
         let file_io = FileIOBuilder::new(factory).with_props(props).build();
 
         Ok(file_io)
+    }
+
+    /// Build a [`View`] from a `LoadViewResult` returned by the view load/create/commit endpoints.
+    ///
+    /// The view's `config` from the response is merged under the catalog's `user_config` props (the
+    /// local config wins on a key collision, matching the table load/create behavior), and the
+    /// resulting [`FileIO`] is loaded against the view's metadata location.
+    async fn build_view_from_load_result(
+        &self,
+        view_ident: TableIdent,
+        response: LoadViewResult,
+    ) -> Result<View> {
+        let config = response
+            .config
+            .into_iter()
+            .chain(self.user_config.props.clone())
+            .collect();
+
+        let file_io = self
+            .load_file_io(Some(&response.metadata_location), Some(config))
+            .await?;
+
+        View::builder()
+            .identifier(view_ident)
+            .file_io(file_io)
+            .metadata(response.metadata)
+            .metadata_location(response.metadata_location)
+            .build()
     }
 
     /// Invalidate the current token without generating a new one. On the next request, the client
@@ -1040,6 +1087,298 @@ impl Catalog for RestCatalog {
             .metadata(response.metadata)
             .metadata_location(response.metadata_location)
             .build()
+    }
+
+    // ========================================================================
+    // View surface — mirrors the Iceberg REST view routes / Java `RESTSessionCatalog`'s
+    // `RESTViewBuilder` + `RESTViewOperations`. Endpoints: `GET/POST /namespaces/{ns}/views`,
+    // `GET/POST/DELETE/HEAD /namespaces/{ns}/views/{view}`, `POST /views/rename`.
+    // ========================================================================
+
+    async fn list_views(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
+        let context = self.context().await?;
+        let endpoint = context.config.views_endpoint(namespace);
+        let mut identifiers = Vec::new();
+        let mut next_token = None;
+
+        loop {
+            let mut request = context.client.request(Method::GET, endpoint.clone());
+            if let Some(token) = next_token {
+                request = request.query(&[("pageToken", token)]);
+            }
+
+            let http_response = context.client.query_catalog(request.build()?).await?;
+
+            match http_response.status() {
+                StatusCode::OK => {
+                    // Java reuses the `ListTablesResponse` shape (`identifiers` / `next-page-token`)
+                    // for the list-views response.
+                    let response =
+                        deserialize_catalog_response::<ListTablesResponse>(http_response).await?;
+                    identifiers.extend(response.identifiers);
+                    match response.next_page_token {
+                        Some(token) => next_token = Some(token),
+                        None => break,
+                    }
+                }
+                StatusCode::NOT_FOUND => {
+                    return Err(Error::new(
+                        ErrorKind::NamespaceNotFound,
+                        "Tried to list views of a namespace that does not exist",
+                    ));
+                }
+                _ => {
+                    return Err(deserialize_unexpected_catalog_error(
+                        http_response,
+                        context.client.disable_header_redaction(),
+                    )
+                    .await);
+                }
+            }
+        }
+
+        Ok(identifiers)
+    }
+
+    async fn create_view(
+        &self,
+        namespace: &NamespaceIdent,
+        creation: ViewCreation,
+    ) -> Result<View> {
+        let context = self.context().await?;
+
+        let view_ident = TableIdent::new(namespace.clone(), creation.name.clone());
+
+        // Build the initial `ViewVersion` from the creation (Java `RESTViewBuilder.create` mints
+        // version 1). The server re-assigns the version id and timestamp authoritatively.
+        let view_version = iceberg::spec::ViewVersion::builder()
+            .with_version_id(1)
+            .with_timestamp_ms(chrono::Utc::now().timestamp_millis())
+            .with_schema_id(creation.schema.schema_id())
+            .with_default_namespace(creation.default_namespace.clone())
+            .with_default_catalog(creation.default_catalog.clone())
+            .with_summary(creation.summary.clone())
+            .with_representations(creation.representations.clone())
+            .build();
+
+        let request = context
+            .client
+            .request(Method::POST, context.config.views_endpoint(namespace))
+            .json(&CreateViewRequest {
+                name: creation.name,
+                location: Some(creation.location),
+                view_version,
+                schema: creation.schema,
+                properties: creation.properties,
+            })
+            .build()?;
+
+        let http_response = context.client.query_catalog(request).await?;
+
+        let response = match http_response.status() {
+            StatusCode::OK => deserialize_catalog_response::<LoadViewResult>(http_response).await?,
+            StatusCode::NOT_FOUND => {
+                return Err(Error::new(
+                    ErrorKind::NamespaceNotFound,
+                    "Tried to create a view under a namespace that does not exist",
+                ));
+            }
+            StatusCode::CONFLICT => {
+                return Err(Error::new(
+                    ErrorKind::ViewAlreadyExists,
+                    "The view already exists",
+                ));
+            }
+            _ => {
+                return Err(deserialize_unexpected_catalog_error(
+                    http_response,
+                    context.client.disable_header_redaction(),
+                )
+                .await);
+            }
+        };
+
+        self.build_view_from_load_result(view_ident, response).await
+    }
+
+    async fn load_view(&self, view_ident: &TableIdent) -> Result<View> {
+        let context = self.context().await?;
+
+        let request = context
+            .client
+            .request(Method::GET, context.config.view_endpoint(view_ident))
+            .build()?;
+
+        let http_response = context.client.query_catalog(request).await?;
+
+        let response = match http_response.status() {
+            StatusCode::OK => deserialize_catalog_response::<LoadViewResult>(http_response).await?,
+            StatusCode::NOT_FOUND => {
+                return Err(Error::new(
+                    ErrorKind::ViewNotFound,
+                    "Tried to load a view that does not exist",
+                ));
+            }
+            _ => {
+                return Err(deserialize_unexpected_catalog_error(
+                    http_response,
+                    context.client.disable_header_redaction(),
+                )
+                .await);
+            }
+        };
+
+        self.build_view_from_load_result(view_ident.clone(), response)
+            .await
+    }
+
+    async fn drop_view(&self, view: &TableIdent) -> Result<()> {
+        let context = self.context().await?;
+
+        let request = context
+            .client
+            .request(Method::DELETE, context.config.view_endpoint(view))
+            .build()?;
+
+        let http_response = context.client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::ViewNotFound,
+                "Tried to drop a view that does not exist",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                context.client.disable_header_redaction(),
+            )
+            .await),
+        }
+    }
+
+    async fn view_exists(&self, view: &TableIdent) -> Result<bool> {
+        let context = self.context().await?;
+
+        let request = context
+            .client
+            .request(Method::HEAD, context.config.view_endpoint(view))
+            .build()?;
+
+        let http_response = context.client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
+            StatusCode::NOT_FOUND => Ok(false),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                context.client.disable_header_redaction(),
+            )
+            .await),
+        }
+    }
+
+    async fn rename_view(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
+        let context = self.context().await?;
+
+        let request = context
+            .client
+            .request(Method::POST, context.config.rename_view_endpoint())
+            .json(&RenameTableRequest {
+                source: src.clone(),
+                destination: dest.clone(),
+            })
+            .build()?;
+
+        let http_response = context.client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::ViewNotFound,
+                "Tried to rename a view that does not exist (is the namespace correct?)",
+            )),
+            StatusCode::CONFLICT => Err(Error::new(
+                ErrorKind::ViewAlreadyExists,
+                "Tried to rename a view to a name that already exists",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                context.client.disable_header_redaction(),
+            )
+            .await),
+        }
+    }
+
+    async fn update_view(&self, mut commit: ViewCommit) -> Result<View> {
+        let context = self.context().await?;
+
+        let view_ident = commit.identifier().clone();
+
+        let request = context
+            .client
+            .request(Method::POST, context.config.view_endpoint(&view_ident))
+            .json(&CommitViewRequest {
+                identifier: Some(view_ident.clone()),
+                requirements: commit.take_requirements(),
+                updates: commit.take_updates(),
+            })
+            .build()?;
+
+        let http_response = context.client.query_catalog(request).await?;
+
+        let response: LoadViewResult = match http_response.status() {
+            StatusCode::OK => deserialize_catalog_response(http_response).await?,
+            StatusCode::NOT_FOUND => {
+                return Err(Error::new(
+                    ErrorKind::ViewNotFound,
+                    "Tried to update a view that does not exist",
+                ));
+            }
+            StatusCode::CONFLICT => {
+                return Err(Error::new(
+                    ErrorKind::CatalogCommitConflicts,
+                    "CatalogCommitConflicts, one or more view requirements failed. The client may retry.",
+                )
+                .with_retryable(true));
+            }
+            // Java `ErrorHandlers$ViewCommitErrorHandler` maps 500/502/503/504 to
+            // `CommitStateUnknownException` (the commit may or may not have landed) — distinct from
+            // a generic transport error. Mirror the table-side `update_table` posture exactly so a
+            // view commit reports the same "commit state is unknown" semantics as a table commit.
+            StatusCode::INTERNAL_SERVER_ERROR => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "An unknown server-side problem occurred; the commit state is unknown.",
+                ));
+            }
+            StatusCode::BAD_GATEWAY => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "A gateway or proxy received an invalid response from the upstream server; the commit state is unknown.",
+                ));
+            }
+            StatusCode::SERVICE_UNAVAILABLE => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "The server is currently unavailable; the commit state is unknown.",
+                ));
+            }
+            StatusCode::GATEWAY_TIMEOUT => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "A server-side gateway timeout occurred; the commit state is unknown.",
+                ));
+            }
+            _ => {
+                return Err(deserialize_unexpected_catalog_error(
+                    http_response,
+                    context.client.disable_header_redaction(),
+                )
+                .await);
+            }
+        };
+
+        self.build_view_from_load_result(view_ident, response).await
     }
 }
 
@@ -2891,5 +3230,384 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
             assert_eq!(err.message(), "Catalog uri is required");
         }
+    }
+
+    // ========================================================================
+    // View method wiring tests — confirm each view method targets the correct REST route and maps
+    // status codes to the right outcome. (Shape-level: a mock server, no real catalog backend.)
+    // ========================================================================
+
+    fn view_metadata_body() -> &'static str {
+        r#"{
+            "metadata-location": "s3://iceberg-catalog/ns1/view1/metadata/00001-abc.metadata.json",
+            "metadata": {
+                "view-uuid": "fa6506c3-7681-40c8-86dc-e36561f83385",
+                "format-version": 1,
+                "location": "s3://iceberg-catalog/ns1/view1",
+                "current-version-id": 1,
+                "properties": {},
+                "versions": [ {
+                    "version-id": 1,
+                    "timestamp-ms": 1573518431292,
+                    "schema-id": 1,
+                    "default-namespace": [ "ns1" ],
+                    "summary": {},
+                    "representations": [ {
+                        "type": "sql",
+                        "sql": "SELECT 1 AS event_count",
+                        "dialect": "spark"
+                    } ]
+                } ],
+                "schemas": [ {
+                    "schema-id": 1,
+                    "type": "struct",
+                    "fields": [ {
+                        "id": 1,
+                        "name": "event_count",
+                        "required": false,
+                        "type": "int"
+                    } ]
+                } ],
+                "version-log": [ {
+                    "timestamp-ms": 1573518431292,
+                    "version-id": 1
+                } ]
+            },
+            "config": {}
+        }"#
+    }
+
+    // RISK: list_views must hit `GET /namespaces/{ns}/views` (NOT /tables) and parse the shared
+    // identifiers response shape.
+    #[tokio::test]
+    async fn test_list_views_targets_views_route() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let list_views_mock = server
+            .mock("GET", "/v1/namespaces/ns1/views")
+            .with_status(200)
+            .with_body(
+                r#"{
+                "identifiers": [
+                    { "namespace": ["ns1"], "name": "view1" },
+                    { "namespace": ["ns1"], "name": "view2" }
+                ]
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+        );
+
+        let views = catalog
+            .list_views(&NamespaceIdent::new("ns1".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(views, vec![
+            TableIdent::new(NamespaceIdent::new("ns1".to_string()), "view1".to_string()),
+            TableIdent::new(NamespaceIdent::new("ns1".to_string()), "view2".to_string()),
+        ]);
+
+        config_mock.assert_async().await;
+        list_views_mock.assert_async().await;
+    }
+
+    // RISK: load_view must hit `GET /namespaces/{ns}/views/{view}` and decode the full
+    // LoadViewResult (metadata-location + the ViewMetadata).
+    #[tokio::test]
+    async fn test_load_view_decodes_metadata() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let load_view_mock = server
+            .mock("GET", "/v1/namespaces/ns1/views/view1")
+            .with_status(200)
+            .with_body(view_metadata_body())
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+        );
+
+        let view_ident =
+            TableIdent::new(NamespaceIdent::new("ns1".to_string()), "view1".to_string());
+        let view = catalog.load_view(&view_ident).await.unwrap();
+        assert_eq!(view.identifier(), &view_ident);
+        assert_eq!(
+            view.metadata().uuid().to_string(),
+            "fa6506c3-7681-40c8-86dc-e36561f83385"
+        );
+        assert_eq!(view.metadata().current_version_id(), 1);
+        assert_eq!(
+            view.metadata_location(),
+            Some("s3://iceberg-catalog/ns1/view1/metadata/00001-abc.metadata.json")
+        );
+
+        config_mock.assert_async().await;
+        load_view_mock.assert_async().await;
+    }
+
+    // RISK: load_view on a 404 must map to ViewNotFound (not a generic error), so callers can
+    // distinguish "absent" from "transport failure".
+    #[tokio::test]
+    async fn test_load_view_not_found_maps_to_view_not_found() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let load_view_mock = server
+            .mock("GET", "/v1/namespaces/ns1/views/absent")
+            .with_status(404)
+            .with_body(
+                r#"{"error": {"message": "View does not exist", "type": "NoSuchViewException", "code": 404}}"#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+        );
+
+        let error = catalog
+            .load_view(&TableIdent::new(
+                NamespaceIdent::new("ns1".to_string()),
+                "absent".to_string(),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ViewNotFound);
+
+        config_mock.assert_async().await;
+        load_view_mock.assert_async().await;
+    }
+
+    // RISK: view_exists must HEAD the view route and map 204→true, 404→false.
+    #[tokio::test]
+    async fn test_view_exists_maps_head_status() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let exists_mock = server
+            .mock("HEAD", "/v1/namespaces/ns1/views/view1")
+            .with_status(204)
+            .create_async()
+            .await;
+        let absent_mock = server
+            .mock("HEAD", "/v1/namespaces/ns1/views/absent")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+        );
+
+        assert!(
+            catalog
+                .view_exists(&TableIdent::new(
+                    NamespaceIdent::new("ns1".to_string()),
+                    "view1".to_string()
+                ))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !catalog
+                .view_exists(&TableIdent::new(
+                    NamespaceIdent::new("ns1".to_string()),
+                    "absent".to_string()
+                ))
+                .await
+                .unwrap()
+        );
+
+        config_mock.assert_async().await;
+        exists_mock.assert_async().await;
+        absent_mock.assert_async().await;
+    }
+
+    // RISK: drop_view must DELETE the view route and treat 404 as ViewNotFound (not a no-op).
+    #[tokio::test]
+    async fn test_drop_view_targets_view_route_and_maps_not_found() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let drop_mock = server
+            .mock("DELETE", "/v1/namespaces/ns1/views/view1")
+            .with_status(204)
+            .create_async()
+            .await;
+        let drop_absent_mock = server
+            .mock("DELETE", "/v1/namespaces/ns1/views/absent")
+            .with_status(404)
+            .with_body(
+                r#"{"error": {"message": "View does not exist", "type": "NoSuchViewException", "code": 404}}"#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+        );
+
+        catalog
+            .drop_view(&TableIdent::new(
+                NamespaceIdent::new("ns1".to_string()),
+                "view1".to_string(),
+            ))
+            .await
+            .unwrap();
+        let error = catalog
+            .drop_view(&TableIdent::new(
+                NamespaceIdent::new("ns1".to_string()),
+                "absent".to_string(),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ViewNotFound);
+
+        config_mock.assert_async().await;
+        drop_mock.assert_async().await;
+        drop_absent_mock.assert_async().await;
+    }
+
+    // RISK: rename_view must POST `/views/rename` (NOT /tables/rename) and map 409 to
+    // ViewAlreadyExists.
+    #[tokio::test]
+    async fn test_rename_view_targets_views_rename_route() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let rename_mock = server
+            .mock("POST", "/v1/views/rename")
+            .with_status(204)
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+        );
+
+        catalog
+            .rename_view(
+                &TableIdent::new(NamespaceIdent::new("ns1".to_string()), "v_src".to_string()),
+                &TableIdent::new(NamespaceIdent::new("ns1".to_string()), "v_dst".to_string()),
+            )
+            .await
+            .unwrap();
+
+        config_mock.assert_async().await;
+        rename_mock.assert_async().await;
+    }
+
+    // RISK: update_view must POST the view route with the commit body and map 409 to a retryable
+    // CatalogCommitConflicts (the REST server does the CAS; the client surfaces the conflict).
+    #[tokio::test]
+    async fn test_update_view_maps_conflict_to_retryable() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let load_view_mock = server
+            .mock("GET", "/v1/namespaces/ns1/views/view1")
+            .with_status(200)
+            .with_body(view_metadata_body())
+            .create_async()
+            .await;
+        // Pin the commit BODY, not just the route: the wire shape is Java's `UpdateTableRequest`
+        // reused for views (`identifier` / `requirements` / `updates`), carrying the VIEW
+        // requirement tag `assert-view-uuid` and the VIEW update tag `set-properties` — a table
+        // requirement/update leak (or a wrong key) must NOT match this mock, which would surface as
+        // an unmatched-request error instead of the expected 409 conflict.
+        let commit_mock = server
+            .mock("POST", "/v1/namespaces/ns1/views/view1")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex(r#""identifier""#.to_string()),
+                mockito::Matcher::Regex(r#""name":"view1""#.to_string()),
+                mockito::Matcher::Regex(r#""type":"assert-view-uuid""#.to_string()),
+                mockito::Matcher::Regex(
+                    "fa6506c3-7681-40c8-86dc-e36561f83385".to_string(),
+                ),
+                mockito::Matcher::Regex(r#""action":"set-properties""#.to_string()),
+                mockito::Matcher::Regex(r#""comment":"daily""#.to_string()),
+            ]))
+            .with_status(409)
+            .with_body(
+                r#"{"error": {"message": "metadata location has changed", "type": "CommitFailedException", "code": 409}}"#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+        );
+
+        let view_ident =
+            TableIdent::new(NamespaceIdent::new("ns1".to_string()), "view1".to_string());
+        let view = catalog.load_view(&view_ident).await.unwrap();
+        let commit = view
+            .update_properties()
+            .set("comment", "daily")
+            .unwrap()
+            .to_commit()
+            .unwrap();
+        let error = catalog.update_view(commit).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::CatalogCommitConflicts);
+        assert!(error.retryable());
+
+        config_mock.assert_async().await;
+        load_view_mock.assert_async().await;
+        commit_mock.assert_async().await;
+    }
+
+    // RISK: a view commit that returns a 5xx must surface a "commit state is unknown" error (Java
+    // `ViewCommitErrorHandler` maps 500/502/503/504 → `CommitStateUnknownException`), NOT be folded
+    // into the generic transport-error default arm — and it must NOT be marked retryable (re-issuing
+    // a possibly-applied commit is unsafe). Mirrors the table-side `update_table` posture.
+    #[tokio::test]
+    async fn test_update_view_5xx_maps_to_commit_state_unknown() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let load_view_mock = server
+            .mock("GET", "/v1/namespaces/ns1/views/view1")
+            .with_status(200)
+            .with_body(view_metadata_body())
+            .create_async()
+            .await;
+        // 503 Service Unavailable: the commit may or may not have landed.
+        let commit_mock = server
+            .mock("POST", "/v1/namespaces/ns1/views/view1")
+            .with_status(503)
+            .with_body(
+                r#"{"error": {"message": "service unavailable", "type": "ServiceUnavailableException", "code": 503}}"#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+        );
+
+        let view_ident =
+            TableIdent::new(NamespaceIdent::new("ns1".to_string()), "view1".to_string());
+        let view = catalog.load_view(&view_ident).await.unwrap();
+        let commit = view
+            .update_properties()
+            .set("comment", "daily")
+            .unwrap()
+            .to_commit()
+            .unwrap();
+        let error = catalog.update_view(commit).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Unexpected);
+        assert!(error.to_string().contains("commit state is unknown"));
+        // A state-unknown commit must NOT be auto-retried.
+        assert!(!error.retryable());
+
+        config_mock.assert_async().await;
+        load_view_mock.assert_async().await;
+        commit_mock.assert_async().await;
     }
 }

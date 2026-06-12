@@ -22,17 +22,20 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
-use iceberg::spec::{TableMetadata, TableMetadataBuilder};
+use iceberg::spec::{TableMetadata, TableMetadataBuilder, ViewMetadata, ViewMetadataBuilder};
 use iceberg::table::Table;
+use iceberg::view::{View, ViewCommit};
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
-    TableCommit, TableCreation, TableIdent,
+    TableCommit, TableCreation, TableIdent, ViewCreation,
 };
 use sqlx::any::{AnyPoolOptions, AnyQueryResult, AnyRow, install_default_drivers};
 use sqlx::{Any, AnyPool, Row, Transaction};
 
 use crate::error::{
-    from_sqlx_error, no_such_namespace_err, no_such_table_err, table_already_exists_err,
+    from_sqlx_error, no_such_namespace_err, no_such_table_err, no_such_view_err,
+    table_already_exists_err, table_with_same_name_err, view_already_exists_err,
+    view_with_same_name_err,
 };
 
 /// catalog URI
@@ -50,6 +53,11 @@ static CATALOG_FIELD_METADATA_LOCATION_PROP: &str = "metadata_location";
 static CATALOG_FIELD_PREVIOUS_METADATA_LOCATION_PROP: &str = "previous_metadata_location";
 static CATALOG_FIELD_RECORD_TYPE: &str = "iceberg_type";
 static CATALOG_FIELD_TABLE_RECORD_TYPE: &str = "TABLE";
+// Views share the `iceberg_tables` table with tables, discriminated by `iceberg_type = 'VIEW'`.
+// Mirrors Java `JdbcUtil.VIEW_RECORD_TYPE`. Unlike `TABLE` (which tolerates a NULL `iceberg_type`
+// for V0-schema backward compatibility), views are a V1-schema-only feature, so view SQL matches
+// `iceberg_type = 'VIEW'` exactly (Java `JdbcViewOperations` always uses `SchemaVersion.V1`).
+static CATALOG_FIELD_VIEW_RECORD_TYPE: &str = "VIEW";
 
 static NAMESPACE_TABLE_NAME: &str = "iceberg_namespace_properties";
 static NAMESPACE_FIELD_NAME: &str = "namespace";
@@ -818,6 +826,12 @@ impl Catalog for SqlCatalog {
             return table_already_exists_err(&tbl_ident);
         }
 
+        // Tables and views share one name space (Java `JdbcCatalog$ViewAwareTableBuilder`): a table
+        // cannot shadow a view of the same name.
+        if self.view_exists(&tbl_ident).await? {
+            return view_with_same_name_err(&tbl_ident);
+        }
+
         let (tbl_creation, location) = match creation.location.clone() {
             Some(location) => (creation, location),
             None => {
@@ -886,6 +900,11 @@ impl Catalog for SqlCatalog {
 
         if self.table_exists(dest).await? {
             return table_already_exists_err(dest);
+        }
+
+        // Tables and views share one name space: a table cannot be renamed onto a view's name.
+        if self.view_exists(dest).await? {
+            return view_with_same_name_err(dest);
         }
 
         self.execute(
@@ -991,6 +1010,283 @@ impl Catalog for SqlCatalog {
         }
 
         Ok(staged_table)
+    }
+
+    // ========================================================================
+    // View surface — Java `JdbcCatalog`/`JdbcViewOperations` (1.10.0). Views live in the SAME
+    // `iceberg_tables` table, discriminated by `iceberg_type = 'VIEW'` (exact match — views are a
+    // V1-schema-only feature; the Rust catalog always creates the V1 schema with the
+    // `iceberg_type` column). Tables and views share one name space (collision-guarded).
+    // ========================================================================
+
+    async fn list_views(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
+        if !self.namespace_exists(namespace).await? {
+            return no_such_namespace_err(namespace);
+        }
+
+        // Java `JdbcUtil.LIST_VIEW_SQL`.
+        let rows = self
+            .fetch_rows(
+                &format!(
+                    "SELECT {CATALOG_FIELD_TABLE_NAME},
+                            {CATALOG_FIELD_TABLE_NAMESPACE}
+                     FROM {CATALOG_TABLE_NAME}
+                     WHERE {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                      AND {CATALOG_FIELD_CATALOG_NAME} = ?
+                      AND {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_VIEW_RECORD_TYPE}'",
+                ),
+                vec![Some(&namespace.join(".")), Some(&self.name)],
+            )
+            .await?;
+
+        let mut views = HashSet::<TableIdent>::with_capacity(rows.len());
+        for row in rows.iter() {
+            let view_name = row
+                .try_get::<String, _>(CATALOG_FIELD_TABLE_NAME)
+                .map_err(from_sqlx_error)?;
+            let ns_strs = row
+                .try_get::<String, _>(CATALOG_FIELD_TABLE_NAMESPACE)
+                .map_err(from_sqlx_error)?;
+            let ns = NamespaceIdent::from_strs(ns_strs.split("."))?;
+            views.insert(TableIdent::new(ns, view_name));
+        }
+
+        Ok(views.into_iter().collect::<Vec<TableIdent>>())
+    }
+
+    async fn view_exists(&self, identifier: &TableIdent) -> Result<bool> {
+        let namespace = identifier.namespace().join(".");
+        // Java `JdbcUtil.GET_VIEW_SQL` (presence form).
+        let rows = self
+            .fetch_rows(
+                &format!(
+                    "SELECT 1
+                     FROM {CATALOG_TABLE_NAME}
+                     WHERE {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                      AND {CATALOG_FIELD_CATALOG_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAME} = ?
+                      AND {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_VIEW_RECORD_TYPE}'"
+                ),
+                vec![Some(&namespace), Some(&self.name), Some(identifier.name())],
+            )
+            .await?;
+
+        Ok(!rows.is_empty())
+    }
+
+    async fn create_view(
+        &self,
+        namespace: &NamespaceIdent,
+        creation: ViewCreation,
+    ) -> Result<View> {
+        if !self.namespace_exists(namespace).await? {
+            return no_such_namespace_err(namespace);
+        }
+
+        let view_name = creation.name.clone();
+        let view_ident = TableIdent::new(namespace.clone(), view_name.clone());
+
+        if self.view_exists(&view_ident).await? {
+            return view_already_exists_err(&view_ident);
+        }
+
+        // Tables and views share one name space (Java `JdbcViewOperations.doCommit` checks
+        // `tableExists`): a view cannot shadow a table of the same name.
+        if self.table_exists(&view_ident).await? {
+            return table_with_same_name_err(&view_ident);
+        }
+
+        let location = creation.location.clone();
+        let metadata = ViewMetadataBuilder::from_view_creation(creation)?
+            .build()?
+            .metadata;
+        let metadata_location = MetadataLocation::new_with_table_location(location).to_string();
+
+        metadata.write_to(&self.fileio, &metadata_location).await?;
+
+        // Java `JdbcUtil.V1_DO_COMMIT_CREATE_SQL` (with `iceberg_type = 'VIEW'`).
+        self.execute(&format!(
+            "INSERT INTO {CATALOG_TABLE_NAME}
+             ({CATALOG_FIELD_CATALOG_NAME}, {CATALOG_FIELD_TABLE_NAMESPACE}, {CATALOG_FIELD_TABLE_NAME}, {CATALOG_FIELD_METADATA_LOCATION_PROP}, {CATALOG_FIELD_RECORD_TYPE})
+             VALUES (?, ?, ?, ?, ?)
+            "), vec![Some(&self.name), Some(&namespace.join(".")), Some(&view_name), Some(&metadata_location), Some(CATALOG_FIELD_VIEW_RECORD_TYPE)], None).await?;
+
+        View::builder()
+            .file_io(self.fileio.clone())
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .identifier(view_ident)
+            .build()
+    }
+
+    async fn load_view(&self, identifier: &TableIdent) -> Result<View> {
+        // Java `JdbcUtil.GET_VIEW_SQL`.
+        let rows = self
+            .fetch_rows(
+                &format!(
+                    "SELECT {CATALOG_FIELD_METADATA_LOCATION_PROP}
+                     FROM {CATALOG_TABLE_NAME}
+                     WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                      AND {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_VIEW_RECORD_TYPE}'"
+                ),
+                vec![
+                    Some(&self.name),
+                    Some(identifier.name()),
+                    Some(&identifier.namespace().join(".")),
+                ],
+            )
+            .await?;
+
+        if rows.is_empty() {
+            return no_such_view_err(identifier);
+        }
+
+        let metadata_location = rows[0]
+            .try_get::<String, _>(CATALOG_FIELD_METADATA_LOCATION_PROP)
+            .map_err(from_sqlx_error)?;
+
+        let metadata = ViewMetadata::read_from(&self.fileio, &metadata_location).await?;
+
+        View::builder()
+            .file_io(self.fileio.clone())
+            .identifier(identifier.clone())
+            .metadata_location(metadata_location)
+            .metadata(metadata)
+            .build()
+    }
+
+    async fn drop_view(&self, identifier: &TableIdent) -> Result<()> {
+        if !self.view_exists(identifier).await? {
+            return no_such_view_err(identifier);
+        }
+
+        // Java `JdbcUtil.DROP_VIEW_SQL`.
+        self.execute(
+            &format!(
+                "DELETE FROM {CATALOG_TABLE_NAME}
+                 WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+                  AND {CATALOG_FIELD_TABLE_NAME} = ?
+                  AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                  AND {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_VIEW_RECORD_TYPE}'"
+            ),
+            vec![
+                Some(&self.name),
+                Some(identifier.name()),
+                Some(&identifier.namespace().join(".")),
+            ],
+            None,
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    async fn rename_view(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
+        if src == dest {
+            return Ok(());
+        }
+
+        if !self.view_exists(src).await? {
+            return no_such_view_err(src);
+        }
+
+        if !self.namespace_exists(dest.namespace()).await? {
+            return no_such_namespace_err(dest.namespace());
+        }
+
+        if self.view_exists(dest).await? {
+            return view_already_exists_err(dest);
+        }
+
+        // Tables and views share one name space: a view cannot be renamed onto a table's name
+        // (Java `JdbcCatalog.renameView` cross-checks `tableExists`).
+        if self.table_exists(dest).await? {
+            return table_with_same_name_err(dest);
+        }
+
+        // Java `JdbcUtil.RENAME_VIEW_SQL`.
+        self.execute(
+            &format!(
+                "UPDATE {CATALOG_TABLE_NAME}
+                 SET {CATALOG_FIELD_TABLE_NAME} = ?, {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                 WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+                  AND {CATALOG_FIELD_TABLE_NAME} = ?
+                  AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                  AND {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_VIEW_RECORD_TYPE}'"
+            ),
+            vec![
+                Some(dest.name()),
+                Some(&dest.namespace().join(".")),
+                Some(&self.name),
+                Some(src.name()),
+                Some(&src.namespace().join(".")),
+            ],
+            None,
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// Updates an existing view within the SQL catalog.
+    ///
+    /// Mirrors Java `JdbcViewOperations.doCommit` (1.10.0): apply the commit, write the new
+    /// metadata file, then a location-CAS UPDATE (`... AND metadata_location = ?`). Zero rows
+    /// affected means a concurrent commit moved the stored location — Java raises
+    /// `CommitFailedException("Cannot commit %s: metadata location %s has changed from %s")`. This
+    /// per-catalog CAS is the JDBC analogue Java does in `doCommit`; the in-tree MemoryCatalog has
+    /// no such CAS (it relies on the `AssertViewUUID` requirement alone, which is invariant across
+    /// replaces) — the two catalogs differ deliberately here.
+    async fn update_view(&self, commit: ViewCommit) -> Result<View> {
+        let view_ident = commit.identifier().clone();
+        let current_view = self.load_view(&view_ident).await?;
+        let current_metadata_location = current_view.metadata_location_result()?.to_string();
+
+        let staged_view = commit.apply(current_view)?;
+        let staged_metadata_location = staged_view.metadata_location_result()?.to_string();
+
+        staged_view
+            .metadata()
+            .write_to(staged_view.file_io(), &staged_metadata_location)
+            .await?;
+
+        // Java `JdbcUtil.V1_DO_COMMIT_VIEW_SQL` — the location-CAS commit.
+        let update_result = self
+            .execute(
+                &format!(
+                    "UPDATE {CATALOG_TABLE_NAME}
+                     SET {CATALOG_FIELD_METADATA_LOCATION_PROP} = ?, {CATALOG_FIELD_PREVIOUS_METADATA_LOCATION_PROP} = ?
+                     WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                      AND {CATALOG_FIELD_RECORD_TYPE} = '{CATALOG_FIELD_VIEW_RECORD_TYPE}'
+                      AND {CATALOG_FIELD_METADATA_LOCATION_PROP} = ?"
+                ),
+                vec![
+                    Some(staged_metadata_location.as_str()),
+                    Some(current_metadata_location.as_str()),
+                    Some(&self.name),
+                    Some(view_ident.name()),
+                    Some(&view_ident.namespace().join(".")),
+                    Some(current_metadata_location.as_str()),
+                ],
+                None,
+            )
+            .await?;
+
+        if update_result.rows_affected() == 0 {
+            return Err(Error::new(
+                ErrorKind::CatalogCommitConflicts,
+                format!(
+                    "Cannot commit {view_ident}: metadata location {current_metadata_location} has changed"
+                ),
+            )
+            .with_retryable(true));
+        }
+
+        Ok(staged_view)
     }
 }
 
@@ -2449,5 +2745,547 @@ mod tests {
             reloaded.metadata_location(),
             updated_table.metadata_location()
         );
+    }
+
+    // ========================================================================
+    // View CRUD lifecycle tests (the SQL catalog view surface — ported from the U1 MemoryCatalog
+    // e2e, plus the SQL-specific location-CAS conflict test).
+    // ========================================================================
+
+    fn simple_view_schema() -> Schema {
+        Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::optional(1, "event_count", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    fn sql_representations(sql: &str) -> iceberg::spec::ViewRepresentations {
+        iceberg::spec::ViewRepresentations::new(vec![iceberg::spec::ViewRepresentation::Sql(
+            iceberg::spec::SqlViewRepresentation {
+                sql: sql.to_string(),
+                dialect: "spark".to_string(),
+            },
+        )])
+    }
+
+    async fn create_view<C: Catalog>(
+        catalog: &C,
+        view_ident: &TableIdent,
+        sql: &str,
+    ) -> iceberg::view::View {
+        let location = format!("{}/{}", temp_path(), view_ident.name());
+        catalog
+            .create_view(
+                &view_ident.namespace,
+                iceberg::ViewCreation::builder()
+                    .name(view_ident.name().to_string())
+                    .location(location)
+                    .schema(simple_view_schema())
+                    .default_namespace(view_ident.namespace.clone())
+                    .representations(sql_representations(sql))
+                    .build(),
+            )
+            .await
+            .unwrap()
+    }
+
+    // RISK: a view must round-trip through the SQL store (the `iceberg_type = 'VIEW'` discriminator
+    // row + the metadata FileIO write/read) and be listed/loaded back by identity.
+    #[tokio::test]
+    async fn test_view_create_load_and_list() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc, Some("iceberg")).await;
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let view_ident = TableIdent::new(namespace_ident.clone(), "v1".into());
+
+        let view = create_view(&catalog, &view_ident, "SELECT 1 AS event_count").await;
+        assert_eq!(view.identifier(), &view_ident);
+        assert_eq!(view.metadata().current_version_id(), 1);
+
+        assert!(catalog.view_exists(&view_ident).await.unwrap());
+        let loaded = catalog.load_view(&view_ident).await.unwrap();
+        assert_eq!(loaded.metadata().uuid(), view.metadata().uuid());
+        assert_eq!(loaded.metadata().versions().count(), 1);
+
+        let views = catalog.list_views(&namespace_ident).await.unwrap();
+        assert_eq!(views, vec![view_ident]);
+    }
+
+    // RISK: creating a view that already exists must fail loudly (Java AlreadyExistsException),
+    // never silently overwrite the existing view's metadata pointer.
+    #[tokio::test]
+    async fn test_view_create_duplicate_fails() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc, Some("iceberg")).await;
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let view_ident = TableIdent::new(namespace_ident.clone(), "v1".into());
+
+        create_view(&catalog, &view_ident, "SELECT 1 AS event_count").await;
+        let location = format!("{}/{}", temp_path(), "v1");
+        let error = catalog
+            .create_view(
+                &namespace_ident,
+                iceberg::ViewCreation::builder()
+                    .name("v1".to_string())
+                    .location(location)
+                    .schema(simple_view_schema())
+                    .default_namespace(namespace_ident.clone())
+                    .representations(sql_representations("SELECT 1"))
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), iceberg::ErrorKind::ViewAlreadyExists);
+    }
+
+    // RISK: the full create→update→load→rename→drop lifecycle — a replace must flip the current
+    // version, append the version log, and KEEP the old version intact; rename must move the row;
+    // drop must remove it. This is the load-bearing catalog-CRUD e2e (ported from U1).
+    #[tokio::test]
+    async fn test_view_full_lifecycle_replace_rename_drop() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc, Some("iceberg")).await;
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let view_ident = TableIdent::new(namespace_ident.clone(), "v1".into());
+
+        let view = create_view(&catalog, &view_ident, "SELECT 1 AS event_count").await;
+        let original_uuid = view.metadata().uuid();
+        let original_location = view.metadata_location().unwrap().to_string();
+
+        // Replace the version with a genuinely different query.
+        let commit = view
+            .replace_version()
+            .with_query("spark", "SELECT 2 AS event_count")
+            .with_schema(simple_view_schema())
+            .with_default_namespace(namespace_ident.clone())
+            .to_commit()
+            .unwrap();
+        let updated = catalog.update_view(commit).await.unwrap();
+
+        // The metadata-file pointer advanced; UUID preserved across the replace.
+        assert_ne!(updated.metadata_location().unwrap(), original_location);
+        assert_eq!(updated.metadata().uuid(), original_uuid);
+
+        // Loading shows the NEW current version, the appended log, and the OLD version intact.
+        let loaded = catalog.load_view(&view_ident).await.unwrap();
+        assert_eq!(loaded.metadata().current_version_id(), 2);
+        assert_eq!(loaded.metadata().versions().count(), 2);
+        assert!(loaded.metadata().version_by_id(1).is_some());
+        assert_eq!(
+            loaded
+                .metadata()
+                .history()
+                .iter()
+                .map(|entry| entry.version_id())
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+
+        // Rename the view, then confirm the source is gone and the destination loads.
+        let renamed_ident = TableIdent::new(namespace_ident.clone(), "v2".into());
+        catalog
+            .rename_view(&view_ident, &renamed_ident)
+            .await
+            .unwrap();
+        assert!(!catalog.view_exists(&view_ident).await.unwrap());
+        assert!(catalog.view_exists(&renamed_ident).await.unwrap());
+        let renamed = catalog.load_view(&renamed_ident).await.unwrap();
+        assert_eq!(renamed.metadata().uuid(), original_uuid);
+        assert_eq!(renamed.metadata().current_version_id(), 2);
+
+        // Drop the view; it is then gone and a re-load fails.
+        catalog.drop_view(&renamed_ident).await.unwrap();
+        assert!(!catalog.view_exists(&renamed_ident).await.unwrap());
+        let error = catalog.load_view(&renamed_ident).await.unwrap_err();
+        assert_eq!(error.kind(), iceberg::ErrorKind::ViewNotFound);
+    }
+
+    // RISK: an update_properties commit must persist properties through the SQL catalog round-trip.
+    #[tokio::test]
+    async fn test_view_update_properties_through_catalog() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc, Some("iceberg")).await;
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let view_ident = TableIdent::new(namespace_ident, "v1".into());
+
+        let view = create_view(&catalog, &view_ident, "SELECT 1 AS event_count").await;
+        let commit = view
+            .update_properties()
+            .set("comment", "daily counts")
+            .unwrap()
+            .to_commit()
+            .unwrap();
+        catalog.update_view(commit).await.unwrap();
+
+        let loaded = catalog.load_view(&view_ident).await.unwrap();
+        assert_eq!(
+            loaded.metadata().properties().get("comment"),
+            Some(&"daily counts".to_string())
+        );
+    }
+
+    // RISK: committing the SAME version twice through the catalog must REUSE the existing version —
+    // Java reuses rather than minting a new id, so the version count stays constant.
+    #[tokio::test]
+    async fn test_view_replace_identical_version_reuses() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc, Some("iceberg")).await;
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let view_ident = TableIdent::new(namespace_ident.clone(), "v1".into());
+
+        let view = create_view(&catalog, &view_ident, "SELECT 1 AS event_count").await;
+        // Replace with the IDENTICAL representation already at version 1.
+        let commit = view
+            .replace_version()
+            .with_query("spark", "SELECT 1 AS event_count")
+            .with_schema(simple_view_schema())
+            .with_default_namespace(namespace_ident)
+            .to_commit()
+            .unwrap();
+        catalog.update_view(commit).await.unwrap();
+
+        let loaded = catalog.load_view(&view_ident).await.unwrap();
+        assert_eq!(loaded.metadata().versions().count(), 1);
+        assert_eq!(loaded.metadata().current_version_id(), 1);
+    }
+
+    // RISK: loading a non-existent view must error ViewNotFound (not the FeatureUnsupported default)
+    // — proving the SqlCatalog override is wired and uses the VIEW discriminator.
+    #[tokio::test]
+    async fn test_view_load_missing_errors_view_not_found() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc, Some("iceberg")).await;
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+        let view_ident = TableIdent::new(namespace_ident, "absent".into());
+
+        let error = catalog.load_view(&view_ident).await.unwrap_err();
+        assert_eq!(error.kind(), iceberg::ErrorKind::ViewNotFound);
+        assert!(!catalog.view_exists(&view_ident).await.unwrap());
+    }
+
+    // RISK: tables and views share ONE name space (Java JdbcCatalog). Creating a view where a TABLE
+    // already exists — or a table where a VIEW exists — must be REJECTED, not silently coexist in
+    // the shared `iceberg_tables` table (a shadowing pair would let a later load resolve the wrong
+    // kind, and the discriminator-scoped queries would skip the shadowed row).
+    #[tokio::test]
+    async fn test_view_and_table_name_collision_rejected_both_directions() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc, Some("iceberg")).await;
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        // A TABLE exists; creating a VIEW with the same name is rejected ("Table with same name").
+        let table_ident = TableIdent::new(namespace_ident.clone(), "shared_a".into());
+        create_table(&catalog, &table_ident).await;
+        let view_over_table = catalog
+            .create_view(
+                &namespace_ident,
+                iceberg::ViewCreation::builder()
+                    .name("shared_a".to_string())
+                    .location(format!("{}/shared_a_view", temp_path()))
+                    .schema(simple_view_schema())
+                    .default_namespace(namespace_ident.clone())
+                    .representations(sql_representations("SELECT 1"))
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            view_over_table.kind(),
+            iceberg::ErrorKind::TableAlreadyExists
+        );
+        assert!(!catalog.view_exists(&table_ident).await.unwrap());
+
+        // A VIEW exists; creating a TABLE with the same name is rejected ("View with same name").
+        let view_ident = TableIdent::new(namespace_ident.clone(), "shared_b".into());
+        create_view(&catalog, &view_ident, "SELECT 1 AS event_count").await;
+        let table_over_view = catalog
+            .create_table(
+                &namespace_ident,
+                TableCreation::builder()
+                    .name("shared_b".to_string())
+                    .location(format!("{}/shared_b", temp_path()))
+                    .schema(simple_table_schema())
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            table_over_view.kind(),
+            iceberg::ErrorKind::ViewAlreadyExists
+        );
+        assert!(!catalog.table_exists(&view_ident).await.unwrap());
+    }
+
+    // RISK: a rename must also respect the shared name space — renaming a view onto a name a TABLE
+    // already holds must be rejected (Java JdbcCatalog.renameView cross-checks `tableExists`).
+    #[tokio::test]
+    async fn test_rename_view_onto_existing_table_rejected() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc, Some("iceberg")).await;
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let view_ident = TableIdent::new(namespace_ident.clone(), "v_src".into());
+        create_view(&catalog, &view_ident, "SELECT 1 AS event_count").await;
+        let table_ident = TableIdent::new(namespace_ident.clone(), "t_dst".into());
+        create_table(&catalog, &table_ident).await;
+
+        let error = catalog
+            .rename_view(&view_ident, &table_ident)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), iceberg::ErrorKind::TableAlreadyExists);
+        // The source view is untouched and the table is intact.
+        assert!(catalog.view_exists(&view_ident).await.unwrap());
+        assert!(catalog.table_exists(&table_ident).await.unwrap());
+    }
+
+    // RISK: the `iceberg_type = 'VIEW'` discriminator must scope `rename_view` to VIEWS only —
+    // passing a TABLE identifier as the source must be rejected as ViewNotFound and must NOT move
+    // the table's row (Java `JdbcUtil.RENAME_VIEW_SQL` filters `iceberg_type = 'VIEW'`, and
+    // `JdbcCatalog.renameView` operates on a `JdbcViewOperations` that only loads views). Without
+    // the discriminator a `rename_view` would silently relocate a table.
+    #[tokio::test]
+    async fn test_rename_view_rejects_table_source() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc, Some("iceberg")).await;
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        // The source is a TABLE, not a view.
+        let table_ident = TableIdent::new(namespace_ident.clone(), "t_src".into());
+        create_table(&catalog, &table_ident).await;
+        let dest_ident = TableIdent::new(namespace_ident.clone(), "renamed".into());
+
+        let error = catalog
+            .rename_view(&table_ident, &dest_ident)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), iceberg::ErrorKind::ViewNotFound);
+        // The table did not move: it is still resolvable at its original name, and nothing was
+        // created at the destination (neither as a view nor as a table).
+        assert!(catalog.table_exists(&table_ident).await.unwrap());
+        assert!(!catalog.view_exists(&dest_ident).await.unwrap());
+        assert!(!catalog.table_exists(&dest_ident).await.unwrap());
+    }
+
+    // RISK: list_views must be namespace-scoped — a view in namespace `a` must NOT appear in the
+    // listing for namespace `b`, and tables sharing the catalog table must NOT leak into the view
+    // listing (the `iceberg_type = 'VIEW'` discriminator scopes both).
+    #[tokio::test]
+    async fn test_list_views_is_namespace_scoped_and_excludes_tables() {
+        let warehouse_loc = temp_path();
+        let catalog = new_sql_catalog(warehouse_loc, Some("iceberg")).await;
+        let namespace_a = NamespaceIdent::new("a".into());
+        let namespace_b = NamespaceIdent::new("b".into());
+        create_namespace(&catalog, &namespace_a).await;
+        create_namespace(&catalog, &namespace_b).await;
+
+        let view_a = TableIdent::new(namespace_a.clone(), "va".into());
+        let view_b = TableIdent::new(namespace_b.clone(), "vb".into());
+        create_view(&catalog, &view_a, "SELECT 1 AS event_count").await;
+        create_view(&catalog, &view_b, "SELECT 2 AS event_count").await;
+        // A table in namespace `a` must not appear in the view listing.
+        create_table(&catalog, &TableIdent::new(namespace_a.clone(), "ta".into())).await;
+
+        let listed_a = catalog.list_views(&namespace_a).await.unwrap();
+        assert_eq!(listed_a, vec![view_a]);
+        let listed_b = catalog.list_views(&namespace_b).await.unwrap();
+        assert_eq!(listed_b, vec![view_b]);
+    }
+
+    // RISK: the location-CAS commit (Java `JdbcViewOperations.doCommit` / `V1_DO_COMMIT_VIEW_SQL`).
+    // Two CONCURRENT view commits both prepared against the SAME stored metadata_location: the SQL
+    // store serializes each UPDATE statement, the first wins, and the second's `WHERE
+    // metadata_location = <stale>` now matches 0 rows and must FAIL with CatalogCommitConflicts —
+    // never silently last-write-win over the winner. Without the CAS (`AND metadata_location = ?`),
+    // the loser would overwrite the winner's metadata pointer, losing the first commit.
+    #[tokio::test]
+    async fn test_view_concurrent_commits_second_conflicts_via_location_cas() {
+        let warehouse_loc = temp_path();
+        let catalog = Arc::new(new_sql_catalog(warehouse_loc, Some("iceberg")).await);
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        create_namespace(catalog.as_ref(), &namespace_ident).await;
+        let view_ident = TableIdent::new(namespace_ident.clone(), "v1".into());
+
+        create_view(catalog.as_ref(), &view_ident, "SELECT 1 AS event_count").await;
+
+        // Each task loads the view, then waits on a barrier so BOTH observe the SAME base
+        // metadata_location before either commits (forcing the stale-base race deterministically),
+        // then builds a distinct replace commit and races the commit. The CAS makes exactly one win.
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+
+        let task_a = tokio::spawn(race_replace_view(
+            catalog.clone(),
+            barrier.clone(),
+            namespace_ident.clone(),
+            view_ident.clone(),
+            "SELECT 2 AS event_count".to_string(),
+        ));
+        let task_b = tokio::spawn(race_replace_view(
+            catalog.clone(),
+            barrier.clone(),
+            namespace_ident.clone(),
+            view_ident.clone(),
+            "SELECT 3 AS event_count".to_string(),
+        ));
+
+        let result_a = task_a.await.unwrap();
+        let result_b = task_b.await.unwrap();
+
+        // Exactly one commit succeeds; the other is rejected with a retryable commit conflict.
+        let (winner, loser) = match (result_a.is_ok(), result_b.is_ok()) {
+            (true, false) => (result_a.unwrap(), result_b.unwrap_err()),
+            (false, true) => (result_b.unwrap(), result_a.unwrap_err()),
+            (true, true) => {
+                panic!("both concurrent commits succeeded — the location-CAS did not fire")
+            }
+            (false, false) => {
+                panic!("both concurrent commits failed — expected exactly one winner")
+            }
+        };
+        assert_eq!(loser.kind(), iceberg::ErrorKind::CatalogCommitConflicts);
+        assert!(loser.to_string().contains("has changed"));
+        assert!(loser.retryable());
+
+        // The store reflects the WINNER, not the loser — the second commit did not overwrite it.
+        let loaded = Catalog::load_view(catalog.as_ref(), &view_ident)
+            .await
+            .unwrap();
+        assert_eq!(loaded.metadata().current_version_id(), 2);
+        assert_eq!(loaded.metadata_location(), winner.metadata_location());
+        let loaded_sql = current_view_sql(&loaded);
+        assert_eq!(loaded_sql, current_view_sql(&winner));
+    }
+
+    /// Load the view, wait on the barrier (so both racers share a base), build a replace commit
+    /// for `sql`, and commit it. Returns the commit `Result` so the caller can assert exactly one
+    /// winner. Used by `test_view_concurrent_commits_second_conflicts_via_location_cas`.
+    async fn race_replace_view<C: Catalog>(
+        catalog: Arc<C>,
+        barrier: Arc<tokio::sync::Barrier>,
+        namespace: NamespaceIdent,
+        ident: TableIdent,
+        sql: String,
+    ) -> Result<iceberg::view::View, iceberg::Error> {
+        let view = catalog.load_view(&ident).await.unwrap();
+        // Both tasks have now loaded the same base; release them together.
+        barrier.wait().await;
+        let commit = view
+            .replace_version()
+            .with_query("spark", sql)
+            .with_schema(simple_view_schema())
+            .with_default_namespace(namespace)
+            .to_commit()
+            .unwrap();
+        catalog.update_view(commit).await
+    }
+
+    fn current_view_sql(view: &iceberg::view::View) -> Vec<String> {
+        view.metadata()
+            .current_version()
+            .representations()
+            .iter()
+            .map(|representation| match representation {
+                iceberg::spec::ViewRepresentation::Sql(sql) => sql.sql.clone(),
+            })
+            .collect()
+    }
+
+    // RISK (accessibility / public-API-surface regression): every type an out-of-crate catalog
+    // implementation needs to build a view and drive create→replace→drop must be constructible
+    // through ONLY the public `iceberg` API. The original gap was `ViewRepresentations` — its tuple
+    // constructor is crate-private, which made `ViewCreation::representations` (and therefore the
+    // entire `create_view` path) unconstructable outside the `iceberg` crate; the fix added
+    // `ViewRepresentations::new`. This is a COMPILE-LEVEL pin: it exercises `ViewRepresentations::
+    // new`, `SqlViewRepresentation { .. }`, `ViewCreation::builder`, `ViewVersion::builder`, the
+    // `View`'s pending-update ops, and references the `ViewUpdate` / `ViewRequirement` public enums
+    // — so if any of these regresses to crate-private, THIS CRATE STOPS COMPILING and the gap class
+    // is caught at build time forever (not just for `ViewRepresentations`).
+    #[tokio::test]
+    async fn test_public_view_api_is_fully_constructible_out_of_crate() {
+        use iceberg::spec::{
+            SqlViewRepresentation, ViewRepresentation, ViewRepresentations, ViewVersion,
+        };
+        use iceberg::{ViewCreation, ViewRequirement, ViewUpdate};
+
+        // 1. The previously-unconstructable piece: `ViewRepresentations::new` + a public
+        //    `SqlViewRepresentation` literal (all fields `pub`).
+        let representations =
+            ViewRepresentations::new(vec![ViewRepresentation::Sql(SqlViewRepresentation {
+                sql: "SELECT 1 AS event_count".to_string(),
+                dialect: "spark".to_string(),
+            })]);
+
+        // 2. A full `ViewVersion` assembled purely through its public builder (the REST catalog's
+        //    create path mints this from a `ViewCreation`).
+        let namespace_ident = NamespaceIdent::new("ns".into());
+        let _view_version: ViewVersion = ViewVersion::builder()
+            .with_version_id(1)
+            .with_schema_id(simple_view_schema().schema_id())
+            .with_timestamp_ms(0)
+            .with_default_namespace(namespace_ident.clone())
+            .with_representations(representations.clone())
+            .build();
+
+        // 3. A `ViewCreation` assembled through its public builder (the field the gap blocked).
+        let creation: ViewCreation = ViewCreation::builder()
+            .name("probe_view".to_string())
+            .location(format!("{}/probe_view", temp_path()))
+            .schema(simple_view_schema())
+            .default_namespace(namespace_ident.clone())
+            .representations(representations)
+            .build();
+
+        // 4. Reference the public requirement/update enums so a regression to crate-private on
+        //    either is a compile error here as well. (`NotExist` is a unit variant — constructing
+        //    it needs no extra crate; `UuidMatch` / `SetProperties` are referenced by pattern.)
+        let _requirement: ViewRequirement = ViewRequirement::NotExist;
+        let _matches_view_enums = |requirement: &ViewRequirement, update: &ViewUpdate| {
+            matches!(requirement, ViewRequirement::UuidMatch { .. })
+                && matches!(update, ViewUpdate::SetProperties { .. })
+        };
+
+        // 5. Drive create → replace → drop through ONLY the public `Catalog` trait, proving the
+        //    whole lifecycle is reachable out-of-crate.
+        let catalog = new_sql_catalog(temp_path(), Some("iceberg")).await;
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let view = catalog
+            .create_view(&namespace_ident, creation)
+            .await
+            .unwrap();
+        let view_ident = view.identifier().clone();
+
+        let commit = view
+            .replace_version()
+            .with_query("spark", "SELECT 2 AS event_count")
+            .with_schema(simple_view_schema())
+            .with_default_namespace(namespace_ident.clone())
+            .to_commit()
+            .unwrap();
+        catalog.update_view(commit).await.unwrap();
+        assert_eq!(
+            catalog
+                .load_view(&view_ident)
+                .await
+                .unwrap()
+                .metadata()
+                .current_version_id(),
+            2
+        );
+
+        catalog.drop_view(&view_ident).await.unwrap();
+        assert!(!catalog.view_exists(&view_ident).await.unwrap());
     }
 }

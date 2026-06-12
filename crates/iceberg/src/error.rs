@@ -56,6 +56,12 @@ pub enum ErrorKind {
     /// Iceberg table does not exist.
     TableNotFound,
 
+    /// Iceberg view already exists at creation.
+    ViewAlreadyExists,
+
+    /// Iceberg view does not exist.
+    ViewNotFound,
+
     /// Iceberg feature is not supported.
     ///
     /// This error is returned when given iceberg feature is not supported.
@@ -80,6 +86,8 @@ impl From<ErrorKind> for &'static str {
             ErrorKind::FeatureUnsupported => "FeatureUnsupported",
             ErrorKind::TableAlreadyExists => "TableAlreadyExists",
             ErrorKind::TableNotFound => "TableNotFound",
+            ErrorKind::ViewAlreadyExists => "ViewAlreadyExists",
+            ErrorKind::ViewNotFound => "ViewNotFound",
             ErrorKind::NamespaceAlreadyExists => "NamespaceAlreadyExists",
             ErrorKind::NamespaceNotFound => "NamespaceNotFound",
             ErrorKind::PreconditionFailed => "PreconditionFailed",

@@ -74,6 +74,7 @@ mod catalog;
 pub use catalog::*;
 
 pub mod table;
+pub mod view;
 
 mod avro;
 pub mod cache;

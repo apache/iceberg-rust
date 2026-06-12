@@ -32,7 +32,9 @@ use uuid::Uuid;
 pub use super::view_metadata_builder::ViewMetadataBuilder;
 use super::view_version::{ViewVersionId, ViewVersionRef};
 use super::{SchemaId, SchemaRef};
+use crate::compression::CompressionCodec;
 use crate::error::{Result, timestamp_ms_to_utc};
+use crate::io::FileIO;
 use crate::{Error, ErrorKind};
 
 /// Reference to [`ViewMetadata`].
@@ -159,6 +161,59 @@ impl ViewMetadata {
     #[inline]
     pub fn history(&self) -> &[ViewVersionLog] {
         &self.version_log
+    }
+
+    /// Read view metadata from the given location.
+    ///
+    /// Mirrors [`crate::spec::TableMetadata::read_from`]: reads the JSON document at
+    /// `metadata_location`, transparently decompressing a gzip-encoded file (detected by the
+    /// gzip magic number), and deserializes it into a [`ViewMetadata`]. This is the on-disk
+    /// contract Java's `ViewMetadataParser.read` produces.
+    pub async fn read_from(
+        file_io: &FileIO,
+        metadata_location: impl AsRef<str>,
+    ) -> Result<ViewMetadata> {
+        let metadata_location = metadata_location.as_ref();
+        let input_file = file_io.new_input(metadata_location)?;
+        let metadata_content = input_file.read().await?;
+
+        // Check if the file is compressed by looking for the gzip "magic number".
+        let metadata = if metadata_content.len() > 2
+            && metadata_content[0] == 0x1F
+            && metadata_content[1] == 0x8B
+        {
+            let decompressed_data = CompressionCodec::Gzip
+                .decompress(metadata_content.to_vec())
+                .map_err(|error| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Trying to read compressed view metadata file",
+                    )
+                    .with_context("file_path", metadata_location)
+                    .with_source(error)
+                })?;
+            serde_json::from_slice(&decompressed_data)?
+        } else {
+            serde_json::from_slice(&metadata_content)?
+        };
+
+        Ok(metadata)
+    }
+
+    /// Write view metadata to the given location.
+    ///
+    /// Mirrors [`crate::spec::TableMetadata::write_to`]: serializes this metadata to JSON and
+    /// writes it to `metadata_location`. Java's `BaseViewOperations` always overwrites because
+    /// the location embeds a UUID and is therefore unique per commit.
+    pub async fn write_to(
+        &self,
+        file_io: &FileIO,
+        metadata_location: impl AsRef<str>,
+    ) -> Result<()> {
+        file_io
+            .new_output(metadata_location)?
+            .write(serde_json::to_vec(self)?.into())
+            .await
     }
 
     /// Validate the view metadata.
@@ -707,5 +762,108 @@ pub(crate) mod tests {
             desered.unwrap_err().to_string(),
             "data did not match any variant of untagged enum ViewMetadataEnum"
         )
+    }
+
+    // RISK: the on-disk JSON FIELD SET must match exactly what Java's `ViewMetadataParser.toJson`
+    // writes — a missing or extra field means another engine cannot read what we wrote (and vice
+    // versa). Java writes (in this order): view-uuid, format-version, location, [properties only
+    // when non-empty], schemas, current-version-id, versions, version-log; each ViewVersion writes
+    // version-id, timestamp-ms, schema-id, summary, [default-catalog only when non-null],
+    // default-namespace, representations. Field ORDER is irrelevant to a serde round-trip; the
+    // FIELD SET is the contract. This document is hand-pinned in Java's exact field order/set.
+    #[test]
+    fn test_view_metadata_parses_java_wire_field_set() {
+        let java_wire = r#"
+        {
+          "view-uuid" : "fa6506c3-7681-40c8-86dc-e36561f83385",
+          "format-version" : 1,
+          "location" : "s3://bucket/warehouse/default.db/event_agg",
+          "properties" : {
+            "comment" : "Daily event counts"
+          },
+          "schemas" : [ {
+            "type" : "struct",
+            "schema-id" : 1,
+            "fields" : [ {
+              "id" : 1,
+              "name" : "event_count",
+              "required" : false,
+              "type" : "int",
+              "doc" : "Count of events"
+            } ]
+          } ],
+          "current-version-id" : 1,
+          "versions" : [ {
+            "version-id" : 1,
+            "timestamp-ms" : 1573518431292,
+            "schema-id" : 1,
+            "summary" : {
+              "engine-name" : "Spark",
+              "engineVersion" : "3.3.2"
+            },
+            "default-catalog" : "prod",
+            "default-namespace" : [ "default" ],
+            "representations" : [ {
+              "type" : "sql",
+              "sql" : "SELECT 1",
+              "dialect" : "spark"
+            } ]
+          } ],
+          "version-log" : [ {
+            "timestamp-ms" : 1573518431292,
+            "version-id" : 1
+          } ]
+        }
+        "#;
+
+        let metadata: ViewMetadata = serde_json::from_str(java_wire).unwrap();
+        assert_eq!(
+            metadata.uuid(),
+            Uuid::parse_str("fa6506c3-7681-40c8-86dc-e36561f83385").unwrap()
+        );
+        assert_eq!(metadata.format_version(), ViewFormatVersion::V1);
+        assert_eq!(metadata.current_version_id(), 1);
+        assert_eq!(metadata.versions().count(), 1);
+        assert_eq!(metadata.schemas_iter().count(), 1);
+        assert_eq!(metadata.history().len(), 1);
+        let version = metadata.current_version();
+        assert_eq!(version.default_catalog(), Some(&"prod".to_string()));
+        assert_eq!(version.default_namespace().as_ref(), &vec![
+            "default".to_string()
+        ]);
+        assert_eq!(version.representations().len(), 1);
+
+        // Round-trip through our own serializer: the field SET must be preserved.
+        let reserialized = serde_json::to_string(&metadata).unwrap();
+        let reparsed: ViewMetadata = serde_json::from_str(&reserialized).unwrap();
+        assert_eq!(reparsed, metadata);
+    }
+
+    // RISK: read_from/write_to must round-trip view metadata through FileIO byte-for-byte at the
+    // struct level — a catalog flips its view pointer to the file write_to produced and load_view
+    // reads it back; any asymmetry corrupts the view on the next load.
+    #[tokio::test]
+    async fn test_view_metadata_read_write_round_trip() {
+        use tempfile::TempDir;
+
+        use crate::io::FileIO;
+
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path().to_str().unwrap();
+        let file_io = FileIO::new_with_fs();
+
+        let original = get_test_view_metadata("ViewMetadataV1Valid.json");
+        let metadata_location = format!("{temp_path}/00000-{}.metadata.json", Uuid::now_v7());
+
+        original
+            .write_to(&file_io, &metadata_location)
+            .await
+            .unwrap();
+        assert!(fs::metadata(&metadata_location).is_ok());
+
+        let read_back = ViewMetadata::read_from(&file_io, &metadata_location)
+            .await
+            .unwrap();
+        assert_eq!(read_back, original);
     }
 }
