@@ -20,6 +20,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use apache_avro::{Writer as AvroWriter, to_value};
+use base64::encode;
 use bytes::Bytes;
 use itertools::Itertools;
 use serde_json::to_vec;
@@ -28,7 +29,7 @@ use super::{
     Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType,
     UNASSIGNED_SEQUENCE_NUMBER,
 };
-use crate::encryption::EncryptedOutputFile;
+use crate::encryption::{EncryptedOutputFile, StandardKeyMetadata};
 use crate::error::Result;
 use crate::io::{FileWrite, OutputFile};
 use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
@@ -81,19 +82,20 @@ impl ManifestWriterBuilder {
     pub fn new_from_encrypted(
         encrypted_output: EncryptedOutputFile,
         snapshot_id: Option<i64>,
-        key_metadata: Option<Vec<u8>>,
         schema: SchemaRef,
         partition_spec: PartitionSpec,
-    ) -> Self {
+    ) -> Result<Self> {
         let location = encrypted_output.location().to_owned();
-        Self {
+        let key_metadata = Some(encrypted_output.key_metadata().encode()?
+            .to_vec());
+        Ok(Self {
             writer_future: Box::pin(async move { encrypted_output.writer().await }),
             location,
             snapshot_id,
             key_metadata,
             schema,
             partition_spec,
-        }
+        })
     }
 
     /// Build a [`ManifestWriter`] for format version 1.
@@ -124,6 +126,7 @@ impl ManifestWriterBuilder {
             .format_version(FormatVersion::V2)
             .content(ManifestContentType::Data)
             .build();
+
         ManifestWriter::new(
             self.writer_future,
             self.location,
