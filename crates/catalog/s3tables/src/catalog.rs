@@ -1272,7 +1272,7 @@ mod tests {
         .unwrap();
 
         // Locations will be generated based on the table metadata, which will be using `s3://` for Amazon S3 Tables.
-        let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+        let location_generator = DefaultLocationGenerator::new(table.metadata()).unwrap();
         let file_name_generator = DefaultFileNameGenerator::new(
             "test".to_string(),
             None,
