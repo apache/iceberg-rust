@@ -27,6 +27,10 @@ use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_catalog_s3tables::S3TablesCatalogBuilder;
 use iceberg_catalog_sql::SqlCatalogBuilder;
 
+mod catalog_type;
+
+pub use catalog_type::CatalogType;
+
 /// A CatalogBuilderFactory creating a new catalog builder.
 type CatalogBuilderFactory = fn() -> Box<dyn BoxedCatalogBuilder>;
 
