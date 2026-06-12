@@ -1460,6 +1460,40 @@ fn test_datum_to_decimal_widens_precision_when_scale_matches() {
 }
 
 #[test]
+fn test_datum_to_decimal_accepts_zero_mantissa() {
+    let target_type = Type::Primitive(PrimitiveType::Decimal {
+        precision: 1,
+        scale: 0,
+    });
+    let datum = Datum::decimal_with_precision(decimal_from_i128_with_scale(0, 0), 9).unwrap();
+
+    let converted = datum.to(&target_type).unwrap();
+
+    assert_eq!(converted.data_type(), &PrimitiveType::Decimal {
+        precision: 1,
+        scale: 0,
+    });
+    assert_eq!(converted.literal(), &PrimitiveLiteral::Int128(0));
+}
+
+#[test]
+fn test_datum_to_decimal_accepts_negative_mantissa() {
+    let target_type = Type::Primitive(PrimitiveType::Decimal {
+        precision: 2,
+        scale: 1,
+    });
+    let datum = Datum::decimal_from_str("-1.5").unwrap();
+
+    let converted = datum.to(&target_type).unwrap();
+
+    assert_eq!(converted.data_type(), &PrimitiveType::Decimal {
+        precision: 2,
+        scale: 1,
+    });
+    assert_eq!(converted.literal(), &PrimitiveLiteral::Int128(-15));
+}
+
+#[test]
 fn test_datum_to_decimal_rejects_precision_too_narrow() {
     let target_type = Type::Primitive(PrimitiveType::Decimal {
         precision: 1,
