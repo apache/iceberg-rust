@@ -124,6 +124,31 @@ impl ArrowReaderBuilder {
         self
     }
 
+    /// Controls whether the column index is preloaded when reading Parquet metadata.
+    /// The column index contains page-level min/max statistics for each column.
+    ///
+    /// Disabling this can significantly reduce metadata read overhead for wide tables
+    /// when only a few columns are queried, as the column index is loaded for ALL
+    /// columns by default.
+    ///
+    /// Defaults to true.
+    pub fn with_preload_column_index(mut self, preload: bool) -> Self {
+        self.parquet_read_options.preload_column_index = preload;
+        self
+    }
+
+    /// Controls whether the offset index is preloaded when reading Parquet metadata.
+    /// The offset index contains page byte offsets within each column chunk.
+    ///
+    /// Disabling this can reduce metadata read overhead when page-level navigation
+    /// is not needed.
+    ///
+    /// Defaults to true.
+    pub fn with_preload_offset_index(mut self, preload: bool) -> Self {
+        self.parquet_read_options.preload_offset_index = preload;
+        self
+    }
+
     /// Build the ArrowReader.
     pub fn build(self) -> ArrowReader {
         ArrowReader {

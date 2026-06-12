@@ -61,6 +61,8 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    preload_column_index: Option<bool>,
+    preload_offset_index: Option<bool>,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -79,6 +81,8 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            preload_column_index: None,
+            preload_offset_index: None,
         }
     }
 
@@ -185,6 +189,31 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
+    /// Controls whether the column index is preloaded when reading Parquet metadata.
+    /// The column index contains page-level min/max statistics for each column.
+    ///
+    /// Disabling this can significantly reduce metadata read overhead for wide tables
+    /// when only a few columns are queried, as the column index is loaded for ALL
+    /// columns by default.
+    ///
+    /// Defaults to true.
+    pub fn with_preload_column_index(mut self, preload: bool) -> Self {
+        self.preload_column_index = Some(preload);
+        self
+    }
+
+    /// Controls whether the offset index is preloaded when reading Parquet metadata.
+    /// The offset index contains page byte offsets within each column chunk.
+    ///
+    /// Disabling this can reduce metadata read overhead when page-level navigation
+    /// is not needed.
+    ///
+    /// Defaults to true.
+    pub fn with_preload_offset_index(mut self, preload: bool) -> Self {
+        self.preload_offset_index = Some(preload);
+        self
+    }
+
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
         let snapshot = match self.snapshot_id {
@@ -211,6 +240,8 @@ impl<'a> TableScanBuilder<'a> {
                         concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
                         row_group_filtering_enabled: self.row_group_filtering_enabled,
                         row_selection_enabled: self.row_selection_enabled,
+                        preload_column_index: self.preload_column_index,
+                        preload_offset_index: self.preload_offset_index,
                         runtime: self.table.runtime().clone(),
                     });
                 };
@@ -305,6 +336,8 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            preload_column_index: self.preload_column_index,
+            preload_offset_index: self.preload_offset_index,
             runtime: self.table.runtime().clone(),
         })
     }
@@ -334,6 +367,8 @@ pub struct TableScan {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    preload_column_index: Option<bool>,
+    preload_offset_index: Option<bool>,
 
     runtime: Runtime,
 }
@@ -470,6 +505,14 @@ impl TableScan {
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
+        }
+
+        if let Some(preload) = self.preload_column_index {
+            arrow_reader_builder = arrow_reader_builder.with_preload_column_index(preload);
+        }
+
+        if let Some(preload) = self.preload_offset_index {
+            arrow_reader_builder = arrow_reader_builder.with_preload_offset_index(preload);
         }
 
         arrow_reader_builder
