@@ -179,9 +179,7 @@ pub(crate) fn split_tagged<'a>(
 ) -> Result<(u8, &'a [u8]), DataFusionError> {
     match buf.split_first() {
         Some((&tag, rest)) => Ok((tag, rest)),
-        None => Err(DataFusionError::Internal(format!(
-            "empty {context} buffer"
-        ))),
+        None => Err(DataFusionError::Internal(format!("empty {context} buffer"))),
     }
 }
 
@@ -201,7 +199,11 @@ impl From<&IcebergCatalogConfig> for CatalogConfigProto {
         Self {
             r#type: c.r#type.clone(),
             name: c.name.clone(),
-            props: c.props.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            props: c
+                .props
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
         }
     }
 }

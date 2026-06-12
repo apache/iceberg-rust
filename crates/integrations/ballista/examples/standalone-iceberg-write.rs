@@ -35,15 +35,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ballista::datafusion::{
-    common::Result,
-    execution::SessionStateBuilder,
-    prelude::{SessionConfig, SessionContext},
-};
+use ballista::datafusion::common::Result;
+use ballista::datafusion::execution::SessionStateBuilder;
+use ballista::datafusion::prelude::{SessionConfig, SessionContext};
 use ballista::prelude::{SessionConfigExt, SessionContextExt};
-use iceberg_ballista::{IcebergCatalogConfig, register_iceberg_codecs, register_iceberg_table};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
+use iceberg_ballista::{IcebergCatalogConfig, register_iceberg_codecs, register_iceberg_table};
 use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_storage_opendal::OpenDalStorageFactory;
 
@@ -74,7 +72,11 @@ async fn ensure_table(props: &HashMap<String, String>) -> Result<(NamespaceIdent
         .expect("build rest catalog");
 
     let namespace = NamespaceIdent::new("ballista_demo".to_string());
-    if !catalog.namespace_exists(&namespace).await.expect("ns exists") {
+    if !catalog
+        .namespace_exists(&namespace)
+        .await
+        .expect("ns exists")
+    {
         catalog
             .create_namespace(&namespace, HashMap::new())
             .await
@@ -82,7 +84,11 @@ async fn ensure_table(props: &HashMap<String, String>) -> Result<(NamespaceIdent
     }
 
     let table_ident = TableIdent::new(namespace.clone(), "events".to_string());
-    if !catalog.table_exists(&table_ident).await.expect("table exists") {
+    if !catalog
+        .table_exists(&table_ident)
+        .await
+        .expect("table exists")
+    {
         let schema = Schema::builder()
             .with_schema_id(0)
             .with_fields(vec![

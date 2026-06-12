@@ -584,10 +584,14 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
         // Test creating a catalog-backed provider
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), None, namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         // Verify the schema is loaded correctly
         let schema = provider.schema();
@@ -600,10 +604,14 @@ mod tests {
     async fn test_catalog_backed_provider_scan() {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), None, namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
@@ -626,10 +634,14 @@ mod tests {
     async fn test_catalog_backed_provider_insert() {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), None, namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
@@ -653,10 +665,14 @@ mod tests {
     async fn test_physical_input_schema_consistent_with_logical_input_schema() {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), None, namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
@@ -778,10 +794,14 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) =
             get_partitioned_test_catalog_and_table(Some(true)).await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), None, namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         let input_schema = provider.schema();
@@ -810,10 +830,14 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) =
             get_partitioned_test_catalog_and_table(Some(false)).await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), None, namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         let input_schema = provider.schema();
@@ -870,10 +894,14 @@ mod tests {
 
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), None, namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         let state = ctx.state();
@@ -931,10 +959,14 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
         // Default provider reads the current snapshot (None in the scan).
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), None, namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
         assert_eq!(provider.snapshot_id(), None);
 
         // Pinning a snapshot threads it into the scan node, where the codec reads

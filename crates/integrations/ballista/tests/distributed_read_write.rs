@@ -41,15 +41,14 @@ use ballista::prelude::{SessionConfigExt, SessionContextExt};
 use ballista_core::serde::protobuf::scheduler_grpc_client::SchedulerGrpcClient;
 use ballista_executor::new_standalone_executor_from_state;
 use ballista_scheduler::standalone::new_standalone_scheduler_from_state;
-use iceberg_ballista::{
-    IcebergCatalogConfig, register_iceberg_catalog, register_iceberg_codecs,
-    register_iceberg_table,
-};
 use iceberg::spec::{
     NestedField, PrimitiveType, Schema, Transform, Type, UnboundPartitionField,
     UnboundPartitionSpec,
 };
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
+use iceberg_ballista::{
+    IcebergCatalogConfig, register_iceberg_catalog, register_iceberg_codecs, register_iceberg_table,
+};
 use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_storage_opendal::OpenDalStorageFactory;
 use tokio::sync::Mutex;
@@ -238,9 +237,15 @@ async fn distributed_insert_and_read() {
         .expect("start standalone ballista");
 
     let catalog_config = IcebergCatalogConfig::new("rest", "rest", props.clone());
-    register_iceberg_table(&ctx, "events", catalog_config, namespace, table_name.clone())
-        .await
-        .expect("register iceberg table");
+    register_iceberg_table(
+        &ctx,
+        "events",
+        catalog_config,
+        namespace,
+        table_name.clone(),
+    )
+    .await
+    .expect("register iceberg table");
 
     run_sql(
         &ctx,
@@ -258,9 +263,13 @@ async fn distributed_insert_and_read() {
     // same table as `<catalog>.<namespace>.<table>`. The providers built through
     // the catalog carry the config too, so this distributed read exercises the
     // catalog/schema config-threading path end to end.
-    register_iceberg_catalog(&ctx, "ice", IcebergCatalogConfig::new("rest", "rest", props))
-        .await
-        .expect("register iceberg catalog");
+    register_iceberg_catalog(
+        &ctx,
+        "ice",
+        IcebergCatalogConfig::new("rest", "rest", props),
+    )
+    .await
+    .expect("register iceberg catalog");
     let count = single_i64(
         &run_sql(
             &ctx,

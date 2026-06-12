@@ -42,8 +42,8 @@ use iceberg_datafusion::{IcebergMetadataTableProvider, IcebergTableProvider};
 use serde::{Deserialize, Serialize};
 
 use crate::bridge::{
-    CatalogConfigProto, TAG_DELEGATED, TAG_ICEBERG, block_on, encode_blob, get_catalog,
-    load_table, split_tagged, to_df_err,
+    CatalogConfigProto, TAG_DELEGATED, TAG_ICEBERG, block_on, encode_blob, get_catalog, load_table,
+    split_tagged, to_df_err,
 };
 
 /// Wire representation of an Iceberg table provider. Carries enough to rebuild

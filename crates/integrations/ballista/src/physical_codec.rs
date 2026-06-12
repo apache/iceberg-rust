@@ -325,8 +325,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
         match tag {
             TAG_DELEGATED => self.inner.try_decode_expr(rest, inputs),
             TAG_ICEBERG => {
-                let proto: PartitionExprProto =
-                    serde_json::from_slice(rest).map_err(to_df_err)?;
+                let proto: PartitionExprProto = serde_json::from_slice(rest).map_err(to_df_err)?;
                 let expr =
                     PartitionExpr::try_new(Arc::new(proto.partition_spec), Arc::new(proto.schema))?;
                 Ok(Arc::new(expr))

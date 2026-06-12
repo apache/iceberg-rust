@@ -87,8 +87,10 @@ pub fn project_with_partition(
         projection_exprs.push((column_expr, field.name().clone()));
     }
 
-    let partition_expr =
-        Arc::new(PartitionExpr::try_new(partition_spec.clone(), table_schema.clone())?);
+    let partition_expr = Arc::new(PartitionExpr::try_new(
+        partition_spec.clone(),
+        table_schema.clone(),
+    )?);
     projection_exprs.push((partition_expr, PROJECTED_PARTITION_VALUE_COLUMN.to_string()));
 
     let projection = ProjectionExec::try_new(projection_exprs, input)?;
@@ -274,8 +276,9 @@ mod tests {
             projection_exprs.push((column_expr, field.name().clone()));
         }
 
-        let partition_expr =
-            Arc::new(PartitionExpr::try_new(partition_spec, Arc::new(table_schema.clone())).unwrap());
+        let partition_expr = Arc::new(
+            PartitionExpr::try_new(partition_spec, Arc::new(table_schema.clone())).unwrap(),
+        );
         projection_exprs.push((partition_expr, PROJECTED_PARTITION_VALUE_COLUMN.to_string()));
 
         let projection = ProjectionExec::try_new(projection_exprs, input).unwrap();
@@ -320,8 +323,7 @@ mod tests {
         let partition_spec = Arc::new(partition_spec);
         let calculator = PartitionValueCalculator::try_new(&partition_spec, &table_schema).unwrap();
         let partition_type = calculator.partition_arrow_type().clone();
-        let expr =
-            PartitionExpr::try_new(partition_spec, Arc::new(table_schema.clone())).unwrap();
+        let expr = PartitionExpr::try_new(partition_spec, Arc::new(table_schema.clone())).unwrap();
 
         assert_eq!(expr.data_type(&arrow_schema).unwrap(), partition_type);
         assert!(!expr.nullable(&arrow_schema).unwrap());

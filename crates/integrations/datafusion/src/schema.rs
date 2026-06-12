@@ -31,9 +31,8 @@ use iceberg::arrow::arrow_schema_to_schema_auto_assign_ids;
 use iceberg::inspect::MetadataTableType;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableCreation, TableIdent};
 
-use crate::IcebergCatalogConfig;
 use crate::table::IcebergTableProvider;
-use crate::to_datafusion_error;
+use crate::{IcebergCatalogConfig, to_datafusion_error};
 
 /// Represents a [`SchemaProvider`] for the Iceberg [`Catalog`], managing
 /// access to table providers within a specific namespace.
@@ -391,7 +390,11 @@ mod tests {
             IcebergSchemaProvider::try_new(catalog.clone(), Some(config), namespace.clone())
                 .await
                 .unwrap();
-        let provider = with_config.table("t").await.unwrap().expect("table provider");
+        let provider = with_config
+            .table("t")
+            .await
+            .unwrap()
+            .expect("table provider");
         let iceberg = provider
             .as_any()
             .downcast_ref::<IcebergTableProvider>()
@@ -402,9 +405,10 @@ mod tests {
         );
 
         // Without config: providers stay config-less (legacy behavior).
-        let without_config = IcebergSchemaProvider::try_new(catalog.clone(), None, namespace.clone())
-            .await
-            .unwrap();
+        let without_config =
+            IcebergSchemaProvider::try_new(catalog.clone(), None, namespace.clone())
+                .await
+                .unwrap();
         let provider = without_config
             .table("t")
             .await
