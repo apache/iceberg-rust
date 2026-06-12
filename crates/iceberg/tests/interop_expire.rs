@@ -748,6 +748,12 @@ async fn expire_meta_view(metadata_json_path: &Path) -> JsonValue {
                 panic!("load manifest list of {}: {error}", snapshot.snapshot_id())
             });
         let mut manifests: Vec<_> = manifest_list.entries().to_vec();
+        // W3 (2026-06-11): `partition_spec_id` is the FINAL tiebreaker (position 10, Option B),
+        // mirroring common/snapshot_meta_view.rs and the Java SnapshotMetaOracle comparator. The
+        // sort exists to erase writer-dependent manifest-list ordering; its only contract is
+        // cross-language determinism, which the final-tiebreaker position provides for future
+        // multi-spec fixtures with zero risk to existing ordering (spec_id is constant 0 in every
+        // single-spec fixture, so the key is byte-invisible here).
         manifests.sort_by_key(|manifest| {
             (
                 content_rank(&manifest.content),
@@ -761,6 +767,7 @@ async fn expire_meta_view(metadata_json_path: &Path) -> JsonValue {
                     .existing_rows_count
                     .map_or(-1, |count| count as i64),
                 manifest.deleted_rows_count.map_or(-1, |count| count as i64),
+                manifest.partition_spec_id,
             )
         });
 
@@ -826,6 +833,7 @@ async fn expire_meta_view(metadata_json_path: &Path) -> JsonValue {
                 },
                 "sequence_number": manifest_file.sequence_number,
                 "min_sequence_number": manifest_file.min_sequence_number,
+                "partition_spec_id": manifest_file.partition_spec_id,
                 "added_snapshot_ordinal": ordinals.get(&manifest_file.added_snapshot_id),
                 "added_files_count": manifest_file.added_files_count,
                 "existing_files_count": manifest_file.existing_files_count,

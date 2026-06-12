@@ -20,6 +20,12 @@
 //! `InteropOracle.SnapshotMetaOracle` emitter (mode `emit-snapshot-meta`). The canonicalization
 //! contract (incl. the V1 sequence-number-tie ordinal limit) is documented on the E1 test module
 //! and the Java emitter; the two sides' allowlists + sort tuples must stay IDENTICAL.
+//!
+//! W3 (2026-06-12): `partition_spec_id` added to the manifest-level EMITTED JSON on both sides
+//! (Rust here + Java `SnapshotMetaOracle`). All existing single-spec fixtures have spec_id=0 so
+//! the constant field does not disturb the byte-level comparisons. The sort-tuple POSITION was
+//! RESOLVED by orchestrator ruling: FINAL tiebreaker (position 10) on all three sides — the sort
+//! exists to erase writer-dependent ordering, so its only contract is cross-language determinism.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -110,6 +116,14 @@ pub async fn snapshot_meta_view(metadata_json_path: &Path) -> JsonValue {
         // tie would fall back to each table's manifest-LIST file order — writer-dependent, not a
         // spec contract. The counts disambiguate deterministically (mirrored by the Java
         // SnapshotMetaOracle comparator).
+        //
+        // W3 (2026-06-11): `partition_spec_id` is the FINAL tiebreaker (position 10, Option B). The
+        // canonical view's sort exists to ERASE writer-dependent manifest-list ordering; its only
+        // contract is cross-language determinism. A multi-spec fixture can place two manifests that
+        // tie on all nine prior keys yet differ in spec id; the final-tiebreaker position makes that
+        // ordering deterministic for future multi-spec fixtures with zero risk to existing ordering
+        // expectations (spec_id is constant 0 in every single-spec fixture, so the key is invisible
+        // there). Kept byte-identical to the Java SnapshotMetaOracle comparator.
         manifests.sort_by_key(|manifest| {
             (
                 content_rank(&manifest.content),
@@ -123,6 +137,7 @@ pub async fn snapshot_meta_view(metadata_json_path: &Path) -> JsonValue {
                     .existing_rows_count
                     .map_or(-1, |count| count as i64),
                 manifest.deleted_rows_count.map_or(-1, |count| count as i64),
+                manifest.partition_spec_id,
             )
         });
 
@@ -191,6 +206,7 @@ pub async fn snapshot_meta_view(metadata_json_path: &Path) -> JsonValue {
                 },
                 "sequence_number": manifest_file.sequence_number,
                 "min_sequence_number": manifest_file.min_sequence_number,
+                "partition_spec_id": manifest_file.partition_spec_id,
                 "added_snapshot_ordinal": ordinals.get(&manifest_file.added_snapshot_id),
                 "added_files_count": manifest_file.added_files_count,
                 "existing_files_count": manifest_file.existing_files_count,
