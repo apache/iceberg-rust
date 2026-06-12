@@ -39,7 +39,7 @@ nextest: install-cargo-nextest
 	cargo nextest run --all-targets --all-features --workspace
 
 install-taplo-cli:
-	cargo install taplo-cli@0.9.3
+	cargo install taplo-cli@0.9.3 --locked
 
 fix-toml: install-taplo-cli
 	taplo fmt

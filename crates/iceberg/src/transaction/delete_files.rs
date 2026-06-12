@@ -65,6 +65,9 @@ pub struct DeleteFilesAction {
     /// An explicit starting snapshot for the files-exist check (Java `validateFromSnapshot`). When `None`,
     /// the check uses the transaction's starting snapshot (the table head when the transaction was created).
     validate_from_snapshot: Option<i64>,
+    /// Stage the produced delete snapshot for write-audit-publish instead of moving `main` (Java
+    /// `SnapshotProducer.stageOnly()`). See [`DeleteFilesAction::stage_only`].
+    stage_only: bool,
 }
 
 impl DeleteFilesAction {
@@ -76,6 +79,7 @@ impl DeleteFilesAction {
             snapshot_properties: HashMap::default(),
             validate_files_exist: false,
             validate_from_snapshot: None,
+            stage_only: false,
         }
     }
 
@@ -142,6 +146,19 @@ impl DeleteFilesAction {
         self.validate_from_snapshot = Some(snapshot_id);
         self
     }
+
+    /// STAGE this delete for write-audit-publish (WAP) instead of publishing it to `main` (Java
+    /// `SnapshotProducer.stageOnly()`). When called, committing this action ADDS the new `Delete` snapshot
+    /// (with its rewritten/tombstoned manifests) to table metadata but moves NO ref: `current-snapshot-id`,
+    /// the `main` ref, and the snapshot-log are left UNCHANGED, so readers continue to see the pre-staging
+    /// data — the deleted rows stay visible — until a later
+    /// [`crate::transaction::Transaction::cherry_pick`] publishes the staged snapshot. The staged snapshot
+    /// still consumes a sequence number exactly like a normal commit. Mirrors `FastAppendAction::stage_only`
+    /// on a delete-bearing action (Java's `stageOnly()` is on the base producer, so it stages identically).
+    pub fn stage_only(mut self) -> Self {
+        self.stage_only = true;
+        self
+    }
 }
 
 #[async_trait]
@@ -154,7 +171,8 @@ impl TransactionAction for DeleteFilesAction {
             self.snapshot_properties.clone(),
             // A delete-only commit adds no data files.
             vec![],
-        );
+        )
+        .with_stage_only(self.stage_only);
 
         snapshot_producer
             .commit(
@@ -1413,6 +1431,78 @@ mod tests {
             count_delete_manifests(&table).await,
             1,
             "the delete_files commit must carry the outstanding delete manifest forward (not drop it)"
+        );
+    }
+
+    // ===============================================================================================
+    // stage_only() on a DELETE-bearing action (Java `SnapshotProducer.stageOnly()` is on the base
+    // producer, so a delete stages identically to an append). A staged delete ADDS its `Delete` snapshot
+    // (with its rewritten/tombstoned manifests) to metadata but moves NO ref, so the deleted rows stay
+    // VISIBLE to readers until the staged snapshot is published.
+    // ===============================================================================================
+
+    /// STAGE_ONLY on a delete-bearing action stages identically to an append: the staged `Delete` snapshot
+    /// is added to metadata but `main` / current-snapshot-id / snapshot-log are UNCHANGED, and a scan still
+    /// sees the row the staged delete would remove (the delete is invisible until published).
+    ///
+    /// Risk pinned: a staged DELETE that publishes its removal early (the deleted rows vanish from readers
+    /// before audit) — the inverse of the append crown jewel, on the removal path.
+    #[tokio::test]
+    async fn test_delete_files_stage_only_stages_without_moving_main() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // Publish {a, b}.
+        let table = append_files(&catalog, &table, vec![
+            data_file("test/a.parquet", 0),
+            data_file("test/b.parquet", 0),
+        ])
+        .await;
+        let base_id = table.metadata().current_snapshot_id();
+        let base_log = table.metadata().history().to_vec();
+        let base_snapshot_count = table.metadata().snapshots().count();
+
+        // STAGE a delete of a.
+        let tx = Transaction::new(&table);
+        let action = tx.delete_files().stage_only().delete_file("test/a.parquet");
+        let tx = action.apply(tx).unwrap();
+        let staged_table = tx.commit(&catalog).await.unwrap();
+        let reloaded = catalog.load_table(staged_table.identifier()).await.unwrap();
+        let metadata = reloaded.metadata();
+
+        // A new (Delete) snapshot was ADDED, but main did not move.
+        assert_eq!(
+            metadata.snapshots().count(),
+            base_snapshot_count + 1,
+            "the staged delete snapshot must be added to metadata"
+        );
+        assert_eq!(
+            metadata.current_snapshot_id(),
+            base_id,
+            "stage_only on a delete must NOT advance current-snapshot-id"
+        );
+        assert_eq!(
+            metadata.snapshot_for_ref("main").unwrap().snapshot_id(),
+            base_id.unwrap(),
+            "stage_only on a delete must NOT move the main ref"
+        );
+        assert_eq!(
+            metadata.history().to_vec(),
+            base_log,
+            "stage_only on a delete must NOT add a snapshot-log entry"
+        );
+        // The staged snapshot records Operation::Delete.
+        let staged_snapshot = metadata
+            .snapshots()
+            .find(|s| Some(s.snapshot_id()) != base_id)
+            .unwrap();
+        assert_eq!(staged_snapshot.summary().operation, Operation::Delete);
+
+        // SCAN PIN: the readable (current-snapshot) live set still includes a — the staged delete is hidden.
+        assert_eq!(
+            live_file_paths(&reloaded).await,
+            HashSet::from(["test/a.parquet".to_string(), "test/b.parquet".to_string()]),
+            "the staged delete does not remove a from the readable table; both files stay live"
         );
     }
 }

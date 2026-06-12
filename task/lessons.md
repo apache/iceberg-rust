@@ -1766,3 +1766,153 @@ How to use it (see the manuals' §2):
   added). MAIN also RETAINS the remove-then-put view/serialization inconsistency (put never
   clears removedFields), so the Rust pins follow 1.10.0 AND MAIN alike — noted in the module doc
   so nobody "fixes" one side.
+
+### 2026-06-11 (Overnight Group V V1 — `stage_only()` WAP staging path, BUILDER Opus, wt-wap)
+- **A staged (WAP) snapshot CONSUMES a sequence number exactly like a normal commit — `apply()` is
+  stageOnly-INDEPENDENT (1.10.0 bytecode).** *Why it's load-bearing:* the brief flagged the seq-number
+  behavior as a verify-from-bytecode item because the later cherrypick seq semantics depend on it.
+  `SnapshotProducer.apply()` (the `Snapshot apply()`) computes `long seq = base.nextSequenceNumber()` at
+  offset 18-24 UNCONDITIONALLY and builds `new BaseSnapshot(seq, ...)` — there is NO `stageOnly` branch
+  in `apply()`. `stageOnly` ONLY gates the metadata-builder update set in `lambda$commit$2`
+  (`stageOnly ? builder.addSnapshot(snapshot) : builder.setBranchSnapshot(snapshot, branch)`). So a staged
+  snapshot's seq == `base.next_sequence_number()` (pinned on-disk). The seq is assigned at snapshot BUILD,
+  the ref decision at metadata-UPDATE — two separate phases.
+- **Java does NOT advance the snapshot-log for a staged snapshot, and the Rust builder ALREADY matches —
+  no spec/ change.** *Why:* `TableMetadata.Builder.addSnapshot` (bytecode) touches `snapshots`,
+  `snapshotsById`, `lastSequenceNumber`, `lastUpdatedMillis`, the `AddSnapshot` change, and (V3)
+  `nextRowId` — but NEVER `snapshotLog`, `currentSnapshotId`, or `refs` (those live in
+  `setBranchSnapshotInternal`→`setRef`, only reached by the NON-staged path). Rust's
+  `TableMetadataBuilder::add_snapshot` is identical, and `update_snapshot_log()` early-returns when no
+  `SetSnapshotRef(main)` is in the change set (`get_intermediate_snapshots` only collects added ids that
+  ALSO have a `SetSnapshotRef(main)`). So an `AddSnapshot`-ALONE update leaves snapshot_log /
+  current_snapshot_id / refs untouched on disk by construction. The brief's "spec/ only if genuinely
+  needed" condition was NOT met — verify the existing builder's add-without-ref path before assuming a
+  spec/ edit is required for a staging feature.
+- **`stageOnly()` is declared on the `SnapshotUpdate<ThisT>` API interface, so EVERY snapshot-producing
+  action exposes it — mirror that by putting the flag on the shared `SnapshotProducer` + a one-line
+  `stage_only()` setter per action.** *Why:* `api/SnapshotUpdate.class` has `public abstract ThisT
+  stageOnly()` (alongside `set(String,String)`, `deleteWith`, `scanManifestsWith`), and `SnapshotProducer`
+  implements it as `iconst_1; putfield stageOnly:Z; return self()`. The Rust analogue: `stage_only: bool`
+  on `SnapshotProducer` + `with_stage_only(bool)`, with each action carrying a `stage_only` field and a
+  `stage_only()` builder setter threaded in at `commit()`. Wired FastAppend (crown jewel) + DeleteFiles
+  (delete-bearing) this increment; the rest are one-line additions.
+- **`wap.id` needs NO new `set()` — `set_snapshot_properties(HashMap)` already IS the engine-side
+  summary-extension surface.** *Why:* Java's engine sets `wap.id` via `SnapshotUpdate.set(prop, value)`
+  → the per-producer `summaryBuilder.set(...)` (`FastAppend` has its own `summaryBuilder` field). The Rust
+  `set_snapshot_properties` on every action feeds the producer's `snapshot_properties`, which
+  `summary()` merges into the snapshot summary — exactly the same channel. The cherry_pick tests already
+  staged `wap.id` this way. A minimal parity `set()` would be redundant with the existing per-action
+  surface; documented-not-added.
+- **A staged snapshot is EXPIRABLE by the existing ExpireSnapshots with zero changes — it's just an
+  unreferenced snapshot.** `unreferenced_snapshots_to_retain` iterates `metadata.snapshots()` (staged
+  snapshots ARE in `snapshots`), drops those referenced by a retained ref (a staged snapshot is referenced
+  by NONE), and keeps only `timestamp_ms >= cutoff`. So an aged staged snapshot lands in `ids_to_remove`
+  — Java-faithful. Pin-only (no code change). The mutation-bait (neuter `if !self.stage_only` → `if true`)
+  makes the staging publish to main, so the retention test then finds the snapshot referenced/current and
+  the expire pin FAILS — proving the pin is behavioral, not vacuous.
+
+### 2026-06-11 (Overnight Group V V1 — `stage_only()` WAP staging path, REVIEWER Opus, wt-wap)
+- **The right oracle for a Rust action's commit REQUIREMENT-set is Java `UpdateRequirements.forUpdateTable(base,
+  updates)`, NOT a guess about "what guard is meaningful."** *Why it's load-bearing:* the headline question
+  ("what does Java require for an AddSnapshot-only staged commit?") is settled by ONE bytecode fact:
+  `UpdateRequirements$Builder.update(MetadataUpdate)` (1.10.0) dispatches on 8 `instanceof` arms —
+  `SetSnapshotRef, AddSchema, SetCurrentSchema, AddPartitionSpec, SetDefaultPartitionSpec, SetDefaultSortOrder,
+  RemovePartitionSpecs, RemoveSchemas` — and has **NO `AddSnapshot` arm**. `forUpdateTable` seeds
+  `AssertTableUUID` then forEach-applies `update`. So `[AddSnapshot]` ⇒ `[AssertTableUUID]` ALONE: no ref
+  requirement, no last-sequence-number requirement. The Rust staged set (`UuidMatch` alone) is Java-EXACT. DO
+  derive the expected requirement-set from `forUpdateTable` against the literal update list; DO NOT reason from
+  "the ref guard is meaningless" (right answer, wrong method — it happens to coincide here but won't always).
+- **The Rust transaction retry/rebase machinery MASKS an over-strict `RefSnapshotIdMatch` requirement
+  end-to-end — pin the requirement-set at the ActionCommit SOURCE, not via a concurrent-commit behavior test.**
+  *Why:* `Transaction::do_commit` refreshes + re-bases + RE-CALLS the action's `commit` against the refreshed
+  base on every attempt, so a `RefSnapshotIdMatch{main, current}` is recomputed against the refreshed
+  `current_snapshot_id` each time — under any concurrent publish it rebases to the NEW head and passes. So the
+  over-strict-requirement mutation (`if !self.stage_only` → `if true` on the REQUIREMENTS block) is INVISIBLE to
+  every end-to-end concurrency test (both publish orders still succeed). It only diverges on the REST wire
+  protocol (an extra `assert-ref-snapshot-id` Java's `forUpdateTable` never emits). The catching pin asserts the
+  ActionCommit's `take_requirements()` == `[UuidMatch]` EXACTLY (mirror the existing `test_fast_append`
+  update/requirement-set assertion). This was a real survivor of the builder's on-disk-only tests.
+- **`apply()` is stageOnly-independent for BOTH seq AND parent (1.10.0 bytecode), and the Rust action recomputes
+  both against the refreshed base on retry — so a staged retry over a moved head is corruption-free.** `apply()`
+  off 5-16 reads `latestSnapshot(base, targetBranch)` (the parent) and off 17-24 reads
+  `base.nextSequenceNumber()` (the seq) — neither references the `stageOnly` field. The Rust producer reads
+  `self.table.metadata().next_sequence_number()` + `.current_snapshot_id()` where `self.table` is the refreshed
+  `current_table` passed by `do_commit`. Pin it with a concurrent-publish-then-staged-commit test asserting the
+  staged snapshot's seq == refreshed-base next-seq (> the concurrent publish's seq) AND parent == the concurrent
+  publish id. The builder's tests only covered the no-concurrency seq case.
+- **Reader-invisibility breadth: a staged snapshot is in the `snapshots` metadata-table source but NOT the
+  `history` one, and is readable by EXPLICIT id (time-travel) though hidden from the default scan — all
+  Java-faithful, all already true in Rust.** `inspect/snapshots.rs` iterates `metadata.snapshots()` (includes
+  staged); `inspect/history.rs` iterates `metadata.history()` (the snapshot-log, which a staged commit never
+  touches). `TableScanBuilder::build` resolves an explicit `snapshot_id` via `snapshot_by_id` (any snapshot,
+  staged included), so `scan().snapshot_id(staged_id)` builds and reads the staged data — matching Java's "a
+  staged snapshot is a valid time-travel target, just not the table default."
+- **wap.id rides `set_snapshot_properties` and is merged into the summary via `additional_properties.extend(...)`
+  — user props OVERRIDE producer keys on collision (Rust), but Java's `ImmutableMap.Builder` would THROW on a
+  true metric-key collision.** For `wap.id` (a non-reserved key) there is no collision, so both sides coexist —
+  pinned. Note (report-only, OUT OF SCOPE for stage_only): Rust `Summary` has `operation: Operation` +
+  `#[serde(flatten)] additional_properties` — a user property literally named `operation` would collide with the
+  flattened key on serialize; Java's `SnapshotParser.toJson` explicitly SKIPS a summary-map `operation` entry
+  (writes the field once). This is a pre-existing property-channel edge, not a stage_only regression.
+
+### 2026-06-11 (Overnight Group V V2 — WAP-path publish dedup, BUILDER Opus, wt-wap)
+- **READ THE FILE before assuming a feature is unbuilt — the V1 cherrypick land already contained the entire
+  WAP-path dedup CORE; V2 was a verify-and-fill-coverage increment, not an implement-from-scratch one.** *Why:*
+  the V2 brief framed "the WAP-path publish dedup" as new work, but `cherry_pick.rs` already had
+  `validate_wap_publish`, `is_wap_id_published` (both arms), the wired call in `validate()` in Java's order, the
+  verbatim `DuplicateWAPCommitException` message, the replay-side `published-wap-id` stamp, AND a crown-jewel
+  test — all from V1's Arc F cherrypick. The honest deliverable was: re-derive every semantic from 1.10.0
+  bytecode, confirm byte-exact, and add the MISSING test coverage. ZERO production change. When a brief says
+  "port X," grep the target file for X FIRST; a sibling increment may have already landed it.
+- **`WapUtil.isWapIdPublished` compares the picked `wap.id` against BOTH each ancestor's OWN `wap.id`
+  (STAGED_WAP_ID_PROP) AND its `published-wap-id` (PUBLISHED_WAP_ID_PROP) — and BOTH arms are load-bearing
+  because the FAST-FORWARD publish path never stamps `published-wap-id`.** *Why (1.10.0 bytecode
+  `WapUtil.isWapIdPublished` offsets 53-74):* a REPLAY publish mints a new snapshot stamped with
+  `published-wap-id` (caught via THAT arm); a FAST-FORWARD publish moves `main` to the staged snapshot VERBATIM
+  (no new snapshot, no restamp — `apply()` offsets 59-72 return `base.snapshot(picked.id)`), so a later same-id
+  pick is caught ONLY via the staged `wap.id` arm. Java `TestWapWorkflow.testDuplicateCherrypick`'s first
+  publish IS a fast-forward (wapSnapshot1.parent == head), proving the STAGED arm. The pre-existing Rust test
+  exercised only the REPLAY→`published-wap-id` arm; the new FF-path test is the discriminating pin — a mutation
+  dropping the staged-`wap.id` arm fails ONLY it (the replay test stays green via the other arm), proving each
+  arm is independently pinned (the docs/testing.md mutate-each-arm rule).
+- **The cherrypick rejection ORDER is `validateNonAncestor` → `validateReplacedPartitions` →
+  `validateWapPublish` (1.10.0 bytecode `CherryPickOperation.validate` offsets 8-55) — so when a pick is BOTH
+  already-an-ancestor AND its wap id is published, the ANCESTRY error fires, NOT the duplicate-WAP one.** *Why
+  it matters:* re-picking a fast-forwarded snapshot hits both conditions (it is now the head AND carries the
+  published `wap.id`); a port that ran the WAP check first would surface the wrong message. Pinned with a
+  both-paths test asserting the `already an ancestor` message AND the absence of the `Duplicate request to
+  cherry pick wap id` substring.
+- **`write.wap.enabled` is ENGINE-side only — core never gates an ordinary commit (V3 settled OUT by
+  bytecode).** *Why:* `TableProperties.WRITE_AUDIT_PUBLISH_ENABLED = "write.wap.enabled"` is DEFINED in core but
+  read by NO core production class (the literal appears in zero core `*.class` files; only `TableProperties`
+  itself + `TestWapWorkflow` reference it; the real consumers are Spark `SparkWriteConf`/`SparkReadConf`/
+  `SparkTableUtil`). `SnapshotProducer.apply()` calls only the overridable per-subclass `validate` — never
+  `WapUtil`; the ONLY core caller of `validateWapPublish` is `CherryPickOperation`. So a `wap.id` present on a
+  NON-staged ordinary commit is not validated/blocked core-side. The settle-it move: grep the jar's `*.class`
+  bytecode for the property STRING (`write.wap.enabled`) + for callers of the validation method — "defined as a
+  constant" ≠ "enforced"; trace the actual consumer.
+
+### 2026-06-11 (Overnight Group V V2 — WAP-path publish dedup, REVIEWER Opus, wt-wap)
+- **An ancestry-scoped dedup/guard has an "escape hatch" by construction — probe the SCOPE, not just the
+  positive/negative cases, and PIN it as Java-faithful (or as a divergence) with a fail-before mutation that
+  WIDENS the scope.** *Why:* `WapUtil.isWapIdPublished` walks `SnapshotUtil.ancestorIds(meta.currentSnapshot())`
+  — the LIVE `main` ancestry only. So a WAP publish that is rolled BACK past (or whose snapshot is orphaned off
+  `main` — cherry-pick only ever targets `main`) drops out of the walk and its `wap.id` REOPENS: a second same-id
+  publish then succeeds. Java has the identical hole (same `currentSnapshot()` root) — NOT a Rust divergence. The
+  discriminating test is fail-before/pass-after against a *scope-widening* mutation (walk ALL snapshots instead
+  of the current ancestry → the legitimate rollback-and-redo is spuriously rejected), which is a sharper pin than
+  the happy-path success assertion alone. Lesson: when a guard keys off "the current ancestry / live ref," the
+  reviewer's job is to construct the off-ancestry case and document whether the resulting hole matches Java.
+- **To settle a "is this constant enforced anywhere in core?" question, grep the constant-pool of EVERY core
+  class for the inlined STRING VALUE, not the field symbol.** *Why:* a `static final String` is a compile-time
+  constant — every consumer inlines its VALUE into ITS OWN constant pool, so the field reference vanishes but the
+  literal `write.wap.enabled` would appear in any reader's class. Across all 1212 core 1.10.0 classes the literal
+  appears in EXACTLY ONE (`TableProperties`, the definition) ⇒ zero runtime readers ⇒ V3 OUT, conclusively. The
+  loop is `for c in $(find . -name '*.class'); do javap -v "$c" | grep -q 'write.wap.enabled' && echo "$c"; done`.
+- **Reviewing a "verify-and-fill-coverage, zero-production-change" increment: confirm the byte-identical claim
+  FIRST (diff the touched production region against HEAD), then re-derive the cited bytecode from the m2 jars
+  independently — do NOT trust the builder's /tmp artifacts.** *Why:* the whole increment's value is the claim
+  "Rust already matches Java"; if the re-derivation is borrowed, the review is circular. Re-extracting from
+  `~/.m2/.../iceberg-{core,api}-1.10.0.jar` is cheap (`unzip` + `javap -c -p`) and catches an off-by-a-few offset
+  citation (builder said `isWapIdPublished` offsets 53-74 / `validate` 8-55; the arms/order were exact, the
+  offset ranges loose — semantics matched, citations slightly off, no functional impact).

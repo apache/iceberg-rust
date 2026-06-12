@@ -695,8 +695,17 @@ result-count-swap, task→file mapping. Gate ×2. Tree: maintenance/** + 4 docs 
       shredding; surface the dependency question, do not touch Cargo. Runs in worktree
       `wt-vschema` parallel to Group O (`phase6/rewrites-and-debt`, Opus) and Group S
       (`interop/data-level-paydown`, Sonnet).
+- [ ] **THIS BRANCH (Overnight 2026-06-12 Group V, Opus actor-critic, user-approved):
+      `stageOnly` + WAP completion** — V1: `SnapshotProducer.stageOnly` parity (snapshot lands in
+      metadata, refs untouched, wap.id summary handling; on-disk pins re-parsing metadata);
+      V2: wap-path publish dedup (duplicate `wap.id` cherrypick rejection — the WAP-path twin of
+      the landed ancestry-path dedup) + apply-vs-commit staging pins; V3 (stretch):
+      `write.wap.enabled` audit-mode IF 1.10.0 core enforces it (bytecode settles; skip if
+      engine-side). Production-only tonight (transaction/**); the staged-WAP interop fixture
+      upgrade is next-wave. Worktree `wt-wap`, parallel to Group W (`interop/data-level-wave2`,
+      Sonnet-builder+Opus-critic) and Group X (`phase6/partition-stats`, Opus).
 - [ ] **Scheduled with the user:** real-catalog (Glue + S3 Tables) hardening — needs credentials.
-- [ ] **Opus-queue (post-handoff or parallel):** cherrypick `stageOnly` WAP-write path, ORC/Avro breadth, view ops, incremental-scan interop.
+- [ ] **Opus-queue (post-handoff or parallel):** ORC/Avro breadth, view ops, incremental-scan interop.
 - [ ] **THIS BRANCH (Group B, Fable actor-critic, user-approved 2026-06-11): variant-type
       groundwork** — B1: the variant binary format read side (`org.apache.iceberg.variants`
       Serialized* + VariantUtil parity: metadata dictionary, value headers, all primitive
@@ -1483,6 +1492,210 @@ the full 2066-test lib). Visitor drivers + finally semantics bytecode-confirmed 
 tables 71-90→99 / 193-214→223; exactly two static `visit` overloads). Gate ×2 CLEAN: typos /
 fmt / clippy `-D warnings`, `cargo test -p iceberg --lib` **2066 ×2** (2062 + 4 reviewer tests;
 one builder test extended). Probes/mutations reverted from /tmp snapshots; tree = allowed set.
+## ACTIVE (2026-06-11): Overnight Group V increment V1 — `stage_only()` WAP staging path (worktree wt-wap, BUILDER Opus)
+
+Expose Java `SnapshotProducer.stageOnly()` on the Rust snapshot-producing actions: a staged commit ADDS its
+snapshot to table metadata WITHOUT moving any ref (no `SetSnapshotRef`), so the snapshot is staged for later
+cherry-pick/publish. Corruption surface: a staged commit that moves a ref publishes unaudited data; a staging
+that mangles snapshot-log / refs / current-snapshot-id corrupts the table for every reader.
+
+**Java authority (1.10.0 bytecode, all confirmed):**
+- `SnapshotProducer.stageOnly()` — `iconst_1; putfield stageOnly:Z; return self()`. The flag is declared on the
+  `SnapshotUpdate<ThisT>` API interface (`api/SnapshotUpdate.class`: `public abstract ThisT stageOnly()`), so
+  EVERY snapshot-producing action exposes it.
+- `SnapshotProducer.apply()` (the `Snapshot apply()`) computes `long seq = base.nextSequenceNumber()`
+  UNCONDITIONALLY (off 18-24) and builds `new BaseSnapshot(seq, snapshotId, ...)` (off 367-418) — NO stageOnly
+  branch. ⇒ **a staged snapshot CONSUMES a sequence number exactly like a normal commit** (load-bearing for
+  cherrypick seq behavior).
+- `SnapshotProducer.commit` → `lambda$commit$2`: builds `TableMetadata.Builder` from base; `if base.snapshot(id)
+  != null` → `setBranchSnapshot(id, branch)` (already-present); `else if stageOnly` → `addSnapshot(snapshot)`
+  ONLY; `else` → `setBranchSnapshot(snapshot, branch)` (add + move ref). So the staged update set is
+  `AddSnapshot` ALONE; the normal set is `AddSnapshot` + the branch-ref move.
+- `TableMetadata.Builder.addSnapshot(Snapshot)` (bytecode): adds to `snapshots`/`snapshotsById`, sets
+  `lastSequenceNumber`/`lastUpdatedMillis`, emits `MetadataUpdate.AddSnapshot`, advances `nextRowId` (V3) —
+  **does NOT touch `snapshotLog`, `currentSnapshotId`, or `refs`** (the snapshot-log entry + current id live in
+  `setRef`/`setBranchSnapshotInternal`, only reached by the non-staged path). ⇒ Java does NOT advance the
+  snapshot log for a staged snapshot.
+- WAP `wap.id`: engine sets it via `SnapshotUpdate.set(String, String)` (api interface) → the producer's
+  `summaryBuilder.set(...)`. The summary then carries `wap.id` on the staged snapshot. Constants
+  (`SnapshotSummary`): `STAGED_WAP_ID_PROP = "wap.id"`, `PUBLISHED_WAP_ID_PROP = "published-wap-id"`.
+
+**Rust-side findings (verified before writing code):**
+- The producer's `commit()` (snapshot.rs L1451-1462) ALWAYS emits BOTH `AddSnapshot` + `SetSnapshotRef(main)`.
+  The whole change is: thread a `stage_only` flag onto `SnapshotProducer`, and when set, emit ONLY `AddSnapshot`
+  (and drop the `RefSnapshotIdMatch` requirement, since no ref moves — keep only `UuidMatch`).
+- Rust `TableMetadataBuilder::add_snapshot` already mirrors Java: inserts into `snapshots`, bumps
+  `last_sequence_number`/`last_updated_ms`/`next_row_id`, emits `AddSnapshot` — does NOT touch `snapshot_log`
+  or `current_snapshot_id`. `update_snapshot_log()` early-returns when no `SetSnapshotRef(main)` is present
+  (`get_intermediate_snapshots` is empty) ⇒ **NO snapshot-log entry for a staged snapshot. NO spec/ change
+  needed** (the brief's "spec/ only if genuinely needed" condition is NOT met — flagged in the report).
+- `wap.id` is ALREADY expressible via `set_snapshot_properties(HashMap)` (present on every action) — the Rust
+  equivalent of Java's per-producer `set()`. The cherry_pick tests already stage `wap.id` this way. So point 2
+  needs NO new `set()` — documented, not added (a minimal Java-parity `set()` would be redundant with the
+  existing surface).
+- Point 3 (retention): `unreferenced_snapshots_to_retain` iterates `metadata.snapshots()` (a staged snapshot is
+  in `snapshots`), drops those referenced by a retained ref (a staged snapshot is referenced by none), keeps
+  only `timestamp_ms >= cutoff` ⇒ a staged-but-never-published snapshot aged past the cutoff IS expirable. NO
+  expire_snapshots change — pin only.
+
+**Surface decision:** `stage_only` lives on the `SnapshotProducer` (Java's `private boolean stageOnly`); each
+action builder gets a `stage_only()` setter + a `stage_only: bool` field threaded into the producer at commit.
+This increment wires it on `FastAppendAction` (crown-jewel) and `DeleteFilesAction` (the delete-bearing action),
+mirroring Java's reach (any SnapshotProducer-derived action can stage). Other actions can adopt the one-line
+setter later — out of scope tonight.
+
+- [x] 1. Write this plan in todo.md.
+- [x] 2. snapshot.rs: add `stage_only: bool` field + `with_stage_only()` builder; in `commit()` emit only
+      `AddSnapshot` (no `SetSnapshotRef`) and only the `UuidMatch` requirement when staged.
+- [x] 3. append.rs: `FastAppendAction.stage_only` field + `stage_only()` setter; thread into the producer.
+- [x] 4. delete_files.rs: same `stage_only()` setter on `DeleteFilesAction`.
+- [x] 5. Tests (each named for its risk): the on-disk staging crown jewel (snapshot exists, current-snapshot-id
+      / main ref / snapshot-log UNCHANGED, summary carries `wap.id`, seq == normal-commit seq); scan returns
+      pre-staging data; e2e stage→cherry_pick publishes (published-wap-id present); two staged snapshots coexist
+      and are each cherrypickable; stage_only on delete_files stages identically; mutation-bait (emit the ref
+      update → crown jewel must fail).
+- [x] 6. GAP_MATRIX cherrypick row: `stageOnly` landed (date; staged-WAP interop fixture still deferred);
+      5-pipe audit.
+- [x] 7. transaction/map.md: note stage_only on the snapshot.rs/append.rs/delete_files.rs rows.
+- [x] 8. Verify (twice): typos + fmt + clippy -D warnings + `cargo test -p iceberg --lib` (baseline 2044).
+
+**Outcome (2026-06-11): V1 LANDED.** See FINAL REPORT. NO spec/ change (Rust builder already Java-faithful for
+add-snapshot-without-ref). `wap.id` rides the existing `set_snapshot_properties` surface (no new `set()`).
+Retention + cherrypick consume staged snapshots unchanged. Deferred: staged-WAP Java interop fixture (next wave);
+stage_only on the remaining actions (one-line setters, not needed tonight); V2 (wap-path publish dedup).
+
+**Reviewer (2026-06-11, Opus, wt-wap): VERIFIED — APPROVED.** Both headlines bytecode-settled:
+(#1 requirements) `UpdateRequirements.forUpdateTable(base, [AddSnapshot])` derives `AssertTableUUID` ALONE —
+the 1.10.0 `Builder.update(MetadataUpdate)` dispatcher has 8 `instanceof` arms (SetSnapshotRef, AddSchema,
+SetCurrentSchema, AddPartitionSpec, SetDefaultPartitionSpec, SetDefaultSortOrder, RemovePartitionSpecs,
+RemoveSchemas) and NO `AddSnapshot` arm, so an AddSnapshot-only update adds no requirement. The Rust staged
+set (`UuidMatch` alone) is Java-EXACT — not over-strict, not under-strict. (#2 retry) `apply()` reads
+`base.nextSequenceNumber()` (off 17-24, unconditional) + `latestSnapshot(base, main)` (off 5-16) — NO stageOnly
+branch in `apply()`; the Rust action recomputes both against the refreshed `current_table` on every
+`do_commit`, so a staged retry takes the NEW seq + NEW parent (pinned). `lambda$commit$2` stageOnly branch +
+`addSnapshot` (touches no snapshotLog/currentSnapshotId/refs) confirmed; the Rust builder's add-without-ref path
+mirrors it exactly ⇒ NO spec/ change correct. **Mutation sweep:** the update-neutering mutation (`if true` on
+the updates block) kills 9 tests; the wap.id-drop mutation kills the crown jewel's wap.id assertion. **Survivor
+caught:** the over-strict-REQUIREMENT mutation (`if true` on the requirements block) is INVISIBLE to every
+end-to-end test (the retry/rebase recomputes `RefSnapshotIdMatch` against the refreshed base, masking it) — the
+reviewer added a wire-level exact update/requirement-set pin
+(`test_stage_only_emits_add_snapshot_alone_with_uuid_match_only`) that catches it at the ActionCommit source.
+**+7 reviewer tests** (the exact-set pin, concurrent-vs-stage both orders, retry/rebase seq+parent, wap.id
+coexistence, readable-by-explicit-id+inspect-posture, reverse-publish-order coexist). Sanctioned cherry_pick.rs
+module-doc fix applied; e2e test docstring corrected (fast-forward keeps original wap.id, not `published-wap-id`).
+Gate ×2 CLEAN: typos/fmt/clippy `-D warnings` clean, `cargo test -p iceberg --lib` **2058 ×2** (baseline 2051 +7).
+Tree = allowed set + the doc fix; zero spec/ edits; no Cargo/pom diffs. NO COMMIT.
+
+## ACTIVE (2026-06-11): Overnight Group V increment V2 — WAP-path publish dedup (worktree wt-wap, BUILDER Opus)
+
+The `wap.id`-keyed duplicate-publish rejection — the WAP-path twin of the ancestry-path dedup landed in V1.
+**Corruption surface:** a duplicate WAP publish double-applies audited changes (the exact failure WAP exists
+to prevent). Modify ONLY transaction/** (+ map.md), GAP_MATRIX (cherrypick row), todo, lessons.
+
+**DISCOVERY (read the file first): the WAP-path dedup CORE ALREADY LANDED with V1's cherrypick (Arc F).**
+`cherry_pick.rs` already has `validate_wap_publish` (L375-392), `is_wap_id_published` (L690-705, walks CURRENT
+ancestors comparing the picked `wap.id` against each ancestor's OWN `wap.id` AND its `published-wap-id`), the
+wired call in `validate()` AFTER non-ancestor + replaced-partitions (L443-451, the Java order), the VERBATIM
+`DuplicateWAPCommitException` message (L387), the replay-side `published-wap-id` stamp (L475-477), and a
+crown-jewel test `test_cherrypick_duplicate_wap_id_is_rejected` (L1333). So V2 is a VERIFY-AND-FILL-COVERAGE
+increment: re-derive every semantic from 1.10.0 bytecode, prove byte-exact parity, and add the brief's missing
+tests (FF-path dedup, distinct-ids no-false-positive, non-WAP negative control, both-paths ordering pin, state-
+unchanged re-parse on rejection). NO production change expected unless the bytecode exposes a divergence.
+
+**Java authority pinned (1.10.0 bytecode, /tmp/wap_bytecode):**
+- `WapUtil.validateWapPublish(TableMetadata, long)`: resolve `snapshot = metadata.snapshot(id)`; `wapId =
+  stagedWapId(snapshot)` (reads `wap.id`); IF `wapId != null && !wapId.isEmpty()` AND `isWapIdPublished(meta,
+  wapId)` → throw `DuplicateWAPCommitException(wapId)`; else return `wapId`. (offsets 0-46.)
+- `isWapIdPublished(meta, wapId)` (private): walk `SnapshotUtil.ancestorIds(meta.currentSnapshot(),
+  meta::snapshot)` — the CURRENT ANCESTRY chain only — and for each ancestor return true if
+  `wapId.equals(stagedWapId(ancestor))` OR `wapId.equals(publishedWapId(ancestor))`. BOTH keys are compared
+  (`wap.id` AND `published-wap-id`). (offsets 0-83.) Rust `is_wap_id_published` is an EXACT mirror.
+- `DuplicateWAPCommitException(String)`: message `"Duplicate request to cherry pick wap id that was published
+  already: %s"` — VERBATIM matches the Rust L387.
+- ORDERING (`CherryPickOperation.validate`, offsets 0-56): `if (!isFastForward) { validateNonAncestor(...);
+  validateReplacedPartitions(...); WapUtil.validateWapPublish(...); }`. So **validateNonAncestor FIRES FIRST**,
+  WAP validate LAST. When BOTH apply (already-ancestor AND wap-published), `CherrypickAncestorCommitException`
+  wins. Rust `validate()` L443-451 mirrors this order exactly.
+- FF PATH (`apply` offsets 17-72): FF returns `base.snapshot(picked.id)` verbatim — NO new snapshot, NO
+  `published-wap-id` restamp; and `validate()` is SKIPPED on FF (`if (!isFastForward)`). So the FF publish keeps
+  ONLY the staged snapshot's own `wap.id`. A LATER cherrypick of a same-wap-id sibling is still caught by
+  `validateWapPublish` — via the `wap.id` (STAGED) arm of `isWapIdPublished` (the FF'd snapshot is now an
+  ancestor carrying that `wap.id`). Confirmed by Java `TestWapWorkflow.testDuplicateCherrypick` (its first
+  publish IS a FF: wapSnapshot1.parent == current head). THIS is the coverage gap V2 adds.
+- V3 (`write.wap.enabled`): bytecode SETTLES it OUT. `TableProperties.WRITE_AUDIT_PUBLISH_ENABLED =
+  "write.wap.enabled"` is DEFINED in core but READ by NOTHING in core production (the literal string appears in
+  ZERO core `*.class` files; only `TestWapWorkflow` + `TableProperties` reference it; the real consumers are
+  Spark `SparkWriteConf`/`SparkReadConf`/`SparkTableUtil`). `SnapshotProducer.apply()` calls only the
+  overridable per-subclass `validate` — NO `WapUtil` call; only `CherryPickOperation` calls
+  `validateWapPublish`. So core never gates an ordinary commit on a present `wap.id`. **V3 is ENGINE-side only
+  ⇒ OUT, documented, skipped.**
+
+**Plan:**
+- [x] 1. Required reading (CLAUDE.md, Opus.md, lessons V1 entries, todo) + cherry_pick.rs/snapshot.rs/map.md +
+      1.10.0 bytecode (WapUtil, CherryPickOperation, SnapshotProducer, DuplicateWAPCommitException).
+- [x] 2. Verified production is already Java-exact (NO production change needed). `is_wap_id_published` walks
+      current ancestors comparing BOTH arms (`wap.id` STAGED + `published-wap-id`) — exact mirror of the bytecode;
+      `validate_wap_publish` runs LAST in `validate()` (Java order); message verbatim; `do_commit` runs
+      `validate` before `commit` on every attempt (so the single Rust validate call covers Java's config-time +
+      apply-time `validateWapPublish` double-call). FF path skips validate + does not restamp — Java-exact.
+- [x] 3. Added 5 tests (cherry_pick.rs, each named for its risk):
+      (a) `test_cherrypick_duplicate_wap_id_rejected_via_fast_forward_published` — FF-path dedup crown jewel
+          (stage X parent==head, publish by FF, stage another X, cherrypick → REJECTED via the staged `wap.id`
+          arm). Pins `is_wap_id_published`'s STAGED arm — the coverage gap the prior replay test never hit.
+      (b) `test_cherrypick_duplicate_wap_rejection_leaves_table_unchanged` — re-parse (catalog reload): the
+          rejected second publish leaves current-snapshot-id, snapshot count, and live file set UNCHANGED.
+      (c) `test_cherrypick_distinct_wap_ids_both_publish` — X then Y BOTH publish (no false positive).
+      (d) `test_cherrypick_non_wap_snapshots_bypass_wap_dedup` — non-WAP negative control (empty wap id never
+          collides; two non-WAP staged publishes both land).
+      (e) `test_cherrypick_both_dedup_paths_ancestry_error_fires_first` — both-paths ordering pin (already an
+          ancestor AND wap id published → ANCESTRY error `already an ancestor`, NOT the WAP error).
+- [x] 4. Mutation-bait verified: (1) disable the wap-walk (`is_wap_id_published` → false) ⇒ BOTH crown jewels
+      (FF + replay) AND the state-unchanged test fail (3 fail); reverted. (2) drop the staged `wap.id` arm ⇒
+      ONLY the FF-path test fails (replay test stays green via the `published-wap-id` arm — the discriminating
+      coverage); reverted. Production restored byte-exact.
+- [x] 5. GAP_MATRIX cherrypick row: WAP-path dedup landed (date; both dedup paths present; V3 OUT; staged-WAP
+      interop fixture still deferred); 5-pipe audit CLEAN.
+- [x] 6. transaction/map.md cherry_pick row + cherry_pick.rs module doc: WAP-id dedup (both arms, ordering, V3).
+- [x] 7. Verify (twice): typos clean, fmt clean, clippy `-D warnings` (workspace ex-sqllogictest) clean,
+      `cargo test -p iceberg --lib` **2063 ×2** (baseline 2058 + 5 new tests).
+
+**Outcome (2026-06-11): V2 LANDED — VERIFY-AND-FILL-COVERAGE, ZERO production change.** The WAP-path dedup CORE
+was already present from V1's cherrypick land (`validate_wap_publish` / `is_wap_id_published` (both arms) /
+wired-LAST-in-`validate` / verbatim `DuplicateWAPCommitException` / replay `published-wap-id` stamp). V2
+re-derived every semantic from 1.10.0 bytecode (`WapUtil.validateWapPublish`/`isWapIdPublished`,
+`CherryPickOperation.validate` order, `apply` FF path, `SnapshotProducer.apply`, `DuplicateWAPCommitException`),
+confirmed BYTE-EXACT, and added the missing test coverage. **Ordering:** validateNonAncestor → replaced-partitions
+→ validateWapPublish (Java order; ancestry error wins when both apply). **FF-path:** a fast-forward does NOT
+restamp `published-wap-id`, but `isWapIdPublished` still catches a same-id pick via the ancestor's OWN `wap.id`
+arm. **V3 (`write.wap.enabled`): OUT** — engine-side only (core defines the constant but enforces it nowhere;
+`SnapshotProducer.apply` never calls `WapUtil`). Files: `cherry_pick.rs` (5 tests + module doc; production
+byte-untouched), `transaction/map.md` (cherry_pick row), `docs/parity/GAP_MATRIX.md` (cherrypick row; 5-pipe
+audit clean), todo, lessons. Tree = allowed set ONLY; zero spec/ edits; no Cargo/pom diffs. NO COMMIT. Deferred:
+staged-WAP Java↔Rust interop fixture (next wave). 2 mutations caught (wap-walk-disable → both crown jewels;
+staged-arm-drop → only the FF-path test).
+
+**V2 REVIEWER (2026-06-11, wt-wap, Opus): VERDICT PASS — production byte-identical confirmed; all four
+bytecode verdicts + V3-OUT re-derived independently; escape-hatch axis pinned.** Confirmed the production claim
+myself (`cherry_pick.rs` diff = module-doc + tests only; `is_wap_id_published`/`validate`/`validate_wap_publish`
+byte-identical to HEAD). Re-derived from the m2 1.10.0 jars (NOT the builder's /tmp artifacts): (1) `WapUtil.
+isWapIdPublished` walks `SnapshotUtil.ancestorIds(meta.currentSnapshot(), ...)` (current-ancestry only) and OR's
+the staged `wap.id` arm with the `published-wap-id` arm — exact Rust mirror; (2) `CherryPickOperation.validate`
+runs validateNonAncestor → validateReplacedPartitions → validateWapPublish, FF skips validate (ancestry wins
+when both apply); (3) `apply` FF path returns the staged snapshot verbatim (no restamp); (4) message verbatim
+`"Duplicate request to cherry pick wap id that was published already: %s"`. **V3 OUT independently confirmed:**
+the literal `write.wap.enabled` appears in the constant pool of EXACTLY 1 of 1212 core classes (`TableProperties`,
+the definition) — zero runtime readers; `SnapshotProducer` never references `WapUtil`; the only core caller of
+`validateWapPublish` is `CherryPickOperation`. Re-ran both builder mutations (wap-walk-disable → the 2 crown
+jewels + state-unchanged fail; staged-arm-drop → only the FF jewel fails) AND added the mirror (published-arm-drop
+→ only the replay jewel + its state-unchanged companion fail, FF jewel stays green) — each arm independently
+pinned. **Headline (#1): added `test_cherrypick_rollback_reopens_wap_id_java_faithful`** — the current-ancestry
+walk means a WAP publish rolled back past (or orphaned off `main`) reopens its `wap.id`, so a second same-id
+publish succeeds; Java has the IDENTICAL hole (same `currentSnapshot()` walk root), NOT a divergence. Fail-before/
+pass-after proven (an over-broad walk-ALL-snapshots mutation rejects the redo). Added one module-doc sentence
+documenting the escape hatch (both rollback + ref-orphan consequences; cherry-pick targets only `main`). ZERO
+production-logic change (no divergence found). Gate ×2 CLEAN: typos/fmt/clippy `-D warnings` clean,
+`cargo test -p iceberg --lib` **2064 ×2** (baseline 2063 + my 1 escape-hatch test). Tree = allowed set; no
+Cargo/pom diffs. NO COMMIT.
 
 ## Carried-forward open items (full context in todo-archive/)
 

@@ -168,6 +168,16 @@ pub(crate) struct SnapshotProducer<'a> {
     // `removed-position-delete-files`, equality → `removed-equality-delete-files`). Populated by
     // `RowDelta.removeDeletes`; empty for every operation that does not remove delete files.
     removed_delete_files: Vec<DataFile>,
+    // The write-audit-publish (WAP) staging flag (Java `SnapshotProducer.stageOnly`, declared on the
+    // `SnapshotUpdate` API interface so every snapshot-producing action exposes it). When `true`, the
+    // commit's update set ADDS the new snapshot to table metadata but moves NO ref: it emits
+    // `AddSnapshot` ALONE (no `SetSnapshotRef`), leaving `current-snapshot-id`, the `main` ref, and the
+    // snapshot-log unchanged on disk. The snapshot is staged for later publish via cherry-pick. The new
+    // snapshot still CONSUMES a sequence number exactly like a normal commit — Java's `apply()` computes
+    // `base.nextSequenceNumber()` unconditionally, independent of `stageOnly` (1.10.0 bytecode), which is
+    // load-bearing for the published snapshot's later sequence-number behavior. `false` (the default) ⇒
+    // the normal add-snapshot-and-move-ref commit.
+    stage_only: bool,
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
@@ -193,8 +203,21 @@ impl<'a> SnapshotProducer<'a> {
             new_data_files_data_sequence_number: None,
             removed_data_files: vec![],
             removed_delete_files: vec![],
+            stage_only: false,
             manifest_counter: (0..),
         }
+    }
+
+    /// STAGE the produced snapshot for write-audit-publish instead of publishing it to `main` (Java
+    /// `SnapshotProducer.stageOnly()`). When enabled, [`SnapshotProducer::commit`] emits ONLY the
+    /// `AddSnapshot` update — no `SetSnapshotRef` — so the new snapshot is added to table metadata but the
+    /// `main` ref, `current-snapshot-id`, and the snapshot-log are left UNCHANGED on disk. The snapshot is
+    /// staged for a later cherry-pick/publish (the WAP "write" half; [`crate::transaction::cherry_pick`] is
+    /// the "publish" half). The staged snapshot still consumes a sequence number exactly like a normal
+    /// commit (Java's `apply()` assigns `base.nextSequenceNumber()` regardless of the flag). Idempotent.
+    pub(crate) fn with_stage_only(mut self, stage_only: bool) -> Self {
+        self.stage_only = stage_only;
+        self
     }
 
     /// Attach the DELETE files (position / equality) this snapshot adds. They are written into a
@@ -1448,28 +1471,39 @@ impl<'a> SnapshotProducer<'a> {
             new_snapshot.build()
         };
 
-        let updates = vec![
-            TableUpdate::AddSnapshot {
-                snapshot: new_snapshot,
-            },
-            TableUpdate::SetSnapshotRef {
+        // The staged (WAP) commit emits ONLY `AddSnapshot` — no `SetSnapshotRef` — mirroring Java
+        // `lambda$commit$2`: `stageOnly ? builder.addSnapshot(snapshot) : builder.setBranchSnapshot(...)`
+        // (1.10.0 bytecode). Adding the snapshot WITHOUT a ref move leaves `current-snapshot-id`, the `main`
+        // ref, and the snapshot-log unchanged (Java's `addSnapshot` touches none of them; the Rust
+        // `TableMetadataBuilder::add_snapshot` matches — and `update_snapshot_log` adds no entry without a
+        // `SetSnapshotRef(main)`). The non-staged commit adds the snapshot AND moves `main` to it.
+        let mut updates = vec![TableUpdate::AddSnapshot {
+            snapshot: new_snapshot,
+        }];
+        if !self.stage_only {
+            updates.push(TableUpdate::SetSnapshotRef {
                 ref_name: MAIN_BRANCH.to_string(),
                 reference: SnapshotReference::new(
                     self.snapshot_id,
                     SnapshotRetention::branch(None, None, None),
                 ),
-            },
-        ];
+            });
+        }
 
-        let requirements = vec![
-            TableRequirement::UuidMatch {
-                uuid: self.table.metadata().uuid(),
-            },
-            TableRequirement::RefSnapshotIdMatch {
+        // The `main`-ref optimistic-concurrency guard is only meaningful when this commit moves `main`. A
+        // staged commit moves no ref, so it emits only the table-uuid guard (it still requires the same
+        // table — a staged snapshot added to a different table's metadata would be nonsense). This mirrors
+        // Java deriving an `AssertRefSnapshotID` requirement only for the `SetSnapshotRef` update it emits
+        // (`UpdateRequirements`); with no ref update there is no ref requirement.
+        let mut requirements = vec![TableRequirement::UuidMatch {
+            uuid: self.table.metadata().uuid(),
+        }];
+        if !self.stage_only {
+            requirements.push(TableRequirement::RefSnapshotIdMatch {
                 r#ref: MAIN_BRANCH.to_string(),
                 snapshot_id: self.table.metadata().current_snapshot_id(),
-            },
-        ];
+            });
+        }
 
         Ok(ActionCommit::new(updates, requirements))
     }

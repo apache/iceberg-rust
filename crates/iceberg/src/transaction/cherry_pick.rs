@@ -65,9 +65,41 @@
 //! land in a manifest stamped with their own spec id, and a scan reads them correctly. Pinned by
 //! `test_cherrypick_multispec_replay_produces_per_spec_manifest`.
 //!
-//! **Out of scope (deferred):** Java↔Rust byte-level interop for the published snapshot (this is a 🟡
-//! unit-proven action); the stage-only WAP WRITE path (`stageOnly()` on the append/overwrite producers that
-//! creates the staged snapshot in the first place) — the tests graft staged snapshots directly.
+//! The stage-only WAP WRITE path that creates a staged snapshot in the first place
+//! (`FastAppendAction::stage_only()` / `DeleteFilesAction::stage_only()`, Java `SnapshotProducer.stageOnly()`)
+//! landed in Group V (2026-06-11); see [`crate::transaction::snapshot::SnapshotProducer::with_stage_only`].
+//! Most tests here still graft staged snapshots by `set_current`-ing main off a normally-published snapshot
+//! (a staged snapshot is just a dangling one), which is equivalent for the publish path under test.
+//!
+//! **WAP-path publish dedup (Group V V2, 2026-06-11).** Two dedup paths run in [`CherryPickAction::validate`],
+//! in Java's order (`CherryPickOperation.validate`, 1.10.0 bytecode): `validateNonAncestor` FIRST (the
+//! ancestry path — already-an-ancestor + the `source-snapshot-id` double-publish lookup), `validateWapPublish`
+//! LAST (the WAP-id path). When BOTH apply, the ANCESTRY error fires (Java order). The WAP-id check
+//! ([`Self::validate_wap_publish`] → [`is_wap_id_published`]) walks the CURRENT ancestry and rejects with the
+//! verbatim `DuplicateWAPCommitException` message iff the picked snapshot's non-empty `wap.id` already appears
+//! among the ancestors — comparing it against each ancestor's OWN `wap.id` (`STAGED_WAP_ID_PROP`) AND its
+//! `published-wap-id` (`PUBLISHED_WAP_ID_PROP`). BOTH arms matter: a REPLAY publish stamps `published-wap-id`
+//! (caught via that arm), but a FAST-FORWARD publish keeps only the staged snapshot's own `wap.id` (caught via
+//! the STAGED arm — Java `TestWapWorkflow.testDuplicateCherrypick`'s first publish is a fast-forward). The
+//! corruption this prevents is a duplicate WAP publish double-applying the same audited change.
+//!
+//! **Dedup scope is the CURRENT ANCESTRY of `main`, by design (Java-faithful escape hatch).** Because the walk
+//! roots at `metadata.current_snapshot()` (Java `WapUtil.isWapIdPublished` → `SnapshotUtil.ancestorIds(meta.
+//! currentSnapshot(), ...)`), a `wap.id` that has left the live `main` line is NO LONGER seen as published: a
+//! WAP publish that is rolled BACK past — or whose publishing snapshot is orphaned (cherry-pick only ever
+//! targets `main`) — reopens its `wap.id`, so a second same-id publish then succeeds. This is identical in Java
+//! (same ancestry source); it is NOT a Rust divergence, and is pinned by
+//! `test_cherrypick_rollback_reopens_wap_id_java_faithful`.
+//!
+//! **`write.wap.enabled` is ENGINE-side only — core does NOT gate ordinary commits (V3, settled OUT by
+//! 1.10.0 bytecode).** `TableProperties.WRITE_AUDIT_PUBLISH_ENABLED = "write.wap.enabled"` is defined in core
+//! but read by NO core production class (only `SparkWriteConf`/`SparkReadConf`/`SparkTableUtil` consume it,
+//! to decide whether the engine stages and sets `wap.id`). `SnapshotProducer.apply()` calls only the
+//! overridable per-subclass `validate` — never `WapUtil`; only `CherryPickOperation` calls `validateWapPublish`.
+//! So a `wap.id` present on a NON-staged ordinary commit is not validated/blocked core-side. No core gate to port.
+//!
+//! **Out of scope (deferred):** Java↔Rust byte-level interop for the published snapshot, incl. the staged-WAP
+//! interop fixture (this is a 🟡 unit-proven action).
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -1659,6 +1691,418 @@ mod tests {
             staged_spec_id,
             Some(0),
             "the replayed old-spec file must live in a manifest stamped with spec id 0, not the new default"
+        );
+    }
+
+    // ============================================================================================
+    // WAP-PATH publish dedup (Group V increment V2, 2026-06-11). The `wap.id`-keyed duplicate-publish
+    // rejection (Java `WapUtil.validateWapPublish` / `isWapIdPublished`), complementing the ancestry-path
+    // dedup above. `is_wap_id_published` walks the CURRENT ancestors and compares the picked snapshot's
+    // `wap.id` against EACH ancestor's OWN `wap.id` (STAGED_WAP_ID_PROP) AND its `published-wap-id`
+    // (PUBLISHED_WAP_ID_PROP) — both arms (1.10.0 bytecode `WapUtil.isWapIdPublished` offsets 53-74).
+    //
+    // The existing `test_cherrypick_duplicate_wap_id_is_rejected` exercises the REPLAY → `published-wap-id`
+    // arm (both staged snapshots replay because their parent != head, so the first publish mints a NEW
+    // snapshot stamped with `published-wap-id`). The tests below add the FAST-FORWARD → own-`wap.id` arm
+    // (a FF publish does NOT restamp `published-wap-id`, so the second publish is caught only by the
+    // STAGED `wap.id` arm), the no-false-positive distinct-ids case, the non-WAP negative control, the
+    // state-unchanged-on-rejection re-parse, and the both-paths ordering pin.
+    // ============================================================================================
+
+    /// FAST-FORWARD-PATH WAP DEDUP (crown jewel — pins the STAGED `wap.id` arm of `is_wap_id_published`).
+    /// Stage S1 with `wap.id = X` off the current head (so cherry-pick FAST-FORWARDS — publishes S1 verbatim
+    /// onto `main` WITHOUT minting a new snapshot or stamping `published-wap-id`). Stage S2 ALSO with
+    /// `wap.id = X` off the same parent. After the FF publish of S1, the second cherry-pick of S2 is REJECTED
+    /// with the verbatim `DuplicateWAPCommitException` message.
+    ///
+    /// Risk pinned: a duplicate WAP publish via the FF path slips through because `published-wap-id` was never
+    /// stamped (the FF publishes verbatim). Java catches it because `isWapIdPublished` also compares each
+    /// ancestor's OWN `wap.id`: after the FF, S1 is a current ancestor carrying `wap.id = X`. A dedup that
+    /// only checked `published-wap-id` (dropping the STAGED arm) would FALSELY ALLOW this double-apply — the
+    /// exact corruption WAP exists to prevent. This is the FF-path coverage the brief flags; the existing
+    /// replay test does NOT cover it (replay stamps `published-wap-id`, so it hits the other arm).
+    /// Mirror of Java `TestWapWorkflow.testDuplicateCherrypick` (its first publish IS a fast-forward).
+    #[tokio::test]
+    async fn test_cherrypick_duplicate_wap_id_rejected_via_fast_forward_published() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // S0 base on main.
+        let table = append(&catalog, &table, vec![data_file("test/base.parquet", 9)]).await;
+        let s0 = table.metadata().current_snapshot_id().unwrap();
+
+        // Stage TWO append snapshots off S0, both with the SAME wap id. Both parents == S0.
+        let table = append_wap(
+            &catalog,
+            &table,
+            vec![data_file("test/w1.parquet", 0)],
+            "wap-ff-dup",
+        )
+        .await;
+        let staged_1 = table.metadata().current_snapshot_id().unwrap();
+        let table = set_current(&catalog, &table, s0).await;
+        let table = append_wap(
+            &catalog,
+            &table,
+            vec![data_file("test/w2.parquet", 1)],
+            "wap-ff-dup",
+        )
+        .await;
+        let staged_2 = table.metadata().current_snapshot_id().unwrap();
+        // Roll main back to S0 so staged_1's parent (S0) == head ⇒ publishing staged_1 FAST-FORWARDS.
+        let table = set_current(&catalog, &table, s0).await;
+
+        // Publish staged_1 via FAST-FORWARD: no new snapshot, main moves to staged_1 verbatim.
+        let before = snapshot_count(&table);
+        let table = cherry_pick(&catalog, &table, staged_1).await;
+        assert_eq!(
+            snapshot_count(&table),
+            before,
+            "publishing staged_1 with parent == head must FAST-FORWARD (no new snapshot)"
+        );
+        assert_eq!(
+            table.metadata().current_snapshot_id(),
+            Some(staged_1),
+            "main fast-forwarded to staged_1 itself"
+        );
+        // The FF publish did NOT stamp published-wap-id — staged_1 carries only its own wap.id.
+        assert_eq!(
+            current_summary_prop(&table, PUBLISHED_WAP_ID_PROP),
+            None,
+            "a fast-forward publishes verbatim and does NOT restamp published-wap-id"
+        );
+        assert_eq!(
+            current_summary_prop(&table, STAGED_WAP_ID_PROP),
+            Some("wap-ff-dup".to_string()),
+            "the fast-forwarded snapshot keeps its own wap.id"
+        );
+
+        // Publishing staged_2 (same wap id) must fail — caught via the STAGED wap.id arm (staged_1 is now an
+        // ancestor carrying wap.id = wap-ff-dup; published-wap-id was never stamped).
+        let err = cherry_pick_err(&catalog, &table, staged_2).await;
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            !err.retryable(),
+            "a duplicate-WAP rejection is non-retryable"
+        );
+        assert!(
+            err.message().contains(
+                "Duplicate request to cherry pick wap id that was published already: wap-ff-dup"
+            ),
+            "unexpected message: {}",
+            err.message()
+        );
+    }
+
+    /// STATE-UNCHANGED ON REJECTION (the rejected attempt must not mutate the table). Re-parse the table
+    /// metadata before and after a rejected duplicate-WAP cherry-pick: current-snapshot-id, the live file
+    /// set, and the snapshot count are all IDENTICAL. Risk pinned: a rejection that still committed a partial
+    /// update (a stamped source-snapshot-id, a moved ref, an added snapshot) — the double-apply WAP guards
+    /// against would land anyway if the validation rejected AFTER mutating metadata.
+    #[tokio::test]
+    async fn test_cherrypick_duplicate_wap_rejection_leaves_table_unchanged() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // S0 base; stage two same-wap-id appends off S0 (both REPLAY — parent S0 != head after the head append).
+        let table = append(&catalog, &table, vec![data_file("test/base.parquet", 9)]).await;
+        let s0 = table.metadata().current_snapshot_id().unwrap();
+        let table = append_wap(
+            &catalog,
+            &table,
+            vec![data_file("test/w1.parquet", 0)],
+            "wap-state",
+        )
+        .await;
+        let staged_1 = table.metadata().current_snapshot_id().unwrap();
+        let table = set_current(&catalog, &table, s0).await;
+        let table = append_wap(
+            &catalog,
+            &table,
+            vec![data_file("test/w2.parquet", 1)],
+            "wap-state",
+        )
+        .await;
+        let staged_2 = table.metadata().current_snapshot_id().unwrap();
+        let table = set_current(&catalog, &table, s0).await;
+        let table = append(&catalog, &table, vec![data_file("test/head.parquet", 9)]).await;
+
+        // Publish staged_1 (its wap id becomes published among ancestors).
+        let table = cherry_pick(&catalog, &table, staged_1).await;
+
+        // Snapshot the table state BEFORE the rejected attempt (the re-parse oracle).
+        let current_before = table.metadata().current_snapshot_id();
+        let count_before = snapshot_count(&table);
+        let live_before = live_file_paths(&table).await;
+
+        // The second publish (same wap id) is rejected.
+        let err = cherry_pick_err(&catalog, &table, staged_2).await;
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message().contains(
+                "Duplicate request to cherry pick wap id that was published already: wap-state"
+            ),
+            "unexpected message: {}",
+            err.message()
+        );
+
+        // Re-load the table from the catalog (re-parse) and assert NOTHING moved.
+        let reloaded = catalog
+            .load_table(table.identifier())
+            .await
+            .expect("reload after rejected cherry-pick");
+        assert_eq!(
+            reloaded.metadata().current_snapshot_id(),
+            current_before,
+            "the rejected attempt must not move current-snapshot-id"
+        );
+        assert_eq!(
+            snapshot_count(&reloaded),
+            count_before,
+            "the rejected attempt must not add a snapshot"
+        );
+        assert_eq!(
+            live_file_paths(&reloaded).await,
+            live_before,
+            "the rejected attempt must not change the live file set"
+        );
+        // The would-be-double-applied file (w2) is NOT live — the double-apply was prevented.
+        assert!(
+            !live_file_paths(&reloaded).await.contains("test/w2.parquet"),
+            "the rejected staged file must NOT have been applied"
+        );
+    }
+
+    /// NO FALSE POSITIVE — distinct wap ids both publish. Stage S1 with `wap.id = X` and S2 with
+    /// `wap.id = Y` (X != Y); both cherry-pick successfully. Risk pinned: an over-eager dedup that rejected
+    /// a SECOND legitimate WAP publish whose id differs (e.g. comparing presence-of-any-wap-id instead of the
+    /// id value). Mirror of Java `TestWapWorkflow`'s distinct-wap-id workflow.
+    #[tokio::test]
+    async fn test_cherrypick_distinct_wap_ids_both_publish() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // S0 base; stage S1 (wap=X) and S2 (wap=Y) off S0.
+        let table = append(&catalog, &table, vec![data_file("test/base.parquet", 9)]).await;
+        let s0 = table.metadata().current_snapshot_id().unwrap();
+        let table = append_wap(
+            &catalog,
+            &table,
+            vec![data_file("test/w1.parquet", 0)],
+            "wap-X",
+        )
+        .await;
+        let staged_1 = table.metadata().current_snapshot_id().unwrap();
+        let table = set_current(&catalog, &table, s0).await;
+        let table = append_wap(
+            &catalog,
+            &table,
+            vec![data_file("test/w2.parquet", 1)],
+            "wap-Y",
+        )
+        .await;
+        let staged_2 = table.metadata().current_snapshot_id().unwrap();
+        let table = set_current(&catalog, &table, s0).await;
+        // Advance main off S0 so both staged snapshots REPLAY (parents = S0 != head).
+        let table = append(&catalog, &table, vec![data_file("test/head.parquet", 9)]).await;
+
+        // Publish S1 (wap=X) then S2 (wap=Y) — distinct ids, no false positive.
+        let table = cherry_pick(&catalog, &table, staged_1).await;
+        assert_eq!(
+            current_summary_prop(&table, PUBLISHED_WAP_ID_PROP),
+            Some("wap-X".to_string())
+        );
+        let table = cherry_pick(&catalog, &table, staged_2).await;
+        assert_eq!(
+            current_summary_prop(&table, PUBLISHED_WAP_ID_PROP),
+            Some("wap-Y".to_string()),
+            "a distinct wap id publishes fine — no false positive from the dedup"
+        );
+        let live = live_file_paths(&table).await;
+        assert!(
+            live.contains("test/w1.parquet") && live.contains("test/w2.parquet"),
+            "both distinct-wap-id files are live: {live:?}"
+        );
+    }
+
+    /// NON-WAP NEGATIVE CONTROL — a staged snapshot with NO `wap.id` cherry-picks without touching the WAP
+    /// dedup. Two distinct non-WAP staged appends both publish; the WAP-publish check is a no-op for them
+    /// (`validate_wap_publish` returns early when the picked snapshot has no non-empty `wap.id`). Risk pinned:
+    /// the dedup spuriously rejecting a non-WAP cherry-pick (e.g. treating an ABSENT/empty `wap.id` as a
+    /// matchable value, so two non-WAP publishes collide on the empty string).
+    #[tokio::test]
+    async fn test_cherrypick_non_wap_snapshots_bypass_wap_dedup() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // S0 base; stage two NON-WAP appends off S0 (empty wap id ⇒ treated as non-WAP).
+        let table = append(&catalog, &table, vec![data_file("test/base.parquet", 9)]).await;
+        let s0 = table.metadata().current_snapshot_id().unwrap();
+        let table = append_wap(&catalog, &table, vec![data_file("test/n1.parquet", 0)], "").await;
+        let staged_1 = table.metadata().current_snapshot_id().unwrap();
+        let table = set_current(&catalog, &table, s0).await;
+        let table = append_wap(&catalog, &table, vec![data_file("test/n2.parquet", 1)], "").await;
+        let staged_2 = table.metadata().current_snapshot_id().unwrap();
+        let table = set_current(&catalog, &table, s0).await;
+        let table = append(&catalog, &table, vec![data_file("test/head.parquet", 9)]).await;
+
+        // Both non-WAP staged snapshots publish — the empty wap id never collides in the dedup.
+        let table = cherry_pick(&catalog, &table, staged_1).await;
+        assert_eq!(
+            current_summary_prop(&table, PUBLISHED_WAP_ID_PROP),
+            None,
+            "a non-WAP publish stamps NO published-wap-id"
+        );
+        let table = cherry_pick(&catalog, &table, staged_2).await;
+        assert_eq!(
+            current_summary_prop(&table, PUBLISHED_WAP_ID_PROP),
+            None,
+            "the second non-WAP publish is NOT blocked by the dedup (empty wap id is not matchable)"
+        );
+        let live = live_file_paths(&table).await;
+        assert!(
+            live.contains("test/n1.parquet") && live.contains("test/n2.parquet"),
+            "both non-WAP files are live: {live:?}"
+        );
+    }
+
+    /// ORDERING PIN (both dedup paths apply). When a staged snapshot is BOTH already an ancestor of the head
+    /// AND carries a `wap.id` already published among the ancestors, Java's `validate` runs
+    /// `validateNonAncestor` BEFORE `validateWapPublish` (1.10.0 bytecode `CherryPickOperation.validate`
+    /// offsets 8-55), so the ANCESTRY error fires first. Here we re-pick the SAME staged snapshot after it was
+    /// fast-forwarded onto main: it is now an ancestor (ancestry path) AND its own `wap.id` is published (WAP
+    /// path) — both conditions hold. The error must be the ancestry one ("already an ancestor"), NOT the WAP
+    /// one. Risk pinned: mirroring Java's rejection ORDER — a port that ran the WAP check first would surface
+    /// the wrong (DuplicateWAPCommitException-shaped) message for an already-ancestor pick.
+    #[tokio::test]
+    async fn test_cherrypick_both_dedup_paths_ancestry_error_fires_first() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // S0 base; stage S1 (wap=Z) off S0 with parent == head so it FAST-FORWARDS on publish.
+        let table = append(&catalog, &table, vec![data_file("test/base.parquet", 9)]).await;
+        let s0 = table.metadata().current_snapshot_id().unwrap();
+        let table = append_wap(
+            &catalog,
+            &table,
+            vec![data_file("test/s1.parquet", 0)],
+            "wap-Z",
+        )
+        .await;
+        let s1 = table.metadata().current_snapshot_id().unwrap();
+        let table = set_current(&catalog, &table, s0).await;
+
+        // Fast-forward publish S1 onto main: S1 is now the head (and an ancestor), carrying wap.id = Z.
+        let table = cherry_pick(&catalog, &table, s1).await;
+        assert_eq!(table.metadata().current_snapshot_id(), Some(s1));
+
+        // Re-pick S1: it is BOTH already an ancestor AND its wap id (Z) is published (on S1 itself). Java's
+        // validate runs validateNonAncestor FIRST ⇒ the ancestry error wins, NOT the duplicate-WAP error.
+        let err = cherry_pick_err(&catalog, &table, s1).await;
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message().contains(&format!(
+                "Cannot cherrypick snapshot {s1}: already an ancestor"
+            )),
+            "the ANCESTRY error must fire first (Java order), got: {}",
+            err.message()
+        );
+        assert!(
+            !err.message()
+                .contains("Duplicate request to cherry pick wap id"),
+            "the WAP error must NOT be the one surfaced when both paths apply, got: {}",
+            err.message()
+        );
+    }
+
+    /// ROLLBACK REOPENS A WAP ID — DOCUMENTED JAVA-FAITHFUL ESCAPE HATCH. The WAP dedup walks the CURRENT
+    /// ancestry ONLY (`is_wap_id_published` roots at `metadata.current_snapshot_id()` — the exact mirror of
+    /// Java `WapUtil.isWapIdPublished`, which walks `SnapshotUtil.ancestorIds(meta.currentSnapshot(), ...)`;
+    /// `SnapshotUtil.ancestorIds` → `ancestorsOf` follows parent links from that root). So once `main` is
+    /// rolled BACK past a WAP publish, the publishing snapshot leaves the current ancestry and its `wap.id` is
+    /// no longer "published" for dedup purposes — a SECOND staged snapshot carrying the SAME `wap.id` then
+    /// publishes successfully (a double-publish *after* a rollback). This is NOT a Rust divergence: Java has the
+    /// identical hole because both implementations key the dedup off the live ancestry chain, by design (WAP
+    /// deduplicates publishes that are still on the line, not every publish that ever happened).
+    ///
+    /// Risk pinned: that the dedup-walk SCOPE matches Java's exactly. A port that walked ALL snapshots (or any
+    /// retained-but-orphaned chain) instead of the current ancestry would REJECT this second publish — a
+    /// stricter-than-Java divergence that would surface as a spurious `DuplicateWAPCommitException` after a
+    /// legitimate rollback-and-redo. The test asserts the second publish SUCCEEDS (the Java-faithful outcome).
+    #[tokio::test]
+    async fn test_cherrypick_rollback_reopens_wap_id_java_faithful() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        // S0 base; stage S1 (wap=R) and S2 (wap=R, same id) off S0, both REPLAY (parent S0 != head).
+        let table = append(&catalog, &table, vec![data_file("test/base.parquet", 9)]).await;
+        let s0 = table.metadata().current_snapshot_id().unwrap();
+        let table = append_wap(
+            &catalog,
+            &table,
+            vec![data_file("test/w1.parquet", 0)],
+            "wap-R",
+        )
+        .await;
+        let staged_1 = table.metadata().current_snapshot_id().unwrap();
+        let table = set_current(&catalog, &table, s0).await;
+        let table = append_wap(
+            &catalog,
+            &table,
+            vec![data_file("test/w2.parquet", 1)],
+            "wap-R",
+        )
+        .await;
+        let staged_2 = table.metadata().current_snapshot_id().unwrap();
+        let table = set_current(&catalog, &table, s0).await;
+        // Advance main off S0 so staged_1 REPLAYS (its publish mints a snapshot stamped published-wap-id=R).
+        let table = append(&catalog, &table, vec![data_file("test/head.parquet", 9)]).await;
+        let head_before_publish = table.metadata().current_snapshot_id().unwrap();
+
+        // Publish staged_1 → its published-wap-id=R now sits in the CURRENT ancestry.
+        let table = cherry_pick(&catalog, &table, staged_1).await;
+        let publish_snapshot = table.metadata().current_snapshot_id().unwrap();
+        assert_eq!(
+            current_summary_prop(&table, PUBLISHED_WAP_ID_PROP),
+            Some("wap-R".to_string()),
+            "the replay publish stamped published-wap-id=R into the current ancestry"
+        );
+        // Sanity: re-publishing staged_2 RIGHT NOW (R still in ancestry) WOULD be rejected — the hole only
+        // opens after the rollback below.
+        let blocked = cherry_pick_err(&catalog, &table, staged_2).await;
+        assert!(
+            blocked.message().contains(
+                "Duplicate request to cherry pick wap id that was published already: wap-R"
+            ),
+            "pre-rollback, the same wap id is still deduped: {}",
+            blocked.message()
+        );
+
+        // ROLL BACK past the publish: move main to the snapshot before staged_1's publish. The publishing
+        // snapshot (carrying published-wap-id=R) is now OFF the current ancestry — but still in metadata.
+        let table = set_current(&catalog, &table, head_before_publish).await;
+        assert_ne!(
+            table.metadata().current_snapshot_id(),
+            Some(publish_snapshot),
+            "main rolled back off the publishing snapshot"
+        );
+        assert!(
+            table.metadata().snapshot_by_id(publish_snapshot).is_some(),
+            "the publishing snapshot still EXISTS in metadata — it is just no longer a current ancestor"
+        );
+
+        // Now staged_2 (same wap id R) publishes SUCCESSFULLY — R left the current ancestry on rollback, so the
+        // dedup walk no longer sees it. This is the documented Java-faithful escape hatch (current-ancestry walk).
+        let table = cherry_pick(&catalog, &table, staged_2).await;
+        assert_eq!(
+            current_summary_prop(&table, PUBLISHED_WAP_ID_PROP),
+            Some("wap-R".to_string()),
+            "after rollback, the same wap id re-publishes (current-ancestry dedup, Java-faithful)"
+        );
+        let live = live_file_paths(&table).await;
+        assert!(
+            live.contains("test/w2.parquet"),
+            "the re-published staged file is live after the rollback-and-redo: {live:?}"
         );
     }
 
