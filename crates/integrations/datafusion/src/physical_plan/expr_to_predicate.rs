@@ -296,8 +296,10 @@ fn resolve_nan_preserving_binary(binary: &BinaryExpr) -> Option<Reference> {
         }
 
         // `x * c` and `c * x` are NaN iff `x` is NaN, but only when `c` is
-        // non-zero: `±inf * 0` is NaN even though `±inf` is not. The column may
-        // be on either side.
+        // non-zero. Per IEEE-754:
+        //   - inf is not NaN
+        //   - inf * 0 is NaN
+        // so multiplying by zero is rejected. The column may be on either side.
         Operator::Multiply => {
             if matches!(finite_literal(right), Some(c) if c != 0.0) {
                 resolve_nan_preserving_reference(left)
@@ -309,8 +311,11 @@ fn resolve_nan_preserving_binary(binary: &BinaryExpr) -> Option<Reference> {
         }
 
         // `x / c` is NaN iff `x` is NaN, for a finite non-zero literal `c`.
-        // `c / x` is rejected because it is not NaN-preserving (e.g. `0 / 0` is
-        // NaN while `0` is not), so the column must be the dividend (left side).
+        // `c / x` is rejected and the column must be the dividend (left side).
+        // Per IEEE-754:
+        //   - 0 is not NaN
+        //   - 0 / 0 is NaN
+        // so `c / x` is not NaN-preserving.
         Operator::Divide => {
             if matches!(finite_literal(right), Some(c) if c != 0.0) {
                 resolve_nan_preserving_reference(left)
