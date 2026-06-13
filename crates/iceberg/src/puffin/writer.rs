@@ -282,11 +282,10 @@ mod tests {
         assert_eq!(read_all_blobs_from_puffin_file(input_file).await, blobs);
     }
 
-    /// Regression for https://github.com/apache/iceberg-rust/issues/2419 —
-    /// the PuffinWriter previously claimed LZ4 compression on the footer (by setting
-    /// the FooterPayloadCompressed flag) but wrote the raw uncompressed JSON, which
-    /// produced unreadable files. The writer now actually LZ4-encodes the footer when
-    /// compress_footer=true, and the reader round-trips it.
+    /// With `compress_footer = true` the writer sets the FooterPayloadCompressed flag and
+    /// records LZ4 as the footer codec. Until LZ4 was wired through `CompressionCodec`,
+    /// `close()` failed with `FeatureUnsupported`; this verifies the footer is now
+    /// LZ4-encoded on write and the reader decodes it back to the original metadata and blob.
     #[tokio::test]
     async fn test_compress_footer_lz4_round_trips() {
         let temp_dir = TempDir::new().unwrap();
@@ -312,9 +311,9 @@ mod tests {
         ]);
     }
 
-    /// Direct adaptation of the reproducer from
-    /// https://github.com/apache/iceberg-rust/issues/2419 — close must succeed when
-    /// compress_footer=true even with no blobs written.
+    /// `close()` must succeed with `compress_footer = true` even when no blobs are written —
+    /// an empty footer still produces a valid LZ4 frame that the reader parses back to an
+    /// empty FileMetadata.
     #[tokio::test]
     async fn test_compress_empty_footer_lz4_succeeds() {
         let temp_dir = TempDir::new().unwrap();

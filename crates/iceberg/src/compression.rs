@@ -218,8 +218,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_compression_codec_compress() {
-        let bytes_vec = [0_u8; 100].to_vec();
-
         let compression_codecs = [
             CompressionCodec::Lz4,
             CompressionCodec::zstd_default(),
@@ -227,36 +225,35 @@ mod tests {
         ];
 
         for codec in compression_codecs {
-            let compressed = codec.compress(bytes_vec.clone()).unwrap();
-            assert!(compressed.len() < bytes_vec.len());
-            let decompressed = codec.decompress(compressed).unwrap();
-            assert_eq!(decompressed, bytes_vec);
+            // Empty input round-trips (the frame still carries header/footer bytes).
+            let empty: Vec<u8> = vec![];
+            let compressed = codec.compress(empty.clone()).unwrap();
+            assert_eq!(codec.decompress(compressed).unwrap(), empty);
+
+            // Highly compressible input (all zeros) shrinks and round-trips.
+            let zeros = vec![0_u8; 100];
+            let compressed = codec.compress(zeros.clone()).unwrap();
+            assert!(compressed.len() < zeros.len());
+            assert_eq!(codec.decompress(compressed).unwrap(), zeros);
+
+            // Less-compressible input (mixed bytes) round-trips.
+            let mixed: Vec<u8> = (0..10_000).map(|i| (i % 251) as u8).collect();
+            let compressed = codec.compress(mixed.clone()).unwrap();
+            assert_eq!(codec.decompress(compressed).unwrap(), mixed);
         }
     }
 
     #[tokio::test]
-    async fn test_compression_codec_lz4_roundtrip() {
-        let codec = CompressionCodec::Lz4;
-
-        // Empty input must round-trip cleanly.
-        let empty: Vec<u8> = vec![];
-        let compressed_empty = codec.compress(empty.clone()).unwrap();
-        assert_eq!(codec.decompress(compressed_empty).unwrap(), empty);
-
-        // Mixed-byte payload (less compressible than all-zeros) round-trips.
-        let payload: Vec<u8> = (0..10_000).map(|i| (i % 251) as u8).collect();
-        let compressed = codec.compress(payload.clone()).unwrap();
-        assert_eq!(codec.decompress(compressed).unwrap(), payload);
-
-        // Frame must begin with the LZ4 frame magic number 0x184D2204 (little-endian)
-        // per https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md.
-        let highly_compressible = vec![0u8; 10_000];
-        let compressed = codec.compress(highly_compressible).unwrap();
+    async fn test_lz4_frame_magic_number() {
+        // LZ4 footers use the framed format; the frame must begin with the LZ4 frame
+        // magic number 0x184D2204 (little-endian) per
+        // https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md.
+        let compressed = CompressionCodec::Lz4.compress(vec![0u8; 10_000]).unwrap();
         assert_eq!(&compressed[..4], &[0x04, 0x22, 0x4D, 0x18]);
     }
 
     #[tokio::test]
-    async fn test_compression_codec_unsupported() {
+    async fn test_snappy_compression_is_unsupported() {
         let bytes_vec = [0_u8; 100].to_vec();
 
         assert_eq!(
