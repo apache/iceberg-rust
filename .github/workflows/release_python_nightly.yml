@@ -122,7 +122,7 @@ jobs:
           manylinux: ${{ matrix.manylinux || 'auto' }}
           working-directory: "bindings/python"
           command: build
-          args: --profile py-release -o dist -i python3.12 # Explicitly set interpreter; manylinux containers have multiple Pythons and maturin may pick an older one
+          args: --release -o dist -i python3.12 # Explicitly set interpreter; manylinux containers have multiple Pythons and maturin may pick an older one
 
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
