@@ -423,7 +423,9 @@ mod tests {
         let original_file1 = test_data_file("test/original1.parquet", spec_id);
         let original_file2 = test_data_file("test/original2.parquet", spec_id);
         let tx = Transaction::new(&table);
-        let action = tx.fast_append().add_data_files(vec![original_file1.clone(), original_file2.clone()]);
+        let action = tx
+            .fast_append()
+            .add_data_files(vec![original_file1.clone(), original_file2.clone()]);
         let tx = action.apply(tx).unwrap();
         let table = tx.commit(&catalog).await.unwrap();
 
