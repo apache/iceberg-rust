@@ -62,10 +62,6 @@ impl ExecutionPlan for IcebergMetadataScan {
         "IcebergMetadataScan"
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
