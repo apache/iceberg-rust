@@ -28,7 +28,6 @@
 pub mod metadata_table;
 pub mod table_provider_factory;
 
-use std::any::Any;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -110,10 +109,6 @@ impl IcebergTableProvider {
 
 #[async_trait]
 impl TableProvider for IcebergTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> ArrowSchemaRef {
         self.schema.clone()
     }
@@ -295,10 +290,6 @@ impl IcebergStaticTableProvider {
 
 #[async_trait]
 impl TableProvider for IcebergStaticTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> ArrowSchemaRef {
         self.schema.clone()
     }
@@ -794,7 +785,6 @@ mod tests {
 
         // Verify that the scan plan is an IcebergTableScan
         let iceberg_scan = scan_plan
-            .as_any()
             .downcast_ref::<IcebergTableScan>()
             .expect("Expected IcebergTableScan");
 
@@ -825,7 +815,6 @@ mod tests {
 
         // Verify that the scan plan is an IcebergTableScan
         let iceberg_scan = scan_plan
-            .as_any()
             .downcast_ref::<IcebergTableScan>()
             .expect("Expected IcebergTableScan");
 
@@ -854,7 +843,6 @@ mod tests {
 
         // Verify that the scan plan is an IcebergTableScan
         let iceberg_scan = scan_plan
-            .as_any()
             .downcast_ref::<IcebergTableScan>()
             .expect("Expected IcebergTableScan");
 
