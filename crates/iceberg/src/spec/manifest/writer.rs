@@ -86,8 +86,7 @@ impl ManifestWriterBuilder {
         partition_spec: PartitionSpec,
     ) -> Result<Self> {
         let location = encrypted_output.location().to_owned();
-        let key_metadata = Some(encrypted_output.key_metadata().encode()?
-            .to_vec());
+        let key_metadata = Some(encrypted_output.key_metadata().encode()?.to_vec());
         Ok(Self {
             writer_future: Box::pin(async move { encrypted_output.writer().await }),
             location,
