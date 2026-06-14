@@ -95,7 +95,7 @@ jobs:
         working-directory: "bindings/python"
         shell: bash
         run: |
-          make install
+          uv sync --group dev --no-install-project
       - name: Install built wheel
         working-directory: "bindings/python"
         shell: bash
