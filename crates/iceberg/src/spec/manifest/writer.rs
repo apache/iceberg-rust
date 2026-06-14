@@ -20,7 +20,6 @@ use std::future::Future;
 use std::pin::Pin;
 
 use apache_avro::{Writer as AvroWriter, to_value};
-use base64::encode;
 use bytes::Bytes;
 use itertools::Itertools;
 use serde_json::to_vec;
@@ -29,7 +28,7 @@ use super::{
     Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType,
     UNASSIGNED_SEQUENCE_NUMBER,
 };
-use crate::encryption::{EncryptedOutputFile, StandardKeyMetadata};
+use crate::encryption::EncryptedOutputFile;
 use crate::error::Result;
 use crate::io::{FileWrite, OutputFile};
 use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
