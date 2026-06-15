@@ -201,6 +201,13 @@ impl TableProvider for IcebergTableProvider {
                     .iter()
                     .map(|c| Arc::new(Column::new(&c.name, c.output_idx)) as Arc<dyn PhysicalExpr>)
                     .collect();
+                // This declaration is only sound if the Arrow arrays built from
+                // partition literals hash identically to the column arrays the
+                // reader emits at scan time. DataFusion's hash dispatch is
+                // dtype-specific, so any drift in the reader output type (for
+                // example Utf8 vs Utf8View) must either update the bucketing
+                // path to materialize that exact dtype or fall back to
+                // UnknownPartitioning.
                 Partitioning::Hash(exprs, n_partitions)
             }
             _ => Partitioning::UnknownPartitioning(n_partitions),
@@ -1283,6 +1290,80 @@ mod tests {
                 assert_eq!(col.name(), "name");
             }
             other => panic!("expected Partitioning::Hash, got {other:?}"),
+        }
+    }
+
+    /// Identity partition task buckets must match DataFusion's own hash
+    /// repartition bucket calculation for the same concrete Arrow array type.
+    #[tokio::test]
+    async fn test_identity_partitioned_hash_buckets_match_datafusion_repartition() {
+        use datafusion::arrow::array::{ArrayRef, StringArray};
+        use datafusion::common::hash_utils::create_hashes;
+        use datafusion::physical_plan::Partitioning;
+        use datafusion::physical_plan::repartition::REPARTITION_RANDOM_STATE;
+
+        let partition_values = vec!["a", "b", "c", "a", "b", "c", "z"];
+        let n_partitions = 4_usize;
+
+        let (catalog, namespace, table_name, _temp_dir) =
+            make_partitioned_catalog_and_table_for_bucketing().await;
+        append_partitioned_fake_data_files(
+            &catalog,
+            &namespace,
+            &table_name,
+            partition_values.clone(),
+        )
+        .await;
+
+        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+        let plan = provider
+            .scan(
+                &ctx_with_target_partitions(n_partitions).state(),
+                None,
+                &[],
+                None,
+            )
+            .await
+            .unwrap();
+        let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+        let buckets = scan.buckets().expect("expected eager scan buckets");
+
+        assert!(matches!(
+            scan.properties().partitioning,
+            Partitioning::Hash(_, 4)
+        ));
+
+        let arrays: Vec<ArrayRef> = vec![Arc::new(StringArray::from(partition_values))];
+        let mut hashes = vec![0_u64; arrays[0].len()];
+        create_hashes(
+            &arrays,
+            REPARTITION_RANDOM_STATE.random_state(),
+            &mut hashes,
+        )
+        .unwrap();
+
+        let mut actual_bucket_by_file = vec![None; hashes.len()];
+        for (bucket_idx, bucket) in buckets.iter().enumerate() {
+            for task in bucket.iter() {
+                let file_idx = task
+                    .data_file_path()
+                    .strip_suffix(".parquet")
+                    .and_then(|path| path.rsplit_once("fake_").map(|(_, idx)| idx))
+                    .and_then(|idx| idx.parse::<usize>().ok())
+                    .expect("fake data file path should include its row index");
+                actual_bucket_by_file[file_idx] = Some(bucket_idx);
+            }
+        }
+
+        for (file_idx, hash) in hashes.iter().enumerate() {
+            let expected_bucket = (hash % n_partitions as u64) as usize;
+            assert_eq!(
+                actual_bucket_by_file[file_idx],
+                Some(expected_bucket),
+                "file {file_idx} should be assigned to DataFusion hash bucket {expected_bucket}"
+            );
         }
     }
 
