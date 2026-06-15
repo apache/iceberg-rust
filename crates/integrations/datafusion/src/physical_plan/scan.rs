@@ -66,7 +66,7 @@ pub struct IcebergTableScan {
     /// Filters to apply to the table scan.
     predicates: Option<Predicate>,
     /// Pre-planned file scan tasks per partition (eager mode), or `None` (lazy mode).
-    buckets: Option<Vec<Vec<FileScanTask>>>,
+    buckets: Option<Arc<[Arc<[FileScanTask]>]>>,
     /// Optional limit on the number of rows to return.
     limit: Option<usize>,
 }
@@ -80,7 +80,7 @@ pub struct IcebergTableScanBuilder {
     filters: Vec<Expr>,
     limit: Option<usize>,
     partitioning: Partitioning,
-    buckets: Option<Vec<Vec<FileScanTask>>>,
+    buckets: Option<Arc<[Arc<[FileScanTask]>]>>,
 }
 
 impl IcebergTableScanBuilder {
@@ -128,7 +128,11 @@ impl IcebergTableScanBuilder {
         buckets: Vec<Vec<FileScanTask>>,
         partitioning: Partitioning,
     ) -> Self {
-        self.buckets = Some(buckets);
+        let buckets = buckets
+            .into_iter()
+            .map(Arc::<[FileScanTask]>::from)
+            .collect::<Vec<_>>();
+        self.buckets = Some(Arc::<[Arc<[FileScanTask]>]>::from(buckets));
         self.partitioning = partitioning;
         self
     }
@@ -194,7 +198,7 @@ impl IcebergTableScan {
     ///
     /// `None` means lazy mode, where file tasks are planned inside `execute`;
     /// `Some` means eager mode, where `execute` reads from pre-planned buckets.
-    pub fn buckets(&self) -> Option<&[Vec<FileScanTask>]> {
+    pub fn buckets(&self) -> Option<&[Arc<[FileScanTask]>]> {
         self.buckets.as_deref()
     }
 
@@ -245,13 +249,13 @@ impl ExecutionPlan for IcebergTableScan {
         _context: Arc<TaskContext>,
     ) -> DFResult<SendableRecordBatchStream> {
         let bucket = match &self.buckets {
-            Some(buckets) => Some(buckets.get(partition).cloned().ok_or_else(|| {
+            Some(buckets) => Some(Arc::clone(buckets.get(partition).ok_or_else(|| {
                 DataFusionError::Internal(format!(
                     "{}: partition index {partition} is out of bounds (total buckets: {})",
                     self.name(),
                     buckets.len()
                 ))
-            })?),
+            })?)),
             None => None,
         };
 
@@ -338,12 +342,12 @@ async fn build_record_batch_stream(
     snapshot_id: Option<i64>,
     column_names: Option<Vec<String>>,
     predicates: Option<Predicate>,
-    bucket: Option<Vec<FileScanTask>>,
+    bucket: Option<Arc<[FileScanTask]>>,
 ) -> DFResult<Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>>> {
     let stream: Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>> = match bucket {
         Some(bucket) => {
             let task_stream = Box::pin(futures::stream::iter(
-                bucket.into_iter().map(Ok::<_, iceberg::Error>),
+                (0..bucket.len()).map(move |idx| Ok::<_, iceberg::Error>(bucket[idx].clone())),
             ));
             let num_cpus = available_parallelism().get();
             let arrow_reader_builder = ArrowReaderBuilder::new(table.file_io().clone())
