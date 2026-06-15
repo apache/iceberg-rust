@@ -56,7 +56,6 @@ use metadata_table::IcebergMetadataTableProvider;
 
 use crate::error::to_datafusion_error;
 use crate::physical_plan::commit::IcebergCommitExec;
-use crate::physical_plan::expr_to_predicate::convert_filters_to_predicate;
 use crate::physical_plan::project::project_with_partition;
 use crate::physical_plan::repartition::repartition;
 use crate::physical_plan::scan::IcebergTableScanBuilder;
@@ -140,29 +139,18 @@ impl TableProvider for IcebergTableProvider {
             .await
             .map_err(to_datafusion_error)?;
 
-        // Build a TableScan mirroring the inputs we'll hand to IcebergTableScan,
-        // so plan_files() uses the same projection/filters the scan will replay in execute().
-        let col_names = projection.map(|indices| {
-            indices
-                .iter()
-                .map(|&i| self.schema.field(i).name().clone())
-                .collect::<Vec<_>>()
-        });
+        // Use the same builder path for eager file planning and execution so
+        // snapshot, projection, and filter handling cannot drift.
+        let scan_builder = IcebergTableScanBuilder::new(table.clone(), self.schema.clone())
+            // Always use current snapshot for catalog-backed provider.
+            .with_snapshot_id(None)
+            .with_projection(projection)
+            .with_filters(filters)
+            .with_limit(limit);
+        let table_scan_config = scan_builder.table_scan_config();
 
-        let predicates = convert_filters_to_predicate(filters);
-
-        let mut builder = table.scan();
-        builder = match col_names {
-            Some(names) => builder.select(names),
-            None => builder.select_all(),
-        };
-        if let Some(pred) = &predicates {
-            builder = builder.with_filter(pred.clone());
-        }
-
-        let tasks: Vec<FileScanTask> = builder
-            .build()
-            .map_err(to_datafusion_error)?
+        let tasks: Vec<FileScanTask> = scan_builder
+            .build_iceberg_table_scan(&table_scan_config)?
             .plan_files()
             .await
             .map_err(to_datafusion_error)?
@@ -172,12 +160,7 @@ impl TableProvider for IcebergTableProvider {
 
         // Output schema after projection: column indices in `Hash` exprs and any
         // Arrow array we hash must reference this schema, not the full table schema.
-        let output_schema = match projection {
-            None => self.schema.clone(),
-            Some(p) => Arc::new(self.schema.project(p).map_err(|e| {
-                to_datafusion_error(Error::new(ErrorKind::DataInvalid, e.to_string()))
-            })?),
-        };
+        let output_schema = scan_builder.output_schema()?;
 
         let target_partitions = state.config().target_partitions();
         // Always produce at least 1 partition so that DataFusion can schedule
@@ -215,15 +198,9 @@ impl TableProvider for IcebergTableProvider {
         };
 
         Ok(Arc::new(
-            IcebergTableScanBuilder::new(table, self.schema.clone())
-                // Always use current snapshot for catalog-backed provider.
-                .with_snapshot_id(None)
-                .with_projection(projection)
-                .with_predicates(predicates)
-                .with_filters(filters)
-                .with_limit(limit)
+            scan_builder
                 .with_task_buckets(buckets, partitioning)
-                .build()?,
+                .build_with_table_scan_config(table_scan_config)?,
         ))
     }
 
@@ -1144,6 +1121,41 @@ mod tests {
 
         assert_eq!(buckets.len(), 1);
         assert_eq!(buckets[0].len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_catalog_backed_eager_scan_uses_builder_projection_and_predicate() {
+        use datafusion::prelude::{col, lit};
+        use iceberg::expr::Reference;
+        use iceberg::spec::Datum;
+
+        let (catalog, namespace, table_name, _temp_dir) =
+            make_catalog_and_table_for_bucketing().await;
+        append_fake_data_files(&catalog, &namespace, &table_name, 2).await;
+
+        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+        let projection = vec![1_usize];
+        let filters = vec![col("id").eq(lit(1_i32))];
+
+        let plan = provider
+            .scan(
+                &ctx_with_target_partitions(2).state(),
+                Some(&projection),
+                &filters,
+                None,
+            )
+            .await
+            .unwrap();
+        let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+
+        assert!(scan.buckets().is_some(), "expected eager scan buckets");
+        assert_eq!(scan.projection().unwrap(), &["name".to_string()]);
+        assert_eq!(
+            scan.predicates(),
+            Some(&Reference::new("id").equal_to(Datum::int(1)))
+        );
     }
 
     async fn make_partitioned_catalog_and_table_for_bucketing()

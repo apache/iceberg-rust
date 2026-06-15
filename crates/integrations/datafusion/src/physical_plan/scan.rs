@@ -79,11 +79,16 @@ pub struct IcebergTableScanBuilder {
     snapshot_id: Option<i64>,
     schema: ArrowSchemaRef,
     projection: Option<Vec<usize>>,
-    predicates: Option<Predicate>,
     filters: Vec<Expr>,
     limit: Option<usize>,
     partitioning: Partitioning,
     buckets: Option<Arc<[Arc<[FileScanTask]>]>>,
+}
+
+pub(crate) struct TableScanConfig {
+    snapshot_id: Option<i64>,
+    column_names: Option<Vec<String>>,
+    predicates: Option<Predicate>,
 }
 
 impl IcebergTableScanBuilder {
@@ -94,7 +99,6 @@ impl IcebergTableScanBuilder {
             schema,
             snapshot_id: None,
             projection: None,
-            predicates: None,
             filters: vec![],
             limit: None,
             partitioning: Partitioning::UnknownPartitioning(1),
@@ -111,12 +115,6 @@ impl IcebergTableScanBuilder {
     /// Sets the projected output columns.
     pub fn with_projection(mut self, projection: Option<&Vec<usize>>) -> Self {
         self.projection = projection.cloned();
-        self
-    }
-
-    /// Sets the predicates
-    pub fn with_predicates(mut self, predicates: Option<Predicate>) -> Self {
-        self.predicates = predicates;
         self
     }
 
@@ -147,8 +145,44 @@ impl IcebergTableScanBuilder {
         self
     }
 
+    pub(crate) fn table_scan_config(&self) -> TableScanConfig {
+        TableScanConfig {
+            snapshot_id: self.snapshot_id,
+            column_names: get_column_names(self.schema.clone(), self.projection.as_ref()),
+            predicates: convert_filters_to_predicate(&self.filters),
+        }
+    }
+
+    /// Returns the Arrow schema produced by this scan after projection.
+    pub(crate) fn output_schema(&self) -> DFResult<ArrowSchemaRef> {
+        match &self.projection {
+            None => Ok(self.schema.clone()),
+            Some(projection) => Ok(Arc::new(self.schema.project(projection).map_err(
+                |err| {
+                    DataFusionError::Plan(format!("Failed to project Iceberg table schema: {err}"))
+                },
+            )?)),
+        }
+    }
+
+    /// Builds the underlying Iceberg [`TableScan`] using the same inputs as this plan.
+    pub(crate) fn build_iceberg_table_scan(
+        &self,
+        table_scan_config: &TableScanConfig,
+    ) -> DFResult<TableScan> {
+        build_iceberg_table_scan_from_config(&self.table, table_scan_config)
+    }
+
     /// Builds the [`IcebergTableScan`].
     pub fn build(self) -> DFResult<IcebergTableScan> {
+        let table_scan_config = self.table_scan_config();
+        self.build_with_table_scan_config(table_scan_config)
+    }
+
+    pub(crate) fn build_with_table_scan_config(
+        self,
+        table_scan_config: TableScanConfig,
+    ) -> DFResult<IcebergTableScan> {
         if let Some(buckets) = &self.buckets {
             let partition_count = self.partitioning.partition_count();
             if buckets.len() != partition_count {
@@ -160,29 +194,20 @@ impl IcebergTableScanBuilder {
             }
         }
 
-        let output_schema = match &self.projection {
-            None => self.schema.clone(),
-            Some(projection) => Arc::new(self.schema.project(projection).map_err(|err| {
-                DataFusionError::Plan(format!("Failed to project Iceberg table schema: {err}"))
-            })?),
-        };
+        let output_schema = self.output_schema()?;
         let plan_properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(output_schema),
             self.partitioning,
             EmissionType::Incremental,
             Boundedness::Bounded,
         ));
-        let projection = get_column_names(self.schema, self.projection.as_ref());
-        let predicates = self
-            .predicates
-            .or_else(|| convert_filters_to_predicate(&self.filters));
 
         Ok(IcebergTableScan {
             table: self.table,
-            snapshot_id: self.snapshot_id,
+            snapshot_id: table_scan_config.snapshot_id,
             plan_properties,
-            projection,
-            predicates,
+            projection: table_scan_config.column_names,
+            predicates: table_scan_config.predicates,
             buckets: self.buckets,
             limit: self.limit,
         })
@@ -326,21 +351,19 @@ impl DisplayAs for IcebergTableScan {
     }
 }
 
-fn build_table_scan(
-    table: Table,
-    snapshot_id: Option<i64>,
-    column_names: Option<Vec<String>>,
-    predicates: Option<Predicate>,
+fn build_iceberg_table_scan_from_config(
+    table: &Table,
+    table_scan_config: &TableScanConfig,
 ) -> DFResult<TableScan> {
-    let scan_builder = match snapshot_id {
+    let scan_builder = match table_scan_config.snapshot_id {
         Some(id) => table.scan().snapshot_id(id),
         None => table.scan(),
     };
-    let mut scan_builder = match column_names {
+    let mut scan_builder = match table_scan_config.column_names.clone() {
         Some(names) => scan_builder.select(names),
         None => scan_builder.select_all(),
     };
-    if let Some(pred) = predicates {
+    if let Some(pred) = table_scan_config.predicates.clone() {
         scan_builder = scan_builder.with_filter(pred);
     }
     scan_builder.build().map_err(to_datafusion_error)
@@ -376,7 +399,12 @@ async fn build_record_batch_stream(
             )
         }
         None => {
-            let table_scan = build_table_scan(table, snapshot_id, column_names, predicates)?;
+            let table_scan_config = TableScanConfig {
+                snapshot_id,
+                column_names,
+                predicates,
+            };
+            let table_scan = build_iceberg_table_scan_from_config(&table, &table_scan_config)?;
             Box::pin(table_scan.to_arrow().await.map_err(to_datafusion_error)?)
         }
     };
