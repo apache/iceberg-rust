@@ -230,8 +230,8 @@ mod tests {
         table_location: String,
         reader: ArrowReader,
     ) -> Vec<Option<String>> {
-        let tasks = Box::pin(futures::stream::iter(
-            vec![Ok(FileScanTask::builder()
+        let tasks = {
+            let task = FileScanTask::builder()
                 .with_file_size_in_bytes(
                     std::fs::metadata(format!("{table_location}/1.parquet"))
                         .unwrap()
@@ -245,9 +245,9 @@ mod tests {
                 .with_project_field_ids(vec![1])
                 .with_predicate(Some(predicate.bind(schema, true).unwrap()))
                 .with_case_sensitive(false)
-                .build())]
-            .into_iter(),
-        )) as FileScanTaskStream;
+                .build();
+            Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream
+        };
 
         let result = reader
             .read(tasks)
