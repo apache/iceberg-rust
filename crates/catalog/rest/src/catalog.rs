@@ -44,7 +44,7 @@ use crate::client::{
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
     CreateTableRequest, ListNamespaceResponse, ListTablesResponse, LoadTableResult,
-    NamespaceResponse, RegisterTableRequest, RenameTableRequest,
+    NamespaceResponse, RegisterTableRequest, RenameTableRequest, StorageCredential,
 };
 
 /// REST catalog URI
@@ -767,6 +767,7 @@ impl Catalog for RestCatalog {
         let request = context
             .client
             .request(Method::POST, context.config.tables_endpoint(namespace))
+            .header("X-Iceberg-Access-Delegation", "vended-credentials")
             .json(&CreateTableRequest {
                 name: creation.name,
                 location: creation.location,
@@ -810,11 +811,7 @@ impl Catalog for RestCatalog {
             "Metadata location missing in `create_table` response!",
         ))?;
 
-        let config = response
-            .config
-            .into_iter()
-            .chain(self.user_config.props.clone())
-            .collect();
+        let config = table_file_io_config(&response, &self.user_config.props);
 
         let file_io = self
             .load_file_io(Some(metadata_location), Some(config))
@@ -847,6 +844,8 @@ impl Catalog for RestCatalog {
         let request = context
             .client
             .request(Method::GET, context.config.table_endpoint(table_ident))
+            // Opt in to vended storage credentials.
+            .header("X-Iceberg-Access-Delegation", "vended-credentials")
             .build()?;
 
         let http_response = context.client.query_catalog(request).await?;
@@ -870,11 +869,7 @@ impl Catalog for RestCatalog {
             }
         };
 
-        let config = response
-            .config
-            .into_iter()
-            .chain(self.user_config.props.clone())
-            .collect();
+        let config = table_file_io_config(&response, &self.user_config.props);
 
         let file_io = self
             .load_file_io(response.metadata_location.as_deref(), Some(config))
@@ -1090,9 +1085,12 @@ impl Catalog for RestCatalog {
             }
         };
 
+        // Reload for a credentialed FileIO (commit response carries no credentials).
         let file_io = self
-            .load_file_io(Some(&response.metadata_location), None)
-            .await?;
+            .load_table(commit.identifier())
+            .await?
+            .file_io()
+            .clone();
 
         let mut table_builder = Table::builder()
             .identifier(commit.identifier().clone())
@@ -1105,6 +1103,23 @@ impl Catalog for RestCatalog {
         }
         table_builder.build()
     }
+}
+
+/// FileIO props: server `config`, then vended `storage_credentials` (longest prefix wins), then user props.
+fn table_file_io_config(
+    response: &LoadTableResult,
+    user_props: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut config: HashMap<String, String> = response.config.clone();
+    if let Some(creds) = response.storage_credentials.as_ref() {
+        let mut sorted: Vec<&StorageCredential> = creds.iter().collect();
+        sorted.sort_by_key(|c| c.prefix.len());
+        for cred in sorted {
+            config.extend(cred.config.clone());
+        }
+    }
+    config.extend(user_props.clone());
+    config
 }
 
 #[cfg(test)]
@@ -2659,6 +2674,7 @@ mod tests {
 
         let config_mock = create_config_mock(&mut server).await;
 
+        // GET hit twice: commit refresh + post-commit reload.
         let load_table_mock = server
             .mock("GET", "/v1/namespaces/ns1/tables/test1")
             .with_status(200)
@@ -2667,6 +2683,7 @@ mod tests {
                 env!("CARGO_MANIFEST_DIR"),
                 "load_table_response.json"
             ))
+            .expect(2)
             .create_async()
             .await;
 
