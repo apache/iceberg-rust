@@ -30,7 +30,9 @@ use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use arrow_cast::cast;
-use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{
+    DataType, Field, FieldRef, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+};
 
 use crate::arrow::schema::{ArrowSchemaVisitor, DEFAULT_MAP_FIELD_NAME, visit_schema};
 use crate::{Error, ErrorKind, Result};
@@ -100,7 +102,7 @@ impl ArrowSchemaVisitor for TimestampTzCoercionVisitor<'_> {
     type T = Field;
     type U = ArrowSchema;
 
-    fn before_field(&mut self, field: &Field) -> Result<()> {
+    fn before_field(&mut self, field: &FieldRef) -> Result<()> {
         self.field_stack.push(field.as_ref().clone());
 
         let target_type = if self.target_field_stack.is_empty() {
@@ -121,13 +123,13 @@ impl ArrowSchemaVisitor for TimestampTzCoercionVisitor<'_> {
         Ok(())
     }
 
-    fn after_field(&mut self, _field: &Field) -> Result<()> {
+    fn after_field(&mut self, _field: &FieldRef) -> Result<()> {
         self.field_stack.pop();
         self.target_field_stack.pop();
         Ok(())
     }
 
-    fn before_list_element(&mut self, field: &Field) -> Result<()> {
+    fn before_list_element(&mut self, field: &FieldRef) -> Result<()> {
         self.field_stack.push(field.as_ref().clone());
         let target_type = match self.target_field_stack.last() {
             Some(DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _)) => {
@@ -139,13 +141,13 @@ impl ArrowSchemaVisitor for TimestampTzCoercionVisitor<'_> {
         Ok(())
     }
 
-    fn after_list_element(&mut self, _field: &Field) -> Result<()> {
+    fn after_list_element(&mut self, _field: &FieldRef) -> Result<()> {
         self.field_stack.pop();
         self.target_field_stack.pop();
         Ok(())
     }
 
-    fn before_map_key(&mut self, field: &Field) -> Result<()> {
+    fn before_map_key(&mut self, field: &FieldRef) -> Result<()> {
         self.field_stack.push(field.as_ref().clone());
         let target_type = match self.target_field_stack.last() {
             Some(DataType::Map(entries, _)) => match entries.data_type() {
@@ -158,13 +160,13 @@ impl ArrowSchemaVisitor for TimestampTzCoercionVisitor<'_> {
         Ok(())
     }
 
-    fn after_map_key(&mut self, _field: &Field) -> Result<()> {
+    fn after_map_key(&mut self, _field: &FieldRef) -> Result<()> {
         self.field_stack.pop();
         self.target_field_stack.pop();
         Ok(())
     }
 
-    fn before_map_value(&mut self, field: &Field) -> Result<()> {
+    fn before_map_value(&mut self, field: &FieldRef) -> Result<()> {
         self.field_stack.push(field.as_ref().clone());
         let target_type = match self.target_field_stack.last() {
             Some(DataType::Map(entries, _)) => match entries.data_type() {
@@ -177,7 +179,7 @@ impl ArrowSchemaVisitor for TimestampTzCoercionVisitor<'_> {
         Ok(())
     }
 
-    fn after_map_value(&mut self, _field: &Field) -> Result<()> {
+    fn after_map_value(&mut self, _field: &FieldRef) -> Result<()> {
         self.field_stack.pop();
         self.target_field_stack.pop();
         Ok(())
