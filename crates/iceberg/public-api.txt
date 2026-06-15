@@ -1272,6 +1272,20 @@ impl serde_core::ser::Serialize for iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::scan::IncrementalAppendScanBuilder<'a>
+impl<'a> iceberg::scan::IncrementalAppendScanBuilder<'a>
+pub fn iceberg::scan::IncrementalAppendScanBuilder<'a>::build(self) -> iceberg::Result<iceberg::scan::TableScan>
+pub fn iceberg::scan::IncrementalAppendScanBuilder<'a>::select(self, column_names: impl core::iter::traits::collect::IntoIterator<Item = impl alloc::string::ToString>) -> Self
+pub fn iceberg::scan::IncrementalAppendScanBuilder<'a>::select_all(self) -> Self
+pub fn iceberg::scan::IncrementalAppendScanBuilder<'a>::select_empty(self) -> Self
+pub fn iceberg::scan::IncrementalAppendScanBuilder<'a>::with_batch_size(self, batch_size: core::option::Option<usize>) -> Self
+pub fn iceberg::scan::IncrementalAppendScanBuilder<'a>::with_case_sensitive(self, case_sensitive: bool) -> Self
+pub fn iceberg::scan::IncrementalAppendScanBuilder<'a>::with_concurrency_limit(self, limit: usize) -> Self
+pub fn iceberg::scan::IncrementalAppendScanBuilder<'a>::with_data_file_concurrency_limit(self, limit: usize) -> Self
+pub fn iceberg::scan::IncrementalAppendScanBuilder<'a>::with_filter(self, predicate: iceberg::expr::Predicate) -> Self
+pub fn iceberg::scan::IncrementalAppendScanBuilder<'a>::with_manifest_entry_concurrency_limit(self, limit: usize) -> Self
+pub fn iceberg::scan::IncrementalAppendScanBuilder<'a>::with_row_group_filtering_enabled(self, row_group_filtering_enabled: bool) -> Self
+pub fn iceberg::scan::IncrementalAppendScanBuilder<'a>::with_row_selection_enabled(self, row_selection_enabled: bool) -> Self
 pub struct iceberg::scan::ScanMetrics
 impl iceberg::scan::ScanMetrics
 pub fn iceberg::scan::ScanMetrics::bytes_read(&self) -> u64
@@ -3011,6 +3025,8 @@ pub struct iceberg::table::StaticTable(_)
 impl iceberg::table::StaticTable
 pub async fn iceberg::table::StaticTable::from_metadata(metadata: iceberg::spec::TableMetadata, table_ident: iceberg::TableIdent, file_io: iceberg::io::FileIO) -> iceberg::Result<Self>
 pub async fn iceberg::table::StaticTable::from_metadata_file(metadata_location: &str, table_ident: iceberg::TableIdent, file_io: iceberg::io::FileIO) -> iceberg::Result<Self>
+pub fn iceberg::table::StaticTable::incremental_append_scan(&self, from_snapshot_id: i64, to_snapshot_id: core::option::Option<i64>) -> iceberg::scan::IncrementalAppendScanBuilder<'_>
+pub fn iceberg::table::StaticTable::incremental_append_scan_inclusive(&self, from_snapshot_id: i64, to_snapshot_id: core::option::Option<i64>) -> iceberg::scan::IncrementalAppendScanBuilder<'_>
 pub fn iceberg::table::StaticTable::into_table(self) -> iceberg::table::Table
 pub fn iceberg::table::StaticTable::metadata(&self) -> iceberg::spec::TableMetadataRef
 pub fn iceberg::table::StaticTable::reader_builder(&self) -> iceberg::arrow::ArrowReaderBuilder
@@ -3026,6 +3042,8 @@ pub fn iceberg::table::Table::current_schema_ref(&self) -> iceberg::spec::Schema
 pub fn iceberg::table::Table::encryption_manager(&self) -> core::option::Option<&iceberg::encryption::EncryptionManager>
 pub fn iceberg::table::Table::file_io(&self) -> &iceberg::io::FileIO
 pub fn iceberg::table::Table::identifier(&self) -> &iceberg::TableIdent
+pub fn iceberg::table::Table::incremental_append_scan(&self, from_snapshot_id: i64, to_snapshot_id: core::option::Option<i64>) -> iceberg::scan::IncrementalAppendScanBuilder<'_>
+pub fn iceberg::table::Table::incremental_append_scan_inclusive(&self, from_snapshot_id: i64, to_snapshot_id: core::option::Option<i64>) -> iceberg::scan::IncrementalAppendScanBuilder<'_>
 pub fn iceberg::table::Table::inspect(&self) -> iceberg::inspect::MetadataTable<'_>
 pub fn iceberg::table::Table::manifest_list_reader(&self, snapshot: &iceberg::spec::SnapshotRef) -> iceberg::spec::ManifestListReader
 pub fn iceberg::table::Table::metadata(&self) -> &iceberg::spec::TableMetadata

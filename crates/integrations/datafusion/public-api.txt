@@ -18,7 +18,6 @@ impl iceberg_datafusion::physical_plan::IcebergTableScan
 pub fn iceberg_datafusion::physical_plan::IcebergTableScan::limit(&self) -> core::option::Option<usize>
 pub fn iceberg_datafusion::physical_plan::IcebergTableScan::predicates(&self) -> core::option::Option<&iceberg::expr::predicate::Predicate>
 pub fn iceberg_datafusion::physical_plan::IcebergTableScan::projection(&self) -> core::option::Option<&[alloc::string::String]>
-pub fn iceberg_datafusion::physical_plan::IcebergTableScan::snapshot_id(&self) -> core::option::Option<i64>
 pub fn iceberg_datafusion::physical_plan::IcebergTableScan::table(&self) -> &iceberg::table::Table
 impl core::fmt::Debug for iceberg_datafusion::physical_plan::IcebergTableScan
 pub fn iceberg_datafusion::physical_plan::IcebergTableScan::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -60,8 +59,11 @@ impl datafusion_catalog::table::TableProviderFactory for iceberg_datafusion::tab
 pub fn iceberg_datafusion::table_provider_factory::IcebergTableProviderFactory::create<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, _state: &'life1 dyn datafusion_session::session::Session, cmd: &'life2 datafusion_expr::logical_plan::ddl::CreateExternalTable) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = datafusion_common::error::Result<alloc::sync::Arc<dyn datafusion_catalog::table::TableProvider>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub struct iceberg_datafusion::table::IcebergStaticTableProvider
 impl iceberg_datafusion::IcebergStaticTableProvider
+pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_appends_after(table: iceberg::table::Table, from_snapshot_id: i64) -> iceberg::error::Result<Self>
 pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_from_table(table: iceberg::table::Table) -> iceberg::error::Result<Self>
 pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_from_table_snapshot(table: iceberg::table::Table, snapshot_id: i64) -> iceberg::error::Result<Self>
+pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_incremental(table: iceberg::table::Table, from_snapshot_id: i64, to_snapshot_id: i64) -> iceberg::error::Result<Self>
+pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_incremental_inclusive(table: iceberg::table::Table, from_snapshot_id: i64, to_snapshot_id: i64) -> iceberg::error::Result<Self>
 impl core::clone::Clone for iceberg_datafusion::IcebergStaticTableProvider
 pub fn iceberg_datafusion::IcebergStaticTableProvider::clone(&self) -> iceberg_datafusion::IcebergStaticTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergStaticTableProvider
@@ -107,8 +109,11 @@ pub fn iceberg_datafusion::IcebergCatalogProvider::schema(&self, name: &str) -> 
 pub fn iceberg_datafusion::IcebergCatalogProvider::schema_names(&self) -> alloc::vec::Vec<alloc::string::String>
 pub struct iceberg_datafusion::IcebergStaticTableProvider
 impl iceberg_datafusion::IcebergStaticTableProvider
+pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_appends_after(table: iceberg::table::Table, from_snapshot_id: i64) -> iceberg::error::Result<Self>
 pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_from_table(table: iceberg::table::Table) -> iceberg::error::Result<Self>
 pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_from_table_snapshot(table: iceberg::table::Table, snapshot_id: i64) -> iceberg::error::Result<Self>
+pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_incremental(table: iceberg::table::Table, from_snapshot_id: i64, to_snapshot_id: i64) -> iceberg::error::Result<Self>
+pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_incremental_inclusive(table: iceberg::table::Table, from_snapshot_id: i64, to_snapshot_id: i64) -> iceberg::error::Result<Self>
 impl core::clone::Clone for iceberg_datafusion::IcebergStaticTableProvider
 pub fn iceberg_datafusion::IcebergStaticTableProvider::clone(&self) -> iceberg_datafusion::IcebergStaticTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergStaticTableProvider
