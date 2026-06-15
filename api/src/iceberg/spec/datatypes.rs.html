@@ -340,7 +340,7 @@
 <a href=#340 id=340 data-nosnippet>340</a><span class="kw">where
 <a href=#341 id=341 data-nosnippet>341</a>    </span>S: Serializer,
 <a href=#342 id=342 data-nosnippet>342</a>{
-<a href=#343 id=343 data-nosnippet>343</a>    serializer.serialize_str(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"decimal({precision},{scale})"</span>))
+<a href=#343 id=343 data-nosnippet>343</a>    serializer.serialize_str(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"decimal({precision}, {scale})"</span>))
 <a href=#344 id=344 data-nosnippet>344</a>}
 <a href=#345 id=345 data-nosnippet>345</a>
 <a href=#346 id=346 data-nosnippet>346</a><span class="kw">fn </span>deserialize_fixed&lt;<span class="lifetime">'de</span>, D&gt;(deserializer: D) -&gt; std::result::Result&lt;PrimitiveType, D::Error&gt;
@@ -370,7 +370,7 @@
 <a href=#370 id=370 data-nosnippet>370</a>            PrimitiveType::Float =&gt; <span class="macro">write!</span>(f, <span class="string">"float"</span>),
 <a href=#371 id=371 data-nosnippet>371</a>            PrimitiveType::Double =&gt; <span class="macro">write!</span>(f, <span class="string">"double"</span>),
 <a href=#372 id=372 data-nosnippet>372</a>            PrimitiveType::Decimal { precision, scale } =&gt; {
-<a href=#373 id=373 data-nosnippet>373</a>                <span class="macro">write!</span>(f, <span class="string">"decimal({precision},{scale})"</span>)
+<a href=#373 id=373 data-nosnippet>373</a>                <span class="macro">write!</span>(f, <span class="string">"decimal({precision}, {scale})"</span>)
 <a href=#374 id=374 data-nosnippet>374</a>            }
 <a href=#375 id=375 data-nosnippet>375</a>            PrimitiveType::Date =&gt; <span class="macro">write!</span>(f, <span class="string">"date"</span>),
 <a href=#376 id=376 data-nosnippet>376</a>            PrimitiveType::Time =&gt; <span class="macro">write!</span>(f, <span class="string">"time"</span>),
@@ -874,7 +874,7 @@
 <a href=#874 id=874 data-nosnippet>874</a>            {"id": 3, "name": "long_field", "required": true, "type": "long"},
 <a href=#875 id=875 data-nosnippet>875</a>            {"id": 4, "name": "float_field", "required": true, "type": "float"},
 <a href=#876 id=876 data-nosnippet>876</a>            {"id": 5, "name": "double_field", "required": true, "type": "double"},
-<a href=#877 id=877 data-nosnippet>877</a>            {"id": 6, "name": "decimal_field", "required": true, "type": "decimal(9,2)"},
+<a href=#877 id=877 data-nosnippet>877</a>            {"id": 6, "name": "decimal_field", "required": true, "type": "decimal(9, 2)"},
 <a href=#878 id=878 data-nosnippet>878</a>            {"id": 7, "name": "date_field", "required": true, "type": "date"},
 <a href=#879 id=879 data-nosnippet>879</a>            {"id": 8, "name": "time_field", "required": true, "type": "time"},
 <a href=#880 id=880 data-nosnippet>880</a>            {"id": 9, "name": "timestamp_field", "required": true, "type": "timestamp"},
