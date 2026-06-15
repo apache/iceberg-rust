@@ -27,6 +27,7 @@ use aws_sdk_s3tables::operation::get_table::{GetTableError, GetTableOutput};
 use aws_sdk_s3tables::operation::list_tables::ListTablesOutput;
 use aws_sdk_s3tables::operation::update_table_metadata_location::UpdateTableMetadataLocationError;
 use aws_sdk_s3tables::types::OpenTableFormat;
+use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
@@ -71,6 +72,7 @@ struct S3TablesCatalogConfig {
 pub struct S3TablesCatalogBuilder {
     config: S3TablesCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
 }
 
@@ -86,6 +88,7 @@ impl Default for S3TablesCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
+            kms_client_factory: None,
             runtime: None,
         }
     }
@@ -131,6 +134,11 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
 
     fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
         self.storage_factory = Some(storage_factory);
+        self
+    }
+
+    fn with_kms_client_factory(mut self, kms_client_factory: Arc<dyn KmsClientFactory>) -> Self {
+        self.kms_client_factory = Some(kms_client_factory);
         self
     }
 
@@ -183,7 +191,11 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
                     Some(rt) => rt,
                     None => Runtime::try_current()?,
                 };
-                S3TablesCatalog::new(self.config, self.storage_factory, runtime).await
+                let kms_client = match self.kms_client_factory {
+                    Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
+                    None => None,
+                };
+                S3TablesCatalog::new(self.config, self.storage_factory, runtime, kms_client).await
             }
         }
     }
@@ -196,6 +208,7 @@ pub struct S3TablesCatalog {
     s3tables_client: aws_sdk_s3tables::Client,
     file_io: FileIO,
     runtime: Runtime,
+    kms_client: Option<Arc<dyn KeyManagementClient>>,
 }
 
 impl S3TablesCatalog {
@@ -204,6 +217,7 @@ impl S3TablesCatalog {
         config: S3TablesCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
+        kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
         let s3tables_client = if let Some(client) = config.client.clone() {
             client
@@ -227,6 +241,7 @@ impl S3TablesCatalog {
             s3tables_client,
             file_io,
             runtime,
+            kms_client,
         })
     }
 
@@ -276,6 +291,7 @@ impl S3TablesCatalog {
             .metadata_location(metadata_location)
             .file_io(self.file_io.clone())
             .runtime(self.runtime.clone())
+            .kms_client(self.kms_client.clone())
             .build()?;
         Ok((table, resp.version_token))
     }
@@ -575,6 +591,7 @@ impl Catalog for S3TablesCatalog {
             .metadata(metadata)
             .file_io(self.file_io.clone())
             .runtime(self.runtime.clone())
+            .kms_client(self.kms_client.clone())
             .build()?;
         Ok(table)
     }
@@ -759,7 +776,7 @@ mod tests {
         };
 
         Ok(Some(
-            S3TablesCatalog::new(config, None, Runtime::current()).await?,
+            S3TablesCatalog::new(config, None, Runtime::current(), None).await?,
         ))
     }
 
