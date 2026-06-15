@@ -45,9 +45,9 @@ fn available_parallelism() -> NonZeroUsize {
 
 /// Iceberg [`Table`] scan as a DataFusion [`ExecutionPlan`].
 ///
-/// Has two construction modes: [`IcebergTableScan::new`] for a lazy
-/// single-partition scan, and [`IcebergTableScan::new_with_tasks`] for an
-/// eager multi-partition scan over pre-planned [`FileScanTask`] buckets.
+/// Has two construction modes: lazy single-partition scans that plan files
+/// inside `execute(0)`, and eager multi-partition scans over pre-planned
+/// [`FileScanTask`] buckets.
 ///
 /// Note: in eager mode the underlying `TableScan` is rebuilt on every
 /// `execute(partition)` call. The per-build cost is bounded (no I/O) and
@@ -71,92 +71,109 @@ pub struct IcebergTableScan {
     limit: Option<usize>,
 }
 
-impl IcebergTableScan {
-    /// Creates a lazy single-partition scan that plans and reads all tasks
-    /// inside `execute(0)`. Used by
-    /// [`IcebergStaticTableProvider`][crate::table::IcebergStaticTableProvider].
-    pub fn new(
-        table: Table,
-        snapshot_id: Option<i64>,
-        schema: ArrowSchemaRef,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
-        limit: Option<usize>,
-    ) -> Self {
-        Self::new_inner(
-            table,
-            snapshot_id,
-            schema,
-            projection,
-            filters,
-            limit,
-            Partitioning::UnknownPartitioning(1),
-            None,
-        )
-    }
+/// Builder to create an [`IcebergTableScan`].
+pub struct IcebergTableScanBuilder {
+    table: Table,
+    snapshot_id: Option<i64>,
+    schema: ArrowSchemaRef,
+    projection: Option<Vec<usize>>,
+    filters: Vec<Expr>,
+    limit: Option<usize>,
+    partitioning: Partitioning,
+    buckets: Option<Vec<Vec<FileScanTask>>>,
+}
 
-    /// Creates an eager multi-partition scan over pre-planned task buckets.
-    /// Partition `i` streams `buckets[i]`. The caller is responsible for
-    /// ensuring `partitioning` matches the bucketing. Used by
-    /// [`IcebergTableProvider`][crate::table::IcebergTableProvider].
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_with_tasks(
-        table: Table,
-        snapshot_id: Option<i64>,
-        schema: ArrowSchemaRef,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
-        limit: Option<usize>,
-        buckets: Vec<Vec<FileScanTask>>,
-        partitioning: Partitioning,
-    ) -> Self {
-        Self::new_inner(
-            table,
-            snapshot_id,
-            schema,
-            projection,
-            filters,
-            limit,
-            partitioning,
-            Some(buckets),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn new_inner(
-        table: Table, // could we remove the Table from here ?
-        snapshot_id: Option<i64>,
-        schema: ArrowSchemaRef,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
-        limit: Option<usize>,
-        partitioning: Partitioning,
-        buckets: Option<Vec<Vec<FileScanTask>>>,
-    ) -> Self {
-        let output_schema = match projection {
-            None => schema.clone(),
-            Some(projection) => Arc::new(schema.project(projection).unwrap()),
-        };
-        let plan_properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(output_schema),
-            partitioning,
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        ));
-        let projection = get_column_names(schema, projection);
-        let predicates = convert_filters_to_predicate(filters);
-
+impl IcebergTableScanBuilder {
+    /// Creates a builder for a lazy single-partition scan.
+    pub fn new(table: Table, schema: ArrowSchemaRef) -> Self {
         Self {
             table,
-            snapshot_id,
-            plan_properties,
-            projection,
-            predicates,
-            buckets,
-            limit,
+            schema,
+            snapshot_id: None,
+            projection: None,
+            filters: vec![],
+            limit: None,
+            partitioning: Partitioning::UnknownPartitioning(1),
+            buckets: None,
         }
     }
 
+    /// Sets the snapshot to scan. When not set, it uses current snapshot.
+    pub fn with_snapshot_id(mut self, snapshot_id: Option<i64>) -> Self {
+        self.snapshot_id = snapshot_id;
+        self
+    }
+
+    /// Sets the projected output columns.
+    pub fn with_projection(mut self, projection: Option<&Vec<usize>>) -> Self {
+        self.projection = projection.cloned();
+        self
+    }
+
+    /// Sets the filters to apply to the table scan.
+    pub fn with_filters(mut self, filters: &[Expr]) -> Self {
+        self.filters = filters.to_vec();
+        self
+    }
+
+    /// Sets the optional row limit.
+    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
+        self.limit = limit;
+        self
+    }
+
+    /// Sets pre-planned task buckets for eager multi-partition scans.
+    pub fn with_task_buckets(
+        mut self,
+        buckets: Vec<Vec<FileScanTask>>,
+        partitioning: Partitioning,
+    ) -> Self {
+        self.buckets = Some(buckets);
+        self.partitioning = partitioning;
+        self
+    }
+
+    /// Builds the [`IcebergTableScan`].
+    pub fn build(self) -> DFResult<IcebergTableScan> {
+        if let Some(buckets) = &self.buckets {
+            let partition_count = self.partitioning.partition_count();
+            if buckets.len() != partition_count {
+                return Err(DataFusionError::Internal(format!(
+                    "IcebergTableScan expected {} task buckets to match partitioning, got {}",
+                    partition_count,
+                    buckets.len()
+                )));
+            }
+        }
+
+        let output_schema = match &self.projection {
+            None => self.schema.clone(),
+            Some(projection) => Arc::new(self.schema.project(projection).map_err(|err| {
+                DataFusionError::Plan(format!("Failed to project Iceberg table schema: {err}"))
+            })?),
+        };
+        let plan_properties = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(output_schema),
+            self.partitioning,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        ));
+        let projection = get_column_names(self.schema, self.projection.as_ref());
+        let predicates = convert_filters_to_predicate(&self.filters);
+
+        Ok(IcebergTableScan {
+            table: self.table,
+            snapshot_id: self.snapshot_id,
+            plan_properties,
+            projection,
+            predicates,
+            buckets: self.buckets,
+            limit: self.limit,
+        })
+    }
+}
+
+impl IcebergTableScan {
     pub fn table(&self) -> &Table {
         &self.table
     }

@@ -59,7 +59,7 @@ use crate::physical_plan::commit::IcebergCommitExec;
 use crate::physical_plan::expr_to_predicate::convert_filters_to_predicate;
 use crate::physical_plan::project::project_with_partition;
 use crate::physical_plan::repartition::repartition;
-use crate::physical_plan::scan::IcebergTableScan;
+use crate::physical_plan::scan::IcebergTableScanBuilder;
 use crate::physical_plan::sort::sort_by_partition;
 use crate::physical_plan::write::IcebergWriteExec;
 
@@ -206,16 +206,16 @@ impl TableProvider for IcebergTableProvider {
             _ => Partitioning::UnknownPartitioning(n_partitions),
         };
 
-        Ok(Arc::new(IcebergTableScan::new_with_tasks(
-            table,
-            None, // Always use current snapshot for catalog-backed provider
-            self.schema.clone(),
-            projection,
-            filters,
-            limit,
-            buckets,
-            partitioning,
-        )))
+        Ok(Arc::new(
+            IcebergTableScanBuilder::new(table, self.schema.clone())
+                // Always use current snapshot for catalog-backed provider.
+                .with_snapshot_id(None)
+                .with_projection(projection)
+                .with_filters(filters)
+                .with_limit(limit)
+                .with_task_buckets(buckets, partitioning)
+                .build()?,
+        ))
     }
 
     fn supports_filters_pushdown(
@@ -383,14 +383,14 @@ impl TableProvider for IcebergStaticTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(IcebergTableScan::new(
-            self.table.clone(),
-            self.snapshot_id,
-            self.schema.clone(),
-            projection,
-            filters,
-            limit,
-        )))
+        Ok(Arc::new(
+            IcebergTableScanBuilder::new(self.table.clone(), self.schema.clone())
+                .with_snapshot_id(self.snapshot_id)
+                .with_projection(projection)
+                .with_filters(filters)
+                .with_limit(limit)
+                .build()?,
+        ))
     }
 
     fn supports_filters_pushdown(
@@ -432,6 +432,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::physical_plan::scan::IcebergTableScan;
 
     async fn get_test_table_from_metadata_file() -> Table {
         let metadata_file_name = "TableMetadataV2Valid.json";
