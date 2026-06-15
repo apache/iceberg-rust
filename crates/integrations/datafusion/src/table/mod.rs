@@ -1054,9 +1054,10 @@ mod tests {
             .await
             .unwrap();
         let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+        let buckets = scan.buckets().expect("expected eager scan buckets");
 
-        assert_eq!(scan.buckets().len(), 1);
-        assert_eq!(scan.buckets()[0].len(), 0);
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].len(), 0);
         assert_eq!(scan.properties().partitioning.partition_count(), 1);
     }
 
@@ -1080,10 +1081,11 @@ mod tests {
             .await
             .unwrap();
         let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+        let buckets = scan.buckets().expect("expected eager scan buckets");
 
-        let total_files: usize = scan.buckets().iter().map(|b| b.len()).sum();
+        let total_files: usize = buckets.iter().map(|b| b.len()).sum();
         assert_eq!(total_files, 5);
-        assert_eq!(scan.buckets().len(), 3);
+        assert_eq!(buckets.len(), 3);
         assert!(matches!(
             scan.properties().partitioning,
             Partitioning::UnknownPartitioning(3)
@@ -1107,8 +1109,9 @@ mod tests {
             .await
             .unwrap();
         let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+        let buckets = scan.buckets().expect("expected eager scan buckets");
 
-        assert_eq!(scan.buckets().len(), 2);
+        assert_eq!(buckets.len(), 2);
     }
 
     /// target_partitions = 1 collapses every task into a single bucket, giving
@@ -1127,9 +1130,10 @@ mod tests {
             .await
             .unwrap();
         let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+        let buckets = scan.buckets().expect("expected eager scan buckets");
 
-        assert_eq!(scan.buckets().len(), 1);
-        assert_eq!(scan.buckets()[0].len(), 4);
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].len(), 4);
     }
 
     async fn make_partitioned_catalog_and_table_for_bucketing()
@@ -1262,8 +1266,9 @@ mod tests {
             .await
             .unwrap();
         let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+        let buckets = scan.buckets().expect("expected eager scan buckets");
 
-        let total_files: usize = scan.buckets().iter().map(|b| b.len()).sum();
+        let total_files: usize = buckets.iter().map(|b| b.len()).sum();
         assert_eq!(total_files, 6);
 
         match &scan.properties().partitioning {

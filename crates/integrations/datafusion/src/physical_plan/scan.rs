@@ -173,9 +173,12 @@ impl IcebergTableScan {
         self.predicates.as_ref()
     }
 
-    /// Returns the pre-planned file task buckets, or an empty slice in lazy mode.
-    pub fn buckets(&self) -> &[Vec<FileScanTask>] {
-        self.buckets.as_deref().unwrap_or(&[])
+    /// Returns the pre-planned file task buckets.
+    ///
+    /// `None` means lazy mode, where file tasks are planned inside `execute`;
+    /// `Some` means eager mode, where `execute` reads from pre-planned buckets.
+    pub fn buckets(&self) -> Option<&[Vec<FileScanTask>]> {
+        self.buckets.as_deref()
     }
 
     pub fn limit(&self) -> Option<usize> {
@@ -183,7 +186,8 @@ impl IcebergTableScan {
     }
 
     fn total_file_count(&self) -> usize {
-        self.buckets().iter().map(|b| b.len()).sum()
+        self.buckets()
+            .map_or(0, |buckets| buckets.iter().map(|b| b.len()).sum())
     }
 }
 
