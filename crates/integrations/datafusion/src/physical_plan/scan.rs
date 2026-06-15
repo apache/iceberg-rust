@@ -37,6 +37,8 @@ use iceberg::table::Table;
 
 use super::expr_to_predicate::convert_filters_to_predicate;
 use crate::to_datafusion_error;
+
+// TODO: use crate::util for available_parallelism
 const DEFAULT_PARALLELISM: usize = 1;
 fn available_parallelism() -> NonZeroUsize {
     std::thread::available_parallelism()

@@ -188,8 +188,9 @@ impl TableProvider for IcebergTableProvider {
         // identity_cols is Some(non-empty) iff every condition for declaring
         // Partitioning::Hash is met: the table's default spec has identity-transform
         // fields, every such source column is present in the output projection, and
-        // every column type is supported by literal_to_array. Any miss collapses to
-        // None, which forces UnknownPartitioning regardless of bucketing strategy.
+        // every column type is supported by the identity hash materialization path.
+        // Any miss collapses to None, which forces UnknownPartitioning regardless
+        // of bucketing strategy.
         let identity_cols = bucketing::compute_identity_cols(&table, &output_schema);
 
         let (buckets, all_had_full_key) =
