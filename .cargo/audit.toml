@@ -43,4 +43,13 @@ ignore = [
   # Direct dependency upgraded to 0.9.3+. Transitive rand 0.8.5 remains
   # from reqsign/sqllogictest/rustc-hash — no 0.8.x patch exists.
   "RUSTSEC-2026-0097",
+  # pyo3 < 0.29: out-of-bounds read in PyList/PyTuple `nth`/`nth_back`, and
+  # missing `Sync` bound on `PyCFunction::new_closure` closures.
+  #
+  # Pulled only transitively through arrow's `pyarrow` feature
+  # (arrow-pyarrow), which still pins pyo3 ^0.28 in its latest release; no
+  # arrow build supports the patched pyo3 0.29 yet. Remove once arrow-pyarrow
+  # moves to pyo3 >=0.29.
+  "RUSTSEC-2026-0176",
+  "RUSTSEC-2026-0177",
 ]
