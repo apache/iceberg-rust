@@ -121,6 +121,12 @@ pub struct FileScanTask {
 
     /// Key metadata for encrypted data files (Parquet Modular Encryption).
     /// When present, the reader uses this to build `FileDecryptionProperties`.
+    ///
+    /// Note on the trust boundary: for the standard encryption scheme this
+    /// carries `StandardKeyMetadata`, whose payload is the *plaintext* DEK.
+    /// Because `FileScanTask` derives `Serialize`, that plaintext DEK is part
+    /// of the serialized scan plan should these tasks ever be serialized and sent
+    /// over the network.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[builder(default)]
@@ -199,8 +205,12 @@ pub struct FileScanTaskDeleteFile {
     #[builder(default)]
     pub equality_ids: Option<Vec<i32>>,
 
-    /// Key metadata for encrypted data files (Parquet Modular Encryption).
+    /// Key metadata for encrypted delete files (Parquet Modular Encryption).
     /// When present, the reader uses this to build `FileDecryptionProperties`.
+    ///
+    /// Same plaintext-DEK trust boundary as [`FileScanTask::key_metadata`]:
+    /// this is serialized into the scan plan and crosses the planner -> worker
+    /// channel in the clear for the standard encryption scheme.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[builder(default)]
