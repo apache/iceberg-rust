@@ -20,6 +20,7 @@ use std::sync::Arc;
 use futures::channel::mpsc::Sender;
 use futures::{SinkExt, TryFutureExt};
 
+use crate::arrow::record_batch_transformer::build_partition_column_constant;
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::object_cache::ObjectCache;
@@ -29,7 +30,7 @@ use crate::scan::{
 };
 use crate::spec::{
     ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping, SchemaRef,
-    SnapshotRef, TableMetadataRef,
+    SnapshotRef, StructType, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -48,6 +49,8 @@ pub(crate) struct ManifestFileContext {
     delete_file_index: DeleteFileIndex,
     name_mapping: Option<Arc<NameMapping>>,
     case_sensitive: bool,
+    table_metadata: TableMetadataRef,
+    unified_partition_type: Option<Arc<StructType>>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -63,6 +66,8 @@ pub(crate) struct ManifestEntryContext {
     pub delete_file_index: DeleteFileIndex,
     pub name_mapping: Option<Arc<NameMapping>>,
     pub case_sensitive: bool,
+    pub table_metadata: TableMetadataRef,
+    pub unified_partition_type: Option<Arc<StructType>>,
 }
 
 impl ManifestFileContext {
@@ -79,7 +84,9 @@ impl ManifestFileContext {
             expression_evaluator_cache,
             delete_file_index,
             name_mapping,
-            case_sensitive,
+            table_metadata,
+            unified_partition_type,
+            ..
         } = self;
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
@@ -96,6 +103,8 @@ impl ManifestFileContext {
                 delete_file_index: delete_file_index.clone(),
                 name_mapping: name_mapping.clone(),
                 case_sensitive,
+                table_metadata: table_metadata.clone(),
+                unified_partition_type: unified_partition_type.clone(),
             };
 
             sender
@@ -120,6 +129,25 @@ impl ManifestEntryContext {
             )
             .await;
 
+        // Compute the _partition struct constant if the unified partition type is available
+        let partition_column_constant = if let Some(ref unified_partition_type) = self.unified_partition_type {
+            let partition_spec = self
+                .table_metadata
+                .partition_spec_by_id(self.partition_spec_id);
+            if let Some(spec) = partition_spec {
+                let constant = build_partition_column_constant(
+                    unified_partition_type,
+                    spec,
+                    &self.manifest_entry.data_file.partition,
+                )?;
+                Some(Arc::new(constant))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         Ok(FileScanTask::builder()
             .with_file_size_in_bytes(self.manifest_entry.file_size_in_bytes())
             .with_start(0)
@@ -138,6 +166,7 @@ impl ManifestEntryContext {
             // TODO: Pass actual PartitionSpec through context chain for native flow
             .with_partition_spec(None)
             .with_name_mapping(self.name_mapping)
+            .with_partition_column_constant(partition_column_constant)
             .with_case_sensitive(self.case_sensitive)
             .build())
     }
@@ -161,6 +190,8 @@ pub(crate) struct PlanContext {
     pub partition_filter_cache: Arc<PartitionFilterCache>,
     pub manifest_evaluator_cache: Arc<ManifestEvaluatorCache>,
     pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
+
+    pub unified_partition_type: Option<Arc<StructType>>,
 }
 
 impl PlanContext {
@@ -284,6 +315,8 @@ impl PlanContext {
             delete_file_index,
             name_mapping: self.name_mapping.clone(),
             case_sensitive: self.case_sensitive,
+            table_metadata: self.table_metadata.clone(),
+            unified_partition_type: self.unified_partition_type.clone(),
         }
     }
 }

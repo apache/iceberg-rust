@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use typed_builder::TypedBuilder;
 
 use crate::Result;
+use crate::arrow::record_batch_transformer::PartitionColumnConstant;
 use crate::expr::BoundPredicate;
 use crate::spec::{
     DataContentType, DataFileFormat, ManifestEntryRef, NameMapping, PartitionSpec, Schema,
@@ -115,6 +116,21 @@ pub struct FileScanTask {
     #[serde(deserialize_with = "deserialize_not_implemented")]
     #[builder(default)]
     pub name_mapping: Option<Arc<NameMapping>>,
+
+    /// Pre-computed constant for the `_partition` metadata struct column.
+    /// Populated by scan planning (or externally by Comet's planner) when
+    /// `RESERVED_FIELD_ID_PARTITION` is in the projected field IDs.
+    ///
+    /// NOTE: This field is not serializable. FileScanTask cannot be
+    /// serialized/deserialized when this is populated. This is consistent with
+    /// partition_spec and name_mapping above, and is acceptable because Comet
+    /// builds tasks in-process (no serialization round-trip).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_not_implemented")]
+    #[serde(deserialize_with = "deserialize_not_implemented")]
+    #[builder(default)]
+    pub partition_column_constant: Option<Arc<PartitionColumnConstant>>,
 
     /// Whether this scan task should treat column names as case-sensitive when binding predicates.
     pub case_sensitive: bool,

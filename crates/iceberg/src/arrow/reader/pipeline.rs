@@ -37,7 +37,7 @@ use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics, ScanResult};
 use crate::error::Result;
 use crate::io::{FileIO, FileMetadata, FileRead};
-use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, is_metadata_field};
+use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, RESERVED_FIELD_ID_PARTITION, is_metadata_field};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::Datum;
 use crate::{Error, ErrorKind};
@@ -253,6 +253,14 @@ impl FileScanTaskReader {
         {
             record_batch_transformer_builder =
                 record_batch_transformer_builder.with_partition(partition_spec, partition_data)?;
+        }
+
+        // Add the _partition metadata struct column if it's in the projected fields
+        if task.project_field_ids().contains(&RESERVED_FIELD_ID_PARTITION)
+            && let Some(partition_column_constant) = &task.partition_column_constant
+        {
+            record_batch_transformer_builder = record_batch_transformer_builder
+                .with_partition_column_precomputed((**partition_column_constant).clone());
         }
 
         let mut record_batch_transformer = record_batch_transformer_builder.build();

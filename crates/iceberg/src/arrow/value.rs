@@ -909,6 +909,38 @@ pub(crate) fn create_primitive_array_repeated(
             let vals: Vec<Option<&[u8]>> = vec![None; num_rows];
             Arc::new(BinaryArray::from_opt_vec(vals))
         }
+        (DataType::LargeBinary, Some(PrimitiveLiteral::Binary(value))) => {
+            Arc::new(LargeBinaryArray::from_vec(vec![value; num_rows]))
+        }
+        (DataType::LargeBinary, None) => {
+            let vals: Vec<Option<&[u8]>> = vec![None; num_rows];
+            Arc::new(LargeBinaryArray::from_opt_vec(vals))
+        }
+        (DataType::FixedSizeBinary(len), Some(PrimitiveLiteral::Binary(value))) => {
+            let repeated: Vec<&[u8]> = vec![value.as_slice(); num_rows];
+            Arc::new(FixedSizeBinaryArray::try_from_iter(repeated.into_iter()).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Failed to create FixedSizeBinary({len}) array: {e}"),
+                )
+            })?)
+        }
+        (DataType::FixedSizeBinary(len), None) => {
+            let repeated: Vec<Option<&[u8]>> = vec![None; num_rows];
+            Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(repeated.into_iter(), *len).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Failed to create null FixedSizeBinary({len}) array: {e}"),
+                )
+            })?)
+        }
+        (DataType::Time64(TimeUnit::Microsecond), Some(PrimitiveLiteral::Long(value))) => {
+            Arc::new(Time64MicrosecondArray::from(vec![*value; num_rows]))
+        }
+        (DataType::Time64(TimeUnit::Microsecond), None) => {
+            let vals: Vec<Option<i64>> = vec![None; num_rows];
+            Arc::new(Time64MicrosecondArray::from(vals))
+        }
         (DataType::Decimal128(precision, scale), Some(PrimitiveLiteral::Int128(value))) => {
             Arc::new(
                 Decimal128Array::from(vec![*value; num_rows])
