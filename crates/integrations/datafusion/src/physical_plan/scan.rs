@@ -77,6 +77,7 @@ pub struct IcebergTableScanBuilder {
     snapshot_id: Option<i64>,
     schema: ArrowSchemaRef,
     projection: Option<Vec<usize>>,
+    predicates: Option<Predicate>,
     filters: Vec<Expr>,
     limit: Option<usize>,
     partitioning: Partitioning,
@@ -91,6 +92,7 @@ impl IcebergTableScanBuilder {
             schema,
             snapshot_id: None,
             projection: None,
+            predicates: None,
             filters: vec![],
             limit: None,
             partitioning: Partitioning::UnknownPartitioning(1),
@@ -107,6 +109,12 @@ impl IcebergTableScanBuilder {
     /// Sets the projected output columns.
     pub fn with_projection(mut self, projection: Option<&Vec<usize>>) -> Self {
         self.projection = projection.cloned();
+        self
+    }
+
+    /// Sets the predicates
+    pub fn with_predicates(mut self, predicates: Option<Predicate>) -> Self {
+        self.predicates = predicates;
         self
     }
 
@@ -163,7 +171,9 @@ impl IcebergTableScanBuilder {
             Boundedness::Bounded,
         ));
         let projection = get_column_names(self.schema, self.projection.as_ref());
-        let predicates = convert_filters_to_predicate(&self.filters);
+        let predicates = self
+            .predicates
+            .or_else(|| convert_filters_to_predicate(&self.filters));
 
         Ok(IcebergTableScan {
             table: self.table,

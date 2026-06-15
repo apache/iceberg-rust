@@ -149,15 +149,15 @@ impl TableProvider for IcebergTableProvider {
                 .collect::<Vec<_>>()
         });
 
-        let predicate = convert_filters_to_predicate(filters);
+        let predicates = convert_filters_to_predicate(filters);
 
         let mut builder = table.scan();
         builder = match col_names {
             Some(names) => builder.select(names),
             None => builder.select_all(),
         };
-        if let Some(pred) = predicate {
-            builder = builder.with_filter(pred);
+        if let Some(pred) = &predicates {
+            builder = builder.with_filter(pred.clone());
         }
 
         let tasks: Vec<FileScanTask> = builder
@@ -218,6 +218,7 @@ impl TableProvider for IcebergTableProvider {
                 // Always use current snapshot for catalog-backed provider.
                 .with_snapshot_id(None)
                 .with_projection(projection)
+                .with_predicates(predicates)
                 .with_filters(filters)
                 .with_limit(limit)
                 .with_task_buckets(buckets, partitioning)
