@@ -21,6 +21,7 @@
 //! as required by the Iceberg specification. Ordering and deduplication must be handled by the
 //! caller (e.g. by using a sorting writer) before passing records to this writer.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
@@ -119,6 +120,7 @@ where
         Ok(PositionDeleteFileWriter {
             inner: Some(self.inner.build()),
             partition_key,
+            distinct_paths: HashSet::new(),
         })
     }
 }
@@ -131,6 +133,7 @@ pub struct PositionDeleteFileWriter<
 > {
     inner: Option<RollingFileWriter<B, L, F>>,
     partition_key: Option<PartitionKey>,
+    distinct_paths: HashSet<Arc<str>>,
 }
 
 #[async_trait::async_trait]
@@ -143,6 +146,10 @@ where
     async fn write(&mut self, input: Vec<PositionDeleteInput>) -> Result<()> {
         if input.is_empty() {
             return Ok(());
+        }
+
+        for pd in &input {
+            self.distinct_paths.insert(Arc::clone(&pd.path));
         }
 
         let batch = build_position_delete_batch(input)?;
@@ -159,9 +166,17 @@ where
 
     async fn close(&mut self) -> Result<Vec<DataFile>> {
         if let Some(writer) = self.inner.take() {
-            writer
-                .close()
-                .await?
+            let builders = writer.close().await?;
+            let single_ref = if self.distinct_paths.len() == 1 {
+                self.distinct_paths
+                    .iter()
+                    .next()
+                    .map(|p: &Arc<str>| p.as_ref().to_string())
+            } else {
+                None
+            };
+
+            builders
                 .into_iter()
                 .map(|mut builder| {
                     builder.content(DataContentType::PositionDeletes);
@@ -171,6 +186,9 @@ where
                     } else {
                         builder.partition(Struct::empty());
                         builder.partition_spec_id(0);
+                    }
+                    if let Some(ref_path) = single_ref.as_ref() {
+                        builder.referenced_data_file(Some(ref_path.clone()));
                     }
                     builder.build().map_err(|e| {
                         Error::new(
@@ -379,6 +397,137 @@ mod tests {
             DataContentType::PositionDeletes
         );
         assert_eq!(data_files[0].partition(), &partition_value);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_referenced_data_file_single_path() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let file_io = FileIOBuilder::new_fs_io().build()?;
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("pos_del".to_string(), None, DataFileFormat::Parquet);
+        let schema = Arc::new(POSITION_DELETE_SCHEMA.clone());
+        let parquet_builder =
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone());
+        let rolling_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            parquet_builder,
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        );
+        let mut writer = PositionDeleteFileWriterBuilder::new(rolling_builder)
+            .build(None)
+            .await?;
+
+        writer
+            .write(vec![
+                PositionDeleteInput::new(Arc::from("s3://bucket/data/file-1.parquet"), 1),
+                PositionDeleteInput::new(Arc::from("s3://bucket/data/file-1.parquet"), 2),
+            ])
+            .await?;
+
+        let data_files = writer.close().await?;
+        assert_eq!(data_files.len(), 1);
+        assert_eq!(
+            data_files[0].referenced_data_file().as_deref(),
+            Some("s3://bucket/data/file-1.parquet")
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_referenced_data_file_multi_path_is_null() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let file_io = FileIOBuilder::new_fs_io().build()?;
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("pos_del".to_string(), None, DataFileFormat::Parquet);
+        let schema = Arc::new(POSITION_DELETE_SCHEMA.clone());
+        let parquet_builder =
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone());
+        let rolling_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            parquet_builder,
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        );
+        let mut writer = PositionDeleteFileWriterBuilder::new(rolling_builder)
+            .build(None)
+            .await?;
+
+        writer
+            .write(vec![
+                PositionDeleteInput::new(Arc::from("s3://bucket/data/file-1.parquet"), 1),
+                PositionDeleteInput::new(Arc::from("s3://bucket/data/file-2.parquet"), 5),
+            ])
+            .await?;
+
+        let data_files = writer.close().await?;
+        assert_eq!(data_files.len(), 1);
+        assert_eq!(data_files[0].referenced_data_file(), None);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_referenced_data_file_set_on_all_rolled_files() -> Result<()> {
+        // When rolling produces multiple output files but all entries target a single
+        // data file, every output file must carry referenced_data_file.
+        let temp_dir = TempDir::new()?;
+        let file_io = FileIOBuilder::new_fs_io().build()?;
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("pos_del".to_string(), None, DataFileFormat::Parquet);
+        let schema = Arc::new(POSITION_DELETE_SCHEMA.clone());
+        let parquet_builder =
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone());
+        // Use a tiny target size to force rolling after the first write.
+        let rolling_builder = RollingFileWriterBuilder::new(
+            parquet_builder,
+            1,
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        );
+        let mut writer = PositionDeleteFileWriterBuilder::new(rolling_builder)
+            .build(None)
+            .await?;
+
+        writer
+            .write(vec![PositionDeleteInput::new(
+                Arc::from("s3://bucket/data/file-1.parquet"),
+                1,
+            )])
+            .await?;
+        writer
+            .write(vec![PositionDeleteInput::new(
+                Arc::from("s3://bucket/data/file-1.parquet"),
+                2,
+            )])
+            .await?;
+
+        let data_files = writer.close().await?;
+        assert!(
+            data_files.len() > 1,
+            "expected rolling to produce multiple files, got {}",
+            data_files.len()
+        );
+        for file in &data_files {
+            assert_eq!(
+                file.referenced_data_file().as_deref(),
+                Some("s3://bucket/data/file-1.parquet"),
+                "all rolled files must carry referenced_data_file"
+            );
+        }
 
         Ok(())
     }
