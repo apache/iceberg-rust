@@ -21,8 +21,10 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
+mod update;
 mod utils;
 mod visitor;
+pub use self::update::*;
 pub use self::visitor::*;
 pub(super) mod _serde;
 mod id_reassigner;

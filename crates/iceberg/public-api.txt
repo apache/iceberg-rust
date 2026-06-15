@@ -1589,6 +1589,23 @@ impl<'de> iceberg::spec::PrimitiveType
 pub fn iceberg::spec::PrimitiveType::deserialize<__D>(__deserializer: __D) -> core::result::Result<iceberg::spec::PrimitiveType, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::PrimitiveType
 pub fn iceberg::spec::PrimitiveType::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
+pub enum iceberg::spec::SchemaOperation
+pub iceberg::spec::SchemaOperation::Add(iceberg::spec::AddColumn)
+pub iceberg::spec::SchemaOperation::AllowIncompatibleChanges
+pub iceberg::spec::SchemaOperation::Delete(iceberg::spec::DeleteColumn)
+pub iceberg::spec::SchemaOperation::Move(iceberg::spec::MoveColumn)
+pub iceberg::spec::SchemaOperation::Rename(iceberg::spec::RenameColumn)
+pub iceberg::spec::SchemaOperation::Update(iceberg::spec::UpdateColumn)
+impl core::convert::From<iceberg::spec::AddColumn> for iceberg::spec::SchemaOperation
+pub fn iceberg::spec::SchemaOperation::from(add: iceberg::spec::AddColumn) -> Self
+impl core::convert::From<iceberg::spec::DeleteColumn> for iceberg::spec::SchemaOperation
+pub fn iceberg::spec::SchemaOperation::from(delete: iceberg::spec::DeleteColumn) -> Self
+impl core::convert::From<iceberg::spec::MoveColumn> for iceberg::spec::SchemaOperation
+pub fn iceberg::spec::SchemaOperation::from(move_col: iceberg::spec::MoveColumn) -> Self
+impl core::convert::From<iceberg::spec::RenameColumn> for iceberg::spec::SchemaOperation
+pub fn iceberg::spec::SchemaOperation::from(rename: iceberg::spec::RenameColumn) -> Self
+impl core::convert::From<iceberg::spec::UpdateColumn> for iceberg::spec::SchemaOperation
+pub fn iceberg::spec::SchemaOperation::from(update: iceberg::spec::UpdateColumn) -> Self
 pub enum iceberg::spec::SnapshotRetention
 pub iceberg::spec::SnapshotRetention::Branch
 pub iceberg::spec::SnapshotRetention::Branch::max_ref_age_ms: core::option::Option<i64>
@@ -1689,6 +1706,8 @@ pub fn iceberg::spec::Type::decimal(precision: u32, scale: u32) -> iceberg::Resu
 pub fn iceberg::spec::Type::decimal_max_precision(num_bytes: u32) -> iceberg::Result<u32>
 pub fn iceberg::spec::Type::decimal_required_bytes(precision: u32) -> iceberg::Result<u32>
 pub fn iceberg::spec::Type::is_floating_type(&self) -> bool
+pub fn iceberg::spec::Type::is_list(&self) -> bool
+pub fn iceberg::spec::Type::is_map(&self) -> bool
 pub fn iceberg::spec::Type::is_nested(&self) -> bool
 pub fn iceberg::spec::Type::is_primitive(&self) -> bool
 pub fn iceberg::spec::Type::is_struct(&self) -> bool
@@ -1752,6 +1771,11 @@ impl serde_core::ser::Serialize for iceberg::spec::ViewRepresentation
 pub fn iceberg::spec::ViewRepresentation::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::ViewRepresentation
 pub fn iceberg::spec::ViewRepresentation::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::spec::AddColumn
+impl core::convert::From<iceberg::spec::AddColumn> for iceberg::spec::SchemaOperation
+pub fn iceberg::spec::SchemaOperation::from(add: iceberg::spec::AddColumn) -> Self
+impl iceberg::spec::AddColumn
+pub fn iceberg::spec::AddColumn::builder() -> AddColumnBuilder<((), (), (), (), (), ())>
 pub struct iceberg::spec::BlobMetadata
 pub iceberg::spec::BlobMetadata::fields: alloc::vec::Vec<i32>
 pub iceberg::spec::BlobMetadata::properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
@@ -1887,6 +1911,11 @@ impl serde_core::ser::Serialize for iceberg::spec::Datum
 pub fn iceberg::spec::Datum::serialize<S: serde_core::ser::Serializer>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::Datum
 pub fn iceberg::spec::Datum::deserialize<D: serde_core::de::Deserializer<'de>>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct iceberg::spec::DeleteColumn
+impl iceberg::spec::DeleteColumn
+pub fn iceberg::spec::DeleteColumn::new(name: impl core::convert::Into<alloc::string::String>) -> Self
+impl core::convert::From<iceberg::spec::DeleteColumn> for iceberg::spec::SchemaOperation
+pub fn iceberg::spec::SchemaOperation::from(delete: iceberg::spec::DeleteColumn) -> Self
 pub struct iceberg::spec::EncryptedKey
 impl iceberg::spec::EncryptedKey
 pub fn iceberg::spec::EncryptedKey::encrypted_by_id(&self) -> core::option::Option<&str>
@@ -1932,6 +1961,8 @@ pub struct iceberg::spec::ListType
 pub iceberg::spec::ListType::element_field: iceberg::spec::NestedFieldRef
 impl iceberg::spec::ListType
 pub fn iceberg::spec::ListType::new(element_field: iceberg::spec::NestedFieldRef) -> Self
+pub fn iceberg::spec::ListType::optional(element_id: i32, element_type: iceberg::spec::Type) -> Self
+pub fn iceberg::spec::ListType::required(element_id: i32, element_type: iceberg::spec::Type) -> Self
 impl core::clone::Clone for iceberg::spec::ListType
 pub fn iceberg::spec::ListType::clone(&self) -> iceberg::spec::ListType
 impl core::cmp::Eq for iceberg::spec::ListType
@@ -2158,6 +2189,13 @@ impl serde_core::ser::Serialize for iceberg::spec::MetadataLog
 pub fn iceberg::spec::MetadataLog::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::MetadataLog
 pub fn iceberg::spec::MetadataLog::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::spec::MoveColumn
+impl iceberg::spec::MoveColumn
+pub fn iceberg::spec::MoveColumn::after(name: impl core::convert::Into<alloc::string::String>, reference: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn iceberg::spec::MoveColumn::before(name: impl core::convert::Into<alloc::string::String>, reference: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn iceberg::spec::MoveColumn::first(name: impl core::convert::Into<alloc::string::String>) -> Self
+impl core::convert::From<iceberg::spec::MoveColumn> for iceberg::spec::SchemaOperation
+pub fn iceberg::spec::SchemaOperation::from(move_col: iceberg::spec::MoveColumn) -> Self
 pub struct iceberg::spec::NameMapping
 impl iceberg::spec::NameMapping
 pub fn iceberg::spec::NameMapping::fields(&self) -> &[iceberg::spec::MappedField]
@@ -2298,6 +2336,11 @@ impl serde_core::ser::Serialize for iceberg::spec::PartitionStatisticsFile
 pub fn iceberg::spec::PartitionStatisticsFile::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::PartitionStatisticsFile
 pub fn iceberg::spec::PartitionStatisticsFile::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::spec::RenameColumn
+impl core::convert::From<iceberg::spec::RenameColumn> for iceberg::spec::SchemaOperation
+pub fn iceberg::spec::SchemaOperation::from(rename: iceberg::spec::RenameColumn) -> Self
+impl iceberg::spec::RenameColumn
+pub fn iceberg::spec::RenameColumn::builder() -> RenameColumnBuilder<((), ())>
 pub struct iceberg::spec::Schema
 impl iceberg::spec::Schema
 pub fn iceberg::spec::Schema::accessor_by_field_id(&self, field_id: i32) -> core::option::Option<alloc::sync::Arc<iceberg::expr::accessor::StructAccessor>>
@@ -2814,6 +2857,14 @@ impl core::default::Default for iceberg::spec::UnboundPartitionSpecBuilder
 pub fn iceberg::spec::UnboundPartitionSpecBuilder::default() -> iceberg::spec::UnboundPartitionSpecBuilder
 impl core::fmt::Debug for iceberg::spec::UnboundPartitionSpecBuilder
 pub fn iceberg::spec::UnboundPartitionSpecBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct iceberg::spec::UpdateColumn
+impl iceberg::spec::UpdateColumn
+pub fn iceberg::spec::UpdateColumn::new_default_value(name: impl core::convert::Into<alloc::string::String>, new_default_value: core::option::Option<iceberg::spec::Literal>) -> Self
+pub fn iceberg::spec::UpdateColumn::new_doc(name: impl core::convert::Into<alloc::string::String>, new_doc: core::option::Option<alloc::string::String>) -> Self
+pub fn iceberg::spec::UpdateColumn::new_required(name: impl core::convert::Into<alloc::string::String>, is_required: bool) -> Self
+pub fn iceberg::spec::UpdateColumn::new_type(name: impl core::convert::Into<alloc::string::String>, new_type: iceberg::spec::PrimitiveType) -> Self
+impl core::convert::From<iceberg::spec::UpdateColumn> for iceberg::spec::SchemaOperation
+pub fn iceberg::spec::SchemaOperation::from(update: iceberg::spec::UpdateColumn) -> Self
 pub struct iceberg::spec::ViewMetadata
 impl iceberg::spec::ViewMetadata
 pub fn iceberg::spec::ViewMetadata::current_schema(&self) -> &iceberg::spec::SchemaRef
@@ -2987,6 +3038,7 @@ pub fn iceberg::spec::SchemaWithPartnerVisitor::struct(&mut self, struct: &icebe
 pub fn iceberg::spec::deserialize_data_file_from_json(json: &str, partition_spec_id: i32, partition_type: &iceberg::spec::StructType, schema: &iceberg::spec::Schema) -> iceberg::Result<iceberg::spec::DataFile>
 pub fn iceberg::spec::prune_columns(schema: &iceberg::spec::Schema, selected: impl core::iter::traits::collect::IntoIterator<Item = i32>, select_full_types: bool) -> iceberg::Result<iceberg::spec::Type>
 pub fn iceberg::spec::read_data_files_from_avro<R: std::io::Read>(reader: &mut R, schema: &iceberg::spec::Schema, partition_spec_id: i32, partition_type: &iceberg::spec::StructType, version: iceberg::spec::FormatVersion) -> iceberg::Result<alloc::vec::Vec<iceberg::spec::DataFile>>
+pub fn iceberg::spec::schema_update(schema: iceberg::spec::SchemaRef, operations: &[iceberg::spec::SchemaOperation]) -> iceberg::Result<iceberg::spec::SchemaRef>
 pub fn iceberg::spec::serialize_data_file_to_json(data_file: iceberg::spec::DataFile, partition_type: &iceberg::spec::StructType, format_version: iceberg::spec::FormatVersion) -> iceberg::Result<alloc::string::String>
 pub fn iceberg::spec::visit_schema<V: iceberg::spec::SchemaVisitor>(schema: &iceberg::spec::Schema, visitor: &mut V) -> iceberg::Result<<V as iceberg::spec::SchemaVisitor>::T>
 pub fn iceberg::spec::visit_schema_with_partner<P, V: iceberg::spec::SchemaWithPartnerVisitor<P>, A: iceberg::spec::PartnerAccessor<P>>(schema: &iceberg::spec::Schema, partner: &P, visitor: &mut V, accessor: &A) -> iceberg::Result<<V as iceberg::spec::SchemaWithPartnerVisitor>::T>
@@ -3060,12 +3112,6 @@ impl iceberg::transaction::ActionCommit
 pub fn iceberg::transaction::ActionCommit::new(updates: alloc::vec::Vec<iceberg::TableUpdate>, requirements: alloc::vec::Vec<iceberg::TableRequirement>) -> Self
 pub fn iceberg::transaction::ActionCommit::take_requirements(&mut self) -> alloc::vec::Vec<iceberg::TableRequirement>
 pub fn iceberg::transaction::ActionCommit::take_updates(&mut self) -> alloc::vec::Vec<iceberg::TableUpdate>
-pub struct iceberg::transaction::AddColumn
-impl iceberg::transaction::AddColumn
-pub fn iceberg::transaction::AddColumn::optional(name: impl alloc::string::ToString, field_type: iceberg::spec::Type) -> Self
-pub fn iceberg::transaction::AddColumn::required(name: impl alloc::string::ToString, field_type: iceberg::spec::Type, initial_default: iceberg::spec::Literal) -> Self
-impl iceberg::transaction::AddColumn
-pub fn iceberg::transaction::AddColumn::builder() -> AddColumnBuilder<((), (), (), (), (), (), ())>
 pub struct iceberg::transaction::Transaction
 impl iceberg::transaction::Transaction
 pub async fn iceberg::transaction::Transaction::commit(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>
@@ -3281,6 +3327,7 @@ impl<B, L, F> iceberg::writer::IcebergWriterBuilder for iceberg::writer::base_wr
 pub type iceberg::writer::base_writer::equality_delete_writer::EqualityDeleteFileWriterBuilder<B, L, F>::R = iceberg::writer::base_writer::equality_delete_writer::EqualityDeleteFileWriter<B, L, F>
 pub fn iceberg::writer::base_writer::equality_delete_writer::EqualityDeleteFileWriterBuilder<B, L, F>::build<'life0, 'async_trait>(&'life0 self, partition_key: core::option::Option<iceberg::spec::PartitionKey>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<Self::R>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub macro iceberg::ensure_data_valid!
+pub macro iceberg::ensure_precondition!
 #[non_exhaustive] pub enum iceberg::ErrorKind
 pub iceberg::ErrorKind::CatalogCommitConflicts
 pub iceberg::ErrorKind::DataInvalid
