@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -29,12 +30,18 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, Partitioning, PlanProperties};
 use datafusion::prelude::Expr;
 use futures::{Stream, TryStreamExt};
+use iceberg::arrow::ArrowReaderBuilder;
 use iceberg::expr::Predicate;
 use iceberg::scan::{FileScanTask, TableScan};
 use iceberg::table::Table;
 
 use super::expr_to_predicate::convert_filters_to_predicate;
 use crate::to_datafusion_error;
+const DEFAULT_PARALLELISM: usize = 1;
+fn available_parallelism() -> NonZeroUsize {
+    std::thread::available_parallelism()
+        .unwrap_or_else(|_err| NonZeroUsize::new(DEFAULT_PARALLELISM).unwrap())
+}
 
 /// Iceberg [`Table`] scan as a DataFusion [`ExecutionPlan`].
 ///
@@ -117,7 +124,7 @@ impl IcebergTableScan {
 
     #[allow(clippy::too_many_arguments)]
     fn new_inner(
-        table: Table,
+        table: Table, // could we remove the Table from here ?
         snapshot_id: Option<i64>,
         schema: ArrowSchemaRef,
         projection: Option<&Vec<usize>>,
@@ -234,6 +241,7 @@ impl ExecutionPlan for IcebergTableScan {
             self.predicates.clone(),
             bucket,
         );
+
         let stream = Box::pin(futures::stream::once(fut).try_flatten())
             as Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>>;
 
@@ -302,8 +310,8 @@ fn build_table_scan(
 }
 
 /// Builds the `RecordBatch` stream for a single partition. When `bucket` is
-/// `Some`, streams the pre-planned tasks via `to_arrow_from_tasks`; when
-/// `None`, plans and reads the full scan via `to_arrow`.
+/// `Some`, streams the pre-planned tasks directly through an `ArrowReader`;
+/// when `None`, plans and reads the full scan via `to_arrow`.
 async fn build_record_batch_stream(
     table: Table,
     snapshot_id: Option<i64>,
@@ -311,26 +319,36 @@ async fn build_record_batch_stream(
     predicates: Option<Predicate>,
     bucket: Option<Vec<FileScanTask>>,
 ) -> DFResult<Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>>> {
-    let table_scan = build_table_scan(table, snapshot_id, column_names, predicates)?;
     let stream: Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>> = match bucket {
         Some(bucket) => {
             let task_stream = Box::pin(futures::stream::iter(
                 bucket.into_iter().map(Ok::<_, iceberg::Error>),
             ));
+            let num_cpus = available_parallelism().get();
+            let arrow_reader_builder = ArrowReaderBuilder::new(table.file_io().clone())
+                .with_data_file_concurrency_limit(num_cpus)
+                .with_row_group_filtering_enabled(true)
+                .with_row_selection_enabled(true);
+
+            Box::pin(
+                arrow_reader_builder
+                    .build()
+                    .read(task_stream)
+                    .map_err(to_datafusion_error)?
+                    .stream()
+                    .map_err(to_datafusion_error),
+            )
+        }
+        None => {
+            let table_scan = build_table_scan(table, snapshot_id, column_names, predicates)?;
             Box::pin(
                 table_scan
-                    .to_arrow_from_tasks(task_stream)
+                    .to_arrow()
+                    .await
                     .map_err(to_datafusion_error)?
                     .map_err(to_datafusion_error),
             )
         }
-        None => Box::pin(
-            table_scan
-                .to_arrow()
-                .await
-                .map_err(to_datafusion_error)?
-                .map_err(to_datafusion_error),
-        ),
     };
     Ok(stream)
 }
