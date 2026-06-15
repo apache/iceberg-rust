@@ -26,7 +26,7 @@ use crate::inspect::MetadataTable;
 use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
 use crate::runtime::Runtime;
-use crate::scan::TableScanBuilder;
+use crate::scan::{ScanPlanner, TableScanBuilder};
 use crate::spec::{ManifestListReader, SchemaRef, SnapshotRef, TableMetadata, TableMetadataRef};
 use crate::{Error, ErrorKind, Result, TableIdent};
 
@@ -41,6 +41,7 @@ pub struct TableBuilder {
     disable_cache: bool,
     cache_size_bytes: Option<u64>,
     runtime: Option<Runtime>,
+    scan_planner: Option<Arc<dyn ScanPlanner>>,
 }
 
 impl TableBuilder {
@@ -55,6 +56,7 @@ impl TableBuilder {
             disable_cache: false,
             cache_size_bytes: None,
             runtime: None,
+            scan_planner: None,
         }
     }
 
@@ -108,6 +110,16 @@ impl TableBuilder {
         self
     }
 
+    /// optional - sets a server-side [`ScanPlanner`] for this table.
+    ///
+    /// When provided, [`Table::scan`] produces scans that delegate planning to
+    /// this planner (typically the REST catalog), falling back to native,
+    /// client-side planning if the server does not support it.
+    pub fn scan_planner(mut self, scan_planner: Arc<dyn ScanPlanner>) -> Self {
+        self.scan_planner = Some(scan_planner);
+        self
+    }
+
     /// optional - sets the KMS client used to unwrap keys for table encryption.
     ///
     /// If the table metadata has the `encryption.key-id` property set, a
@@ -130,6 +142,7 @@ impl TableBuilder {
             disable_cache,
             cache_size_bytes,
             runtime,
+            scan_planner,
         } = self;
 
         let Some(file_io) = file_io else {
@@ -190,6 +203,7 @@ impl TableBuilder {
             object_cache,
             runtime,
             encryption_manager,
+            scan_planner,
         })
     }
 }
@@ -205,6 +219,8 @@ pub struct Table {
     object_cache: Arc<ObjectCache>,
     runtime: Runtime,
     encryption_manager: Option<Arc<EncryptionManager>>,
+    /// Optional server-side scan planner injected by the catalog (e.g. REST).
+    scan_planner: Option<Arc<dyn ScanPlanner>>,
 }
 
 impl Table {
@@ -289,6 +305,11 @@ impl Table {
     /// Returns the [`Runtime`] for this table.
     pub(crate) fn runtime(&self) -> &Runtime {
         &self.runtime
+    }
+
+    /// Returns the server-side [`ScanPlanner`] for this table, if one was set.
+    pub(crate) fn scan_planner(&self) -> Option<Arc<dyn ScanPlanner>> {
+        self.scan_planner.clone()
     }
 
     /// Returns the flag indicating whether the `Table` is readonly or not
