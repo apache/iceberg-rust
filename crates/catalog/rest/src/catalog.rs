@@ -843,6 +843,7 @@ impl RestSessionCatalog {
         &self,
         metadata_location: Option<&str>,
         extra_config: Option<HashMap<String, String>>,
+        storage_credentials: Option<&[StorageCredential]>,
     ) -> Result<FileIO> {
         let mut props = self.client().await?.config.props.clone();
         if let Some(config) = extra_config {
@@ -875,9 +876,19 @@ impl RestSessionCatalog {
                 )
             })?;
 
-        let file_io = FileIOBuilder::new(factory).with_props(props).build();
+        let mut builder = FileIOBuilder::new(factory).with_props(props.clone());
 
-        Ok(file_io)
+        // Vended credentials are scoped per location prefix: give each its own
+        // storage so reads/writes use the matching credentials.
+        if let Some(creds) = storage_credentials {
+            for cred in creds {
+                let mut prefixed = props.clone();
+                prefixed.extend(cred.config.clone());
+                builder = builder.with_prefixed_props(cred.prefix.clone(), prefixed);
+            }
+        }
+
+        Ok(builder.build())
     }
 }
 
@@ -1137,7 +1148,6 @@ impl SessionCatalog for RestSessionCatalog {
             client
                 .http_client
                 .request(Method::POST, client.config.tables_endpoint(namespace))
-                .header("X-Iceberg-Access-Delegation", "vended-credentials")
                 .json(&CreateTableRequest {
                     name: creation.name,
                     location: creation.location,
@@ -1178,10 +1188,15 @@ impl SessionCatalog for RestSessionCatalog {
             "Metadata location missing in `create_table` response!",
         ))?;
 
-        let config = table_file_io_config(&response, &self.user_config.props);
+        let mut base_config = response.config.clone();
+        base_config.extend(self.user_config.props.clone());
 
         let file_io = self
-            .load_file_io(Some(metadata_location), Some(config))
+            .load_file_io(
+                Some(metadata_location),
+                Some(base_config),
+                response.storage_credentials.as_deref(),
+            )
             .await?;
 
         let mut table_builder = Table::builder()
@@ -1212,12 +1227,13 @@ impl SessionCatalog for RestSessionCatalog {
     ) -> Result<Table> {
         let client = self.client().await?;
 
+        // Vended credentials are opt-in via a `header.X-Iceberg-Access-Delegation`
+        // catalog property (applied to every request like the Iceberg Java client);
+        // any returned `storage_credentials` are wired into the FileIO below.
         let request = HttpRequest::build(
             client
                 .http_client
-                .request(Method::GET, client.config.table_endpoint(table_ident))
-                // Opt in to vended storage credentials.
-                .header("X-Iceberg-Access-Delegation", "vended-credentials"),
+                .request(Method::GET, client.config.table_endpoint(table_ident)),
         )?;
 
         let http_response = client.query_catalog(request).await?;
@@ -1240,10 +1256,15 @@ impl SessionCatalog for RestSessionCatalog {
             }
         };
 
-        let config = table_file_io_config(&response, &self.user_config.props);
+        let mut base_config = response.config.clone();
+        base_config.extend(self.user_config.props.clone());
 
         let file_io = self
-            .load_file_io(response.metadata_location.as_deref(), Some(config))
+            .load_file_io(
+                response.metadata_location.as_deref(),
+                Some(base_config),
+                response.storage_credentials.as_deref(),
+            )
             .await?;
 
         let mut table_builder = Table::builder()
@@ -1382,7 +1403,9 @@ impl SessionCatalog for RestSessionCatalog {
             "Metadata location missing in `register_table` response!",
         ))?;
 
-        let file_io = self.load_file_io(Some(metadata_location), None).await?;
+        let file_io = self
+            .load_file_io(Some(metadata_location), None, None)
+            .await?;
 
         let mut table_builder = Table::builder()
             .identifier(table_ident.clone())
@@ -1398,7 +1421,7 @@ impl SessionCatalog for RestSessionCatalog {
 
     async fn update_table(
         &self,
-        context: &SessionContext,
+        _context: &SessionContext,
         mut commit: TableCommit,
     ) -> Result<Table> {
         let client = self.client().await?;
@@ -1460,12 +1483,11 @@ impl SessionCatalog for RestSessionCatalog {
             }
         };
 
-        // Reload for a credentialed FileIO (commit response carries no credentials).
+        // The commit response carries no credentials, so build a plain FileIO;
+        // the transaction layer reuses the credentialed one it already holds.
         let file_io = self
-            .load_table(context, commit.identifier())
-            .await?
-            .file_io()
-            .clone();
+            .load_file_io(Some(&response.metadata_location), None, None)
+            .await?;
 
         let mut table_builder = Table::builder()
             .identifier(commit.identifier().clone())
@@ -1648,23 +1670,6 @@ impl RestSessionCatalogBuilder {
             }
         }
     }
-}
-
-/// FileIO props: server `config`, then vended `storage_credentials` (longest prefix wins), then user props.
-fn table_file_io_config(
-    response: &LoadTableResult,
-    user_props: &HashMap<String, String>,
-) -> HashMap<String, String> {
-    let mut config: HashMap<String, String> = response.config.clone();
-    if let Some(creds) = response.storage_credentials.as_ref() {
-        let mut sorted: Vec<&StorageCredential> = creds.iter().collect();
-        sorted.sort_by_key(|c| c.prefix.len());
-        for cred in sorted {
-            config.extend(cred.config.clone());
-        }
-    }
-    config.extend(user_props.clone());
-    config
 }
 
 #[cfg(test)]
@@ -3798,6 +3803,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_load_table_uses_vended_credentials() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        // Vended credentials are opt-in via a `header.*` catalog property (like the
+        // Java client). With it configured, the header is sent and the response's
+        // `storage-credentials` are accepted (the FileIO builds).
+        let load_table_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .match_header("x-iceberg-access-delegation", "vended-credentials")
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "load_table_response_with_credentials.json"
+            ))
+            .create_async()
+            .await;
+
+        let props = HashMap::from([(
+            "header.X-Iceberg-Access-Delegation".to_string(),
+            "vended-credentials".to_string(),
+        )]);
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+            None,
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+
+        let table = catalog
+            .load_table(&TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            "s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json",
+            table.metadata_location().unwrap()
+        );
+
+        config_mock.assert_async().await;
+        load_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_load_table_omits_delegation_header_by_default() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        // No delegation header is hardcoded: without a `header.*` prop, none is sent.
+        let load_table_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .match_header("x-iceberg-access-delegation", mockito::Matcher::Missing)
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "load_table_response.json"
+            ))
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            None,
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+
+        catalog
+            .load_table(&TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .await
+            .unwrap();
+
+        config_mock.assert_async().await;
+        load_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn test_create_table() {
         let mut server = Server::new_async().await;
 
@@ -4012,7 +4105,7 @@ mod tests {
 
         let config_mock = create_config_mock(&mut server).await;
 
-        // GET hit twice: commit refresh + post-commit reload.
+        // GET hit once: the transaction refreshes the table before committing.
         let load_table_mock = server
             .mock("GET", "/v1/namespaces/ns1/tables/test1")
             .with_status(200)
@@ -4021,7 +4114,7 @@ mod tests {
                 env!("CARGO_MANIFEST_DIR"),
                 "load_table_response.json"
             ))
-            .expect(2)
+            .expect(1)
             .create_async()
             .await;
 
