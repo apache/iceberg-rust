@@ -78,7 +78,7 @@ pub(crate) fn coerce_timestamp_columns(
 /// the target's timezone in the coerced schema.
 struct TimestampTzCoercionVisitor<'a> {
     target_schema: &'a ArrowSchemaRef,
-    field_stack: Vec<Field>,
+    field_stack: Vec<FieldRef>,
     target_field_stack: Vec<DataType>,
     changed: bool,
 }
@@ -103,7 +103,7 @@ impl ArrowSchemaVisitor for TimestampTzCoercionVisitor<'_> {
     type U = ArrowSchema;
 
     fn before_field(&mut self, field: &FieldRef) -> Result<()> {
-        self.field_stack.push(field.as_ref().clone());
+        self.field_stack.push(field.clone());
 
         let target_type = if self.target_field_stack.is_empty() {
             self.target_schema
@@ -130,7 +130,7 @@ impl ArrowSchemaVisitor for TimestampTzCoercionVisitor<'_> {
     }
 
     fn before_list_element(&mut self, field: &FieldRef) -> Result<()> {
-        self.field_stack.push(field.as_ref().clone());
+        self.field_stack.push(field.clone());
         let target_type = match self.target_field_stack.last() {
             Some(DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _)) => {
                 f.data_type().clone()
@@ -148,7 +148,7 @@ impl ArrowSchemaVisitor for TimestampTzCoercionVisitor<'_> {
     }
 
     fn before_map_key(&mut self, field: &FieldRef) -> Result<()> {
-        self.field_stack.push(field.as_ref().clone());
+        self.field_stack.push(field.clone());
         let target_type = match self.target_field_stack.last() {
             Some(DataType::Map(entries, _)) => match entries.data_type() {
                 DataType::Struct(fields) if fields.len() == 2 => fields[0].data_type().clone(),
@@ -167,7 +167,7 @@ impl ArrowSchemaVisitor for TimestampTzCoercionVisitor<'_> {
     }
 
     fn before_map_value(&mut self, field: &FieldRef) -> Result<()> {
-        self.field_stack.push(field.as_ref().clone());
+        self.field_stack.push(field.clone());
         let target_type = match self.target_field_stack.last() {
             Some(DataType::Map(entries, _)) => match entries.data_type() {
                 DataType::Struct(fields) if fields.len() == 2 => fields[1].data_type().clone(),
