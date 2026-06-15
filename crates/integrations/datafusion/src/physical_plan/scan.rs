@@ -344,7 +344,7 @@ async fn build_record_batch_stream(
     predicates: Option<Predicate>,
     bucket: Option<Arc<[FileScanTask]>>,
 ) -> DFResult<Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>>> {
-    let stream: Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>> = match bucket {
+    let stream: Pin<Box<dyn Stream<Item = iceberg::Result<RecordBatch>> + Send>> = match bucket {
         Some(bucket) => {
             let task_stream = Box::pin(futures::stream::iter(
                 (0..bucket.len()).map(move |idx| Ok::<_, iceberg::Error>(bucket[idx].clone())),
@@ -360,22 +360,15 @@ async fn build_record_batch_stream(
                     .build()
                     .read(task_stream)
                     .map_err(to_datafusion_error)?
-                    .stream()
-                    .map_err(to_datafusion_error),
+                    .stream(),
             )
         }
         None => {
             let table_scan = build_table_scan(table, snapshot_id, column_names, predicates)?;
-            Box::pin(
-                table_scan
-                    .to_arrow()
-                    .await
-                    .map_err(to_datafusion_error)?
-                    .map_err(to_datafusion_error),
-            )
+            Box::pin(table_scan.to_arrow().await.map_err(to_datafusion_error)?)
         }
     };
-    Ok(stream)
+    Ok(Box::pin(stream.map_err(to_datafusion_error)))
 }
 
 /// Truncates a stream of `RecordBatch` to at most `limit` rows.
