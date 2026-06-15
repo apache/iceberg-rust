@@ -239,7 +239,9 @@ impl Transaction {
             .requirements(existing_requirements)
             .build();
 
-        catalog.update_table(table_commit).await
+        let committed = catalog.update_table(table_commit).await?;
+        // Reuse the credentialed FileIO we already hold; the commit response has none.
+        Ok(committed.with_file_io(self.table.file_io().clone()))
     }
 }
 
