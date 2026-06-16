@@ -1554,7 +1554,8 @@ mod tests {
         let mut builder = Table::builder()
             .file_io(table.file_io().clone())
             .metadata(Arc::new(metadata))
-            .identifier(table.identifier().clone());
+            .identifier(table.identifier().clone())
+            .runtime(table.runtime().clone());
         if let Some(metadata_location) = table.metadata_location() {
             builder = builder.metadata_location(metadata_location);
         }
