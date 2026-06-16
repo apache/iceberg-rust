@@ -25,6 +25,7 @@ use arrow_array::{
 };
 use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, FieldRef, TimeUnit};
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use uuid::Uuid;
 
 use super::get_field_id_from_metadata;
@@ -517,10 +518,20 @@ impl PartnerAccessor<ArrayRef> for ArrowArrayAccessor {
             .iter()
             .position(|arrow_field| self.match_mode.match_field(arrow_field, field))
             .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Field id {} not found in struct array", field.id),
-                )
+                let message = match self.match_mode {
+                    // The usual cause in id mode is an Arrow schema built without field
+                    // ids, so point at the canonical way to preserve them.
+                    FieldMatchMode::Id => format!(
+                        "Field id {} ({}) not found in struct array; the Arrow field may be \
+                         missing its `{PARQUET_FIELD_ID_META_KEY}` metadata (derive the schema \
+                         from the table via current_schema().as_ref().try_into())",
+                        field.id, field.name
+                    ),
+                    FieldMatchMode::Name => {
+                        format!("Field {} not found in struct array by name", field.name)
+                    }
+                };
+                Error::new(ErrorKind::DataInvalid, message)
             })?;
 
         Ok(struct_array.column(field_pos))
@@ -1419,6 +1430,25 @@ mod test {
         assert_eq!(int_array.value(0), 42);
         assert_eq!(int_array.value(1), 43);
         assert!(int_array.is_null(2));
+    }
+
+    #[test]
+    fn test_field_partner_missing_field_id_error_is_actionable() {
+        // A struct array whose Arrow field carries no PARQUET:field_id metadata.
+        let struct_array = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("field_a", DataType::Int32, true)),
+            Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef,
+        )])) as ArrayRef;
+
+        let accessor = ArrowArrayAccessor::new_with_match_mode(FieldMatchMode::Id);
+        let field = NestedField::optional(1, "field_a", Type::Primitive(PrimitiveType::Int));
+
+        let err = accessor.field_partner(&struct_array, &field).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message().contains(PARQUET_FIELD_ID_META_KEY),
+            "id-mode error should hint at the missing metadata key, got: {err}"
+        );
     }
 
     #[test]
