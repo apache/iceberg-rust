@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -34,16 +33,10 @@ use iceberg::arrow::ArrowReaderBuilder;
 use iceberg::expr::Predicate;
 use iceberg::scan::{FileScanTask, TableScan};
 use iceberg::table::Table;
+use iceberg::util::available_parallelism;
 
 use super::expr_to_predicate::convert_filters_to_predicate;
 use crate::to_datafusion_error;
-
-// TODO: use crate::util for available_parallelism
-const DEFAULT_PARALLELISM: usize = 1;
-fn available_parallelism() -> NonZeroUsize {
-    std::thread::available_parallelism()
-        .unwrap_or_else(|_err| NonZeroUsize::new(DEFAULT_PARALLELISM).unwrap())
-}
 
 /// Iceberg [`Table`] scan as a DataFusion [`ExecutionPlan`].
 ///

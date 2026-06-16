@@ -34,7 +34,7 @@ const DEFAULT_PARALLELISM: usize = 1;
 /// are circumstances where the level of available
 /// parallelism can change during the lifetime of an executing
 /// process, but this should not be called in a hot loop.
-pub(crate) fn available_parallelism() -> NonZeroUsize {
+pub fn available_parallelism() -> NonZeroUsize {
     std::thread::available_parallelism().unwrap_or_else(|err| {
         tracing::warn!(
             error = %err,
