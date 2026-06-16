@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 
 use http::StatusCode;
 use iceberg::{Error, ErrorKind, Result};
@@ -26,6 +27,7 @@ use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
 
 use crate::RestCatalogConfig;
+use crate::signing::HttpRequestSigner;
 use crate::types::{ErrorResponse, TokenResponse};
 
 pub(crate) struct HttpClient {
@@ -45,6 +47,8 @@ pub(crate) struct HttpClient {
     extra_oauth_params: HashMap<String, String>,
     /// Whether to disable header redaction in error logs (defaults to false for security).
     disable_header_redaction: bool,
+    /// Optional request signer (e.g. SigV4). Mutually exclusive with token auth.
+    signer: Option<Arc<dyn HttpRequestSigner>>,
 }
 
 impl Debug for HttpClient {
@@ -68,6 +72,7 @@ impl HttpClient {
             extra_headers,
             extra_oauth_params: cfg.extra_oauth_params(),
             disable_header_redaction: cfg.disable_header_redaction(),
+            signer: cfg.resolve_signer()?,
         })
     }
 
@@ -96,6 +101,7 @@ impl HttpClient {
                 self.extra_oauth_params
             },
             disable_header_redaction: cfg.disable_header_redaction(),
+            signer: cfg.resolve_signer()?.or(self.signer),
         })
     }
 
@@ -250,9 +256,18 @@ impl HttpClient {
             .headers(self.extra_headers.clone())
     }
 
+    /// Signs the request if a signer is configured.
+    pub(crate) fn maybe_sign(&self, request: &mut Request) -> Result<()> {
+        if let Some(signer) = &self.signer {
+            signer.sign(request)?;
+        }
+        Ok(())
+    }
+
     /// Executes the given `Request` and returns a `Response`.
     pub async fn execute(&self, mut request: Request) -> Result<Response> {
         request.headers_mut().extend(self.extra_headers.clone());
+        self.maybe_sign(&mut request)?;
         Ok(self.client.execute(request).await?)
     }
 
