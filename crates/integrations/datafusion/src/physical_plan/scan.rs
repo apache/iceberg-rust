@@ -385,10 +385,11 @@ async fn build_record_batch_stream(
                 (0..bucket.len()).map(move |idx| Ok::<_, iceberg::Error>(bucket[idx].clone())),
             ));
             let num_cpus = available_parallelism().get();
-            let arrow_reader_builder = ArrowReaderBuilder::new(table.file_io().clone())
-                .with_data_file_concurrency_limit(num_cpus)
-                .with_row_group_filtering_enabled(true)
-                .with_row_selection_enabled(true);
+            let arrow_reader_builder =
+                ArrowReaderBuilder::new(table.file_io().clone(), table.runtime().clone())
+                    .with_data_file_concurrency_limit(num_cpus)
+                    .with_row_group_filtering_enabled(true)
+                    .with_row_selection_enabled(true);
 
             Box::pin(
                 arrow_reader_builder
