@@ -45,6 +45,30 @@ pub use oss::*;
 pub use s3::*;
 use serde::{Deserialize, Serialize};
 
+/// A storage credential scoped to a location prefix.
+///
+/// This mirrors the `storage-credentials` entries returned by an Iceberg REST
+/// catalog (see the REST spec). Each credential applies to objects whose path
+/// starts with `prefix`; when several credentials match a path, the one with
+/// the longest prefix should be preferred.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct StorageCredential {
+    /// Storage location prefix this credential applies to (e.g. `s3://bucket/db/table`).
+    pub prefix: String,
+    /// Backend configuration carrying the credential (e.g. `s3.access-key-id`, ...).
+    pub config: HashMap<String, String>,
+}
+
+impl StorageCredential {
+    /// Create a new storage credential for the given location prefix.
+    pub fn new(prefix: impl Into<String>, config: HashMap<String, String>) -> Self {
+        Self {
+            prefix: prefix.into(),
+            config,
+        }
+    }
+}
+
 /// Configuration properties for storage backends.
 ///
 /// This struct contains only configuration properties without specifying
@@ -55,6 +79,9 @@ use serde::{Deserialize, Serialize};
 pub struct StorageConfig {
     /// Configuration properties for the storage backend
     props: HashMap<String, String>,
+    /// Per-prefix storage credentials, typically vended by a catalog.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    credentials: Vec<StorageCredential>,
 }
 
 impl StorageConfig {
@@ -62,6 +89,7 @@ impl StorageConfig {
     pub fn new() -> Self {
         Self {
             props: HashMap::new(),
+            credentials: Vec::new(),
         }
     }
 
@@ -71,12 +99,50 @@ impl StorageConfig {
     ///
     /// * `props` - Configuration properties for the storage backend
     pub fn from_props(props: HashMap<String, String>) -> Self {
-        Self { props }
+        Self {
+            props,
+            credentials: Vec::new(),
+        }
     }
 
     /// Get all configuration properties.
     pub fn props(&self) -> &HashMap<String, String> {
         &self.props
+    }
+
+    /// Get the per-prefix storage credentials.
+    pub fn credentials(&self) -> &[StorageCredential] {
+        &self.credentials
+    }
+
+    /// Attach per-prefix storage credentials (e.g. vended by a REST catalog).
+    ///
+    /// This is a builder-style method that returns `self` for chaining.
+    pub fn with_credentials(mut self, credentials: Vec<StorageCredential>) -> Self {
+        self.credentials = credentials;
+        self
+    }
+
+    /// Resolve the most specific credential for `location`.
+    ///
+    /// Returns the credential whose `prefix` is the longest match for the given
+    /// location, mirroring the selection rule from the Iceberg REST spec. Returns
+    /// `None` when no credential prefix matches.
+    pub fn resolve_credential(&self, location: &str) -> Option<&StorageCredential> {
+        self.credentials
+            .iter()
+            .filter(|c| location.starts_with(&c.prefix))
+            .max_by_key(|c| c.prefix.len())
+    }
+
+    /// Build the effective property map for `location`: base props overlaid with
+    /// the most specific matching credential's config (credential wins, per spec).
+    pub fn resolved_props(&self, location: &str) -> HashMap<String, String> {
+        let mut props = self.props.clone();
+        if let Some(cred) = self.resolve_credential(location) {
+            props.extend(cred.config.clone());
+        }
+        props
     }
 
     /// Get a specific configuration property by key.
@@ -222,6 +288,62 @@ mod tests {
         let config = StorageConfig::from_props(HashMap::new());
 
         assert!(config.props().is_empty());
+    }
+
+    #[test]
+    fn test_resolve_credential_longest_prefix_wins() {
+        let config = StorageConfig::new().with_credentials(vec![
+            StorageCredential::new(
+                "s3://bucket",
+                HashMap::from([("s3.access-key-id".to_string(), "broad".to_string())]),
+            ),
+            StorageCredential::new(
+                "s3://bucket/db/table",
+                HashMap::from([("s3.access-key-id".to_string(), "specific".to_string())]),
+            ),
+        ]);
+
+        let cred = config
+            .resolve_credential("s3://bucket/db/table/data/0.parquet")
+            .expect("a credential should match");
+        assert_eq!(cred.prefix, "s3://bucket/db/table");
+        assert_eq!(cred.config.get("s3.access-key-id").unwrap(), "specific");
+
+        // A path only under the broad prefix falls back to it.
+        let cred = config
+            .resolve_credential("s3://bucket/other/file.parquet")
+            .unwrap();
+        assert_eq!(cred.prefix, "s3://bucket");
+    }
+
+    #[test]
+    fn test_resolve_credential_no_match() {
+        let config = StorageConfig::new().with_credentials(vec![StorageCredential::new(
+            "s3://bucket-a",
+            HashMap::from([("s3.access-key-id".to_string(), "a".to_string())]),
+        )]);
+
+        assert!(config.resolve_credential("s3://bucket-b/x").is_none());
+    }
+
+    #[test]
+    fn test_resolved_props_credential_overrides_base() {
+        let config = StorageConfig::new()
+            .with_prop("s3.region", "us-east-1")
+            .with_prop("s3.access-key-id", "base")
+            .with_credentials(vec![StorageCredential::new(
+                "s3://bucket",
+                HashMap::from([("s3.access-key-id".to_string(), "vended".to_string())]),
+            )]);
+
+        let props = config.resolved_props("s3://bucket/db/table/data/0.parquet");
+        // Credential wins over base for the same key, base-only keys are preserved.
+        assert_eq!(props.get("s3.access-key-id").unwrap(), "vended");
+        assert_eq!(props.get("s3.region").unwrap(), "us-east-1");
+
+        // No matching credential: base props returned unchanged.
+        let props = config.resolved_props("gs://other/file");
+        assert_eq!(props.get("s3.access-key-id").unwrap(), "base");
     }
 
     #[test]

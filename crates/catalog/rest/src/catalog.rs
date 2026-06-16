@@ -23,7 +23,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
+use iceberg::io::{FileIO, FileIOBuilder, StorageCredential, StorageFactory};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, Namespace, NamespaceIdent, Result, Runtime,
@@ -340,6 +340,18 @@ impl RestCatalogConfig {
     }
 }
 
+/// Convert REST `storage-credentials` entries into core [`StorageCredential`]s
+/// that can be attached to a [`FileIO`] via its [`StorageConfig`](iceberg::io::StorageConfig).
+fn to_storage_credentials(
+    creds: Option<Vec<crate::types::StorageCredential>>,
+) -> Vec<StorageCredential> {
+    creds
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| StorageCredential::new(c.prefix, c.config))
+        .collect()
+}
+
 #[derive(Debug)]
 struct RestContext {
     client: HttpClient,
@@ -451,6 +463,7 @@ impl RestCatalog {
         &self,
         metadata_location: Option<&str>,
         extra_config: Option<HashMap<String, String>>,
+        credentials: Vec<StorageCredential>,
     ) -> Result<FileIO> {
         let mut props = self.context().await?.config.props.clone();
         if let Some(config) = extra_config {
@@ -483,7 +496,10 @@ impl RestCatalog {
                 )
             })?;
 
-        let file_io = FileIOBuilder::new(factory).with_props(props).build();
+        let file_io = FileIOBuilder::new(factory)
+            .with_props(props)
+            .with_storage_credentials(credentials)
+            .build();
 
         Ok(file_io)
     }
@@ -791,6 +807,7 @@ impl Catalog for RestCatalog {
             "Metadata location missing in `create_table` response!",
         ))?;
 
+        let credentials = to_storage_credentials(response.storage_credentials);
         let config = response
             .config
             .into_iter()
@@ -798,7 +815,7 @@ impl Catalog for RestCatalog {
             .collect();
 
         let file_io = self
-            .load_file_io(Some(metadata_location), Some(config))
+            .load_file_io(Some(metadata_location), Some(config), credentials)
             .await?;
 
         let table_builder = Table::builder()
@@ -848,6 +865,7 @@ impl Catalog for RestCatalog {
             }
         };
 
+        let credentials = to_storage_credentials(response.storage_credentials);
         let config = response
             .config
             .into_iter()
@@ -855,7 +873,11 @@ impl Catalog for RestCatalog {
             .collect();
 
         let file_io = self
-            .load_file_io(response.metadata_location.as_deref(), Some(config))
+            .load_file_io(
+                response.metadata_location.as_deref(),
+                Some(config),
+                credentials,
+            )
             .await?;
 
         let table_builder = Table::builder()
@@ -991,7 +1013,10 @@ impl Catalog for RestCatalog {
             "Metadata location missing in `register_table` response!",
         ))?;
 
-        let file_io = self.load_file_io(Some(metadata_location), None).await?;
+        let credentials = to_storage_credentials(response.storage_credentials);
+        let file_io = self
+            .load_file_io(Some(metadata_location), None, credentials)
+            .await?;
 
         Table::builder()
             .identifier(table_ident.clone())
@@ -1063,7 +1088,7 @@ impl Catalog for RestCatalog {
         };
 
         let file_io = self
-            .load_file_io(Some(&response.metadata_location), None)
+            .load_file_io(Some(&response.metadata_location), None, Vec::new())
             .await?;
 
         Table::builder()
@@ -2344,6 +2369,71 @@ mod tests {
 
         config_mock.assert_async().await;
         rename_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_load_table_applies_storage_credentials() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        // Inject a `storage-credentials` entry into the standard load-table response.
+        let mut body: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "load_table_response.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        body["storage-credentials"] = json!([
+            {
+                "prefix": "s3://warehouse/database/table",
+                "config": {
+                    "s3.access-key-id": "VENDED_KEY",
+                    "s3.secret-access-key": "VENDED_SECRET",
+                    "s3.session-token": "VENDED_TOKEN"
+                }
+            }
+        ]);
+
+        let load_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body(body.to_string())
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+        );
+
+        let table = catalog
+            .load_table(&TableIdent::new(
+                NamespaceIdent::new("ns1".to_string()),
+                "test1".to_string(),
+            ))
+            .await
+            .unwrap();
+
+        // The vended credential is carried on the table's FileIO config.
+        let creds = table.file_io().config().credentials();
+        assert_eq!(creds.len(), 1);
+        assert_eq!(creds[0].prefix, "s3://warehouse/database/table");
+
+        // And it is applied (wins) when resolving props for a data file under the prefix.
+        let resolved = table
+            .file_io()
+            .config()
+            .resolved_props("s3://warehouse/database/table/data/0.parquet");
+        assert_eq!(resolved.get("s3.access-key-id").unwrap(), "VENDED_KEY");
+        assert_eq!(resolved.get("s3.session-token").unwrap(), "VENDED_TOKEN");
+
+        config_mock.assert_async().await;
+        load_mock.assert_async().await;
     }
 
     #[tokio::test]
