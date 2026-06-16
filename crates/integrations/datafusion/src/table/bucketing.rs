@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn bucket_tasks_hashes_multiple_identity_columns() {
-        let rows = vec![(1, "a"), (2, "b"), (1, "b"), (3, "c"), (2, "a")];
+        let rows = [(1, "a"), (2, "b"), (1, "b"), (3, "c"), (2, "a")];
         let tasks = rows
             .iter()
             .enumerate()
@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn bucket_tasks_hashes_decimal_and_timestamp_identity_columns() {
-        let rows = vec![
+        let rows = [
             (100_i128, 1_740_600_000_000_000_i64),
             (200_i128, 1_740_600_100_000_000_i64),
             (100_i128, 1_740_600_200_000_000_i64),
