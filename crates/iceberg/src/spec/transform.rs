@@ -160,7 +160,15 @@ impl Transform {
     pub fn result_type(&self, input_type: &Type) -> Result<Type> {
         match self {
             Transform::Identity => {
-                if matches!(input_type, Type::Primitive(_)) {
+                if matches!(
+                    input_type,
+                    Type::Primitive(PrimitiveType::Geometry(_) | PrimitiveType::Geography(_))
+                ) {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("{input_type} is not a valid input type of identity transform",),
+                    ))
+                } else if matches!(input_type, Type::Primitive(_)) {
                     Ok(input_type.clone())
                 } else {
                     Err(Error::new(
