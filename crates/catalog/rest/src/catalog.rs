@@ -41,6 +41,7 @@ use typed_builder::TypedBuilder;
 use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
+use crate::signing::{AwsCredentials, HttpRequestSigner, PayloadHashMode, SigV4Signer};
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
     CreateTableRequest, ListNamespaceResponse, ListTablesResponse, LoadTableResult,
@@ -53,6 +54,18 @@ pub const REST_CATALOG_PROP_URI: &str = "uri";
 pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 /// Disable header redaction in error logs (defaults to false for security)
 pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-redaction";
+/// Enable AWS SigV4 request signing for the REST catalog.
+pub const REST_CATALOG_PROP_SIGV4_ENABLED: &str = "rest.sigv4-enabled";
+/// SigV4 signing service name (required when sigv4 is enabled).
+pub const REST_CATALOG_PROP_SIGNING_NAME: &str = "rest.signing-name";
+/// SigV4 signing region (required when sigv4 is enabled).
+pub const REST_CATALOG_PROP_SIGNING_REGION: &str = "rest.signing-region";
+/// SigV4 access key id (optional; falls back to the `AWS_ACCESS_KEY_ID` env var).
+pub const REST_CATALOG_PROP_SIGNING_ACCESS_KEY: &str = "rest.signing-access-key-id";
+/// SigV4 secret access key (optional; falls back to the `AWS_SECRET_ACCESS_KEY` env var).
+pub const REST_CATALOG_PROP_SIGNING_SECRET_KEY: &str = "rest.signing-secret-access-key";
+/// SigV4 session token (optional; falls back to the `AWS_SESSION_TOKEN` env var).
+pub const REST_CATALOG_PROP_SIGNING_SESSION_TOKEN: &str = "rest.signing-session-token";
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -76,6 +89,7 @@ impl Default for RestCatalogBuilder {
                 warehouse: None,
                 props: HashMap::new(),
                 client: None,
+                custom_signer: None,
             },
             storage_factory: None,
             kms_client_factory: None,
@@ -160,6 +174,12 @@ impl RestCatalogBuilder {
         self.config.client = Some(client);
         self
     }
+
+    /// Injects a custom request signer, overriding the `rest.sigv4-*` configuration.
+    pub fn with_signer(mut self, signer: Arc<dyn HttpRequestSigner>) -> Self {
+        self.config.custom_signer = Some(signer);
+        self
+    }
 }
 
 /// Rest catalog configuration.
@@ -178,6 +198,9 @@ pub(crate) struct RestCatalogConfig {
 
     #[builder(default)]
     client: Option<Client>,
+
+    #[builder(default)]
+    custom_signer: Option<Arc<dyn HttpRequestSigner>>,
 }
 
 impl RestCatalogConfig {
@@ -338,6 +361,100 @@ impl RestCatalogConfig {
             .get(REST_CATALOG_PROP_DISABLE_HEADER_REDACTION)
             .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
+    }
+
+    fn sigv4_enabled(&self) -> bool {
+        self.props
+            .get(REST_CATALOG_PROP_SIGV4_ENABLED)
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
+    /// Resolves the request signer: a `with_signer` override wins, otherwise a
+    /// `SigV4Signer` is built when `rest.sigv4-enabled` is true.
+    pub(crate) fn resolve_signer(&self) -> Result<Option<Arc<dyn HttpRequestSigner>>> {
+        if let Some(signer) = &self.custom_signer {
+            return Ok(Some(signer.clone()));
+        }
+        if !self.sigv4_enabled() {
+            return Ok(None);
+        }
+        // SigV4 and OAuth token/credential auth are mutually exclusive.
+        if self.token().is_some() || self.credential().is_some() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "'{REST_CATALOG_PROP_SIGV4_ENABLED}' cannot be combined with OAuth token/credential authentication"
+                ),
+            ));
+        }
+        self.build_sigv4_signer().map(Some)
+    }
+
+    fn build_sigv4_signer(&self) -> Result<Arc<dyn HttpRequestSigner>> {
+        let region = self
+            .props
+            .get(REST_CATALOG_PROP_SIGNING_REGION)
+            .cloned()
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "'{REST_CATALOG_PROP_SIGNING_REGION}' is required when '{REST_CATALOG_PROP_SIGV4_ENABLED}' is true"
+                    ),
+                )
+            })?;
+        let name = self
+            .props
+            .get(REST_CATALOG_PROP_SIGNING_NAME)
+            .cloned()
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "'{REST_CATALOG_PROP_SIGNING_NAME}' is required when '{REST_CATALOG_PROP_SIGV4_ENABLED}' is true"
+                    ),
+                )
+            })?;
+        let access_key_id = self
+            .props
+            .get(REST_CATALOG_PROP_SIGNING_ACCESS_KEY)
+            .cloned()
+            .or_else(|| std::env::var("AWS_ACCESS_KEY_ID").ok())
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "missing SigV4 access key id (set 'rest.signing-access-key-id' or AWS_ACCESS_KEY_ID)",
+                )
+            })?;
+        let secret_access_key = self
+            .props
+            .get(REST_CATALOG_PROP_SIGNING_SECRET_KEY)
+            .cloned()
+            .or_else(|| std::env::var("AWS_SECRET_ACCESS_KEY").ok())
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "missing SigV4 secret access key (set 'rest.signing-secret-access-key' or AWS_SECRET_ACCESS_KEY)",
+                )
+            })?;
+        let session_token = self
+            .props
+            .get(REST_CATALOG_PROP_SIGNING_SESSION_TOKEN)
+            .cloned()
+            .or_else(|| std::env::var("AWS_SESSION_TOKEN").ok());
+
+        let credentials = AwsCredentials {
+            access_key_id,
+            secret_access_key,
+            session_token,
+        };
+        Ok(Arc::new(SigV4Signer::new(
+            credentials,
+            region,
+            name,
+            PayloadHashMode::IcebergRest,
+        )))
     }
 
     /// Merge the `RestCatalogConfig` with the a [`CatalogConfig`] (fetched from the REST server).
@@ -1610,6 +1727,89 @@ mod tests {
 
         config_mock.assert_async().await;
         list_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_sigv4_signs_requests() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        // With sigv4 enabled, requests must carry an AWS SigV4 Authorization header.
+        let list_ns_mock = server
+            .mock("GET", "/v1/namespaces")
+            .match_header(
+                "authorization",
+                mockito::Matcher::Regex("^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/".to_string()),
+            )
+            .with_body(r#"{"namespaces": []}"#)
+            .create_async()
+            .await;
+
+        let props = HashMap::from([
+            (
+                REST_CATALOG_PROP_SIGV4_ENABLED.to_string(),
+                "true".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_REGION.to_string(),
+                "us-east-1".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_NAME.to_string(),
+                "glue".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_ACCESS_KEY.to_string(),
+                "AKIDEXAMPLE".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_SECRET_KEY.to_string(),
+                "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY".to_string(),
+            ),
+        ]);
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+            None,
+            Runtime::current(),
+            None,
+        );
+
+        let namespaces = catalog.list_namespaces(None).await.unwrap();
+        assert!(namespaces.is_empty());
+
+        config_mock.assert_async().await;
+        list_ns_mock.assert_async().await;
+    }
+
+    #[test]
+    fn test_sigv4_rejects_oauth_combination() {
+        // SigV4 and OAuth token auth are mutually exclusive.
+        let props = HashMap::from([
+            (
+                REST_CATALOG_PROP_SIGV4_ENABLED.to_string(),
+                "true".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_REGION.to_string(),
+                "us-east-1".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_NAME.to_string(),
+                "glue".to_string(),
+            ),
+            ("token".to_string(), "some-oauth-token".to_string()),
+        ]);
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(props)
+            .build();
+
+        let err = config.resolve_signer().unwrap_err();
+        assert!(err.message().contains("cannot be combined with OAuth"));
     }
 
     #[tokio::test]

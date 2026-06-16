@@ -35,10 +35,12 @@ chrono = { workspace = true }
 http = { workspace = true }
 iceberg = { workspace = true }
 itertools = { workspace = true }
+reqsign-core = "3.0.0"
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.10"
 tokio = { workspace = true }
 typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
