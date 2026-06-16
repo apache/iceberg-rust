@@ -37,7 +37,7 @@ version = "0.9.0"
 
 license = "Apache-2.0"
 repository = "https://github.com/apache/iceberg-rust"
-# Check the MSRV policy in README.md before changing this
+# Must meet MSRV policy in README.md. Update using ./dev/bump_msrv.py script.
 rust-version = "1.92"
 
 [workspace.dependencies]
