@@ -1,9 +1,9 @@
 (function() {
-    var implementors = Object.fromEntries([["iceberg_storage_opendal",[]]]);
+    const implementors = Object.fromEntries([["iceberg_storage_opendal",[]]]);
     if (window.register_implementors) {
         window.register_implementors(implementors);
     } else {
         window.pending_implementors = implementors;
     }
 })()
-//{"start":57,"fragment_lengths":[30]}
+//{"start":59,"fragment_lengths":[30]}

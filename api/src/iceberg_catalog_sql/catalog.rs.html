@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/catalog/sql/src/catalog.rs`."><title>catalog.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="iceberg_catalog_sql" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0-nightly (f37aa9955 2025-10-26)" data-channel="nightly" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg_catalog_sql/</div>catalog.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/catalog/sql/src/catalog.rs`."><title>catalog.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="iceberg_catalog_sql" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.0-nightly (b90dc1e59 2026-03-04)" data-channel="nightly" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">iceberg_catalog_sql/</div>catalog.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 <a href=#2 id=2 data-nosnippet>2</a>// or more contributor license agreements.  See the NOTICE file
 <a href=#3 id=3 data-nosnippet>3</a>// distributed with this work for additional information
 <a href=#4 id=4 data-nosnippet>4</a>// regarding copyright ownership.  The ASF licenses this file
@@ -180,12 +180,12 @@
 <a href=#180 id=180 data-nosnippet>180</a>        <span class="kw">let </span>valid_name = !name.trim().is_empty();
 <a href=#181 id=181 data-nosnippet>181</a>
 <a href=#182 id=182 data-nosnippet>182</a>        <span class="kw">async move </span>{
-<a href=#183 id=183 data-nosnippet>183</a>            <span class="macro">if !</span>valid_name {
+<a href=#183 id=183 data-nosnippet>183</a>            <span class="kw">if </span>!valid_name {
 <a href=#184 id=184 data-nosnippet>184</a>                <span class="prelude-val">Err</span>(Error::new(
 <a href=#185 id=185 data-nosnippet>185</a>                    ErrorKind::DataInvalid,
 <a href=#186 id=186 data-nosnippet>186</a>                    <span class="string">"Catalog name cannot be empty"</span>,
 <a href=#187 id=187 data-nosnippet>187</a>                ))
-<a href=#188 id=188 data-nosnippet>188</a>            } <span class="kw">else </span><span class="macro">if !</span>valid_sql_bind_style {
+<a href=#188 id=188 data-nosnippet>188</a>            } <span class="kw">else if </span>!valid_sql_bind_style {
 <a href=#189 id=189 data-nosnippet>189</a>                <span class="prelude-val">Err</span>(Error::new(
 <a href=#190 id=190 data-nosnippet>190</a>                    ErrorKind::DataInvalid,
 <a href=#191 id=191 data-nosnippet>191</a>                    <span class="macro">format!</span>(
@@ -420,7 +420,7 @@
 <a href=#420 id=420 data-nosnippet>420</a>                <span class="kw">for </span>row <span class="kw">in </span>namespace_rows.iter() {
 <a href=#421 id=421 data-nosnippet>421</a>                    <span class="kw">let </span>nsp = row.try_get::&lt;String, <span class="kw">_</span>&gt;(<span class="number">0</span>).map_err(from_sqlx_error)<span class="question-mark">?</span>;
 <a href=#422 id=422 data-nosnippet>422</a>                    <span class="comment">// if parent = a, then we only want to see a.b, a.c returned.
-<a href=#423 id=423 data-nosnippet>423</a>                    </span><span class="kw">if </span><span class="macro">nsp !</span>= parent_str &amp;&amp; nsp.starts_with(<span class="kw-2">&amp;</span>parent_str) {
+<a href=#423 id=423 data-nosnippet>423</a>                    </span><span class="kw">if </span>nsp != parent_str &amp;&amp; nsp.starts_with(<span class="kw-2">&amp;</span>parent_str) {
 <a href=#424 id=424 data-nosnippet>424</a>                        namespaces.insert(NamespaceIdent::from_strs(nsp.split(<span class="string">"."</span>))<span class="question-mark">?</span>);
 <a href=#425 id=425 data-nosnippet>425</a>                    }
 <a href=#426 id=426 data-nosnippet>426</a>                }
@@ -433,7 +433,7 @@
 <a href=#433 id=433 data-nosnippet>433</a>            <span class="kw">for </span>row <span class="kw">in </span>namespace_rows.iter() {
 <a href=#434 id=434 data-nosnippet>434</a>                <span class="kw">let </span>nsp = row.try_get::&lt;String, <span class="kw">_</span>&gt;(<span class="number">0</span>).map_err(from_sqlx_error)<span class="question-mark">?</span>;
 <a href=#435 id=435 data-nosnippet>435</a>                <span class="kw">let </span><span class="kw-2">mut </span>levels = nsp.split(<span class="string">"."</span>).collect::&lt;Vec&lt;<span class="kw-2">&amp;</span>str&gt;&gt;();
-<a href=#436 id=436 data-nosnippet>436</a>                <span class="macro">if !</span>levels.is_empty() {
+<a href=#436 id=436 data-nosnippet>436</a>                <span class="kw">if </span>!levels.is_empty() {
 <a href=#437 id=437 data-nosnippet>437</a>                    <span class="kw">let </span>first_level = levels.drain(..<span class="number">1</span>).collect::&lt;Vec&lt;<span class="kw-2">&amp;</span>str&gt;&gt;();
 <a href=#438 id=438 data-nosnippet>438</a>                    namespaces.insert(NamespaceIdent::from_strs(first_level)<span class="question-mark">?</span>);
 <a href=#439 id=439 data-nosnippet>439</a>                }
@@ -461,7 +461,7 @@
 <a href=#461 id=461 data-nosnippet>461</a>        <span class="kw">let </span>insert = <span class="macro">format!</span>(
 <a href=#462 id=462 data-nosnippet>462</a>            <span class="string">"INSERT INTO {NAMESPACE_TABLE_NAME} ({CATALOG_FIELD_CATALOG_NAME}, {NAMESPACE_FIELD_NAME}, {NAMESPACE_FIELD_PROPERTY_KEY}, {NAMESPACE_FIELD_PROPERTY_VALUE})
 <a href=#463 id=463 data-nosnippet>463</a>             VALUES (?, ?, ?, ?)"</span>);
-<a href=#464 id=464 data-nosnippet>464</a>        <span class="macro">if !</span>properties.is_empty() {
+<a href=#464 id=464 data-nosnippet>464</a>        <span class="kw">if </span>!properties.is_empty() {
 <a href=#465 id=465 data-nosnippet>465</a>            <span class="kw">let </span><span class="kw-2">mut </span>insert_properties = properties.clone();
 <a href=#466 id=466 data-nosnippet>466</a>            insert_properties.insert(<span class="string">"exists"</span>.to_string(), <span class="string">"true"</span>.to_string());
 <a href=#467 id=467 data-nosnippet>467</a>
@@ -554,7 +554,7 @@
 <a href=#554 id=554 data-nosnippet>554</a>            )
 <a href=#555 id=555 data-nosnippet>555</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#556 id=556 data-nosnippet>556</a>
-<a href=#557 id=557 data-nosnippet>557</a>        <span class="macro">if !</span>table_namespaces.is_empty() {
+<a href=#557 id=557 data-nosnippet>557</a>        <span class="kw">if </span>!table_namespaces.is_empty() {
 <a href=#558 id=558 data-nosnippet>558</a>            <span class="prelude-val">Ok</span>(<span class="bool-val">true</span>)
 <a href=#559 id=559 data-nosnippet>559</a>        } <span class="kw">else </span>{
 <a href=#560 id=560 data-nosnippet>560</a>            <span class="kw">let </span>namespaces = <span class="self">self
@@ -568,7 +568,7 @@
 <a href=#568 id=568 data-nosnippet>568</a>                    <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="self">self</span>.name), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>namespace_str)],
 <a href=#569 id=569 data-nosnippet>569</a>                )
 <a href=#570 id=570 data-nosnippet>570</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#571 id=571 data-nosnippet>571</a>            <span class="macro">if !</span>namespaces.is_empty() {
+<a href=#571 id=571 data-nosnippet>571</a>            <span class="kw">if </span>!namespaces.is_empty() {
 <a href=#572 id=572 data-nosnippet>572</a>                <span class="prelude-val">Ok</span>(<span class="bool-val">true</span>)
 <a href=#573 id=573 data-nosnippet>573</a>            } <span class="kw">else </span>{
 <a href=#574 id=574 data-nosnippet>574</a>                <span class="prelude-val">Ok</span>(<span class="bool-val">false</span>)
@@ -653,7 +653,7 @@
 <a href=#653 id=653 data-nosnippet>653</a>        <span class="kw">if </span>exists {
 <a href=#654 id=654 data-nosnippet>654</a>            <span class="comment">// if there are tables in the namespace, don't allow drop.
 <a href=#655 id=655 data-nosnippet>655</a>            </span><span class="kw">let </span>tables = <span class="self">self</span>.list_tables(namespace).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#656 id=656 data-nosnippet>656</a>            <span class="macro">if !</span>tables.is_empty() {
+<a href=#656 id=656 data-nosnippet>656</a>            <span class="kw">if </span>!tables.is_empty() {
 <a href=#657 id=657 data-nosnippet>657</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#658 id=658 data-nosnippet>658</a>                    iceberg::ErrorKind::Unexpected,
 <a href=#659 id=659 data-nosnippet>659</a>                    <span class="macro">format!</span>(
@@ -740,7 +740,7 @@
 <a href=#740 id=740 data-nosnippet>740</a>            )
 <a href=#741 id=741 data-nosnippet>741</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#742 id=742 data-nosnippet>742</a>
-<a href=#743 id=743 data-nosnippet>743</a>        <span class="macro">if !</span>table_counts.is_empty() {
+<a href=#743 id=743 data-nosnippet>743</a>        <span class="kw">if </span>!table_counts.is_empty() {
 <a href=#744 id=744 data-nosnippet>744</a>            <span class="prelude-val">Ok</span>(<span class="bool-val">true</span>)
 <a href=#745 id=745 data-nosnippet>745</a>        } <span class="kw">else </span>{
 <a href=#746 id=746 data-nosnippet>746</a>            <span class="prelude-val">Ok</span>(<span class="bool-val">false</span>)
@@ -748,7 +748,7 @@
 <a href=#748 id=748 data-nosnippet>748</a>    }
 <a href=#749 id=749 data-nosnippet>749</a>
 <a href=#750 id=750 data-nosnippet>750</a>    <span class="kw">async fn </span>drop_table(<span class="kw-2">&amp;</span><span class="self">self</span>, identifier: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#751 id=751 data-nosnippet>751</a>        <span class="macro">if !</span><span class="self">self</span>.table_exists(identifier).<span class="kw">await</span><span class="question-mark">? </span>{
+<a href=#751 id=751 data-nosnippet>751</a>        <span class="kw">if </span>!<span class="self">self</span>.table_exists(identifier).<span class="kw">await</span><span class="question-mark">? </span>{
 <a href=#752 id=752 data-nosnippet>752</a>            <span class="kw">return </span>no_such_table_err(identifier);
 <a href=#753 id=753 data-nosnippet>753</a>        }
 <a href=#754 id=754 data-nosnippet>754</a>
@@ -782,7 +782,7 @@
 <a href=#782 id=782 data-nosnippet>782</a>    </span>}
 <a href=#783 id=783 data-nosnippet>783</a>
 <a href=#784 id=784 data-nosnippet>784</a>    <span class="kw">async fn </span>load_table(<span class="kw-2">&amp;</span><span class="self">self</span>, identifier: <span class="kw-2">&amp;</span>TableIdent) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
-<a href=#785 id=785 data-nosnippet>785</a>        <span class="macro">if !</span><span class="self">self</span>.table_exists(identifier).<span class="kw">await</span><span class="question-mark">? </span>{
+<a href=#785 id=785 data-nosnippet>785</a>        <span class="kw">if </span>!<span class="self">self</span>.table_exists(identifier).<span class="kw">await</span><span class="question-mark">? </span>{
 <a href=#786 id=786 data-nosnippet>786</a>            <span class="kw">return </span>no_such_table_err(identifier);
 <a href=#787 id=787 data-nosnippet>787</a>        }
 <a href=#788 id=788 data-nosnippet>788</a>
@@ -832,7 +832,7 @@
 <a href=#832 id=832 data-nosnippet>832</a>        namespace: <span class="kw-2">&amp;</span>NamespaceIdent,
 <a href=#833 id=833 data-nosnippet>833</a>        creation: TableCreation,
 <a href=#834 id=834 data-nosnippet>834</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Table&gt; {
-<a href=#835 id=835 data-nosnippet>835</a>        <span class="macro">if !</span><span class="self">self</span>.namespace_exists(namespace).<span class="kw">await</span><span class="question-mark">? </span>{
+<a href=#835 id=835 data-nosnippet>835</a>        <span class="kw">if </span>!<span class="self">self</span>.namespace_exists(namespace).<span class="kw">await</span><span class="question-mark">? </span>{
 <a href=#836 id=836 data-nosnippet>836</a>            <span class="kw">return </span>no_such_namespace_err(namespace);
 <a href=#837 id=837 data-nosnippet>837</a>        }
 <a href=#838 id=838 data-nosnippet>838</a>
@@ -903,11 +903,11 @@
 <a href=#903 id=903 data-nosnippet>903</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
 <a href=#904 id=904 data-nosnippet>904</a>        }
 <a href=#905 id=905 data-nosnippet>905</a>
-<a href=#906 id=906 data-nosnippet>906</a>        <span class="macro">if !</span><span class="self">self</span>.table_exists(src).<span class="kw">await</span><span class="question-mark">? </span>{
+<a href=#906 id=906 data-nosnippet>906</a>        <span class="kw">if </span>!<span class="self">self</span>.table_exists(src).<span class="kw">await</span><span class="question-mark">? </span>{
 <a href=#907 id=907 data-nosnippet>907</a>            <span class="kw">return </span>no_such_table_err(src);
 <a href=#908 id=908 data-nosnippet>908</a>        }
 <a href=#909 id=909 data-nosnippet>909</a>
-<a href=#910 id=910 data-nosnippet>910</a>        <span class="macro">if !</span><span class="self">self</span>.namespace_exists(dest.namespace()).<span class="kw">await</span><span class="question-mark">? </span>{
+<a href=#910 id=910 data-nosnippet>910</a>        <span class="kw">if </span>!<span class="self">self</span>.namespace_exists(dest.namespace()).<span class="kw">await</span><span class="question-mark">? </span>{
 <a href=#911 id=911 data-nosnippet>911</a>            <span class="kw">return </span>no_such_namespace_err(dest.namespace());
 <a href=#912 id=912 data-nosnippet>912</a>        }
 <a href=#913 id=913 data-nosnippet>913</a>
@@ -1043,7 +1043,7 @@
 <a href=#1043 id=1043 data-nosnippet>1043</a>        NAMESPACE_LOCATION_PROPERTY_KEY, SQL_CATALOG_PROP_BIND_STYLE, SQL_CATALOG_PROP_URI,
 <a href=#1044 id=1044 data-nosnippet>1044</a>        SQL_CATALOG_PROP_WAREHOUSE,
 <a href=#1045 id=1045 data-nosnippet>1045</a>    };
-<a href=#1046 id=1046 data-nosnippet>1046</a>    <span class="kw">use crate</span>::{SqlBindStyle, SqlCatalogBuilder};
+<a href=#1046 id=1046 data-nosnippet>1046</a>    <span class="kw">use </span>crate::{SqlBindStyle, SqlCatalogBuilder};
 <a href=#1047 id=1047 data-nosnippet>1047</a>
 <a href=#1048 id=1048 data-nosnippet>1048</a>    <span class="kw">const </span>UUID_REGEX_STR: <span class="kw-2">&amp;</span>str = <span class="string">"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"</span>;
 <a href=#1049 id=1049 data-nosnippet>1049</a>

@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/spec/manifest/writer.rs`."><title>writer.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0-nightly (f37aa9955 2025-10-26)" data-channel="nightly" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg/spec/manifest/</div>writer.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/spec/manifest/writer.rs`."><title>writer.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.0-nightly (b90dc1e59 2026-03-04)" data-channel="nightly" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">iceberg/spec/manifest/</div>writer.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 <a href=#2 id=2 data-nosnippet>2</a>// or more contributor license agreements.  See the NOTICE file
 <a href=#3 id=3 data-nosnippet>3</a>// distributed with this work for additional information
 <a href=#4 id=4 data-nosnippet>4</a>// regarding copyright ownership.  The ASF licenses this file
@@ -24,7 +24,7 @@
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>itertools::Itertools;
 <a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>serde_json::to_vec;
 <a href=#26 id=26 data-nosnippet>26</a>
-<a href=#27 id=27 data-nosnippet>27</a><span class="kw">use super</span>::{
+<a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>super::{
 <a href=#28 id=28 data-nosnippet>28</a>    Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType,
 <a href=#29 id=29 data-nosnippet>29</a>    UNASSIGNED_SEQUENCE_NUMBER,
 <a href=#30 id=30 data-nosnippet>30</a>};
@@ -37,7 +37,7 @@
 <a href=#37 id=37 data-nosnippet>37</a>    DataContentType, DataFile, FieldSummary, ManifestEntry, ManifestFile, ManifestMetadata,
 <a href=#38 id=38 data-nosnippet>38</a>    ManifestStatus, PrimitiveLiteral, SchemaRef, StructType,
 <a href=#39 id=39 data-nosnippet>39</a>};
-<a href=#40 id=40 data-nosnippet>40</a><span class="kw">use crate</span>::{Error, ErrorKind};
+<a href=#40 id=40 data-nosnippet>40</a><span class="kw">use </span>crate::{Error, ErrorKind};
 <a href=#41 id=41 data-nosnippet>41</a>
 <a href=#42 id=42 data-nosnippet>42</a><span class="doccomment">/// Placeholder for snapshot ID. The field with this value must be replaced
 <a href=#43 id=43 data-nosnippet>43</a>/// with the actual snapshot ID before it is committed.
@@ -267,7 +267,7 @@
 <a href=#267 id=267 data-nosnippet>267</a>    <span class="kw">fn </span>check_data_file(<span class="kw-2">&amp;</span><span class="self">self</span>, data_file: <span class="kw-2">&amp;</span>DataFile) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#268 id=268 data-nosnippet>268</a>        <span class="kw">match </span><span class="self">self</span>.metadata.content {
 <a href=#269 id=269 data-nosnippet>269</a>            ManifestContentType::Data =&gt; {
-<a href=#270 id=270 data-nosnippet>270</a>                <span class="kw">if </span>data_file.<span class="macro">content !</span>= DataContentType::Data {
+<a href=#270 id=270 data-nosnippet>270</a>                <span class="kw">if </span>data_file.content != DataContentType::Data {
 <a href=#271 id=271 data-nosnippet>271</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#272 id=272 data-nosnippet>272</a>                        ErrorKind::DataInvalid,
 <a href=#273 id=273 data-nosnippet>273</a>                        <span class="macro">format!</span>(
@@ -279,8 +279,8 @@
 <a href=#279 id=279 data-nosnippet>279</a>                }
 <a href=#280 id=280 data-nosnippet>280</a>            }
 <a href=#281 id=281 data-nosnippet>281</a>            ManifestContentType::Deletes =&gt; {
-<a href=#282 id=282 data-nosnippet>282</a>                <span class="kw">if </span>data_file.<span class="macro">content !</span>= DataContentType::EqualityDeletes
-<a href=#283 id=283 data-nosnippet>283</a>                    &amp;&amp; data_file.<span class="macro">content !</span>= DataContentType::PositionDeletes
+<a href=#282 id=282 data-nosnippet>282</a>                <span class="kw">if </span>data_file.content != DataContentType::EqualityDeletes
+<a href=#283 id=283 data-nosnippet>283</a>                    &amp;&amp; data_file.content != DataContentType::PositionDeletes
 <a href=#284 id=284 data-nosnippet>284</a>                {
 <a href=#285 id=285 data-nosnippet>285</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#286 id=286 data-nosnippet>286</a>                        ErrorKind::DataInvalid,
@@ -556,7 +556,7 @@
 <a href=#556 id=556 data-nosnippet>556</a>            <span class="self">self</span>.contains_null = <span class="bool-val">true</span>;
 <a href=#557 id=557 data-nosnippet>557</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
 <a href=#558 id=558 data-nosnippet>558</a>        };
-<a href=#559 id=559 data-nosnippet>559</a>        <span class="macro">if !</span><span class="self">self</span>.partition_type.compatible(<span class="kw-2">&amp;</span>value) {
+<a href=#559 id=559 data-nosnippet>559</a>        <span class="kw">if </span>!<span class="self">self</span>.partition_type.compatible(<span class="kw-2">&amp;</span>value) {
 <a href=#560 id=560 data-nosnippet>560</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#561 id=561 data-nosnippet>561</a>                ErrorKind::DataInvalid,
 <a href=#562 id=562 data-nosnippet>562</a>                <span class="string">"value is not compatible with type"</span>,
@@ -601,7 +601,7 @@
 <a href=#601 id=601 data-nosnippet>601</a>
 <a href=#602 id=602 data-nosnippet>602</a>    <span class="kw">use </span>tempfile::TempDir;
 <a href=#603 id=603 data-nosnippet>603</a>
-<a href=#604 id=604 data-nosnippet>604</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#604 id=604 data-nosnippet>604</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
 <a href=#605 id=605 data-nosnippet>605</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
 <a href=#606 id=606 data-nosnippet>606</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{DataFileFormat, Manifest, NestedField, PrimitiveType, Schema, Struct, Type};
 <a href=#607 id=607 data-nosnippet>607</a>

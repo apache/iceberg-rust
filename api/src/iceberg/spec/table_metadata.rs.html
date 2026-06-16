@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/spec/table_metadata.rs`."><title>table_metadata.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0-nightly (f37aa9955 2025-10-26)" data-channel="nightly" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg/spec/</div>table_metadata.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/spec/table_metadata.rs`."><title>table_metadata.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.0-nightly (b90dc1e59 2026-03-04)" data-channel="nightly" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">iceberg/spec/</div>table_metadata.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 <a href=#2 id=2 data-nosnippet>2</a>// or more contributor license agreements.  See the NOTICE file
 <a href=#3 id=3 data-nosnippet>3</a>// distributed with this work for additional information
 <a href=#4 id=4 data-nosnippet>4</a>// regarding copyright ownership.  The ASF licenses this file
@@ -32,7 +32,7 @@
 <a href=#32 id=32 data-nosnippet>32</a>
 <a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span><span class="kw">super</span>::snapshot::SnapshotReference;
 <a href=#34 id=34 data-nosnippet>34</a><span class="kw">pub use </span><span class="kw">super</span>::table_metadata_builder::{TableMetadataBuildResult, TableMetadataBuilder};
-<a href=#35 id=35 data-nosnippet>35</a><span class="kw">use super</span>::{
+<a href=#35 id=35 data-nosnippet>35</a><span class="kw">use </span>super::{
 <a href=#36 id=36 data-nosnippet>36</a>    DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, SchemaId, SchemaRef,
 <a href=#37 id=37 data-nosnippet>37</a>    SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
 <a href=#38 id=38 data-nosnippet>38</a>    TableProperties, parse_metadata_file_compression,
@@ -42,7 +42,7 @@
 <a href=#42 id=42 data-nosnippet>42</a><span class="kw">use </span><span class="kw">crate</span>::error::{<span class="prelude-ty">Result</span>, timestamp_ms_to_utc};
 <a href=#43 id=43 data-nosnippet>43</a><span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
 <a href=#44 id=44 data-nosnippet>44</a><span class="kw">use </span><span class="kw">crate</span>::spec::EncryptedKey;
-<a href=#45 id=45 data-nosnippet>45</a><span class="kw">use crate</span>::{Error, ErrorKind};
+<a href=#45 id=45 data-nosnippet>45</a><span class="kw">use </span>crate::{Error, ErrorKind};
 <a href=#46 id=46 data-nosnippet>46</a>
 <a href=#47 id=47 data-nosnippet>47</a><span class="kw">static </span>MAIN_BRANCH: <span class="kw-2">&amp;</span>str = <span class="string">"main"</span>;
 <a href=#48 id=48 data-nosnippet>48</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">static </span>ONE_MINUTE_MS: i64 = <span class="number">60_000</span>;
@@ -489,7 +489,7 @@
 <a href=#489 id=489 data-nosnippet>489</a>        <span class="comment">// Check if compression codec from properties matches the one in metadata_location
 <a href=#490 id=490 data-nosnippet>490</a>        </span><span class="kw">let </span>codec = parse_metadata_file_compression(<span class="kw-2">&amp;</span><span class="self">self</span>.properties)<span class="question-mark">?</span>;
 <a href=#491 id=491 data-nosnippet>491</a>
-<a href=#492 id=492 data-nosnippet>492</a>        <span class="kw">if </span><span class="macro">codec !</span>= metadata_location.compression_codec() {
+<a href=#492 id=492 data-nosnippet>492</a>        <span class="kw">if </span>codec != metadata_location.compression_codec() {
 <a href=#493 id=493 data-nosnippet>493</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#494 id=494 data-nosnippet>494</a>                ErrorKind::DataInvalid,
 <a href=#495 id=495 data-nosnippet>495</a>                <span class="macro">format!</span>(
@@ -574,7 +574,7 @@
 <a href=#574 id=574 data-nosnippet>574</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
 <a href=#575 id=575 data-nosnippet>575</a>        }
 <a href=#576 id=576 data-nosnippet>576</a>
-<a href=#577 id=577 data-nosnippet>577</a>        <span class="kw">if </span><span class="self">self</span>.<span class="macro">default_sort_order_id !</span>= SortOrder::UNSORTED_ORDER_ID {
+<a href=#577 id=577 data-nosnippet>577</a>        <span class="kw">if </span><span class="self">self</span>.default_sort_order_id != SortOrder::UNSORTED_ORDER_ID {
 <a href=#578 id=578 data-nosnippet>578</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#579 id=579 data-nosnippet>579</a>                ErrorKind::DataInvalid,
 <a href=#580 id=580 data-nosnippet>580</a>                <span class="macro">format!</span>(
@@ -637,7 +637,7 @@
 <a href=#637 id=637 data-nosnippet>637</a>        <span class="kw">let </span>main_ref = <span class="self">self</span>.refs.get(MAIN_BRANCH);
 <a href=#638 id=638 data-nosnippet>638</a>        <span class="kw">if </span><span class="self">self</span>.current_snapshot_id.is_some() {
 <a href=#639 id=639 data-nosnippet>639</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(main_ref) = main_ref
-<a href=#640 id=640 data-nosnippet>640</a>                &amp;&amp; main_ref.<span class="macro">snapshot_id !</span>= <span class="self">self</span>.current_snapshot_id.unwrap_or_default()
+<a href=#640 id=640 data-nosnippet>640</a>                &amp;&amp; main_ref.snapshot_id != <span class="self">self</span>.current_snapshot_id.unwrap_or_default()
 <a href=#641 id=641 data-nosnippet>641</a>            {
 <a href=#642 id=642 data-nosnippet>642</a>                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#643 id=643 data-nosnippet>643</a>                    ErrorKind::DataInvalid,
@@ -660,7 +660,7 @@
 <a href=#660 id=660 data-nosnippet>660</a>
 <a href=#661 id=661 data-nosnippet>661</a>    <span class="doccomment">/// Validate that for V1 Metadata the last_sequence_number is 0
 <a href=#662 id=662 data-nosnippet>662</a>    </span><span class="kw">fn </span>validate_snapshot_sequence_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#663 id=663 data-nosnippet>663</a>        <span class="kw">if </span><span class="self">self</span>.format_version &lt; FormatVersion::V2 &amp;&amp; <span class="self">self</span>.<span class="macro">last_sequence_number !</span>= <span class="number">0 </span>{
+<a href=#663 id=663 data-nosnippet>663</a>        <span class="kw">if </span><span class="self">self</span>.format_version &lt; FormatVersion::V2 &amp;&amp; <span class="self">self</span>.last_sequence_number != <span class="number">0 </span>{
 <a href=#664 id=664 data-nosnippet>664</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#665 id=665 data-nosnippet>665</a>                ErrorKind::DataInvalid,
 <a href=#666 id=666 data-nosnippet>666</a>                <span class="macro">format!</span>(
@@ -767,7 +767,7 @@
 <a href=#767 id=767 data-nosnippet>767</a>    <span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#768 id=768 data-nosnippet>768</a>    <span class="kw">use </span>uuid::Uuid;
 <a href=#769 id=769 data-nosnippet>769</a>
-<a href=#770 id=770 data-nosnippet>770</a>    <span class="kw">use super</span>::{
+<a href=#770 id=770 data-nosnippet>770</a>    <span class="kw">use </span>super::{
 <a href=#771 id=771 data-nosnippet>771</a>        DEFAULT_PARTITION_SPEC_ID, EMPTY_SNAPSHOT_ID, FormatVersion, MAIN_BRANCH, MetadataLog,
 <a href=#772 id=772 data-nosnippet>772</a>        SnapshotLog, TableMetadata,
 <a href=#773 id=773 data-nosnippet>773</a>    };
@@ -778,7 +778,7 @@
 <a href=#778 id=778 data-nosnippet>778</a>        PartitionStatisticsFile, Schema, SchemaRef, Snapshot, SnapshotReference, SnapshotRetention,
 <a href=#779 id=779 data-nosnippet>779</a>        SortOrder, StatisticsFile,
 <a href=#780 id=780 data-nosnippet>780</a>    };
-<a href=#781 id=781 data-nosnippet>781</a>    <span class="kw">use crate</span>::{Error, ErrorKind};
+<a href=#781 id=781 data-nosnippet>781</a>    <span class="kw">use </span>crate::{Error, ErrorKind};
 <a href=#782 id=782 data-nosnippet>782</a>
 <a href=#783 id=783 data-nosnippet>783</a>    <span class="attr">#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 <a href=#784 id=784 data-nosnippet>784</a>    #[serde(untagged)]
@@ -1282,7 +1282,7 @@
 <a href=#1282 id=1282 data-nosnippet>1282</a>                snapshots: value
 <a href=#1283 id=1283 data-nosnippet>1283</a>                    .snapshots
 <a href=#1284 id=1284 data-nosnippet>1284</a>                    .map(|snapshots| {
-<a href=#1285 id=1285 data-nosnippet>1285</a>                        <span class="prelude-val">Ok</span>::&lt;<span class="kw">_</span>, Error&gt;(HashMap::from_iter(
+<a href=#1285 id=1285 data-nosnippet>1285</a>                        Ok::&lt;<span class="kw">_</span>, Error&gt;(HashMap::from_iter(
 <a href=#1286 id=1286 data-nosnippet>1286</a>                            snapshots
 <a href=#1287 id=1287 data-nosnippet>1287</a>                                .into_iter()
 <a href=#1288 id=1288 data-nosnippet>1288</a>                                .map(|x| <span class="prelude-val">Ok</span>((x.snapshot_id, Arc::new(x.try_into()<span class="question-mark">?</span>))))
@@ -1610,7 +1610,7 @@
 <a href=#1610 id=1610 data-nosnippet>1610</a>    <span class="kw">use </span>tempfile::TempDir;
 <a href=#1611 id=1611 data-nosnippet>1611</a>    <span class="kw">use </span>uuid::Uuid;
 <a href=#1612 id=1612 data-nosnippet>1612</a>
-<a href=#1613 id=1613 data-nosnippet>1613</a>    <span class="kw">use super</span>::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
+<a href=#1613 id=1613 data-nosnippet>1613</a>    <span class="kw">use </span>super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
 <a href=#1614 id=1614 data-nosnippet>1614</a>    <span class="kw">use </span><span class="kw">crate</span>::catalog::MetadataLocation;
 <a href=#1615 id=1615 data-nosnippet>1615</a>    <span class="kw">use </span><span class="kw">crate</span>::compression::CompressionCodec;
 <a href=#1616 id=1616 data-nosnippet>1616</a>    <span class="kw">use </span><span class="kw">crate</span>::io::FileIO;
@@ -1621,7 +1621,7 @@
 <a href=#1621 id=1621 data-nosnippet>1621</a>        SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, StatisticsFile,
 <a href=#1622 id=1622 data-nosnippet>1622</a>        Summary, TableProperties, Transform, Type, UnboundPartitionField,
 <a href=#1623 id=1623 data-nosnippet>1623</a>    };
-<a href=#1624 id=1624 data-nosnippet>1624</a>    <span class="kw">use crate</span>::{ErrorKind, TableCreation};
+<a href=#1624 id=1624 data-nosnippet>1624</a>    <span class="kw">use </span>crate::{ErrorKind, TableCreation};
 <a href=#1625 id=1625 data-nosnippet>1625</a>
 <a href=#1626 id=1626 data-nosnippet>1626</a>    <span class="kw">fn </span>check_table_metadata_serde(json: <span class="kw-2">&amp;</span>str, expected_type: TableMetadata) {
 <a href=#1627 id=1627 data-nosnippet>1627</a>        <span class="kw">let </span>desered_type: TableMetadata = serde_json::from_str(json).unwrap();

@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/avro/schema.rs`."><title>schema.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0-nightly (f37aa9955 2025-10-26)" data-channel="nightly" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg/avro/</div>schema.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/avro/schema.rs`."><title>schema.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.0-nightly (b90dc1e59 2026-03-04)" data-channel="nightly" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">iceberg/avro/</div>schema.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 <a href=#2 id=2 data-nosnippet>2</a>// or more contributor license agreements.  See the NOTICE file
 <a href=#3 id=3 data-nosnippet>3</a>// distributed with this work for additional information
 <a href=#4 id=4 data-nosnippet>4</a>// regarding copyright ownership.  The ASF licenses this file
@@ -30,7 +30,7 @@
 <a href=#30 id=30 data-nosnippet>30</a>    ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor,
 <a href=#31 id=31 data-nosnippet>31</a>    StructType, Type, visit_schema,
 <a href=#32 id=32 data-nosnippet>32</a>};
-<a href=#33 id=33 data-nosnippet>33</a><span class="kw">use crate</span>::{Error, ErrorKind, <span class="prelude-ty">Result</span>, ensure_data_valid};
+<a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>crate::{Error, ErrorKind, <span class="prelude-ty">Result</span>, ensure_data_valid};
 <a href=#34 id=34 data-nosnippet>34</a>
 <a href=#35 id=35 data-nosnippet>35</a><span class="kw">const </span>ELEMENT_ID: <span class="kw-2">&amp;</span>str = <span class="string">"element-id"</span>;
 <a href=#36 id=36 data-nosnippet>36</a><span class="kw">const </span>FIELD_ID_PROP: <span class="kw-2">&amp;</span>str = <span class="string">"field-id"</span>;
@@ -74,13 +74,13 @@
 <a href=#74 id=74 data-nosnippet>74</a>            record.name = Name::from(<span class="macro">format!</span>(<span class="string">"r{}"</span>, field.id).as_str());
 <a href=#75 id=75 data-nosnippet>75</a>        }
 <a href=#76 id=76 data-nosnippet>76</a>
-<a href=#77 id=77 data-nosnippet>77</a>        <span class="macro">if !</span>field.required {
+<a href=#77 id=77 data-nosnippet>77</a>        <span class="kw">if </span>!field.required {
 <a href=#78 id=78 data-nosnippet>78</a>            field_schema = avro_optional(field_schema)<span class="question-mark">?</span>;
 <a href=#79 id=79 data-nosnippet>79</a>        }
 <a href=#80 id=80 data-nosnippet>80</a>
 <a href=#81 id=81 data-nosnippet>81</a>        <span class="kw">let </span>default = <span class="kw">if let </span><span class="prelude-val">Some</span>(literal) = <span class="kw-2">&amp;</span>field.initial_default {
 <a href=#82 id=82 data-nosnippet>82</a>            <span class="prelude-val">Some</span>(literal.clone().try_into_json(<span class="kw-2">&amp;</span>field.field_type)<span class="question-mark">?</span>)
-<a href=#83 id=83 data-nosnippet>83</a>        } <span class="kw">else </span><span class="macro">if !</span>field.required {
+<a href=#83 id=83 data-nosnippet>83</a>        } <span class="kw">else if </span>!field.required {
 <a href=#84 id=84 data-nosnippet>84</a>            <span class="prelude-val">Some</span>(Value::Null)
 <a href=#85 id=85 data-nosnippet>85</a>        } <span class="kw">else </span>{
 <a href=#86 id=86 data-nosnippet>86</a>            <span class="prelude-val">None
@@ -126,7 +126,7 @@
 <a href=#126 id=126 data-nosnippet>126</a>            record.name = Name::from(<span class="macro">format!</span>(<span class="string">"r{}"</span>, list.element_field.id).as_str());
 <a href=#127 id=127 data-nosnippet>127</a>        }
 <a href=#128 id=128 data-nosnippet>128</a>
-<a href=#129 id=129 data-nosnippet>129</a>        <span class="macro">if !</span>list.element_field.required {
+<a href=#129 id=129 data-nosnippet>129</a>        <span class="kw">if </span>!list.element_field.required {
 <a href=#130 id=130 data-nosnippet>130</a>            field_schema = avro_optional(field_schema)<span class="question-mark">?</span>;
 <a href=#131 id=131 data-nosnippet>131</a>        }
 <a href=#132 id=132 data-nosnippet>132</a>
@@ -147,7 +147,7 @@
 <a href=#147 id=147 data-nosnippet>147</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;AvroSchemaOrField&gt; {
 <a href=#148 id=148 data-nosnippet>148</a>        <span class="kw">let </span>key_field_schema = key_value.unwrap_left();
 <a href=#149 id=149 data-nosnippet>149</a>        <span class="kw">let </span><span class="kw-2">mut </span>value_field_schema = value.unwrap_left();
-<a href=#150 id=150 data-nosnippet>150</a>        <span class="macro">if !</span>map.value_field.required {
+<a href=#150 id=150 data-nosnippet>150</a>        <span class="kw">if </span>!map.value_field.required {
 <a href=#151 id=151 data-nosnippet>151</a>            value_field_schema = avro_optional(value_field_schema)<span class="question-mark">?</span>;
 <a href=#152 id=152 data-nosnippet>152</a>        }
 <a href=#153 id=153 data-nosnippet>153</a>
@@ -612,7 +612,7 @@
 <a href=#612 id=612 data-nosnippet>612</a>    <span class="kw">use </span>apache_avro::Schema <span class="kw">as </span>AvroSchema;
 <a href=#613 id=613 data-nosnippet>613</a>    <span class="kw">use </span>apache_avro::schema::{Namespace, UnionSchema};
 <a href=#614 id=614 data-nosnippet>614</a>
-<a href=#615 id=615 data-nosnippet>615</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#615 id=615 data-nosnippet>615</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
 <a href=#616 id=616 data-nosnippet>616</a>    <span class="kw">use </span><span class="kw">crate</span>::avro::schema::AvroSchemaToSchema;
 <a href=#617 id=617 data-nosnippet>617</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type};
 <a href=#618 id=618 data-nosnippet>618</a>

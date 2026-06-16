@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/arrow/value.rs`."><title>value.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0-nightly (f37aa9955 2025-10-26)" data-channel="nightly" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg/arrow/</div>value.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/iceberg/src/arrow/value.rs`."><title>value.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.0-nightly (b90dc1e59 2026-03-04)" data-channel="nightly" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">iceberg/arrow/</div>value.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 <a href=#2 id=2 data-nosnippet>2</a>// or more contributor license agreements.  See the NOTICE file
 <a href=#3 id=3 data-nosnippet>3</a>// distributed with this work for additional information
 <a href=#4 id=4 data-nosnippet>4</a>// regarding copyright ownership.  The ASF licenses this file
@@ -33,7 +33,7 @@
 <a href=#33 id=33 data-nosnippet>33</a>    SchemaWithPartnerVisitor, Struct, StructType, Type, visit_struct_with_partner,
 <a href=#34 id=34 data-nosnippet>34</a>    visit_type_with_partner,
 <a href=#35 id=35 data-nosnippet>35</a>};
-<a href=#36 id=36 data-nosnippet>36</a><span class="kw">use crate</span>::{Error, ErrorKind, <span class="prelude-ty">Result</span>};
+<a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>crate::{Error, ErrorKind, <span class="prelude-ty">Result</span>};
 <a href=#37 id=37 data-nosnippet>37</a>
 <a href=#38 id=38 data-nosnippet>38</a><span class="kw">struct </span>ArrowArrayToIcebergStructConverter;
 <a href=#39 id=39 data-nosnippet>39</a>
@@ -262,7 +262,7 @@
 <a href=#262 id=262 data-nosnippet>262</a>                        )
 <a href=#263 id=263 data-nosnippet>263</a>                    })<span class="question-mark">?</span>;
 <a href=#264 id=264 data-nosnippet>264</a>                <span class="kw">if let </span>DataType::Decimal128(arrow_precision, arrow_scale) = array.data_type()
-<a href=#265 id=265 data-nosnippet>265</a>                    &amp;&amp; (<span class="kw-2">*</span>arrow_precision <span class="kw">as </span><span class="macro">u32 !</span>= <span class="kw-2">*</span>precision || <span class="kw-2">*</span>arrow_scale <span class="kw">as </span><span class="macro">u32 !</span>= <span class="kw-2">*</span>scale)
+<a href=#265 id=265 data-nosnippet>265</a>                    &amp;&amp; (<span class="kw-2">*</span>arrow_precision <span class="kw">as </span>u32 != <span class="kw-2">*</span>precision || <span class="kw-2">*</span>arrow_scale <span class="kw">as </span>u32 != <span class="kw-2">*</span>scale)
 <a href=#266 id=266 data-nosnippet>266</a>                {
 <a href=#267 id=267 data-nosnippet>267</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#268 id=268 data-nosnippet>268</a>                        ErrorKind::DataInvalid,
@@ -485,7 +485,7 @@
 <a href=#485 id=485 data-nosnippet>485</a>
 <a href=#486 id=486 data-nosnippet>486</a><span class="kw">impl </span>PartnerAccessor&lt;ArrayRef&gt; <span class="kw">for </span>ArrowArrayAccessor {
 <a href=#487 id=487 data-nosnippet>487</a>    <span class="kw">fn </span>struct_partner&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, schema_partner: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>ArrayRef) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'a </span>ArrayRef&gt; {
-<a href=#488 id=488 data-nosnippet>488</a>        <span class="macro">if !matches!</span>(schema_partner.data_type(), DataType::Struct(<span class="kw">_</span>)) {
+<a href=#488 id=488 data-nosnippet>488</a>        <span class="kw">if </span>!<span class="macro">matches!</span>(schema_partner.data_type(), DataType::Struct(<span class="kw">_</span>)) {
 <a href=#489 id=489 data-nosnippet>489</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#490 id=490 data-nosnippet>490</a>                ErrorKind::DataInvalid,
 <a href=#491 id=491 data-nosnippet>491</a>                <span class="string">"The schema partner is not a struct type"</span>,
@@ -632,19 +632,19 @@
 <a href=#632 id=632 data-nosnippet>632</a>        (DataType::Boolean, <span class="prelude-val">Some</span>(PrimitiveLiteral::Boolean(v))) =&gt; {
 <a href=#633 id=633 data-nosnippet>633</a>            <span class="prelude-val">Ok</span>(Arc::new(BooleanArray::from(<span class="macro">vec!</span>[<span class="kw-2">*</span>v])))
 <a href=#634 id=634 data-nosnippet>634</a>        }
-<a href=#635 id=635 data-nosnippet>635</a>        (DataType::Boolean, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Ok</span>(Arc::new(BooleanArray::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;bool&gt;::None]))),
+<a href=#635 id=635 data-nosnippet>635</a>        (DataType::Boolean, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Ok</span>(Arc::new(BooleanArray::from(<span class="macro">vec!</span>[Option::&lt;bool&gt;::None]))),
 <a href=#636 id=636 data-nosnippet>636</a>        (DataType::Int32, <span class="prelude-val">Some</span>(PrimitiveLiteral::Int(v))) =&gt; {
 <a href=#637 id=637 data-nosnippet>637</a>            <span class="prelude-val">Ok</span>(Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="kw-2">*</span>v])))
 <a href=#638 id=638 data-nosnippet>638</a>        }
-<a href=#639 id=639 data-nosnippet>639</a>        (DataType::Int32, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Ok</span>(Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;i32&gt;::None]))),
+<a href=#639 id=639 data-nosnippet>639</a>        (DataType::Int32, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Ok</span>(Arc::new(Int32Array::from(<span class="macro">vec!</span>[Option::&lt;i32&gt;::None]))),
 <a href=#640 id=640 data-nosnippet>640</a>        (DataType::Date32, <span class="prelude-val">Some</span>(PrimitiveLiteral::Int(v))) =&gt; {
 <a href=#641 id=641 data-nosnippet>641</a>            <span class="prelude-val">Ok</span>(Arc::new(Date32Array::from(<span class="macro">vec!</span>[<span class="kw-2">*</span>v])))
 <a href=#642 id=642 data-nosnippet>642</a>        }
-<a href=#643 id=643 data-nosnippet>643</a>        (DataType::Date32, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Ok</span>(Arc::new(Date32Array::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;i32&gt;::None]))),
+<a href=#643 id=643 data-nosnippet>643</a>        (DataType::Date32, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Ok</span>(Arc::new(Date32Array::from(<span class="macro">vec!</span>[Option::&lt;i32&gt;::None]))),
 <a href=#644 id=644 data-nosnippet>644</a>        (DataType::Int64, <span class="prelude-val">Some</span>(PrimitiveLiteral::Long(v))) =&gt; {
 <a href=#645 id=645 data-nosnippet>645</a>            <span class="prelude-val">Ok</span>(Arc::new(Int64Array::from(<span class="macro">vec!</span>[<span class="kw-2">*</span>v])))
 <a href=#646 id=646 data-nosnippet>646</a>        }
-<a href=#647 id=647 data-nosnippet>647</a>        (DataType::Int64, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Ok</span>(Arc::new(Int64Array::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;i64&gt;::None]))),
+<a href=#647 id=647 data-nosnippet>647</a>        (DataType::Int64, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Ok</span>(Arc::new(Int64Array::from(<span class="macro">vec!</span>[Option::&lt;i64&gt;::None]))),
 <a href=#648 id=648 data-nosnippet>648</a>        (DataType::Timestamp(TimeUnit::Microsecond, timezone), <span class="prelude-val">Some</span>(PrimitiveLiteral::Long(v))) =&gt; {
 <a href=#649 id=649 data-nosnippet>649</a>            <span class="kw">let </span>array = TimestampMicrosecondArray::from(<span class="macro">vec!</span>[<span class="kw-2">*</span>v]);
 <a href=#650 id=650 data-nosnippet>650</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(timezone) = timezone {
@@ -654,7 +654,7 @@
 <a href=#654 id=654 data-nosnippet>654</a>            }
 <a href=#655 id=655 data-nosnippet>655</a>        }
 <a href=#656 id=656 data-nosnippet>656</a>        (DataType::Timestamp(TimeUnit::Microsecond, timezone), <span class="prelude-val">None</span>) =&gt; {
-<a href=#657 id=657 data-nosnippet>657</a>            <span class="kw">let </span>array = TimestampMicrosecondArray::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;i64&gt;::None]);
+<a href=#657 id=657 data-nosnippet>657</a>            <span class="kw">let </span>array = TimestampMicrosecondArray::from(<span class="macro">vec!</span>[Option::&lt;i64&gt;::None]);
 <a href=#658 id=658 data-nosnippet>658</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(timezone) = timezone {
 <a href=#659 id=659 data-nosnippet>659</a>                <span class="prelude-val">Ok</span>(Arc::new(array.with_timezone(timezone.clone())))
 <a href=#660 id=660 data-nosnippet>660</a>            } <span class="kw">else </span>{
@@ -670,7 +670,7 @@
 <a href=#670 id=670 data-nosnippet>670</a>            }
 <a href=#671 id=671 data-nosnippet>671</a>        }
 <a href=#672 id=672 data-nosnippet>672</a>        (DataType::Timestamp(TimeUnit::Nanosecond, timezone), <span class="prelude-val">None</span>) =&gt; {
-<a href=#673 id=673 data-nosnippet>673</a>            <span class="kw">let </span>array = TimestampNanosecondArray::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;i64&gt;::None]);
+<a href=#673 id=673 data-nosnippet>673</a>            <span class="kw">let </span>array = TimestampNanosecondArray::from(<span class="macro">vec!</span>[Option::&lt;i64&gt;::None]);
 <a href=#674 id=674 data-nosnippet>674</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(timezone) = timezone {
 <a href=#675 id=675 data-nosnippet>675</a>                <span class="prelude-val">Ok</span>(Arc::new(array.with_timezone(timezone.clone())))
 <a href=#676 id=676 data-nosnippet>676</a>            } <span class="kw">else </span>{
@@ -680,20 +680,20 @@
 <a href=#680 id=680 data-nosnippet>680</a>        (DataType::Float32, <span class="prelude-val">Some</span>(PrimitiveLiteral::Float(v))) =&gt; {
 <a href=#681 id=681 data-nosnippet>681</a>            <span class="prelude-val">Ok</span>(Arc::new(Float32Array::from(<span class="macro">vec!</span>[v.<span class="number">0</span>])))
 <a href=#682 id=682 data-nosnippet>682</a>        }
-<a href=#683 id=683 data-nosnippet>683</a>        (DataType::Float32, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Ok</span>(Arc::new(Float32Array::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;f32&gt;::None]))),
+<a href=#683 id=683 data-nosnippet>683</a>        (DataType::Float32, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Ok</span>(Arc::new(Float32Array::from(<span class="macro">vec!</span>[Option::&lt;f32&gt;::None]))),
 <a href=#684 id=684 data-nosnippet>684</a>        (DataType::Float64, <span class="prelude-val">Some</span>(PrimitiveLiteral::Double(v))) =&gt; {
 <a href=#685 id=685 data-nosnippet>685</a>            <span class="prelude-val">Ok</span>(Arc::new(Float64Array::from(<span class="macro">vec!</span>[v.<span class="number">0</span>])))
 <a href=#686 id=686 data-nosnippet>686</a>        }
-<a href=#687 id=687 data-nosnippet>687</a>        (DataType::Float64, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Ok</span>(Arc::new(Float64Array::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;f64&gt;::None]))),
+<a href=#687 id=687 data-nosnippet>687</a>        (DataType::Float64, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Ok</span>(Arc::new(Float64Array::from(<span class="macro">vec!</span>[Option::&lt;f64&gt;::None]))),
 <a href=#688 id=688 data-nosnippet>688</a>        (DataType::Utf8, <span class="prelude-val">Some</span>(PrimitiveLiteral::String(v))) =&gt; {
 <a href=#689 id=689 data-nosnippet>689</a>            <span class="prelude-val">Ok</span>(Arc::new(StringArray::from(<span class="macro">vec!</span>[v.as_str()])))
 <a href=#690 id=690 data-nosnippet>690</a>        }
-<a href=#691 id=691 data-nosnippet>691</a>        (DataType::Utf8, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Ok</span>(Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;<span class="kw-2">&amp;</span>str&gt;::None]))),
+<a href=#691 id=691 data-nosnippet>691</a>        (DataType::Utf8, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Ok</span>(Arc::new(StringArray::from(<span class="macro">vec!</span>[Option::&lt;<span class="kw-2">&amp;</span>str&gt;::None]))),
 <a href=#692 id=692 data-nosnippet>692</a>        (DataType::Binary, <span class="prelude-val">Some</span>(PrimitiveLiteral::Binary(v))) =&gt; {
 <a href=#693 id=693 data-nosnippet>693</a>            <span class="prelude-val">Ok</span>(Arc::new(BinaryArray::from_vec(<span class="macro">vec!</span>[v.as_slice()])))
 <a href=#694 id=694 data-nosnippet>694</a>        }
 <a href=#695 id=695 data-nosnippet>695</a>        (DataType::Binary, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Ok</span>(Arc::new(BinaryArray::from_opt_vec(<span class="macro">vec!</span>[
-<a href=#696 id=696 data-nosnippet>696</a>            <span class="prelude-ty">Option</span>::&lt;<span class="kw-2">&amp;</span>[u8]&gt;::None,
+<a href=#696 id=696 data-nosnippet>696</a>            Option::&lt;<span class="kw-2">&amp;</span>[u8]&gt;::None,
 <a href=#697 id=697 data-nosnippet>697</a>        ]))),
 <a href=#698 id=698 data-nosnippet>698</a>        (DataType::Decimal128(precision, scale), <span class="prelude-val">Some</span>(PrimitiveLiteral::Int128(v))) =&gt; {
 <a href=#699 id=699 data-nosnippet>699</a>            <span class="kw">let </span>array = Decimal128Array::from(<span class="macro">vec!</span>[{ <span class="kw-2">*</span>v }])
@@ -722,7 +722,7 @@
 <a href=#722 id=722 data-nosnippet>722</a>            <span class="prelude-val">Ok</span>(Arc::new(array))
 <a href=#723 id=723 data-nosnippet>723</a>        }
 <a href=#724 id=724 data-nosnippet>724</a>        (DataType::Decimal128(precision, scale), <span class="prelude-val">None</span>) =&gt; {
-<a href=#725 id=725 data-nosnippet>725</a>            <span class="kw">let </span>array = Decimal128Array::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;i128&gt;::None])
+<a href=#725 id=725 data-nosnippet>725</a>            <span class="kw">let </span>array = Decimal128Array::from(<span class="macro">vec!</span>[Option::&lt;i128&gt;::None])
 <a href=#726 id=726 data-nosnippet>726</a>                .with_precision_and_scale(<span class="kw-2">*</span>precision, <span class="kw-2">*</span>scale)
 <a href=#727 id=727 data-nosnippet>727</a>                .map_err(|e| {
 <a href=#728 id=728 data-nosnippet>728</a>                    Error::new(
@@ -743,17 +743,17 @@
 <a href=#743 id=743 data-nosnippet>743</a>                    // For primitive fields in structs, use simple null arrays (not REE within struct)
 <a href=#744 id=744 data-nosnippet>744</a>                    </span><span class="kw">match </span>f.data_type() {
 <a href=#745 id=745 data-nosnippet>745</a>                        DataType::Boolean =&gt; {
-<a href=#746 id=746 data-nosnippet>746</a>                            <span class="prelude-val">Ok</span>(Arc::new(BooleanArray::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;bool&gt;::None]))
+<a href=#746 id=746 data-nosnippet>746</a>                            <span class="prelude-val">Ok</span>(Arc::new(BooleanArray::from(<span class="macro">vec!</span>[Option::&lt;bool&gt;::None]))
 <a href=#747 id=747 data-nosnippet>747</a>                                <span class="kw">as </span>ArrayRef)
 <a href=#748 id=748 data-nosnippet>748</a>                        }
 <a href=#749 id=749 data-nosnippet>749</a>                        DataType::Int32 | DataType::Date32 =&gt; {
-<a href=#750 id=750 data-nosnippet>750</a>                            <span class="prelude-val">Ok</span>(Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;i32&gt;::None])) <span class="kw">as </span>ArrayRef)
+<a href=#750 id=750 data-nosnippet>750</a>                            <span class="prelude-val">Ok</span>(Arc::new(Int32Array::from(<span class="macro">vec!</span>[Option::&lt;i32&gt;::None])) <span class="kw">as </span>ArrayRef)
 <a href=#751 id=751 data-nosnippet>751</a>                        }
 <a href=#752 id=752 data-nosnippet>752</a>                        DataType::Int64 =&gt; {
-<a href=#753 id=753 data-nosnippet>753</a>                            <span class="prelude-val">Ok</span>(Arc::new(Int64Array::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;i64&gt;::None])) <span class="kw">as </span>ArrayRef)
+<a href=#753 id=753 data-nosnippet>753</a>                            <span class="prelude-val">Ok</span>(Arc::new(Int64Array::from(<span class="macro">vec!</span>[Option::&lt;i64&gt;::None])) <span class="kw">as </span>ArrayRef)
 <a href=#754 id=754 data-nosnippet>754</a>                        }
 <a href=#755 id=755 data-nosnippet>755</a>                        DataType::Timestamp(TimeUnit::Microsecond, timezone) =&gt; {
-<a href=#756 id=756 data-nosnippet>756</a>                            <span class="kw">let </span>array = TimestampMicrosecondArray::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;i64&gt;::None]);
+<a href=#756 id=756 data-nosnippet>756</a>                            <span class="kw">let </span>array = TimestampMicrosecondArray::from(<span class="macro">vec!</span>[Option::&lt;i64&gt;::None]);
 <a href=#757 id=757 data-nosnippet>757</a>                            <span class="kw">if let </span><span class="prelude-val">Some</span>(timezone) = timezone {
 <a href=#758 id=758 data-nosnippet>758</a>                                <span class="prelude-val">Ok</span>(Arc::new(array.with_timezone(timezone.clone())) <span class="kw">as </span>ArrayRef)
 <a href=#759 id=759 data-nosnippet>759</a>                            } <span class="kw">else </span>{
@@ -761,7 +761,7 @@
 <a href=#761 id=761 data-nosnippet>761</a>                            }
 <a href=#762 id=762 data-nosnippet>762</a>                        }
 <a href=#763 id=763 data-nosnippet>763</a>                        DataType::Timestamp(TimeUnit::Nanosecond, timezone) =&gt; {
-<a href=#764 id=764 data-nosnippet>764</a>                            <span class="kw">let </span>array = TimestampNanosecondArray::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;i64&gt;::None]);
+<a href=#764 id=764 data-nosnippet>764</a>                            <span class="kw">let </span>array = TimestampNanosecondArray::from(<span class="macro">vec!</span>[Option::&lt;i64&gt;::None]);
 <a href=#765 id=765 data-nosnippet>765</a>                            <span class="kw">if let </span><span class="prelude-val">Some</span>(timezone) = timezone {
 <a href=#766 id=766 data-nosnippet>766</a>                                <span class="prelude-val">Ok</span>(Arc::new(array.with_timezone(timezone.clone())) <span class="kw">as </span>ArrayRef)
 <a href=#767 id=767 data-nosnippet>767</a>                            } <span class="kw">else </span>{
@@ -769,17 +769,17 @@
 <a href=#769 id=769 data-nosnippet>769</a>                            }
 <a href=#770 id=770 data-nosnippet>770</a>                        }
 <a href=#771 id=771 data-nosnippet>771</a>                        DataType::Float32 =&gt; {
-<a href=#772 id=772 data-nosnippet>772</a>                            <span class="prelude-val">Ok</span>(Arc::new(Float32Array::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;f32&gt;::None])) <span class="kw">as </span>ArrayRef)
+<a href=#772 id=772 data-nosnippet>772</a>                            <span class="prelude-val">Ok</span>(Arc::new(Float32Array::from(<span class="macro">vec!</span>[Option::&lt;f32&gt;::None])) <span class="kw">as </span>ArrayRef)
 <a href=#773 id=773 data-nosnippet>773</a>                        }
 <a href=#774 id=774 data-nosnippet>774</a>                        DataType::Float64 =&gt; {
-<a href=#775 id=775 data-nosnippet>775</a>                            <span class="prelude-val">Ok</span>(Arc::new(Float64Array::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;f64&gt;::None])) <span class="kw">as </span>ArrayRef)
+<a href=#775 id=775 data-nosnippet>775</a>                            <span class="prelude-val">Ok</span>(Arc::new(Float64Array::from(<span class="macro">vec!</span>[Option::&lt;f64&gt;::None])) <span class="kw">as </span>ArrayRef)
 <a href=#776 id=776 data-nosnippet>776</a>                        }
 <a href=#777 id=777 data-nosnippet>777</a>                        DataType::Utf8 =&gt; {
-<a href=#778 id=778 data-nosnippet>778</a>                            <span class="prelude-val">Ok</span>(Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;<span class="kw-2">&amp;</span>str&gt;::None])) <span class="kw">as </span>ArrayRef)
+<a href=#778 id=778 data-nosnippet>778</a>                            <span class="prelude-val">Ok</span>(Arc::new(StringArray::from(<span class="macro">vec!</span>[Option::&lt;<span class="kw-2">&amp;</span>str&gt;::None])) <span class="kw">as </span>ArrayRef)
 <a href=#779 id=779 data-nosnippet>779</a>                        }
 <a href=#780 id=780 data-nosnippet>780</a>                        DataType::Binary =&gt; {
 <a href=#781 id=781 data-nosnippet>781</a>                            <span class="prelude-val">Ok</span>(
-<a href=#782 id=782 data-nosnippet>782</a>                                Arc::new(BinaryArray::from_opt_vec(<span class="macro">vec!</span>[<span class="prelude-ty">Option</span>::&lt;<span class="kw-2">&amp;</span>[u8]&gt;::None]))
+<a href=#782 id=782 data-nosnippet>782</a>                                Arc::new(BinaryArray::from_opt_vec(<span class="macro">vec!</span>[Option::&lt;<span class="kw-2">&amp;</span>[u8]&gt;::None]))
 <a href=#783 id=783 data-nosnippet>783</a>                                    <span class="kw">as </span>ArrayRef,
 <a href=#784 id=784 data-nosnippet>784</a>                            )
 <a href=#785 id=785 data-nosnippet>785</a>                        }
@@ -989,7 +989,7 @@
 <a href=#989 id=989 data-nosnippet>989</a>    <span class="kw">use </span>arrow_schema::{DataType, Field, Fields, TimeUnit};
 <a href=#990 id=990 data-nosnippet>990</a>    <span class="kw">use </span>parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 <a href=#991 id=991 data-nosnippet>991</a>
-<a href=#992 id=992 data-nosnippet>992</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#992 id=992 data-nosnippet>992</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
 <a href=#993 id=993 data-nosnippet>993</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{ListType, Literal, MapType, NestedField, PrimitiveType, StructType, Type};
 <a href=#994 id=994 data-nosnippet>994</a>
 <a href=#995 id=995 data-nosnippet>995</a>    <span class="attr">#[test]

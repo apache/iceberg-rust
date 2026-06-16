@@ -1,9 +1,9 @@
 (function() {
-    var implementors = Object.fromEntries([["iceberg_catalog_loader",[]]]);
+    const implementors = Object.fromEntries([["iceberg_catalog_loader",[]]]);
     if (window.register_implementors) {
         window.register_implementors(implementors);
     } else {
         window.pending_implementors = implementors;
     }
 })()
-//{"start":57,"fragment_lengths":[29]}
+//{"start":59,"fragment_lengths":[29]}

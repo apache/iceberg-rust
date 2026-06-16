@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/catalog/glue/src/catalog.rs`."><title>catalog.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="iceberg_catalog_glue" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0-nightly (f37aa9955 2025-10-26)" data-channel="nightly" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">iceberg_catalog_glue/</div>catalog.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/catalog/glue/src/catalog.rs`."><title>catalog.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="iceberg_catalog_glue" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.0-nightly (b90dc1e59 2026-03-04)" data-channel="nightly" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">iceberg_catalog_glue/</div>catalog.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 <a href=#2 id=2 data-nosnippet>2</a>// or more contributor license agreements.  See the NOTICE file
 <a href=#3 id=3 data-nosnippet>3</a>// distributed with this work for additional information
 <a href=#4 id=4 data-nosnippet>4</a>// regarding copyright ownership.  The ASF licenses this file
@@ -42,7 +42,7 @@
 <a href=#42 id=42 data-nosnippet>42</a>    convert_to_database, convert_to_glue_table, convert_to_namespace, create_sdk_config,
 <a href=#43 id=43 data-nosnippet>43</a>    get_default_table_location, get_metadata_location, is_iceberg_table, validate_namespace,
 <a href=#44 id=44 data-nosnippet>44</a>};
-<a href=#45 id=45 data-nosnippet>45</a><span class="kw">use crate</span>::{
+<a href=#45 id=45 data-nosnippet>45</a><span class="kw">use </span>crate::{
 <a href=#46 id=46 data-nosnippet>46</a>    AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, with_catalog_id,
 <a href=#47 id=47 data-nosnippet>47</a>};
 <a href=#48 id=48 data-nosnippet>48</a>
@@ -116,9 +116,9 @@
 <a href=#116 id=116 data-nosnippet>116</a>        </span><span class="self">self</span>.config.props = props
 <a href=#117 id=117 data-nosnippet>117</a>            .into_iter()
 <a href=#118 id=118 data-nosnippet>118</a>            .filter(|(k, <span class="kw">_</span>)| {
-<a href=#119 id=119 data-nosnippet>119</a>                <span class="macro">k !</span>= GLUE_CATALOG_PROP_URI
-<a href=#120 id=120 data-nosnippet>120</a>                    &amp;&amp; <span class="macro">k !</span>= GLUE_CATALOG_PROP_CATALOG_ID
-<a href=#121 id=121 data-nosnippet>121</a>                    &amp;&amp; <span class="macro">k !</span>= GLUE_CATALOG_PROP_WAREHOUSE
+<a href=#119 id=119 data-nosnippet>119</a>                k != GLUE_CATALOG_PROP_URI
+<a href=#120 id=120 data-nosnippet>120</a>                    &amp;&amp; k != GLUE_CATALOG_PROP_CATALOG_ID
+<a href=#121 id=121 data-nosnippet>121</a>                    &amp;&amp; k != GLUE_CATALOG_PROP_WAREHOUSE
 <a href=#122 id=122 data-nosnippet>122</a>            })
 <a href=#123 id=123 data-nosnippet>123</a>            .collect();
 <a href=#124 id=124 data-nosnippet>124</a>
@@ -182,12 +182,12 @@
 <a href=#182 id=182 data-nosnippet>182</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
 <a href=#183 id=183 data-nosnippet>183</a>        <span class="kw">let </span>sdk_config = create_sdk_config(<span class="kw-2">&amp;</span>config.props, config.uri.as_ref()).<span class="kw">await</span>;
 <a href=#184 id=184 data-nosnippet>184</a>        <span class="kw">let </span><span class="kw-2">mut </span>file_io_props = config.props.clone();
-<a href=#185 id=185 data-nosnippet>185</a>        <span class="macro">if !</span>file_io_props.contains_key(S3_ACCESS_KEY_ID)
+<a href=#185 id=185 data-nosnippet>185</a>        <span class="kw">if </span>!file_io_props.contains_key(S3_ACCESS_KEY_ID)
 <a href=#186 id=186 data-nosnippet>186</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Some</span>(access_key_id) = file_io_props.get(AWS_ACCESS_KEY_ID)
 <a href=#187 id=187 data-nosnippet>187</a>        {
 <a href=#188 id=188 data-nosnippet>188</a>            file_io_props.insert(S3_ACCESS_KEY_ID.to_string(), access_key_id.to_string());
 <a href=#189 id=189 data-nosnippet>189</a>        }
-<a href=#190 id=190 data-nosnippet>190</a>        <span class="macro">if !</span>file_io_props.contains_key(S3_SECRET_ACCESS_KEY)
+<a href=#190 id=190 data-nosnippet>190</a>        <span class="kw">if </span>!file_io_props.contains_key(S3_SECRET_ACCESS_KEY)
 <a href=#191 id=191 data-nosnippet>191</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Some</span>(secret_access_key) = file_io_props.get(AWS_SECRET_ACCESS_KEY)
 <a href=#192 id=192 data-nosnippet>192</a>        {
 <a href=#193 id=193 data-nosnippet>193</a>            file_io_props.insert(
@@ -195,17 +195,17 @@
 <a href=#195 id=195 data-nosnippet>195</a>                secret_access_key.to_string(),
 <a href=#196 id=196 data-nosnippet>196</a>            );
 <a href=#197 id=197 data-nosnippet>197</a>        }
-<a href=#198 id=198 data-nosnippet>198</a>        <span class="macro">if !</span>file_io_props.contains_key(S3_REGION)
+<a href=#198 id=198 data-nosnippet>198</a>        <span class="kw">if </span>!file_io_props.contains_key(S3_REGION)
 <a href=#199 id=199 data-nosnippet>199</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Some</span>(region) = file_io_props.get(AWS_REGION_NAME)
 <a href=#200 id=200 data-nosnippet>200</a>        {
 <a href=#201 id=201 data-nosnippet>201</a>            file_io_props.insert(S3_REGION.to_string(), region.to_string());
 <a href=#202 id=202 data-nosnippet>202</a>        }
-<a href=#203 id=203 data-nosnippet>203</a>        <span class="macro">if !</span>file_io_props.contains_key(S3_SESSION_TOKEN)
+<a href=#203 id=203 data-nosnippet>203</a>        <span class="kw">if </span>!file_io_props.contains_key(S3_SESSION_TOKEN)
 <a href=#204 id=204 data-nosnippet>204</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Some</span>(session_token) = file_io_props.get(AWS_SESSION_TOKEN)
 <a href=#205 id=205 data-nosnippet>205</a>        {
 <a href=#206 id=206 data-nosnippet>206</a>            file_io_props.insert(S3_SESSION_TOKEN.to_string(), session_token.to_string());
 <a href=#207 id=207 data-nosnippet>207</a>        }
-<a href=#208 id=208 data-nosnippet>208</a>        <span class="macro">if !</span>file_io_props.contains_key(S3_ENDPOINT)
+<a href=#208 id=208 data-nosnippet>208</a>        <span class="kw">if </span>!file_io_props.contains_key(S3_ENDPOINT)
 <a href=#209 id=209 data-nosnippet>209</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Some</span>(aws_endpoint) = config.uri.as_ref()
 <a href=#210 id=210 data-nosnippet>210</a>        {
 <a href=#211 id=211 data-nosnippet>211</a>            file_io_props.insert(S3_ENDPOINT.to_string(), aws_endpoint.to_string());
@@ -462,7 +462,7 @@
 <a href=#462 id=462 data-nosnippet>462</a>        namespace: <span class="kw-2">&amp;</span>NamespaceIdent,
 <a href=#463 id=463 data-nosnippet>463</a>        properties: HashMap&lt;String, String&gt;,
 <a href=#464 id=464 data-nosnippet>464</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#465 id=465 data-nosnippet>465</a>        <span class="macro">if !</span><span class="self">self</span>.namespace_exists(namespace).<span class="kw">await</span><span class="question-mark">? </span>{
+<a href=#465 id=465 data-nosnippet>465</a>        <span class="kw">if </span>!<span class="self">self</span>.namespace_exists(namespace).<span class="kw">await</span><span class="question-mark">? </span>{
 <a href=#466 id=466 data-nosnippet>466</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#467 id=467 data-nosnippet>467</a>                ErrorKind::NamespaceNotFound,
 <a href=#468 id=468 data-nosnippet>468</a>                <span class="macro">format!</span>(<span class="string">"Namespace {namespace:?} does not exist"</span>),
@@ -496,7 +496,7 @@
 <a href=#496 id=496 data-nosnippet>496</a>    /// - `Err(...)` signifies failure to drop the namespace due to validation
 <a href=#497 id=497 data-nosnippet>497</a>    /// errors, connectivity issues, or Glue Catalog constraints.
 <a href=#498 id=498 data-nosnippet>498</a>    </span><span class="kw">async fn </span>drop_namespace(<span class="kw-2">&amp;</span><span class="self">self</span>, namespace: <span class="kw-2">&amp;</span>NamespaceIdent) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#499 id=499 data-nosnippet>499</a>        <span class="macro">if !</span><span class="self">self</span>.namespace_exists(namespace).<span class="kw">await</span><span class="question-mark">? </span>{
+<a href=#499 id=499 data-nosnippet>499</a>        <span class="kw">if </span>!<span class="self">self</span>.namespace_exists(namespace).<span class="kw">await</span><span class="question-mark">? </span>{
 <a href=#500 id=500 data-nosnippet>500</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#501 id=501 data-nosnippet>501</a>                ErrorKind::NamespaceNotFound,
 <a href=#502 id=502 data-nosnippet>502</a>                <span class="macro">format!</span>(<span class="string">"Namespace {namespace:?} does not exist"</span>),
@@ -518,7 +518,7 @@
 <a href=#518 id=518 data-nosnippet>518</a>        <span class="kw">let </span>builder = <span class="macro">with_catalog_id!</span>(builder, <span class="self">self</span>.config);
 <a href=#519 id=519 data-nosnippet>519</a>        <span class="kw">let </span>resp = builder.send().<span class="kw">await</span>.map_err(from_aws_sdk_error)<span class="question-mark">?</span>;
 <a href=#520 id=520 data-nosnippet>520</a>
-<a href=#521 id=521 data-nosnippet>521</a>        <span class="macro">if !</span>resp.table_list().is_empty() {
+<a href=#521 id=521 data-nosnippet>521</a>        <span class="kw">if </span>!resp.table_list().is_empty() {
 <a href=#522 id=522 data-nosnippet>522</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(
 <a href=#523 id=523 data-nosnippet>523</a>                ErrorKind::DataInvalid,
 <a href=#524 id=524 data-nosnippet>524</a>                <span class="macro">format!</span>(<span class="string">"Database with name: {} is not empty"</span>, <span class="kw-2">&amp;</span>db_name),
