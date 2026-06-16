@@ -62,10 +62,6 @@ const META_ROOT_PATH: &str = "metadata";
 /// 3. **Delete Entry Processing**: The `delete_entries()` method is intended for future delete
 ///    operations to specify which manifest entries should be marked as deleted.
 pub(crate) trait SnapshotProduceOperation: Send + Sync {
-    /// Returns the operation type that will be recorded in the snapshot summary.
-    ///
-    /// This determines what kind of operation is being performed (e.g., `Append`, `Overwrite`),
-    /// which is stored in the snapshot metadata for tracking and auditing purposes.
     fn operation(&self) -> Operation;
 
     /// Returns manifest entries that should be marked as deleted in the new snapshot.
@@ -75,18 +71,29 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
         snapshot_produce: &SnapshotProducer,
     ) -> impl Future<Output = Result<Vec<ManifestEntry>>> + Send;
 
-    /// Returns existing manifest files that should be included in the new snapshot.
+    /// Returns existing manifest files to carry forward (or rewrite) into the new snapshot.
     ///
-    /// This method determines which manifest files from the current snapshot should be
-    /// carried forward to the new snapshot. The selection depends on the operation type:
-    ///
-    /// - **Append operations**: Typically include all existing manifests
-    /// - **Overwrite operations**: May exclude manifests for partitions being overwritten
-    /// - **Delete operations**: May exclude manifests for partitions being deleted
+    /// Implementations that need to delete specific files within a manifest should rewrite that
+    /// manifest (DELETED + EXISTING entries) and return the rewritten `ManifestFile` here.
+    /// `&mut SnapshotProducer` is provided so that implementations can call
+    /// `snapshot_produce.new_manifest_writer()` to produce the rewritten manifest.
     fn existing_manifest(
         &self,
-        snapshot_produce: &SnapshotProducer<'_>,
+        snapshot_produce: &mut SnapshotProducer<'_>,
     ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
+
+    /// Data files being removed in this operation (used for snapshot summary metrics).
+    fn removed_data_files(&self) -> &[DataFile] {
+        &[]
+    }
+
+    /// Whether this Overwrite replaces the entire table content. When true,
+    /// `truncate_table_summary` sets `deleted-data-files` to the previous total.
+    /// Row-level operations (RowDelta) return false; full-table rewrites (future
+    /// OverwriteFiles / ReplacePartitions) return true.
+    fn is_truncate_full_table(&self) -> bool {
+        false
+    }
 }
 
 pub(crate) struct DefaultManifestProcess;
@@ -242,7 +249,7 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_id
     }
 
-    fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
+    pub(crate) fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
         let new_manifest_path = format!(
             "{}/{}/{}-m{}.{}",
             self.table.metadata().location(),
@@ -338,20 +345,51 @@ impl<'a> SnapshotProducer<'a> {
         writer.write_manifest_file().await
     }
 
+    // Write a data manifest containing DELETED-status entries and return the ManifestFile.
+    // Note: this is NOT an Iceberg "delete manifest" (content=Deletes for MoR delete files).
+    // It is a data manifest (content=Data) whose entries carry ManifestStatus::Deleted to
+    // record which data files were removed in Copy-on-Write mode.
+    async fn write_manifest_with_deleted_entries(
+        &mut self,
+        delete_entries: Vec<ManifestEntry>,
+    ) -> Result<ManifestFile> {
+        if delete_entries.is_empty() {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "No delete entries found when writing a delete manifest file",
+            ));
+        }
+
+        let mut writer = self.new_manifest_writer(ManifestContentType::Data)?;
+        for entry in delete_entries {
+            // Use add_delete_entry() to preserve Deleted status instead of add_entry()
+            // which always overwrites status to Added
+            writer.add_delete_entry(entry)?;
+        }
+        writer.write_manifest_file().await
+    }
+
     async fn manifest_file<OP: SnapshotProduceOperation, MP: ManifestProcess>(
         &mut self,
         snapshot_produce_operation: &OP,
         manifest_process: &MP,
     ) -> Result<Vec<ManifestFile>> {
+        // Check if there's any content to add to the new snapshot
+        let delete_entries = snapshot_produce_operation.delete_entries(self).await?;
+        let has_delete_entries = !delete_entries.is_empty();
+
         // Assert current snapshot producer contains new content to add to new snapshot.
         //
         // TODO: Allowing snapshot property setup with no added data files is a workaround.
         // We should clean it up after all necessary actions are supported.
         // For details, please refer to https://github.com/apache/iceberg-rust/issues/1548
-        if self.added_data_files.is_empty() && self.snapshot_properties.is_empty() {
+        if self.added_data_files.is_empty()
+            && self.snapshot_properties.is_empty()
+            && !has_delete_entries
+        {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
-                "No added data files or added snapshot properties found when write a manifest file",
+                "No added data files, delete entries, or snapshot properties found when write a manifest file",
             ));
         }
 
@@ -364,8 +402,11 @@ impl<'a> SnapshotProducer<'a> {
             manifest_files.push(added_manifest);
         }
 
-        // # TODO
-        // Support process delete entries.
+        // Process delete entries.
+        if has_delete_entries {
+            let delete_manifest = self.write_manifest_with_deleted_entries(delete_entries).await?;
+            manifest_files.push(delete_manifest);
+        }
 
         let manifest_files = manifest_process.process_manifests(self, manifest_files);
         Ok(manifest_files)
@@ -402,6 +443,14 @@ impl<'a> SnapshotProducer<'a> {
             );
         }
 
+        for data_file in snapshot_produce_operation.removed_data_files() {
+            summary_collector.remove_file(
+                data_file,
+                table_metadata.current_schema().clone(),
+                table_metadata.default_partition_spec().clone(),
+            );
+        }
+
         let previous_snapshot = table_metadata.current_snapshot();
 
         let mut additional_properties = summary_collector.build();
@@ -415,7 +464,7 @@ impl<'a> SnapshotProducer<'a> {
         update_snapshot_summaries(
             summary,
             previous_snapshot.map(|s| s.summary()),
-            snapshot_produce_operation.operation() == Operation::Overwrite,
+            snapshot_produce_operation.is_truncate_full_table(),
         )
     }
 
