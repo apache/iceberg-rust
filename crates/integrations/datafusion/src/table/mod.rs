@@ -163,10 +163,11 @@ impl TableProvider for IcebergTableProvider {
         let output_schema = scan_builder.output_schema()?;
 
         let target_partitions = state.config().target_partitions();
+        let task_count = tasks.len();
         // Always produce at least 1 partition so that DataFusion can schedule
         // the plan normally and callers can safely call execute(0). An empty
         // bucket simply yields an empty record-batch stream.
-        let n_partitions = target_partitions.min(tasks.len()).max(1);
+        let n_partitions = target_partitions.min(task_count).max(1);
 
         // identity_cols is Some(non-empty) iff every condition for declaring
         // Partitioning::Hash is met: the table's default spec has identity-transform
@@ -179,22 +180,28 @@ impl TableProvider for IcebergTableProvider {
         let (buckets, all_had_full_key) =
             bucketing::bucket_tasks(tasks, n_partitions, identity_cols.as_deref());
 
-        let partitioning = match identity_cols {
-            Some(cols) if !cols.is_empty() && all_had_full_key && n_partitions > 0 => {
-                let exprs: Vec<Arc<dyn PhysicalExpr>> = cols
-                    .iter()
-                    .map(|c| Arc::new(Column::new(&c.name, c.output_idx)) as Arc<dyn PhysicalExpr>)
-                    .collect();
-                // This declaration is only sound if the Arrow arrays built from
-                // partition literals hash identically to the column arrays the
-                // reader emits at scan time. DataFusion's hash dispatch is
-                // dtype-specific, so any drift in the reader output type (for
-                // example Utf8 vs Utf8View) must either update the bucketing
-                // path to materialize that exact dtype or fall back to
-                // UnknownPartitioning.
-                Partitioning::Hash(exprs, n_partitions)
+        let partitioning = if task_count == 0 {
+            Partitioning::UnknownPartitioning(n_partitions)
+        } else {
+            match identity_cols {
+                Some(cols) if !cols.is_empty() && all_had_full_key => {
+                    let exprs: Vec<Arc<dyn PhysicalExpr>> = cols
+                        .iter()
+                        .map(|c| {
+                            Arc::new(Column::new(&c.name, c.output_idx)) as Arc<dyn PhysicalExpr>
+                        })
+                        .collect();
+                    // This declaration is only sound if the Arrow arrays built from
+                    // partition literals hash identically to the column arrays the
+                    // reader emits at scan time. DataFusion's hash dispatch is
+                    // dtype-specific, so any drift in the reader output type (for
+                    // example Utf8 vs Utf8View) must either update the bucketing
+                    // path to materialize that exact dtype or fall back to
+                    // UnknownPartitioning.
+                    Partitioning::Hash(exprs, n_partitions)
+                }
+                _ => Partitioning::UnknownPartitioning(n_partitions),
             }
-            _ => Partitioning::UnknownPartitioning(n_partitions),
         };
 
         Ok(Arc::new(
@@ -1305,6 +1312,33 @@ mod tests {
             }
             other => panic!("expected Partitioning::Hash, got {other:?}"),
         }
+    }
+
+    /// Empty identity-partitioned tables still use one empty bucket, but do not
+    /// claim hash partitioning because there are no tasks proving a full key.
+    #[tokio::test]
+    async fn test_empty_identity_partitioned_table_falls_back_to_unknown() {
+        use datafusion::physical_plan::Partitioning;
+
+        let (catalog, namespace, table_name, _temp_dir) =
+            make_partitioned_catalog_and_table_for_bucketing().await;
+
+        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+        let plan = provider
+            .scan(&ctx_with_target_partitions(8).state(), None, &[], None)
+            .await
+            .unwrap();
+        let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+        let buckets = scan.buckets().expect("expected eager scan buckets");
+
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].len(), 0);
+        assert!(matches!(
+            scan.properties().partitioning,
+            Partitioning::UnknownPartitioning(1)
+        ));
     }
 
     /// Identity partition task buckets must match DataFusion's own hash
