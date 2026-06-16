@@ -68,6 +68,14 @@ pub(super) fn compute_identity_cols(
     output_schema: &ArrowSchema,
 ) -> Option<Vec<IdentityCol>> {
     let metadata = table.metadata();
+    // iceberg-java is less conservative here: it intersects the identity fields
+    // present in every spec (`Partitioning.groupingKeyType` /
+    // `commonActiveFieldIds`) and still reports a grouping key on the columns
+    // that are identity-partitioned across all of them. We deliberately bail
+    // out on any spec evolution instead, because the bucketing path aligns each
+    // task's partition slot to the *default* spec and `FileScanTask` does not
+    // yet carry its own spec id to disambiguate. Tracked as a follow-up in
+    // <https://github.com/apache/iceberg-rust/issues/2658>.
     if metadata.partition_specs_iter().len() > 1 {
         return None;
     }
