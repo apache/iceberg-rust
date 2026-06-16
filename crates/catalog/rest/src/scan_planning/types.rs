@@ -33,12 +33,16 @@ use crate::types::StorageCredential;
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum PlanStatus {
     /// Planning finished; tasks (and/or plan-task tokens) are available.
+    #[serde(alias = "COMPLETED")]
     Completed,
     /// Planning is in progress; poll the plan id until it completes.
+    #[serde(alias = "SUBMITTED")]
     Submitted,
     /// Planning was cancelled.
+    #[serde(alias = "CANCELLED")]
     Cancelled,
     /// Planning failed.
+    #[serde(alias = "FAILED")]
     Failed,
 }
 

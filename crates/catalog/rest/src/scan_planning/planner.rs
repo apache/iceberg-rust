@@ -17,11 +17,12 @@
 
 //! [`RestScanPlanner`]: the REST catalog's [`ScanPlanner`] implementation.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use iceberg::scan::{FileScanTaskStream, ScanPlanRequest, ScanPlanner};
+use iceberg::io::StorageFactory;
+use iceberg::scan::{ScanPlanRequest, ScanPlanner, ServerScanPlan};
 use iceberg::{Result, Runtime};
 
 use super::endpoint::Endpoint;
@@ -33,13 +34,16 @@ use crate::client::HttpClient;
 ///
 /// Instances are created by `RestCatalog` and attached to the tables it loads;
 /// each holds a handle to the shared HTTP client, the negotiated runtime config
-/// and endpoint set, so planning can run independently of the catalog object.
+/// and endpoint set, plus the storage factory and base props needed to build a
+/// plan-scoped `FileIO` from the credentials the server vends per scan.
 #[derive(Debug)]
 pub struct RestScanPlanner {
     client: Arc<HttpClient>,
     config: RestCatalogConfig,
     endpoints: Arc<HashSet<Endpoint>>,
     runtime: Runtime,
+    storage_factory: Option<Arc<dyn StorageFactory>>,
+    base_props: HashMap<String, String>,
 }
 
 impl RestScanPlanner {
@@ -48,19 +52,23 @@ impl RestScanPlanner {
         config: RestCatalogConfig,
         endpoints: Arc<HashSet<Endpoint>>,
         runtime: Runtime,
+        storage_factory: Option<Arc<dyn StorageFactory>>,
+        base_props: HashMap<String, String>,
     ) -> Self {
         Self {
             client,
             config,
             endpoints,
             runtime,
+            storage_factory,
+            base_props,
         }
     }
 }
 
 #[async_trait]
 impl ScanPlanner for RestScanPlanner {
-    async fn plan_table_scan(&self, request: ScanPlanRequest) -> Result<FileScanTaskStream> {
+    async fn plan_table_scan(&self, request: ScanPlanRequest) -> Result<ServerScanPlan> {
         request.validate()?;
         let ctx = PlanScanContext {
             client: self.client.clone(),
@@ -77,6 +85,8 @@ impl ScanPlanner for RestScanPlanner {
             end_snapshot_id: request.end_snapshot_id,
             select: request.select,
             filter: request.filter,
+            storage_factory: self.storage_factory.clone(),
+            base_props: self.base_props.clone(),
         };
         plan_table_scan(ctx).await
     }

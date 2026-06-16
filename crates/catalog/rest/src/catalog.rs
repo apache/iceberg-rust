@@ -23,7 +23,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
+use iceberg::io::{FileIO, FileIOBuilder, StorageCredential, StorageFactory};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, Namespace, NamespaceIdent, Result, Runtime,
@@ -58,6 +58,18 @@ pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-red
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PATH_V1: &str = "v1";
+
+/// Convert REST `storage-credentials` entries into core [`StorageCredential`]s
+/// that can be attached to a [`FileIO`] via its [`StorageConfig`](iceberg::io::StorageConfig).
+fn to_storage_credentials(
+    creds: Option<Vec<crate::types::StorageCredential>>,
+) -> Vec<StorageCredential> {
+    creds
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| StorageCredential::new(c.prefix, c.config))
+        .collect()
+}
 
 /// Builder for [`RestCatalog`].
 #[derive(Debug)]
@@ -497,6 +509,7 @@ impl RestCatalog {
         &self,
         metadata_location: Option<&str>,
         extra_config: Option<HashMap<String, String>>,
+        credentials: Vec<StorageCredential>,
     ) -> Result<FileIO> {
         let mut props = self.context().await?.config.props.clone();
         if let Some(config) = extra_config {
@@ -529,7 +542,10 @@ impl RestCatalog {
                 )
             })?;
 
-        let file_io = FileIOBuilder::new(factory).with_props(props).build();
+        let file_io = FileIOBuilder::new(factory)
+            .with_props(props)
+            .with_storage_credentials(credentials)
+            .build();
 
         Ok(file_io)
     }
@@ -542,6 +558,8 @@ impl RestCatalog {
             context.config.clone(),
             context.endpoints.clone(),
             self.runtime.clone(),
+            self.storage_factory.clone(),
+            context.config.props.clone(),
         ))
     }
 
@@ -854,8 +872,9 @@ impl Catalog for RestCatalog {
             .chain(self.user_config.props.clone())
             .collect();
 
+        let credentials = to_storage_credentials(response.storage_credentials);
         let file_io = self
-            .load_file_io(Some(metadata_location), Some(config))
+            .load_file_io(Some(metadata_location), Some(config), credentials)
             .await?;
 
         let table_builder = Table::builder()
@@ -912,8 +931,13 @@ impl Catalog for RestCatalog {
             .chain(self.user_config.props.clone())
             .collect();
 
+        let credentials = to_storage_credentials(response.storage_credentials);
         let file_io = self
-            .load_file_io(response.metadata_location.as_deref(), Some(config))
+            .load_file_io(
+                response.metadata_location.as_deref(),
+                Some(config),
+                credentials,
+            )
             .await?;
 
         let table_builder = Table::builder()
@@ -1050,7 +1074,10 @@ impl Catalog for RestCatalog {
             "Metadata location missing in `register_table` response!",
         ))?;
 
-        let file_io = self.load_file_io(Some(metadata_location), None).await?;
+        let credentials = to_storage_credentials(response.storage_credentials);
+        let file_io = self
+            .load_file_io(Some(metadata_location), None, credentials)
+            .await?;
 
         Table::builder()
             .identifier(table_ident.clone())
@@ -1123,7 +1150,7 @@ impl Catalog for RestCatalog {
         };
 
         let file_io = self
-            .load_file_io(Some(&response.metadata_location), None)
+            .load_file_io(Some(&response.metadata_location), None, Vec::new())
             .await?;
 
         Table::builder()

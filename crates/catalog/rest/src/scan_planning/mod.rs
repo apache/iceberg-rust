@@ -25,10 +25,11 @@ mod planner;
 mod stream;
 mod types;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use iceberg::expr::Predicate;
+use iceberg::io::StorageFactory;
 use iceberg::spec::{SchemaRef, TableMetadataRef};
 use iceberg::{Runtime, TableIdent};
 pub use planner::RestScanPlanner;
@@ -54,4 +55,8 @@ pub(crate) struct PlanScanContext {
     pub(crate) end_snapshot_id: Option<i64>,
     pub(crate) select: Option<Vec<String>>,
     pub(crate) filter: Option<Predicate>,
+    /// Storage factory + base props used to build a plan-scoped `FileIO` from
+    /// the credentials the server vends in the plan response.
+    pub(crate) storage_factory: Option<Arc<dyn StorageFactory>>,
+    pub(crate) base_props: HashMap<String, String>,
 }

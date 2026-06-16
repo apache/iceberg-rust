@@ -24,13 +24,13 @@ use context::*;
 mod planner;
 mod task;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Sender, channel};
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
-pub use planner::{ScanPlanRequest, ScanPlanner};
+pub use planner::{ScanPlanRequest, ScanPlanner, ServerScanPlan};
 pub use task::*;
 
 use crate::arrow::ArrowReaderBuilder;
@@ -236,6 +236,7 @@ impl<'a> TableScanBuilder<'a> {
                         table_ident: self.table.identifier().clone(),
                         start_snapshot_id: self.start_snapshot_id,
                         end_snapshot_id: self.end_snapshot_id,
+                        scan_io_override: Arc::new(OnceLock::new()),
                     });
                 };
                 current_snapshot_id.clone()
@@ -334,6 +335,7 @@ impl<'a> TableScanBuilder<'a> {
             table_ident: self.table.identifier().clone(),
             start_snapshot_id: self.start_snapshot_id,
             end_snapshot_id: self.end_snapshot_id,
+            scan_io_override: Arc::new(OnceLock::new()),
         })
     }
 }
@@ -374,6 +376,9 @@ pub struct TableScan {
     /// Incremental scan bounds, forwarded to the server-side planner.
     start_snapshot_id: Option<i64>,
     end_snapshot_id: Option<i64>,
+    /// Set by server-side planning to a plan-scoped [`FileIO`] carrying vended
+    /// credentials; [`to_arrow`](Self::to_arrow) reads through it when present.
+    scan_io_override: Arc<OnceLock<FileIO>>,
 }
 
 impl TableScan {
@@ -408,7 +413,12 @@ impl TableScan {
             };
 
             match planner.plan_table_scan(request).await {
-                Ok(stream) => return Ok(stream),
+                Ok(plan) => {
+                    if let Some(io) = plan.file_io {
+                        let _ = self.scan_io_override.set(io);
+                    }
+                    return Ok(plan.tasks);
+                }
                 Err(e) if e.kind() == ErrorKind::FeatureUnsupported => {
                     // Fall through to native, client-side planning below.
                 }
@@ -533,11 +543,19 @@ impl TableScan {
 
     /// Returns an [`ArrowRecordBatchStream`].
     pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
-        let mut arrow_reader_builder =
-            ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
-                .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
-                .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
-                .with_row_selection_enabled(self.row_selection_enabled);
+        // Plan first: server-side planning may install a plan-scoped FileIO
+        // (with vended credentials) that we must read through.
+        let tasks = self.plan_files().await?;
+        let file_io = self
+            .scan_io_override
+            .get()
+            .cloned()
+            .unwrap_or_else(|| self.file_io.clone());
+
+        let mut arrow_reader_builder = ArrowReaderBuilder::new(file_io, self.runtime.clone())
+            .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
+            .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
+            .with_row_selection_enabled(self.row_selection_enabled);
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
@@ -545,7 +563,7 @@ impl TableScan {
 
         arrow_reader_builder
             .build()
-            .read(self.plan_files().await?)
+            .read(tasks)
             .map(|result| result.stream())
     }
 

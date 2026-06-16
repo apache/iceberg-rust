@@ -22,7 +22,8 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt};
 
 use super::storage::{
-    LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig, StorageFactory,
+    LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig, StorageCredential,
+    StorageFactory,
 };
 use crate::Result;
 
@@ -216,6 +217,12 @@ impl FileIOBuilder {
         self.config = self
             .config
             .with_props(args.into_iter().map(|e| (e.0.to_string(), e.1.to_string())));
+        self
+    }
+
+    /// Attach per-prefix storage credentials (e.g. vended by a REST catalog).
+    pub fn with_storage_credentials(mut self, credentials: Vec<StorageCredential>) -> Self {
+        self.config = self.config.with_credentials(credentials);
         self
     }
 

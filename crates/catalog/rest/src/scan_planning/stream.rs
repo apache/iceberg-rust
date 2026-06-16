@@ -27,7 +27,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use iceberg::expr::Bind;
-use iceberg::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
+use iceberg::io::{FileIO, FileIOBuilder, StorageCredential};
+use iceberg::scan::{FileScanTask, FileScanTaskDeleteFile, ServerScanPlan};
 use iceberg::{Error, ErrorKind, Result, TableIdent};
 use reqwest::{Method, StatusCode};
 use serde::Serialize;
@@ -55,7 +56,7 @@ const MAX_WAIT: Duration = Duration::from_secs(300);
 /// Returns [`ErrorKind::FeatureUnsupported`] if the server does not advertise
 /// the submit endpoint, allowing the scan engine to fall back to native
 /// planning.
-pub(crate) async fn plan_table_scan(ctx: PlanScanContext) -> Result<FileScanTaskStream> {
+pub(crate) async fn plan_table_scan(ctx: PlanScanContext) -> Result<ServerScanPlan> {
     endpoint::check(&ctx.endpoints, &Endpoint::submit_table_scan_plan())?;
 
     let bound_filter = match &ctx.filter {
@@ -80,12 +81,37 @@ pub(crate) async fn plan_table_scan(ctx: PlanScanContext) -> Result<FileScanTask
         armed: true,
     };
 
-    let tasks = drive(&ctx, &convert_ctx, &mut guard).await?;
+    let (tasks, wire_creds) = drive(&ctx, &convert_ctx, &mut guard).await?;
     guard.disarm();
 
-    Ok(Box::pin(futures::stream::iter(
-        tasks.into_iter().map(Ok::<FileScanTask, Error>),
-    )))
+    Ok(ServerScanPlan {
+        tasks: Box::pin(futures::stream::iter(
+            tasks.into_iter().map(Ok::<FileScanTask, Error>),
+        )),
+        file_io: build_scan_file_io(&ctx, wire_creds),
+    })
+}
+
+/// Build a plan-scoped `FileIO` from the credentials the server vended for this
+/// scan, or `None` if there were none (or no storage factory is configured).
+fn build_scan_file_io(
+    ctx: &PlanScanContext,
+    wire_creds: Vec<crate::types::StorageCredential>,
+) -> Option<FileIO> {
+    if wire_creds.is_empty() {
+        return None;
+    }
+    let factory = ctx.storage_factory.clone()?;
+    let credentials: Vec<StorageCredential> = wire_creds
+        .into_iter()
+        .map(|c| StorageCredential::new(c.prefix, c.config))
+        .collect();
+    Some(
+        FileIOBuilder::new(factory)
+            .with_props(ctx.base_props.clone())
+            .with_storage_credentials(credentials)
+            .build(),
+    )
 }
 
 /// Run the full state machine and collect all produced tasks.
@@ -93,7 +119,7 @@ async fn drive(
     ctx: &PlanScanContext,
     convert_ctx: &ConvertContext,
     guard: &mut CancelGuard,
-) -> Result<Vec<FileScanTask>> {
+) -> Result<(Vec<FileScanTask>, Vec<crate::types::StorageCredential>)> {
     let request = build_request(ctx);
     let submit_url = ctx.config.scan_plan_endpoint(&ctx.table_ident);
     let response: PlanTableScanResponse = post_json(&ctx.client, &submit_url, &request).await?;
@@ -103,12 +129,16 @@ async fn drive(
     }
 
     let mut out = Vec::new();
+    let mut credentials: Vec<crate::types::StorageCredential> = Vec::new();
     let (delete_files, file_scan_tasks, plan_tasks) = match response.status {
-        PlanStatus::Completed => (
-            response.delete_files,
-            response.file_scan_tasks,
-            response.plan_tasks,
-        ),
+        PlanStatus::Completed => {
+            credentials.extend(response.storage_credentials.unwrap_or_default());
+            (
+                response.delete_files,
+                response.file_scan_tasks,
+                response.plan_tasks,
+            )
+        }
         PlanStatus::Submitted => {
             let plan_id = response.plan_id.ok_or_else(|| {
                 Error::new(
@@ -116,7 +146,9 @@ async fn drive(
                     "Server returned status=submitted without a plan-id",
                 )
             })?;
-            poll_until_complete(ctx, &plan_id).await?
+            let (d, f, p, c) = poll_until_complete(ctx, &plan_id).await?;
+            credentials.extend(c);
+            (d, f, p)
         }
         PlanStatus::Failed => return Err(failure_error(response.error.as_ref())),
         PlanStatus::Cancelled => {
@@ -152,7 +184,7 @@ async fn drive(
         }
     }
 
-    Ok(out)
+    Ok((out, credentials))
 }
 
 /// Poll `GET .../plan/{plan-id}` with exponential backoff until the plan
@@ -164,6 +196,7 @@ async fn poll_until_complete(
     Option<Vec<RestContentFile>>,
     Option<Vec<RestFileScanTask>>,
     Option<Vec<String>>,
+    Vec<crate::types::StorageCredential>,
 )> {
     endpoint::check(&ctx.endpoints, &Endpoint::fetch_table_scan_plan())?;
     let url = ctx.config.scan_plan_id_endpoint(&ctx.table_ident, plan_id);
@@ -179,6 +212,7 @@ async fn poll_until_complete(
                     response.delete_files,
                     response.file_scan_tasks,
                     response.plan_tasks,
+                    response.storage_credentials.unwrap_or_default(),
                 ));
             }
             PlanStatus::Submitted => {
