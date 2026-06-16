@@ -15,6 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Distribution of pre-planned [`FileScanTask`]s into per-partition buckets for
+//! eager multi-partition scans.
+//!
+//! Tasks are distributed by *count*: each task is hashed (on its identity
+//! partition key when available, otherwise on its data file path) and placed in
+//! `hash % n_partitions`. This evens out the number of files per bucket but is
+//! unaware of `file_size_in_bytes`, so a table mixing one large file with many
+//! small ones can pile most of the bytes into a single bucket and serialize the
+//! query on that partition.
+//!
+//! A size-aware strategy — first-fit-decreasing bin-packing on
+//! `file_size_in_bytes` (optionally with a target split size), mirroring
+//! iceberg-java's `TableScanUtil.planTaskGroups` / `BinPacking` — would spread
+//! the work more evenly. The byte size is already carried on each
+//! [`FileScanTask`], so this is a fairly contained extension; it is tracked as a
+//! follow-up in <https://github.com/apache/iceberg-rust/issues/128>.
+
 use datafusion::arrow::datatypes::{DataType, Schema as ArrowSchema, TimeUnit};
 use datafusion::common::hash_utils::create_hashes;
 use datafusion::physical_plan::repartition::REPARTITION_RANDOM_STATE;
