@@ -114,7 +114,8 @@ mod test {
                     self.name.clone(),
                     self.field.clone(),
                     Arc::new(StructAccessor::new(1, PrimitiveType::Boolean)),
-                ),
+                )
+                .into(),
                 literal,
             ))
         }
@@ -129,7 +130,8 @@ mod test {
                     self.name.clone(),
                     self.field.clone(),
                     Arc::new(StructAccessor::new(1, PrimitiveType::Boolean)),
-                ),
+                )
+                .into(),
                 HashSet::from_iter(literals),
             ))
         }

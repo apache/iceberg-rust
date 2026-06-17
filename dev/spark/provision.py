@@ -129,6 +129,25 @@ spark.sql("ALTER TABLE rest.default.test_promote_partition_column ALTER COLUMN b
 spark.sql("ALTER TABLE rest.default.test_promote_partition_column ALTER COLUMN baz TYPE decimal(6, 2)")
 spark.sql("INSERT INTO rest.default.test_promote_partition_column VALUES (25, 22.25, 22.25)")
 
+#  Create tables for transform predicate scan tests
+spark.sql("CREATE OR REPLACE TABLE rest.default.test_transform_bucket_filter (id bigint, label string) USING iceberg PARTITIONED BY (bucket(10, id))")
+spark.sql("""
+    INSERT INTO rest.default.test_transform_bucket_filter VALUES
+        (34, 'bucket-9'),
+        (35, 'bucket-5'),
+        (36, 'bucket-0'),
+        (37, 'bucket-2')
+""")
+
+spark.sql("CREATE OR REPLACE TABLE rest.default.test_transform_year_filter (id bigint, event_ts timestamp) USING iceberg PARTITIONED BY (years(event_ts))")
+spark.sql("""
+    INSERT INTO rest.default.test_transform_year_filter VALUES
+        (202301, TIMESTAMP '2023-01-01 00:00:00Z'),
+        (202406, TIMESTAMP '2024-06-01 00:00:00Z'),
+        (202412, TIMESTAMP '2024-12-31 00:00:00Z'),
+        (202501, TIMESTAMP '2025-01-01 00:00:00Z')
+""")
+
 #  Create a table with various types
 spark.sql("""
 CREATE OR REPLACE TABLE rest.default.types_test USING ICEBERG AS 
