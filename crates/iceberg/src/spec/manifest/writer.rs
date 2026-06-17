@@ -56,7 +56,7 @@ pub struct ManifestWriterBuilder {
 }
 
 impl ManifestWriterBuilder {
-    /// Create a new builder.
+    /// Create a new builder for unencrypted manifests.
     pub fn new(
         output: OutputFile,
         snapshot_id: Option<i64>,
