@@ -381,4 +381,68 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
         assert!(sts.ends_with(creq_hash));
         assert!(sts.starts_with("AWS4-HMAC-SHA256\n20150830T123600Z\n"));
     }
+
+    /// Empty body uses the hex constant and existing headers are signed too
+    /// (mirrors Java's `TestRESTSigV4AuthSession::authenticateWithoutBody`).
+    #[test]
+    fn signs_empty_body_and_all_headers() {
+        let creds = AwsCredentials {
+            access_key_id: "AKIDEXAMPLE".into(),
+            secret_access_key: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY".into(),
+            session_token: None,
+        };
+        let signer = SigV4Signer::new(
+            creds,
+            "us-east-1".into(),
+            "glue".into(),
+            PayloadHashMode::IcebergRest,
+        );
+        let client = reqwest::Client::new();
+        let mut req = client
+            .get("https://rest.example.com/v1/config")
+            .header("content-type", "application/json")
+            .header("content-encoding", "gzip")
+            .build()
+            .unwrap();
+
+        signer.sign(&mut req).unwrap();
+
+        let h = req.headers();
+        assert_eq!(h.get("x-amz-content-sha256").unwrap(), EMPTY_HEX);
+        assert!(!h.contains_key("x-amz-security-token"));
+        let auth = h.get("authorization").unwrap().to_str().unwrap();
+        assert!(auth.starts_with("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/"));
+        assert!(auth.contains(
+            "SignedHeaders=content-encoding;content-type;host;x-amz-content-sha256;x-amz-date"
+        ));
+    }
+
+    #[test]
+    fn signs_request_standard_mode_uses_hex_header() {
+        let creds = AwsCredentials {
+            access_key_id: "AKIDEXAMPLE".into(),
+            secret_access_key: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY".into(),
+            session_token: None,
+        };
+        let signer = SigV4Signer::new(
+            creds,
+            "us-east-1".into(),
+            "glue".into(),
+            PayloadHashMode::StandardAws,
+        );
+        let client = reqwest::Client::new();
+        let mut req = client
+            .post("https://rest.example.com/v1/namespaces")
+            .body("hello")
+            .build()
+            .unwrap();
+
+        signer.sign(&mut req).unwrap();
+
+        // StandardAws keeps the header in hex.
+        assert_eq!(
+            req.headers().get("x-amz-content-sha256").unwrap(),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
 }
