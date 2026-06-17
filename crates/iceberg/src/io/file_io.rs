@@ -178,7 +178,9 @@ impl FileIO {
             return self.get_storage("")?.delete_stream(paths.boxed()).await;
         }
 
-        // Otherwise group paths by routed storage, then batch-delete each group.
+        // Route by prefix, flushing bounded batches as we iterate so memory stays
+        // bounded on large streams (like Java's `S3FileIO.deleteFiles`).
+        const DELETE_BATCH_SIZE: usize = 1000;
         let mut groups: HashMap<String, Vec<String>> = HashMap::new();
         let mut paths = paths.boxed();
         while let Some(path) = paths.next().await {
@@ -188,12 +190,24 @@ impl FileIO {
                 .find(|ps| path.starts_with(&ps.prefix))
                 .map(|ps| ps.prefix.clone())
                 .unwrap_or_default();
-            groups.entry(key).or_default().push(path);
+            let buf = groups.entry(key).or_default();
+            buf.push(path);
+            if buf.len() >= DELETE_BATCH_SIZE {
+                let full = std::mem::take(buf);
+                self.get_storage(&full[0])?
+                    .delete_stream(stream::iter(full).boxed())
+                    .await?;
+            }
         }
 
+        // Flush remainders.
         for batch in groups.into_values() {
-            let storage = self.get_storage(&batch[0])?;
-            storage.delete_stream(stream::iter(batch).boxed()).await?;
+            if batch.is_empty() {
+                continue;
+            }
+            self.get_storage(&batch[0])?
+                .delete_stream(stream::iter(batch).boxed())
+                .await?;
         }
         Ok(())
     }
@@ -636,6 +650,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_prefixed_config_carries_credential_values() {
+        // Prefix config gets the vended credentials; default config keeps only base props.
+        let factory = Arc::new(MemoryStorageFactory);
+        let file_io = FileIOBuilder::new(factory)
+            .with_prop("s3.region", "us-east-1")
+            .with_prefixed_props("s3://bucket/table", [
+                ("s3.region", "us-east-1"),
+                ("s3.access-key-id", "vended-key"),
+                ("s3.secret-access-key", "vended-secret"),
+            ])
+            .build();
+
+        // Default: base props, no credentials.
+        assert_eq!(
+            file_io.config().get("s3.region"),
+            Some(&"us-east-1".to_string())
+        );
+        assert_eq!(file_io.config().get("s3.access-key-id"), None);
+
+        // Prefix: base props + vended credentials.
+        let prefixed = &file_io.prefixed[0].config;
+        assert_eq!(prefixed.get("s3.region"), Some(&"us-east-1".to_string()));
+        assert_eq!(
+            prefixed.get("s3.access-key-id"),
+            Some(&"vended-key".to_string())
+        );
+        assert_eq!(
+            prefixed.get("s3.secret-access-key"),
+            Some(&"vended-secret".to_string())
+        );
+    }
+
+    #[tokio::test]
     async fn test_get_storage_routes_by_prefix() {
         let factory = Arc::new(MemoryStorageFactory);
         let file_io = FileIOBuilder::new(factory)
@@ -686,5 +733,36 @@ mod tests {
 
         assert!(!file_io.exists(default_path).await.unwrap());
         assert!(!file_io.exists(prefixed_path).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_delete_stream_flushes_across_batches() {
+        // More than the flush threshold (1000): exercises mid-stream flush + remainder.
+        let factory = Arc::new(MemoryStorageFactory);
+        let file_io = FileIOBuilder::new(factory)
+            .with_prefixed_props("memory:/creds/", [("k", "v")])
+            .build();
+
+        let n = 1050;
+        let mut paths = Vec::with_capacity(n);
+        for i in 0..n {
+            let p = format!("memory:/creds/f{i}.txt");
+            file_io
+                .new_output(&p)
+                .unwrap()
+                .write("x".into())
+                .await
+                .unwrap();
+            paths.push(p);
+        }
+
+        file_io
+            .delete_stream(futures::stream::iter(paths.clone()))
+            .await
+            .unwrap();
+
+        for p in &paths {
+            assert!(!file_io.exists(p).await.unwrap());
+        }
     }
 }
