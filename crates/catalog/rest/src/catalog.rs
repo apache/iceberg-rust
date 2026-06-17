@@ -1770,6 +1770,56 @@ mod tests {
         assert!(err.message().contains("cannot be combined with OAuth"));
     }
 
+    #[test]
+    fn test_sigv4_requires_region_and_name() {
+        // Missing region.
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(HashMap::from([(
+                REST_CATALOG_PROP_SIGV4_ENABLED.to_string(),
+                "true".to_string(),
+            )]))
+            .build();
+        let err = config.resolve_signer().unwrap_err();
+        assert!(err.message().contains(REST_CATALOG_PROP_SIGNING_REGION));
+
+        // Region present, name missing.
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(HashMap::from([
+                (
+                    REST_CATALOG_PROP_SIGV4_ENABLED.to_string(),
+                    "true".to_string(),
+                ),
+                (
+                    REST_CATALOG_PROP_SIGNING_REGION.to_string(),
+                    "us-east-1".to_string(),
+                ),
+            ]))
+            .build();
+        let err = config.resolve_signer().unwrap_err();
+        assert!(err.message().contains(REST_CATALOG_PROP_SIGNING_NAME));
+    }
+
+    #[test]
+    fn test_with_signer_overrides_config() {
+        // A custom signer takes precedence over the sigv4 config.
+        #[derive(Debug)]
+        struct StubSigner;
+        impl HttpRequestSigner for StubSigner {
+            fn sign(&self, _request: &mut reqwest::Request) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .custom_signer(Some(Arc::new(StubSigner)))
+            .build();
+
+        assert!(config.resolve_signer().unwrap().is_some());
+    }
+
     #[tokio::test]
     async fn test_list_namespace_with_pagination() {
         let mut server = Server::new_async().await;
