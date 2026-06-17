@@ -355,11 +355,11 @@ pub enum iceberg::expr::BoundPredicate
 pub iceberg::expr::BoundPredicate::AlwaysFalse
 pub iceberg::expr::BoundPredicate::AlwaysTrue
 pub iceberg::expr::BoundPredicate::And(iceberg::expr::LogicalExpression<iceberg::expr::BoundPredicate, 2>)
-pub iceberg::expr::BoundPredicate::Binary(iceberg::expr::BinaryExpression<iceberg::expr::BoundReference>)
+pub iceberg::expr::BoundPredicate::Binary(iceberg::expr::BinaryExpression<iceberg::expr::BoundTerm>)
 pub iceberg::expr::BoundPredicate::Not(iceberg::expr::LogicalExpression<iceberg::expr::BoundPredicate, 1>)
 pub iceberg::expr::BoundPredicate::Or(iceberg::expr::LogicalExpression<iceberg::expr::BoundPredicate, 2>)
-pub iceberg::expr::BoundPredicate::Set(iceberg::expr::SetExpression<iceberg::expr::BoundReference>)
-pub iceberg::expr::BoundPredicate::Unary(iceberg::expr::UnaryExpression<iceberg::expr::BoundReference>)
+pub iceberg::expr::BoundPredicate::Set(iceberg::expr::SetExpression<iceberg::expr::BoundTerm>)
+pub iceberg::expr::BoundPredicate::Unary(iceberg::expr::UnaryExpression<iceberg::expr::BoundTerm>)
 impl iceberg::expr::BoundPredicate
 pub fn iceberg::expr::BoundPredicate::rewrite_not(self) -> iceberg::expr::BoundPredicate
 impl core::clone::Clone for iceberg::expr::BoundPredicate
@@ -375,15 +375,40 @@ impl serde_core::ser::Serialize for iceberg::expr::BoundPredicate
 pub fn iceberg::expr::BoundPredicate::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::expr::BoundPredicate
 pub fn iceberg::expr::BoundPredicate::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub enum iceberg::expr::BoundTerm
+pub iceberg::expr::BoundTerm::Reference(iceberg::expr::BoundReference)
+pub iceberg::expr::BoundTerm::Transform(iceberg::expr::BoundTransformTerm)
+impl iceberg::expr::BoundTerm
+pub fn iceberg::expr::BoundTerm::accessor(&self) -> &iceberg::expr::accessor::StructAccessor
+pub fn iceberg::expr::BoundTerm::reference(&self) -> &iceberg::expr::BoundReference
+pub fn iceberg::expr::BoundTerm::result_type(&self) -> iceberg::Result<iceberg::spec::Type>
+impl core::clone::Clone for iceberg::expr::BoundTerm
+pub fn iceberg::expr::BoundTerm::clone(&self) -> iceberg::expr::BoundTerm
+impl core::cmp::Eq for iceberg::expr::BoundTerm
+impl core::cmp::PartialEq for iceberg::expr::BoundTerm
+pub fn iceberg::expr::BoundTerm::eq(&self, other: &iceberg::expr::BoundTerm) -> bool
+impl core::convert::From<iceberg::expr::BoundReference> for iceberg::expr::BoundTerm
+pub fn iceberg::expr::BoundTerm::from(r: iceberg::expr::BoundReference) -> Self
+impl core::convert::From<iceberg::expr::BoundTransformTerm> for iceberg::expr::BoundTerm
+pub fn iceberg::expr::BoundTerm::from(t: iceberg::expr::BoundTransformTerm) -> Self
+impl core::fmt::Debug for iceberg::expr::BoundTerm
+pub fn iceberg::expr::BoundTerm::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for iceberg::expr::BoundTerm
+pub fn iceberg::expr::BoundTerm::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::expr::BoundTerm
+impl serde_core::ser::Serialize for iceberg::expr::BoundTerm
+pub fn iceberg::expr::BoundTerm::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::expr::BoundTerm
+pub fn iceberg::expr::BoundTerm::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub enum iceberg::expr::Predicate
 pub iceberg::expr::Predicate::AlwaysFalse
 pub iceberg::expr::Predicate::AlwaysTrue
 pub iceberg::expr::Predicate::And(iceberg::expr::LogicalExpression<iceberg::expr::Predicate, 2>)
-pub iceberg::expr::Predicate::Binary(iceberg::expr::BinaryExpression<iceberg::expr::Reference>)
+pub iceberg::expr::Predicate::Binary(iceberg::expr::BinaryExpression<iceberg::expr::Term>)
 pub iceberg::expr::Predicate::Not(iceberg::expr::LogicalExpression<iceberg::expr::Predicate, 1>)
 pub iceberg::expr::Predicate::Or(iceberg::expr::LogicalExpression<iceberg::expr::Predicate, 2>)
-pub iceberg::expr::Predicate::Set(iceberg::expr::SetExpression<iceberg::expr::Reference>)
-pub iceberg::expr::Predicate::Unary(iceberg::expr::UnaryExpression<iceberg::expr::Reference>)
+pub iceberg::expr::Predicate::Set(iceberg::expr::SetExpression<iceberg::expr::Term>)
+pub iceberg::expr::Predicate::Unary(iceberg::expr::UnaryExpression<iceberg::expr::Term>)
 impl iceberg::expr::Predicate
 pub fn iceberg::expr::Predicate::and(self, other: iceberg::expr::Predicate) -> iceberg::expr::Predicate
 pub fn iceberg::expr::Predicate::negate(self) -> iceberg::expr::Predicate
@@ -393,6 +418,8 @@ impl core::clone::Clone for iceberg::expr::Predicate
 pub fn iceberg::expr::Predicate::clone(&self) -> iceberg::expr::Predicate
 impl core::cmp::PartialEq for iceberg::expr::Predicate
 pub fn iceberg::expr::Predicate::eq(&self, other: &iceberg::expr::Predicate) -> bool
+impl core::convert::From<iceberg::expr::BinaryExpression<iceberg::expr::Term>> for iceberg::expr::Predicate
+pub fn iceberg::expr::Predicate::from(expr: iceberg::expr::BinaryExpression<iceberg::expr::Term>) -> Self
 impl core::fmt::Debug for iceberg::expr::Predicate
 pub fn iceberg::expr::Predicate::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for iceberg::expr::Predicate
@@ -442,12 +469,40 @@ impl serde_core::ser::Serialize for iceberg::expr::PredicateOperator
 pub fn iceberg::expr::PredicateOperator::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::expr::PredicateOperator
 pub fn iceberg::expr::PredicateOperator::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub enum iceberg::expr::Term
+pub iceberg::expr::Term::Reference(iceberg::expr::Reference)
+pub iceberg::expr::Term::Transform(iceberg::expr::TransformTerm)
+impl iceberg::expr::Term
+pub fn iceberg::expr::Term::is_transform(&self) -> bool
+pub fn iceberg::expr::Term::reference(&self) -> &iceberg::expr::Reference
+impl core::clone::Clone for iceberg::expr::Term
+pub fn iceberg::expr::Term::clone(&self) -> iceberg::expr::Term
+impl core::cmp::PartialEq for iceberg::expr::Term
+pub fn iceberg::expr::Term::eq(&self, other: &iceberg::expr::Term) -> bool
+impl core::convert::From<iceberg::expr::Reference> for iceberg::expr::Term
+pub fn iceberg::expr::Term::from(r: iceberg::expr::Reference) -> Self
+impl core::convert::From<iceberg::expr::TransformTerm> for iceberg::expr::Term
+pub fn iceberg::expr::Term::from(t: iceberg::expr::TransformTerm) -> Self
+impl core::fmt::Debug for iceberg::expr::Term
+pub fn iceberg::expr::Term::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for iceberg::expr::Term
+pub fn iceberg::expr::Term::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::expr::Term
+impl iceberg::expr::Bind for iceberg::expr::Term
+pub type iceberg::expr::Term::Bound = iceberg::expr::BoundTerm
+pub fn iceberg::expr::Term::bind(&self, schema: iceberg::spec::SchemaRef, case_sensitive: bool) -> iceberg::Result<Self::Bound>
+impl serde_core::ser::Serialize for iceberg::expr::Term
+pub fn iceberg::expr::Term::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::expr::Term
+pub fn iceberg::expr::Term::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::expr::BinaryExpression<T>
 impl<T> iceberg::expr::BinaryExpression<T>
 pub fn iceberg::expr::BinaryExpression<T>::literal(&self) -> &iceberg::spec::Datum
 pub fn iceberg::expr::BinaryExpression<T>::new(op: iceberg::expr::PredicateOperator, term: T, literal: iceberg::spec::Datum) -> Self
 pub fn iceberg::expr::BinaryExpression<T>::op(&self) -> iceberg::expr::PredicateOperator
 pub fn iceberg::expr::BinaryExpression<T>::term(&self) -> &T
+impl core::convert::From<iceberg::expr::BinaryExpression<iceberg::expr::Term>> for iceberg::expr::Predicate
+pub fn iceberg::expr::Predicate::from(expr: iceberg::expr::BinaryExpression<iceberg::expr::Term>) -> Self
 impl<'de, T> serde_core::de::Deserialize<'de> for iceberg::expr::BinaryExpression<T> where T: serde_core::de::Deserialize<'de>
 pub fn iceberg::expr::BinaryExpression<T>::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 impl<T: core::clone::Clone> core::clone::Clone for iceberg::expr::BinaryExpression<T>
@@ -474,6 +529,8 @@ pub fn iceberg::expr::BoundReference::clone(&self) -> iceberg::expr::BoundRefere
 impl core::cmp::Eq for iceberg::expr::BoundReference
 impl core::cmp::PartialEq for iceberg::expr::BoundReference
 pub fn iceberg::expr::BoundReference::eq(&self, other: &iceberg::expr::BoundReference) -> bool
+impl core::convert::From<iceberg::expr::BoundReference> for iceberg::expr::BoundTerm
+pub fn iceberg::expr::BoundTerm::from(r: iceberg::expr::BoundReference) -> Self
 impl core::fmt::Debug for iceberg::expr::BoundReference
 pub fn iceberg::expr::BoundReference::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for iceberg::expr::BoundReference
@@ -483,6 +540,27 @@ impl serde_core::ser::Serialize for iceberg::expr::BoundReference
 pub fn iceberg::expr::BoundReference::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::expr::BoundReference
 pub fn iceberg::expr::BoundReference::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::expr::BoundTransformTerm
+impl iceberg::expr::BoundTransformTerm
+pub fn iceberg::expr::BoundTransformTerm::new(transform: iceberg::spec::Transform, reference: iceberg::expr::BoundReference) -> Self
+pub fn iceberg::expr::BoundTransformTerm::reference(&self) -> &iceberg::expr::BoundReference
+pub fn iceberg::expr::BoundTransformTerm::transform(&self) -> &iceberg::spec::Transform
+impl core::clone::Clone for iceberg::expr::BoundTransformTerm
+pub fn iceberg::expr::BoundTransformTerm::clone(&self) -> iceberg::expr::BoundTransformTerm
+impl core::cmp::Eq for iceberg::expr::BoundTransformTerm
+impl core::cmp::PartialEq for iceberg::expr::BoundTransformTerm
+pub fn iceberg::expr::BoundTransformTerm::eq(&self, other: &iceberg::expr::BoundTransformTerm) -> bool
+impl core::convert::From<iceberg::expr::BoundTransformTerm> for iceberg::expr::BoundTerm
+pub fn iceberg::expr::BoundTerm::from(t: iceberg::expr::BoundTransformTerm) -> Self
+impl core::fmt::Debug for iceberg::expr::BoundTransformTerm
+pub fn iceberg::expr::BoundTransformTerm::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for iceberg::expr::BoundTransformTerm
+pub fn iceberg::expr::BoundTransformTerm::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::expr::BoundTransformTerm
+impl serde_core::ser::Serialize for iceberg::expr::BoundTransformTerm
+pub fn iceberg::expr::BoundTransformTerm::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::expr::BoundTransformTerm
+pub fn iceberg::expr::BoundTransformTerm::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::expr::LogicalExpression<T, const N: usize>
 impl<T, const N: usize> iceberg::expr::LogicalExpression<T, N>
 pub fn iceberg::expr::LogicalExpression<T, N>::inputs(&self) -> [&T; N]
@@ -523,6 +601,8 @@ impl core::clone::Clone for iceberg::expr::Reference
 pub fn iceberg::expr::Reference::clone(&self) -> iceberg::expr::Reference
 impl core::cmp::PartialEq for iceberg::expr::Reference
 pub fn iceberg::expr::Reference::eq(&self, other: &iceberg::expr::Reference) -> bool
+impl core::convert::From<iceberg::expr::Reference> for iceberg::expr::Term
+pub fn iceberg::expr::Term::from(r: iceberg::expr::Reference) -> Self
 impl core::fmt::Debug for iceberg::expr::Reference
 pub fn iceberg::expr::Reference::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for iceberg::expr::Reference
@@ -557,6 +637,44 @@ pub fn iceberg::expr::SetExpression<T>::bind(&self, schema: iceberg::spec::Schem
 impl<T> core::marker::StructuralPartialEq for iceberg::expr::SetExpression<T>
 impl<T> serde_core::ser::Serialize for iceberg::expr::SetExpression<T> where T: serde_core::ser::Serialize
 pub fn iceberg::expr::SetExpression<T>::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub struct iceberg::expr::TransformTerm
+impl iceberg::expr::TransformTerm
+pub fn iceberg::expr::TransformTerm::bucket(name: impl core::convert::Into<alloc::string::String>, n: u32) -> Self
+pub fn iceberg::expr::TransformTerm::day(name: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn iceberg::expr::TransformTerm::hour(name: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn iceberg::expr::TransformTerm::month(name: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn iceberg::expr::TransformTerm::new(transform: iceberg::spec::Transform, reference: iceberg::expr::Reference) -> Self
+pub fn iceberg::expr::TransformTerm::reference(&self) -> &iceberg::expr::Reference
+pub fn iceberg::expr::TransformTerm::transform(&self) -> &iceberg::spec::Transform
+pub fn iceberg::expr::TransformTerm::truncate(name: impl core::convert::Into<alloc::string::String>, width: u32) -> Self
+pub fn iceberg::expr::TransformTerm::year(name: impl core::convert::Into<alloc::string::String>) -> Self
+impl iceberg::expr::TransformTerm
+pub fn iceberg::expr::TransformTerm::equal_to(self, datum: iceberg::spec::Datum) -> iceberg::expr::Predicate
+pub fn iceberg::expr::TransformTerm::greater_than(self, datum: iceberg::spec::Datum) -> iceberg::expr::Predicate
+pub fn iceberg::expr::TransformTerm::greater_than_or_equal_to(self, datum: iceberg::spec::Datum) -> iceberg::expr::Predicate
+pub fn iceberg::expr::TransformTerm::is_in(self, literals: impl core::iter::traits::collect::IntoIterator<Item = iceberg::spec::Datum>) -> iceberg::expr::Predicate
+pub fn iceberg::expr::TransformTerm::is_not_in(self, literals: impl core::iter::traits::collect::IntoIterator<Item = iceberg::spec::Datum>) -> iceberg::expr::Predicate
+pub fn iceberg::expr::TransformTerm::less_than(self, datum: iceberg::spec::Datum) -> iceberg::expr::Predicate
+pub fn iceberg::expr::TransformTerm::less_than_or_equal_to(self, datum: iceberg::spec::Datum) -> iceberg::expr::Predicate
+pub fn iceberg::expr::TransformTerm::not_equal_to(self, datum: iceberg::spec::Datum) -> iceberg::expr::Predicate
+impl core::clone::Clone for iceberg::expr::TransformTerm
+pub fn iceberg::expr::TransformTerm::clone(&self) -> iceberg::expr::TransformTerm
+impl core::cmp::PartialEq for iceberg::expr::TransformTerm
+pub fn iceberg::expr::TransformTerm::eq(&self, other: &iceberg::expr::TransformTerm) -> bool
+impl core::convert::From<iceberg::expr::TransformTerm> for iceberg::expr::Term
+pub fn iceberg::expr::Term::from(t: iceberg::expr::TransformTerm) -> Self
+impl core::fmt::Debug for iceberg::expr::TransformTerm
+pub fn iceberg::expr::TransformTerm::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for iceberg::expr::TransformTerm
+pub fn iceberg::expr::TransformTerm::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::expr::TransformTerm
+impl iceberg::expr::Bind for iceberg::expr::TransformTerm
+pub type iceberg::expr::TransformTerm::Bound = iceberg::expr::BoundTransformTerm
+pub fn iceberg::expr::TransformTerm::bind(&self, schema: iceberg::spec::SchemaRef, case_sensitive: bool) -> iceberg::Result<Self::Bound>
+impl serde_core::ser::Serialize for iceberg::expr::TransformTerm
+pub fn iceberg::expr::TransformTerm::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::expr::TransformTerm
+pub fn iceberg::expr::TransformTerm::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::expr::UnaryExpression<T>
 impl<T> iceberg::expr::UnaryExpression<T>
 pub fn iceberg::expr::UnaryExpression<T>::new(op: iceberg::expr::PredicateOperator, term: T) -> Self
@@ -587,6 +705,12 @@ pub fn iceberg::expr::Predicate::bind(&self, schema: iceberg::spec::SchemaRef, c
 impl iceberg::expr::Bind for iceberg::expr::Reference
 pub type iceberg::expr::Reference::Bound = iceberg::expr::BoundReference
 pub fn iceberg::expr::Reference::bind(&self, schema: iceberg::spec::SchemaRef, case_sensitive: bool) -> iceberg::Result<Self::Bound>
+impl iceberg::expr::Bind for iceberg::expr::Term
+pub type iceberg::expr::Term::Bound = iceberg::expr::BoundTerm
+pub fn iceberg::expr::Term::bind(&self, schema: iceberg::spec::SchemaRef, case_sensitive: bool) -> iceberg::Result<Self::Bound>
+impl iceberg::expr::Bind for iceberg::expr::TransformTerm
+pub type iceberg::expr::TransformTerm::Bound = iceberg::expr::BoundTransformTerm
+pub fn iceberg::expr::TransformTerm::bind(&self, schema: iceberg::spec::SchemaRef, case_sensitive: bool) -> iceberg::Result<Self::Bound>
 impl<T: iceberg::expr::Bind, const N: usize> iceberg::expr::Bind for iceberg::expr::LogicalExpression<T, N> where <T as iceberg::expr::Bind>::Bound: core::marker::Sized
 pub type iceberg::expr::LogicalExpression<T, N>::Bound = iceberg::expr::LogicalExpression<<T as iceberg::expr::Bind>::Bound, N>
 pub fn iceberg::expr::LogicalExpression<T, N>::bind(&self, schema: iceberg::spec::SchemaRef, case_sensitive: bool) -> iceberg::Result<Self::Bound>
@@ -599,8 +723,6 @@ pub fn iceberg::expr::SetExpression<T>::bind(&self, schema: iceberg::spec::Schem
 impl<T: iceberg::expr::Bind> iceberg::expr::Bind for iceberg::expr::UnaryExpression<T>
 pub type iceberg::expr::UnaryExpression<T>::Bound = iceberg::expr::UnaryExpression<<T as iceberg::expr::Bind>::Bound>
 pub fn iceberg::expr::UnaryExpression<T>::bind(&self, schema: iceberg::spec::SchemaRef, case_sensitive: bool) -> iceberg::Result<Self::Bound>
-pub type iceberg::expr::BoundTerm = iceberg::expr::BoundReference
-pub type iceberg::expr::Term = iceberg::expr::Reference
 pub mod iceberg::inspect
 pub enum iceberg::inspect::MetadataTableType
 pub iceberg::inspect::MetadataTableType::Manifests
