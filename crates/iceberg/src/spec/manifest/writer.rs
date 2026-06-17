@@ -60,7 +60,6 @@ impl ManifestWriterBuilder {
     pub fn new(
         output: OutputFile,
         snapshot_id: Option<i64>,
-        key_metadata: Option<Vec<u8>>,
         schema: SchemaRef,
         partition_spec: PartitionSpec,
     ) -> Self {
@@ -69,7 +68,7 @@ impl ManifestWriterBuilder {
             writer_future: Box::pin(async move { output.writer().await }),
             location,
             snapshot_id,
-            key_metadata,
+            key_metadata: None,
             schema,
             partition_spec,
         }
@@ -732,7 +731,6 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(3),
-            None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
         )
@@ -820,7 +818,6 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(1),
-            None,
             schema.clone(),
             partition_spec.clone(),
         )

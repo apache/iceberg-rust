@@ -255,7 +255,6 @@ impl<'a> SnapshotProducer<'a> {
         let builder = ManifestWriterBuilder::new(
             output_file,
             Some(self.snapshot_id),
-            self.key_metadata.clone(),
             self.table.metadata().current_schema().clone(),
             self.table
                 .metadata()

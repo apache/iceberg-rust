@@ -233,7 +233,6 @@ mod tests {
         let mut data_writer = ManifestWriterBuilder::new(
             next_manifest_file(&table_location_str),
             Some(current_snapshot.snapshot_id()),
-            None,
             schema.clone(),
             partition_spec.as_ref().clone(),
         )
@@ -263,7 +262,6 @@ mod tests {
         let mut delete_writer = ManifestWriterBuilder::new(
             next_manifest_file(&table_location_str),
             Some(current_snapshot.snapshot_id()),
-            None,
             schema.clone(),
             partition_spec.as_ref().clone(),
         )
