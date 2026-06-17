@@ -113,7 +113,6 @@ pub(crate) struct SnapshotProducer<'a> {
     pub(crate) table: &'a Table,
     snapshot_id: i64,
     commit_uuid: Uuid,
-    key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
@@ -126,7 +125,6 @@ impl<'a> SnapshotProducer<'a> {
     pub(crate) fn new(
         table: &'a Table,
         commit_uuid: Uuid,
-        key_metadata: Option<Vec<u8>>,
         snapshot_properties: HashMap<String, String>,
         added_data_files: Vec<DataFile>,
     ) -> Self {
@@ -134,7 +132,6 @@ impl<'a> SnapshotProducer<'a> {
             table,
             snapshot_id: Self::generate_unique_snapshot_id(table),
             commit_uuid,
-            key_metadata,
             snapshot_properties,
             added_data_files,
             manifest_counter: (0..),
