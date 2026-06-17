@@ -119,6 +119,12 @@ pub struct TableProperties {
     /// Whether garbage collection is enabled on drop.
     /// When `false`, data files will not be deleted when a table is dropped.
     pub gc_enabled: bool,
+    /// Default maximum age of a snapshot to keep when expiring snapshots.
+    pub max_snapshot_age_ms: i64,
+    /// Default minimum number of snapshots to keep per branch when expiring snapshots.
+    pub min_snapshots_to_keep: usize,
+    /// Default maximum age of a snapshot reference to keep when expiring snapshots.
+    pub max_ref_age_ms: i64,
     /// Whether content-defined chunking is enabled.
     /// `true` only when `write.parquet.content-defined-chunking.enabled = "true"`.
     pub cdc_enabled: bool,
@@ -239,6 +245,19 @@ impl TableProperties {
     /// Default value for gc.enabled
     pub const PROPERTY_GC_ENABLED_DEFAULT: bool = true;
 
+    /// Property key for the default maximum age of a snapshot to keep when expiring snapshots.
+    pub const PROPERTY_MAX_SNAPSHOT_AGE_MS: &str = "history.expire.max-snapshot-age-ms";
+    /// Default value for history.expire.max-snapshot-age-ms (5 days).
+    pub const PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT: i64 = 5 * 24 * 60 * 60 * 1000;
+    /// Property key for the default minimum number of snapshots to keep when expiring snapshots.
+    pub const PROPERTY_MIN_SNAPSHOTS_TO_KEEP: &str = "history.expire.min-snapshots-to-keep";
+    /// Default value for history.expire.min-snapshots-to-keep.
+    pub const PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT: usize = 1;
+    /// Property key for the default maximum age of a snapshot reference to keep when expiring.
+    pub const PROPERTY_MAX_REF_AGE_MS: &str = "history.expire.max-ref-age-ms";
+    /// Default value for history.expire.max-ref-age-ms (effectively never expire refs).
+    pub const PROPERTY_MAX_REF_AGE_MS_DEFAULT: i64 = i64::MAX;
+
     /// Enable content-defined chunking with parquet defaults (or per-property overrides).
     pub const PROPERTY_PARQUET_CDC_ENABLED: &str = "write.parquet.content-defined-chunking.enabled";
     /// Default value for content-defined chunking enabled.
@@ -316,6 +335,21 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_GC_ENABLED,
                 TableProperties::PROPERTY_GC_ENABLED_DEFAULT,
             )?,
+            max_snapshot_age_ms: parse_property(
+                props,
+                TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS,
+                TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT,
+            )?,
+            min_snapshots_to_keep: parse_property(
+                props,
+                TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP,
+                TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT,
+            )?,
+            max_ref_age_ms: parse_property(
+                props,
+                TableProperties::PROPERTY_MAX_REF_AGE_MS,
+                TableProperties::PROPERTY_MAX_REF_AGE_MS_DEFAULT,
+            )?,
             cdc_enabled: parse_property(
                 props,
                 TableProperties::PROPERTY_PARQUET_CDC_ENABLED,
@@ -386,6 +420,40 @@ mod tests {
             table_properties.gc_enabled,
             TableProperties::PROPERTY_GC_ENABLED_DEFAULT
         );
+        assert_eq!(
+            table_properties.max_snapshot_age_ms,
+            TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT
+        );
+        assert_eq!(
+            table_properties.min_snapshots_to_keep,
+            TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT
+        );
+        assert_eq!(
+            table_properties.max_ref_age_ms,
+            TableProperties::PROPERTY_MAX_REF_AGE_MS_DEFAULT
+        );
+    }
+
+    #[test]
+    fn test_table_properties_history_expire_overrides() {
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS.to_string(),
+                "1234".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP.to_string(),
+                "7".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_MAX_REF_AGE_MS.to_string(),
+                "5678".to_string(),
+            ),
+        ]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(table_properties.max_snapshot_age_ms, 1234);
+        assert_eq!(table_properties.min_snapshots_to_keep, 7);
+        assert_eq!(table_properties.max_ref_age_ms, 5678);
     }
 
     #[test]
