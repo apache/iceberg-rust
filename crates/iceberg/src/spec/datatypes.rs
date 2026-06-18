@@ -374,7 +374,7 @@ fn serialize_decimal<S>(
 where
     S: Serializer,
 {
-    serializer.serialize_str(&format!("decimal({precision},{scale})"))
+    serializer.serialize_str(&format!("decimal({precision}, {scale})"))
 }
 
 fn deserialize_fixed<'de, D>(deserializer: D) -> std::result::Result<PrimitiveType, D::Error>
@@ -404,7 +404,7 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Float => write!(f, "float"),
             PrimitiveType::Double => write!(f, "double"),
             PrimitiveType::Decimal { precision, scale } => {
-                write!(f, "decimal({precision},{scale})")
+                write!(f, "decimal({precision}, {scale})")
             }
             PrimitiveType::Date => write!(f, "date"),
             PrimitiveType::Time => write!(f, "time"),
@@ -908,7 +908,7 @@ mod tests {
             {"id": 3, "name": "long_field", "required": true, "type": "long"},
             {"id": 4, "name": "float_field", "required": true, "type": "float"},
             {"id": 5, "name": "double_field", "required": true, "type": "double"},
-            {"id": 6, "name": "decimal_field", "required": true, "type": "decimal(9,2)"},
+            {"id": 6, "name": "decimal_field", "required": true, "type": "decimal(9, 2)"},
             {"id": 7, "name": "date_field", "required": true, "type": "date"},
             {"id": 8, "name": "time_field", "required": true, "type": "time"},
             {"id": 9, "name": "timestamp_field", "required": true, "type": "timestamp"},

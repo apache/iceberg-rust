@@ -39,7 +39,7 @@ nextest: install-cargo-nextest
 	cargo nextest run --all-targets --all-features --workspace
 
 install-taplo-cli:
-	cargo install taplo-cli@0.9.3
+	cargo install --locked taplo-cli@0.9.3
 
 fix-toml: install-taplo-cli
 	taplo fmt
@@ -65,7 +65,7 @@ generate-public-api: install-cargo-public-api
 		manifest=$${entry##*:}; \
 		crate_dir=$$(dirname "$$manifest"); \
 		echo "Generating public API for $$crate..."; \
-		cargo public-api -p "$$crate" --all-features > "$$crate_dir/public-api.txt"; \
+		cargo public-api -p "$$crate" --all-features -ss > "$$crate_dir/public-api.txt"; \
 	done
 
 check-public-api: install-cargo-public-api
@@ -75,7 +75,7 @@ check-public-api: install-cargo-public-api
 		manifest=$${entry##*:}; \
 		crate_dir=$$(dirname "$$manifest"); \
 		echo "Checking public API for $$crate..."; \
-		cargo public-api -p "$$crate" --all-features | diff - "$$crate_dir/public-api.txt" || { \
+		cargo public-api -p "$$crate" --all-features -ss | diff - "$$crate_dir/public-api.txt" || { \
 			echo "ERROR: Public API for $$crate has changed. Run 'make generate-public-api' to update."; \
 			fail=1; \
 		}; \
