@@ -108,11 +108,9 @@ impl TransactionAction for RewriteManifestsAction {
                     + u64::from(m.existing_files_count.unwrap_or(0))
             })
             .sum();
-        let bytes_per_entry = if total_input_entries > 0 {
-            (total_size / total_input_entries).max(1)
-        } else {
-            FALLBACK_BYTES_PER_ENTRY
-        };
+        let bytes_per_entry = total_size
+            .checked_div(total_input_entries)
+            .map_or(FALLBACK_BYTES_PER_ENTRY, |b| b.max(1));
         let manifests_replaced = to_rewrite.len();
 
         let commit_uuid = Uuid::now_v7();
