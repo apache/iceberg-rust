@@ -99,6 +99,25 @@ pub fn iceberg_datafusion::IcebergCatalogProvider::fmt(&self, f: &mut core::fmt:
 impl datafusion_catalog::catalog::CatalogProvider for iceberg_datafusion::IcebergCatalogProvider
 pub fn iceberg_datafusion::IcebergCatalogProvider::schema(&self, name: &str) -> core::option::Option<alloc::sync::Arc<dyn datafusion_catalog::schema::SchemaProvider>>
 pub fn iceberg_datafusion::IcebergCatalogProvider::schema_names(&self) -> alloc::vec::Vec<alloc::string::String>
+#[non_exhaustive] pub struct iceberg_datafusion::IcebergDataFusionConfig
+pub iceberg_datafusion::IcebergDataFusionConfig::enable_eager_scan_planning: bool
+impl core::clone::Clone for iceberg_datafusion::IcebergDataFusionConfig
+pub fn iceberg_datafusion::IcebergDataFusionConfig::clone(&self) -> iceberg_datafusion::IcebergDataFusionConfig
+impl core::default::Default for iceberg_datafusion::IcebergDataFusionConfig
+pub fn iceberg_datafusion::IcebergDataFusionConfig::default() -> Self
+impl core::fmt::Debug for iceberg_datafusion::IcebergDataFusionConfig
+pub fn iceberg_datafusion::IcebergDataFusionConfig::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl datafusion_common::config::ConfigExtension for iceberg_datafusion::IcebergDataFusionConfig
+pub const iceberg_datafusion::IcebergDataFusionConfig::PREFIX: &'static str
+impl datafusion_common::config::ConfigField for iceberg_datafusion::IcebergDataFusionConfig
+pub fn iceberg_datafusion::IcebergDataFusionConfig::set(&mut self, key: &str, value: &str) -> datafusion_common::error::Result<()>
+pub fn iceberg_datafusion::IcebergDataFusionConfig::visit<V: datafusion_common::config::Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str)
+impl datafusion_common::config::ExtensionOptions for iceberg_datafusion::IcebergDataFusionConfig
+pub fn iceberg_datafusion::IcebergDataFusionConfig::as_any(&self) -> &dyn core::any::Any
+pub fn iceberg_datafusion::IcebergDataFusionConfig::as_any_mut(&mut self) -> &mut dyn core::any::Any
+pub fn iceberg_datafusion::IcebergDataFusionConfig::cloned(&self) -> alloc::boxed::Box<dyn datafusion_common::config::ExtensionOptions>
+pub fn iceberg_datafusion::IcebergDataFusionConfig::entries(&self) -> alloc::vec::Vec<datafusion_common::config::ConfigEntry>
+pub fn iceberg_datafusion::IcebergDataFusionConfig::set(&mut self, key: &str, value: &str) -> datafusion_common::error::Result<()>
 pub struct iceberg_datafusion::IcebergStaticTableProvider
 impl iceberg_datafusion::IcebergStaticTableProvider
 pub async fn iceberg_datafusion::IcebergStaticTableProvider::try_new_from_table(table: iceberg::table::Table) -> iceberg::error::Result<Self>
