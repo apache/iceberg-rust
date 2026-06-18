@@ -21,10 +21,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec;
 
-use datafusion::arrow::array::{Array, StringArray, UInt64Array};
+use datafusion::arrow::array::{Array, ArrayRef, Int32Array, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use datafusion::prelude::SessionConfig;
 use expect_test::expect;
 use iceberg::io::LocalFsStorageFactory;
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
@@ -35,7 +38,8 @@ use iceberg::test_utils::check_record_batches;
 use iceberg::{
     Catalog, CatalogBuilder, MemoryCatalog, NamespaceIdent, Result, TableCreation, TableIdent,
 };
-use iceberg_datafusion::IcebergCatalogProvider;
+use iceberg_datafusion::physical_plan::IcebergTableScan;
+use iceberg_datafusion::{IcebergCatalogProvider, IcebergDataFusionConfig};
 use tempfile::TempDir;
 
 fn temp_path() -> String {
@@ -93,6 +97,237 @@ fn get_table_creation(
         .build();
 
     Ok(creation)
+}
+
+async fn get_multi_file_table_context(
+    namespace_name: &str,
+    table_name: &str,
+    data_file_count: usize,
+) -> Result<(Arc<MemoryCatalog>, NamespaceIdent, String)> {
+    let iceberg_catalog = Arc::new(get_iceberg_catalog().await);
+    let namespace = NamespaceIdent::new(namespace_name.to_string());
+    set_test_namespace(&iceberg_catalog, &namespace).await?;
+
+    let creation = get_table_creation(temp_path(), table_name, None)?;
+    iceberg_catalog.create_table(&namespace, creation).await?;
+
+    let write_ctx = SessionContext::new_with_config(
+        SessionConfig::new().with_target_partitions(data_file_count),
+    );
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![
+        Field::new("foo1", DataType::Int32, false),
+        Field::new("foo2", DataType::Utf8, false),
+    ]));
+
+    let batches: Vec<RecordBatch> = (1..=data_file_count as i32)
+        .map(|idx| {
+            RecordBatch::try_new(arrow_schema.clone(), vec![
+                Arc::new(Int32Array::from(vec![idx])) as ArrayRef,
+                Arc::new(StringArray::from(vec![format!("row-{idx}")])) as ArrayRef,
+            ])
+        })
+        .collect::<std::result::Result<_, _>>()?;
+
+    let partitions = batches.into_iter().map(|batch| vec![batch]).collect();
+    let source_table = Arc::new(MemTable::try_new(arrow_schema, partitions).unwrap());
+    write_ctx
+        .register_table("source_table", source_table)
+        .unwrap();
+
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(iceberg_catalog.clone()).await?);
+    write_ctx.register_catalog("catalog", catalog);
+
+    let insert_sql =
+        format!("INSERT INTO catalog.{namespace_name}.{table_name} SELECT * FROM source_table");
+    let batches = write_ctx
+        .sql(&insert_sql)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(batches.len(), 1);
+
+    let rows_inserted = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap();
+    assert_eq!(rows_inserted.value(0), data_file_count as u64);
+
+    Ok((iceberg_catalog, namespace, table_name.to_string()))
+}
+
+async fn get_read_context(
+    catalog: Arc<MemoryCatalog>,
+    target_partitions: usize,
+    enable_eager_scan_planning: Option<bool>,
+) -> Result<SessionContext> {
+    let ctx = SessionContext::new_with_config(read_session_config(
+        target_partitions,
+        enable_eager_scan_planning,
+    ));
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(catalog).await?);
+    ctx.register_catalog("catalog", catalog);
+    Ok(ctx)
+}
+
+fn read_session_config(
+    target_partitions: usize,
+    enable_eager_scan_planning: Option<bool>,
+) -> SessionConfig {
+    let config = SessionConfig::new().with_target_partitions(target_partitions);
+
+    match enable_eager_scan_planning {
+        Some(enabled) => {
+            let mut iceberg_config = IcebergDataFusionConfig::default();
+            iceberg_config.enable_eager_scan_planning = enabled;
+            config.with_option_extension(iceberg_config)
+        }
+        None => config,
+    }
+}
+
+async fn scan_partition_count(
+    ctx: &SessionContext,
+    namespace: &NamespaceIdent,
+    table_name: &str,
+) -> usize {
+    let provider = ctx.catalog("catalog").unwrap();
+    let namespace_name = &namespace[0];
+    let schema = provider.schema(namespace_name).unwrap();
+    let table = schema.table(table_name).await.unwrap().unwrap();
+
+    let state = ctx.state();
+    let plan = table.scan(&state, None, &[], None).await.unwrap();
+    plan.downcast_ref::<IcebergTableScan>()
+        .expect("Expected IcebergTableScan");
+    plan.properties().output_partitioning().partition_count()
+}
+
+#[tokio::test]
+async fn test_multi_file_scan_produces_multiple_partitions() -> Result<()> {
+    let data_file_count = 3;
+    // Ask for more partitions than files to verify scan planning does not expose empty partitions.
+    let target_partitions = data_file_count + 1;
+    let (iceberg_catalog, namespace, table_name) = get_multi_file_table_context(
+        "test_multi_file_scan_partitions",
+        "my_table",
+        data_file_count,
+    )
+    .await?;
+    let ctx = get_read_context(iceberg_catalog, target_partitions, Some(true)).await?;
+    let actual_partition_count = scan_partition_count(&ctx, &namespace, &table_name).await;
+
+    assert_eq!(actual_partition_count, data_file_count);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_multi_file_scan_defaults_to_single_lazy_partition() -> Result<()> {
+    let data_file_count = 3;
+    let target_partitions = data_file_count + 1;
+    let (iceberg_catalog, namespace, table_name) = get_multi_file_table_context(
+        "test_multi_file_scan_default_lazy",
+        "my_table",
+        data_file_count,
+    )
+    .await?;
+    let ctx = get_read_context(iceberg_catalog, target_partitions, None).await?;
+
+    let actual_partition_count = scan_partition_count(&ctx, &namespace, &table_name).await;
+
+    assert_eq!(actual_partition_count, 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_set_enable_eager_scan_planning() -> Result<()> {
+    let data_file_count = 3;
+    let target_partitions = data_file_count + 1;
+    let (iceberg_catalog, namespace, table_name) =
+        get_multi_file_table_context("test_set_eager_scan_planning", "my_table", data_file_count)
+            .await?;
+    let ctx = get_read_context(iceberg_catalog, target_partitions, Some(false)).await?;
+
+    ctx.sql("SET iceberg.enable_eager_scan_planning = true")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let actual_partition_count = scan_partition_count(&ctx, &namespace, &table_name).await;
+
+    assert_eq!(actual_partition_count, data_file_count);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_multi_partition_scan_matches_single_partition_results() -> Result<()> {
+    let data_file_count = 3;
+    let target_partitions = data_file_count + 1;
+    let (iceberg_catalog, namespace, table_name) = get_multi_file_table_context(
+        "test_multi_partition_scan_results",
+        "my_table",
+        data_file_count,
+    )
+    .await?;
+    let namespace_name = &namespace[0];
+
+    let single_partition_ctx = get_read_context(iceberg_catalog.clone(), 1, Some(true)).await?;
+    let multi_partition_ctx =
+        get_read_context(iceberg_catalog, target_partitions, Some(true)).await?;
+
+    let query =
+        format!("SELECT foo1, foo2 FROM catalog.{namespace_name}.{table_name} ORDER BY foo1");
+
+    let single_partition_batches = single_partition_ctx
+        .sql(&query)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let multi_partition_batches = multi_partition_ctx
+        .sql(&query)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let assert_expected_batches = |batches| {
+        check_record_batches(
+            batches,
+            expect![[r#"
+                Field { "foo1": Int32, metadata: {"PARQUET:field_id": "1"} },
+                Field { "foo2": Utf8, metadata: {"PARQUET:field_id": "2"} }"#]],
+            expect![[r#"
+                foo1: PrimitiveArray<Int32>
+                [
+                  1,
+                  2,
+                  3,
+                ],
+                foo2: StringArray
+                [
+                  "row-1",
+                  "row-2",
+                  "row-3",
+                ]"#]],
+            &[],
+            None,
+        );
+    };
+
+    assert_expected_batches(single_partition_batches);
+    assert_expected_batches(multi_partition_batches);
+
+    Ok(())
 }
 
 #[tokio::test]
