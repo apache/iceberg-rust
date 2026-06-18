@@ -130,23 +130,24 @@ impl ManifestEntryContext {
             .await;
 
         // Compute the _partition struct constant if the unified partition type is available
-        let partition_column_constant = if let Some(ref unified_partition_type) = self.unified_partition_type {
-            let partition_spec = self
-                .table_metadata
-                .partition_spec_by_id(self.partition_spec_id);
-            if let Some(spec) = partition_spec {
-                let constant = build_partition_column_constant(
-                    unified_partition_type,
-                    spec,
-                    &self.manifest_entry.data_file.partition,
-                )?;
-                Some(Arc::new(constant))
+        let partition_column_constant =
+            if let Some(ref unified_partition_type) = self.unified_partition_type {
+                let partition_spec = self
+                    .table_metadata
+                    .partition_spec_by_id(self.partition_spec_id);
+                if let Some(spec) = partition_spec {
+                    let constant = build_partition_column_constant(
+                        unified_partition_type,
+                        spec,
+                        &self.manifest_entry.data_file.partition,
+                    )?;
+                    Some(Arc::new(constant))
+                } else {
+                    None
+                }
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
 
         Ok(FileScanTask::builder()
             .with_file_size_in_bytes(self.manifest_entry.file_size_in_bytes())

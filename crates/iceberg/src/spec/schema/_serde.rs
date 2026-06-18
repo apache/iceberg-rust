@@ -21,8 +21,7 @@
 //! and then converted into the [Schema] struct. Serialization works the other way around.
 //! [SchemaV1] and [SchemaV2] are internal structs only used for serialization and deserialization.
 
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{DEFAULT_SCHEMA_ID, Schema};
 use crate::spec::StructType;

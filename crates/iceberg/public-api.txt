@@ -78,6 +78,16 @@ pub fn iceberg::arrow::ArrowReaderBuilder::with_range_coalesce_bytes(self, range
 pub fn iceberg::arrow::ArrowReaderBuilder::with_range_fetch_concurrency(self, range_fetch_concurrency: usize) -> Self
 pub fn iceberg::arrow::ArrowReaderBuilder::with_row_group_filtering_enabled(self, row_group_filtering_enabled: bool) -> Self
 pub fn iceberg::arrow::ArrowReaderBuilder::with_row_selection_enabled(self, row_selection_enabled: bool) -> Self
+pub struct iceberg::arrow::PartitionColumnConstant
+pub iceberg::arrow::PartitionColumnConstant::child_values: alloc::vec::Vec<core::option::Option<iceberg::spec::PrimitiveLiteral>>
+pub iceberg::arrow::PartitionColumnConstant::fields: arrow_schema::fields::Fields
+impl core::clone::Clone for iceberg::arrow::PartitionColumnConstant
+pub fn iceberg::arrow::PartitionColumnConstant::clone(&self) -> iceberg::arrow::PartitionColumnConstant
+impl core::cmp::PartialEq for iceberg::arrow::PartitionColumnConstant
+pub fn iceberg::arrow::PartitionColumnConstant::eq(&self, other: &iceberg::arrow::PartitionColumnConstant) -> bool
+impl core::fmt::Debug for iceberg::arrow::PartitionColumnConstant
+pub fn iceberg::arrow::PartitionColumnConstant::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::arrow::PartitionColumnConstant
 pub struct iceberg::arrow::PartitionValueCalculator
 impl iceberg::arrow::PartitionValueCalculator
 pub fn iceberg::arrow::PartitionValueCalculator::calculate(&self, batch: &arrow_array::record_batch::RecordBatch) -> iceberg::Result<arrow_array::array::ArrayRef>
@@ -127,6 +137,7 @@ pub fn iceberg::arrow::arrow_schema_to_schema(schema: &arrow_schema::schema::Sch
 pub fn iceberg::arrow::arrow_schema_to_schema_auto_assign_ids(schema: &arrow_schema::schema::Schema) -> iceberg::Result<iceberg::spec::Schema>
 pub fn iceberg::arrow::arrow_struct_to_literal(struct_array: &arrow_array::array::ArrayRef, ty: &iceberg::spec::StructType) -> iceberg::Result<alloc::vec::Vec<core::option::Option<iceberg::spec::Literal>>>
 pub fn iceberg::arrow::arrow_type_to_type(ty: &arrow_schema::datatype::DataType) -> iceberg::Result<iceberg::spec::Type>
+pub fn iceberg::arrow::build_partition_column_constant(unified_partition_type: &iceberg::spec::StructType, partition_spec: &iceberg::spec::PartitionSpec, partition_data: &iceberg::spec::Struct) -> iceberg::Result<iceberg::arrow::PartitionColumnConstant>
 pub fn iceberg::arrow::datum_to_arrow_type_with_ree(datum: &iceberg::spec::Datum) -> arrow_schema::datatype::DataType
 pub fn iceberg::arrow::schema_to_arrow_schema(schema: &iceberg::spec::Schema) -> iceberg::Result<arrow_schema::schema::Schema>
 pub fn iceberg::arrow::strip_metadata_from_schema(schema: &arrow_schema::schema::Schema) -> iceberg::Result<arrow_schema::schema::Schema>
@@ -1106,6 +1117,7 @@ pub const iceberg::metadata_columns::RESERVED_FIELD_ID_SPEC_ID: i32
 pub fn iceberg::metadata_columns::change_ordinal_field() -> &'static iceberg::spec::NestedFieldRef
 pub fn iceberg::metadata_columns::change_type_field() -> &'static iceberg::spec::NestedFieldRef
 pub fn iceberg::metadata_columns::commit_snapshot_id_field() -> &'static iceberg::spec::NestedFieldRef
+pub fn iceberg::metadata_columns::compute_unified_partition_type<'a>(partition_specs: impl core::iter::traits::iterator::Iterator<Item = &'a iceberg::spec::PartitionSpec>, schema: &iceberg::spec::Schema) -> iceberg::Result<iceberg::spec::StructType>
 pub fn iceberg::metadata_columns::delete_file_path_field() -> &'static iceberg::spec::NestedFieldRef
 pub fn iceberg::metadata_columns::delete_file_pos_field() -> &'static iceberg::spec::NestedFieldRef
 pub fn iceberg::metadata_columns::deleted_field() -> &'static iceberg::spec::NestedFieldRef
@@ -1228,6 +1240,7 @@ pub iceberg::scan::FileScanTask::file_size_in_bytes: u64
 pub iceberg::scan::FileScanTask::length: u64
 pub iceberg::scan::FileScanTask::name_mapping: core::option::Option<alloc::sync::Arc<iceberg::spec::NameMapping>>
 pub iceberg::scan::FileScanTask::partition: core::option::Option<iceberg::spec::Struct>
+pub iceberg::scan::FileScanTask::partition_column_constant: core::option::Option<alloc::sync::Arc<iceberg::arrow::PartitionColumnConstant>>
 pub iceberg::scan::FileScanTask::partition_spec: core::option::Option<alloc::sync::Arc<iceberg::spec::PartitionSpec>>
 pub iceberg::scan::FileScanTask::predicate: core::option::Option<iceberg::expr::BoundPredicate>
 pub iceberg::scan::FileScanTask::project_field_ids: alloc::vec::Vec<i32>
@@ -1248,7 +1261,7 @@ impl core::fmt::Debug for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::scan::FileScanTask
 impl iceberg::scan::FileScanTask
-pub fn iceberg::scan::FileScanTask::builder() -> FileScanTaskBuilder<((), (), (), (), (), (), (), (), (), (), (), (), (), ())>
+pub fn iceberg::scan::FileScanTask::builder() -> FileScanTaskBuilder<((), (), (), (), (), (), (), (), (), (), (), (), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::scan::FileScanTask
