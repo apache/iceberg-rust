@@ -26,7 +26,9 @@ use std::sync::Arc;
 
 use once_cell::sync::Lazy;
 
-use crate::spec::{NestedField, NestedFieldRef, PartitionSpec, PrimitiveType, Schema, StructType, Type};
+use crate::spec::{
+    NestedField, NestedFieldRef, PartitionSpec, PrimitiveType, Schema, StructType, Type,
+};
 use crate::{Error, ErrorKind, Result};
 
 /// Reserved field ID for the file path (_file) column per Iceberg spec
@@ -417,8 +419,7 @@ pub fn compute_unified_partition_type<'a>(
             })?;
 
             let res_type = field.transform.result_type(&source_field.field_type)?;
-            let nested =
-                NestedField::optional(field.field_id, &field.name, res_type).into();
+            let nested = NestedField::optional(field.field_id, &field.name, res_type).into();
             struct_fields.push(nested);
         }
     }

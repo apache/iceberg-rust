@@ -33,8 +33,8 @@ use crate::arrow::value::{create_primitive_array_repeated, create_primitive_arra
 use crate::arrow::{datum_to_arrow_type_with_ree, schema_to_arrow_schema};
 use crate::metadata_columns::{RESERVED_FIELD_ID_PARTITION, get_metadata_field};
 use crate::spec::{
-    Datum, Literal, PartitionSpec, PrimitiveLiteral, Schema as IcebergSchema,
-    Struct, StructType, Transform,
+    Datum, Literal, PartitionSpec, PrimitiveLiteral, Schema as IcebergSchema, Struct, StructType,
+    Transform,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -288,8 +288,11 @@ impl RecordBatchTransformerBuilder {
         partition_spec: &PartitionSpec,
         partition_data: &Struct,
     ) -> Result<Self> {
-        let partition_column =
-            build_partition_column_constant(unified_partition_type, partition_spec, partition_data)?;
+        let partition_column = build_partition_column_constant(
+            unified_partition_type,
+            partition_spec,
+            partition_data,
+        )?;
         self.partition_column = Some(partition_column);
         Ok(self)
     }
@@ -763,7 +766,10 @@ impl RecordBatchTransformer {
     ) -> Result<ArrayRef> {
         if fields.is_empty() {
             let nulls = arrow_buffer::NullBuffer::new_null(num_rows);
-            return Ok(Arc::new(StructArray::new_empty_fields(num_rows, Some(nulls))));
+            return Ok(Arc::new(StructArray::new_empty_fields(
+                num_rows,
+                Some(nulls),
+            )));
         }
 
         let child_arrays: Vec<ArrayRef> = fields
@@ -808,11 +814,7 @@ pub fn build_partition_column_constant(
         // unnecessary cast operation per batch.
         // Always nullable: partition evolution means any field may be absent
         // for files written under a different spec.
-        let arrow_field = Field::new(
-            &unified_field.name,
-            arrow_type,
-            true,
-        );
+        let arrow_field = Field::new(&unified_field.name, arrow_type, true);
         arrow_fields.push(Arc::new(arrow_field));
 
         // Find matching field in this file's partition spec by field_id
@@ -1883,8 +1885,7 @@ mod test {
         );
 
         // Unified partition type: just one field (same as the spec's type)
-        let unified_partition_type =
-            partition_spec.partition_type(&snapshot_schema).unwrap();
+        let unified_partition_type = partition_spec.partition_type(&snapshot_schema).unwrap();
 
         // Partition data: id=42
         let partition_data = Struct::from_iter(vec![Some(Literal::int(42))]);
@@ -1954,7 +1955,9 @@ mod test {
     fn partition_column_with_evolution() {
         use arrow_array::StructArray;
 
-        use crate::metadata_columns::{RESERVED_FIELD_ID_PARTITION, compute_unified_partition_type};
+        use crate::metadata_columns::{
+            RESERVED_FIELD_ID_PARTITION, compute_unified_partition_type,
+        };
         use crate::spec::Transform;
 
         // Schema with two fields that could be partition sources
@@ -1989,11 +1992,9 @@ mod test {
             .unwrap();
 
         // Unified type includes both year and month
-        let unified_partition_type = compute_unified_partition_type(
-            [&spec_v0, &spec_v1].into_iter(),
-            &snapshot_schema,
-        )
-        .unwrap();
+        let unified_partition_type =
+            compute_unified_partition_type([&spec_v0, &spec_v1].into_iter(), &snapshot_schema)
+                .unwrap();
 
         assert_eq!(unified_partition_type.fields().len(), 2);
 
@@ -2015,10 +2016,11 @@ mod test {
                 .unwrap()
                 .build();
 
-        let parquet_batch = RecordBatch::try_new(parquet_schema, vec![Arc::new(
-            StringArray::from(vec!["hello", "world"]),
-        )])
-        .unwrap();
+        let parquet_batch =
+            RecordBatch::try_new(parquet_schema, vec![Arc::new(StringArray::from(vec![
+                "hello", "world",
+            ]))])
+            .unwrap();
 
         let result = transformer.process_record_batch(parquet_batch).unwrap();
 
