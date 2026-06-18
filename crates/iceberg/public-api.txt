@@ -2705,7 +2705,10 @@ pub iceberg::spec::TableProperties::commit_total_retry_timeout_ms: u64
 pub iceberg::spec::TableProperties::encryption_data_key_length: usize
 pub iceberg::spec::TableProperties::encryption_key_id: core::option::Option<alloc::string::String>
 pub iceberg::spec::TableProperties::gc_enabled: bool
+pub iceberg::spec::TableProperties::max_ref_age_ms: i64
+pub iceberg::spec::TableProperties::max_snapshot_age_ms: i64
 pub iceberg::spec::TableProperties::metadata_compression_codec: iceberg::compression::CompressionCodec
+pub iceberg::spec::TableProperties::min_snapshots_to_keep: usize
 pub iceberg::spec::TableProperties::write_datafusion_fanout_enabled: bool
 pub iceberg::spec::TableProperties::write_format_default: alloc::string::String
 pub iceberg::spec::TableProperties::write_target_file_size_bytes: usize
@@ -2735,10 +2738,16 @@ pub const iceberg::spec::TableProperties::PROPERTY_ENCRYPTION_KEY_ID: &str
 pub const iceberg::spec::TableProperties::PROPERTY_FORMAT_VERSION: &str
 pub const iceberg::spec::TableProperties::PROPERTY_GC_ENABLED: &str
 pub const iceberg::spec::TableProperties::PROPERTY_GC_ENABLED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_MAX_REF_AGE_MS: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MAX_REF_AGE_MS_DEFAULT: i64
+pub const iceberg::spec::TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT: i64
 pub const iceberg::spec::TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC: &str
 pub const iceberg::spec::TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX: &str
 pub const iceberg::spec::TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT: usize
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_ENABLED: &str
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_ENABLED_DEFAULT: bool
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE: &str
@@ -3069,6 +3078,7 @@ pub fn iceberg::transaction::AddColumn::builder() -> AddColumnBuilder<((), (), (
 pub struct iceberg::transaction::Transaction
 impl iceberg::transaction::Transaction
 pub async fn iceberg::transaction::Transaction::commit(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>
+pub fn iceberg::transaction::Transaction::expire_snapshots(&self) -> iceberg::transaction::expire_snapshots::ExpireSnapshotsAction
 pub fn iceberg::transaction::Transaction::fast_append(&self) -> iceberg::transaction::append::FastAppendAction
 pub fn iceberg::transaction::Transaction::new(table: &iceberg::table::Table) -> Self
 pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::sort_order::ReplaceSortOrderAction
