@@ -41,12 +41,14 @@
 //! should drop by `DV_DELETE_COUNT`.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use iceberg::delete_vector::DeleteVector;
 use iceberg::spec::DataContentType;
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{Catalog, CatalogBuilder, TableIdent};
 use iceberg_catalog_rest::RestCatalogBuilder;
+use iceberg_storage_opendal::OpenDalResolvingStorageFactory;
 use uuid::Uuid;
 
 #[tokio::main]
@@ -70,7 +72,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "oauth2-server-uri".to_string(),
         format!("{}/v1/oauth/tokens", uri.trim_end_matches('/')),
     );
-    let catalog = RestCatalogBuilder::default().load("polaris", props).await?;
+    let catalog = RestCatalogBuilder::default()
+        .with_storage_factory(Arc::new(OpenDalResolvingStorageFactory::new()))
+        .load("polaris", props)
+        .await?;
 
     let ident = TableIdent::from_strs([namespace.as_str(), table_name.as_str()])?;
     let table = catalog.load_table(&ident).await?;
