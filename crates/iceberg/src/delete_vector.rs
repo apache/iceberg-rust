@@ -600,4 +600,36 @@ mod tests {
         got.sort();
         assert_eq!(got, positions.to_vec());
     }
+
+    /// Cross-implementation byte-parity with Apache Iceberg-Java: the serialized
+    /// `deletion-vector-v1` payload for positions {1,3,5,7,9} must be byte-identical
+    /// to the Java-produced golden fixture (lifted from apache/iceberg test resources
+    /// `small-alternating-values-position-index.bin` via apache/iceberg-go). Proves our
+    /// roaring serialization + framing exactly match the Iceberg-Java reference.
+    #[test]
+    fn test_dv_payload_byte_identical_to_java_golden() {
+        let golden: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/testdata/puffin/deletion-vector-v1-payload.bin"
+        ));
+
+        let mut dv = DeleteVector::default();
+        for p in [1u64, 3, 5, 7, 9] {
+            dv.insert(p);
+        }
+        let props = HashMap::from([
+            (DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(), "5".to_string()),
+            (
+                DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE.to_string(),
+                "data/test.parquet".to_string(),
+            ),
+        ]);
+        let blob = dv.to_puffin_blob(props).unwrap();
+
+        assert_eq!(
+            blob.data(),
+            golden,
+            "DV payload must be byte-identical to the apache/iceberg Java golden fixture"
+        );
+    }
 }
