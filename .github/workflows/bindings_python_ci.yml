@@ -82,6 +82,16 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: 3.12
+      # Linux maturin builds may run inside manylinux Docker, so host Rust caches only help Windows/macOS.
+      - name: Setup Rust toolchain
+        if: runner.os != 'Linux'
+        uses: ./.github/actions/setup-builder
+      - name: Cache Rust artifacts
+        if: runner.os != 'Linux'
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: bindings-python
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           working-directory: "bindings/python"
