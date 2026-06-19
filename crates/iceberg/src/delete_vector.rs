@@ -15,13 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+use std::io::Cursor;
 use std::ops::BitOrAssign;
 
+use crc32fast::Hasher;
 use roaring::RoaringTreemap;
 use roaring::bitmap::Iter;
 use roaring::treemap::BitmapIter;
 
+use crate::puffin::{Blob, DELETION_VECTOR_V1};
 use crate::{Error, ErrorKind, Result};
+
+/// Iceberg `deletion-vector-v1` Puffin blob magic bytes (Iceberg Puffin spec;
+/// ported from risingwavelabs/iceberg-rust #113 — design reference only).
+const DELETION_VECTOR_MAGIC_BYTES: [u8; 4] = [0xD1, 0xD3, 0x39, 0x64];
+/// Minimum blob size: u32 length (4) + magic (4) + u32 crc (4).
+const MIN_SERIALIZED_DELETION_VECTOR_BLOB: usize = 12;
+/// Puffin blob property: deletion vector cardinality (number of deleted positions).
+pub(crate) const DELETION_VECTOR_PROPERTY_CARDINALITY: &str = "cardinality";
+/// Puffin blob property: referenced data file path the DV applies to.
+pub(crate) const DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE: &str = "referenced-data-file";
 
 #[derive(Debug, Default)]
 pub struct DeleteVector {
@@ -67,6 +81,148 @@ impl DeleteVector {
     #[allow(unused)]
     pub fn len(&self) -> u64 {
         self.inner.len()
+    }
+
+    /// Returns `true` if there are no deleted positions in this vector.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Serialize this delete vector into an Iceberg V3 `deletion-vector-v1` Puffin blob.
+    ///
+    /// Blob layout (Iceberg Puffin spec): `length(u32 BE = magic + bitmap) ‖ magic ‖
+    /// portable 64-bit RoaringTreemap ‖ crc32(u32 BE over magic + bitmap)`.
+    /// `properties` must contain `cardinality` + `referenced-data-file`.
+    /// Ported from risingwavelabs/iceberg-rust #113 (design reference only).
+    pub fn to_puffin_blob(&self, properties: HashMap<String, String>) -> Result<Blob> {
+        Self::check_properties(&properties)?;
+
+        let serialized_bitmap_size = self.inner.serialized_size();
+        let combined_length = (DELETION_VECTOR_MAGIC_BYTES.len() + serialized_bitmap_size) as u32;
+        let mut data = Vec::with_capacity(
+            std::mem::size_of_val(&combined_length)
+                + DELETION_VECTOR_MAGIC_BYTES.len()
+                + serialized_bitmap_size
+                + 4,
+        );
+
+        data.extend_from_slice(&combined_length.to_be_bytes());
+        data.extend_from_slice(&DELETION_VECTOR_MAGIC_BYTES);
+
+        let bitmap_start = data.len();
+        data.resize(bitmap_start + serialized_bitmap_size, 0);
+        {
+            let mut cursor = Cursor::new(&mut data[bitmap_start..]);
+            self.inner.serialize_into(&mut cursor).map_err(|err| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "failed to serialize deletion vector bitmap".to_string(),
+                )
+                .with_source(err)
+            })?;
+        }
+
+        let mut hasher = Hasher::new();
+        hasher.update(&data[4..]);
+        let crc = hasher.finalize();
+        data.extend_from_slice(&crc.to_be_bytes());
+
+        Ok(Blob::builder()
+            .r#type(DELETION_VECTOR_V1.to_string())
+            .fields(vec![])
+            .snapshot_id(-1)
+            .sequence_number(-1)
+            .data(data)
+            .properties(properties)
+            .build())
+    }
+
+    /// Deserialize a delete vector from an Iceberg `deletion-vector-v1` Puffin blob.
+    pub fn from_puffin_blob(blob: Blob) -> Result<Self> {
+        if blob.blob_type() != DELETION_VECTOR_V1 {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("unsupported puffin blob type: {}", blob.blob_type()),
+            ));
+        }
+
+        let data = blob.data();
+        if data.len() < MIN_SERIALIZED_DELETION_VECTOR_BLOB {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "serialized deletion vector blob too small".to_string(),
+            ));
+        }
+
+        let magic = &data[4..8];
+        if magic != DELETION_VECTOR_MAGIC_BYTES {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "invalid deletion vector magic bytes".to_string(),
+            ));
+        }
+
+        let combined_length = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+        let expected_len = std::mem::size_of_val(&combined_length) + combined_length as usize + 4;
+        if expected_len != data.len() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "serialized deletion vector length mismatch: expected {expected_len}, actual {}",
+                    data.len()
+                ),
+            ));
+        }
+
+        let bitmap_end = data.len() - 4;
+        let bitmap_data = &data[8..bitmap_end];
+
+        let mut hasher = Hasher::new();
+        hasher.update(&data[4..bitmap_end]);
+        let expected_crc = hasher.finalize();
+        let stored_crc = u32::from_be_bytes([
+            data[data.len() - 4],
+            data[data.len() - 3],
+            data[data.len() - 2],
+            data[data.len() - 1],
+        ]);
+        if expected_crc != stored_crc {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("deletion vector crc mismatch: expected {expected_crc}, got {stored_crc}"),
+            ));
+        }
+
+        let bitmap =
+            RoaringTreemap::deserialize_from(&mut Cursor::new(bitmap_data)).map_err(|err| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "failed to deserialize deletion vector bitmap".to_string(),
+                )
+                .with_source(err)
+            })?;
+
+        Ok(DeleteVector::new(bitmap))
+    }
+
+    fn check_properties(properties: &HashMap<String, String>) -> Result<()> {
+        if !properties.contains_key(DELETION_VECTOR_PROPERTY_CARDINALITY) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector blob missing required property: {DELETION_VECTOR_PROPERTY_CARDINALITY}"
+                ),
+            ));
+        }
+        if !properties.contains_key(DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector blob missing required property: {DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE}"
+                ),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -197,5 +353,131 @@ mod tests {
         let positions = vec![1, 3, 5, 5];
         let res = dv.insert_positions(&positions);
         assert!(res.is_err());
+    }
+
+    fn dv_props() -> HashMap<String, String> {
+        HashMap::from([
+            (
+                DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(),
+                "0".to_string(),
+            ),
+            (
+                DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE.to_string(),
+                "s3://bucket/data/f.parquet".to_string(),
+            ),
+        ])
+    }
+
+    /// Self round-trip: serialize → Puffin blob → deserialize recovers the positions,
+    /// validating the frame (length, magic, crc) and serialize/deserialize symmetry.
+    #[test]
+    fn test_dv_puffin_blob_roundtrip() {
+        let positions = [1u64, 5, 42, 100, 1 << 33, (1u64 << 33) + 7];
+        let mut dv = DeleteVector::default();
+        for p in positions {
+            dv.insert(p);
+        }
+        let blob = dv.to_puffin_blob(dv_props()).unwrap();
+        assert_eq!(blob.blob_type(), DELETION_VECTOR_V1);
+
+        let restored = DeleteVector::from_puffin_blob(blob).unwrap();
+        let mut got: Vec<u64> = restored.iter().collect();
+        got.sort();
+        assert_eq!(got, positions.to_vec());
+    }
+
+    /// Spark-compatibility proxy: parse the serialized bitmap with the EXACT algorithm
+    /// pyiceberg's `_deserialize_bitmap` uses — `[u64 LE bucket count]` then per bucket
+    /// `[u32 LE high-key + 32-bit portable RoaringBitmap]`. If this recovers the
+    /// positions, the bytes are Iceberg/Spark portable (no Spark needed for the signal).
+    #[test]
+    fn test_dv_blob_is_iceberg_portable() {
+        use std::io::Read;
+
+        use roaring::RoaringBitmap;
+
+        let positions = [3u64, 7, 100, (1u64 << 33) + 5];
+        let mut dv = DeleteVector::default();
+        for p in positions {
+            dv.insert(p);
+        }
+        let blob = dv.to_puffin_blob(dv_props()).unwrap();
+        let data = blob.data();
+
+        // Frame (certain): [u32 BE len][magic][bitmap][u32 BE crc]
+        assert_eq!(&data[4..8], &DELETION_VECTOR_MAGIC_BYTES);
+        let bitmap = &data[8..data.len() - 4];
+
+        // pyiceberg portable parse
+        let mut cur = Cursor::new(bitmap);
+        let mut count_buf = [0u8; 8];
+        cur.read_exact(&mut count_buf).unwrap();
+        let n_buckets = u64::from_le_bytes(count_buf);
+
+        let mut recovered: Vec<u64> = Vec::new();
+        for _ in 0..n_buckets {
+            let mut key_buf = [0u8; 4];
+            cur.read_exact(&mut key_buf).unwrap();
+            let hi = u32::from_le_bytes(key_buf) as u64;
+            let bm = RoaringBitmap::deserialize_from(&mut cur).unwrap();
+            for lo in bm.iter() {
+                recovered.push((hi << 32) | u64::from(lo));
+            }
+        }
+        recovered.sort();
+        assert_eq!(
+            recovered,
+            positions.to_vec(),
+            "serialized bitmap is NOT Iceberg-portable — roaring serialize_into header \
+             differs from pyiceberg layout; switch to hand-rolled portable framing"
+        );
+    }
+
+    /// Piece 2 — full Puffin-FILE round-trip in Rust: write a DV blob to a real
+    /// Puffin file via `PuffinWriter`, read it back via `PuffinReader`, and recover
+    /// the deleted positions. Proves the Puffin file framing, not just the blob bytes.
+    #[tokio::test]
+    async fn test_dv_puffin_file_roundtrip() {
+        use tempfile::TempDir;
+
+        use crate::io::FileIO;
+        use crate::puffin::{CompressionCodec, PuffinReader, PuffinWriter};
+
+        let positions = [2u64, 9, 256, (1u64 << 33) + 11];
+        let mut dv = DeleteVector::default();
+        for p in positions {
+            dv.insert(p);
+        }
+        assert!(!dv.is_empty());
+
+        let mut props = dv_props();
+        props.insert(
+            DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(),
+            dv.len().to_string(),
+        );
+        let blob = dv.to_puffin_blob(props).unwrap();
+
+        let tmp = TempDir::new().unwrap();
+        let path_buf = tmp.path().join("dv.puffin");
+        let path = path_buf.to_str().unwrap();
+
+        let file_io = FileIO::new_with_fs();
+        let output = file_io.new_output(path).unwrap();
+        let mut writer = PuffinWriter::new(&output, HashMap::new(), false)
+            .await
+            .unwrap();
+        writer.add(blob, CompressionCodec::None).await.unwrap();
+        writer.close().await.unwrap();
+
+        let input = output.to_input_file();
+        let reader = PuffinReader::new(input);
+        let meta = reader.file_metadata().await.unwrap().clone();
+        assert_eq!(meta.blobs.len(), 1);
+        let read_blob = reader.blob(meta.blobs.first().unwrap()).await.unwrap();
+
+        let restored = DeleteVector::from_puffin_blob(read_blob).unwrap();
+        let mut got: Vec<u64> = restored.iter().collect();
+        got.sort();
+        assert_eq!(got, positions.to_vec());
     }
 }
