@@ -632,4 +632,44 @@ mod tests {
             "DV payload must be byte-identical to the apache/iceberg Java golden fixture"
         );
     }
+
+    /// Empty deletion vector round-trips (mirrors iceberg-go `TestSerializeDVEmpty`).
+    #[test]
+    fn test_dv_empty_roundtrip() {
+        let dv = DeleteVector::default();
+        let props = HashMap::from([
+            (DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(), "0".to_string()),
+            (
+                DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE.to_string(),
+                "data/empty.parquet".to_string(),
+            ),
+        ]);
+        let blob = dv.to_puffin_blob(props).unwrap();
+        let restored = DeleteVector::from_puffin_blob(blob).unwrap();
+        assert!(restored.is_empty());
+        assert_eq!(restored.len(), 0);
+    }
+
+    /// Positions straddling the 2^31 (Java-signed) and 2^32 (roaring bucket)
+    /// boundaries round-trip (mirrors iceberg-go `TestSerializeDVLargePositions`).
+    #[test]
+    fn test_dv_boundary_positions_roundtrip() {
+        let positions = [100u64, 101, 2_147_483_747, 2_147_483_748, (1u64 << 32) | 42];
+        let mut dv = DeleteVector::default();
+        for p in positions {
+            dv.insert(p);
+        }
+        let props = HashMap::from([
+            (DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(), "5".to_string()),
+            (
+                DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE.to_string(),
+                "data/boundary.parquet".to_string(),
+            ),
+        ]);
+        let blob = dv.to_puffin_blob(props).unwrap();
+        let restored = DeleteVector::from_puffin_blob(blob).unwrap();
+        let mut got: Vec<u64> = restored.iter().collect();
+        got.sort();
+        assert_eq!(got, positions.to_vec());
+    }
 }
