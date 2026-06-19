@@ -35,7 +35,7 @@ use crate::transaction::{ActionCommit, TransactionAction};
 pub struct RowDeltaAction {
     added_data_files: Vec<DataFile>,
     removed_data_files: Vec<DataFile>,
-    /// Reserved for future Merge-on-Read support; calling `add_delete_files` currently errors.
+    /// MoR delete files (position/equality deletes, incl. V3 deletion vectors) to add.
     added_delete_files: Vec<DataFile>,
     commit_uuid: Option<Uuid>,
     snapshot_properties: HashMap<String, String>,
@@ -68,10 +68,8 @@ impl RowDeltaAction {
         self
     }
 
-    /// Reserved for future Merge-on-Read support — currently returns an error on commit.
-    ///
-    /// Once MoR is implemented, this will write position/equality delete files instead of
-    /// rewriting data files.
+    /// Add Merge-on-Read delete files (position/equality deletes, incl. V3 deletion
+    /// vectors). Written into a content=Deletes manifest at commit time.
     pub fn add_delete_files(mut self, delete_files: impl IntoIterator<Item = DataFile>) -> Self {
         self.added_delete_files.extend(delete_files);
         self
@@ -99,14 +97,6 @@ impl RowDeltaAction {
 #[async_trait]
 impl TransactionAction for RowDeltaAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
-        if !self.added_delete_files.is_empty() {
-            return Err(crate::Error::new(
-                crate::ErrorKind::FeatureUnsupported,
-                "add_delete_files is not yet implemented; Merge-on-Read support is pending. \
-                 Use remove_data_files for Copy-on-Write deletes instead.",
-            ));
-        }
-
         if let Some(expected_snapshot_id) = self.starting_snapshot_id
             && table.metadata().current_snapshot_id() != Some(expected_snapshot_id)
         {
@@ -120,7 +110,7 @@ impl TransactionAction for RowDeltaAction {
             ));
         }
 
-        let snapshot_producer = SnapshotProducer::new(
+        let mut snapshot_producer = SnapshotProducer::new(
             table,
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
             None,
@@ -133,8 +123,14 @@ impl TransactionAction for RowDeltaAction {
         // already validated when originally committed. This matches Java's MergingSnapshotProducer.
         snapshot_producer.validate_added_data_files()?;
 
+        // MoR delete files (position/equality deletes, incl. V3 deletion vectors) are
+        // written into a separate content=Deletes manifest by the snapshot producer.
+        snapshot_producer.set_added_delete_files(self.added_delete_files.clone());
+
         let operation = RowDeltaOperation {
             removed_data_files: self.removed_data_files.clone(),
+            has_added_data_files: !self.added_data_files.is_empty(),
+            has_added_delete_files: !self.added_delete_files.is_empty(),
         };
 
         snapshot_producer
@@ -145,20 +141,26 @@ impl TransactionAction for RowDeltaAction {
 
 struct RowDeltaOperation {
     removed_data_files: Vec<DataFile>,
+    has_added_data_files: bool,
+    has_added_delete_files: bool,
 }
 
 impl SnapshotProduceOperation for RowDeltaOperation {
-    /// Operation type based on Java `BaseRowDelta.operation()`:
-    /// - No removes → `Append`
-    /// - Any removes → `Overwrite`
-    ///
-    /// `Operation::Delete` (MoR-only delete files, no data file changes) is deferred until
-    /// Merge-on-Read is wired up.
+    /// Operation type (mirrors Java `BaseRowDelta.operation()`):
+    /// - Any data files removed → `Overwrite`
+    /// - MoR delete files added → `Overwrite` if data files also added, else `Delete`
+    /// - Only data files added (or nothing) → `Append`
     fn operation(&self) -> Operation {
-        if self.removed_data_files.is_empty() {
-            Operation::Append
-        } else {
+        if !self.removed_data_files.is_empty() {
             Operation::Overwrite
+        } else if self.has_added_delete_files {
+            if self.has_added_data_files {
+                Operation::Overwrite
+            } else {
+                Operation::Delete
+            }
+        } else {
+            Operation::Append
         }
     }
 
@@ -186,11 +188,10 @@ impl SnapshotProduceOperation for RowDeltaOperation {
             return Ok(vec![]);
         };
 
-        let manifest_list = snapshot
-            .load_manifest_list(
-                snapshot_produce.table.file_io(),
-                &snapshot_produce.table.metadata_ref(),
-            )
+        let manifest_list = snapshot_produce
+            .table
+            .manifest_list_reader(snapshot)
+            .load()
             .await?;
 
         let deleted_paths: HashSet<&str> = self
@@ -377,18 +378,84 @@ mod tests {
         assert!(Arc::new(action).commit(&table).await.is_err());
     }
 
+    /// MoR: adding a position-delete file via RowDelta commits a content=Deletes
+    /// manifest and an `Operation::Delete` snapshot (replaces the old "errors" test
+    /// now that `add_delete_files` is implemented).
     #[tokio::test]
-    async fn test_row_delta_add_delete_files_errors() {
-        let table = make_v2_minimal_table();
-        let file = make_data_file(&table, "test/delete.parquet", 100);
-        let action = Transaction::new(&table)
-            .row_delta()
-            .add_delete_files(vec![file]);
-        let result = Arc::new(action).commit(&table).await;
-        match result {
-            Ok(_) => panic!("expected FeatureUnsupported"),
-            Err(e) => assert_eq!(e.kind(), crate::ErrorKind::FeatureUnsupported),
+    async fn test_row_delta_add_delete_files_mor() {
+        let base = make_v2_minimal_table();
+
+        // S1: append a data file.
+        let data_file = make_data_file(&base, "test/data.parquet", 100);
+        let mut c1 = Arc::new(
+            Transaction::new(&base)
+                .fast_append()
+                .add_data_files(vec![data_file]),
+        )
+        .commit(&base)
+        .await
+        .unwrap();
+        let snap_s1 = if let TableUpdate::AddSnapshot { snapshot } =
+            c1.take_updates().into_iter().next().unwrap()
+        {
+            snapshot
+        } else {
+            panic!("expected AddSnapshot");
+        };
+        let table_s1 = table_with_snapshot(&base, snap_s1).await;
+
+        // S2: add a MoR position-delete file referencing the data file.
+        let delete_file = DataFileBuilder::default()
+            .content(DataContentType::PositionDeletes)
+            .file_path("test/pos-delete.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(50)
+            .record_count(3)
+            .partition_spec_id(table_s1.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(100))]))
+            .referenced_data_file(Some("test/data.parquet".to_string()))
+            .build()
+            .unwrap();
+        let mut c2 = Arc::new(
+            Transaction::new(&table_s1)
+                .row_delta()
+                .add_delete_files(vec![delete_file]),
+        )
+        .commit(&table_s1)
+        .await
+        .unwrap();
+        let updates2 = c2.take_updates();
+        let snap_s2 = if let TableUpdate::AddSnapshot { ref snapshot } = updates2[0] {
+            snapshot
+        } else {
+            panic!("expected AddSnapshot");
+        };
+
+        // Only delete files added (no data adds/removes) → Operation::Delete.
+        assert_eq!(snap_s2.summary().operation, crate::spec::Operation::Delete);
+
+        // A PositionDeletes entry must exist in the new snapshot's manifests.
+        let manifest_list = table_s1
+            .manifest_list_reader(&std::sync::Arc::new(snap_s2.clone()))
+            .load()
+            .await
+            .unwrap();
+        let mut found_position_delete = false;
+        for manifest_file in manifest_list.entries() {
+            let manifest = manifest_file
+                .load_manifest(table_s1.file_io())
+                .await
+                .unwrap();
+            for entry in manifest.entries() {
+                if entry.data_file().content_type() == DataContentType::PositionDeletes {
+                    found_position_delete = true;
+                }
+            }
         }
+        assert!(
+            found_position_delete,
+            "expected a PositionDeletes entry in the RowDelta snapshot's manifests"
+        );
     }
 
     /// End-to-end CoW test: append two files, then remove one via RowDelta.
@@ -449,8 +516,9 @@ mod tests {
         );
 
         // Scan all manifest entries in S2
-        let manifest_list = snapshot_s2
-            .load_manifest_list(table_s1.file_io(), table_s1.metadata())
+        let manifest_list = table_s1
+            .manifest_list_reader(&std::sync::Arc::new(snapshot_s2.clone()))
+            .load()
             .await
             .unwrap();
 
