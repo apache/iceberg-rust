@@ -222,8 +222,7 @@ impl SnapshotProduceOperation for RowDeltaOperation {
 
             // Rewrite: deleted files → DELETED (new snapshot_id, original seq nums preserved),
             // surviving files → EXISTING (all original fields preserved).
-            let mut writer =
-                snapshot_produce.new_manifest_writer(ManifestContentType::Data)?;
+            let mut writer = snapshot_produce.new_manifest_writer(ManifestContentType::Data)?;
             for entry in manifest.entries() {
                 if deleted_paths.contains(entry.data_file().file_path()) {
                     writer.add_delete_entry((**entry).clone())?;
@@ -270,15 +269,13 @@ mod tests {
 
     /// Build a table that has `snapshot` as its current snapshot, backed by the same FileIO.
     async fn table_with_snapshot(base: &Table, snapshot: crate::spec::Snapshot) -> Table {
-        let updated_metadata = TableMetadataBuilder::new_from_metadata(
-            base.metadata_ref().as_ref().clone(),
-            None,
-        )
-        .set_branch_snapshot(snapshot, MAIN_BRANCH)
-        .unwrap()
-        .build()
-        .unwrap()
-        .metadata;
+        let updated_metadata =
+            TableMetadataBuilder::new_from_metadata(base.metadata_ref().as_ref().clone(), None)
+                .set_branch_snapshot(snapshot, MAIN_BRANCH)
+                .unwrap()
+                .build()
+                .unwrap()
+                .metadata;
 
         Table::builder()
             .metadata(updated_metadata)
@@ -479,11 +476,12 @@ mod tests {
         let mut commit1 = Arc::new(action1).commit(&base_table).await.unwrap();
         let updates1 = commit1.take_updates();
 
-        let snapshot_s1 = if let TableUpdate::AddSnapshot { snapshot } = updates1.into_iter().next().unwrap() {
-            snapshot
-        } else {
-            panic!("expected AddSnapshot");
-        };
+        let snapshot_s1 =
+            if let TableUpdate::AddSnapshot { snapshot } = updates1.into_iter().next().unwrap() {
+                snapshot
+            } else {
+                panic!("expected AddSnapshot");
+            };
 
         let table_s1 = table_with_snapshot(&base_table, snapshot_s1).await;
 
@@ -570,7 +568,10 @@ mod tests {
         }
 
         assert!(found_deleted_a, "file-A should have a DELETED entry in S2");
-        assert!(found_existing_b, "file-B should have an EXISTING entry in S2");
+        assert!(
+            found_existing_b,
+            "file-B should have an EXISTING entry in S2"
+        );
         assert!(found_added_c, "file-C should have an ADDED entry in S2");
     }
 }

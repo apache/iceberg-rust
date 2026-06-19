@@ -253,7 +253,10 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_id
     }
 
-    pub(crate) fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
+    pub(crate) fn new_manifest_writer(
+        &mut self,
+        content: ManifestContentType,
+    ) -> Result<ManifestWriter> {
         let new_manifest_path = format!(
             "{}/{}/{}-m{}.{}",
             self.table.metadata().location(),
@@ -450,7 +453,9 @@ impl<'a> SnapshotProducer<'a> {
 
         // Process delete entries.
         if has_delete_entries {
-            let delete_manifest = self.write_manifest_with_deleted_entries(delete_entries).await?;
+            let delete_manifest = self
+                .write_manifest_with_deleted_entries(delete_entries)
+                .await?;
             manifest_files.push(delete_manifest);
         }
 

@@ -618,7 +618,10 @@ mod tests {
             dv.insert(p);
         }
         let props = HashMap::from([
-            (DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(), "5".to_string()),
+            (
+                DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(),
+                "5".to_string(),
+            ),
             (
                 DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE.to_string(),
                 "data/test.parquet".to_string(),
@@ -638,7 +641,10 @@ mod tests {
     fn test_dv_empty_roundtrip() {
         let dv = DeleteVector::default();
         let props = HashMap::from([
-            (DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(), "0".to_string()),
+            (
+                DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(),
+                "0".to_string(),
+            ),
             (
                 DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE.to_string(),
                 "data/empty.parquet".to_string(),
@@ -660,7 +666,10 @@ mod tests {
             dv.insert(p);
         }
         let props = HashMap::from([
-            (DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(), "5".to_string()),
+            (
+                DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(),
+                "5".to_string(),
+            ),
             (
                 DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE.to_string(),
                 "data/boundary.parquet".to_string(),
@@ -683,7 +692,10 @@ mod tests {
         ));
         let dv = DeleteVector::default();
         let props = HashMap::from([
-            (DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(), "0".to_string()),
+            (
+                DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(),
+                "0".to_string(),
+            ),
             (
                 DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE.to_string(),
                 "data/test.parquet".to_string(),
@@ -711,7 +723,10 @@ mod tests {
             dv.insert(p);
         }
         let props = HashMap::from([
-            (DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(), "4".to_string()),
+            (
+                DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(),
+                "4".to_string(),
+            ),
             (
                 DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE.to_string(),
                 "data/test.parquet".to_string(),
