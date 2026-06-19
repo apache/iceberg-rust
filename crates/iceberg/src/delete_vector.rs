@@ -24,7 +24,9 @@ use roaring::RoaringTreemap;
 use roaring::bitmap::Iter;
 use roaring::treemap::BitmapIter;
 
-use crate::puffin::{Blob, DELETION_VECTOR_V1};
+use crate::io::FileIO;
+use crate::puffin::{Blob, CompressionCodec, DELETION_VECTOR_V1, PuffinWriter};
+use crate::spec::{DataContentType, DataFile, DataFileBuilder, DataFileFormat, Struct};
 use crate::{Error, ErrorKind, Result};
 
 /// Iceberg `deletion-vector-v1` Puffin blob magic bytes (Iceberg Puffin spec;
@@ -223,6 +225,63 @@ impl DeleteVector {
             ));
         }
         Ok(())
+    }
+
+    /// Write this delete vector to a `deletion-vector-v1` Puffin file at `location` and
+    /// return the V3 `DataFile{content=PositionDeletes, …}` to feed
+    /// `RowDeltaAction::add_delete_files`. Connects DV serialization → Puffin file →
+    /// delete-file metadata (offset/length) in one step (cf. RW `deletion_vector_writer.rs`).
+    pub async fn write_to_puffin_file(
+        &self,
+        file_io: &FileIO,
+        location: String,
+        referenced_data_file: String,
+        partition: Struct,
+        partition_spec_id: i32,
+    ) -> Result<DataFile> {
+        let cardinality = self.len();
+        let properties = HashMap::from([
+            (
+                DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(),
+                cardinality.to_string(),
+            ),
+            (
+                DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE.to_string(),
+                referenced_data_file.clone(),
+            ),
+        ]);
+        let blob = self.to_puffin_blob(properties)?;
+
+        let output_file = file_io.new_output(&location)?;
+        let mut writer = PuffinWriter::new(&output_file, HashMap::new(), false).await?;
+        writer.add(blob, CompressionCodec::None).await?;
+        let result = writer.close_with_metadata().await?;
+        let file_size = result.file_size_in_bytes;
+        let blob_metadata = result.blobs_metadata.first().ok_or_else(|| {
+            Error::new(
+                ErrorKind::Unexpected,
+                "puffin metadata is empty after writing deletion vector",
+            )
+        })?;
+
+        DataFileBuilder::default()
+            .content(DataContentType::PositionDeletes)
+            .file_path(location)
+            .file_format(DataFileFormat::Puffin)
+            .partition(partition)
+            .partition_spec_id(partition_spec_id)
+            .record_count(cardinality)
+            .file_size_in_bytes(file_size)
+            .referenced_data_file(Some(referenced_data_file))
+            .content_offset(Some(blob_metadata.offset() as i64))
+            .content_size_in_bytes(Some(blob_metadata.length() as i64))
+            .build()
+            .map_err(|err| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("failed to build deletion vector data file: {err}"),
+                )
+            })
     }
 }
 
@@ -476,6 +535,56 @@ mod tests {
         let read_blob = reader.blob(meta.blobs.first().unwrap()).await.unwrap();
 
         let restored = DeleteVector::from_puffin_blob(read_blob).unwrap();
+        let mut got: Vec<u64> = restored.iter().collect();
+        got.sort();
+        assert_eq!(got, positions.to_vec());
+    }
+
+    /// Piece 2.5 — glue: write a DV to a Puffin file and get back a V3
+    /// `DataFile{PositionDeletes}` (offset/size/referenced-file filled), then read the
+    /// written file back and recover the positions.
+    #[tokio::test]
+    async fn test_dv_write_to_puffin_file() {
+        use tempfile::TempDir;
+
+        use crate::puffin::PuffinReader;
+
+        let positions = [4u64, 11, 512, (1u64 << 33) + 3];
+        let mut dv = DeleteVector::default();
+        for p in positions {
+            dv.insert(p);
+        }
+
+        let tmp = TempDir::new().unwrap();
+        let path_buf = tmp.path().join("dv2.puffin");
+        let location = path_buf.to_str().unwrap().to_string();
+        let file_io = FileIO::new_with_fs();
+
+        let data_file = dv
+            .write_to_puffin_file(
+                &file_io,
+                location.clone(),
+                "s3://bucket/data/x.parquet".to_string(),
+                Struct::empty(),
+                0,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(data_file.content_type(), DataContentType::PositionDeletes);
+        assert_eq!(
+            data_file.referenced_data_file().as_deref(),
+            Some("s3://bucket/data/x.parquet")
+        );
+        assert!(data_file.content_offset().is_some());
+        assert!(data_file.content_size_in_bytes().is_some());
+
+        // The written Puffin file reads back to the same positions.
+        let input = file_io.new_input(&location).unwrap();
+        let reader = PuffinReader::new(input);
+        let meta = reader.file_metadata().await.unwrap().clone();
+        let blob = reader.blob(meta.blobs.first().unwrap()).await.unwrap();
+        let restored = DeleteVector::from_puffin_blob(blob).unwrap();
         let mut got: Vec<u64> = restored.iter().collect();
         got.sort();
         assert_eq!(got, positions.to_vec());
