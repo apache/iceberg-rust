@@ -672,4 +672,56 @@ mod tests {
         got.sort();
         assert_eq!(got, positions.to_vec());
     }
+
+    /// Byte-parity with Apache Iceberg-Java: the **empty** DV payload
+    /// (`empty-position-index.bin` from apache/iceberg test resources).
+    #[test]
+    fn test_dv_payload_byte_identical_to_java_empty() {
+        let golden: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/testdata/puffin/empty-position-index.bin"
+        ));
+        let dv = DeleteVector::default();
+        let props = HashMap::from([
+            (DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(), "0".to_string()),
+            (
+                DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE.to_string(),
+                "data/test.parquet".to_string(),
+            ),
+        ]);
+        let blob = dv.to_puffin_blob(props).unwrap();
+        assert_eq!(
+            blob.data(),
+            golden,
+            "empty DV payload must be byte-identical to the Java golden fixture"
+        );
+    }
+
+    /// Byte-parity with Apache Iceberg-Java: small + large positions spanning two
+    /// 16-bit roaring containers — {100, 101, INT_MAX+100, INT_MAX+101} per
+    /// `small-and-large-values-position-index.bin` from apache/iceberg test resources.
+    #[test]
+    fn test_dv_payload_byte_identical_to_java_small_and_large() {
+        let golden: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/testdata/puffin/small-and-large-values-position-index.bin"
+        ));
+        let mut dv = DeleteVector::default();
+        for p in [100u64, 101, 2_147_483_747, 2_147_483_748] {
+            dv.insert(p);
+        }
+        let props = HashMap::from([
+            (DELETION_VECTOR_PROPERTY_CARDINALITY.to_string(), "4".to_string()),
+            (
+                DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE.to_string(),
+                "data/test.parquet".to_string(),
+            ),
+        ]);
+        let blob = dv.to_puffin_blob(props).unwrap();
+        assert_eq!(
+            blob.data(),
+            golden,
+            "small+large DV payload must be byte-identical to the Java golden fixture"
+        );
+    }
 }
