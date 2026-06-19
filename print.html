@@ -883,7 +883,6 @@ The RC creation script requires a local GPG secret key when artifact signing or 
 
 - [ ] Bump version in project
 - [ ] Update docs
-- [ ] Generate dependencies list
 - [ ] Create and push release candidate tag
 
 #### ASF Side
@@ -913,17 +912,6 @@ This version is the final version, not the release candidate version.</p>
 </ul>
 <h3 id="update-docs"><a class="header" href="#update-docs">Update docs</a></h3>
 <p>Update <code>CHANGELOG.md</code> by drafting a new release <a href="https://github.com/apache/iceberg-rust/releases/new">note on GitHub Releases</a>.</p>
-<h3 id="generate-dependencies-list"><a class="header" href="#generate-dependencies-list">Generate dependencies list</a></h3>
-<p>Download and set up <code>cargo-deny</code>. You can refer to <a href="https://embarkstudios.github.io/cargo-deny/cli/index.html">cargo-deny</a>.
-For example:</p>
-<pre><code class="language-shell">cargo install cargo-deny
-</code></pre>
-<p>Run the following command to update the dependencies list of every package:</p>
-<pre><code class="language-shell">dev/release/dependencies.sh generate
-</code></pre>
-<p>Run the following command to verify the updated dependencies' license:</p>
-<pre><code class="language-shell">dev/release/dependencies.sh check
-</code></pre>
 <h3 id="create-release-candidate-tag-and-artifacts"><a class="header" href="#create-release-candidate-tag-and-artifacts">Create release candidate tag and artifacts</a></h3>
 <p>After the version bump PR gets merged, check out the exact commit to release and run:</p>
 <pre><code class="language-shell">dev/release/create_rc.sh ${iceberg_version} ${rc}
