@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Iceberg V3 deletion vectors (`deletion-vector-v1`): a roaring-bitmap-backed set
+//! of deleted row positions, serialized to and from Puffin blobs and files.
+
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::ops::BitOrAssign;
@@ -39,12 +42,15 @@ pub(crate) const DELETION_VECTOR_PROPERTY_CARDINALITY: &str = "cardinality";
 /// Puffin blob property: referenced data file path the DV applies to.
 pub(crate) const DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE: &str = "referenced-data-file";
 
+/// A set of deleted row positions backed by a 64-bit roaring bitmap — the in-memory
+/// form of an Iceberg V3 `deletion-vector-v1`.
 #[derive(Debug, Default)]
 pub struct DeleteVector {
     inner: RoaringTreemap,
 }
 
 impl DeleteVector {
+    /// Creates a delete vector that wraps an existing roaring treemap of positions.
     #[allow(unused)]
     pub fn new(roaring_treemap: RoaringTreemap) -> DeleteVector {
         DeleteVector {
@@ -52,11 +58,13 @@ impl DeleteVector {
         }
     }
 
+    /// Returns an iterator over the deleted row positions in ascending order.
     pub fn iter(&self) -> DeleteVectorIterator<'_> {
         let outer = self.inner.bitmaps();
         DeleteVectorIterator { outer, inner: None }
     }
 
+    /// Marks row position `pos` as deleted; returns `true` if it was newly added.
     pub fn insert(&mut self, pos: u64) -> bool {
         self.inner.insert(pos)
     }
@@ -80,6 +88,7 @@ impl DeleteVector {
         Ok(positions.len())
     }
 
+    /// Returns the number of deleted row positions.
     #[allow(unused)]
     pub fn len(&self) -> u64 {
         self.inner.len()
@@ -291,6 +300,7 @@ impl DeleteVector {
 // There is a PR open on roaring to add this (https://github.com/RoaringBitmap/roaring-rs/pull/314)
 // and if that gets merged then we can simplify `DeleteVectorIterator` here, refactoring `advance_to`
 // to just a wrapper around the underlying iterator's method.
+/// Iterator over the deleted row positions of a [`DeleteVector`], in ascending order.
 pub struct DeleteVectorIterator<'a> {
     // NB: `BitMapIter` was only exposed publicly in https://github.com/RoaringBitmap/roaring-rs/pull/316
     // which is not yet released. As a consequence our Cargo.toml temporarily uses a git reference for
@@ -328,6 +338,7 @@ impl Iterator for DeleteVectorIterator<'_> {
 }
 
 impl DeleteVectorIterator<'_> {
+    /// Advances the iterator so the next yielded position is `>= pos`.
     pub fn advance_to(&mut self, pos: u64) {
         let hi = (pos >> 32) as u32;
         let lo = pos as u32;
