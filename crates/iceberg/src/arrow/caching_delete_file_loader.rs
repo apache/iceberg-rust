@@ -125,11 +125,11 @@ impl CachingDeleteFileLoader {
     ///    tasks from starting to load the same equality delete file. We spawn a task to load
     ///    the EQ delete's record batch stream, convert it to a predicate, update the delete filter,
     ///    and notify any task that was waiting for it.
-    ///  * When this gets updated to add support for delete vectors, the load phase will return
-    ///    a PuffinReader for them.
+    ///  * for delete vectors (V3, stored in Puffin) the load phase records the Puffin file
+    ///    path + referenced data file; the parse phase reads the deletion-vector-v1 blob.
     ///  * The parse phase parses each record batch stream according to its associated data type.
     ///    The result of this is a map of data file paths to delete vectors for the positional
-    ///    delete tasks (and in future for the delete vector tasks). For equality delete
+    ///    delete tasks and the deletion-vector tasks. For equality delete
     ///    file tasks, this results in an unbound Predicate.
     ///  * The unbound Predicates resulting from equality deletes are sent to their associated oneshot
     ///    channel to store them in the right place in the delete file managers state.
@@ -151,7 +151,7 @@ impl CachingDeleteFileLoader {
     ///                                                     |
     ///                                                     |
     ///                       +-----------------------------+--------------------------+
-    ///                     Pos Del           Del Vec (Not yet Implemented)         EQ Del
+    ///                     Pos Del                    Del Vec                     EQ Del
     ///                       |                             |                          |
     ///              [parse pos del stream]         [parse del vec puffin]       [parse eq del]
     ///          HashMap<String, RoaringTreeMap> HashMap<String, RoaringTreeMap>   (Predicate, Sender)
@@ -1043,6 +1043,98 @@ mod tests {
             "Failed to build equality delete predicate: {:?}",
             result.err()
         );
+    }
+
+    /// Ported from apache/iceberg-go `TestFilterByDeletionVector` /
+    /// `TestReadAllDeletionVectors`: a V3 deletion vector (Puffin) that references a
+    /// data file is loaded during scan and its marked positions become the data
+    /// file's delete vector. Before DV-applied scan support, the loader tried to read
+    /// the Puffin file as a Parquet positional-delete and the marked rows were not
+    /// excluded.
+    #[tokio::test]
+    async fn test_load_deletes_applies_v3_deletion_vector() {
+        use crate::scan::FileScanTask;
+        use crate::spec::{DataFileFormat, Schema, Struct};
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path();
+        let file_io = FileIO::new_with_fs();
+
+        let data_file_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    crate::spec::NestedField::optional(
+                        2,
+                        "y",
+                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let data_file_path = format!("{}/data-dv.parquet", table_location.to_str().unwrap());
+
+        // Build a deletion vector marking positions 1 and 3 as deleted and write it to
+        // a Puffin file via the DV-write path.
+        let mut dv = DeleteVector::default();
+        dv.insert(1);
+        dv.insert(3);
+        let dv_puffin_path = format!("{}/dv-1.puffin", table_location.to_str().unwrap());
+        let dv_data_file = dv
+            .write_to_puffin_file(
+                &file_io,
+                dv_puffin_path.clone(),
+                data_file_path.clone(),
+                Struct::empty(),
+                0,
+            )
+            .await
+            .unwrap();
+
+        let dv_del = FileScanTaskDeleteFile {
+            file_path: dv_data_file.file_path().to_string(),
+            file_size_in_bytes: dv_data_file.file_size_in_bytes(),
+            file_type: DataContentType::PositionDeletes,
+            partition_spec_id: 0,
+            equality_ids: None,
+            file_format: DataFileFormat::Puffin,
+            referenced_data_file: dv_data_file.referenced_data_file(),
+        };
+
+        let file_scan_task = FileScanTask {
+            file_size_in_bytes: 0,
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path: data_file_path.clone(),
+            data_file_format: DataFileFormat::Parquet,
+            schema: data_file_schema.clone(),
+            project_field_ids: vec![2],
+            predicate: None,
+            deletes: vec![dv_del],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: false,
+        };
+
+        let delete_file_loader =
+            CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::current());
+        let delete_filter = delete_file_loader
+            .load_deletes(&file_scan_task.deletes, file_scan_task.schema_ref())
+            .await
+            .unwrap()
+            .unwrap();
+
+        // The DV's marked positions are surfaced as the data file's delete vector.
+        let dv_handle = delete_filter
+            .get_delete_vector(&file_scan_task)
+            .expect("expected a deletion vector for the data file");
+        let mut positions: Vec<u64> = dv_handle.lock().unwrap().iter().collect();
+        positions.sort();
+        assert_eq!(positions, vec![1, 3]);
     }
 
     #[tokio::test]
