@@ -60,11 +60,16 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
 
+      - name: Install lint tools
+        uses: taiki-e/install-action@56545b37b57562edd73171cb6c62cc509db4c34e # v2.81.7
+        with:
+          tool: taplo@0.9.3,cargo-machete@0.7.0
+
       - name: Check License Header
         uses: apache/skywalking-eyes/header@61275cc80d0798a405cb070f7d3a8aaf7cf2c2c1 # v0.8.0
 
       - name: Check toml format
-        run: make check-toml
+        run: taplo fmt --check
 
       - name: Install protoc
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
@@ -84,7 +89,7 @@ jobs:
         run: make check-clippy
 
       - name: Cargo Machete
-        run: make cargo-machete
+        run: cargo machete
 
   build:
     runs-on: ${{ matrix.os }}
