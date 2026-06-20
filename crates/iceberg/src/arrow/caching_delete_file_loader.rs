@@ -31,6 +31,7 @@ use crate::delete_vector::DeleteVector;
 use crate::expr::Predicate::AlwaysTrue;
 use crate::expr::{Predicate, Reference};
 use crate::io::FileIO;
+use crate::puffin::PuffinReader;
 use crate::runtime::Runtime;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
 use crate::spec::{
@@ -412,7 +413,45 @@ impl CachingDeleteFileLoader {
                     ),
                 )
             })?;
-        DeleteVector::from_serialized_bytes(&bytes[start..end])
+
+        // Fast path: per the Iceberg spec a `deletion-vector-v1` blob is stored
+        // uncompressed ("Omit compression-codec; deletion-vector-v1 is not
+        // compressed"), so the bytes located by content_offset/content_size are the
+        // serialized blob directly. This also covers container-less blob files
+        // (e.g. written by DuckDB) that have no Puffin footer.
+        if let Ok(delete_vector) = DeleteVector::from_serialized_bytes(&bytes[start..end]) {
+            return Ok(delete_vector);
+        }
+
+        // Fallback: a deletion vector blob that is compressed (which the spec
+        // forbids, but a non-conforming writer could produce) can only be
+        // decompressed using the codec recorded in the Puffin footer. If this file
+        // is a valid Puffin file, read the blob through its footer, which honors
+        // the per-blob compression codec.
+        let reader = PuffinReader::new(file_io.new_input(file_path)?);
+        let metadata = reader.file_metadata().await.map_err(|err| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "deletion vector at offset {content_offset} in {file_path} is neither a valid uncompressed deletion-vector-v1 blob nor a Puffin container"
+                ),
+            )
+            .with_source(err)
+        })?;
+        let blob_metadata = metadata
+            .blobs()
+            .iter()
+            .find(|blob| blob.offset() == content_offset)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Puffin file {file_path} has no blob at content_offset {content_offset}"
+                    ),
+                )
+            })?;
+        let blob = reader.blob(blob_metadata).await?;
+        DeleteVector::from_puffin_blob(blob)
     }
 
     /// Parses a record batch stream coming from positional delete files
