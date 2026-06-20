@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::net::ToSocketAddrs;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -328,12 +329,11 @@ impl HmsCatalog {
             .build()?;
 
         let staged_table = commit.apply(cur_table)?;
+        let staged_metadata_location =
+            MetadataLocation::from_str(staged_table.metadata_location_result()?)?;
         staged_table
             .metadata()
-            .write_to(
-                staged_table.file_io(),
-                staged_table.metadata_location_result()?,
-            )
+            .write_to(staged_table.file_io(), &staged_metadata_location)
             .await?;
 
         let new_hive_table = update_hive_table_from_table(hive_table, &staged_table)?;
