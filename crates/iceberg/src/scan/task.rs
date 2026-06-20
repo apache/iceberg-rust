@@ -163,6 +163,8 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
             .with_equality_ids(ctx.manifest_entry.data_file.equality_ids.clone())
             .with_file_format(ctx.manifest_entry.data_file().file_format())
             .with_referenced_data_file(ctx.manifest_entry.data_file().referenced_data_file())
+            .with_content_offset(ctx.manifest_entry.data_file().content_offset())
+            .with_content_size_in_bytes(ctx.manifest_entry.data_file().content_size_in_bytes())
             .build()
     }
 }
@@ -196,4 +198,14 @@ pub struct FileScanTaskDeleteFile {
     /// `referenced_data_file`). `None` for positional/equality delete files.
     #[builder(default)]
     pub referenced_data_file: Option<String>,
+
+    /// Offset of the deletion-vector blob within the file (the manifest entry's
+    /// `content_offset`). `None` for positional/equality delete files.
+    #[builder(default)]
+    pub content_offset: Option<i64>,
+
+    /// Size in bytes of the deletion-vector blob (the manifest entry's
+    /// `content_size_in_bytes`). `None` for positional/equality delete files.
+    #[builder(default)]
+    pub content_size_in_bytes: Option<i64>,
 }

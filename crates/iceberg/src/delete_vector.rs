@@ -156,8 +156,17 @@ impl DeleteVector {
                 format!("unsupported puffin blob type: {}", blob.blob_type()),
             ));
         }
+        Self::from_serialized_bytes(blob.data())
+    }
 
-        let data = blob.data();
+    /// Parse a serialized `deletion-vector-v1` blob payload:
+    /// `[u32 BE length][magic 0xD1D33964][serialized RoaringTreemap][u32 BE CRC32]`.
+    ///
+    /// These are exactly the bytes located by a manifest entry's `content_offset`
+    /// and `content_size_in_bytes`, so this works whether the deletion vector is a
+    /// standalone blob file (e.g. written by DuckDB) or stored inside a Puffin
+    /// container (the manifest offset points past the container framing).
+    pub fn from_serialized_bytes(data: &[u8]) -> Result<Self> {
         if data.len() < MIN_SERIALIZED_DELETION_VECTOR_BLOB {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
