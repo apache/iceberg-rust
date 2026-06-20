@@ -504,8 +504,9 @@ mod tests {
         let current_snapshot = updated_table.metadata().current_snapshot().unwrap();
 
         // Load the manifest list to verify the data files were added
-        let manifest_list = current_snapshot
-            .load_manifest_list(updated_table.file_io(), updated_table.metadata())
+        let manifest_list = updated_table
+            .manifest_list_reader(current_snapshot)
+            .load()
             .await?;
 
         // There should be at least one manifest

@@ -41,7 +41,6 @@ enum DeleteFileIndexState {
 
 #[derive(Debug)]
 struct PopulatedDeleteFileIndex {
-    #[allow(dead_code)]
     global_equality_deletes: Vec<Arc<DeleteFileContext>>,
     eq_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
     pos_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
