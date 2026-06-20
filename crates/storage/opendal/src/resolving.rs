@@ -27,7 +27,7 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use iceberg::io::{
     FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
-    StorageFactory,
+    StorageCredential, StorageFactory,
 };
 use iceberg::{Error, ErrorKind, Result};
 use serde::{Deserialize, Serialize};
@@ -188,6 +188,7 @@ impl StorageFactory for OpenDalResolvingStorageFactory {
     fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
         Ok(Arc::new(OpenDalResolvingStorage {
             props: config.props().clone(),
+            credentials: config.credentials().to_vec(),
             storages: RwLock::new(HashMap::new()),
             #[cfg(feature = "opendal-s3")]
             customized_credential_load: self.customized_credential_load.clone(),
@@ -205,9 +206,16 @@ impl StorageFactory for OpenDalResolvingStorageFactory {
 pub struct OpenDalResolvingStorage {
     /// Configuration properties shared across all backends.
     props: HashMap<String, String>,
-    /// Cache of canonical scheme to storage mappings.
+    /// Per-prefix storage credentials (e.g. vended by a REST catalog).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    credentials: Vec<StorageCredential>,
+    /// Cache of resolution-key to storage mappings.
+    ///
+    /// The key is the canonical scheme when no credential matches, or the matched
+    /// credential prefix otherwise, so that different prefixes (with different
+    /// vended credentials) under the same scheme get distinct storage instances.
     #[serde(skip, default)]
-    storages: RwLock<HashMap<&'static str, Arc<OpenDalStorage>>>,
+    storages: RwLock<HashMap<String, Arc<OpenDalStorage>>>,
     /// Custom AWS credential loader for S3 storage.
     #[cfg(feature = "opendal-s3")]
     #[serde(skip)]
@@ -215,10 +223,26 @@ pub struct OpenDalResolvingStorage {
 }
 
 impl OpenDalResolvingStorage {
-    /// Resolve the storage for the given path by extracting the canonical scheme and
-    /// returning the cached or newly-created [`OpenDalStorage`].
+    /// Select the most specific (longest-prefix) credential matching `path`.
+    fn resolve_credential(&self, path: &str) -> Option<&StorageCredential> {
+        self.credentials
+            .iter()
+            .filter(|c| path.starts_with(&c.prefix))
+            .max_by_key(|c| c.prefix.len())
+    }
+
+    /// Resolve the storage for the given path by extracting the canonical scheme,
+    /// overlaying any matching vended credential, and returning the cached or
+    /// newly-created [`OpenDalStorage`].
     fn resolve(&self, path: &str) -> Result<Arc<OpenDalStorage>> {
         let scheme = extract_scheme(path)?;
+        let credential = self.resolve_credential(path);
+
+        // Cache key: matched credential prefix (most specific) or the scheme.
+        let cache_key = match credential {
+            Some(cred) => format!("{scheme}\u{0}{}", cred.prefix),
+            None => scheme.to_string(),
+        };
 
         // Fast path: check read lock first.
         {
@@ -226,7 +250,7 @@ impl OpenDalResolvingStorage {
                 .storages
                 .read()
                 .map_err(|_| Error::new(ErrorKind::Unexpected, "Storage cache lock poisoned"))?;
-            if let Some(storage) = cache.get(&scheme) {
+            if let Some(storage) = cache.get(&cache_key) {
                 return Ok(storage.clone());
             }
         }
@@ -238,18 +262,29 @@ impl OpenDalResolvingStorage {
             .map_err(|_| Error::new(ErrorKind::Unexpected, "Storage cache lock poisoned"))?;
 
         // Double-check after acquiring write lock.
-        if let Some(storage) = cache.get(&scheme) {
+        if let Some(storage) = cache.get(&cache_key) {
             return Ok(storage.clone());
         }
 
+        // Overlay the matching credential's config over the base props (credential
+        // wins, per the Iceberg REST spec preference for `storage-credentials`).
+        let props = match credential {
+            Some(cred) => {
+                let mut merged = self.props.clone();
+                merged.extend(cred.config.clone());
+                merged
+            }
+            None => self.props.clone(),
+        };
+
         let storage = build_storage_for_scheme(
             scheme,
-            &self.props,
+            &props,
             #[cfg(feature = "opendal-s3")]
             &self.customized_credential_load,
         )?;
         let storage = Arc::new(storage);
-        cache.insert(scheme, storage.clone());
+        cache.insert(cache_key, storage.clone());
         Ok(storage)
     }
 }
@@ -331,10 +366,74 @@ mod tests {
     fn empty_resolving_storage() -> OpenDalResolvingStorage {
         OpenDalResolvingStorage {
             props: HashMap::new(),
+            credentials: Vec::new(),
             storages: RwLock::new(HashMap::new()),
             #[cfg(feature = "opendal-s3")]
             customized_credential_load: None,
         }
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    fn resolving_storage_with_credentials(
+        credentials: Vec<StorageCredential>,
+    ) -> OpenDalResolvingStorage {
+        OpenDalResolvingStorage {
+            props: HashMap::from([("s3.region".to_string(), "us-east-1".to_string())]),
+            credentials,
+            storages: RwLock::new(HashMap::new()),
+            customized_credential_load: None,
+        }
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[test]
+    fn test_resolve_distinct_credentials_yield_distinct_storages() {
+        let storage = resolving_storage_with_credentials(vec![
+            StorageCredential::new(
+                "s3://bucket/db/t1",
+                HashMap::from([
+                    ("s3.access-key-id".to_string(), "k1".to_string()),
+                    ("s3.secret-access-key".to_string(), "s1".to_string()),
+                ]),
+            ),
+            StorageCredential::new(
+                "s3://bucket/db/t2",
+                HashMap::from([
+                    ("s3.access-key-id".to_string(), "k2".to_string()),
+                    ("s3.secret-access-key".to_string(), "s2".to_string()),
+                ]),
+            ),
+        ]);
+
+        let t1_a = storage.resolve("s3://bucket/db/t1/data/0.parquet").unwrap();
+        let t1_b = storage.resolve("s3://bucket/db/t1/data/1.parquet").unwrap();
+        let t2 = storage.resolve("s3://bucket/db/t2/data/0.parquet").unwrap();
+
+        // Same credential prefix -> shared cached storage.
+        assert!(
+            Arc::ptr_eq(&t1_a, &t1_b),
+            "paths under the same credential prefix should share a storage"
+        );
+        // Different credential prefix -> distinct storage instances.
+        assert!(
+            !Arc::ptr_eq(&t1_a, &t2),
+            "paths under different credential prefixes must not share a storage"
+        );
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[test]
+    fn test_resolve_no_credential_falls_back_to_scheme_sharing() {
+        // With credentials present but a path that matches none, resolution falls
+        // back to scheme-level sharing (keyed by scheme, not prefix).
+        let storage = resolving_storage_with_credentials(vec![StorageCredential::new(
+            "s3://bucket/db/t1",
+            HashMap::from([("s3.access-key-id".to_string(), "k1".to_string())]),
+        )]);
+
+        let other_a = storage.resolve("s3://other/x.parquet").unwrap();
+        let other_b = storage.resolve("s3://other/y.parquet").unwrap();
+        assert!(Arc::ptr_eq(&other_a, &other_b));
     }
 
     #[cfg(feature = "opendal-s3")]

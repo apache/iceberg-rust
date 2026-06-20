@@ -53,7 +53,9 @@
 
 mod catalog;
 mod client;
+mod scan_planning;
 mod types;
 
 pub use catalog::*;
+pub use scan_planning::RestScanPlanner;
 pub use types::*;

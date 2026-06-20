@@ -21,14 +21,16 @@ mod cache;
 use cache::*;
 mod context;
 use context::*;
+mod planner;
 mod task;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Sender, channel};
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
+pub use planner::{ScanPlanRequest, ScanPlanner, ServerScanPlan};
 pub use task::*;
 
 use crate::arrow::ArrowReaderBuilder;
@@ -42,7 +44,7 @@ use crate::runtime::Runtime;
 use crate::spec::{DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, SnapshotRef};
 use crate::table::Table;
 use crate::util::available_parallelism;
-use crate::{Error, ErrorKind, Result};
+use crate::{Error, ErrorKind, Result, TableIdent};
 
 /// A stream of arrow [`RecordBatch`]es.
 pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
@@ -53,6 +55,10 @@ pub struct TableScanBuilder<'a> {
     // Defaults to none which means select all columns
     column_names: Option<Vec<String>>,
     snapshot_id: Option<i64>,
+    // Exclusive start / inclusive end snapshots for an incremental scan. Only
+    // honored by server-side scan planning; the native planner ignores them.
+    start_snapshot_id: Option<i64>,
+    end_snapshot_id: Option<i64>,
     batch_size: Option<usize>,
     case_sensitive: bool,
     filter: Option<Predicate>,
@@ -71,6 +77,8 @@ impl<'a> TableScanBuilder<'a> {
             table,
             column_names: None,
             snapshot_id: None,
+            start_snapshot_id: None,
+            end_snapshot_id: None,
             batch_size: None,
             case_sensitive: true,
             filter: None,
@@ -129,6 +137,18 @@ impl<'a> TableScanBuilder<'a> {
     /// Set the snapshot to scan. When not set, it uses current snapshot.
     pub fn snapshot_id(mut self, snapshot_id: i64) -> Self {
         self.snapshot_id = Some(snapshot_id);
+        self
+    }
+
+    /// Configure an incremental scan between an exclusive `start` snapshot and
+    /// an inclusive `end` snapshot.
+    ///
+    /// Incremental scans are only supported when the table is backed by a
+    /// catalog that performs server-side scan planning; the native planner
+    /// ignores these bounds and scans the resolved snapshot instead.
+    pub fn with_incremental(mut self, start_snapshot_id: i64, end_snapshot_id: i64) -> Self {
+        self.start_snapshot_id = Some(start_snapshot_id);
+        self.end_snapshot_id = Some(end_snapshot_id);
         self
     }
 
@@ -212,6 +232,11 @@ impl<'a> TableScanBuilder<'a> {
                         row_group_filtering_enabled: self.row_group_filtering_enabled,
                         row_selection_enabled: self.row_selection_enabled,
                         runtime: self.table.runtime().clone(),
+                        scan_planner: self.table.scan_planner(),
+                        table_ident: self.table.identifier().clone(),
+                        start_snapshot_id: self.start_snapshot_id,
+                        end_snapshot_id: self.end_snapshot_id,
+                        scan_io_override: Arc::new(OnceLock::new()),
                     });
                 };
                 current_snapshot_id.clone()
@@ -326,6 +351,11 @@ impl<'a> TableScanBuilder<'a> {
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
             runtime: self.table.runtime().clone(),
+            scan_planner: self.table.scan_planner(),
+            table_ident: self.table.identifier().clone(),
+            start_snapshot_id: self.start_snapshot_id,
+            end_snapshot_id: self.end_snapshot_id,
+            scan_io_override: Arc::new(OnceLock::new()),
         })
     }
 }
@@ -356,6 +386,19 @@ pub struct TableScan {
     row_selection_enabled: bool,
 
     runtime: Runtime,
+
+    /// Optional server-side scan planner injected by the catalog. When present,
+    /// [`plan_files`](Self::plan_files) delegates planning to it.
+    scan_planner: Option<Arc<dyn ScanPlanner>>,
+    /// Identifier of the scanned table, required to address the server-side
+    /// planning endpoints.
+    table_ident: TableIdent,
+    /// Incremental scan bounds, forwarded to the server-side planner.
+    start_snapshot_id: Option<i64>,
+    end_snapshot_id: Option<i64>,
+    /// Set by server-side planning to a plan-scoped [`FileIO`] carrying vended
+    /// credentials; [`to_arrow`](Self::to_arrow) reads through it when present.
+    scan_io_override: Arc<OnceLock<FileIO>>,
 }
 
 impl TableScan {
@@ -364,6 +407,44 @@ impl TableScan {
         let Some(plan_context) = self.plan_context.as_ref() else {
             return Ok(Box::pin(futures::stream::empty()));
         };
+
+        // Delegate to server-side scan planning when the catalog provides a
+        // planner. A `FeatureUnsupported` error means the server does not
+        // advertise the planning endpoints, so we fall back to native planning.
+        if let Some(planner) = self.scan_planner.as_ref() {
+            let snapshot_id = if self.start_snapshot_id.is_some() || self.end_snapshot_id.is_some()
+            {
+                None
+            } else {
+                Some(plan_context.snapshot.snapshot_id())
+            };
+
+            let request = ScanPlanRequest {
+                table_ident: self.table_ident.clone(),
+                snapshot_id,
+                start_snapshot_id: self.start_snapshot_id,
+                end_snapshot_id: self.end_snapshot_id,
+                select: self.column_names.clone(),
+                filter: plan_context.predicate.as_ref().map(|p| p.as_ref().clone()),
+                case_sensitive: plan_context.case_sensitive,
+                project_field_ids: plan_context.field_ids.as_ref().clone(),
+                metadata: plan_context.table_metadata.clone(),
+                snapshot_schema: plan_context.snapshot_schema.clone(),
+            };
+
+            match planner.plan_table_scan(request).await {
+                Ok(plan) => {
+                    if let Some(io) = plan.file_io {
+                        let _ = self.scan_io_override.set(io);
+                    }
+                    return Ok(plan.tasks);
+                }
+                Err(e) if e.kind() == ErrorKind::FeatureUnsupported => {
+                    // Fall through to native, client-side planning below.
+                }
+                Err(e) => return Err(e),
+            }
+        }
 
         let concurrency_limit_manifest_files = self.concurrency_limit_manifest_files;
         let concurrency_limit_manifest_entries = self.concurrency_limit_manifest_entries;
@@ -482,11 +563,19 @@ impl TableScan {
 
     /// Returns an [`ArrowRecordBatchStream`].
     pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
-        let mut arrow_reader_builder =
-            ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
-                .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
-                .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
-                .with_row_selection_enabled(self.row_selection_enabled);
+        // Plan first: server-side planning may install a plan-scoped FileIO
+        // (with vended credentials) that we must read through.
+        let tasks = self.plan_files().await?;
+        let file_io = self
+            .scan_io_override
+            .get()
+            .cloned()
+            .unwrap_or_else(|| self.file_io.clone());
+
+        let mut arrow_reader_builder = ArrowReaderBuilder::new(file_io, self.runtime.clone())
+            .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
+            .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
+            .with_row_selection_enabled(self.row_selection_enabled);
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
@@ -494,7 +583,7 @@ impl TableScan {
 
         arrow_reader_builder
             .build()
-            .read(self.plan_files().await?)
+            .read(tasks)
             .map(|result| result.stream())
     }
 

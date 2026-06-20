@@ -25,10 +25,15 @@ use iceberg::{
 };
 use serde_derive::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub(super) struct CatalogConfig {
     pub(super) overrides: HashMap<String, String>,
     pub(super) defaults: HashMap<String, String>,
+    /// Endpoints advertised by the server for capability negotiation. Absent on
+    /// older servers, in which case optional features (e.g. server-side scan
+    /// planning) are treated as unsupported.
+    #[serde(default)]
+    pub(super) endpoints: Vec<crate::scan_planning::endpoint::Endpoint>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
