@@ -80,7 +80,7 @@ services:
   # REST Catalog - Apache Iceberg REST Catalog
   # =============================================================================
   rest:
-    image: apache/iceberg-rest-fixture:1.10.0
+    image: apache/iceberg-rest-fixture:latest
     environment:
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
