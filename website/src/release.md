@@ -99,7 +99,6 @@ This issue is used to track tasks of the iceberg rust ${iceberg_version} release
 
 - [ ] Draft GitHub release
 - [ ] Bump version in project and update changelog
-- [ ] Generate dependencies list
 - [ ] Create and push release candidate tag
 
 #### ASF Side
@@ -115,7 +114,7 @@ This issue is used to track tasks of the iceberg rust ${iceberg_version} release
 
 - [ ] Publish artifacts to SVN RELEASE branch
 - [ ] Change Iceberg Rust Website download link
-- [ ] Publish GitHub release and Git tag
+- [ ] Publish GitHub release, automatically pushing the Git tag
 - [ ] Send the announcement
 
 For details of each step, please refer to: https://rust.iceberg.apache.org/release
@@ -145,27 +144,6 @@ Use the content of the draft GitHub release to update `CHANGELOG.md`.
 Since drafting a GitHub release requires `content: write` GitHub permissions, this step must be owned by a committer.
 
 Open a pull request with both the changes to the crate versions and the associated changelog for the new versions.
-
-### Generate dependencies list
-
-Download and set up `cargo-deny`. You can refer to [cargo-deny](https://embarkstudios.github.io/cargo-deny/cli/index.html).
-For example:
-
-```shell
-cargo install cargo-deny
-```
-
-Run the following command to update the dependencies list of every package:
-
-```shell
-dev/release/dependencies.sh generate
-```
-
-Run the following command to verify the updated dependencies' license:
-
-```shell
-dev/release/dependencies.sh check
-```
 
 ### Create release candidate tag and artifacts
 
