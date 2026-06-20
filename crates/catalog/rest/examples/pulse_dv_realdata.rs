@@ -89,9 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .metadata()
         .current_snapshot()
         .ok_or("table has no current snapshot")?;
-    let manifest_list = snapshot
-        .load_manifest_list(table.file_io(), table.metadata())
-        .await?;
+    let manifest_list = table.manifest_list_reader(snapshot).load().await?;
     let mut chosen = None;
     for manifest_file in manifest_list.entries() {
         let manifest = manifest_file.load_manifest(table.file_io()).await?;
@@ -125,6 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         table.metadata().location().trim_end_matches('/'),
         Uuid::now_v7()
     );
+    let t_write_start = std::time::Instant::now();
     let dv_data_file = dv
         .write_to_puffin_file(
             table.file_io(),
@@ -134,13 +133,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             table.metadata().default_partition_spec_id(),
         )
         .await?;
-    println!("wrote deletion vector puffin: {dv_location}");
+    let t_write = t_write_start.elapsed();
 
     // --- commit via RowDelta -> content=Deletes manifest + Operation::Delete ---
+    let t_commit_start = std::time::Instant::now();
     let tx = Transaction::new(&table);
     let action = tx.row_delta().add_delete_files(vec![dv_data_file]);
     let tx = action.apply(tx)?;
     let updated = tx.commit(&catalog).await?;
+    let t_commit = t_commit_start.elapsed();
+    println!(
+        "BENCH K={delete_count} write_to_puffin={:.3}s commit={:.3}s total={:.3}s",
+        t_write.as_secs_f64(),
+        t_commit.as_secs_f64(),
+        (t_write + t_commit).as_secs_f64()
+    );
 
     println!(
         "COMMITTED. new snapshot_id={:?}. Now verify with an independent engine \
