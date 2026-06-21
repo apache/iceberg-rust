@@ -312,6 +312,7 @@ impl HmsCatalog {
                 NamespaceIdent::new(db_name.to_string()),
                 tbl_name.to_string(),
             ))
+            .runtime(self.runtime.clone())
             .build()?;
 
         let staged_table = commit.apply(cur_table)?;

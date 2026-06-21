@@ -26,7 +26,7 @@ pub fn iceberg_catalog_hms::HmsCatalog::register_table<'life0, 'life1, 'async_tr
 pub fn iceberg_catalog_hms::HmsCatalog::rename_table<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, src: &'life1 iceberg::catalog::TableIdent, dest: &'life2 iceberg::catalog::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn iceberg_catalog_hms::HmsCatalog::table_exists<'life0, 'life1, 'async_trait>(&'life0 self, table: &'life1 iceberg::catalog::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg_catalog_hms::HmsCatalog::update_namespace<'life0, 'life1, 'async_trait>(&'life0 self, namespace: &'life1 iceberg::catalog::NamespaceIdent, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
-pub fn iceberg_catalog_hms::HmsCatalog::update_table<'life0, 'async_trait>(&'life0 self, _commit: iceberg::catalog::TableCommit) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn iceberg_catalog_hms::HmsCatalog::update_table<'life0, 'async_trait>(&'life0 self, commit: iceberg::catalog::TableCommit) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub struct iceberg_catalog_hms::HmsCatalogBuilder
 impl core::default::Default for iceberg_catalog_hms::HmsCatalogBuilder
 pub fn iceberg_catalog_hms::HmsCatalogBuilder::default() -> Self
@@ -40,5 +40,6 @@ pub fn iceberg_catalog_hms::HmsCatalogBuilder::with_storage_factory(self, storag
 pub const iceberg_catalog_hms::HMS_CATALOG_PROP_THRIFT_TRANSPORT: &str
 pub const iceberg_catalog_hms::HMS_CATALOG_PROP_URI: &str
 pub const iceberg_catalog_hms::HMS_CATALOG_PROP_WAREHOUSE: &str
+pub const iceberg_catalog_hms::HMS_HIVE_LOCKS_DISABLED: &str
 pub const iceberg_catalog_hms::THRIFT_TRANSPORT_BUFFERED: &str
 pub const iceberg_catalog_hms::THRIFT_TRANSPORT_FRAMED: &str

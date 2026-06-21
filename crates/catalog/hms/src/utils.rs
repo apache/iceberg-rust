@@ -16,6 +16,9 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::{env, process};
 
 use chrono::Utc;
 use hive_metastore::{Database, PrincipalType, SerDeInfo, StorageDescriptor};
@@ -358,6 +361,33 @@ fn get_current_time() -> Result<i32> {
     })
 }
 
+fn lock_user() -> String {
+    env::var("USER")
+        .or_else(|_| env::var("USERNAME"))
+        .unwrap_or_else(|_| format!("iceberg-rust-user-{}", lock_identity_suffix()))
+}
+
+fn lock_hostname() -> String {
+    env::var("HOSTNAME")
+        .or_else(|_| env::var("COMPUTERNAME"))
+        .unwrap_or_else(|_| format!("iceberg-rust-host-{}", lock_identity_suffix()))
+}
+
+fn lock_identity_suffix() -> &'static str {
+    static LOCK_IDENTITY_SUFFIX: OnceLock<String> = OnceLock::new();
+
+    LOCK_IDENTITY_SUFFIX.get_or_init(|| {
+        let since_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        let stack_addr = &since_epoch as *const u128 as usize as u128;
+        let process_id = process::id() as u128;
+
+        format!("{:x}", since_epoch ^ (process_id << 64) ^ stack_addr)
+    })
+}
+
 pub(crate) fn create_lock_request(db_name: &str, tbl_name: &str) -> hive_metastore::LockRequest {
     let component = hive_metastore::LockComponent {
         r#type: hive_metastore::LockType::EXCLUSIVE,
@@ -372,8 +402,8 @@ pub(crate) fn create_lock_request(db_name: &str, tbl_name: &str) -> hive_metasto
     hive_metastore::LockRequest {
         component: vec![component],
         txnid: None,
-        user: FastStr::from(whoami::username()),
-        hostname: FastStr::from(whoami::fallible::hostname().unwrap()),
+        user: FastStr::from_string(lock_user()),
+        hostname: FastStr::from_string(lock_hostname()),
         agent_info: None,
     }
 }
