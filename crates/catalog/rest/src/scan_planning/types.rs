@@ -223,9 +223,8 @@ mod tests {
             serde_json::from_value::<PlanStatus>(serde_json::json!("completed")).unwrap(),
             PlanStatus::Completed
         );
-        assert_eq!(
-            serde_json::from_value::<PlanStatus>(serde_json::json!("position-deletes")).is_err(),
-            true
+        assert!(
+            serde_json::from_value::<PlanStatus>(serde_json::json!("position-deletes")).is_err()
         );
     }
 
