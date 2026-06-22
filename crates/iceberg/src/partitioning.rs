@@ -45,7 +45,7 @@ pub fn compute_unified_partition_type<'a>(
     // Sort specs by spec_id descending (newer first) to match Java's behavior:
     // newer field names take precedence when deduplicating by field_id.
     let mut specs: Vec<&PartitionSpec> = partition_specs.collect();
-    specs.sort_by(|a, b| b.spec_id().cmp(&a.spec_id()));
+    specs.sort_by_key(|s| std::cmp::Reverse(s.spec_id()));
 
     for spec in specs {
         for field in spec.fields() {
