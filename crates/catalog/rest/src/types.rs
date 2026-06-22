@@ -25,10 +25,18 @@ use iceberg::{
 };
 use serde_derive::{Deserialize, Serialize};
 
+use crate::endpoint::Endpoint;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct CatalogConfig {
     pub(super) overrides: HashMap<String, String>,
     pub(super) defaults: HashMap<String, String>,
+    /// Routes the server advertises support for, for capability negotiation
+    /// (the `endpoints` field of `GET /v1/config`). `None` when the field is
+    /// absent; `Some` (possibly empty) when the server sends it. Resolution
+    /// treats an absent field and an empty list alike — both fall back to the
+    /// default base set.
+    pub(super) endpoints: Option<Vec<Endpoint>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
