@@ -32,15 +32,15 @@ use arrow_schema::{
 };
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::statistics::Statistics;
-use parquet_geospatial::{WkbMetadata, WkbType, WkbTypeHint};
+use parquet_geospatial::{WkbEdges, WkbMetadata, WkbType, WkbTypeHint};
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::decimal_utils::i128_from_be_bytes;
 use crate::spec::{
-    Datum, FIRST_FIELD_ID, GeographyType, GeometryType, ListType, MapType, NestedField,
-    NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema, SchemaVisitor, StructType, Type,
-    VariantType,
+    Datum, EdgeInterpolationAlgorithm, FIRST_FIELD_ID, GeographyType, GeometryType, ListType,
+    MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema, SchemaVisitor,
+    StructType, Type, VariantType,
 };
 use crate::{Error, ErrorKind};
 
@@ -99,6 +99,26 @@ impl ExtensionType for VariantExtensionType {
     ) -> std::result::Result<Self, ArrowError> {
         Self.supports_data_type(data_type)?;
         Ok(Self)
+    }
+}
+
+fn edge_interpolation_algorithm_to_wkb_edges(algorithm: EdgeInterpolationAlgorithm) -> WkbEdges {
+    match algorithm {
+        EdgeInterpolationAlgorithm::Spherical => WkbEdges::Spherical,
+        EdgeInterpolationAlgorithm::Vincenty => WkbEdges::Vincenty,
+        EdgeInterpolationAlgorithm::Thomas => WkbEdges::Thomas,
+        EdgeInterpolationAlgorithm::Andoyer => WkbEdges::Andoyer,
+        EdgeInterpolationAlgorithm::Karney => WkbEdges::Karney,
+    }
+}
+
+fn wkb_edges_to_edge_interpolation_algorithm(edges: WkbEdges) -> EdgeInterpolationAlgorithm {
+    match edges {
+        WkbEdges::Spherical => EdgeInterpolationAlgorithm::Spherical,
+        WkbEdges::Vincenty => EdgeInterpolationAlgorithm::Vincenty,
+        WkbEdges::Thomas => EdgeInterpolationAlgorithm::Thomas,
+        WkbEdges::Andoyer => EdgeInterpolationAlgorithm::Andoyer,
+        WkbEdges::Karney => EdgeInterpolationAlgorithm::Karney,
     }
 }
 
@@ -447,14 +467,19 @@ impl ArrowSchemaConverter {
                 })?,
             ))),
             WkbTypeHint::Geography => Ok(Type::Primitive(PrimitiveType::Geography(
-                GeographyType::new(crs, wkb_type.metadata().algorithm.unwrap_or_default())
-                    .map_err(|err| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("Invalid geography CRS for field {}", field.name()),
-                        )
-                        .with_source(err)
-                    })?,
+                GeographyType::new(
+                    crs,
+                    wkb_edges_to_edge_interpolation_algorithm(
+                        wkb_type.metadata().algorithm.unwrap_or_default(),
+                    ),
+                )
+                .map_err(|err| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid geography CRS for field {}", field.name()),
+                    )
+                    .with_source(err)
+                })?,
             ))),
         }
     }
@@ -491,6 +516,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             }
         };
 
+        let value = self.apply_field_extension_type(element_field, &value)?;
         let id = self.get_field_id(element_field)?;
         let doc = get_field_doc(element_field);
         let mut element_field =
@@ -515,6 +541,8 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
 
                     let key_field = &fields[0];
                     let value_field = &fields[1];
+                    let key_value = self.apply_field_extension_type(key_field, &key_value)?;
+                    let value = self.apply_field_extension_type(value_field, &value)?;
 
                     let key_id = self.get_field_id(key_field)?;
                     let key_doc = get_field_doc(key_field);
@@ -689,19 +717,24 @@ impl SchemaVisitor for ToArrowSchemaConverter {
                     .try_with_extension_type(WkbType::new(Some(metadata)))
                     .map_err(|err| {
                         Error::new(
-                            crate::ErrorKind::DataInvalid,
+                            ErrorKind::DataInvalid,
                             "Failed to attach geometry Arrow extension metadata",
                         )
                         .with_source(err)
                     })?;
             }
             Type::Primitive(PrimitiveType::Geography(geography)) => {
-                let metadata = WkbMetadata::new(geography.crs(), Some(geography.algorithm()));
+                let metadata = WkbMetadata::new(
+                    geography.crs(),
+                    Some(edge_interpolation_algorithm_to_wkb_edges(
+                        geography.algorithm(),
+                    )),
+                );
                 arrow_field
                     .try_with_extension_type(WkbType::new(Some(metadata)))
                     .map_err(|err| {
                         Error::new(
-                            crate::ErrorKind::DataInvalid,
+                            ErrorKind::DataInvalid,
                             "Failed to attach geography Arrow extension metadata",
                         )
                         .with_source(err)
@@ -1293,6 +1326,7 @@ pub fn datum_to_arrow_type_with_ree(datum: &Datum) -> DataType {
         PrimitiveType::Uuid => make_ree(DataType::Binary),
         PrimitiveType::Fixed(_) => make_ree(DataType::Binary),
         PrimitiveType::Binary => make_ree(DataType::Binary),
+        PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => make_ree(DataType::LargeBinary),
         PrimitiveType::Decimal { precision, scale } => {
             make_ree(DataType::Decimal128(*precision as u8, *scale as i8))
         }
@@ -1474,7 +1508,9 @@ mod tests {
 
     use super::*;
     use crate::spec::decimal_utils::decimal_new;
-    use crate::spec::{Literal, Schema};
+    use crate::spec::{
+        EdgeInterpolationAlgorithm as IcebergEdgeInterpolationAlgorithm, Literal, Schema,
+    };
 
     /// Create a simple field with metadata.
     fn simple_field(name: &str, ty: DataType, nullable: bool, value: &str) -> Field {
@@ -2305,8 +2341,11 @@ mod tests {
                     2,
                     "geog",
                     Type::Primitive(PrimitiveType::Geography(
-                        GeographyType::new(Some("srid:3857".to_string()), WkbEdges::Karney)
-                            .unwrap(),
+                        GeographyType::new(
+                            Some("srid:3857".to_string()),
+                            IcebergEdgeInterpolationAlgorithm::Karney,
+                        )
+                        .unwrap(),
                     )),
                 )
                 .into(),

@@ -311,8 +311,8 @@ fn json_binary() {
 #[test]
 fn json_geospatial_defaults_reject_non_null() {
     let cases = vec![
-        Type::Primitive(PrimitiveType::Geometry(Default::default())),
-        Type::Primitive(PrimitiveType::Geography(Default::default())),
+        Primitive(PrimitiveType::Geometry(Default::default())),
+        Primitive(PrimitiveType::Geography(Default::default())),
     ];
 
     for ty in cases {

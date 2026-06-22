@@ -5515,9 +5515,9 @@ dependencies = [
 
 [[package]]
 name = "parquet-geospatial"
-version = "58.1.0"
+version = "58.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32928da166f0e52c9c15d055181fb8c163e3ceb2fce12c79fdba5cfd284d98a2"
+checksum = "fce21fd6b0ed0f7a8db95bbce7c5327cdd526bcb15e2757a7b5415d9a6a2dfd9"
 dependencies = [
  "arrow-schema",
  "geo-traits",
