@@ -1955,9 +1955,8 @@ mod test {
     fn partition_column_with_evolution() {
         use arrow_array::StructArray;
 
-        use crate::metadata_columns::{
-            RESERVED_FIELD_ID_PARTITION, compute_unified_partition_type,
-        };
+        use crate::metadata_columns::RESERVED_FIELD_ID_PARTITION;
+        use crate::partitioning::compute_unified_partition_type;
         use crate::spec::Transform;
 
         // Schema with two fields that could be partition sources

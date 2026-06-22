@@ -38,9 +38,9 @@ use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluato
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::metadata_columns::{
-    RESERVED_FIELD_ID_PARTITION, compute_unified_partition_type, get_metadata_field_id,
-    is_metadata_column_name,
+    RESERVED_FIELD_ID_PARTITION, get_metadata_field_id, is_metadata_column_name,
 };
+use crate::partitioning::compute_unified_partition_type;
 use crate::runtime::Runtime;
 use crate::spec::{DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, SnapshotRef};
 use crate::table::Table;
