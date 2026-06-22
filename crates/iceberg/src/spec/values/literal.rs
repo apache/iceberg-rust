@@ -538,7 +538,7 @@ impl Literal {
                     PrimitiveType::Geometry(_) | PrimitiveType::Geography(_),
                     JsonValue::String(_),
                 ) => Err(Error::new(
-                    crate::ErrorKind::DataInvalid,
+                    ErrorKind::DataInvalid,
                     "Geometry and geography defaults must be null",
                 )),
                 (

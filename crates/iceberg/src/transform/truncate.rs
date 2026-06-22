@@ -201,7 +201,7 @@ mod test {
     use crate::spec::Type::{Primitive, Struct};
     use crate::spec::decimal_utils::decimal_new;
     use crate::spec::{
-        Datum, GeographyType, GeometryType, NestedField, PrimitiveType, StructType, Transform, Type,
+        Datum, GeographyType, GeometryType, NestedField, PrimitiveType, StructType, Transform,
     };
     use crate::transform::TransformFunction;
     use crate::transform::test::{TestProjectionFixture, TestTransformFixture};
