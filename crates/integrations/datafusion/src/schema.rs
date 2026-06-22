@@ -81,7 +81,7 @@ impl IcebergSchemaProvider {
         .await?;
 
         let tables = Arc::new(DashMap::new());
-        for (name, provider) in table_names.into_iter().zip(providers.into_iter()) {
+        for (name, provider) in table_names.into_iter().zip(providers) {
             tables.insert(name, Arc::new(provider));
         }
 

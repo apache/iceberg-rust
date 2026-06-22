@@ -90,7 +90,6 @@ This issue is used to track tasks of the iceberg rust ${iceberg_version} release
 
 - [ ] Bump version in project
 - [ ] Update docs
-- [ ] Generate dependencies list
 - [ ] Create and push release candidate tag
 
 #### ASF Side
@@ -124,27 +123,6 @@ This version is the final version, not the release candidate version.
 ### Update docs
 
 Update `CHANGELOG.md` by drafting a new release [note on GitHub Releases](https://github.com/apache/iceberg-rust/releases/new).
-
-### Generate dependencies list
-
-Download and set up `cargo-deny`. You can refer to [cargo-deny](https://embarkstudios.github.io/cargo-deny/cli/index.html).
-For example:
-
-```shell
-cargo install cargo-deny
-```
-
-Run the following command to update the dependencies list of every package:
-
-```shell
-dev/release/dependencies.sh generate
-```
-
-Run the following command to verify the updated dependencies' license:
-
-```shell
-dev/release/dependencies.sh check
-```
 
 ### Create release candidate tag and artifacts
 
