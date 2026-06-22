@@ -52,21 +52,29 @@ fn is_valid_avro_name(name: &str) -> bool {
     }
 }
 
-/// Sanitizes an Iceberg field name to a valid Avro field name.
+/// Sanitizes an Iceberg field name into a valid Avro field name.
 ///
-/// Matches Java `AvroSchemaUtil.sanitize()` semantics, operating on UTF-16
-/// code units (to match Java's `String.charAt()`). Characters that are not
-/// ASCII letters, ASCII digits, or underscore are escaped as `_x<HEX>` where
-/// HEX is the uppercase hexadecimal representation of the UTF-16 code unit
-/// with no leading zeros.
+/// Follows the escaping *scheme* of Java `AvroSchemaUtil.sanitize()`, but is
+/// intentionally stricter about which characters are left unescaped:
 ///
-/// Special handling for the first character:
-/// - ASCII digit: prefix with `_`, digit is preserved (e.g., `1foo` -> `_1foo`)
-/// - Non-letter, non-underscore: escaped as `_x<HEX>` (e.g., `.foo` -> `_x2Efoo`)
+/// - Java's `validAvroName`/`sanitize` keep any Unicode letter or digit
+///   (`Character.isLetter`/`isLetterOrDigit`/`isDigit`), which can emit names
+///   that violate Avro's ASCII-only grammar `[A-Za-z_][A-Za-z0-9_]*`
+///   (e.g. Java leaves `café` and `_٠x` intact).
+/// - This implementation keeps only ASCII letters, ASCII digits, and `_`, so
+///   the result is always a spec-valid Avro name. The exact original is
+///   preserved out-of-band in the `iceberg-field-name` property, so the
+///   stricter escaping stays lossless across the write/read round-trip.
 ///
-/// For supplementary characters (above U+FFFF), each surrogate half is escaped
-/// independently (e.g., U+1F600 -> `_xD83D_xDE00`), matching Java's behavior
-/// of iterating over `char` (UTF-16 code unit) values.
+/// Escaping rules (identical to Java for any character both sides escape):
+/// - A character outside the keep-set becomes `_x<HEX>`, where HEX is the
+///   uppercase hex of its UTF-16 code unit with no leading zeros.
+/// - A leading ASCII digit is prefixed with `_` instead (e.g. `1foo` -> `_1foo`).
+/// - A leading non-letter, non-underscore is escaped (e.g. `.foo` -> `_x2Efoo`).
+///
+/// Names are processed per UTF-16 code unit (matching Java's `String.charAt()`),
+/// so a supplementary character is escaped as its two surrogate halves
+/// (e.g. U+1F600 -> `_xD83D_xDE00`).
 fn sanitize_avro_name(name: &str) -> String {
     let utf16_units: Vec<u16> = name.encode_utf16().collect();
     if utf16_units.is_empty() {
