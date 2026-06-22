@@ -343,12 +343,7 @@ impl Catalog for MemoryCatalog {
     async fn purge_table(&self, table_ident: &TableIdent) -> Result<()> {
         let table_info = self.load_table(table_ident).await?;
         self.drop_table(table_ident).await?;
-        crate::catalog::utils::drop_table_data(
-            table_info.file_io(),
-            table_info.metadata(),
-            table_info.metadata_location(),
-        )
-        .await
+        crate::catalog::utils::drop_table_data(&table_info).await
     }
 
     /// Check if a table exists in the catalog.
