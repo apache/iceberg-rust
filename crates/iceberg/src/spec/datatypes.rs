@@ -21,12 +21,10 @@
 use std::collections::HashMap;
 use std::convert::identity;
 use std::fmt;
-use std::hash::{Hash, Hasher};
 use std::ops::Index;
 use std::sync::{Arc, OnceLock};
 
 use ::serde::de::{MapAccess, Visitor};
-use parquet_geospatial::WkbEdges;
 use serde::de::{Error, IntoDeserializer};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value as JsonValue;
@@ -227,32 +225,42 @@ impl GeometryType {
     }
 }
 
+/// Iceberg geography edge interpolation algorithm.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum EdgeInterpolationAlgorithm {
+    /// Spherical edge interpolation.
+    #[default]
+    Spherical,
+    /// Vincenty edge interpolation.
+    Vincenty,
+    /// Thomas edge interpolation.
+    Thomas,
+    /// Andoyer edge interpolation.
+    Andoyer,
+    /// Karney edge interpolation.
+    Karney,
+}
+
 /// Iceberg geography type.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Hash)]
 pub struct GeographyType {
     crs: Option<String>,
-    algorithm: WkbEdges,
+    algorithm: EdgeInterpolationAlgorithm,
 }
 
 impl Default for GeographyType {
     fn default() -> Self {
         Self {
             crs: None,
-            algorithm: WkbEdges::Spherical,
+            algorithm: EdgeInterpolationAlgorithm::Spherical,
         }
-    }
-}
-
-impl Hash for GeographyType {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.crs.hash(state);
-        wkb_edges_as_str(self.algorithm).hash(state);
     }
 }
 
 impl GeographyType {
     /// Creates a geography type with an optional coordinate reference system and edge interpolation algorithm.
-    pub fn new(crs: Option<String>, algorithm: WkbEdges) -> Result<Self> {
+    pub fn new(crs: Option<String>, algorithm: EdgeInterpolationAlgorithm) -> Result<Self> {
         Ok(Self {
             crs: normalize_crs(crs)?,
             algorithm,
@@ -265,7 +273,7 @@ impl GeographyType {
     }
 
     /// Returns the edge interpolation algorithm.
-    pub fn algorithm(&self) -> WkbEdges {
+    pub fn algorithm(&self) -> EdgeInterpolationAlgorithm {
         self.algorithm
     }
 }
@@ -284,23 +292,25 @@ fn normalize_crs(crs: Option<String>) -> Result<Option<String>> {
     Ok((crs != DEFAULT_GEOSPATIAL_CRS).then_some(crs))
 }
 
-fn wkb_edges_as_str(edges: WkbEdges) -> &'static str {
-    match edges {
-        WkbEdges::Spherical => "spherical",
-        WkbEdges::Vincenty => "vincenty",
-        WkbEdges::Thomas => "thomas",
-        WkbEdges::Andoyer => "andoyer",
-        WkbEdges::Karney => "karney",
+fn edge_interpolation_algorithm_as_str(algorithm: EdgeInterpolationAlgorithm) -> &'static str {
+    match algorithm {
+        EdgeInterpolationAlgorithm::Spherical => "spherical",
+        EdgeInterpolationAlgorithm::Vincenty => "vincenty",
+        EdgeInterpolationAlgorithm::Thomas => "thomas",
+        EdgeInterpolationAlgorithm::Andoyer => "andoyer",
+        EdgeInterpolationAlgorithm::Karney => "karney",
     }
 }
 
-fn parse_wkb_edges(value: &str) -> std::result::Result<WkbEdges, String> {
+fn parse_edge_interpolation_algorithm(
+    value: &str,
+) -> std::result::Result<EdgeInterpolationAlgorithm, String> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "spherical" => Ok(WkbEdges::Spherical),
-        "vincenty" => Ok(WkbEdges::Vincenty),
-        "thomas" => Ok(WkbEdges::Thomas),
-        "andoyer" => Ok(WkbEdges::Andoyer),
-        "karney" => Ok(WkbEdges::Karney),
+        "spherical" => Ok(EdgeInterpolationAlgorithm::Spherical),
+        "vincenty" => Ok(EdgeInterpolationAlgorithm::Vincenty),
+        "thomas" => Ok(EdgeInterpolationAlgorithm::Thomas),
+        "andoyer" => Ok(EdgeInterpolationAlgorithm::Andoyer),
+        "karney" => Ok(EdgeInterpolationAlgorithm::Karney),
         _ => Err(format!(
             "Unknown geography edge interpolation algorithm: {value}"
         )),
@@ -344,14 +354,16 @@ fn parse_geography(value: &str) -> std::result::Result<PrimitiveType, String> {
     let params = parse_geospatial_params(value.trim(), "geography")?;
     let geography = match params.as_slice() {
         [] => GeographyType::default(),
-        [crs] if !crs.is_empty() => {
-            GeographyType::new(Some((*crs).to_string()), WkbEdges::Spherical)
-                .map_err(|err| err.to_string())?
-        }
-        [crs, algorithm] if !crs.is_empty() && !algorithm.is_empty() => {
-            GeographyType::new(Some((*crs).to_string()), parse_wkb_edges(algorithm)?)
-                .map_err(|err| err.to_string())?
-        }
+        [crs] if !crs.is_empty() => GeographyType::new(
+            Some((*crs).to_string()),
+            EdgeInterpolationAlgorithm::Spherical,
+        )
+        .map_err(|err| err.to_string())?,
+        [crs, algorithm] if !crs.is_empty() && !algorithm.is_empty() => GeographyType::new(
+            Some((*crs).to_string()),
+            parse_edge_interpolation_algorithm(algorithm)?,
+        )
+        .map_err(|err| err.to_string())?,
         _ => return Err(format!("Invalid geography type: {value}")),
     };
 
@@ -556,13 +568,15 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Geography(geography) => {
                 let algorithm = geography.algorithm();
                 match (geography.crs(), algorithm) {
-                    (None, WkbEdges::Spherical) => write!(f, "geography"),
-                    (Some(crs), WkbEdges::Spherical) => write!(f, "geography({crs})"),
+                    (None, EdgeInterpolationAlgorithm::Spherical) => write!(f, "geography"),
+                    (Some(crs), EdgeInterpolationAlgorithm::Spherical) => {
+                        write!(f, "geography({crs})")
+                    }
                     (crs, algorithm) => write!(
                         f,
                         "geography({}, {})",
                         crs.unwrap_or(DEFAULT_GEOSPATIAL_CRS),
-                        wkb_edges_as_str(algorithm)
+                        edge_interpolation_algorithm_as_str(algorithm)
                     ),
                 }
             }
@@ -1176,14 +1190,22 @@ mod tests {
             (
                 r#""geography(srid:4326)""#,
                 PrimitiveType::Geography(
-                    GeographyType::new(Some("srid:4326".to_string()), WkbEdges::Spherical).unwrap(),
+                    GeographyType::new(
+                        Some("srid:4326".to_string()),
+                        EdgeInterpolationAlgorithm::Spherical,
+                    )
+                    .unwrap(),
                 ),
                 "geography(srid:4326)",
             ),
             (
                 r#""geography(srid:4326,karney)""#,
                 PrimitiveType::Geography(
-                    GeographyType::new(Some("srid:4326".to_string()), WkbEdges::Karney).unwrap(),
+                    GeographyType::new(
+                        Some("srid:4326".to_string()),
+                        EdgeInterpolationAlgorithm::Karney,
+                    )
+                    .unwrap(),
                 ),
                 "geography(srid:4326, karney)",
             ),

@@ -628,7 +628,6 @@ mod tests {
     use parquet::basic::{EdgeInterpolationAlgorithm, LogicalType};
     use parquet::data_type::ByteArray;
     use parquet::file::statistics::ValueStatistics;
-    use parquet_geospatial::WkbEdges;
     use parquet_geospatial::testing::wkb_point_xy;
     use tempfile::TempDir;
     use uuid::Uuid;
@@ -637,7 +636,10 @@ mod tests {
     use crate::arrow::schema_to_arrow_schema;
     use crate::io::FileIO;
     use crate::spec::decimal_utils::{decimal_mantissa, decimal_new, decimal_scale};
-    use crate::spec::{PrimitiveLiteral, Struct, *};
+    use crate::spec::{
+        EdgeInterpolationAlgorithm as IcebergEdgeInterpolationAlgorithm, PrimitiveLiteral, Struct,
+        *,
+    };
     use crate::writer::file_writer::location_generator::{
         DefaultFileNameGenerator, DefaultLocationGenerator, FileNameGenerator, LocationGenerator,
     };
@@ -2277,7 +2279,8 @@ mod tests {
                         1,
                         "geog",
                         Type::Primitive(PrimitiveType::Geography(
-                            GeographyType::new(None, WkbEdges::Karney).unwrap(),
+                            GeographyType::new(None, IcebergEdgeInterpolationAlgorithm::Karney)
+                                .unwrap(),
                         )),
                     )
                     .into(),
