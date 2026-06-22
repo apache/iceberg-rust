@@ -48,7 +48,6 @@ pub(crate) struct ManifestFileContext {
     delete_file_index: DeleteFileIndex,
     name_mapping: Option<Arc<NameMapping>>,
     case_sensitive: bool,
-    table_metadata: TableMetadataRef,
     unified_partition_type: Option<Arc<StructType>>,
 }
 
@@ -65,7 +64,6 @@ pub(crate) struct ManifestEntryContext {
     pub delete_file_index: DeleteFileIndex,
     pub name_mapping: Option<Arc<NameMapping>>,
     pub case_sensitive: bool,
-    pub table_metadata: TableMetadataRef,
     pub unified_partition_type: Option<Arc<StructType>>,
 }
 
@@ -83,9 +81,8 @@ impl ManifestFileContext {
             expression_evaluator_cache,
             delete_file_index,
             name_mapping,
-            table_metadata,
+            case_sensitive,
             unified_partition_type,
-            ..
         } = self;
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
@@ -102,7 +99,6 @@ impl ManifestFileContext {
                 delete_file_index: delete_file_index.clone(),
                 name_mapping: name_mapping.clone(),
                 case_sensitive,
-                table_metadata: table_metadata.clone(),
                 unified_partition_type: unified_partition_type.clone(),
             };
 
