@@ -96,6 +96,8 @@ impl ArrowReader {
     /// metadata (common with older files written before page indexes became
     /// standard). In that case page-level pruning is simply skipped; row-group
     /// filtering and the Arrow row filter still apply the predicate.
+    ///
+    /// `Ok(Some(empty))` case means that all rows were filtered by the predicate - returning zero rows
     pub(super) fn get_row_selection_for_filter_predicate(
         predicate: &BoundPredicate,
         parquet_metadata: &Arc<ParquetMetaData>,
@@ -104,14 +106,17 @@ impl ArrowReader {
         snapshot_schema: &Schema,
     ) -> Result<Option<RowSelection>> {
         let Some(column_index) = parquet_metadata.column_index() else {
+            tracing::debug!("ColumnIndex was absent while reading this file");
             return Ok(None);
         };
 
         let Some(offset_index) = parquet_metadata.offset_index() else {
+            tracing::debug!("OffsetIndex was absent while reading this file");
             return Ok(None);
         };
 
         // If all row groups were filtered out, return an empty RowSelection (select no rows)
+        //
         if let Some(selected_row_groups) = selected_row_groups
             && selected_row_groups.is_empty()
         {
@@ -203,12 +208,15 @@ mod tests {
     use futures::TryStreamExt;
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
+    use parquet::file::metadata::{FileMetaData, ParquetMetaData, ParquetMetaDataBuilder};
     use parquet::file::properties::WriterProperties;
+    use parquet::schema::parser::parse_message_type;
+    use parquet::schema::types::SchemaDescriptor;
     use tempfile::TempDir;
 
     use crate::Runtime;
     use crate::arrow::{ArrowReader, ArrowReaderBuilder};
-    use crate::expr::{Bind, Predicate, Reference};
+    use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskStream};
     use crate::spec::{DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
@@ -618,5 +626,218 @@ mod tests {
 
             assert_eq!(first_val, 100, "Task 2 should start with id=100, not id=0");
         }
+    }
+
+    fn int_schema() -> SchemaRef {
+        Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![Arc::new(NestedField::required(
+                    1,
+                    "x",
+                    Type::Primitive(PrimitiveType::Int),
+                ))])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    fn simple_predicate(schema: SchemaRef) -> BoundPredicate {
+        Reference::new("x")
+            .greater_than(crate::spec::Datum::int(0))
+            .bind(schema.clone(), false)
+            .unwrap()
+    }
+
+    fn field_id_map() -> HashMap<i32, usize> {
+        let mut m = HashMap::new();
+        m.insert(1_i32, 0_usize);
+        m
+    }
+
+    fn metadata_no_page_indexes() -> Arc<ParquetMetaData> {
+        let msg_type = parse_message_type("message schema { REQUIRED INT32 x; }").unwrap();
+        let schema_desc = Arc::new(SchemaDescriptor::new(Arc::new(msg_type)));
+        let file_meta = FileMetaData::new(2, 0, None, None, schema_desc.clone(), None);
+        Arc::new(ParquetMetaDataBuilder::new(file_meta).build())
+    }
+
+    fn metadata_column_index_only() -> Arc<ParquetMetaData> {
+        let msg_type = parse_message_type("message schema { REQUIRED INT32 x; }").unwrap();
+        let schema_desc = Arc::new(SchemaDescriptor::new(Arc::new(msg_type)));
+        let file_meta = FileMetaData::new(2, 0, None, None, schema_desc, None);
+        Arc::new(
+            ParquetMetaDataBuilder::new(file_meta)
+                .set_column_index(Some(vec![]))
+                .build(),
+        )
+    }
+
+    fn metadata_with_both_indexes() -> Arc<ParquetMetaData> {
+        let msg_type = parse_message_type("message schema { REQUIRED INT32 x; }").unwrap();
+        let schema_desc = Arc::new(SchemaDescriptor::new(Arc::new(msg_type)));
+        let file_meta = FileMetaData::new(2, 0, None, None, schema_desc, None);
+        Arc::new(
+            ParquetMetaDataBuilder::new(file_meta)
+                .set_column_index(Some(vec![]))
+                .set_offset_index(Some(vec![]))
+                .build(),
+        )
+    }
+
+    /// Testing suite regarding: https://github.com/apache/iceberg-rust/issues/2452
+    /// Testing when: both indices are absent, some present, both present
+    #[test]
+    fn test_absent_column_index_returns_ok_none() {
+        let schema = int_schema();
+        let predicate = simple_predicate(schema.clone());
+        let metadata = metadata_no_page_indexes();
+        let field_id_map = field_id_map();
+
+        let result = ArrowReader::get_row_selection_for_filter_predicate(
+            &predicate,
+            &metadata,
+            &None,
+            &field_id_map,
+            schema.clone().as_ref(),
+        );
+
+        assert!(
+            result.is_ok(),
+            "expected Ok(_), got Err: {:?}",
+            result.unwrap_err()
+        );
+        assert!(
+            result.unwrap().is_none(),
+            "expected Ok(None) when column index is absent"
+        );
+    }
+
+    #[test]
+    fn test_absent_offset_index_returns_ok_none() {
+        let schema = int_schema();
+        let predicate = simple_predicate(schema.clone());
+        let metadata = metadata_column_index_only();
+        let field_id_map = field_id_map();
+
+        let result = ArrowReader::get_row_selection_for_filter_predicate(
+            &predicate,
+            &metadata,
+            &None,
+            &field_id_map,
+            schema.clone().as_ref(),
+        );
+
+        assert!(
+            result.is_ok(),
+            "expected Ok(_), got Err: {:?}",
+            result.unwrap_err()
+        );
+        assert!(
+            result.unwrap().is_none(),
+            "expected Ok(None) when offset index is absent"
+        );
+    }
+
+    #[test]
+    fn test_absent_column_index_with_selected_row_groups_returns_ok_none() {
+        let schema = int_schema();
+        let predicate = simple_predicate(schema.clone());
+        let metadata = metadata_no_page_indexes();
+        let field_id_map = field_id_map();
+        let selected = Some(vec![0usize, 1]);
+
+        let result = ArrowReader::get_row_selection_for_filter_predicate(
+            &predicate,
+            &metadata,
+            &selected,
+            &field_id_map,
+            schema.clone().as_ref(),
+        );
+
+        assert!(result.is_ok());
+        assert!(
+            result.unwrap().is_none(),
+            "absent column index must short-circuit before selected_row_groups is inspected"
+        );
+    }
+
+    #[test]
+    fn test_absent_offset_index_with_selected_row_groups_returns_ok_none() {
+        let schema = int_schema();
+        let predicate = simple_predicate(schema.clone());
+        let metadata = metadata_column_index_only();
+        let field_id_map = field_id_map();
+        let selected = Some(vec![0usize]);
+
+        let result = ArrowReader::get_row_selection_for_filter_predicate(
+            &predicate,
+            &metadata,
+            &selected,
+            &field_id_map,
+            schema.clone().as_ref(),
+        );
+
+        assert!(result.is_ok());
+        assert!(
+            result.unwrap().is_none(),
+            "absent offset index must short-circuit before selected_row_groups is inspected"
+        );
+    }
+
+    #[test]
+    fn test_absent_column_index_with_empty_selected_row_groups_returns_ok_none() {
+        let schema = int_schema();
+        let predicate = simple_predicate(schema.clone());
+        let metadata = metadata_no_page_indexes();
+        let field_id_map = field_id_map();
+        let selected: Option<Vec<usize>> = Some(vec![]);
+
+        let result = ArrowReader::get_row_selection_for_filter_predicate(
+            &predicate,
+            &metadata,
+            &selected,
+            &field_id_map,
+            schema.clone().as_ref(),
+        );
+
+        assert!(result.is_ok());
+        assert!(
+            result.unwrap().is_none(),
+            "column index check must fire before the empty-selected-row-groups branch"
+        );
+    }
+
+    #[test]
+    fn test_both_indexes_present_empty_selected_row_groups_returns_ok_some_empty() {
+        let schema = int_schema();
+        let predicate = simple_predicate(schema.clone());
+        let metadata = metadata_with_both_indexes();
+        let field_id_map = field_id_map();
+        let selected: Option<Vec<usize>> = Some(vec![]);
+
+        let result = ArrowReader::get_row_selection_for_filter_predicate(
+            &predicate,
+            &metadata,
+            &selected,
+            &field_id_map,
+            schema.as_ref(),
+        );
+
+        assert!(
+            result.is_ok(),
+            "expected Ok(_), got Err: {:?}",
+            result.unwrap_err()
+        );
+
+        let row_selection = result.unwrap().expect(
+            "expected Ok(Some(_)) when both indexes are present and all row groups are filtered",
+        );
+
+        assert_eq!(
+            row_selection.row_count(),
+            0,
+            "RowSelection must be empty (zero rows selected) when selected_row_groups is empty"
+        );
     }
 }
