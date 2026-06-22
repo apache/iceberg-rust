@@ -26,9 +26,7 @@ use std::sync::Arc;
 
 use once_cell::sync::Lazy;
 
-use crate::spec::{
-    NestedField, NestedFieldRef, PartitionSpec, PrimitiveType, Schema, StructType, Type,
-};
+use crate::spec::{NestedField, NestedFieldRef, PrimitiveType, Type};
 use crate::{Error, ErrorKind, Result};
 
 /// Reserved field ID for the file path (_file) column per Iceberg spec
@@ -379,52 +377,6 @@ pub fn partition_field(partition_fields: Vec<NestedFieldRef>) -> NestedFieldRef 
         )
         .with_doc("Partition to which a row belongs"),
     )
-}
-
-/// Computes the unified partition type across all partition specs in the table.
-///
-/// This is equivalent to Java's `Partitioning.partitionType(table)`. The result is a
-/// StructType containing all partition fields ever used across all specs, enabling correct
-/// representation of the `_partition` metadata column when partition evolution has occurred.
-///
-/// For each spec, the partition fields are derived from the transform applied to the source
-/// column. Fields are deduplicated by field_id - each unique field_id appears exactly once
-/// in the result.
-///
-/// # Arguments
-/// * `partition_specs` - Iterator over all partition specs in the table
-/// * `schema` - The current table schema (needed to determine result types of transforms)
-pub fn compute_unified_partition_type<'a>(
-    partition_specs: impl Iterator<Item = &'a PartitionSpec>,
-    schema: &Schema,
-) -> Result<StructType> {
-    let mut seen_field_ids = std::collections::HashSet::new();
-    let mut struct_fields: Vec<NestedFieldRef> = Vec::new();
-
-    for spec in partition_specs {
-        for field in spec.fields() {
-            if seen_field_ids.contains(&field.field_id) {
-                continue;
-            }
-            seen_field_ids.insert(field.field_id);
-
-            let source_field = schema.field_by_id(field.source_id).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    format!(
-                        "No column with source column id {} in schema for partition field {}",
-                        field.source_id, field.name
-                    ),
-                )
-            })?;
-
-            let res_type = field.transform.result_type(&source_field.field_type)?;
-            let nested = NestedField::optional(field.field_id, &field.name, res_type).into();
-            struct_fields.push(nested);
-        }
-    }
-
-    Ok(StructType::new(struct_fields))
 }
 
 /// Returns the Iceberg field definition for a metadata field ID.

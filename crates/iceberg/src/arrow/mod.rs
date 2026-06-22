@@ -32,7 +32,7 @@ mod reader;
 /// RecordBatch projection utilities
 pub mod record_batch_projector;
 pub(crate) mod record_batch_transformer;
-pub use record_batch_transformer::{PartitionColumnConstant, build_partition_column_constant};
+pub(crate) use record_batch_transformer::build_partition_column_constant;
 mod scan_metrics;
 mod value;
 
