@@ -212,6 +212,7 @@ litemap@0.8.1												X
 lock_api@0.4.14		X								X					
 log@0.4.29		X								X					
 lz4_flex@0.13.0										X					
+md-5@0.10.6		X								X					
 memchr@2.8.0										X			X		
 miniz_oxide@0.8.9		X								X				X	
 mio@1.2.0										X					
