@@ -45,8 +45,6 @@ atomic-waker@1.1.2		X								X
 autocfg@1.5.0		X								X						
 aws-config@1.8.15		X														
 aws-credential-types@1.2.14		X														
-aws-lc-rs@1.16.2		X						X								
-aws-lc-sys@0.39.0		X			X			X		X	X					
 aws-runtime@1.7.2		X														
 aws-sdk-sso@1.97.0		X														
 aws-sdk-ssooidc@1.99.0		X														
@@ -96,7 +94,6 @@ clap_builder@4.6.0		X								X
 clap_derive@4.6.0		X								X						
 clap_lex@1.1.0		X								X						
 clipboard-win@5.4.1						X										
-cmake@0.1.57		X								X						
 colorchoice@1.0.5		X								X						
 comfy-table@7.2.2										X						
 compression-codecs@0.4.37		X								X						
@@ -167,7 +164,6 @@ dirs@6.0.0		X								X
 dirs-sys@0.5.0		X								X						
 displaydoc@0.2.5		X								X						
 dissimilar@1.0.11		X														
-dunce@1.0.5		X					X				X					
 either@1.15.0		X								X						
 endian-type@0.1.2										X						
 env_filter@1.0.0		X								X						
@@ -191,7 +187,6 @@ foldhash@0.1.5															X
 foldhash@0.2.0															X	
 form_urlencoded@1.2.2		X								X						
 fs-err@3.3.0		X								X						
-fs_extra@1.3.0										X						
 futures@0.3.32		X								X						
 futures-channel@0.3.32		X								X						
 futures-core@0.3.32		X								X						
@@ -231,11 +226,11 @@ hyper-rustls@0.27.7		X						X		X
 hyper-util@0.1.20										X						
 iana-time-zone@0.1.65		X								X						
 iana-time-zone-haiku@0.1.2		X								X						
-iceberg@0.9.0		X														
-iceberg-catalog-rest@0.9.0		X														
-iceberg-datafusion@0.9.0		X														
-iceberg-playground@0.9.0		X														
-iceberg_test_utils@0.9.0		X														
+iceberg@0.10.0		X														
+iceberg-catalog-rest@0.10.0		X														
+iceberg-datafusion@0.10.0		X														
+iceberg-playground@0.10.0		X														
+iceberg_test_utils@0.10.0		X														
 icu_collections@2.1.1													X			
 icu_locale_core@2.1.1													X			
 icu_normalizer@2.1.1													X			
@@ -278,7 +273,6 @@ litemap@0.8.1													X
 lock_api@0.4.14		X								X						
 log@0.4.29		X								X						
 lz4_flex@0.13.0										X						
-md-5@0.10.6		X								X						
 memchr@2.8.0										X				X		
 mimalloc@0.1.48										X						
 miniz_oxide@0.8.9		X								X					X	
