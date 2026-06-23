@@ -1648,6 +1648,48 @@ mod tests {
     }
 
     #[test]
+    fn test_add_spec_emits_spec_id_key() {
+        // Regression guard: a Java REST server's `PartitionSpecParser.fromJson`
+        // throws `IllegalArgumentException: Cannot parse missing int: spec-id`
+        // when the `spec-id` key is missing on the wire. The inner
+        // `UnboundPartitionSpec` therefore must always emit the `spec-id`
+        // key on `TableUpdate::AddSpec`, even before `add_partition_spec`
+        // has populated it. Re-introducing
+        // `#[serde(skip_serializing_if = "Option::is_none")]` on
+        // `UnboundPartitionSpec::spec_id` would silently break this.
+        let update = TableUpdate::AddSpec {
+            spec: UnboundPartitionSpec::builder()
+                .add_partition_field(4, "ts_day".to_string(), Transform::Day)
+                .unwrap()
+                .build(),
+        };
+
+        let value = serde_json::to_value(&update).unwrap();
+        let spec = value
+            .get("spec")
+            .and_then(|s| s.as_object())
+            .expect("AddSpec must serialize `spec` as a JSON object");
+        assert!(
+            spec.contains_key("spec-id"),
+            "AddSpec must emit `spec-id` on the wire even when None; got {value}",
+        );
+
+        // And when set, the key holds the value.
+        let update = TableUpdate::AddSpec {
+            spec: UnboundPartitionSpec::builder()
+                .with_spec_id(7)
+                .add_partition_field(4, "ts_day".to_string(), Transform::Day)
+                .unwrap()
+                .build(),
+        };
+        let value = serde_json::to_value(&update).unwrap();
+        assert_eq!(
+            Some(&serde_json::json!(7)),
+            value.get("spec").and_then(|s| s.get("spec-id"))
+        );
+    }
+
+    #[test]
     fn test_set_default_spec() {
         test_serde_json(
             r#"

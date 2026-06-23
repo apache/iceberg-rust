@@ -246,7 +246,6 @@ pub struct UnboundPartitionField {
     /// A partition field id that is used to identify a partition field and is unique within a partition spec.
     /// In v2 table metadata, it is unique across all partition specs.
     #[builder(default, setter(strip_option(fallback = field_id_opt)))]
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub field_id: Option<i32>,
     /// A partition name.
     pub name: String,
@@ -261,7 +260,6 @@ pub struct UnboundPartitionField {
 #[serde(rename_all = "kebab-case")]
 pub struct UnboundPartitionSpec {
     /// Identifier for PartitionSpec
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) spec_id: Option<i32>,
     /// Details of the partition spec
     pub(crate) fields: Vec<UnboundPartitionField>,
@@ -915,7 +913,14 @@ mod tests {
     }
 
     #[test]
-    fn test_unbound_partition_spec_serialization_skips_none_fields() {
+    fn test_unbound_partition_spec_serialization_emits_none_as_null() {
+        // The core `UnboundPartitionSpec` / `UnboundPartitionField` types must
+        // always emit `spec-id` and `field-id` keys on the wire, even when
+        // they are `None`. `TableUpdate::AddSpec` relies on this contract:
+        // a Java REST server's `PartitionSpecParser.fromJson` requires
+        // `spec-id` to be present on the JSON object. Per-request types that
+        // need the keys omitted (e.g. REST `CreateTableRequest`) localize
+        // that behavior via a custom serializer.
         let spec = UnboundPartitionSpec::builder()
             .add_partition_field(4, "ts_day".to_string(), Transform::Day)
             .unwrap()
@@ -923,16 +928,15 @@ mod tests {
 
         let value = serde_json::to_value(&spec).unwrap();
         let object = value.as_object().unwrap();
-        assert!(!object.contains_key("spec-id"));
+        assert_eq!(Some(&serde_json::Value::Null), object.get("spec-id"));
         let field = object["fields"][0].as_object().unwrap();
-        assert!(!field.contains_key("field-id"));
+        assert_eq!(Some(&serde_json::Value::Null), field.get("field-id"));
 
         let value = serde_json::to_value(spec.with_spec_id(1)).unwrap();
         let object = value.as_object().unwrap();
         assert_eq!(Some(&serde_json::json!(1)), object.get("spec-id"));
 
-        // Explicit nulls must still deserialize to `None` for backwards
-        // compatibility.
+        // Explicit nulls must still deserialize to `None`.
         let spec: UnboundPartitionSpec = serde_json::from_str(
             r#"{
                 "spec-id": null,
@@ -944,6 +948,28 @@ mod tests {
         .unwrap();
         assert_eq!(None, spec.spec_id);
         assert_eq!(None, spec.fields[0].field_id);
+    }
+
+    #[test]
+    fn test_unbound_partition_field_field_id_set_is_serialized() {
+        // Positive case for the `field-id` round-trip: when `field_id` is
+        // `Some`, the value must appear under the kebab-case `field-id` key.
+        // Mirrors viirya's review ask on #2610.
+        let field = UnboundPartitionField::builder()
+            .source_id(4)
+            .field_id(1000)
+            .name("ts_day".to_string())
+            .transform(Transform::Day)
+            .build();
+
+        let value = serde_json::to_value(&field).unwrap();
+        let object = value.as_object().unwrap();
+        assert_eq!(Some(&serde_json::json!(1000)), object.get("field-id"));
+
+        // Round-trip back to confirm the key is the canonical kebab-case
+        // form and not `field_id`.
+        let parsed: UnboundPartitionField = serde_json::from_value(value).unwrap();
+        assert_eq!(Some(1000), parsed.field_id);
     }
 
     #[test]
