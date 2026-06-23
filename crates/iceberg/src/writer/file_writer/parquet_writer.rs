@@ -36,6 +36,7 @@ use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
     get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum,
 };
+use crate::encryption::EncryptedOutputFile;
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
@@ -45,6 +46,47 @@ use crate::spec::{
 use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
 use crate::{Error, ErrorKind, Result};
+
+/// Output destination for a [`ParquetWriter`].
+///
+/// Wraps either a plain or an AES-GCM-encrypted output
+enum OutputTarget {
+    Plain(OutputFile),
+    Encrypted(EncryptedOutputFile),
+}
+
+impl OutputTarget {
+    async fn writer(&self) -> Result<Box<dyn FileWrite>> {
+        match self {
+            Self::Plain(o) => o.writer().await,
+            Self::Encrypted(e) => e.writer().await,
+        }
+    }
+
+    async fn delete(&self) -> Result<()> {
+        match self {
+            Self::Plain(o) => o.delete().await,
+            Self::Encrypted(e) => e.delete().await,
+        }
+    }
+
+    fn location(&self) -> &str {
+        match self {
+            Self::Plain(o) => o.location(),
+            Self::Encrypted(e) => e.location(),
+        }
+    }
+
+    /// Returns the encoded `StandardKeyMetadata` bytes for the encrypted
+    /// variant — these are what gets stored on `DataFile.key_metadata` so
+    /// readers can reconstruct the key. Plain variant returns `None`.
+    fn encoded_key_metadata(&self) -> Result<Option<Vec<u8>>> {
+        match self {
+            Self::Plain(_) => Ok(None),
+            Self::Encrypted(e) => Ok(Some(e.key_metadata().encode()?.into_vec())),
+        }
+    }
+}
 
 /// ParquetWriterBuilder is used to builder a [`ParquetWriter`]
 #[derive(Clone, Debug)]
@@ -79,14 +121,35 @@ impl FileWriterBuilder for ParquetWriterBuilder {
     type R = ParquetWriter;
 
     async fn build(&self, output_file: OutputFile) -> Result<Self::R> {
-        Ok(ParquetWriter {
+        Ok(self.build_with_target(OutputTarget::Plain(output_file)))
+    }
+}
+
+impl ParquetWriterBuilder {
+    /// Like [`Self::build`], but writes an AES-GCM-encrypted parquet file.
+    ///
+    /// The returned writer wraps `encrypted_output` so each parquet block is
+    /// encrypted as it streams to disk. On close, the resulting
+    /// [`DataFile::key_metadata`] is populated with the encoded
+    /// `StandardKeyMetadata` from the wrapper so readers can decrypt the file.
+    ///
+    /// [`DataFile::key_metadata`]: crate::spec::DataFile::key_metadata
+    pub async fn build_from_encrypted(
+        &self,
+        encrypted_output: EncryptedOutputFile,
+    ) -> Result<ParquetWriter> {
+        Ok(self.build_with_target(OutputTarget::Encrypted(encrypted_output)))
+    }
+
+    fn build_with_target(&self, output_target: OutputTarget) -> ParquetWriter {
+        ParquetWriter {
             schema: self.schema.clone(),
             inner_writer: None,
             writer_properties: self.props.clone(),
             current_row_num: 0,
-            output_file,
+            output_target,
             nan_value_count_visitor: NanValueCountVisitor::new_with_match_mode(self.match_mode),
-        })
+        }
     }
 }
 
@@ -211,7 +274,7 @@ impl SchemaVisitor for IndexByParquetPathName {
 /// `ParquetWriter`` is used to write arrow data into parquet file on storage.
 pub struct ParquetWriter {
     schema: SchemaRef,
-    output_file: OutputFile,
+    output_target: OutputTarget,
     inner_writer: Option<AsyncArrowWriter<AsyncFileWriter>>,
     writer_properties: WriterProperties,
     current_row_num: usize,
@@ -337,6 +400,9 @@ impl ParquetWriter {
                 file_path,
                 // TODO: Implement nan_value_counts here
                 HashMap::new(),
+                // This helper consumes already-written parquet files; encryption
+                // metadata isn't surfaced here, so always plain for now.
+                None,
             )?;
             builder.partition_spec_id(table_metadata.default_partition_spec_id());
             let data_file = builder.build().unwrap();
@@ -353,6 +419,7 @@ impl ParquetWriter {
         written_size: usize,
         file_path: String,
         nan_value_counts: HashMap<i32, u64>,
+        key_metadata: Option<Vec<u8>>,
     ) -> Result<DataFileBuilder> {
         let index_by_parquet_path = {
             let mut visitor = IndexByParquetPathName::new();
@@ -412,6 +479,7 @@ impl ParquetWriter {
             // - We can ignore implementing distinct_counts due to this: https://lists.apache.org/thread/j52tsojv0x4bopxyzsp7m7bqt23n5fnd
             .lower_bounds(lower_bounds)
             .upper_bounds(upper_bounds)
+            .key_metadata(key_metadata)
             .split_offsets(Some(
                 metadata
                     .row_groups()
@@ -490,7 +558,7 @@ impl FileWriter for ParquetWriter {
             writer
         } else {
             let arrow_schema: ArrowSchemaRef = Arc::new(self.schema.as_ref().try_into()?);
-            let inner_writer = self.output_file.writer().await?;
+            let inner_writer = self.output_target.writer().await?;
             let async_writer = AsyncFileWriter::new(inner_writer);
             let writer = AsyncArrowWriter::try_new(
                 async_writer,
@@ -529,7 +597,7 @@ impl FileWriter for ParquetWriter {
         let written_size = writer.bytes_written();
 
         if self.current_row_num == 0 {
-            self.output_file.delete().await.map_err(|err| {
+            self.output_target.delete().await.map_err(|err| {
                 Error::new(
                     ErrorKind::Unexpected,
                     "Failed to delete empty parquet file.",
@@ -540,12 +608,14 @@ impl FileWriter for ParquetWriter {
         } else {
             let parquet_metadata = Arc::new(metadata);
 
+            let key_metadata = self.output_target.encoded_key_metadata()?;
             Ok(vec![Self::parquet_to_data_file_builder(
                 self.schema,
                 parquet_metadata,
                 written_size,
-                self.output_file.location().to_string(),
+                self.output_target.location().to_string(),
                 self.nan_value_count_visitor.nan_value_counts,
+                key_metadata,
             )?])
         }
     }
@@ -553,7 +623,7 @@ impl FileWriter for ParquetWriter {
 
 impl CurrentFileStatus for ParquetWriter {
     fn current_file_path(&self) -> String {
-        self.output_file.location().to_string()
+        self.output_target.location().to_string()
     }
 
     fn current_row_num(&self) -> usize {
@@ -627,6 +697,8 @@ mod tests {
 
     use super::*;
     use crate::arrow::schema_to_arrow_schema;
+    use crate::encryption::kms::{KeyManagementClient, MemoryKeyManagementClient};
+    use crate::encryption::{EncryptedInputFile, EncryptionManager};
     use crate::io::FileIO;
     use crate::spec::decimal_utils::{decimal_mantissa, decimal_new, decimal_scale};
     use crate::spec::{PrimitiveLiteral, Struct, *};
