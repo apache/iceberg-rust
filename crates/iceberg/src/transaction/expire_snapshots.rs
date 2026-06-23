@@ -322,22 +322,22 @@ impl TransactionAction for ExpireSnapshotsAction {
             .map(|ref_name| TableUpdate::RemoveSnapshotRef { ref_name })
             .collect();
 
-        // Drop the statistics metadata tied to each expired snapshot, mirroring Java
-        // `RemoveSnapshots.removeSnapshots`. This only rewrites metadata; the puffin files those
-        // entries point at are deleted by the higher-level file-cleanup maintenance operation.
-        // Built before the `RemoveSnapshots` push so the ids can be read without cloning, but
-        // appended after it to keep the update order refs -> snapshots -> stats.
+        // Drop statistics metadata for expired snapshots.
+        // This only updates metadata; puffin files are cleaned up separately.
         let mut stats_updates: Vec<TableUpdate> = vec![];
         for &snapshot_id in &plan.ids_to_remove {
-            if metadata.statistics_for_snapshot(snapshot_id).is_some() {
-                stats_updates.push(TableUpdate::RemoveStatistics { snapshot_id });
-            }
-            if metadata
-                .partition_statistics_for_snapshot(snapshot_id)
-                .is_some()
-            {
-                stats_updates.push(TableUpdate::RemovePartitionStatistics { snapshot_id });
-            }
+            stats_updates.extend(
+                metadata
+                    .statistics_for_snapshot(snapshot_id)
+                    .is_some()
+                    .then_some(TableUpdate::RemoveStatistics { snapshot_id }),
+            );
+            stats_updates.extend(
+                metadata
+                    .partition_statistics_for_snapshot(snapshot_id)
+                    .is_some()
+                    .then_some(TableUpdate::RemovePartitionStatistics { snapshot_id }),
+            );
         }
 
         if !plan.ids_to_remove.is_empty() {
