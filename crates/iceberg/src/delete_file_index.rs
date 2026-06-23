@@ -86,17 +86,21 @@ impl DeleteFileIndex {
         data_file: &DataFile,
         seq_num: Option<i64>,
     ) -> Vec<FileScanTaskDeleteFile> {
-        let notifier = {
+        // Create the `Notified` while holding the read lock. `notify_waiters()` stores no
+        // permit and only wakes futures created before it; the populator can't signal until
+        // it takes the write lock (blocked by this read lock), so the notification is
+        // guaranteed to land after creation. `notified_owned` lets it outlive the guard.
+        let notified = {
             let guard = self.state.read().unwrap();
-            match *guard {
-                DeleteFileIndexState::Populating(ref notifier) => notifier.clone(),
-                DeleteFileIndexState::Populated(ref index) => {
+            match &*guard {
+                DeleteFileIndexState::Populating(notifier) => notifier.clone().notified_owned(),
+                DeleteFileIndexState::Populated(index) => {
                     return index.get_deletes_for_data_file(data_file, seq_num);
                 }
             }
         };
 
-        notifier.notified().await;
+        notified.await;
 
         let guard = self.state.read().unwrap();
         match guard.deref() {
