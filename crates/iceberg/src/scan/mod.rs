@@ -39,7 +39,7 @@ use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::metadata_columns::{get_metadata_field_id, is_metadata_column_name};
 use crate::runtime::Runtime;
-use crate::spec::{DataContentType, SnapshotRef};
+use crate::spec::{DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, SnapshotRef};
 use crate::table::Table;
 use crate::util::available_parallelism;
 use crate::{Error, ErrorKind, Result};
@@ -281,6 +281,25 @@ impl<'a> TableScanBuilder<'a> {
             None
         };
 
+        let name_mapping = self
+            .table
+            .metadata()
+            .properties()
+            .get(DEFAULT_SCHEMA_NAME_MAPPING)
+            .map(|raw| {
+                serde_json::from_str::<NameMapping>(raw).map_err(|e| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Failed to parse table property {DEFAULT_SCHEMA_NAME_MAPPING} as a NameMapping"
+                        ),
+                    )
+                    .with_source(e)
+                })
+            })
+            .transpose()?
+            .map(Arc::new);
+
         let plan_context = PlanContext {
             snapshot,
             table_metadata: self.table.metadata_ref(),
@@ -290,6 +309,7 @@ impl<'a> TableScanBuilder<'a> {
             snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
             object_cache: self.table.object_cache(),
             field_ids: Arc::new(field_ids),
+            name_mapping,
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
@@ -618,19 +638,19 @@ pub mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    use crate::TableIdent;
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::{FileIO, OutputFile};
     use crate::metadata_columns::RESERVED_COL_NAME_FILE;
     use crate::scan::FileScanTask;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestEntry,
-        ManifestListWriter, ManifestStatus, ManifestWriterBuilder, NestedField, PartitionSpec,
-        PrimitiveType, Schema, Struct, StructType, TableMetadata, Type,
+        DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, DataFileBuilder, DataFileFormat, Datum,
+        Literal, ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder,
+        NestedField, PartitionSpec, PrimitiveType, Schema, Struct, StructType, TableMetadata, Type,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
+    use crate::{ErrorKind, TableIdent};
 
     fn render_template(template: &str, ctx: Value) -> String {
         let mut env = Environment::new();
@@ -1318,6 +1338,112 @@ pub mod tests {
             table_scan.snapshot().unwrap().snapshot_id(),
             3051729675574597004
         );
+    }
+
+    fn table_with_property(key: &str, value: &str) -> Table {
+        let fixture = TableTestFixture::new();
+        let mut metadata = fixture.table.metadata().clone();
+        metadata
+            .properties
+            .insert(key.to_string(), value.to_string());
+        Table::builder()
+            .metadata(metadata)
+            .identifier(fixture.table.identifier().clone())
+            .file_io(fixture.table.file_io().clone())
+            .metadata_location(fixture.table.metadata_location().unwrap().to_string())
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_table_scan_without_name_mapping_property() {
+        let table = TableTestFixture::new().table;
+
+        let table_scan = table.scan().build().unwrap();
+        assert!(
+            table_scan
+                .plan_context
+                .as_ref()
+                .unwrap()
+                .name_mapping
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_table_scan_with_name_mapping_property() {
+        let mapping_json = r#"[{"field-id":1,"names":["id","record_id"]}]"#;
+        let table = table_with_property(DEFAULT_SCHEMA_NAME_MAPPING, mapping_json);
+
+        let table_scan = table.scan().build().unwrap();
+        let mapping = table_scan
+            .plan_context
+            .as_ref()
+            .unwrap()
+            .name_mapping
+            .as_ref()
+            .expect("name_mapping should be parsed from the table property");
+        let fields = mapping.fields();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].field_id(), Some(1));
+        assert_eq!(fields[0].names(), &[
+            "id".to_string(),
+            "record_id".to_string()
+        ]);
+    }
+
+    #[test]
+    fn test_table_scan_with_malformed_name_mapping_property() {
+        let table = table_with_property(DEFAULT_SCHEMA_NAME_MAPPING, "{ not valid json");
+
+        let err = table
+            .scan()
+            .build()
+            .expect_err("malformed name mapping should fail to parse");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_carries_name_mapping_into_file_scan_task() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let mapping_json = r#"[{"field-id":1,"names":["id","record_id"]}]"#;
+        let mut metadata = fixture.table.metadata().clone();
+        metadata.properties.insert(
+            DEFAULT_SCHEMA_NAME_MAPPING.to_string(),
+            mapping_json.to_string(),
+        );
+        let table = Table::builder()
+            .metadata(metadata)
+            .identifier(fixture.table.identifier().clone())
+            .file_io(fixture.table.file_io().clone())
+            .metadata_location(fixture.table.metadata_location().unwrap().to_string())
+            .runtime(test_runtime())
+            .build()
+            .unwrap();
+
+        let tasks: Vec<_> = table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert!(!tasks.is_empty(), "expected at least one FileScanTask");
+        for task in &tasks {
+            let mapping = task
+                .name_mapping
+                .as_ref()
+                .expect("name_mapping should reach the FileScanTask");
+            assert_eq!(mapping.fields().len(), 1);
+            assert_eq!(mapping.fields()[0].field_id(), Some(1));
+        }
     }
 
     #[tokio::test]

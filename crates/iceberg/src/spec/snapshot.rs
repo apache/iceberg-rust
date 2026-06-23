@@ -25,7 +25,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
-use super::table_metadata::SnapshotLog;
 use crate::error::{Result, timestamp_ms_to_utc};
 use crate::spec::{SchemaId, SchemaRef, TableMetadata};
 use crate::{Error, ErrorKind};
@@ -190,14 +189,6 @@ impl Snapshot {
         match self.parent_snapshot_id {
             Some(id) => table_metadata.snapshot_by_id(id).cloned(),
             None => None,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn log(&self) -> SnapshotLog {
-        SnapshotLog {
-            timestamp_ms: self.timestamp_ms,
-            snapshot_id: self.snapshot_id,
         }
     }
 

@@ -2704,8 +2704,13 @@ pub iceberg::spec::TableProperties::commit_max_retry_wait_ms: u64
 pub iceberg::spec::TableProperties::commit_min_retry_wait_ms: u64
 pub iceberg::spec::TableProperties::commit_num_retries: usize
 pub iceberg::spec::TableProperties::commit_total_retry_timeout_ms: u64
+pub iceberg::spec::TableProperties::encryption_data_key_length: usize
+pub iceberg::spec::TableProperties::encryption_key_id: core::option::Option<alloc::string::String>
 pub iceberg::spec::TableProperties::gc_enabled: bool
+pub iceberg::spec::TableProperties::max_ref_age_ms: i64
+pub iceberg::spec::TableProperties::max_snapshot_age_ms: i64
 pub iceberg::spec::TableProperties::metadata_compression_codec: iceberg::compression::CompressionCodec
+pub iceberg::spec::TableProperties::min_snapshots_to_keep: usize
 pub iceberg::spec::TableProperties::write_datafusion_fanout_enabled: bool
 pub iceberg::spec::TableProperties::write_format_default: alloc::string::String
 pub iceberg::spec::TableProperties::write_target_file_size_bytes: usize
@@ -2729,13 +2734,22 @@ pub const iceberg::spec::TableProperties::PROPERTY_DEFAULT_FILE_FORMAT_DEFAULT: 
 pub const iceberg::spec::TableProperties::PROPERTY_DEFAULT_PARTITION_SPEC: &str
 pub const iceberg::spec::TableProperties::PROPERTY_DEFAULT_SORT_ORDER: &str
 pub const iceberg::spec::TableProperties::PROPERTY_DELETE_DEFAULT_FILE_FORMAT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH: &str
+pub const iceberg::spec::TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_ENCRYPTION_KEY_ID: &str
 pub const iceberg::spec::TableProperties::PROPERTY_FORMAT_VERSION: &str
 pub const iceberg::spec::TableProperties::PROPERTY_GC_ENABLED: &str
 pub const iceberg::spec::TableProperties::PROPERTY_GC_ENABLED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_MAX_REF_AGE_MS: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MAX_REF_AGE_MS_DEFAULT: i64
+pub const iceberg::spec::TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT: i64
 pub const iceberg::spec::TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC: &str
 pub const iceberg::spec::TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX: &str
 pub const iceberg::spec::TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT: usize
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_ENABLED: &str
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_ENABLED_DEFAULT: bool
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE: &str
@@ -3020,6 +3034,7 @@ pub struct iceberg::table::Table
 impl iceberg::table::Table
 pub fn iceberg::table::Table::builder() -> iceberg::table::TableBuilder
 pub fn iceberg::table::Table::current_schema_ref(&self) -> iceberg::spec::SchemaRef
+pub fn iceberg::table::Table::encryption_manager(&self) -> core::option::Option<&iceberg::encryption::EncryptionManager>
 pub fn iceberg::table::Table::file_io(&self) -> &iceberg::io::FileIO
 pub fn iceberg::table::Table::identifier(&self) -> &iceberg::TableIdent
 pub fn iceberg::table::Table::inspect(&self) -> iceberg::inspect::MetadataTable<'_>
@@ -3042,6 +3057,7 @@ pub fn iceberg::table::TableBuilder::cache_size_bytes(self, cache_size_bytes: u6
 pub fn iceberg::table::TableBuilder::disable_cache(self) -> Self
 pub fn iceberg::table::TableBuilder::file_io(self, file_io: iceberg::io::FileIO) -> Self
 pub fn iceberg::table::TableBuilder::identifier(self, identifier: iceberg::TableIdent) -> Self
+pub fn iceberg::table::TableBuilder::kms_client(self, kms_client: alloc::sync::Arc<dyn iceberg::encryption::KeyManagementClient>) -> Self
 pub fn iceberg::table::TableBuilder::metadata<T: core::convert::Into<iceberg::spec::TableMetadataRef>>(self, metadata: T) -> Self
 pub fn iceberg::table::TableBuilder::metadata_location<T: core::convert::Into<alloc::string::String>>(self, metadata_location: T) -> Self
 pub fn iceberg::table::TableBuilder::readonly(self, readonly: bool) -> Self
@@ -3064,6 +3080,7 @@ pub fn iceberg::transaction::AddColumn::builder() -> AddColumnBuilder<((), (), (
 pub struct iceberg::transaction::Transaction
 impl iceberg::transaction::Transaction
 pub async fn iceberg::transaction::Transaction::commit(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>
+pub fn iceberg::transaction::Transaction::expire_snapshots(&self) -> iceberg::transaction::expire_snapshots::ExpireSnapshotsAction
 pub fn iceberg::transaction::Transaction::fast_append(&self) -> iceberg::transaction::append::FastAppendAction
 pub fn iceberg::transaction::Transaction::new(table: &iceberg::table::Table) -> Self
 pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::sort_order::ReplaceSortOrderAction
@@ -3144,7 +3161,7 @@ impl iceberg::writer::file_writer::location_generator::FileNameGenerator for ice
 pub fn iceberg::writer::file_writer::location_generator::DefaultFileNameGenerator::generate_file_name(&self) -> alloc::string::String
 pub struct iceberg::writer::file_writer::location_generator::DefaultLocationGenerator
 impl iceberg::writer::file_writer::location_generator::DefaultLocationGenerator
-pub fn iceberg::writer::file_writer::location_generator::DefaultLocationGenerator::new(table_metadata: iceberg::spec::TableMetadata) -> iceberg::Result<Self>
+pub fn iceberg::writer::file_writer::location_generator::DefaultLocationGenerator::new(table_metadata: &iceberg::spec::TableMetadata) -> iceberg::Result<Self>
 pub fn iceberg::writer::file_writer::location_generator::DefaultLocationGenerator::with_data_location(data_location: alloc::string::String) -> Self
 impl core::clone::Clone for iceberg::writer::file_writer::location_generator::DefaultLocationGenerator
 pub fn iceberg::writer::file_writer::location_generator::DefaultLocationGenerator::clone(&self) -> iceberg::writer::file_writer::location_generator::DefaultLocationGenerator
