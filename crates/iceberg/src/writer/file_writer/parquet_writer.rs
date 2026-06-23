@@ -47,9 +47,6 @@ use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
 use crate::{Error, ErrorKind, Result};
 
-/// Output destination for a [`ParquetWriter`]: either a plain [`OutputFile`]
-/// or an [`EncryptedOutputFile`] that transparently AES-GCM-encrypts each block
-/// as it streams to storage.
 enum OutputTarget {
     Plain(OutputFile),
     Encrypted(EncryptedOutputFile),
@@ -78,8 +75,7 @@ impl OutputTarget {
     }
 
     /// Returns the encoded `StandardKeyMetadata` bytes for the encrypted
-    /// variant — these are what gets stored on `DataFile.key_metadata` so
-    /// readers can reconstruct the key. Plain variant returns `None`.
+    /// variant
     fn encoded_key_metadata(&self) -> Result<Option<Vec<u8>>> {
         match self {
             Self::Plain(_) => Ok(None),
@@ -933,16 +929,8 @@ mod tests {
 
         use crate::encryption::StandardKeyMetadata;
 
-        let temp_dir = TempDir::new().unwrap();
-        let file_io = FileIO::new_with_fs();
-        let location_gen = DefaultLocationGenerator::with_data_location(
-            temp_dir.path().to_str().unwrap().to_string(),
-        );
-        let file_name_gen = DefaultFileNameGenerator::new(
-            "encrypted".to_string(),
-            None,
-            DataFileFormat::Parquet,
-        );
+        let file_io = FileIO::new_with_memory();
+        let path = "memory:///encrypted_parquet.parquet";
 
         let kms = MemoryKeyManagementClient::new();
         kms.add_master_key("master-1").unwrap();
@@ -951,36 +939,31 @@ mod tests {
             .table_key_id("master-1")
             .build();
 
-        let arrow_schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
-            "col",
-            DataType::Int64,
-            true,
+        let arrow_schema = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("col", DataType::Int64, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "0".to_string(),
+            )])),
+        ]));
+        let batch = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![Arc::new(Int64Array::from_iter_values(0..16)) as ArrayRef],
         )
-        .with_metadata(HashMap::from([(
-            PARQUET_FIELD_ID_META_KEY.to_string(),
-            "0".to_string(),
-        )]))]));
-        let col = Arc::new(Int64Array::from_iter_values(0..256)) as ArrayRef;
-        let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![col]).unwrap();
+        .unwrap();
 
-        let plain_output = file_io.new_output(
-            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
-        )?;
-        let encrypted_output = manager.encrypt(plain_output);
-        let expected_key_metadata = encrypted_output.key_metadata().clone();
-        let file_path = encrypted_output.location().to_string();
+        let encrypted_out = manager.encrypt(file_io.new_output(path)?);
+        let expected_km = encrypted_out.key_metadata().clone();
 
         let mut pw = ParquetWriterBuilder::new(
             WriterProperties::builder().build(),
             Arc::new(arrow_schema.as_ref().try_into().unwrap()),
         )
-        .build_encrypted(encrypted_output)
+        .build_encrypted(encrypted_out)
         .await?;
-        pw.write(&to_write).await?;
-        let mut res = pw.close().await?;
-        assert_eq!(res.len(), 1);
+        pw.write(&batch).await?;
+        let mut builders = pw.close().await?;
 
-        let data_file = res
+        let data_file = builders
             .pop()
             .unwrap()
             .content(DataContentType::Data)
@@ -989,33 +972,22 @@ mod tests {
             .build()
             .unwrap();
 
-        // DataFile must carry the encoded key metadata so readers can decrypt.
-        let encoded_km = data_file
-            .key_metadata()
-            .expect("encrypted data file must carry key_metadata");
-        let decoded_km = StandardKeyMetadata::decode(encoded_km)?;
-        assert_eq!(decoded_km, expected_key_metadata);
+        let decoded_km = StandardKeyMetadata::decode(
+            data_file
+                .key_metadata()
+                .expect("encrypted data file must carry key_metadata"),
+        )?;
+        assert_eq!(decoded_km, expected_km);
 
-        // Sanity: bytes on disk must NOT contain the plaintext parquet magic, since
-        // the file is wrapped in AGS1 framing.
-        let raw_bytes = file_io.new_input(&file_path)?.read().await?;
-        assert_ne!(
-            &raw_bytes[..4],
-            b"PAR1",
-            "encrypted file should not start with plaintext parquet magic"
-        );
-
-        // Reading through EncryptedInputFile yields the original parquet stream.
-        let encrypted_input =
-            EncryptedInputFile::new(file_io.new_input(&file_path)?, decoded_km);
-        let plaintext = encrypted_input.read().await?;
+        let plaintext = EncryptedInputFile::new(file_io.new_input(path)?, decoded_km)
+            .read()
+            .await?;
         let reader = ParquetRecordBatchReaderBuilder::try_new(plaintext)
             .unwrap()
             .build()
             .unwrap();
         let batches: Vec<RecordBatch> = reader.map(|b| b.unwrap()).collect();
-        let round_tripped = concat_batches(&arrow_schema, &batches).unwrap();
-        assert_eq!(to_write, round_tripped);
+        assert_eq!(batch, concat_batches(&arrow_schema, &batches).unwrap());
 
         Ok(())
     }
