@@ -47,9 +47,9 @@ use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
 use crate::{Error, ErrorKind, Result};
 
-/// Output destination for a [`ParquetWriter`].
-///
-/// Wraps either a plain or an AES-GCM-encrypted output
+/// Output destination for a [`ParquetWriter`]: either a plain [`OutputFile`]
+/// or an [`EncryptedOutputFile`] that transparently AES-GCM-encrypts each block
+/// as it streams to storage.
 enum OutputTarget {
     Plain(OutputFile),
     Encrypted(EncryptedOutputFile),
@@ -123,24 +123,20 @@ impl FileWriterBuilder for ParquetWriterBuilder {
     async fn build(&self, output_file: OutputFile) -> Result<Self::R> {
         Ok(self.build_with_target(OutputTarget::Plain(output_file)))
     }
+
+    /// Builds a `ParquetWriter` that writes an AES-GCM-encrypted parquet file.
+    ///
+    /// On close, the resulting [`DataFile::key_metadata`] is populated with the encoded
+    /// `StandardKeyMetadata` from the wrapper so readers can decrypt the file.
+    async fn build_encrypted(
+        &self,
+        encrypted_output: EncryptedOutputFile,
+    ) -> Result<Self::R> {
+        Ok(self.build_with_target(OutputTarget::Encrypted(encrypted_output)))
+    }
 }
 
 impl ParquetWriterBuilder {
-    /// Like [`Self::build`], but writes an AES-GCM-encrypted parquet file.
-    ///
-    /// The returned writer wraps `encrypted_output` so each parquet block is
-    /// encrypted as it streams to disk. On close, the resulting
-    /// [`DataFile::key_metadata`] is populated with the encoded
-    /// `StandardKeyMetadata` from the wrapper so readers can decrypt the file.
-    ///
-    /// [`DataFile::key_metadata`]: crate::spec::DataFile::key_metadata
-    pub async fn build_from_encrypted(
-        &self,
-        encrypted_output: EncryptedOutputFile,
-    ) -> Result<ParquetWriter> {
-        Ok(self.build_with_target(OutputTarget::Encrypted(encrypted_output)))
-    }
-
     fn build_with_target(&self, output_target: OutputTarget) -> ParquetWriter {
         ParquetWriter {
             schema: self.schema.clone(),
@@ -370,7 +366,7 @@ impl MinMaxColAggregator {
 }
 
 impl ParquetWriter {
-    /// Converts parquet files to data files
+    /// Converts already-written parquet files into [`DataFile`]s.
     #[allow(dead_code)]
     pub(crate) async fn parquet_files_to_data_files(
         file_io: &FileIO,
@@ -400,8 +396,6 @@ impl ParquetWriter {
                 file_path,
                 // TODO: Implement nan_value_counts here
                 HashMap::new(),
-                // This helper consumes already-written parquet files; encryption
-                // metadata isn't surfaced here, so always plain for now.
                 None,
             )?;
             builder.partition_spec_id(table_metadata.default_partition_spec_id());
@@ -929,6 +923,99 @@ mod tests {
         // check the written file
         let expect_batch = concat_batches(&schema, vec![&to_write, &to_write_null]).unwrap();
         check_parquet_data_file(&file_io, &data_file, &expect_batch).await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_writer_encrypted_round_trip() -> Result<()> {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        use crate::encryption::StandardKeyMetadata;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen = DefaultFileNameGenerator::new(
+            "encrypted".to_string(),
+            None,
+            DataFileFormat::Parquet,
+        );
+
+        let kms = MemoryKeyManagementClient::new();
+        kms.add_master_key("master-1").unwrap();
+        let manager = EncryptionManager::builder()
+            .kms_client(Arc::new(kms) as Arc<dyn KeyManagementClient>)
+            .table_key_id("master-1")
+            .build();
+
+        let arrow_schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "col",
+            DataType::Int64,
+            true,
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "0".to_string(),
+        )]))]));
+        let col = Arc::new(Int64Array::from_iter_values(0..256)) as ArrayRef;
+        let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![col]).unwrap();
+
+        let plain_output = file_io.new_output(
+            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
+        )?;
+        let encrypted_output = manager.encrypt(plain_output);
+        let expected_key_metadata = encrypted_output.key_metadata().clone();
+        let file_path = encrypted_output.location().to_string();
+
+        let mut pw = ParquetWriterBuilder::new(
+            WriterProperties::builder().build(),
+            Arc::new(arrow_schema.as_ref().try_into().unwrap()),
+        )
+        .build_encrypted(encrypted_output)
+        .await?;
+        pw.write(&to_write).await?;
+        let mut res = pw.close().await?;
+        assert_eq!(res.len(), 1);
+
+        let data_file = res
+            .pop()
+            .unwrap()
+            .content(DataContentType::Data)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        // DataFile must carry the encoded key metadata so readers can decrypt.
+        let encoded_km = data_file
+            .key_metadata()
+            .expect("encrypted data file must carry key_metadata");
+        let decoded_km = StandardKeyMetadata::decode(encoded_km)?;
+        assert_eq!(decoded_km, expected_key_metadata);
+
+        // Sanity: bytes on disk must NOT contain the plaintext parquet magic, since
+        // the file is wrapped in AGS1 framing.
+        let raw_bytes = file_io.new_input(&file_path)?.read().await?;
+        assert_ne!(
+            &raw_bytes[..4],
+            b"PAR1",
+            "encrypted file should not start with plaintext parquet magic"
+        );
+
+        // Reading through EncryptedInputFile yields the original parquet stream.
+        let encrypted_input =
+            EncryptedInputFile::new(file_io.new_input(&file_path)?, decoded_km);
+        let plaintext = encrypted_input.read().await?;
+        let reader = ParquetRecordBatchReaderBuilder::try_new(plaintext)
+            .unwrap()
+            .build()
+            .unwrap();
+        let batches: Vec<RecordBatch> = reader.map(|b| b.unwrap()).collect();
+        let round_tripped = concat_batches(&arrow_schema, &batches).unwrap();
+        assert_eq!(to_write, round_tripped);
 
         Ok(())
     }

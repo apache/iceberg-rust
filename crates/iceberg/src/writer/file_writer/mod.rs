@@ -21,8 +21,9 @@ use arrow_array::RecordBatch;
 use futures::Future;
 
 use super::CurrentFileStatus;
-use crate::Result;
+use crate::encryption::EncryptedOutputFile;
 use crate::spec::DataFileBuilder;
+use crate::{Error, ErrorKind, Result};
 
 mod parquet_writer;
 pub use parquet_writer::{ParquetWriter, ParquetWriterBuilder};
@@ -41,6 +42,22 @@ pub trait FileWriterBuilder<O = DefaultOutput>: Clone + Send + Sync + 'static {
     type R: FileWriter<O>;
     /// Build file writer.
     fn build(&self, output_file: OutputFile) -> impl Future<Output = Result<Self::R>> + Send;
+
+    /// Like [`Self::build`], but writes an AES-GCM-encrypted file. The default
+    /// implementation rejects the call — formats that support encryption
+    /// override this to wire the encrypted output through their writer.
+    fn build_encrypted(
+        &self,
+        encrypted_output: EncryptedOutputFile,
+    ) -> impl Future<Output = Result<Self::R>> + Send {
+        async move {
+            let _ = encrypted_output;
+            Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Encryption is not supported by this file writer builder",
+            ))
+        }
+    }
 }
 
 /// File writer focus on writing record batch to different physical file format.(Such as parquet. orc)
