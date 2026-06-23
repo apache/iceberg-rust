@@ -29,7 +29,7 @@ use crate::{Error, ErrorKind, Result};
 /// Matches Java's behavior:
 /// - Specs are sorted by spec_id in descending order (newer specs first), so newer field
 ///   names take precedence when deduplicating by field_id.
-/// - Void transform fields (dropped partition columns) are skipped.
+/// - Void and unknown transform fields are skipped.
 /// - Fields are deduplicated by field_id — each unique field_id appears exactly once.
 ///
 /// # Arguments
@@ -53,8 +53,8 @@ pub fn compute_unified_partition_type<'a>(
                 continue;
             }
 
-            // Skip void transforms (dropped partition columns)
-            if matches!(field.transform, Transform::Void) {
+            // Skip void transforms (dropped partition columns) and unknown transforms
+            if matches!(field.transform, Transform::Void | Transform::Unknown) {
                 continue;
             }
 
