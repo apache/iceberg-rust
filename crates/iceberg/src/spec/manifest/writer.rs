@@ -81,19 +81,19 @@ impl ManifestWriterBuilder {
     pub fn new_from_encrypted(
         encrypted_output: EncryptedOutputFile,
         snapshot_id: Option<i64>,
-        key_metadata: Option<Vec<u8>>,
         schema: SchemaRef,
         partition_spec: PartitionSpec,
-    ) -> Self {
+    ) -> Result<Self> {
         let location = encrypted_output.location().to_owned();
-        Self {
+        let key_metadata = Some(encrypted_output.key_metadata().encode()?.to_vec());
+        Ok(Self {
             writer_future: Box::pin(async move { encrypted_output.writer().await }),
             location,
             snapshot_id,
             key_metadata,
             schema,
             partition_spec,
-        }
+        })
     }
 
     /// Build a [`ManifestWriter`] for format version 1.
@@ -124,6 +124,7 @@ impl ManifestWriterBuilder {
             .format_version(FormatVersion::V2)
             .content(ManifestContentType::Data)
             .build();
+
         ManifestWriter::new(
             self.writer_future,
             self.location,
