@@ -216,13 +216,13 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
-    use arrow_array::{ArrayRef, LargeStringArray, RecordBatch, StringArray};
+    use arrow_array::{ArrayRef, Int32Array, Int64Array, LargeStringArray, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use futures::TryStreamExt;
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
     use parquet::file::metadata::{FileMetaData, ParquetMetaData, ParquetMetaDataBuilder};
-    use parquet::file::properties::WriterProperties;
+    use parquet::file::properties::{WriterProperties, EnabledStatistics};
     use parquet::schema::parser::parse_message_type;
     use parquet::schema::types::SchemaDescriptor;
     use tempfile::TempDir;
@@ -231,8 +231,8 @@ mod tests {
     use crate::arrow::{ArrowReader, ArrowReaderBuilder};
     use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
     use crate::io::FileIO;
-    use crate::scan::{FileScanTask, FileScanTaskStream};
-    use crate::spec::{DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
+    use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
+    use crate::spec::{DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
     async fn test_perform_read(
         predicate: Predicate,
@@ -907,7 +907,7 @@ mod tests {
             &metadata,
             &None,
             &field_id_map,
-            schema.clone().as_ref(),
+            schema.as_ref(),
         );
 
         assert!(
@@ -933,7 +933,7 @@ mod tests {
             &metadata,
             &None,
             &field_id_map,
-            schema.clone().as_ref(),
+            schema.as_ref(),
         );
 
         assert!(
@@ -960,7 +960,7 @@ mod tests {
             &metadata,
             &selected,
             &field_id_map,
-            schema.clone().as_ref(),
+            schema.as_ref(),
         );
 
         assert!(result.is_ok());
@@ -983,7 +983,7 @@ mod tests {
             &metadata,
             &selected,
             &field_id_map,
-            schema.clone().as_ref(),
+            schema.as_ref(),
         );
 
         assert!(result.is_ok());
@@ -1006,7 +1006,7 @@ mod tests {
             &metadata,
             &selected,
             &field_id_map,
-            schema.clone().as_ref(),
+            schema.as_ref(),
         );
 
         assert!(result.is_ok());
@@ -1046,6 +1046,234 @@ mod tests {
             row_selection.row_count(),
             0,
             "RowSelection must be empty (zero rows selected) when selected_row_groups is empty"
+        );
+    }
+
+    /// Full-suite regression test for issue: https://github.com/apache/iceberg-rust/issues/2452
+    #[tokio::test]
+    async fn test_scan_without_page_indexes_does_not_error() {
+        // Building schema (both iceberg and arrow for RecordBatch)
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = format!("{}/data.parquet", tmp_dir.path().to_str().unwrap());
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            // Disabling page statistics
+            .set_statistics_enabled(EnabledStatistics::None)
+            .build();
+
+        let batch = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef,
+                Arc::new(StringArray::from(vec![
+                    Some("alice"),
+                    Some("bob"),
+                    None,
+                    Some("dana"),
+                    Some("eve"),
+                ])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        let file = std::fs::File::create(&file_path).unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // Truly exercising a file without column/offset index
+        {
+            use parquet::file::reader::{FileReader, SerializedFileReader};
+            let f = std::fs::File::open(&file_path).unwrap();
+            let rdr = SerializedFileReader::new(f).unwrap();
+            assert!(
+                rdr.metadata().column_index().is_none(),
+                "test fixture must produce a file without a column index"
+            );
+            assert!(
+                rdr.metadata().offset_index().is_none(),
+                "test fixture must a product a file without offset index"
+            )
+        }
+
+        // Predicate: id > 2 
+        let predicate = Reference::new("id")
+        .greater_than(Datum::int(2))
+        .bind(iceberg_schema.clone(), false)
+        .unwrap();
+
+        let file_io = FileIO::new_with_fs();
+        let reader = ArrowReaderBuilder::new(file_io.clone(), Runtime::current())
+            // Enabling row selection ()
+            .with_row_selection_enabled(true)
+            .build();
+
+        let file_size = std::fs::metadata(&file_path).unwrap().len();
+        let task = FileScanTask {
+            file_size_in_bytes: file_size,
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path: file_path.clone(),
+            data_file_format: DataFileFormat::Parquet,
+            schema: iceberg_schema.clone(),
+            project_field_ids: vec![1, 2],
+            predicate: Some(predicate),
+            deletes: vec![],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: false,
+        };
+
+        let stream = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = reader
+            .read(stream)
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let ids: Vec<i32> = batches
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect();
+
+        assert_eq!(
+            ids,
+            vec![3, 4, 5],
+            "predicate must still be enforced via Arrow row filter even without page indexes"
+        );
+
+        // Absent index + position delete field present
+        let pos_del_path = format!("{}/pos-del.parquet", tmp_dir.path().to_str().unwrap());
+
+        // Build the position delete Arrow schema (standard Iceberg layout).
+        let pos_del_arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("file_path", DataType::Utf8, false),
+            Field::new("pos", DataType::Int64, false),
+        ]));
+
+        let pos_del_batch = RecordBatch::try_new(
+            pos_del_arrow_schema.clone(),
+            vec![
+                // Both deletions reference the same data file
+                Arc::new(StringArray::from(vec![
+                    file_path.as_str(),
+                    file_path.as_str(),
+                ])) as ArrayRef,
+                // Delete by index - index-0 (`1` in test case) and index-2 (`3` in test case)
+                Arc::new(Int64Array::from(vec![0i64, 2i64])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        // Write position delete file also without indices
+        let pos_del_props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .set_statistics_enabled(EnabledStatistics::None)
+            .build();
+
+        let pos_del_file = std::fs::File::create(&pos_del_path).unwrap();
+        let mut pos_del_writer =
+            ArrowWriter::try_new(pos_del_file, pos_del_arrow_schema.clone(), Some(pos_del_props))
+                .unwrap();
+        pos_del_writer.write(&pos_del_batch).unwrap();
+        pos_del_writer.close().unwrap();
+
+        // Predicate: id > 1 (note that `3` was also removed by position delete)
+        let predicate_sub2 = Reference::new("id")
+            .greater_than(Datum::int(1))
+            .bind(iceberg_schema.clone(), false)
+            .unwrap();
+
+        let reader_sub2 = ArrowReaderBuilder::new(file_io.clone(), Runtime::current())
+            .with_row_selection_enabled(true)
+            .build();
+
+        let task_sub2 = FileScanTask {
+            file_size_in_bytes: file_size,
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path: file_path.clone(),
+            data_file_format: DataFileFormat::Parquet,
+            schema: iceberg_schema.clone(),
+            project_field_ids: vec![1, 2],
+            predicate: Some(predicate_sub2),
+            deletes: vec![FileScanTaskDeleteFile {
+                file_path: pos_del_path.clone(),
+                file_type: DataContentType::PositionDeletes,
+                partition_spec_id: 0,
+                equality_ids: None,
+                file_size_in_bytes: std::fs::metadata(&pos_del_path).unwrap().len(),
+            }],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: false,
+        };
+
+        let stream_sub2 =
+            Box::pin(futures::stream::iter(vec![Ok(task_sub2)])) as FileScanTaskStream;
+        let batches_sub2: Vec<RecordBatch> = reader_sub2
+            .read(stream_sub2)
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let ids_sub2: Vec<i32> = batches_sub2
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect();
+
+        assert_eq!(
+            ids_sub2,
+            vec![2, 4, 5],
+            "positional deletes must be applied correctly even when page indexes are absent"
         );
     }
 }
