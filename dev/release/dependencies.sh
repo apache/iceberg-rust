@@ -100,7 +100,7 @@ require_cargo_deny() {
   require_command cargo
   if ! cargo deny --version >/dev/null 2>&1; then
     echo "This script requires 'cargo-deny' for dependency license checks." >&2
-    echo "Install it with: cargo install cargo-deny" >&2
+    echo "Install it with: cargo install --locked cargo-deny" >&2
     return 1
   fi
 }
