@@ -373,7 +373,7 @@ impl TryFrom<i32> for DataContentType {
 }
 
 /// Format of this data.
-#[derive(Debug, PartialEq, Eq, Clone, Copy, SerializeDisplay, DeserializeFromStr)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, SerializeDisplay, DeserializeFromStr)]
 pub enum DataFileFormat {
     /// Avro file format: <https://avro.apache.org/>
     Avro,
