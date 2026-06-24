@@ -248,6 +248,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * CI: Check ASF action allowlist on every PR by @ebyhr in https://github.com/apache/iceberg-rust/pull/2694
 * fix(rest): skip serializing unset optional fields in CreateTableRequest by @rahulsmahadev in https://github.com/apache/iceberg-rust/pull/2610
 * chore: Update release runbook by @dannycjones in https://github.com/apache/iceberg-rust/pull/2674
+* feat(transaction): remove statistics file metadata for expired snapshots by @dhruvarya-db in https://github.com/apache/iceberg-rust/pull/2667
+* fix: fix RUSTSEC-2026-0185 by @CTTY in https://github.com/apache/iceberg-rust/pull/2703
+* fix(reader): graceful handling of missing column index by @sandugood in https://github.com/apache/iceberg-rust/pull/2693
 
 ## [v0.9.0] - 2026-03-10
 
