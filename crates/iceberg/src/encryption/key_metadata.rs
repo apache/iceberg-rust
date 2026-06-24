@@ -20,7 +20,7 @@
 
 use std::fmt;
 
-use super::SensitiveBytes;
+use super::{SecureKey, SensitiveBytes};
 use crate::{Error, ErrorKind, Result};
 
 /// Standard key metadata for Iceberg table encryption.
@@ -97,7 +97,17 @@ impl StandardKeyMetadata {
 
     /// Decodes from Java-compatible format.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        _serde::StandardKeyMetadataV1::decode(bytes).map(Self::from)
+        let metadata = _serde::StandardKeyMetadataV1::decode(bytes).map(Self::from)?;
+        // Validate the DEK is a usable AES key (16/24/32 bytes) up front, so a
+        // malformed key surfaces a clear error.
+        SecureKey::new(metadata.encryption_key.as_bytes()).map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "Invalid encryption key in key metadata",
+            )
+            .with_source(e)
+        })?;
+        Ok(metadata)
     }
 }
 
@@ -276,11 +286,33 @@ mod tests {
 
     #[test]
     fn test_roundtrip_without_aad() {
-        let metadata = StandardKeyMetadata::new(&[1, 2, 3, 4]);
+        let key = b"0123456789012345";
+        let metadata = StandardKeyMetadata::new(key);
         let serialized = metadata.encode().unwrap();
         let parsed = StandardKeyMetadata::decode(&serialized).unwrap();
 
-        assert_eq!(parsed.encryption_key().as_bytes(), &[1, 2, 3, 4]);
+        assert_eq!(parsed.encryption_key().as_bytes(), key);
         assert_eq!(parsed.aad_prefix(), None);
+    }
+
+    #[test]
+    fn test_decode_rejects_invalid_key_length() {
+        // 24-byte (AES-192) and 32-byte (AES-256) keys are accepted.
+        for len in [16usize, 24, 32] {
+            let metadata = StandardKeyMetadata::new(&vec![0u8; len]);
+            let serialized = metadata.encode().unwrap();
+            assert!(StandardKeyMetadata::decode(&serialized).is_ok());
+        }
+
+        for len in [0usize, 4, 15, 20, 33] {
+            let metadata = StandardKeyMetadata::new(&vec![0u8; len]);
+            let serialized = metadata.encode().unwrap();
+            let err = StandardKeyMetadata::decode(&serialized).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(
+                err.to_string()
+                    .contains("Invalid encryption key in key metadata")
+            );
+        }
     }
 }
