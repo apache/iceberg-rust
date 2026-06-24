@@ -26,6 +26,7 @@ use futures::lock::{Mutex, MutexGuard};
 use itertools::Itertools;
 
 use super::namespace_state::NamespaceState;
+use crate::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use crate::io::{FileIO, FileIOBuilder, MemoryStorageFactory, StorageFactory};
 use crate::runtime::Runtime;
 use crate::spec::{TableMetadata, TableMetadataBuilder};
@@ -46,6 +47,7 @@ const LOCATION: &str = "location";
 pub struct MemoryCatalogBuilder {
     config: MemoryCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
 }
 
@@ -58,6 +60,7 @@ impl Default for MemoryCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
+            kms_client_factory: None,
             runtime: None,
         }
     }
@@ -68,6 +71,11 @@ impl CatalogBuilder for MemoryCatalogBuilder {
 
     fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
         self.storage_factory = Some(storage_factory);
+        self
+    }
+
+    fn with_kms_client_factory(mut self, kms_client_factory: Arc<dyn KmsClientFactory>) -> Self {
+        self.kms_client_factory = Some(kms_client_factory);
         self
     }
 
@@ -96,7 +104,7 @@ impl CatalogBuilder for MemoryCatalogBuilder {
             .filter(|(k, _)| k != MEMORY_CATALOG_WAREHOUSE)
             .collect();
 
-        let result = {
+        async move {
             if self.config.name.is_none() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
@@ -109,11 +117,13 @@ impl CatalogBuilder for MemoryCatalogBuilder {
                 ))
             } else {
                 let runtime = self.runtime.unwrap_or_else(Runtime::current);
-                MemoryCatalog::new(self.config, self.storage_factory, runtime)
+                let kms_client = match self.kms_client_factory {
+                    Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
+                    None => None,
+                };
+                MemoryCatalog::new(self.config, self.storage_factory, runtime, kms_client)
             }
-        };
-
-        std::future::ready(result)
+        }
     }
 }
 
@@ -131,6 +141,7 @@ pub struct MemoryCatalog {
     file_io: FileIO,
     warehouse_location: String,
     runtime: Runtime,
+    kms_client: Option<Arc<dyn KeyManagementClient>>,
 }
 
 impl MemoryCatalog {
@@ -139,6 +150,7 @@ impl MemoryCatalog {
         config: MemoryCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
+        kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
         // Use provided factory or default to MemoryStorageFactory
         let factory = storage_factory.unwrap_or_else(|| Arc::new(MemoryStorageFactory));
@@ -148,6 +160,7 @@ impl MemoryCatalog {
             file_io: FileIOBuilder::new(factory).with_props(config.props).build(),
             warehouse_location: config.warehouse,
             runtime,
+            kms_client,
         })
     }
 
@@ -166,6 +179,7 @@ impl MemoryCatalog {
             .metadata_location(metadata_location.to_string())
             .file_io(self.file_io.clone())
             .runtime(self.runtime.clone())
+            .kms_client(self.kms_client.clone())
             .build()
     }
 }
@@ -321,6 +335,7 @@ impl Catalog for MemoryCatalog {
             .metadata(metadata)
             .identifier(table_ident)
             .runtime(self.runtime.clone())
+            .kms_client(self.kms_client.clone())
             .build()
     }
 
@@ -388,6 +403,7 @@ impl Catalog for MemoryCatalog {
             .metadata(metadata)
             .identifier(table_ident.clone())
             .runtime(self.runtime.clone())
+            .kms_client(self.kms_client.clone())
             .build()
     }
 

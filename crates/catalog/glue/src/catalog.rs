@@ -25,6 +25,7 @@ use async_trait::async_trait;
 use aws_sdk_glue::operation::create_table::CreateTableError;
 use aws_sdk_glue::operation::update_table::UpdateTableError;
 use aws_sdk_glue::types::TableInput;
+use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{
     FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
     S3_SESSION_TOKEN, StorageFactory,
@@ -58,6 +59,7 @@ pub const GLUE_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 pub struct GlueCatalogBuilder {
     config: GlueCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
 }
 
@@ -72,6 +74,7 @@ impl Default for GlueCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
+            kms_client_factory: None,
             runtime: None,
         }
     }
@@ -82,6 +85,11 @@ impl CatalogBuilder for GlueCatalogBuilder {
 
     fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
         self.storage_factory = Some(storage_factory);
+        self
+    }
+
+    fn with_kms_client_factory(mut self, kms_client_factory: Arc<dyn KmsClientFactory>) -> Self {
+        self.kms_client_factory = Some(kms_client_factory);
         self
     }
 
@@ -140,7 +148,11 @@ impl CatalogBuilder for GlueCatalogBuilder {
                 Some(rt) => rt,
                 None => Runtime::try_current()?,
             };
-            GlueCatalog::new(self.config, self.storage_factory, runtime).await
+            let kms_client = match self.kms_client_factory {
+                Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
+                None => None,
+            };
+            GlueCatalog::new(self.config, self.storage_factory, runtime, kms_client).await
         }
     }
 }
@@ -163,6 +175,7 @@ pub struct GlueCatalog {
     client: GlueClient,
     file_io: FileIO,
     runtime: Runtime,
+    kms_client: Option<Arc<dyn KeyManagementClient>>,
 }
 
 impl Debug for GlueCatalog {
@@ -179,6 +192,7 @@ impl GlueCatalog {
         config: GlueCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
+        kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
         let sdk_config = create_sdk_config(&config.props, config.uri.as_ref()).await;
         let mut file_io_props = config.props.clone();
@@ -228,6 +242,7 @@ impl GlueCatalog {
             client: GlueClient(client),
             file_io,
             runtime,
+            kms_client,
         })
     }
     /// Get the catalogs `FileIO`
@@ -287,6 +302,7 @@ impl GlueCatalog {
                 table_name.to_owned(),
             ))
             .runtime(self.runtime.clone())
+            .kms_client(self.kms_client.clone())
             .build()?;
 
         Ok((table, version_id))
@@ -644,6 +660,7 @@ impl Catalog for GlueCatalog {
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
             .runtime(self.runtime.clone())
+            .kms_client(self.kms_client.clone())
             .build()
     }
 
@@ -874,6 +891,7 @@ impl Catalog for GlueCatalog {
             .metadata(metadata)
             .file_io(self.file_io())
             .runtime(self.runtime.clone())
+            .kms_client(self.kms_client.clone())
             .build()?)
     }
 
