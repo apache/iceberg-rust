@@ -289,6 +289,14 @@ impl Transform {
         )
     }
 
+    /// Returns true if this is a temporal transform (year, month, day, hour).
+    pub fn is_time_transform(&self) -> bool {
+        matches!(
+            self,
+            Transform::Year | Transform::Month | Transform::Day | Transform::Hour
+        )
+    }
+
     /// Return the unique transform name to check if similar transforms for the same source field
     /// are added multiple times in partition spec builder.
     pub fn dedup_name(&self) -> String {

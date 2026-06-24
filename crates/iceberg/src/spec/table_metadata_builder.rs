@@ -765,12 +765,12 @@ impl TableMetadataBuilder {
     /// Validate partition field names against schema field names across all historical schemas.
     ///
     /// Due to Iceberg's multi-version property, partition fields can share names with schema fields
-    /// if they meet specific requirements (identity transform + matching source field ID).
+    /// if they meet specific requirements (identity/void transform + matching source field ID).
     /// This validation enforces those rules across all historical schema versions.
     ///
     /// # Errors
-    /// - Partition field name conflicts with schema field name but doesn't use identity transform.
-    /// - Partition field uses identity transform but references wrong source field ID.
+    /// - Partition field name conflicts with schema field name but doesn't use identity/void transform.
+    /// - Partition field uses identity/void transform but references wrong source field ID.
     fn validate_partition_field_names(&self, unbound_spec: &UnboundPartitionSpec) -> Result<()> {
         if self.metadata.schemas.is_empty() {
             return Ok(());
@@ -789,15 +789,17 @@ impl TableMetadataBuilder {
 
             // If name exists in schemas, validate against current schema rules
             if let Some(schema_field) = current_schema.field_by_name(&partition_field.name) {
-                let is_identity_transform =
-                    partition_field.transform == crate::spec::Transform::Identity;
+                let is_schema_conflict_allowed = matches!(
+                    partition_field.transform,
+                    crate::spec::Transform::Identity | crate::spec::Transform::Void
+                );
                 let has_matching_source_id = schema_field.id == partition_field.source_id;
 
-                if !is_identity_transform {
+                if !is_schema_conflict_allowed {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
                         format!(
-                            "Cannot create partition with name '{}' that conflicts with schema field and is not an identity transform.",
+                            "Cannot create partition with name '{}' that conflicts with schema field and is not an identity/void transform.",
                             partition_field.name
                         ),
                     ));
@@ -807,7 +809,7 @@ impl TableMetadataBuilder {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
                         format!(
-                            "Cannot create identity partition sourced from different field in schema. \
+                            "Cannot create identity/void partition sourced from different field in schema. \
                              Field name '{}' has id `{}` in schema but partition source id is `{}`",
                             partition_field.name, schema_field.id, partition_field.source_id
                         ),
@@ -2929,7 +2931,7 @@ mod tests {
         assert!(error_message.contains(
             "Cannot create partition with name 'existing_field' that conflicts with schema field"
         ));
-        assert!(error_message.contains("and is not an identity transform"));
+        assert!(error_message.contains("and is not an identity/void transform"));
     }
 
     #[test]
