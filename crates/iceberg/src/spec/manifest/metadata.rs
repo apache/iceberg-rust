@@ -80,13 +80,29 @@ impl ManifestMetadata {
                         "partition-spec is required in manifest metadata but not found",
                     )
                 })?;
-                serde_json::from_slice::<Vec<PartitionField>>(bs).map_err(|err| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Fail to parse partition spec in manifest metadata",
-                    )
-                    .with_source(err)
-                })?
+                // Accept either shape that Iceberg writers produce here:
+                //   - bare JSON array `[{...}]` — historical iceberg-rust shortcut
+                //   - spec-compliant object `{"spec-id":N,"fields":[{...}]}` —
+                //     iceberg-java / iceberg-cpp / pyiceberg
+                // Previously only the bare array was accepted, which made
+                // fast_append fail against tables where any non-rust writer
+                // had committed before (the parent-manifest load for the
+                // duplicate-file check tripped on the object shape).
+                serde_json::from_slice::<Vec<PartitionField>>(bs)
+                    .or_else(|_| {
+                        #[derive(serde::Deserialize)]
+                        struct PartitionSpecJson {
+                            fields: Vec<PartitionField>,
+                        }
+                        serde_json::from_slice::<PartitionSpecJson>(bs).map(|s| s.fields)
+                    })
+                    .map_err(|err| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            "Fail to parse partition spec in manifest metadata",
+                        )
+                        .with_source(err)
+                    })?
             };
             let spec_id = meta
                 .get("partition-spec-id")

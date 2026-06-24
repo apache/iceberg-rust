@@ -465,7 +465,12 @@ impl ManifestWriter {
         )?;
         avro_writer.add_user_metadata(
             "partition-spec".to_string(),
-            to_vec(&self.metadata.partition_spec.fields()).map_err(|err| {
+            // Serialize the full PartitionSpec object ({"spec-id":N,"fields":[...]})
+            // so iceberg-java / iceberg-cpp / pyiceberg can read manifests
+            // written by iceberg-rust. The previous output (bare `fields`
+            // array) is a rust-only shortcut that other Iceberg
+            // implementations reject.
+            to_vec(&self.metadata.partition_spec).map_err(|err| {
                 Error::new(ErrorKind::DataInvalid, "Fail to serialize partition spec")
                     .with_source(err)
             })?,
