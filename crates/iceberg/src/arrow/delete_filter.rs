@@ -244,14 +244,20 @@ impl DeleteFilter {
         delete_file_path: &str,
         eq_del: Receiver<Predicate>,
     ) {
-        let notify = Arc::new(Notify::new());
-        {
+        let notify = {
             let mut state = self.state.write().unwrap();
-            state.equality_deletes.insert(
-                delete_file_path.to_string(),
-                EqDelState::Loading(notify.clone()),
-            );
-        }
+            match state.equality_deletes.get(delete_file_path) {
+                Some(EqDelState::Loading(notify)) => notify.clone(),
+                _ => {
+                    let notify = Arc::new(Notify::new());
+                    state.equality_deletes.insert(
+                        delete_file_path.to_string(),
+                        EqDelState::Loading(notify.clone()),
+                    );
+                    notify
+                }
+            }
+        };
 
         let state = self.state.clone();
         let delete_file_path = delete_file_path.to_string();
@@ -277,6 +283,8 @@ pub(crate) mod tests {
     use std::fs::File;
     use std::path::Path;
     use std::sync::Arc;
+    use std::task::Poll;
+    use std::time::Duration;
 
     use arrow_array::{Int64Array, RecordBatch, StringArray};
     use arrow_schema::Schema as ArrowSchema;
@@ -529,5 +537,29 @@ pub(crate) mod tests {
             result.is_err(),
             "case_sensitive=true should fail when column case mismatches"
         );
+    }
+
+    #[tokio::test]
+    async fn test_equality_delete_waiter_is_notified_after_load_started() {
+        let filter = DeleteFilter::new(Runtime::current());
+        let delete_file_path = "eq-del.parquet";
+
+        assert!(filter.try_start_eq_del_load(delete_file_path).is_some());
+
+        let waiter = filter.get_equality_delete_predicate_for_delete_file_path(delete_file_path);
+        tokio::pin!(waiter);
+        assert!(matches!(futures::poll!(&mut waiter), Poll::Pending));
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        filter.insert_equality_delete(delete_file_path, rx);
+        tx.send(Reference::new("id").equal_to(Datum::long(10)))
+            .unwrap();
+
+        let predicate = tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("equality delete waiter should be notified")
+            .expect("equality delete predicate should be loaded");
+
+        assert_eq!(predicate.to_string(), "id = 10");
     }
 }

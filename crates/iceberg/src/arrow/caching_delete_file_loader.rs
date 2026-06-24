@@ -259,9 +259,9 @@ impl CachingDeleteFileLoader {
             }
 
             DataContentType::EqualityDeletes => {
-                let Some(notify) = del_filter.try_start_eq_del_load(&task.file_path) else {
+                if del_filter.try_start_eq_del_load(&task.file_path).is_none() {
                     return Ok(DeleteFileContext::ExistingEqDel);
-                };
+                }
 
                 let (sender, receiver) = channel();
                 del_filter.insert_equality_delete(&task.file_path, receiver);
