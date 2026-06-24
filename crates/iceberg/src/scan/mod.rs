@@ -276,7 +276,7 @@ impl<'a> TableScanBuilder<'a> {
         }
 
         let snapshot_bound_predicate = if let Some(ref predicates) = self.filter {
-            Some(predicates.bind(schema.clone(), true)?)
+            Some(predicates.bind(schema.clone(), self.case_sensitive)?)
         } else {
             None
         };
@@ -1625,6 +1625,31 @@ pub mod tests {
         let col = batches[0].column_by_name("x").unwrap();
         let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(int64_arr.value(0), 1);
+
+        let col = batches[0].column_by_name("y").unwrap();
+        let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 2);
+    }
+
+    #[tokio::test]
+    async fn test_filter_with_case_insensitive_reference() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Filter: Y < 3, resolved against schema field "y".
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_case_sensitive(false)
+            .with_filter(Reference::new("Y").less_than(Datum::long(3)))
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches[0].num_rows(), 512);
 
         let col = batches[0].column_by_name("y").unwrap();
         let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
