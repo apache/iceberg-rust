@@ -216,13 +216,15 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
-    use arrow_array::{ArrayRef, Int32Array, Int64Array, LargeStringArray, RecordBatch, StringArray};
+    use arrow_array::{
+        ArrayRef, Int32Array, Int64Array, LargeStringArray, RecordBatch, StringArray,
+    };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use futures::TryStreamExt;
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
     use parquet::file::metadata::{FileMetaData, ParquetMetaData, ParquetMetaDataBuilder};
-    use parquet::file::properties::{WriterProperties, EnabledStatistics};
+    use parquet::file::properties::{EnabledStatistics, WriterProperties};
     use parquet::schema::parser::parse_message_type;
     use parquet::schema::types::SchemaDescriptor;
     use tempfile::TempDir;
@@ -232,7 +234,9 @@ mod tests {
     use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
-    use crate::spec::{DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
+    use crate::spec::{
+        DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
+    };
 
     async fn test_perform_read(
         predicate: Predicate,
@@ -1084,24 +1088,20 @@ mod tests {
             .set_statistics_enabled(EnabledStatistics::None)
             .build();
 
-        let batch = RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef,
-                Arc::new(StringArray::from(vec![
-                    Some("alice"),
-                    Some("bob"),
-                    None,
-                    Some("dana"),
-                    Some("eve"),
-                ])) as ArrayRef,
-            ],
-        )
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef,
+            Arc::new(StringArray::from(vec![
+                Some("alice"),
+                Some("bob"),
+                None,
+                Some("dana"),
+                Some("eve"),
+            ])) as ArrayRef,
+        ])
         .unwrap();
 
         let file = std::fs::File::create(&file_path).unwrap();
-        let mut writer =
-            ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
 
@@ -1120,11 +1120,11 @@ mod tests {
             )
         }
 
-        // Predicate: id > 2 
+        // Predicate: id > 2
         let predicate = Reference::new("id")
-        .greater_than(Datum::int(2))
-        .bind(iceberg_schema.clone(), false)
-        .unwrap();
+            .greater_than(Datum::int(2))
+            .bind(iceberg_schema.clone(), false)
+            .unwrap();
 
         let file_io = FileIO::new_with_fs();
         let reader = ArrowReaderBuilder::new(file_io.clone(), Runtime::current())
@@ -1187,18 +1187,15 @@ mod tests {
             Field::new("pos", DataType::Int64, false),
         ]));
 
-        let pos_del_batch = RecordBatch::try_new(
-            pos_del_arrow_schema.clone(),
-            vec![
-                // Both deletions reference the same data file
-                Arc::new(StringArray::from(vec![
-                    file_path.as_str(),
-                    file_path.as_str(),
-                ])) as ArrayRef,
-                // Delete by index - index-0 (`1` in test case) and index-2 (`3` in test case)
-                Arc::new(Int64Array::from(vec![0i64, 2i64])) as ArrayRef,
-            ],
-        )
+        let pos_del_batch = RecordBatch::try_new(pos_del_arrow_schema.clone(), vec![
+            // Both deletions reference the same data file
+            Arc::new(StringArray::from(vec![
+                file_path.as_str(),
+                file_path.as_str(),
+            ])) as ArrayRef,
+            // Delete by index - index-0 (`1` in test case) and index-2 (`3` in test case)
+            Arc::new(Int64Array::from(vec![0i64, 2i64])) as ArrayRef,
+        ])
         .unwrap();
 
         // Write position delete file also without indices
@@ -1208,9 +1205,12 @@ mod tests {
             .build();
 
         let pos_del_file = std::fs::File::create(&pos_del_path).unwrap();
-        let mut pos_del_writer =
-            ArrowWriter::try_new(pos_del_file, pos_del_arrow_schema.clone(), Some(pos_del_props))
-                .unwrap();
+        let mut pos_del_writer = ArrowWriter::try_new(
+            pos_del_file,
+            pos_del_arrow_schema.clone(),
+            Some(pos_del_props),
+        )
+        .unwrap();
         pos_del_writer.write(&pos_del_batch).unwrap();
         pos_del_writer.close().unwrap();
 
