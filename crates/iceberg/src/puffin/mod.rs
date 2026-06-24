@@ -51,7 +51,7 @@ mod reader;
 pub use reader::PuffinReader;
 
 mod writer;
-pub use writer::PuffinWriter;
+pub use writer::{PuffinWriteResult, PuffinWriter};
 
 #[cfg(test)]
 mod test_utils;
