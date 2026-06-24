@@ -346,13 +346,13 @@
 <a href=#346 id=346 data-nosnippet>346</a>            }
 <a href=#347 id=347 data-nosnippet>347</a>
 <a href=#348 id=348 data-nosnippet>348</a>            <span class="kw">if </span><span class="self">self</span>.row_selection_enabled {
-<a href=#349 id=349 data-nosnippet>349</a>                row_selection = <span class="prelude-val">Some</span>(ArrowReader::get_row_selection_for_filter_predicate(
+<a href=#349 id=349 data-nosnippet>349</a>                row_selection = ArrowReader::get_row_selection_for_filter_predicate(
 <a href=#350 id=350 data-nosnippet>350</a>                    <span class="kw-2">&amp;</span>predicate,
 <a href=#351 id=351 data-nosnippet>351</a>                    record_batch_stream_builder.metadata(),
 <a href=#352 id=352 data-nosnippet>352</a>                    <span class="kw-2">&amp;</span>selected_row_group_indices,
 <a href=#353 id=353 data-nosnippet>353</a>                    <span class="kw-2">&amp;</span>field_id_map,
 <a href=#354 id=354 data-nosnippet>354</a>                    <span class="kw-2">&amp;</span>task.schema,
-<a href=#355 id=355 data-nosnippet>355</a>                )<span class="question-mark">?</span>);
+<a href=#355 id=355 data-nosnippet>355</a>                )<span class="question-mark">?</span>;
 <a href=#356 id=356 data-nosnippet>356</a>            }
 <a href=#357 id=357 data-nosnippet>357</a>        }
 <a href=#358 id=358 data-nosnippet>358</a>
