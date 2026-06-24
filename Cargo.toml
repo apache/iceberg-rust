@@ -16,8 +16,8 @@
 # under the License.
 
 [workspace]
-exclude = ["bindings/python"]
 members = [
+  "bindings/python",
   "crates/catalog/*",
   "crates/examples",
   "crates/iceberg",
@@ -32,19 +32,21 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 homepage = "https://rust.iceberg.apache.org/"
+publish = false
 version = "0.9.0"
 
 license = "Apache-2.0"
 repository = "https://github.com/apache/iceberg-rust"
 # Check the MSRV policy in README.md before changing this
-rust-version = "1.92"
+rust-version = "1.94"
 
 [workspace.dependencies]
 aes = { version = "0.8", features = ["zeroize"] }
 aes-gcm = "0.10"
 anyhow = "1.0.72"
-apache-avro = { version = "0.21", features = ["zstandard"] }
+apache-avro = { version = "0.21", features = ["snappy", "zstandard"] }
 array-init = "2"
+arrow = "58"
 arrow-arith = "58"
 arrow-array = "58"
 arrow-buffer = "58"
@@ -56,8 +58,14 @@ arrow-string = "58"
 as-any = "0.3.2"
 async-trait = "0.1.89"
 aws-config = "1.8.7"
-aws-sdk-glue = { version = "1.85", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-sdk-s3tables = { version = "1.28", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-glue = { version = "1.85", default-features = false, features = [
+  "default-https-client",
+  "rt-tokio",
+] }
+aws-sdk-s3tables = { version = "1.28", default-features = false, features = [
+  "default-https-client",
+  "rt-tokio",
+] }
 backon = "1.5.1"
 base64 = "0.22.1"
 bimap = "0.6"
@@ -68,12 +76,17 @@ clap = { version = "4.5.48", features = ["derive", "cargo"] }
 dashmap = "6"
 datafusion = "53.1.0"
 datafusion-cli = "53.0.0"
+datafusion-ffi = "53.0.0"
 datafusion-sqllogictest = "53.0.0"
 derive_builder = "0.20"
 dirs = "6"
 enum-ordinalize = "4.3.0"
 env_logger = "0.11.8"
 expect-test = "1"
+fastnum = { version = "0.7", default-features = false, features = [
+  "std",
+  "serde",
+] }
 faststr = "0.2.31"
 flate2 = "1.1.5"
 fnv = "1.0.7"
@@ -103,17 +116,17 @@ mockito = "1"
 motore-macros = "0.4.3"
 murmur3 = "0.5.2"
 once_cell = "1.20"
-opendal = "0.56"
+opendal = "0.57"
 ordered-float = "4"
 parquet = "58"
 pilota = "0.11.10"
 pretty_assertions = "1.4"
+pyo3 = "0.28"
 rand = "0.9.3"
 regex = "1.11.3"
 reqwest = { version = "0.12.12", default-features = false, features = ["json"] }
 roaring = { version = "0.11" }
 rstest = "0.26"
-fastnum = { version = "0.7", default-features = false, features = ["std", "serde"] }
 serde = { version = "1.0.219", features = ["rc"] }
 serde_bytes = "0.11.17"
 serde_derive = "1.0.219"
@@ -126,7 +139,10 @@ stacker = "0.1.20"
 strum = "0.27.2"
 tempfile = "3.18"
 thrift = "0.17.0"
-tokio = { version = "1.47", default-features = false, features = ["sync", "rt-multi-thread"] }
+tokio = { version = "1.47", default-features = false, features = [
+  "sync",
+  "rt-multi-thread",
+] }
 toml = "0.8"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.20"

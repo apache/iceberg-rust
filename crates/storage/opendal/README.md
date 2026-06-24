@@ -29,6 +29,7 @@ OpenDAL-based storage backend implementations for [Apache Iceberg Rust](https://
 | Local Filesystem     | `opendal-fs`     | ✅ Stable       | Local filesystem storage                      |
 | Amazon S3            | `opendal-s3`     | ✅ Stable       | Amazon S3 storage                             |
 | Google Cloud Storage | `opendal-gcs`    | ✅ Stable       | Google Cloud Storage                          |
+| Hugging Face         | `opendal-hf`     | ✅ Stable       | Hugging Face buckets and repositories         |
 | Alibaba Cloud OSS    | `opendal-oss`    | 🧪 Experimental | Alibaba Cloud Object Storage Service          |
 | Azure Datalake       | `opendal-azdls`  | 🧪 Experimental | Azure Datalake Storage v2                     |
 

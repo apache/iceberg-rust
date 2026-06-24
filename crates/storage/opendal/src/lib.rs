@@ -39,7 +39,7 @@ use iceberg::io::{
 };
 use iceberg::{Error, ErrorKind, Result};
 use opendal::Operator;
-use opendal::layers::RetryLayer;
+use opendal::layers::{RetryLayer, TimeoutLayer};
 use serde::{Deserialize, Serialize};
 use utils::from_opendal_error;
 
@@ -48,6 +48,14 @@ cfg_if! {
         mod azdls;
         use azdls::*;
         use opendal::services::AzdlsConfig;
+    }
+}
+
+cfg_if! {
+    if #[cfg(feature = "opendal-hf")] {
+        mod hf;
+        use hf::*;
+        use opendal::services::HfConfig;
     }
 }
 
@@ -120,6 +128,9 @@ pub enum OpenDalStorageFactory {
     /// Azure Data Lake Storage factory.
     #[cfg(feature = "opendal-azdls")]
     Azdls,
+    /// HuggingFace Hub storage factory.
+    #[cfg(feature = "opendal-hf")]
+    Hf,
 }
 
 #[typetag::serde(name = "OpenDalStorageFactory")]
@@ -152,6 +163,10 @@ impl StorageFactory for OpenDalStorageFactory {
             OpenDalStorageFactory::Azdls => Ok(Arc::new(OpenDalStorage::Azdls {
                 config: azdls_config_parse(config.props().clone())?.into(),
             })),
+            #[cfg(feature = "opendal-hf")]
+            OpenDalStorageFactory::Hf => Ok(Arc::new(OpenDalStorage::Hf {
+                config: hf_config_parse(config.props().clone())?.into(),
+            })),
             #[cfg(all(
                 not(feature = "opendal-memory"),
                 not(feature = "opendal-fs"),
@@ -159,6 +174,7 @@ impl StorageFactory for OpenDalStorageFactory {
                 not(feature = "opendal-gcs"),
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
+                not(feature = "opendal-hf"),
             ))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -217,6 +233,16 @@ pub enum OpenDalStorage {
     Azdls {
         /// Azure DLS configuration.
         config: Arc<AzdlsConfig>,
+    },
+    /// HuggingFace Hub storage variant.
+    ///
+    /// Accepts paths of the form
+    /// `hf://<repo_type>/<owner>/<repo>[@<revision>]/<path_in_repo>`,
+    /// where `<repo_type>` must be one of `models`, `datasets`, `spaces`, or `buckets`.
+    #[cfg(feature = "opendal-hf")]
+    Hf {
+        /// HuggingFace Hub configuration (token + endpoint).
+        config: Arc<HfConfig>,
     },
 }
 
@@ -311,12 +337,15 @@ impl OpenDalStorage {
             }
             #[cfg(feature = "opendal-azdls")]
             OpenDalStorage::Azdls { config } => azdls_create_operator(path, config)?,
+            #[cfg(feature = "opendal-hf")]
+            OpenDalStorage::Hf { config } => hf_config_build(config, path)?,
             #[cfg(all(
                 not(feature = "opendal-s3"),
                 not(feature = "opendal-fs"),
                 not(feature = "opendal-gcs"),
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
+                not(feature = "opendal-hf"),
             ))]
             _ => {
                 return Err(Error::new(
@@ -326,10 +355,33 @@ impl OpenDalStorage {
             }
         };
 
-        // Transient errors are common for object stores; however there's no
-        // harm in retrying temporary failures for other storage backends as well.
-        let operator = operator.layer(RetryLayer::new());
+        // Apply observability/resilience layers. TimeoutLayer must be
+        // inside RetryLayer so each retry attempt is independently
+        // bounded — without a per-attempt timeout, a future parked on a
+        // silently dropped TCP connection never produces an `Err` and
+        // RetryLayer cannot retry, leaving the caller hung indefinitely.
+        // See: https://opendal.apache.org/docs/rust/opendal/layers/struct.TimeoutLayer.html
+        //
+        // Transient errors are common for object stores; we retry temporary
+        // failures with exponential backoff. The retry behavior also
+        // benefits non-object-store backends.
+        let operator = operator.layer(TimeoutLayer::new()).layer(RetryLayer::new());
         Ok((operator, relative_path))
+    }
+
+    /// Returns a cache key used by `delete_stream` to group paths by storage operator.
+    ///
+    /// For most backends the URL host (bucket name) is sufficient. For HF the host
+    /// encodes the repo type, not the repo identity, so a more specific key is used.
+    fn batch_key_for_path(&self, path: &str) -> String {
+        match self {
+            #[cfg(feature = "opendal-hf")]
+            OpenDalStorage::Hf { .. } => hf_batch_key(path),
+            _ => url::Url::parse(path)
+                .ok()
+                .and_then(|u| u.host_str().map(|s| s.to_string()))
+                .unwrap_or_default(),
+        }
     }
 
     /// Extracts the relative path from an absolute path without building an operator.
@@ -408,12 +460,20 @@ impl OpenDalStorage {
                 let relative_path_len = azure_path.path.len();
                 Ok(&path[path.len() - relative_path_len..])
             }
+            #[cfg(feature = "opendal-hf")]
+            OpenDalStorage::Hf { .. } => {
+                let parsed = hf::HfUri::parse(path).ok_or_else(|| {
+                    Error::new(ErrorKind::DataInvalid, format!("Invalid hf url: {path}"))
+                })?;
+                Ok(&path[path.len() - parsed.path.len()..])
+            }
             #[cfg(all(
                 not(feature = "opendal-s3"),
                 not(feature = "opendal-fs"),
                 not(feature = "opendal-gcs"),
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
+                not(feature = "opendal-hf"),
             ))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -493,10 +553,7 @@ impl Storage for OpenDalStorage {
         let mut deleters: HashMap<String, opendal::Deleter> = HashMap::new();
 
         while let Some(path) = paths.next().await {
-            let bucket = url::Url::parse(&path)
-                .ok()
-                .and_then(|u| u.host_str().map(|s| s.to_string()))
-                .unwrap_or_default();
+            let bucket = self.batch_key_for_path(&path);
 
             let (relative_path, deleter) = match deleters.entry(bucket) {
                 Entry::Occupied(entry) => {

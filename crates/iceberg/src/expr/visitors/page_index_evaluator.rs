@@ -736,28 +736,22 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
                 }
 
                 match (min, max) {
-                    (Some(min), Some(max)) => {
+                    (Some(min), Some(max))
                         if literals
                             .iter()
-                            .all(|datum| datum.lt(&min) || datum.gt(&max))
-                        {
-                            // if all values are outside the bounds, rows cannot match.
-                            return Ok(false);
-                        }
+                            .all(|datum| datum.lt(&min) || datum.gt(&max)) =>
+                    {
+                        // if all values are outside the bounds, no rows can match
+                        return Ok(false);
                     }
-                    (Some(min), _) => {
-                        if !literals.iter().any(|datum| datum.ge(&min)) {
-                            // if none of the values are greater than the min bound, rows cant match
-                            return Ok(false);
-                        }
+                    (Some(min), _) if !literals.iter().any(|datum| datum.ge(&min)) => {
+                        // if no values are within the min bound, no rows can match
+                        return Ok(false);
                     }
-                    (_, Some(max)) => {
-                        if !literals.iter().any(|datum| datum.le(&max)) {
-                            // if all values are greater than upper bound, rows cannot match.
-                            return Ok(false);
-                        }
+                    (_, Some(max)) if !literals.iter().any(|datum| datum.le(&max)) => {
+                        // if no values are within the max bound, no rows can match
+                        return Ok(false);
                     }
-
                     _ => {}
                 }
 
