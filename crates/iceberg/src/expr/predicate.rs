@@ -31,7 +31,7 @@ use crate::error::Result;
 use crate::expr::visitors::bound_predicate_visitor::visit as visit_bound;
 use crate::expr::visitors::predicate_visitor::visit;
 use crate::expr::visitors::rewrite_not::RewriteNotVisitor;
-use crate::expr::{Bind, BoundReference, PredicateOperator, Reference};
+use crate::expr::{Bind, BoundTerm, PredicateOperator, Term};
 use crate::spec::{Datum, PrimitiveLiteral, SchemaRef};
 use crate::{Error, ErrorKind};
 
@@ -188,12 +188,12 @@ impl<T> BinaryExpression<T> {
     /// # Example
     ///
     /// ```rust
-    /// use iceberg::expr::{BinaryExpression, PredicateOperator, Reference};
+    /// use iceberg::expr::{BinaryExpression, PredicateOperator, Reference, Term};
     /// use iceberg::spec::Datum;
     ///
-    /// BinaryExpression::new(
+    /// BinaryExpression::<Term>::new(
     ///     PredicateOperator::LessThanOrEq,
-    ///     Reference::new("a"),
+    ///     Reference::new("a").into(),
     ///     Datum::int(10),
     /// );
     /// ```
@@ -237,6 +237,12 @@ impl<T: Bind> Bind for BinaryExpression<T> {
     }
 }
 
+impl From<BinaryExpression<Term>> for Predicate {
+    fn from(expr: BinaryExpression<Term>) -> Self {
+        Predicate::Binary(expr)
+    }
+}
+
 /// Set predicates, for example, `a in (1, 2, 3)`.
 #[derive(PartialEq, Clone, Serialize, Deserialize)]
 pub struct SetExpression<T> {
@@ -265,12 +271,12 @@ impl<T> SetExpression<T> {
     ///
     /// ```rust
     /// use fnv::FnvHashSet;
-    /// use iceberg::expr::{PredicateOperator, Reference, SetExpression};
+    /// use iceberg::expr::{PredicateOperator, Reference, SetExpression, Term};
     /// use iceberg::spec::Datum;
     ///
-    /// SetExpression::new(
+    /// SetExpression::<Term>::new(
     ///     PredicateOperator::In,
-    ///     Reference::new("a"),
+    ///     Reference::new("a").into(),
     ///     FnvHashSet::from_iter(vec![Datum::int(1)]),
     /// );
     /// ```
@@ -330,11 +336,64 @@ pub enum Predicate {
     /// Not predicate, for example, `NOT (a > 10)`.
     Not(LogicalExpression<Predicate, 1>),
     /// Unary expression, for example, `a IS NULL`.
-    Unary(UnaryExpression<Reference>),
+    Unary(UnaryExpression<Term>),
     /// Binary expression, for example, `a > 10`.
-    Binary(BinaryExpression<Reference>),
+    Binary(BinaryExpression<Term>),
     /// Set predicates, for example, `a in (1, 2, 3)`.
-    Set(SetExpression<Reference>),
+    Set(SetExpression<Term>),
+}
+
+impl Predicate {
+    pub(crate) fn filter_transform(&self) -> Result<Predicate> {
+        self.clone().rewrite_not().filter_transform_inner()
+    }
+
+    fn filter_transform_inner(self) -> Result<Predicate> {
+        match self {
+            Predicate::And(expr) => {
+                let [left, right] = expr.inputs;
+                let left = (*left).filter_transform_inner()?;
+                if matches!(&left, &Predicate::AlwaysFalse) {
+                    return Ok(Predicate::AlwaysFalse);
+                }
+                Ok(left.and((*right).filter_transform_inner()?))
+            }
+            Predicate::Or(expr) => {
+                let [left, right] = expr.inputs;
+                let left = (*left).filter_transform_inner()?;
+                if matches!(&left, &Predicate::AlwaysTrue) {
+                    return Ok(Predicate::AlwaysTrue);
+                }
+                Ok(left.or((*right).filter_transform_inner()?))
+            }
+            Predicate::Not(expr) => {
+                let [inner] = expr.inputs;
+                (*inner).negate().filter_transform_inner()
+            }
+            Predicate::Unary(expr) => {
+                if expr.term().is_transform() {
+                    Ok(Predicate::AlwaysTrue)
+                } else {
+                    Ok(Predicate::Unary(expr))
+                }
+            }
+            Predicate::Binary(expr) => {
+                if expr.term().is_transform() {
+                    Ok(Predicate::AlwaysTrue)
+                } else {
+                    Ok(Predicate::Binary(expr))
+                }
+            }
+            Predicate::Set(expr) => {
+                if expr.term().is_transform() {
+                    Ok(Predicate::AlwaysTrue)
+                } else {
+                    Ok(Predicate::Set(expr))
+                }
+            }
+            other => Ok(other),
+        }
+    }
 }
 
 impl Bind for Predicate {
@@ -387,22 +446,28 @@ impl Bind for Predicate {
 
                 match &bound_expr.op {
                     &PredicateOperator::IsNull => {
-                        if bound_expr.term.field().required {
+                        if bound_expr.term.reference().field().required {
                             return Ok(BoundPredicate::AlwaysFalse);
                         }
                     }
                     &PredicateOperator::NotNull => {
-                        if bound_expr.term.field().required {
+                        if bound_expr.term.reference().field().required {
                             return Ok(BoundPredicate::AlwaysTrue);
                         }
                     }
                     &PredicateOperator::IsNan | &PredicateOperator::NotNan => {
-                        if !bound_expr.term.field().field_type.is_floating_type() {
+                        if !bound_expr
+                            .term
+                            .reference()
+                            .field()
+                            .field_type
+                            .is_floating_type()
+                        {
                             return Err(Error::new(
                                 ErrorKind::DataInvalid,
                                 format!(
                                     "Expecting floating point type, but found {}",
-                                    bound_expr.term.field().field_type
+                                    bound_expr.term.reference().field().field_type
                                 ),
                             ));
                         }
@@ -419,7 +484,7 @@ impl Bind for Predicate {
             }
             Predicate::Binary(expr) => {
                 let bound_expr = expr.bind(schema, case_sensitive)?;
-                let bound_literal = bound_expr.literal.to(&bound_expr.term.field().field_type)?;
+                let bound_literal = bound_expr.literal.to(&bound_expr.term.result_type()?)?;
 
                 match bound_literal.literal() {
                     PrimitiveLiteral::AboveMax => match &bound_expr.op {
@@ -459,10 +524,11 @@ impl Bind for Predicate {
             }
             Predicate::Set(expr) => {
                 let bound_expr = expr.bind(schema, case_sensitive)?;
+                let result_type = bound_expr.term.result_type()?;
                 let bound_literals = bound_expr
                     .literals
                     .into_iter()
-                    .map(|l| l.to(&bound_expr.term.field().field_type))
+                    .map(|l| l.to(&result_type))
                     .collect::<Result<FnvHashSet<Datum>>>()?;
 
                 match &bound_expr.op {
@@ -716,11 +782,11 @@ pub enum BoundPredicate {
     /// An expression combined by `NOT`, for example, `NOT (a > 10)`.
     Not(LogicalExpression<BoundPredicate, 1>),
     /// Unary expression, for example, `a IS NULL`.
-    Unary(UnaryExpression<BoundReference>),
+    Unary(UnaryExpression<BoundTerm>),
     /// Binary expression, for example, `a > 10`.
-    Binary(BinaryExpression<BoundReference>),
+    Binary(BinaryExpression<BoundTerm>),
     /// Set predicates, for example, `a IN (1, 2, 3)`.
-    Set(SetExpression<BoundReference>),
+    Set(SetExpression<BoundTerm>),
 }
 
 impl BoundPredicate {
