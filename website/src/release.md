@@ -112,9 +112,10 @@ This issue is used to track tasks of the iceberg rust ${iceberg_version} release
 
 ### Official Release
 
+- [ ] Push the signed release git tag
 - [ ] Publish artifacts to SVN RELEASE branch
 - [ ] Change Iceberg Rust Website download link
-- [ ] Publish GitHub release, automatically pushing the Git tag
+- [ ] Publish GitHub release
 - [ ] Send the announcement
 
 For details of each step, please refer to: https://rust.iceberg.apache.org/release
@@ -128,7 +129,8 @@ The following steps should be followed once the release is ready to begin.
 
 - [Draft a new GitHub Release using the GitHub web UI](https://github.com/apache/iceberg-rust/releases/new).
 - Enter the git tag of this release version, of the form `v0.y.z`. For example, `v0.9.0`.
-  The tag should not exist at this stage and GitHub will offer to create it when the release is published.
+  The tag should not exist at this stage.
+  While it may suggest it can automatically create the tag on publish, we will push manually as we rely on signed tags.
 - Make sure the branch target is `main` for minor release (such as `0.9.0`), or the minor version branch for a patch release (such as `0.9.1`).
 - Generate the release note by clicking the `Generate release notes` button.
 - Save the draft.
@@ -446,16 +448,18 @@ Useful options include:
 - `--release_dist_url https://dist.apache.org/repos/dist/release/iceberg`: SVN directory URL where final release artifact directories are published.
 
 The release script does not push the final release tag.
-Review the output and then move on to the next step to publish the GitHub release and tag.
+Review the output, then push the tag manually:
+
+```shell
+git push origin "v${iceberg_version}"
+```
+
+Pushing the final release tag triggers the publish workflow for crates and pyiceberg-core.
 
 ### Publish the GitHub Release
 
 A GitHub release should have been drafted earlier in the release process.
 Open the release and publish it now.
-
-On publish, the Git tag will be created for the release.
-
-The creation of the final release tag triggers the publish workflow for crates and pyiceberg-core.
 
 ### Send the announcement
 
