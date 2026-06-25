@@ -15,26 +15,39 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Public API
+name: Dependencies
 
 on:
   push:
     branches:
       - main
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "**/DEPENDENCIES.rust.tsv"
+      - ".github/workflows/dependencies.yml"
+
   pull_request:
     paths:
-      - 'crates/**'
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "**/DEPENDENCIES.rust.tsv"
+      - ".github/workflows/dependencies.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
+env:
+  CARGO_DENY_VERSION: "0.19.9"
+
+permissions: {}
 
 jobs:
-  check-public-api:
+  check_dependencies:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -43,20 +56,23 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
 
-      - name: Cache Rust artifacts
-        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny@$CARGO_DENY_VERSION
 
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate dependency lists
+        run: dev/release/dependencies.sh generate
 
-      - name: Install cargo-public-api
-        uses: taiki-e/install-action@56545b37b57562edd73171cb6c62cc509db4c34e # v2.81.7
-        with:
-          tool: cargo-public-api
-
-      - name: Check public API
-        run: make check-public-api
+      - name: Check dependency lists are up-to-date
+        run: |
+          if ! git diff --exit-code -- '**/DEPENDENCIES.rust.tsv'; then
+            echo ""
+            echo "ERROR: DEPENDENCIES.rust.tsv files are out of date."
+            echo "This CI check uses cargo-deny $CARGO_DENY_VERSION."
+            echo ""
+            echo "To fix this locally:"
+            echo "  cargo install --locked cargo-deny@$CARGO_DENY_VERSION"
+            echo "  dev/release/dependencies.sh generate"
+            echo ""
+            echo "Then commit the updated DEPENDENCIES.rust.tsv files."
+            exit 1
+          fi

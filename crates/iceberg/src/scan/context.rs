@@ -28,8 +28,8 @@ use crate::scan::{
     PartitionFilterCache,
 };
 use crate::spec::{
-    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, SchemaRef, SnapshotRef,
-    TableMetadataRef,
+    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping, SchemaRef,
+    SnapshotRef, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -46,6 +46,7 @@ pub(crate) struct ManifestFileContext {
     snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
     delete_file_index: DeleteFileIndex,
+    name_mapping: Option<Arc<NameMapping>>,
     case_sensitive: bool,
 }
 
@@ -60,6 +61,7 @@ pub(crate) struct ManifestEntryContext {
     pub partition_spec_id: i32,
     pub snapshot_schema: SchemaRef,
     pub delete_file_index: DeleteFileIndex,
+    pub name_mapping: Option<Arc<NameMapping>>,
     pub case_sensitive: bool,
 }
 
@@ -76,7 +78,8 @@ impl ManifestFileContext {
             mut sender,
             expression_evaluator_cache,
             delete_file_index,
-            ..
+            name_mapping,
+            case_sensitive,
         } = self;
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
@@ -91,7 +94,8 @@ impl ManifestFileContext {
                 bound_predicates: bound_predicates.clone(),
                 snapshot_schema: snapshot_schema.clone(),
                 delete_file_index: delete_file_index.clone(),
-                case_sensitive: self.case_sensitive,
+                name_mapping: name_mapping.clone(),
+                case_sensitive,
             };
 
             sender
@@ -133,8 +137,7 @@ impl ManifestEntryContext {
             .with_partition(Some(self.manifest_entry.data_file.partition.clone()))
             // TODO: Pass actual PartitionSpec through context chain for native flow
             .with_partition_spec(None)
-            // TODO: Extract name_mapping from table metadata property "schema.name-mapping.default"
-            .with_name_mapping(None)
+            .with_name_mapping(self.name_mapping)
             .with_case_sensitive(self.case_sensitive)
             .build())
     }
@@ -153,6 +156,7 @@ pub(crate) struct PlanContext {
     pub snapshot_bound_predicate: Option<Arc<BoundPredicate>>,
     pub object_cache: Arc<ObjectCache>,
     pub field_ids: Arc<Vec<i32>>,
+    pub name_mapping: Option<Arc<NameMapping>>,
 
     pub partition_filter_cache: Arc<PartitionFilterCache>,
     pub manifest_evaluator_cache: Arc<ManifestEvaluatorCache>,
@@ -278,6 +282,7 @@ impl PlanContext {
             field_ids: self.field_ids.clone(),
             expression_evaluator_cache: self.expression_evaluator_cache.clone(),
             delete_file_index,
+            name_mapping: self.name_mapping.clone(),
             case_sensitive: self.case_sensitive,
         }
     }
