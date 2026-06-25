@@ -64,6 +64,29 @@ impl serde_core::ser::Serialize for iceberg_catalog_rest::CreateTableRequest
 pub fn iceberg_catalog_rest::CreateTableRequest::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::CreateTableRequest
 pub fn iceberg_catalog_rest::CreateTableRequest::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg_catalog_rest::Endpoint
+impl iceberg_catalog_rest::Endpoint
+pub fn iceberg_catalog_rest::Endpoint::method(&self) -> &str
+pub fn iceberg_catalog_rest::Endpoint::path(&self) -> &str
+impl core::clone::Clone for iceberg_catalog_rest::Endpoint
+pub fn iceberg_catalog_rest::Endpoint::clone(&self) -> iceberg_catalog_rest::Endpoint
+impl core::cmp::Eq for iceberg_catalog_rest::Endpoint
+impl core::cmp::PartialEq for iceberg_catalog_rest::Endpoint
+pub fn iceberg_catalog_rest::Endpoint::eq(&self, other: &iceberg_catalog_rest::Endpoint) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::Endpoint
+pub fn iceberg_catalog_rest::Endpoint::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for iceberg_catalog_rest::Endpoint
+pub fn iceberg_catalog_rest::Endpoint::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for iceberg_catalog_rest::Endpoint
+pub fn iceberg_catalog_rest::Endpoint::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::Endpoint
+impl core::str::traits::FromStr for iceberg_catalog_rest::Endpoint
+pub type iceberg_catalog_rest::Endpoint::Err = iceberg::error::Error
+pub fn iceberg_catalog_rest::Endpoint::from_str(s: &str) -> core::result::Result<Self, Self::Err>
+impl serde_core::ser::Serialize for iceberg_catalog_rest::Endpoint
+pub fn iceberg_catalog_rest::Endpoint::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::Endpoint
+pub fn iceberg_catalog_rest::Endpoint::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::ErrorModel
 pub iceberg_catalog_rest::ErrorModel::code: u16
 pub iceberg_catalog_rest::ErrorModel::message: alloc::string::String
@@ -187,6 +210,7 @@ pub struct iceberg_catalog_rest::RestCatalog
 impl iceberg_catalog_rest::RestCatalog
 pub async fn iceberg_catalog_rest::RestCatalog::invalidate_token(&self) -> iceberg::error::Result<()>
 pub async fn iceberg_catalog_rest::RestCatalog::regenerate_token(&self) -> iceberg::error::Result<()>
+pub async fn iceberg_catalog_rest::RestCatalog::supports_endpoint(&self, endpoint: &iceberg_catalog_rest::Endpoint) -> iceberg::error::Result<bool>
 impl core::fmt::Debug for iceberg_catalog_rest::RestCatalog
 pub fn iceberg_catalog_rest::RestCatalog::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::catalog::Catalog for iceberg_catalog_rest::RestCatalog

@@ -17,7 +17,7 @@
 
 //! This module contains the iceberg REST catalog implementation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -40,6 +40,7 @@ use typed_builder::TypedBuilder;
 use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
+use crate::endpoint::Endpoint;
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
     CreateTableRequest, ListNamespaceResponse, ListTablesResponse, LoadTableResult,
@@ -347,6 +348,10 @@ struct RestContext {
     ///
     /// It's could be different from the user config.
     config: RestCatalogConfig,
+    /// Endpoints the server advertised in its `GET /v1/config` response, used
+    /// for capability negotiation. Empty when the server does not advertise an
+    /// `endpoints` list.
+    endpoints: HashSet<Endpoint>,
 }
 
 /// Rest catalog implementation.
@@ -412,12 +417,39 @@ impl RestCatalog {
             .get_or_try_init(|| async {
                 let client = HttpClient::new(&self.user_config)?;
                 let catalog_config = RestCatalog::load_config(&client, &self.user_config).await?;
+                // The `endpoints` field is optional. An absent field (`None`)
+                // means an older server, so fall back to the standard base set;
+                // an explicit list — even an empty one — is taken verbatim.
+                let endpoints = match &catalog_config.endpoints {
+                    Some(advertised) => advertised.iter().cloned().collect(),
+                    None => crate::endpoint::DEFAULT_ENDPOINTS.clone(),
+                };
                 let config = self.user_config.clone().merge_with_config(catalog_config);
                 let client = client.update_with(&config)?;
 
-                Ok(RestContext { config, client })
+                Ok(RestContext {
+                    config,
+                    client,
+                    endpoints,
+                })
             })
             .await
+    }
+
+    /// Returns whether the connected server supports `endpoint`.
+    ///
+    /// Servers advertise the routes they support in the `endpoints` field of
+    /// the `GET /v1/config` response. When that field is present it is used
+    /// verbatim (an explicit empty list therefore advertises nothing). When a
+    /// server omits the field, a standard base set of namespace and table
+    /// operations is assumed, so an older server still resolves its core
+    /// operations as supported; any optional endpoint outside that base set is
+    /// reported unsupported unless it is explicitly advertised.
+    ///
+    /// The server config is fetched once and cached, so the first call may
+    /// incur a round-trip to `GET /v1/config`.
+    pub async fn supports_endpoint(&self, endpoint: &Endpoint) -> Result<bool> {
+        Ok(self.context().await?.endpoints.contains(endpoint))
     }
 
     /// Load the runtime config from the server by `user_config`.
@@ -1131,6 +1163,104 @@ mod tests {
                 .get("warehouse"),
             Some(&"s3://iceberg-catalog".to_string())
         );
+
+        config_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_config_advertised_endpoints() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(
+                r#"{
+                "overrides": {},
+                "defaults": {},
+                "endpoints": [
+                    "GET /v1/{prefix}/namespaces",
+                    "POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/plan"
+                ]
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+        );
+
+        let plan = "POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/plan"
+            .parse::<Endpoint>()
+            .unwrap();
+        assert!(catalog.supports_endpoint(&plan).await.unwrap());
+        // Advertised list is present but does not include this route.
+        let delete_ns = "DELETE /v1/{prefix}/namespaces/{namespace}"
+            .parse::<Endpoint>()
+            .unwrap();
+        assert!(!catalog.supports_endpoint(&delete_ns).await.unwrap());
+
+        config_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_config_without_endpoints_falls_back_to_default_set() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(r#"{ "overrides": {}, "defaults": {} }"#)
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+        );
+
+        // A server that omits the `endpoints` field is assumed to support the
+        // standard base operations.
+        let load_table = "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}"
+            .parse::<Endpoint>()
+            .unwrap();
+        assert!(catalog.supports_endpoint(&load_table).await.unwrap());
+        // But not an optional endpoint that must be advertised.
+        let plan = "POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/plan"
+            .parse::<Endpoint>()
+            .unwrap();
+        assert!(!catalog.supports_endpoint(&plan).await.unwrap());
+
+        config_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_config_with_empty_endpoints_advertises_nothing() {
+        let mut server = Server::new_async().await;
+
+        // An explicit empty list is distinct from an absent field: it is taken
+        // verbatim, so even the standard base operations are not advertised.
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(r#"{ "overrides": {}, "defaults": {}, "endpoints": [] }"#)
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+        );
+
+        let load_table = "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}"
+            .parse::<Endpoint>()
+            .unwrap();
+        assert!(!catalog.supports_endpoint(&load_table).await.unwrap());
 
         config_mock.assert_async().await;
     }
