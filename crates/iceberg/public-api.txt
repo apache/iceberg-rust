@@ -2617,10 +2617,12 @@ pub fn iceberg::spec::TableMetadata::partition_statistics_for_snapshot(&self, sn
 pub fn iceberg::spec::TableMetadata::partition_statistics_iter(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = &iceberg::spec::PartitionStatisticsFile>
 pub fn iceberg::spec::TableMetadata::properties(&self) -> &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
 pub async fn iceberg::spec::TableMetadata::read_from(file_io: &iceberg::io::FileIO, metadata_location: impl core::convert::AsRef<str>) -> iceberg::Result<iceberg::spec::TableMetadata>
+pub fn iceberg::spec::TableMetadata::refs(&self) -> &std::collections::hash::map::HashMap<alloc::string::String, iceberg::spec::SnapshotReference>
 pub fn iceberg::spec::TableMetadata::schema_by_id(&self, schema_id: iceberg::spec::SchemaId) -> core::option::Option<&iceberg::spec::SchemaRef>
 pub fn iceberg::spec::TableMetadata::schemas_iter(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = &iceberg::spec::SchemaRef>
 pub fn iceberg::spec::TableMetadata::snapshot_by_id(&self, snapshot_id: i64) -> core::option::Option<&iceberg::spec::SnapshotRef>
 pub fn iceberg::spec::TableMetadata::snapshot_for_ref(&self, ref_name: &str) -> core::option::Option<&iceberg::spec::SnapshotRef>
+pub fn iceberg::spec::TableMetadata::snapshot_reference(&self, name: &str) -> core::option::Option<&iceberg::spec::SnapshotReference>
 pub fn iceberg::spec::TableMetadata::snapshots(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = &iceberg::spec::SnapshotRef>
 pub fn iceberg::spec::TableMetadata::sort_order_by_id(&self, sort_order_id: i64) -> core::option::Option<&iceberg::spec::SortOrderRef>
 pub fn iceberg::spec::TableMetadata::sort_orders_iter(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = &iceberg::spec::SortOrderRef>
@@ -3080,6 +3082,7 @@ impl iceberg::transaction::Transaction
 pub async fn iceberg::transaction::Transaction::commit(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>
 pub fn iceberg::transaction::Transaction::expire_snapshots(&self) -> iceberg::transaction::expire_snapshots::ExpireSnapshotsAction
 pub fn iceberg::transaction::Transaction::fast_append(&self) -> iceberg::transaction::append::FastAppendAction
+pub fn iceberg::transaction::Transaction::manage_snapshots(&self) -> iceberg::transaction::manage_snapshots::ManageSnapshotsAction
 pub fn iceberg::transaction::Transaction::new(table: &iceberg::table::Table) -> Self
 pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::sort_order::ReplaceSortOrderAction
 pub fn iceberg::transaction::Transaction::update_location(&self) -> iceberg::transaction::update_location::UpdateLocationAction
@@ -3104,6 +3107,7 @@ pub mod iceberg::util
 pub mod iceberg::util::snapshot
 pub fn iceberg::util::snapshot::ancestors_between(table_metadata: &iceberg::spec::TableMetadataRef, latest_snapshot_id: i64, oldest_snapshot_id: core::option::Option<i64>) -> impl core::iter::traits::iterator::Iterator<Item = iceberg::spec::SnapshotRef> + core::marker::Send
 pub fn iceberg::util::snapshot::ancestors_of(table_metadata: &iceberg::spec::TableMetadataRef, snapshot_id: i64) -> impl core::iter::traits::iterator::Iterator<Item = iceberg::spec::SnapshotRef> + core::marker::Send
+pub fn iceberg::util::snapshot::is_ancestor_of(table_metadata: &iceberg::spec::TableMetadataRef, descendant_id: i64, ancestor_id: i64) -> bool
 pub mod iceberg::writer
 pub mod iceberg::writer::base_writer
 pub mod iceberg::writer::base_writer::data_file_writer
