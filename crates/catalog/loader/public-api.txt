@@ -1,4 +1,23 @@
 pub mod iceberg_catalog_loader
+pub enum iceberg_catalog_loader::CatalogType
+pub iceberg_catalog_loader::CatalogType::Glue
+pub iceberg_catalog_loader::CatalogType::Hms
+pub iceberg_catalog_loader::CatalogType::Memory
+pub iceberg_catalog_loader::CatalogType::Rest
+pub iceberg_catalog_loader::CatalogType::S3Tables
+pub iceberg_catalog_loader::CatalogType::Sql
+impl iceberg_catalog_loader::CatalogType
+pub async fn iceberg_catalog_loader::CatalogType::load(self, name: impl core::convert::Into<alloc::string::String>, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, storage_factory: core::option::Option<alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>>) -> iceberg::error::Result<alloc::sync::Arc<dyn iceberg::catalog::Catalog>>
+impl core::clone::Clone for iceberg_catalog_loader::CatalogType
+pub fn iceberg_catalog_loader::CatalogType::clone(&self) -> iceberg_catalog_loader::CatalogType
+impl core::cmp::Eq for iceberg_catalog_loader::CatalogType
+impl core::cmp::PartialEq for iceberg_catalog_loader::CatalogType
+pub fn iceberg_catalog_loader::CatalogType::eq(&self, other: &iceberg_catalog_loader::CatalogType) -> bool
+impl core::fmt::Debug for iceberg_catalog_loader::CatalogType
+pub fn iceberg_catalog_loader::CatalogType::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for iceberg_catalog_loader::CatalogType
+pub fn iceberg_catalog_loader::CatalogType::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::StructuralPartialEq for iceberg_catalog_loader::CatalogType
 pub struct iceberg_catalog_loader::CatalogLoader<'a>
 impl iceberg_catalog_loader::CatalogLoader<'_>
 pub async fn iceberg_catalog_loader::CatalogLoader<'_>::load(self, name: alloc::string::String, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::error::Result<alloc::sync::Arc<dyn iceberg::catalog::Catalog>>
