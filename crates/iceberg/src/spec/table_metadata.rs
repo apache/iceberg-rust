@@ -527,6 +527,7 @@ impl TableMetadata {
     /// should return normalized `TableMetadata`.
     pub(super) fn try_normalize(&mut self) -> Result<&mut Self> {
         self.validate_current_schema()?;
+        self.validate_schemas_compatible_with_format_version()?;
         self.normalize_current_snapshot()?;
         self.construct_refs();
         self.validate_refs()?;
@@ -538,6 +539,19 @@ impl TableMetadata {
         self.try_normalize_partition_spec()?;
         self.try_normalize_sort_order()?;
         Ok(self)
+    }
+
+    fn validate_schemas_compatible_with_format_version(&self) -> Result<()> {
+        let mut schema_ids = self.schemas.keys().copied().collect::<Vec<_>>();
+        schema_ids.sort_unstable();
+
+        for schema_id in schema_ids {
+            if let Some(schema) = self.schemas.get(&schema_id) {
+                schema.validate_compatible_with_format_version(self.format_version)?;
+            }
+        }
+
+        Ok(())
     }
 
     /// If the default partition spec is not present in specs, add it
@@ -1616,10 +1630,10 @@ mod tests {
     use crate::io::FileIO;
     use crate::spec::table_metadata::TableMetadata;
     use crate::spec::{
-        BlobMetadata, EncryptedKey, INITIAL_ROW_ID, Literal, NestedField, NullOrder, Operation,
-        PartitionSpec, PartitionStatisticsFile, PrimitiveLiteral, PrimitiveType, Schema, Snapshot,
-        SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, StatisticsFile,
-        Summary, TableProperties, Transform, Type, UnboundPartitionField,
+        BlobMetadata, EncryptedKey, INITIAL_ROW_ID, ListType, Literal, NestedField, NullOrder,
+        Operation, PartitionSpec, PartitionStatisticsFile, PrimitiveLiteral, PrimitiveType, Schema,
+        Snapshot, SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder,
+        StatisticsFile, Summary, TableProperties, Transform, Type, UnboundPartitionField,
     };
     use crate::{ErrorKind, TableCreation};
 
@@ -3427,6 +3441,23 @@ mod tests {
     }
 
     #[test]
+    fn test_table_metadata_v2_rejects_schema_requiring_v3() {
+        let metadata =
+            fs::read_to_string("testdata/table_metadata/TableMetadataV2Valid.json").unwrap();
+        let mut metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+        metadata["schemas"][1]["fields"][2]["type"] =
+            serde_json::Value::String("timestamp_ns".to_string());
+
+        let desered: Result<TableMetadata, serde_json::Error> = serde_json::from_value(metadata);
+
+        let error_message = desered.unwrap_err().to_string();
+        assert!(
+            error_message.contains("Invalid type for z: timestamp_ns is not supported until v3"),
+            "expected serde validation to reject v3 type in v2 metadata, got: {error_message}"
+        );
+    }
+
+    #[test]
     fn test_table_metadata_v2_missing_sort_order() {
         let metadata =
             fs::read_to_string("testdata/table_metadata/TableMetadataV2MissingSortOrder.json")
@@ -3541,6 +3572,28 @@ mod tests {
         )
     }
 
+    fn schema_with_primitive_field(field_type: PrimitiveType) -> Schema {
+        Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "ts", Type::Primitive(field_type)).into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    fn table_creation_with_format_version(
+        schema: Schema,
+        format_version: FormatVersion,
+    ) -> TableCreation {
+        TableCreation::builder()
+            .location("s3://db/table".to_string())
+            .name("table".to_string())
+            .properties(HashMap::new())
+            .schema(schema)
+            .format_version(format_version)
+            .build()
+    }
+
     #[test]
     fn test_table_metadata_builder_from_table_creation() {
         let table_creation = TableCreation::builder()
@@ -3589,6 +3642,91 @@ mod tests {
                 })
             )])
         );
+    }
+
+    #[test]
+    fn test_table_metadata_builder_rejects_v1_v2_nanosecond_timestamp_tables() {
+        for (format_version, primitive_type) in [
+            (FormatVersion::V1, PrimitiveType::TimestampNs),
+            (FormatVersion::V1, PrimitiveType::TimestamptzNs),
+            (FormatVersion::V2, PrimitiveType::TimestampNs),
+            (FormatVersion::V2, PrimitiveType::TimestamptzNs),
+        ] {
+            let table_creation = table_creation_with_format_version(
+                schema_with_primitive_field(primitive_type),
+                format_version,
+            );
+
+            let err = TableMetadataBuilder::from_table_creation(table_creation).unwrap_err();
+
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(
+                err.message().contains("Invalid type for ts:"),
+                "expected error message to name the invalid column, got {}",
+                err.message()
+            );
+            assert!(
+                err.message().contains("is not supported until v3"),
+                "expected error message to explain v3 requirement, got {}",
+                err.message()
+            );
+        }
+    }
+
+    #[test]
+    fn test_table_metadata_builder_rejects_v2_list_element_requiring_v3() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "ts_values",
+                    Type::List(ListType::new(
+                        NestedField::list_element(
+                            2,
+                            Type::Primitive(PrimitiveType::TimestampNs),
+                            false,
+                        )
+                        .into(),
+                    )),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        let table_creation = table_creation_with_format_version(schema, FormatVersion::V2);
+
+        let err = TableMetadataBuilder::from_table_creation(table_creation).unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message().contains(
+                "Invalid type for ts_values.element: timestamp_ns is not supported until v3"
+            ),
+            "expected error message to explain nested v3 requirement with column name, got {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn test_table_metadata_builder_allows_v3_nanosecond_timestamp_tables() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "ts_ns", Type::Primitive(PrimitiveType::TimestampNs))
+                    .into(),
+                NestedField::required(2, "tstz_ns", Type::Primitive(PrimitiveType::TimestamptzNs))
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+        let table_creation = table_creation_with_format_version(schema, FormatVersion::V3);
+
+        let table_metadata = TableMetadataBuilder::from_table_creation(table_creation)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(table_metadata.format_version, FormatVersion::V3);
     }
 
     #[tokio::test]

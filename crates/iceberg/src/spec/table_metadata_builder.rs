@@ -638,6 +638,8 @@ impl TableMetadataBuilder {
     /// Important: Use this method with caution. The builder does not check
     /// if the added schema is compatible with the current schema.
     pub fn add_schema(mut self, schema: Schema) -> Result<Self> {
+        schema.validate_compatible_with_format_version(self.metadata.format_version)?;
+
         // Validate that new schema fields don't conflict with existing partition field names
         self.validate_schema_field_names(&schema)?;
 

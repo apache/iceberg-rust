@@ -17,7 +17,7 @@
 
 //! This module defines schema in iceberg.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -36,7 +36,7 @@ use self::_serde::SchemaEnum;
 use self::id_reassigner::ReassignFieldIds;
 use self::index::{IndexByName, index_by_id, index_parents};
 pub use self::prune_columns::prune_columns;
-use super::NestedField;
+use super::{FormatVersion, NestedField};
 use crate::error::Result;
 use crate::expr::accessor::StructAccessor;
 use crate::spec::datatypes::{
@@ -420,6 +420,51 @@ impl Schema {
     /// Return a hashmap matching field ids to nested fields.
     pub fn field_id_to_fields(&self) -> &HashMap<i32, NestedFieldRef> {
         &self.id_to_field
+    }
+
+    /// Returns the minimum table format version required by any type in this schema.
+    ///
+    /// Returns [`None`] when the schema contains no type with a specific minimum
+    /// table format version requirement.
+    pub fn min_format_version(&self) -> Option<FormatVersion> {
+        self.id_to_field
+            .values()
+            .filter_map(|field| field.field_type.as_primitive_type())
+            .filter_map(PrimitiveType::min_format_version)
+            .max()
+    }
+
+    /// Validates that all schema types are supported by the table format version.
+    pub(super) fn validate_compatible_with_format_version(
+        &self,
+        format_version: FormatVersion,
+    ) -> Result<()> {
+        let problems = self
+            .id_to_field
+            .values()
+            .filter_map(|field| {
+                let field_type = field.field_type.as_ref();
+                let primitive = field_type.as_primitive_type()?;
+                let required_format_version =
+                    primitive.required_format_version_if_unsupported(format_version)?;
+                let column_name = self.name_by_field_id(field.id).unwrap_or(field.name.as_str());
+                Some((
+                    field.id,
+                    format!(
+                        "Invalid type for {column_name}: {field_type} is not supported until {required_format_version}"
+                    ),
+                ))
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        if !problems.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                problems.into_values().collect::<Vec<_>>().join("; "),
+            ));
+        }
+
+        Ok(())
     }
 }
 
