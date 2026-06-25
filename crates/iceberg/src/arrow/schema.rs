@@ -688,7 +688,7 @@ impl SchemaVisitor for ToArrowSchemaConverter {
                     .unwrap_or(DataType::LargeBinary),
             )),
             crate::spec::PrimitiveType::Binary => {
-                Ok(ArrowSchemaOrFieldOrType::Type(DataType::LargeBinary))
+                Ok(ArrowSchemaOrFieldOrType::Type(DataType::Binary))
             }
         }
     }
@@ -1666,8 +1666,8 @@ mod tests {
                 false,
                 "12",
             ),
-            simple_field("l", DataType::LargeBinary, false, "13"),
-            simple_field("o", DataType::LargeBinary, false, "22"),
+            simple_field("l", DataType::Binary, false, "13"),
+            simple_field("o", DataType::Binary, false, "22"),
             simple_field("m", DataType::FixedSizeBinary(10), false, "11"),
             simple_field(
                 "list",
@@ -1695,7 +1695,7 @@ mod tests {
                 "fixed_list",
                 DataType::List(Arc::new(simple_field(
                     "element",
-                    DataType::LargeBinary,
+                    DataType::Binary,
                     false,
                     "26",
                 ))),

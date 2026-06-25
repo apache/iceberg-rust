@@ -678,10 +678,10 @@ mod test {
             )
             .unwrap(),
         ) as ArrayRef;
-        let col13 = Arc::new(arrow_array::LargeBinaryArray::from_opt_vec(vec![
-            Some(b"one"),
-            Some(b""),
-            Some(b"zzzz"),
+        let col13 = Arc::new(arrow_array::BinaryArray::from_opt_vec(vec![
+            Some(b"one".as_slice()),
+            Some(b"".as_slice()),
+            Some(b"zzzz".as_slice()),
         ])) as ArrayRef;
         let to_write = RecordBatch::try_new(delete_arrow_schema.clone(), vec![
             col0, col1, col2, col3, col4, col5, col6, col7, col8, col9, col10, col11, col12, col13,

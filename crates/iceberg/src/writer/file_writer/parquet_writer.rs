@@ -1124,11 +1124,11 @@ mod tests {
             None,
             Some("d"),
         ])) as ArrayRef;
-        let col6 = Arc::new(arrow_array::LargeBinaryArray::from_opt_vec(vec![
-            Some(b"one"),
+        let col6 = Arc::new(arrow_array::BinaryArray::from_opt_vec(vec![
+            Some(b"one".as_slice()),
             None,
-            Some(b""),
-            Some(b"zzzz"),
+            Some(b"".as_slice()),
+            Some(b"zzzz".as_slice()),
         ])) as ArrayRef;
         let col7 = Arc::new(arrow_array::Date32Array::from(vec![
             Some(0),
