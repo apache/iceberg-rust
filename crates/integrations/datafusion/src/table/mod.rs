@@ -161,6 +161,12 @@ impl TableProvider for IcebergTableProvider {
         input: Arc<dyn ExecutionPlan>,
         _insert_op: InsertOp,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        if _insert_op != InsertOp::Append {
+            return Err(DataFusionError::NotImplemented(format!(
+                "IcebergTableProvider supports only append inserts, got {_insert_op}"
+            )));
+        }
+
         // Load fresh table metadata from catalog
         let table = self
             .catalog
@@ -708,6 +714,60 @@ mod tests {
             }
         }
         false
+    }
+
+    #[tokio::test]
+    async fn test_catalog_backed_provider_rejects_overwrite_insert() {
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+        let ctx = SessionContext::new();
+        let input = Arc::new(EmptyExec::new(provider.schema())) as Arc<dyn ExecutionPlan>;
+
+        let error = provider
+            .insert_into(&ctx.state(), input, InsertOp::Overwrite)
+            .await
+            .expect_err("overwrite inserts should be rejected");
+
+        assert!(
+            matches!(
+                error,
+                DataFusionError::NotImplemented(ref message)
+                    if message
+                        == "IcebergTableProvider supports only append inserts, got Insert Overwrite"
+            ),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_catalog_backed_provider_rejects_replace_insert() {
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+        let ctx = SessionContext::new();
+        let input = Arc::new(EmptyExec::new(provider.schema())) as Arc<dyn ExecutionPlan>;
+
+        let error = provider
+            .insert_into(&ctx.state(), input, InsertOp::Replace)
+            .await
+            .expect_err("replace inserts should be rejected");
+
+        assert!(
+            matches!(
+                error,
+                DataFusionError::NotImplemented(ref message)
+                    if message
+                        == "IcebergTableProvider supports only append inserts, got Replace Into"
+            ),
+            "unexpected error: {error}"
+        );
     }
 
     #[tokio::test]
