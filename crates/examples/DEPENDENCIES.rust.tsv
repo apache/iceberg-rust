@@ -114,10 +114,10 @@ hyper@1.8.1										X
 hyper-util@0.1.20										X			
 iana-time-zone@0.1.65		X								X			
 iana-time-zone-haiku@0.1.2		X								X			
-iceberg@0.9.0		X											
-iceberg-catalog-rest@0.9.0		X											
-iceberg-examples@0.9.0		X											
-iceberg_test_utils@0.9.0		X											
+iceberg@0.10.0		X											
+iceberg-catalog-rest@0.10.0		X											
+iceberg-examples@0.10.0		X											
+iceberg_test_utils@0.10.0		X											
 icu_collections@2.1.1											X		
 icu_locale_core@2.1.1											X		
 icu_normalizer@2.1.1											X		
