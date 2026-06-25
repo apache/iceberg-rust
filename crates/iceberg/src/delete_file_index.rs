@@ -86,10 +86,11 @@ impl DeleteFileIndex {
         data_file: &DataFile,
         seq_num: Option<i64>,
     ) -> Vec<FileScanTaskDeleteFile> {
-        // Create the `Notified` while holding the read lock. `notify_waiters()` stores no
-        // permit and only wakes futures created before it; the populator can't signal until
-        // it takes the write lock (blocked by this read lock), so the notification is
-        // guaranteed to land after creation. `notified_owned` lets it outlive the guard.
+        // Create the `Notified` while holding the read lock. The read lock ensures that
+        // when we go inside it, either the state is already at Populated or it is still
+        // at Populating AND `notify_waiters()` has not been called yet. Any `Notified`
+        // created before the invocation of `notify_waiters()` will be notified by it
+        // even if `await` has not been called on it yet.
         let notified = {
             let guard = self.state.read().unwrap();
             match &*guard {

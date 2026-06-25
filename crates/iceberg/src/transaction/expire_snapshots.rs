@@ -321,11 +321,31 @@ impl TransactionAction for ExpireSnapshotsAction {
             .into_iter()
             .map(|ref_name| TableUpdate::RemoveSnapshotRef { ref_name })
             .collect();
+
+        // Drop statistics metadata for expired snapshots.
+        // This only updates metadata; puffin files are cleaned up separately.
+        let mut stats_updates: Vec<TableUpdate> = vec![];
+        for &snapshot_id in &plan.ids_to_remove {
+            stats_updates.extend(
+                metadata
+                    .statistics_for_snapshot(snapshot_id)
+                    .is_some()
+                    .then_some(TableUpdate::RemoveStatistics { snapshot_id }),
+            );
+            stats_updates.extend(
+                metadata
+                    .partition_statistics_for_snapshot(snapshot_id)
+                    .is_some()
+                    .then_some(TableUpdate::RemovePartitionStatistics { snapshot_id }),
+            );
+        }
+
         if !plan.ids_to_remove.is_empty() {
             updates.push(TableUpdate::RemoveSnapshots {
                 snapshot_ids: plan.ids_to_remove,
             });
         }
+        updates.extend(stats_updates);
 
         // The ref assertion closes the race where a concurrent writer advances `main` between
         // selection and commit, which could orphan a snapshot whose parent we are about to remove.
@@ -349,7 +369,8 @@ mod tests {
     use chrono::Utc;
 
     use crate::spec::{
-        MAIN_BRANCH, Operation, Snapshot, SnapshotReference, SnapshotRetention, Summary,
+        MAIN_BRANCH, Operation, PartitionStatisticsFile, Snapshot, SnapshotReference,
+        SnapshotRetention, StatisticsFile, Summary,
     };
     use crate::table::Table;
     use crate::transaction::Transaction;
@@ -470,6 +491,64 @@ mod tests {
             builder = builder.set_ref(name, reference).unwrap();
         }
         base.with_metadata(Arc::new(builder.build().unwrap().metadata))
+    }
+
+    /// Like [`table_with`], but also attaches statistics and partition-statistics files. Reuses
+    /// [`table_with`] for the snapshot/ref wiring so the two can't drift, then layers stats on top.
+    fn table_with_stats(
+        snapshots: Vec<Snapshot>,
+        refs: Vec<(&str, SnapshotReference)>,
+        statistics: Vec<StatisticsFile>,
+        partition_statistics: Vec<PartitionStatisticsFile>,
+    ) -> Table {
+        let table = table_with(snapshots, refs);
+        let mut builder = table.metadata().clone().into_builder(None);
+        for stats in statistics {
+            builder = builder.set_statistics(stats);
+        }
+        for stats in partition_statistics {
+            builder = builder.set_partition_statistics(stats);
+        }
+        table.with_metadata(Arc::new(builder.build().unwrap().metadata))
+    }
+
+    fn stats_file(snapshot_id: i64) -> StatisticsFile {
+        StatisticsFile {
+            snapshot_id,
+            statistics_path: format!("/stats-{snapshot_id}.puffin"),
+            file_size_in_bytes: 1,
+            file_footer_size_in_bytes: 1,
+            key_metadata: None,
+            blob_metadata: vec![],
+        }
+    }
+
+    fn partition_stats_file(snapshot_id: i64) -> PartitionStatisticsFile {
+        PartitionStatisticsFile {
+            snapshot_id,
+            statistics_path: format!("/partition-stats-{snapshot_id}.puffin"),
+            file_size_in_bytes: 1,
+        }
+    }
+
+    fn removed_statistics(updates: &[TableUpdate]) -> Vec<i64> {
+        updates
+            .iter()
+            .filter_map(|update| match update {
+                TableUpdate::RemoveStatistics { snapshot_id } => Some(*snapshot_id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn removed_partition_statistics(updates: &[TableUpdate]) -> Vec<i64> {
+        updates
+            .iter()
+            .filter_map(|update| match update {
+                TableUpdate::RemovePartitionStatistics { snapshot_id } => Some(*snapshot_id),
+                _ => None,
+            })
+            .collect()
     }
 
     #[tokio::test]
@@ -994,5 +1073,124 @@ mod tests {
         assert!(updates.iter().any(
             |u| matches!(u, TableUpdate::RemoveSnapshots { snapshot_ids } if snapshot_ids == &[1])
         ));
+    }
+
+    #[tokio::test]
+    async fn test_expiring_snapshot_drops_its_statistics() {
+        // main: 1 -> 2, both carrying statistics. retain_last(1) keeps only the head (2).
+        let table = table_with_stats(
+            vec![
+                snapshot(1, None, 35, TS + 1),
+                snapshot(2, Some(1), 36, TS + 2),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+            vec![stats_file(1), stats_file(2)],
+            vec![partition_stats_file(1), partition_stats_file(2)],
+        );
+
+        let updates = updates_of(
+            &table,
+            action().retain_last(1).expire_older_than_ms(i64::MAX),
+        )
+        .await;
+
+        // Snapshot 1 expires, so its stats entries are dropped; the retained head 2 keeps its stats.
+        assert_eq!(removed_statistics(&updates), vec![1]);
+        assert_eq!(removed_partition_statistics(&updates), vec![1]);
+    }
+
+    #[tokio::test]
+    async fn test_expiring_snapshot_without_statistics_emits_no_removal() {
+        // Same expiry, but no statistics attached to any snapshot.
+        let table = table_with(
+            vec![
+                snapshot(1, None, 35, TS + 1),
+                snapshot(2, Some(1), 36, TS + 2),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+        );
+
+        let updates = updates_of(
+            &table,
+            action().retain_last(1).expire_older_than_ms(i64::MAX),
+        )
+        .await;
+
+        assert!(removed_statistics(&updates).is_empty());
+        assert!(removed_partition_statistics(&updates).is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_only_present_statistics_variant_is_removed() {
+        // Snapshot 1 has statistics but no partition statistics.
+        let table = table_with_stats(
+            vec![
+                snapshot(1, None, 35, TS + 1),
+                snapshot(2, Some(1), 36, TS + 2),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+            vec![stats_file(1)],
+            vec![],
+        );
+
+        let updates = updates_of(
+            &table,
+            action().retain_last(1).expire_older_than_ms(i64::MAX),
+        )
+        .await;
+
+        assert_eq!(removed_statistics(&updates), vec![1]);
+        assert!(removed_partition_statistics(&updates).is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_ref_aging_expiry_drops_statistics() {
+        let now = Utc::now().timestamp_millis();
+        let day_ms = 24 * 60 * 60 * 1000;
+        // Snapshot 1 is kept alive only by `old-tag`; once the tag ages out (1-day max-ref-age vs a
+        // 10-day-old head) snapshot 1 becomes expirable and its statistics go with it. This reaches
+        // the stats loop through the ref-aging branch of `plan()`, distinct from the retain/age path.
+        let table = table_with_stats(
+            vec![
+                snapshot(1, None, 35, now - 10 * day_ms),
+                snapshot(2, None, 36, now - 1000),
+            ],
+            vec![
+                ("old-tag", tag(1, Some(day_ms))),
+                (MAIN_BRANCH, branch(2, None)),
+            ],
+            vec![stats_file(1)],
+            vec![partition_stats_file(1)],
+        );
+
+        let updates = updates_of(&table, action().expire_older_than_ms(now - 5 * day_ms)).await;
+        assert_eq!(removed_refs(&updates), vec!["old-tag".to_string()]);
+        assert_eq!(removed_statistics(&updates), vec![1]);
+        assert_eq!(removed_partition_statistics(&updates), vec![1]);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_expired_snapshots_drop_their_statistics() {
+        // Chain 1 -> 2 -> 3 on main; retain_last(1) keeps only head 3, expiring 1 and 2, both
+        // carrying statistics.
+        let table = table_with_stats(
+            vec![
+                snapshot(1, None, 35, TS + 1),
+                snapshot(2, Some(1), 36, TS + 2),
+                snapshot(3, Some(2), 37, TS + 3),
+            ],
+            vec![(MAIN_BRANCH, branch(3, None))],
+            vec![stats_file(1), stats_file(2)],
+            vec![partition_stats_file(1), partition_stats_file(2)],
+        );
+
+        let updates = updates_of(
+            &table,
+            action().retain_last(1).expire_older_than_ms(i64::MAX),
+        )
+        .await;
+
+        assert_eq!(removed_statistics(&updates), vec![1, 2]);
+        assert_eq!(removed_partition_statistics(&updates), vec![1, 2]);
     }
 }
