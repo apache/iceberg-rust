@@ -470,8 +470,8 @@ impl<'a> SnapshotProducer<'a> {
             ),
         };
 
-        // Calling self.summary() before self.manifest_file() is important because self.added_data_files
-        // will be set to an empty vec after self.manifest_file() returns, resulting in an empty summary
+        // Calling self.summary() before self.produce_manifest_file_list() is important because self.added_data_files
+        // will be set to an empty vec after self.produce_manifest_file_list() returns, resulting in an empty summary
         // being generated.
         let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
             Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
