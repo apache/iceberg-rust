@@ -23,6 +23,7 @@ use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
 use uuid::Uuid;
 
+use crate::compression::CompressionCodec;
 use crate::error::Result;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
@@ -165,6 +166,18 @@ impl<'a> SnapshotProducer<'a> {
         Ok(())
     }
 
+    fn avro_compression_codec(&self) -> Result<CompressionCodec> {
+        TableProperties::try_from(self.table.metadata().properties())
+            .map(|p| p.avro_compression_codec)
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Failed to parse table properties for compression settings",
+                )
+                .with_source(e)
+            })
+    }
+
     pub(crate) async fn validate_duplicate_files(&self) -> Result<()> {
         let Some(current_snapshot) = self.table.metadata().current_snapshot() else {
             return Ok(());
@@ -262,6 +275,7 @@ impl<'a> SnapshotProducer<'a> {
                 .default_partition_spec()
                 .as_ref()
                 .clone(),
+            self.avro_compression_codec()?,
         );
         match self.table.metadata().format_version() {
             FormatVersion::V1 => Ok(builder.build_v1()),
@@ -440,31 +454,34 @@ impl<'a> SnapshotProducer<'a> {
         let manifest_list_path = self.generate_manifest_list_file_path(0);
         let next_seq_num = self.table.metadata().next_sequence_number();
         let first_row_id = self.table.metadata().next_row_id();
-        let writer = self
+        let output_file = self
             .table
             .file_io()
-            .new_output(manifest_list_path.clone())?
-            .writer()
-            .await?;
+            .new_output(manifest_list_path.clone())?;
+        let compression = self.avro_compression_codec()?;
+
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
-                writer,
+                output_file,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
-            ),
+                compression,
+            )?,
             FormatVersion::V2 => ManifestListWriter::v2(
-                writer,
+                output_file,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
-            ),
+                compression,
+            )?,
             FormatVersion::V3 => ManifestListWriter::v3(
-                writer,
+                output_file,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
                 Some(first_row_id),
-            ),
+                compression,
+            )?,
         };
 
         // Calling self.summary() before self.manifest_file() is important because self.added_data_files

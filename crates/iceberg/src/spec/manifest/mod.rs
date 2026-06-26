@@ -166,6 +166,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::compression::CompressionCodec;
     use crate::io::FileIO;
     use crate::spec::{Literal, NestedField, PrimitiveType, Struct, Transform, Type};
 
@@ -273,6 +274,7 @@ mod tests {
             None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
+            CompressionCodec::None,
         )
         .build_v2_data();
         for entry in &entries {
@@ -575,6 +577,7 @@ mod tests {
             None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
+            CompressionCodec::None,
         )
         .build_v2_data();
         for entry in &entries {
@@ -672,6 +675,7 @@ mod tests {
             None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
+            CompressionCodec::None,
         )
         .build_v1();
         for entry in &entries {
@@ -781,6 +785,7 @@ mod tests {
             None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
+            CompressionCodec::None,
         )
         .build_v1();
         for entry in &entries {
@@ -889,6 +894,7 @@ mod tests {
             None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
+            CompressionCodec::None,
         )
         .build_v2_data();
         for entry in &entries {
@@ -1168,6 +1174,7 @@ mod tests {
             None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
+            CompressionCodec::None,
         )
         .build_v2_data();
         for entry in &entries {

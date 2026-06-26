@@ -28,14 +28,14 @@ use super::{
     Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType,
     UNASSIGNED_SEQUENCE_NUMBER,
 };
-use crate::encryption::EncryptedOutputFile;
+use crate::compression::CompressionCodec;
 use crate::error::Result;
 use crate::io::{FileWrite, OutputFile};
 use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
 use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2};
 use crate::spec::{
     DataContentType, DataFile, FieldSummary, ManifestEntry, ManifestFile, ManifestMetadata,
-    ManifestStatus, PrimitiveLiteral, SchemaRef, StructType,
+    ManifestStatus, PrimitiveLiteral, SchemaRef, StructType, avro_util,
 };
 use crate::{Error, ErrorKind};
 
@@ -43,6 +43,9 @@ use crate::{Error, ErrorKind};
 /// with the actual snapshot ID before it is committed.
 const UNASSIGNED_SNAPSHOT_ID: i64 = -1;
 
+// The future is pinned eagerly (rather than holding OutputFile) because OutputFile is consumed
+// by `output.writer().await` — we can't store it and call writer() later. Capturing the future
+// at construction time lets us defer the async work while still owning the location string.
 type WriterFuture = Pin<Box<dyn Future<Output = Result<Box<dyn FileWrite>>> + Send>>;
 
 /// The builder used to create a [`ManifestWriter`].
@@ -53,6 +56,7 @@ pub struct ManifestWriterBuilder {
     key_metadata: Option<Vec<u8>>,
     schema: SchemaRef,
     partition_spec: PartitionSpec,
+    compression: CompressionCodec,
 }
 
 impl ManifestWriterBuilder {
@@ -63,6 +67,7 @@ impl ManifestWriterBuilder {
         key_metadata: Option<Vec<u8>>,
         schema: SchemaRef,
         partition_spec: PartitionSpec,
+        compression: CompressionCodec,
     ) -> Self {
         let location = output.location().to_owned();
         Self {
@@ -72,27 +77,7 @@ impl ManifestWriterBuilder {
             key_metadata,
             schema,
             partition_spec,
-        }
-    }
-
-    /// Create a new builder from an [`EncryptedOutputFile`].
-    ///
-    /// Use this when writing manifests with transparent encryption.
-    pub fn new_from_encrypted(
-        encrypted_output: EncryptedOutputFile,
-        snapshot_id: Option<i64>,
-        key_metadata: Option<Vec<u8>>,
-        schema: SchemaRef,
-        partition_spec: PartitionSpec,
-    ) -> Self {
-        let location = encrypted_output.location().to_owned();
-        Self {
-            writer_future: Box::pin(async move { encrypted_output.writer().await }),
-            location,
-            snapshot_id,
-            key_metadata,
-            schema,
-            partition_spec,
+            compression,
         }
     }
 
@@ -112,6 +97,7 @@ impl ManifestWriterBuilder {
             self.key_metadata,
             metadata,
             None,
+            self.compression,
         )
     }
 
@@ -131,6 +117,7 @@ impl ManifestWriterBuilder {
             self.key_metadata,
             metadata,
             None,
+            self.compression,
         )
     }
 
@@ -150,6 +137,7 @@ impl ManifestWriterBuilder {
             self.key_metadata,
             metadata,
             None,
+            self.compression,
         )
     }
 
@@ -171,6 +159,7 @@ impl ManifestWriterBuilder {
             // First row id is assigned by the [`ManifestListWriter`] when the manifest
             // is added to the list.
             None,
+            self.compression,
         )
     }
 
@@ -190,6 +179,7 @@ impl ManifestWriterBuilder {
             self.key_metadata,
             metadata,
             None,
+            self.compression,
         )
     }
 }
@@ -216,6 +206,8 @@ pub struct ManifestWriter {
     manifest_entries: Vec<ManifestEntry>,
 
     metadata: ManifestMetadata,
+
+    compression: CompressionCodec,
 }
 
 impl ManifestWriter {
@@ -227,6 +219,7 @@ impl ManifestWriter {
         key_metadata: Option<Vec<u8>>,
         metadata: ManifestMetadata,
         first_row_id: Option<u64>,
+        compression: CompressionCodec,
     ) -> Self {
         Self {
             writer_future,
@@ -243,6 +236,7 @@ impl ManifestWriter {
             key_metadata,
             manifest_entries: Vec::new(),
             metadata,
+            compression,
         }
     }
 
@@ -451,7 +445,12 @@ impl ManifestWriter {
             // Manifest schema did not change between V2 and V3
             FormatVersion::V2 | FormatVersion::V3 => manifest_schema_v2(&partition_type)?,
         };
-        let mut avro_writer = AvroWriter::new(&avro_schema, Vec::new());
+
+        let mut avro_writer = AvroWriter::with_codec(
+            &avro_schema,
+            Vec::new(),
+            avro_util::to_avro_codec(self.compression)?,
+        );
         avro_writer.add_user_metadata(
             "schema".to_string(),
             to_vec(table_schema).map_err(|err| {
@@ -602,8 +601,13 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::compression::CompressionCodec;
     use crate::io::FileIO;
-    use crate::spec::{DataFileFormat, Manifest, NestedField, PrimitiveType, Schema, Struct, Type};
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, Manifest, ManifestContentType,
+        ManifestEntry, ManifestMetadata, ManifestStatus, NestedField, PartitionSpec, PrimitiveType,
+        Schema, Struct, Type,
+    };
 
     #[tokio::test]
     async fn test_add_delete_existing() {
@@ -735,6 +739,7 @@ mod tests {
             None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
+            CompressionCodec::None,
         )
         .build_v2_data();
         writer.add_entry(entries[0].clone()).unwrap();
@@ -753,6 +758,91 @@ mod tests {
         // file sequence number is assigned to None when the entry is added and delete to the manifest.
         entries[0].file_sequence_number = None;
         assert_eq!(actual_manifest, Manifest::new(metadata, entries));
+    }
+
+    #[tokio::test]
+    async fn test_manifest_writer_with_compression() {
+        let metadata = {
+            let schema = Schema::builder()
+                .with_fields(vec![Arc::new(NestedField::required(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Int),
+                ))])
+                .build()
+                .unwrap();
+
+            ManifestMetadata {
+                schema_id: 0,
+                schema: Arc::new(schema),
+                partition_spec: PartitionSpec::unpartition_spec(),
+                format_version: FormatVersion::V2,
+                content: ManifestContentType::Data,
+            }
+        };
+
+        async fn write_manifest(
+            io: &FileIO,
+            path: &std::path::Path,
+            metadata: &ManifestMetadata,
+            compression: CompressionCodec,
+        ) {
+            let output_file = io.new_output(path.to_str().unwrap()).unwrap();
+            let mut writer = ManifestWriterBuilder::new(
+                output_file,
+                Some(1),
+                None,
+                metadata.schema.clone(),
+                metadata.partition_spec.clone(),
+                compression,
+            )
+            .build_v2_data();
+            for i in 0..1000 {
+                let data_file = DataFileBuilder::default()
+                    .content(DataContentType::Data)
+                    .file_path(format!(
+                        "/very/long/path/to/data/directory/with/many/subdirectories/file_{i}.parquet"
+                    ))
+                    .file_format(DataFileFormat::Parquet)
+                    .partition(Struct::empty())
+                    .file_size_in_bytes(100000 + i)
+                    .record_count(1000 + i)
+                    .build()
+                    .unwrap();
+                let entry = ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .snapshot_id(1)
+                    .sequence_number(1)
+                    .file_sequence_number(1)
+                    .data_file(data_file)
+                    .build();
+                writer.add_entry(entry).unwrap();
+            }
+            writer.write_manifest_file().await.unwrap();
+        }
+
+        let tmp_dir = TempDir::new().unwrap();
+        let io = FileIO::new_with_fs();
+        let uncompressed_path = tmp_dir.path().join("uncompressed_manifest.avro");
+        let compressed_path = tmp_dir.path().join("compressed_manifest.avro");
+
+        write_manifest(&io, &uncompressed_path, &metadata, CompressionCodec::None).await;
+        write_manifest(&io, &compressed_path, &metadata, CompressionCodec::Gzip(Some(9))).await;
+
+        let uncompressed_size = fs::metadata(&uncompressed_path).unwrap().len();
+        let compressed_size = fs::metadata(&compressed_path).unwrap().len();
+
+        // Verify compression is actually working
+        assert!(
+            compressed_size < uncompressed_size,
+            "Compressed size ({compressed_size}) should be less than uncompressed size ({uncompressed_size})"
+        );
+
+        // Verify the compressed file can be read back correctly
+        let compressed_bytes = fs::read(&compressed_path).unwrap();
+        let manifest = Manifest::parse_avro(&compressed_bytes).unwrap();
+        assert_eq!(manifest.metadata.format_version, FormatVersion::V2);
+        assert_eq!(manifest.entries.len(), 1000);
     }
 
     #[tokio::test]
@@ -823,6 +913,7 @@ mod tests {
             None,
             schema.clone(),
             partition_spec.clone(),
+            CompressionCodec::None,
         )
         .build_v3_deletes();
 
@@ -843,4 +934,5 @@ mod tests {
             ManifestContentType::Deletes,
         );
     }
+
 }

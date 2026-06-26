@@ -17,6 +17,7 @@
 
 //! Spec for Iceberg.
 
+pub(crate) mod avro_util;
 mod datatypes;
 mod encrypted_key;
 mod manifest;

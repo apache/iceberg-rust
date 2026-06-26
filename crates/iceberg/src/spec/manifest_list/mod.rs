@@ -99,6 +99,7 @@ mod test {
     use super::_const_schema::MANIFEST_LIST_AVRO_SCHEMA_V2;
     use super::_serde::ManifestFileV2;
     use super::*;
+    use crate::compression::CompressionCodec;
     use crate::io::FileIO;
     use crate::spec::{Datum, FieldSummary, ManifestContentType, ManifestFile};
 
@@ -134,15 +135,12 @@ mod test {
         let full_path = format!("{}/{}", tmp_dir.path().to_str().unwrap(), file_name);
 
         let mut writer = ManifestListWriter::v1(
-            file_io
-                .new_output(full_path.clone())
-                .unwrap()
-                .writer()
-                .await
-                .unwrap(),
+            file_io.new_output(full_path.clone()).unwrap(),
             1646658105718557341,
             Some(1646658105718557341),
-        );
+            CompressionCodec::None,
+        )
+        .unwrap();
 
         writer
             .add_manifests(manifest_list.entries.clone().into_iter())
@@ -211,16 +209,13 @@ mod test {
         let full_path = format!("{}/{}", tmp_dir.path().to_str().unwrap(), file_name);
 
         let mut writer = ManifestListWriter::v2(
-            file_io
-                .new_output(full_path.clone())
-                .unwrap()
-                .writer()
-                .await
-                .unwrap(),
+            file_io.new_output(full_path.clone()).unwrap(),
             1646658105718557341,
             Some(1646658105718557341),
             1,
-        );
+            CompressionCodec::None,
+        )
+        .unwrap();
 
         writer
             .add_manifests(manifest_list.entries.clone().into_iter())
@@ -329,17 +324,14 @@ mod test {
         let full_path = format!("{}/{}", tmp_dir.path().to_str().unwrap(), file_name);
 
         let mut writer = ManifestListWriter::v3(
-            file_io
-                .new_output(full_path.clone())
-                .unwrap()
-                .writer()
-                .await
-                .unwrap(),
+            file_io.new_output(full_path.clone()).unwrap(),
             377075049360453639,
             Some(377075049360453639),
             1,
             Some(10),
-        );
+            CompressionCodec::None,
+        )
+        .unwrap();
 
         writer
             .add_manifests(manifest_list.entries.clone().into_iter())

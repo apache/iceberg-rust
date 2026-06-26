@@ -1024,7 +1024,7 @@ mod tests {
         assert_eq!(metadata.blobs.len(), 1);
         assert_eq!(
             metadata.blobs[0].compression_codec,
-            CompressionCodec::gzip_default()
+            CompressionCodec::Gzip(None)
         );
     }
 }

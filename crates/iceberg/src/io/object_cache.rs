@@ -214,6 +214,7 @@ mod tests {
 
     use super::*;
     use crate::TableIdent;
+    use crate::compression::CompressionCodec;
     use crate::io::{FileIO, OutputFile};
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestEntry,
@@ -296,6 +297,7 @@ mod tests {
                 None,
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
+                CompressionCodec::None,
             )
             .build_v2_data();
             writer
@@ -320,20 +322,17 @@ mod tests {
             let data_file_manifest = writer.write_manifest_file().await.unwrap();
 
             // Write to manifest list
-            let manifest_list_writer = self
-                .table
-                .file_io()
-                .new_output(current_snapshot.manifest_list())
-                .unwrap()
-                .writer()
-                .await
-                .unwrap();
             let mut manifest_list_write = ManifestListWriter::v2(
-                manifest_list_writer,
+                self.table
+                    .file_io()
+                    .new_output(current_snapshot.manifest_list())
+                    .unwrap(),
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
-            );
+                CompressionCodec::None,
+            )
+            .unwrap();
             manifest_list_write
                 .add_manifests(vec![data_file_manifest].into_iter())
                 .unwrap();
