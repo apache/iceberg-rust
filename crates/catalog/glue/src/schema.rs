@@ -174,7 +174,10 @@ impl SchemaVisitor for GlueSchemaBuilder {
             PrimitiveType::Time | PrimitiveType::String | PrimitiveType::Uuid => {
                 "string".to_string()
             }
-            PrimitiveType::Binary | PrimitiveType::Fixed(_) => "binary".to_string(),
+            PrimitiveType::Binary
+            | PrimitiveType::Fixed(_)
+            | PrimitiveType::Geometry(_)
+            | PrimitiveType::Geography(_) => "binary".to_string(),
             PrimitiveType::Decimal { precision, scale } => {
                 format!("decimal({precision},{scale})")
             }

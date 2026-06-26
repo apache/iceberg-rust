@@ -508,6 +508,13 @@ impl Literal {
                     PrimitiveLiteral::Binary(decode_hex_bytes(&s)?),
                 ))),
                 (
+                    PrimitiveType::Geometry(_) | PrimitiveType::Geography(_),
+                    JsonValue::String(_),
+                ) => Err(Error::new(
+                    crate::ErrorKind::DataInvalid,
+                    "Geometry and geography defaults must be null",
+                )),
+                (
                     PrimitiveType::Decimal {
                         precision: _,
                         scale,
@@ -672,6 +679,13 @@ impl Literal {
                 (PrimitiveType::Binary, PrimitiveLiteral::Binary(val)) => {
                     Ok(JsonValue::String(encode_hex_bytes(&val)))
                 }
+                (
+                    PrimitiveType::Geometry(_) | PrimitiveType::Geography(_),
+                    PrimitiveLiteral::Binary(_),
+                ) => Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Geometry and geography defaults must be null",
+                )),
                 (_, PrimitiveLiteral::Int128(val)) => match r#type {
                     Type::Primitive(PrimitiveType::Decimal {
                         precision: _precision,
