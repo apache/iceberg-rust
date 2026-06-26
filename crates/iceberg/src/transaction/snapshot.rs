@@ -32,6 +32,7 @@ use crate::spec::{
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
+use crate::transaction::validate::SnapshotValidator;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
@@ -61,7 +62,7 @@ const META_ROOT_PATH: &str = "metadata";
 ///
 /// 3. **Delete Entry Processing**: The `delete_entries()` method is intended for future delete
 ///    operations to specify which manifest entries should be marked as deleted.
-pub(crate) trait SnapshotProduceOperation: Send + Sync {
+pub(crate) trait SnapshotProduceOperation: Send + Sync + SnapshotValidator {
     /// Returns the operation type that will be recorded in the snapshot summary.
     ///
     /// This determines what kind of operation is being performed (e.g., `Append`, `Overwrite`),
@@ -437,6 +438,12 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_produce_operation: OP,
         process: MP,
     ) -> Result<ActionCommit> {
+        // Validate the operation against the (refreshed) base table to detect conflicts
+        // before writing the new snapshot.
+        snapshot_produce_operation
+            .validate(self.table, self.table.metadata().current_snapshot_id())
+            .await?;
+
         let manifest_list_path = self.generate_manifest_list_file_path(0);
         let next_seq_num = self.table.metadata().next_sequence_number();
         let first_row_id = self.table.metadata().next_row_id();
