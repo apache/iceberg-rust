@@ -341,7 +341,10 @@ mod test {
     use super::ManifestListWriter;
     use crate::compression::CompressionCodec;
     use crate::io::FileIO;
-    use crate::spec::{Datum, FieldSummary, ManifestContentType, ManifestFile, ManifestList, UNASSIGNED_SEQUENCE_NUMBER};
+    use crate::spec::{
+        Datum, FieldSummary, ManifestContentType, ManifestFile, ManifestList,
+        UNASSIGNED_SEQUENCE_NUMBER,
+    };
 
     #[tokio::test]
     async fn test_manifest_list_writer_v1() {
@@ -373,7 +376,13 @@ mod test {
         let io = FileIO::new_with_fs();
         let output_file = output_file(&path, &io);
 
-        let mut writer = ManifestListWriter::v1(output_file, 1646658105718557341, Some(0), CompressionCodec::None).unwrap();
+        let mut writer = ManifestListWriter::v1(
+            output_file,
+            1646658105718557341,
+            Some(0),
+            CompressionCodec::None,
+        )
+        .unwrap();
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -420,7 +429,14 @@ mod test {
         let io = FileIO::new_with_fs();
         let output_file = output_file(&path, &io);
 
-        let mut writer = ManifestListWriter::v2(output_file, snapshot_id, Some(0), seq_num, CompressionCodec::None).unwrap();
+        let mut writer = ManifestListWriter::v2(
+            output_file,
+            snapshot_id,
+            Some(0),
+            seq_num,
+            CompressionCodec::None,
+        )
+        .unwrap();
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -468,8 +484,15 @@ mod test {
         let io = FileIO::new_with_fs();
         let output_file = output_file(&path, &io);
 
-        let mut writer =
-            ManifestListWriter::v3(output_file, snapshot_id, Some(0), seq_num, Some(10), CompressionCodec::None).unwrap();
+        let mut writer = ManifestListWriter::v3(
+            output_file,
+            snapshot_id,
+            Some(0),
+            seq_num,
+            Some(10),
+            CompressionCodec::None,
+        )
+        .unwrap();
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -516,7 +539,13 @@ mod test {
         let io = FileIO::new_with_fs();
         let output_file = output_file(&path, &io);
 
-        let mut writer = ManifestListWriter::v1(output_file, 1646658105718557341, Some(0), CompressionCodec::None).unwrap();
+        let mut writer = ManifestListWriter::v1(
+            output_file,
+            1646658105718557341,
+            Some(0),
+            CompressionCodec::None,
+        )
+        .unwrap();
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -561,7 +590,13 @@ mod test {
         let io = FileIO::new_with_fs();
         let output_file = output_file(&path, &io);
 
-        let mut writer = ManifestListWriter::v1(output_file, 1646658105718557341, Some(0), CompressionCodec::None).unwrap();
+        let mut writer = ManifestListWriter::v1(
+            output_file,
+            1646658105718557341,
+            Some(0),
+            CompressionCodec::None,
+        )
+        .unwrap();
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();
@@ -608,7 +643,14 @@ mod test {
         let io = FileIO::new_with_fs();
         let output_file = output_file(&path, &io);
 
-        let mut writer = ManifestListWriter::v2(output_file, snapshot_id, Some(0), seq_num, CompressionCodec::None).unwrap();
+        let mut writer = ManifestListWriter::v2(
+            output_file,
+            snapshot_id,
+            Some(0),
+            seq_num,
+            CompressionCodec::None,
+        )
+        .unwrap();
         writer
             .add_manifests(expected_manifest_list.entries.clone().into_iter())
             .unwrap();

@@ -138,7 +138,8 @@ mod tests {
     fn test_parse_avro_codec_unknown() {
         let err = parse_avro_codec(Some("unknown"), Some(1)).unwrap_err();
         assert!(
-            err.to_string().contains("Unsupported compression codec: unknown"),
+            err.to_string()
+                .contains("Unsupported compression codec: unknown"),
             "unexpected error: {err}"
         );
     }

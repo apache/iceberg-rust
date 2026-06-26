@@ -101,7 +101,6 @@ mod test {
     use super::*;
     use crate::compression::CompressionCodec;
     use crate::io::FileIO;
-
     use crate::spec::{Datum, FieldSummary, ManifestContentType, ManifestFile};
 
     #[tokio::test]

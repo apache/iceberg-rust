@@ -265,7 +265,6 @@ impl<'a> SnapshotProducer<'a> {
             DataFileFormat::Avro
         );
         let output_file = self.table.file_io().new_output(new_manifest_path)?;
-
         let builder = ManifestWriterBuilder::new(
             output_file,
             Some(self.snapshot_id),
@@ -278,7 +277,6 @@ impl<'a> SnapshotProducer<'a> {
                 .clone(),
             self.avro_compression_codec()?,
         );
-
         match self.table.metadata().format_version() {
             FormatVersion::V1 => Ok(builder.build_v1()),
             FormatVersion::V2 => match content {

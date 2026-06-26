@@ -2708,7 +2708,6 @@ impl iceberg::spec::TableProperties
 pub const iceberg::spec::TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC: &str
 pub const iceberg::spec::TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL: &str
-pub const iceberg::spec::TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT: core::option::Option<u8>
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS: &str
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT: u64
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS: &str

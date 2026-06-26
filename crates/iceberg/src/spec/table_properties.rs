@@ -239,8 +239,6 @@ impl TableProperties {
 
     /// Compression level for Avro files
     pub const PROPERTY_AVRO_COMPRESSION_LEVEL: &str = "write.avro.compression-level";
-    /// Default Avro compression level (None, uses codec-specific defaults: gzip=9, zstd=1)
-    pub const PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT: Option<u8> = None;
 
     /// Whether to use `FanoutWriter` for partitioned tables (handles unsorted data).
     /// If false, uses `ClusteredWriter` (requires sorted data, more memory efficient).

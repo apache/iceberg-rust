@@ -131,8 +131,9 @@ impl CompressionCodec {
                 Ok(encoder.finish()?)
             }
             CompressionCodec::Gzip(level) => {
-                let compression =
-                    Compression::new(level.unwrap_or(GZIP_DEFAULT_LEVEL).min(GZIP_MAX_LEVEL) as u32);
+                let compression = Compression::new(
+                    level.unwrap_or(GZIP_DEFAULT_LEVEL).min(GZIP_MAX_LEVEL) as u32,
+                );
                 let mut encoder = GzEncoder::new(Vec::new(), compression);
                 encoder.write_all(&bytes)?;
                 Ok(encoder.finish()?)
