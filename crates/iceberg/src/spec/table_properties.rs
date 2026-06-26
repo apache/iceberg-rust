@@ -341,13 +341,20 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                     TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT.to_string(),
                 )?;
 
-                // Sentinel value 255 means level was not specified
-                let level_raw = parse_property(
-                    props,
-                    TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL,
-                    255u8,
-                )?;
-                let level = if level_raw == 255 { None } else { Some(level_raw) };
+                let level = props
+                    .get(TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL)
+                    .map(|v| {
+                        v.parse::<u8>().map_err(|e| {
+                            Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Invalid value for {}: {e}",
+                                    TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL
+                                ),
+                            )
+                        })
+                    })
+                    .transpose()?;
 
                 avro_util::parse_avro_codec(Some(&codec_name), level)?
             },
