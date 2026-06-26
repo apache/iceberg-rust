@@ -209,6 +209,9 @@ jobs:
   pypi-publish:
     name: Publish Python 🐍 distribution 📦 to Pypi
     needs: [sdist, wheels]
+    # PyPI publish must always be in the top-level workflow
+    # The calling workflow must instead implement publishing in its own workflow definition
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
 
     environment:
