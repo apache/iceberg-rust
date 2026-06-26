@@ -467,7 +467,7 @@ impl<'a> SnapshotProducer<'a> {
                 .with_source(e)
             })?;
 
-        let compression = to_avro_codec(table_props.avro_compression_codec);
+        let compression = to_avro_codec(table_props.avro_compression_codec)?;
 
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(

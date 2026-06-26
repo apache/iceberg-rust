@@ -490,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn test_table_properties_compression() {
+    fn test_table_properties_avro_compression() {
         let props = HashMap::from([
             (
                 TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC.to_string(),

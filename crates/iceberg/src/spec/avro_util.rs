@@ -23,6 +23,8 @@ use miniz_oxide::deflate::CompressionLevel;
 use serde_json::Value;
 
 use crate::compression::CompressionCodec;
+use crate::error::Result;
+use crate::{Error, ErrorKind};
 
 /// Codec name for gzip compression
 pub const CODEC_GZIP: &str = "gzip";
@@ -67,11 +69,15 @@ pub(crate) fn parse_avro_codec(codec: Option<&str>, level: Option<u8>) -> Compre
 
 /// Convert a [`CompressionCodec`] to an [`apache_avro::Codec`] for use in Avro writers.
 /// Codec-specific defaults are applied here (e.g. gzip defaults to level 9, zstd to level 1).
-pub(crate) fn to_avro_codec(codec: CompressionCodec) -> Codec {
+/// Returns an error for codecs that are not supported in Avro (e.g. LZ4).
+pub(crate) fn to_avro_codec(codec: CompressionCodec) -> Result<Codec> {
     match codec {
-        CompressionCodec::None => Codec::Null,
-        CompressionCodec::Snappy => Codec::Snappy,
-        CompressionCodec::Lz4 => Codec::Null,
+        CompressionCodec::None => Ok(Codec::Null),
+        CompressionCodec::Snappy => Ok(Codec::Snappy),
+        CompressionCodec::Lz4 => Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "LZ4 compression is not supported for Avro files",
+        )),
         CompressionCodec::Gzip(level) => {
             let compression_level = match level.unwrap_or(DEFAULT_GZIP_LEVEL) {
                 0 => CompressionLevel::NoCompression,
@@ -80,11 +86,11 @@ pub(crate) fn to_avro_codec(codec: CompressionCodec) -> Codec {
                 10 => CompressionLevel::UberCompression,
                 _ => CompressionLevel::DefaultLevel,
             };
-            Codec::Deflate(DeflateSettings::new(compression_level))
+            Ok(Codec::Deflate(DeflateSettings::new(compression_level)))
         }
         CompressionCodec::Zstd(level) => {
             let zstd_level = level.unwrap_or(DEFAULT_ZSTD_LEVEL).min(MAX_ZSTD_LEVEL);
-            Codec::Zstandard(ZstandardSettings::new(zstd_level))
+            Ok(Codec::Zstandard(ZstandardSettings::new(zstd_level)))
         }
     }
 }
@@ -149,7 +155,7 @@ mod tests {
     #[test]
     fn test_to_avro_codec_gzip_default() {
         // None level → default 9 (BestCompression)
-        let avro_codec = to_avro_codec(CompressionCodec::Gzip(None));
+        let avro_codec = to_avro_codec(CompressionCodec::Gzip(None)).unwrap();
         assert_eq!(
             avro_codec,
             Codec::Deflate(DeflateSettings::new(CompressionLevel::BestCompression))
@@ -158,7 +164,7 @@ mod tests {
 
     #[test]
     fn test_to_avro_codec_gzip_level5() {
-        let avro_codec = to_avro_codec(CompressionCodec::Gzip(Some(5)));
+        let avro_codec = to_avro_codec(CompressionCodec::Gzip(Some(5))).unwrap();
         assert_eq!(
             avro_codec,
             Codec::Deflate(DeflateSettings::new(CompressionLevel::DefaultLevel))
@@ -168,19 +174,19 @@ mod tests {
     #[test]
     fn test_to_avro_codec_zstd_default() {
         // None level → default 1
-        let avro_codec = to_avro_codec(CompressionCodec::Zstd(None));
+        let avro_codec = to_avro_codec(CompressionCodec::Zstd(None)).unwrap();
         assert_eq!(avro_codec, Codec::Zstandard(ZstandardSettings::new(1)));
     }
 
     #[test]
     fn test_to_avro_codec_zstd_level3() {
-        let avro_codec = to_avro_codec(CompressionCodec::Zstd(Some(3)));
+        let avro_codec = to_avro_codec(CompressionCodec::Zstd(Some(3))).unwrap();
         assert_eq!(avro_codec, Codec::Zstandard(ZstandardSettings::new(3)));
     }
 
     #[test]
     fn test_to_avro_codec_zstd_clamping() {
-        let avro_codec = to_avro_codec(CompressionCodec::Zstd(Some(MAX_ZSTD_LEVEL + 1)));
+        let avro_codec = to_avro_codec(CompressionCodec::Zstd(Some(MAX_ZSTD_LEVEL + 1))).unwrap();
         assert_eq!(
             avro_codec,
             Codec::Zstandard(ZstandardSettings::new(MAX_ZSTD_LEVEL))
@@ -189,14 +195,22 @@ mod tests {
 
     #[test]
     fn test_to_avro_codec_null() {
-        assert!(matches!(to_avro_codec(CompressionCodec::None), Codec::Null));
+        assert!(matches!(
+            to_avro_codec(CompressionCodec::None).unwrap(),
+            Codec::Null
+        ));
     }
 
     #[test]
     fn test_to_avro_codec_snappy() {
         assert!(matches!(
-            to_avro_codec(CompressionCodec::Snappy),
+            to_avro_codec(CompressionCodec::Snappy).unwrap(),
             Codec::Snappy
         ));
+    }
+
+    #[test]
+    fn test_to_avro_codec_lz4_unsupported() {
+        assert!(to_avro_codec(CompressionCodec::Lz4).is_err());
     }
 }

@@ -158,6 +158,9 @@ mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
+    use apache_avro::Codec;
+
+    use crate::compression::CompressionCodec;
     use crate::io::FileIO;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, ManifestEntry,
@@ -236,6 +239,7 @@ mod tests {
             None,
             schema.clone(),
             partition_spec.as_ref().clone(),
+            CompressionCodec::None,
         )
         .build_v2_data();
         data_writer
@@ -266,6 +270,7 @@ mod tests {
             None,
             schema.clone(),
             partition_spec.as_ref().clone(),
+            CompressionCodec::None,
         )
         .build_v2_data();
         delete_writer
@@ -301,13 +306,11 @@ mod tests {
             table
                 .file_io()
                 .new_output(current_snapshot.manifest_list())
-                .unwrap()
-                .writer()
-                .await
                 .unwrap(),
             current_snapshot.snapshot_id(),
             current_snapshot.parent_snapshot_id(),
             current_snapshot.sequence_number(),
+            Codec::Null,
         );
         manifest_list_write
             .add_manifests(vec![data_manifest, delete_manifest].into_iter())

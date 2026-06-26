@@ -1614,6 +1614,7 @@ mod tests {
     use crate::catalog::MetadataLocation;
     use crate::compression::CompressionCodec;
     use crate::io::FileIO;
+    use crate::spec::TableProperties;
     use crate::spec::table_metadata::TableMetadata;
     use crate::spec::{
         BlobMetadata, EncryptedKey, INITIAL_ROW_ID, Literal, NestedField, NullOrder, Operation,

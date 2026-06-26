@@ -446,7 +446,7 @@ impl ManifestWriter {
         let mut avro_writer = AvroWriter::with_codec(
             &avro_schema,
             Vec::new(),
-            avro_util::to_avro_codec(self.compression),
+            avro_util::to_avro_codec(self.compression)?,
         );
         avro_writer.add_user_metadata(
             "schema".to_string(),
@@ -825,7 +825,7 @@ mod tests {
             None,
             schema.clone(),
             partition_spec.clone(),
-            Codec::Null,
+            CompressionCodec::None,
         )
         .build_v3_deletes();
 

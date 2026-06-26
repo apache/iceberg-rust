@@ -100,7 +100,6 @@ mod test {
     use super::_serde::ManifestFileV2;
     use super::*;
     use crate::io::FileIO;
-    use apache_avro::Codec;
 
     use crate::spec::{Datum, FieldSummary, ManifestContentType, ManifestFile};
 

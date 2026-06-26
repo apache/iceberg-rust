@@ -638,6 +638,8 @@ pub mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
+    use apache_avro::Codec;
+
     use crate::arrow::ArrowReaderBuilder;
     use crate::compression::CompressionCodec;
     use crate::expr::{BoundPredicate, Reference};
@@ -920,20 +922,15 @@ pub mod tests {
             let data_file_manifest = writer.write_manifest_file().await.unwrap();
 
             // Write to manifest list
-            let manifest_list_writer = self
-                .table
-                .file_io()
-                .new_output(current_snapshot.manifest_list())
-                .unwrap()
-                .writer()
-                .await
-                .unwrap();
             let mut manifest_list_write = ManifestListWriter::v2(
-                manifest_list_writer,
+                self.table
+                    .file_io()
+                    .new_output(current_snapshot.manifest_list())
+                    .unwrap(),
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
-                CompressionCodec::None,
+                Codec::Null,
             );
             manifest_list_write
                 .add_manifests(vec![data_file_manifest].into_iter())
@@ -1158,20 +1155,15 @@ pub mod tests {
             let data_file_manifest = writer.write_manifest_file().await.unwrap();
 
             // Write to manifest list
-            let manifest_list_writer = self
-                .table
-                .file_io()
-                .new_output(current_snapshot.manifest_list())
-                .unwrap()
-                .writer()
-                .await
-                .unwrap();
             let mut manifest_list_write = ManifestListWriter::v2(
-                manifest_list_writer,
+                self.table
+                    .file_io()
+                    .new_output(current_snapshot.manifest_list())
+                    .unwrap(),
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
-                CompressionCodec::None,
+                Codec::Null,
             );
             manifest_list_write
                 .add_manifests(vec![data_file_manifest].into_iter())
@@ -1257,20 +1249,15 @@ pub mod tests {
 
             // Write to manifest list - DATA FIRST then DELETE
             // This order is crucial for reproduction
-            let manifest_list_writer = self
-                .table
-                .file_io()
-                .new_output(current_snapshot.manifest_list())
-                .unwrap()
-                .writer()
-                .await
-                .unwrap();
             let mut manifest_list_write = ManifestListWriter::v2(
-                manifest_list_writer,
+                self.table
+                    .file_io()
+                    .new_output(current_snapshot.manifest_list())
+                    .unwrap(),
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
-                CompressionCodec::None,
+                Codec::Null,
             );
             manifest_list_write
                 .add_manifests(vec![data_manifest, delete_manifest].into_iter())
