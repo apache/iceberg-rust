@@ -18,7 +18,6 @@
 //! Utilities for working with Apache Avro in Iceberg.
 
 use apache_avro::{Codec, DeflateSettings, ZstandardSettings};
-use log::warn;
 use miniz_oxide::deflate::CompressionLevel;
 use serde_json::Value;
 
@@ -38,32 +37,31 @@ const MAX_ZSTD_LEVEL: u8 = 22;
 
 /// Parse codec name and optional level into a [`CompressionCodec`].
 ///
-/// Unknown codec names fall back to `CompressionCodec::None` with a `warn!` log entry rather
-/// than returning an error. This is intentional graceful degradation: the Avro spec allows
-/// readers to tolerate unknown codec metadata fields, and a hard error here would break
-/// reading tables written by newer implementations. Callers that need strict validation should
-/// check the codec before writing.
+/// Returns `DataInvalid` for unrecognized codec names, matching the Java implementation which
+/// throws `IllegalArgumentException("Unsupported compression codec: ...")` in the same case.
 ///
 /// # Arguments
 ///
 /// * `codec` - The name of the compression codec (e.g., "gzip", "zstd", "snappy", "uncompressed")
 /// * `level` - Optional compression level stored as-is; codec-specific defaults are applied
 ///   in [`to_avro_codec`] at the point of use.
-pub(crate) fn parse_avro_codec(codec: Option<&str>, level: Option<u8>) -> CompressionCodec {
+pub(crate) fn parse_avro_codec(codec: Option<&str>, level: Option<u8>) -> Result<CompressionCodec> {
     let Some(codec_str) = codec else {
-        return CompressionCodec::None;
+        return Ok(CompressionCodec::None);
     };
     let lowercase = codec_str.to_lowercase();
     // "uncompressed" is Avro-specific and not in the standard CompressionCodec names
     if lowercase == CODEC_UNCOMPRESSED {
-        return CompressionCodec::None;
+        return Ok(CompressionCodec::None);
     }
     let base: CompressionCodec =
-        serde_json::from_value(Value::String(lowercase)).unwrap_or_else(|_| {
-            warn!("Unrecognized compression codec '{codec_str}', using no compression");
-            CompressionCodec::None
-        });
-    base.with_level(level)
+        serde_json::from_value(Value::String(lowercase)).map_err(|_| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Unsupported compression codec: {codec_str}"),
+            )
+        })?;
+    Ok(base.with_level(level))
 }
 
 /// Convert a [`CompressionCodec`] to an [`apache_avro::Codec`] for use in Avro writers.
@@ -107,50 +105,53 @@ mod tests {
     #[test]
     fn test_parse_avro_codec_gzip() {
         // Test with mixed case to verify case-insensitive matching
-        let codec = parse_avro_codec(Some("GZip"), Some(5));
+        let codec = parse_avro_codec(Some("GZip"), Some(5)).unwrap();
         assert_eq!(codec, CompressionCodec::Gzip(Some(5)));
     }
 
     #[test]
     fn test_parse_avro_codec_snappy() {
-        let codec = parse_avro_codec(Some("snappy"), None);
+        let codec = parse_avro_codec(Some("snappy"), None).unwrap();
         assert_eq!(codec, CompressionCodec::Snappy);
     }
 
     #[test]
     fn test_parse_avro_codec_zstd() {
-        let codec = parse_avro_codec(Some("zstd"), Some(3));
+        let codec = parse_avro_codec(Some("zstd"), Some(3)).unwrap();
         assert_eq!(codec, CompressionCodec::Zstd(Some(3)));
     }
 
     #[test]
     fn test_parse_avro_codec_uncompressed() {
-        let codec = parse_avro_codec(Some("uncompressed"), None);
+        let codec = parse_avro_codec(Some("uncompressed"), None).unwrap();
         assert_eq!(codec, CompressionCodec::None);
     }
 
     #[test]
     fn test_parse_avro_codec_null() {
-        let codec = parse_avro_codec(None, None);
+        let codec = parse_avro_codec(None, None).unwrap();
         assert_eq!(codec, CompressionCodec::None);
     }
 
     #[test]
     fn test_parse_avro_codec_unknown() {
-        let codec = parse_avro_codec(Some("unknown"), Some(1));
-        assert_eq!(codec, CompressionCodec::None);
+        let err = parse_avro_codec(Some("unknown"), Some(1)).unwrap_err();
+        assert!(
+            err.to_string().contains("Unsupported compression codec: unknown"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
     fn test_parse_avro_codec_gzip_no_level() {
         // Level is stored as-is (None), default applied in to_avro_codec
-        let codec = parse_avro_codec(Some("gzip"), None);
+        let codec = parse_avro_codec(Some("gzip"), None).unwrap();
         assert_eq!(codec, CompressionCodec::Gzip(None));
     }
 
     #[test]
     fn test_parse_avro_codec_zstd_no_level() {
-        let codec = parse_avro_codec(Some("zstd"), None);
+        let codec = parse_avro_codec(Some("zstd"), None).unwrap();
         assert_eq!(codec, CompressionCodec::Zstd(None));
     }
 

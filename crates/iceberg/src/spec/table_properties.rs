@@ -349,7 +349,7 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 )?;
                 let level = if level_raw == 255 { None } else { Some(level_raw) };
 
-                avro_util::parse_avro_codec(Some(&codec_name), level)
+                avro_util::parse_avro_codec(Some(&codec_name), level)?
             },
             metadata_compression_codec: parse_metadata_file_compression(props)?,
             write_datafusion_fanout_enabled: parse_property(
