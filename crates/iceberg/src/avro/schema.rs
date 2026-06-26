@@ -28,7 +28,7 @@ use serde_json::{Number, Value};
 
 use crate::spec::{
     ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor,
-    StructType, Type, visit_schema,
+    StructType, Type, VariantType, visit_schema,
 };
 use crate::{Error, ErrorKind, Result, ensure_data_valid};
 
@@ -242,6 +242,13 @@ impl SchemaVisitor for SchemaToAvroSchema {
             }
         };
         Ok(Either::Left(avro_schema))
+    }
+
+    fn variant(&mut self, _v: &VariantType) -> Result<AvroSchemaOrField> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Avro schema conversion for Variant is not yet implemented",
+        ))
     }
 }
 

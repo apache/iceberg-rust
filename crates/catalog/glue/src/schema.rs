@@ -182,6 +182,13 @@ impl SchemaVisitor for GlueSchemaBuilder {
 
         Ok(glue_type)
     }
+
+    fn variant(&mut self, _v: &iceberg::spec::VariantType) -> iceberg::Result<String> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Conversion from Variant to Glue type is not supported",
+        ))
+    }
 }
 
 #[cfg(test)]

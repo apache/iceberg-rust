@@ -692,6 +692,16 @@ impl SchemaVisitor for ToArrowSchemaConverter {
             }
         }
     }
+
+    fn variant(
+        &mut self,
+        _v: &crate::spec::VariantType,
+    ) -> crate::Result<ArrowSchemaOrFieldOrType> {
+        Err(crate::Error::new(
+            crate::ErrorKind::FeatureUnsupported,
+            "Arrow schema conversion for Variant is not yet implemented",
+        ))
+    }
 }
 
 /// Convert iceberg schema to an arrow schema.

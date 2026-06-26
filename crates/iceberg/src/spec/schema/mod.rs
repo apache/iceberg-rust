@@ -41,7 +41,7 @@ use crate::error::Result;
 use crate::expr::accessor::StructAccessor;
 use crate::spec::datatypes::{
     LIST_FIELD_NAME, ListType, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, MapType, NestedFieldRef,
-    PrimitiveType, StructType, Type,
+    PrimitiveType, StructType, Type, VariantType,
 };
 use crate::{Error, ErrorKind, ensure_data_valid};
 
