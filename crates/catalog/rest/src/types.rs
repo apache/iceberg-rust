@@ -19,10 +19,13 @@
 
 use std::collections::HashMap;
 
-use iceberg::spec::{Schema, SortOrder, TableMetadata, UnboundPartitionSpec};
+use iceberg::spec::{
+    Schema, SortOrder, TableMetadata, Transform, UnboundPartitionField, UnboundPartitionSpec,
+};
 use iceberg::{
     Error, ErrorKind, Namespace, NamespaceIdent, TableIdent, TableRequirement, TableUpdate,
 };
+use serde::{Serialize as _, Serializer};
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -256,7 +259,10 @@ pub struct CreateTableRequest {
     /// Table schema
     pub schema: Schema,
     /// Optional partition specification. If not provided, the table will be unpartitioned.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_partition_spec_omit_none_ids"
+    )]
     pub partition_spec: Option<UnboundPartitionSpec>,
     /// Optional sort order for the table
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -267,6 +273,73 @@ pub struct CreateTableRequest {
     /// Optional properties to set on the table
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub properties: HashMap<String, String>,
+}
+
+/// Serialize a `CreateTableRequest::partition_spec` value, omitting the
+/// inner `spec-id` / `field-id` keys when they are `None`.
+///
+/// The core `UnboundPartitionSpec` / `UnboundPartitionField` types always
+/// emit those keys (as `null` when unset) because `TableUpdate::AddSpec`
+/// requires `spec-id` to be present on the wire. `CreateTableRequest` is
+/// a separate REST surface where the server assigns these ids, so the
+/// client should omit them entirely when not set rather than send
+/// explicit `null`s. This serializer localizes that REST-only behavior
+/// without coupling the core spec type to it.
+///
+/// Paired with `skip_serializing_if = "Option::is_none"` on the field, so
+/// this function is only invoked when the outer `Option` is `Some`. The
+/// `None` arm is defensive.
+fn serialize_partition_spec_omit_none_ids<S>(
+    partition_spec: &Option<UnboundPartitionSpec>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    // Shadow types that mirror the wire shape of `UnboundPartitionSpec` /
+    // `UnboundPartitionField` but skip the optional id fields when `None`.
+    #[derive(Serialize)]
+    #[serde(rename_all = "kebab-case")]
+    struct CreateTableUnboundPartitionField<'a> {
+        source_id: i32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        field_id: Option<i32>,
+        name: &'a str,
+        transform: &'a Transform,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "kebab-case")]
+    struct CreateTableUnboundPartitionSpec<'a> {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        spec_id: Option<i32>,
+        fields: Vec<CreateTableUnboundPartitionField<'a>>,
+    }
+
+    impl<'a> From<&'a UnboundPartitionField> for CreateTableUnboundPartitionField<'a> {
+        fn from(field: &'a UnboundPartitionField) -> Self {
+            Self {
+                source_id: field.source_id,
+                field_id: field.field_id,
+                name: &field.name,
+                transform: &field.transform,
+            }
+        }
+    }
+
+    impl<'a> From<&'a UnboundPartitionSpec> for CreateTableUnboundPartitionSpec<'a> {
+        fn from(spec: &'a UnboundPartitionSpec) -> Self {
+            Self {
+                spec_id: spec.spec_id(),
+                fields: spec.fields().iter().map(Into::into).collect(),
+            }
+        }
+    }
+
+    match partition_spec {
+        Some(spec) => CreateTableUnboundPartitionSpec::from(spec).serialize(serializer),
+        None => serializer.serialize_none(),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -471,5 +544,90 @@ mod tests {
         assert_eq!(request.write_order, None);
         assert_eq!(request.stage_create, None);
         assert!(request.properties.is_empty());
+    }
+
+    #[test]
+    fn test_create_table_request_partition_spec_skips_inner_none_ids() {
+        // When `partition_spec` is `Some` but the inner spec / fields have
+        // no `spec_id` / `field_id` set, those inner keys must be omitted
+        // from the serialized REST payload (the server assigns them).
+        // The core `UnboundPartitionSpec` serializes those keys as `null`
+        // by design; this localization lives only on the REST layer.
+        use iceberg::spec::{Transform, UnboundPartitionField, UnboundPartitionSpec};
+
+        let request = CreateTableRequest {
+            name: "tbl1".to_string(),
+            location: None,
+            schema: test_create_table_request_schema(),
+            partition_spec: Some(
+                UnboundPartitionSpec::builder()
+                    .add_partition_field(2, "bar_id".to_string(), Transform::Identity)
+                    .expect("builder add_partition_field failed")
+                    .build(),
+            ),
+            write_order: None,
+            stage_create: None,
+            properties: HashMap::new(),
+        };
+
+        let serialized = serde_json::to_value(&request).expect("Serialization failed");
+        let spec = serialized
+            .get("partition-spec")
+            .and_then(|s| s.as_object())
+            .expect("partition-spec must be present and an object");
+        assert!(
+            !spec.contains_key("spec-id"),
+            "spec-id must be omitted when None on REST payload; got {serialized}",
+        );
+        let fields = spec
+            .get("fields")
+            .and_then(|f| f.as_array())
+            .expect("fields must be a JSON array");
+        let field = fields[0]
+            .as_object()
+            .expect("each field must be a JSON object");
+        assert!(
+            !field.contains_key("field-id"),
+            "field-id must be omitted when None on REST payload; got {serialized}",
+        );
+
+        // When the ids are set on the inner spec, they appear on the wire.
+        let request = CreateTableRequest {
+            name: "tbl1".to_string(),
+            location: None,
+            schema: test_create_table_request_schema(),
+            partition_spec: Some(
+                UnboundPartitionSpec::builder()
+                    .with_spec_id(1)
+                    .add_partition_fields(vec![
+                        UnboundPartitionField::builder()
+                            .source_id(2)
+                            .field_id(1000)
+                            .name("bar_id".to_string())
+                            .transform(Transform::Identity)
+                            .build(),
+                    ])
+                    .expect("builder add_partition_fields failed")
+                    .build(),
+            ),
+            write_order: None,
+            stage_create: None,
+            properties: HashMap::new(),
+        };
+        let serialized = serde_json::to_value(&request).expect("Serialization failed");
+        assert_eq!(
+            Some(&serde_json::json!(1)),
+            serialized
+                .get("partition-spec")
+                .and_then(|s| s.get("spec-id"))
+        );
+        assert_eq!(
+            Some(&serde_json::json!(1000)),
+            serialized
+                .get("partition-spec")
+                .and_then(|s| s.get("fields"))
+                .and_then(|f| f.get(0))
+                .and_then(|f| f.get("field-id"))
+        );
     }
 }
