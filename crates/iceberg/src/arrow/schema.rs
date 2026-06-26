@@ -35,7 +35,7 @@ use crate::error::Result;
 use crate::spec::decimal_utils::i128_from_be_bytes;
 use crate::spec::{
     Datum, FIRST_FIELD_ID, ListType, MapType, NestedField, NestedFieldRef, PrimitiveLiteral,
-    PrimitiveType, Schema, SchemaVisitor, StructType, Type,
+    PrimitiveType, Schema, SchemaVisitor, StructType, Type, VariantType,
 };
 use crate::{Error, ErrorKind};
 
@@ -691,6 +691,16 @@ impl SchemaVisitor for ToArrowSchemaConverter {
                 Ok(ArrowSchemaOrFieldOrType::Type(DataType::LargeBinary))
             }
         }
+    }
+
+    fn variant(&mut self, _v: &VariantType) -> crate::Result<ArrowSchemaOrFieldOrType> {
+        // Variant is stored as a struct with two required binary fields (no field IDs on sub-fields).
+        // Uses Binary (not LargeBinary) matching the Parquet BINARY primitive directly.
+        let metadata_field = Field::new("metadata", DataType::Binary, false);
+        let value_field = Field::new("value", DataType::Binary, false);
+        Ok(ArrowSchemaOrFieldOrType::Type(DataType::Struct(
+            vec![metadata_field, value_field].into(),
+        )))
     }
 }
 
@@ -1705,6 +1715,15 @@ mod tests {
             simple_field("map", map, false, "16"),
             simple_field("struct", r#struct, false, "17"),
             simple_field("uuid", DataType::FixedSizeBinary(16), false, "30"),
+            simple_field(
+                "v",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("metadata", DataType::Binary, false),
+                    Field::new("value", DataType::Binary, false),
+                ])),
+                true,
+                "31",
+            ),
         ])
     }
 
@@ -1888,6 +1907,12 @@ mod tests {
                     "name":"uuid",
                     "required":true,
                     "type":"uuid"
+                },
+                {
+                    "id":31,
+                    "name":"v",
+                    "required":false,
+                    "type":"variant"
                 }
             ],
             "identifier-field-ids":[]
@@ -1903,6 +1928,20 @@ mod tests {
         let schema = iceberg_schema_for_schema_to_arrow_schema();
         let converted_arrow_schema = schema_to_arrow_schema(&schema).unwrap();
         assert_eq!(converted_arrow_schema, arrow_schema);
+    }
+
+    #[test]
+    fn test_variant_type_to_arrow_type() {
+        // Variant maps to a struct of two required binary fields {metadata, value},
+        // with no field ids on the sub-fields, matching the Parquet BINARY layout.
+        let arrow_type = type_to_arrow_type(&Type::Variant(VariantType)).unwrap();
+        assert_eq!(
+            arrow_type,
+            DataType::Struct(Fields::from(vec![
+                Field::new("metadata", DataType::Binary, false),
+                Field::new("value", DataType::Binary, false),
+            ]))
+        );
     }
 
     #[test]

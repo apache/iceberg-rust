@@ -17,6 +17,7 @@
 
 use super::utils::try_insert_field;
 use super::*;
+use crate::spec::VariantType;
 
 /// Creates a field id to field map.
 pub fn index_by_id(r#struct: &StructType) -> Result<HashMap<i32, NestedFieldRef>> {
@@ -51,6 +52,10 @@ pub fn index_by_id(r#struct: &StructType) -> Result<HashMap<i32, NestedFieldRef>
         }
 
         fn primitive(&mut self, _: &PrimitiveType) -> Result<Self::T> {
+            Ok(())
+        }
+
+        fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
             Ok(())
         }
     }
@@ -143,6 +148,10 @@ pub fn index_parents(r#struct: &StructType) -> Result<HashMap<i32, i32>> {
         }
 
         fn primitive(&mut self, _p: &PrimitiveType) -> Result<Self::T> {
+            Ok(())
+        }
+
+        fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
             Ok(())
         }
     }
@@ -293,6 +302,10 @@ impl SchemaVisitor for IndexByName {
     fn primitive(&mut self, _p: &PrimitiveType) -> Result<Self::T> {
         Ok(())
     }
+
+    fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -314,5 +327,41 @@ mod tests {
         assert_eq!(result.get(&14).unwrap(), &12);
         assert_eq!(result.get(&16).unwrap(), &15);
         assert_eq!(result.get(&17).unwrap(), &15);
+    }
+
+    #[test]
+    fn test_index_variant_by_id_and_name() {
+        // A variant is indexed like a leaf: by id and by full (dotted) name, both at the
+        // top level and nested inside a struct. Mirrors Java's TestTypeUtil index-by-id /
+        // index-name-by-id coverage for variant.
+        let s = StructType::new(vec![
+            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
+            NestedField::required(
+                3,
+                "nested",
+                Type::Struct(StructType::new(vec![
+                    NestedField::optional(4, "inner_v", Type::Variant(VariantType)).into(),
+                ])),
+            )
+            .into(),
+        ]);
+
+        let by_id = index_by_id(&s).unwrap();
+        // All four fields (id, v, nested, nested.inner_v) are indexed exactly once.
+        assert_eq!(by_id.len(), 4);
+        assert!(by_id[&2].field_type.is_variant());
+        assert!(by_id[&4].field_type.is_variant());
+
+        let (name_to_id, id_to_name) = {
+            let mut index = IndexByName::default();
+            visit_struct(&s, &mut index).unwrap();
+            index.indexes()
+        };
+        assert_eq!(id_to_name.len(), 4);
+        assert_eq!(id_to_name[&2], "v");
+        assert_eq!(id_to_name[&4], "nested.inner_v");
+        assert_eq!(name_to_id["v"], 2);
+        assert_eq!(name_to_id["nested.inner_v"], 4);
     }
 }
