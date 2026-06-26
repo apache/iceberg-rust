@@ -99,6 +99,7 @@ mod test {
     use super::_const_schema::MANIFEST_LIST_AVRO_SCHEMA_V2;
     use super::_serde::ManifestFileV2;
     use super::*;
+    use crate::compression::CompressionCodec;
     use crate::io::FileIO;
 
     use crate::spec::{Datum, FieldSummary, ManifestContentType, ManifestFile};
@@ -138,8 +139,9 @@ mod test {
             file_io.new_output(full_path.clone()).unwrap(),
             1646658105718557341,
             Some(1646658105718557341),
-            Codec::Null,
-        );
+            CompressionCodec::None,
+        )
+        .unwrap();
 
         writer
             .add_manifests(manifest_list.entries.clone().into_iter())
@@ -212,8 +214,9 @@ mod test {
             1646658105718557341,
             Some(1646658105718557341),
             1,
-            Codec::Null,
-        );
+            CompressionCodec::None,
+        )
+        .unwrap();
 
         writer
             .add_manifests(manifest_list.entries.clone().into_iter())
@@ -327,8 +330,9 @@ mod test {
             Some(377075049360453639),
             1,
             Some(10),
-            Codec::Null,
-        );
+            CompressionCodec::None,
+        )
+        .unwrap();
 
         writer
             .add_manifests(manifest_list.entries.clone().into_iter())

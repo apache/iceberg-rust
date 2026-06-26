@@ -25,7 +25,6 @@ use uuid::Uuid;
 
 use crate::compression::CompressionCodec;
 use crate::error::Result;
-use crate::spec::avro_util::to_avro_codec;
 use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
     ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
@@ -461,7 +460,7 @@ impl<'a> SnapshotProducer<'a> {
             .table
             .file_io()
             .new_output(manifest_list_path.clone())?;
-        let compression = to_avro_codec(self.avro_compression_codec()?)?;
+        let compression = self.avro_compression_codec()?;
 
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
@@ -469,14 +468,14 @@ impl<'a> SnapshotProducer<'a> {
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 compression,
-            ),
+            )?,
             FormatVersion::V2 => ManifestListWriter::v2(
                 output_file,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
                 compression,
-            ),
+            )?,
             FormatVersion::V3 => ManifestListWriter::v3(
                 output_file,
                 self.snapshot_id,
@@ -484,7 +483,7 @@ impl<'a> SnapshotProducer<'a> {
                 next_seq_num,
                 Some(first_row_id),
                 compression,
-            ),
+            )?,
         };
 
         // Calling self.summary() before self.manifest_file() is important because self.added_data_files

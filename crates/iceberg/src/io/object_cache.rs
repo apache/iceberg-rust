@@ -212,8 +212,6 @@ mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    use apache_avro::Codec;
-
     use super::*;
     use crate::TableIdent;
     use crate::compression::CompressionCodec;
@@ -332,8 +330,9 @@ mod tests {
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
-                Codec::Null,
-            );
+                CompressionCodec::None,
+            )
+            .unwrap();
             manifest_list_write
                 .add_manifests(vec![data_file_manifest].into_iter())
                 .unwrap();

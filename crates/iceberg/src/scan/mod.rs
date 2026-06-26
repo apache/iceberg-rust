@@ -638,8 +638,6 @@ pub mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    use apache_avro::Codec;
-
     use crate::arrow::ArrowReaderBuilder;
     use crate::compression::CompressionCodec;
     use crate::expr::{BoundPredicate, Reference};
@@ -930,8 +928,9 @@ pub mod tests {
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
-                Codec::Null,
-            );
+                CompressionCodec::None,
+            )
+            .unwrap();
             manifest_list_write
                 .add_manifests(vec![data_file_manifest].into_iter())
                 .unwrap();
@@ -1163,8 +1162,9 @@ pub mod tests {
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
-                Codec::Null,
-            );
+                CompressionCodec::None,
+            )
+            .unwrap();
             manifest_list_write
                 .add_manifests(vec![data_file_manifest].into_iter())
                 .unwrap();
@@ -1257,8 +1257,9 @@ pub mod tests {
                 current_snapshot.snapshot_id(),
                 current_snapshot.parent_snapshot_id(),
                 current_snapshot.sequence_number(),
-                Codec::Null,
-            );
+                CompressionCodec::None,
+            )
+            .unwrap();
             manifest_list_write
                 .add_manifests(vec![data_manifest, delete_manifest].into_iter())
                 .unwrap();
