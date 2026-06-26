@@ -28,9 +28,10 @@ use crate::{Error, ErrorKind};
 /// Codec name for uncompressed
 pub const CODEC_UNCOMPRESSED: &str = "uncompressed";
 
-/// Default compression level for gzip (matches Java implementation)
+// These Avro-specific defaults match the Java Iceberg implementation (GzipCodec/ZstandardCodec).
+// They differ intentionally from the general-purpose defaults in compression.rs (gzip=6, zstd=3),
+// which are used for data-file compression and are not Java-compatible by design.
 const DEFAULT_GZIP_LEVEL: u8 = 9;
-/// Default compression level for zstd (matches Java implementation)
 const DEFAULT_ZSTD_LEVEL: u8 = 1;
 /// Max supported level for ZSTD
 const MAX_ZSTD_LEVEL: u8 = 22;

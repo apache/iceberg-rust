@@ -27,6 +27,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{Error, ErrorKind, Result};
 
+// General-purpose defaults for data-file compression. Avro manifest defaults are different
+// (gzip=9, zstd=1) and are defined in avro_util.rs to match the Java implementation.
 const ZSTD_DEFAULT_LEVEL: u8 = 3;
 const GZIP_DEFAULT_LEVEL: u8 = 6;
 const GZIP_MAX_LEVEL: u8 = 9;

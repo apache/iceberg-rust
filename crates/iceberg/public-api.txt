@@ -141,15 +141,11 @@ pub fn iceberg::cache::ObjectCacheProvide::manifest_list_cache(&self) -> &dyn ic
 pub type iceberg::cache::ObjectCacheProvider = alloc::sync::Arc<dyn iceberg::cache::ObjectCacheProvide>
 pub mod iceberg::compression
 pub enum iceberg::compression::CompressionCodec
-pub iceberg::compression::CompressionCodec::Gzip(u8)
+pub iceberg::compression::CompressionCodec::Gzip(core::option::Option<u8>)
 pub iceberg::compression::CompressionCodec::Lz4
 pub iceberg::compression::CompressionCodec::None
 pub iceberg::compression::CompressionCodec::Snappy
-pub iceberg::compression::CompressionCodec::Zstd(u8)
-impl iceberg::compression::CompressionCodec
-pub const fn iceberg::compression::CompressionCodec::gzip_default() -> Self
-pub fn iceberg::compression::CompressionCodec::name(&self) -> &'static str
-pub const fn iceberg::compression::CompressionCodec::zstd_default() -> Self
+pub iceberg::compression::CompressionCodec::Zstd(core::option::Option<u8>)
 impl iceberg::compression::CompressionCodec
 pub fn iceberg::compression::CompressionCodec::suffix(&self) -> iceberg::Result<&'static str>
 impl core::clone::Clone for iceberg::compression::CompressionCodec
@@ -1121,15 +1117,11 @@ pub fn iceberg::metadata_columns::row_id_field() -> &'static iceberg::spec::Nest
 pub fn iceberg::metadata_columns::spec_id_field() -> &'static iceberg::spec::NestedFieldRef
 pub mod iceberg::puffin
 pub enum iceberg::puffin::CompressionCodec
-pub iceberg::puffin::CompressionCodec::Gzip(u8)
+pub iceberg::puffin::CompressionCodec::Gzip(core::option::Option<u8>)
 pub iceberg::puffin::CompressionCodec::Lz4
 pub iceberg::puffin::CompressionCodec::None
 pub iceberg::puffin::CompressionCodec::Snappy
-pub iceberg::puffin::CompressionCodec::Zstd(u8)
-impl iceberg::compression::CompressionCodec
-pub const fn iceberg::compression::CompressionCodec::gzip_default() -> Self
-pub fn iceberg::compression::CompressionCodec::name(&self) -> &'static str
-pub const fn iceberg::compression::CompressionCodec::zstd_default() -> Self
+pub iceberg::puffin::CompressionCodec::Zstd(core::option::Option<u8>)
 impl iceberg::compression::CompressionCodec
 pub fn iceberg::compression::CompressionCodec::suffix(&self) -> iceberg::Result<&'static str>
 impl core::clone::Clone for iceberg::compression::CompressionCodec
@@ -2037,9 +2029,9 @@ impl iceberg::spec::ManifestListWriter
 pub fn iceberg::spec::ManifestListWriter::add_manifests(&mut self, manifests: impl core::iter::traits::iterator::Iterator<Item = iceberg::spec::ManifestFile>) -> iceberg::Result<()>
 pub async fn iceberg::spec::ManifestListWriter::close(self) -> iceberg::Result<()>
 pub fn iceberg::spec::ManifestListWriter::next_row_id(&self) -> core::option::Option<u64>
-pub fn iceberg::spec::ManifestListWriter::v1(writer: alloc::boxed::Box<dyn iceberg::io::FileWrite>, snapshot_id: i64, parent_snapshot_id: core::option::Option<i64>) -> Self
-pub fn iceberg::spec::ManifestListWriter::v2(writer: alloc::boxed::Box<dyn iceberg::io::FileWrite>, snapshot_id: i64, parent_snapshot_id: core::option::Option<i64>, sequence_number: i64) -> Self
-pub fn iceberg::spec::ManifestListWriter::v3(writer: alloc::boxed::Box<dyn iceberg::io::FileWrite>, snapshot_id: i64, parent_snapshot_id: core::option::Option<i64>, sequence_number: i64, first_row_id: core::option::Option<u64>) -> Self
+pub fn iceberg::spec::ManifestListWriter::v1(output_file: iceberg::io::OutputFile, snapshot_id: i64, parent_snapshot_id: core::option::Option<i64>, compression: apache_avro::codec::Codec) -> Self
+pub fn iceberg::spec::ManifestListWriter::v2(output_file: iceberg::io::OutputFile, snapshot_id: i64, parent_snapshot_id: core::option::Option<i64>, sequence_number: i64, compression: apache_avro::codec::Codec) -> Self
+pub fn iceberg::spec::ManifestListWriter::v3(output_file: iceberg::io::OutputFile, snapshot_id: i64, parent_snapshot_id: core::option::Option<i64>, sequence_number: i64, first_row_id: core::option::Option<u64>, compression: apache_avro::codec::Codec) -> Self
 impl core::fmt::Debug for iceberg::spec::ManifestListWriter
 pub fn iceberg::spec::ManifestListWriter::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::spec::ManifestMetadata
@@ -2078,8 +2070,7 @@ pub fn iceberg::spec::ManifestWriterBuilder::build_v2_data(self) -> iceberg::spe
 pub fn iceberg::spec::ManifestWriterBuilder::build_v2_deletes(self) -> iceberg::spec::ManifestWriter
 pub fn iceberg::spec::ManifestWriterBuilder::build_v3_data(self) -> iceberg::spec::ManifestWriter
 pub fn iceberg::spec::ManifestWriterBuilder::build_v3_deletes(self) -> iceberg::spec::ManifestWriter
-pub fn iceberg::spec::ManifestWriterBuilder::new(output: iceberg::io::OutputFile, snapshot_id: core::option::Option<i64>, key_metadata: core::option::Option<alloc::vec::Vec<u8>>, schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpec) -> Self
-pub fn iceberg::spec::ManifestWriterBuilder::new_from_encrypted(encrypted_output: iceberg::encryption::EncryptedOutputFile, snapshot_id: core::option::Option<i64>, key_metadata: core::option::Option<alloc::vec::Vec<u8>>, schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpec) -> Self
+pub fn iceberg::spec::ManifestWriterBuilder::new(output: iceberg::io::OutputFile, snapshot_id: core::option::Option<i64>, key_metadata: core::option::Option<alloc::vec::Vec<u8>>, schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpec, compression: iceberg::compression::CompressionCodec) -> Self
 pub struct iceberg::spec::Map
 impl iceberg::spec::Map
 pub fn iceberg::spec::Map::get(&self, key: &iceberg::spec::Literal) -> core::option::Option<&core::option::Option<iceberg::spec::Literal>>
@@ -2694,6 +2685,7 @@ pub fn iceberg::spec::TableMetadataBuilder::clone(&self) -> iceberg::spec::Table
 impl core::fmt::Debug for iceberg::spec::TableMetadataBuilder
 pub fn iceberg::spec::TableMetadataBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::spec::TableProperties
+pub iceberg::spec::TableProperties::avro_compression_codec: iceberg::compression::CompressionCodec
 pub iceberg::spec::TableProperties::cdc_enabled: bool
 pub iceberg::spec::TableProperties::cdc_max_chunk_size: usize
 pub iceberg::spec::TableProperties::cdc_min_chunk_size: usize
@@ -2713,6 +2705,10 @@ pub iceberg::spec::TableProperties::write_datafusion_fanout_enabled: bool
 pub iceberg::spec::TableProperties::write_format_default: alloc::string::String
 pub iceberg::spec::TableProperties::write_target_file_size_bytes: usize
 impl iceberg::spec::TableProperties
+pub const iceberg::spec::TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC: &str
+pub const iceberg::spec::TableProperties::PROPERTY_AVRO_COMPRESSION_CODEC_DEFAULT: &str
+pub const iceberg::spec::TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL: &str
+pub const iceberg::spec::TableProperties::PROPERTY_AVRO_COMPRESSION_LEVEL_DEFAULT: core::option::Option<u8>
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS: &str
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS_DEFAULT: u64
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MIN_RETRY_WAIT_MS: &str

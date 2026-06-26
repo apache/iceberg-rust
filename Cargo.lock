@@ -3770,7 +3770,6 @@ dependencies = [
  "futures",
  "iceberg_test_utils",
  "itertools 0.13.0",
- "log",
  "minijinja",
  "miniz_oxide",
  "mockall",

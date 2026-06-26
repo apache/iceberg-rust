@@ -212,7 +212,7 @@ impl ManifestListWriter {
     }
 
     /// Write the manifest list to the output file.
-    pub async fn close(mut self) -> Result<()> {
+    pub async fn close(self) -> Result<()> {
         let data = self.avro_writer.into_inner()?;
         let mut writer = self.output_file.writer().await?;
         writer.write(Bytes::from(data)).await?;
@@ -621,6 +621,67 @@ mod test {
         assert_eq!(manifest_list, expected_manifest_list);
 
         temp_dir.close().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_manifest_list_writer_with_compression() {
+        let snapshot_id = 377075049360453639;
+        let seq_num = 1;
+
+        let entries: Vec<ManifestFile> = (0..1000)
+            .map(|i| ManifestFile {
+                manifest_path: format!(
+                    "s3a://icebergdata/demo/s1/t1/metadata/very-long-path-for-compression-test/manifest-file-number-{i}.avro"
+                ),
+                manifest_length: 6926 + i,
+                partition_spec_id: 1,
+                content: ManifestContentType::Data,
+                sequence_number: seq_num,
+                min_sequence_number: seq_num,
+                added_snapshot_id: snapshot_id,
+                added_files_count: Some(1),
+                existing_files_count: Some(0),
+                deleted_files_count: Some(0),
+                added_rows_count: Some(3),
+                existing_rows_count: Some(0),
+                deleted_rows_count: Some(0),
+                partitions: None,
+                key_metadata: None,
+                first_row_id: None,
+            })
+            .collect();
+
+        let tmp_dir = TempDir::new().unwrap();
+        let io = FileIO::new_with_fs();
+
+        let uncompressed_path = tmp_dir.path().join("manifest_list_uncompressed.avro");
+        let mut writer = ManifestListWriter::v2(
+            output_file(&uncompressed_path, &io),
+            snapshot_id,
+            Some(0),
+            seq_num,
+            Codec::Null,
+        );
+        writer.add_manifests(entries.clone().into_iter()).unwrap();
+        writer.close().await.unwrap();
+        let uncompressed_size = fs::metadata(&uncompressed_path).unwrap().len();
+
+        let compressed_path = tmp_dir.path().join("manifest_list_compressed.avro");
+        let mut writer = ManifestListWriter::v2(
+            output_file(&compressed_path, &io),
+            snapshot_id,
+            Some(0),
+            seq_num,
+            Codec::Deflate(apache_avro::DeflateSettings::default()),
+        );
+        writer.add_manifests(entries.into_iter()).unwrap();
+        writer.close().await.unwrap();
+        let compressed_size = fs::metadata(&compressed_path).unwrap().len();
+
+        assert!(
+            compressed_size < uncompressed_size,
+            "compressed size ({compressed_size}) should be less than uncompressed size ({uncompressed_size})"
+        );
     }
 
     fn output_file(path: &Path, io: &FileIO) -> crate::io::OutputFile {
