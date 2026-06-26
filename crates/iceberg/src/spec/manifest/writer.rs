@@ -827,7 +827,7 @@ mod tests {
         let compressed_path = tmp_dir.path().join("compressed_manifest.avro");
 
         write_manifest(&io, &uncompressed_path, &metadata, CompressionCodec::None).await;
-        write_manifest(&io, &compressed_path, &metadata, CompressionCodec::Gzip(9)).await;
+        write_manifest(&io, &compressed_path, &metadata, CompressionCodec::Gzip(Some(9))).await;
 
         let uncompressed_size = fs::metadata(&uncompressed_path).unwrap().len();
         let compressed_size = fs::metadata(&compressed_path).unwrap().len();

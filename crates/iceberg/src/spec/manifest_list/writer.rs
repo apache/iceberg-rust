@@ -728,6 +728,12 @@ mod test {
             compressed_size < uncompressed_size,
             "compressed size ({compressed_size}) should be less than uncompressed size ({uncompressed_size})"
         );
+
+        let compressed_bytes = fs::read(&compressed_path).unwrap();
+        let manifest_list =
+            ManifestList::parse_with_version(&compressed_bytes, crate::spec::FormatVersion::V2)
+                .unwrap();
+        assert_eq!(manifest_list.entries().len(), 1000);
     }
 
     fn output_file(path: &Path, io: &FileIO) -> crate::io::OutputFile {
