@@ -94,7 +94,6 @@ pub(crate) fn parse_metadata_file_compression(
     }
 }
 
-
 /// TableProperties that contains the properties of a table.
 #[derive(Debug)]
 pub struct TableProperties {

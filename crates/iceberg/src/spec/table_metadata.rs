@@ -3719,7 +3719,6 @@ mod tests {
         assert_eq!(read_metadata, compressed_metadata);
     }
 
-
     #[test]
     fn test_partition_name_exists() {
         let schema = Schema::builder()

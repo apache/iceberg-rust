@@ -243,6 +243,23 @@ mod tests {
     }
 
     #[test]
+    fn test_with_level_ignores_level_for_level_less_variants() {
+        // Snappy and Lz4 don't carry a level; with_level must return them unchanged.
+        assert_eq!(
+            CompressionCodec::Snappy.with_level(Some(5)),
+            CompressionCodec::Snappy
+        );
+        assert_eq!(
+            CompressionCodec::Lz4.with_level(Some(5)),
+            CompressionCodec::Lz4
+        );
+        assert_eq!(
+            CompressionCodec::None.with_level(Some(5)),
+            CompressionCodec::None
+        );
+    }
+
+    #[test]
     fn test_display() {
         assert_eq!(CompressionCodec::None.to_string(), "None");
         assert_eq!(CompressionCodec::Lz4.to_string(), "Lz4");

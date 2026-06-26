@@ -251,7 +251,8 @@ impl ManifestListWriter {
         Ok(())
     }
 
-    /// Returns number of newly assigned first-row-ids, if any.
+    /// Assigns `manifest.first_row_id` if not already set, advancing `self.next_row_id`
+    /// by the manifest's record count.
     fn assign_first_row_id(&mut self, manifest: &mut ManifestFile) -> Result<()> {
         match manifest.content {
             ManifestContentType::Data => {

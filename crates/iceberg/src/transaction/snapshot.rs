@@ -23,6 +23,7 @@ use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
 use uuid::Uuid;
 
+use crate::compression::CompressionCodec;
 use crate::error::Result;
 use crate::spec::avro_util::to_avro_codec;
 use crate::spec::{
@@ -166,6 +167,18 @@ impl<'a> SnapshotProducer<'a> {
         Ok(())
     }
 
+    fn avro_compression_codec(&self) -> Result<CompressionCodec> {
+        TableProperties::try_from(self.table.metadata().properties())
+            .map(|p| p.avro_compression_codec)
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Failed to parse table properties for compression settings",
+                )
+                .with_source(e)
+            })
+    }
+
     pub(crate) async fn validate_duplicate_files(&self) -> Result<()> {
         let Some(current_snapshot) = self.table.metadata().current_snapshot() else {
             return Ok(());
@@ -254,16 +267,6 @@ impl<'a> SnapshotProducer<'a> {
         );
         let output_file = self.table.file_io().new_output(new_manifest_path)?;
 
-        // Get compression settings from table properties
-        let table_props =
-            TableProperties::try_from(self.table.metadata().properties()).map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Failed to parse table properties for compression settings",
-                )
-                .with_source(e)
-            })?;
-
         let builder = ManifestWriterBuilder::new(
             output_file,
             Some(self.snapshot_id),
@@ -274,7 +277,7 @@ impl<'a> SnapshotProducer<'a> {
                 .default_partition_spec()
                 .as_ref()
                 .clone(),
-            table_props.avro_compression_codec,
+            self.avro_compression_codec()?,
         );
 
         match self.table.metadata().format_version() {
@@ -458,16 +461,7 @@ impl<'a> SnapshotProducer<'a> {
             .table
             .file_io()
             .new_output(manifest_list_path.clone())?;
-        let table_props =
-            TableProperties::try_from(self.table.metadata().properties()).map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Failed to parse table properties for compression settings",
-                )
-                .with_source(e)
-            })?;
-
-        let compression = to_avro_codec(table_props.avro_compression_codec)?;
+        let compression = to_avro_codec(self.avro_compression_codec()?)?;
 
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(

@@ -43,6 +43,9 @@ use crate::{Error, ErrorKind};
 /// with the actual snapshot ID before it is committed.
 const UNASSIGNED_SNAPSHOT_ID: i64 = -1;
 
+// The future is pinned eagerly (rather than holding OutputFile) because OutputFile is consumed
+// by `output.writer().await` — we can't store it and call writer() later. Capturing the future
+// at construction time lets us defer the async work while still owning the location string.
 type WriterFuture = Pin<Box<dyn Future<Output = Result<Box<dyn FileWrite>>> + Send>>;
 
 /// The builder used to create a [`ManifestWriter`].

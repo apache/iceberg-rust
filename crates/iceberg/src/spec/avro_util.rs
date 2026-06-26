@@ -26,12 +26,6 @@ use crate::compression::CompressionCodec;
 use crate::error::Result;
 use crate::{Error, ErrorKind};
 
-/// Codec name for gzip compression
-pub const CODEC_GZIP: &str = "gzip";
-/// Codec name for zstd compression
-pub const CODEC_ZSTD: &str = "zstd";
-/// Codec name for snappy compression
-pub const CODEC_SNAPPY: &str = "snappy";
 /// Codec name for uncompressed
 pub const CODEC_UNCOMPRESSED: &str = "uncompressed";
 
@@ -43,7 +37,12 @@ const DEFAULT_ZSTD_LEVEL: u8 = 1;
 const MAX_ZSTD_LEVEL: u8 = 22;
 
 /// Parse codec name and optional level into a [`CompressionCodec`].
-/// Returns `CompressionCodec::None` for unknown or unsupported codecs.
+///
+/// Unknown codec names fall back to `CompressionCodec::None` with a `warn!` log entry rather
+/// than returning an error. This is intentional graceful degradation: the Avro spec allows
+/// readers to tolerate unknown codec metadata fields, and a hard error here would break
+/// reading tables written by newer implementations. Callers that need strict validation should
+/// check the codec before writing.
 ///
 /// # Arguments
 ///
@@ -79,6 +78,9 @@ pub(crate) fn to_avro_codec(codec: CompressionCodec) -> Result<Codec> {
             "LZ4 compression is not supported for Avro files",
         )),
         CompressionCodec::Gzip(level) => {
+            // miniz_oxide::CompressionLevel only exposes a handful of named levels, so levels
+            // 2–8 and 11+ all map to DefaultLevel. This is a library granularity limitation,
+            // not a bug — the output is valid gzip at whatever level miniz chooses.
             let compression_level = match level.unwrap_or(DEFAULT_GZIP_LEVEL) {
                 0 => CompressionLevel::NoCompression,
                 1 => CompressionLevel::BestSpeed,
