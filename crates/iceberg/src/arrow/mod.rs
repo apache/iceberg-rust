@@ -33,6 +33,7 @@ mod reader;
 pub mod record_batch_projector;
 pub(crate) mod record_batch_transformer;
 mod scan_metrics;
+pub(crate) mod timestamp_tz;
 mod value;
 
 pub use reader::*;
