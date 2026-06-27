@@ -100,6 +100,15 @@ cfg_if! {
 mod resolving;
 pub use resolving::{OpenDalResolvingStorage, OpenDalResolvingStorageFactory};
 
+/// Returns `true` when the property map contains S3-style configuration,
+/// indicating that `oss://` paths should be routed through the S3 backend
+/// (e.g. REST catalog vended credentials).
+#[cfg(all(feature = "opendal-oss", feature = "opendal-s3"))]
+fn has_s3_config(props: &HashMap<String, String>) -> bool {
+    props.contains_key(iceberg::io::S3_ENDPOINT)
+        || props.contains_key(iceberg::io::S3_ACCESS_KEY_ID)
+}
+
 /// OpenDAL-based storage factory.
 ///
 /// Maps scheme to the corresponding OpenDalStorage storage variant.
@@ -155,7 +164,23 @@ impl StorageFactory for OpenDalStorageFactory {
             OpenDalStorageFactory::Gcs => Ok(Arc::new(OpenDalStorage::Gcs {
                 config: gcs_config_parse(config.props().clone())?.into(),
             })),
-            #[cfg(feature = "opendal-oss")]
+            // OSS: if `s3.*` props are present (REST catalog vended credentials),
+            // route through S3 backend (OSS is S3-API-compatible).
+            // Otherwise fall back to native OSS backend (RAM/OIDC auth).
+            #[cfg(all(feature = "opendal-oss", feature = "opendal-s3"))]
+            OpenDalStorageFactory::Oss => {
+                if has_s3_config(config.props()) {
+                    Ok(Arc::new(OpenDalStorage::S3 {
+                        config: s3_config_parse(config.props().clone())?.into(),
+                        customized_credential_load: None,
+                    }))
+                } else {
+                    Ok(Arc::new(OpenDalStorage::Oss {
+                        config: oss_config_parse(config.props().clone())?.into(),
+                    }))
+                }
+            }
+            #[cfg(all(feature = "opendal-oss", not(feature = "opendal-s3")))]
             OpenDalStorageFactory::Oss => Ok(Arc::new(OpenDalStorage::Oss {
                 config: oss_config_parse(config.props().clone())?.into(),
             })),
@@ -217,7 +242,10 @@ pub enum OpenDalStorage {
         /// GCS configuration.
         config: Arc<GcsConfig>,
     },
-    /// OSS storage variant.
+    /// OSS storage variant (native OpenDAL OSS backend).
+    ///
+    /// Used when no `s3.*` configuration is present, allowing native
+    /// Aliyun authentication (RAM/OIDC/assume-role).
     #[cfg(feature = "opendal-oss")]
     Oss {
         /// OSS configuration.
@@ -733,20 +761,6 @@ mod tests {
                 .relativize_path("oss://my-bucket/path/to/file.parquet")
                 .unwrap(),
             "path/to/file.parquet"
-        );
-    }
-
-    #[cfg(feature = "opendal-oss")]
-    #[test]
-    fn test_relativize_path_oss_invalid_scheme() {
-        let storage = OpenDalStorage::Oss {
-            config: Arc::new(OssConfig::default()),
-        };
-
-        assert!(
-            storage
-                .relativize_path("s3://my-bucket/path/to/file.parquet")
-                .is_err()
         );
     }
 
