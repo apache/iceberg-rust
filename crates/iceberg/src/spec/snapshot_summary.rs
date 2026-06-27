@@ -506,7 +506,7 @@ fn update_totals(
         },
     };
 
-    // Parse the added/removed deltas, tolerating an unparseable value by skipping
+    // Parse the added/removed deltas, tolerating an unparsable value by skipping
     // the total entirely rather than panicking. Computed metrics always overwrite
     // user-supplied summary properties (see `SnapshotProducer::summary`), so a bad
     // value should only ever come from a previous snapshot's summary; matching
@@ -1166,7 +1166,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_totals_tolerates_unparseable_added_value() {
+    fn test_update_totals_tolerates_unparsable_added_value() {
         // A non-integer added value (which can survive in a previous snapshot's
         // summary) must not panic the commit. Matching iceberg-java's `updateTotal`
         // try/catch, the affected total is skipped while other totals still compute.
@@ -1195,10 +1195,10 @@ mod tests {
         let updated = update_snapshot_summaries(summary, Some(&previous_summary), false).unwrap();
         let props = &updated.additional_properties;
 
-        // The total whose added delta was unparseable is skipped...
+        // The total whose added delta was unparsable is skipped...
         assert!(
             !props.contains_key(TOTAL_DATA_FILES),
-            "TOTAL_DATA_FILES should be skipped when its added value is unparseable",
+            "TOTAL_DATA_FILES should be skipped when its added value is unparsable",
         );
         // ...while a sibling total with valid deltas still computes.
         assert_eq!(props.get(TOTAL_RECORDS).unwrap(), "120");
