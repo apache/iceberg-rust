@@ -414,6 +414,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_snapshot_properties_cannot_override_computed_metrics() {
+        // A user-supplied snapshot property must not shadow a computed metric key
+        // such as `added-data-files`. Matching iceberg-java, the computed value
+        // wins, so the summary reflects the real count and a bad value can neither
+        // corrupt the summary nor panic total computation (see #2184-adjacent fix).
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+
+        let mut snapshot_properties = HashMap::new();
+        // Both a benign-but-wrong value and a non-integer value collide with
+        // computed metric keys; neither should reach the final summary.
+        snapshot_properties.insert("added-data-files".to_string(), "9999".to_string());
+        snapshot_properties.insert("added-records".to_string(), "not-a-number".to_string());
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/1.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+
+        let action = tx
+            .fast_append()
+            .set_snapshot_properties(snapshot_properties)
+            .add_data_files(vec![data_file]);
+        // Must not panic during total computation.
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_snapshot = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            snapshot
+        } else {
+            unreachable!()
+        };
+        let props = &new_snapshot.summary().additional_properties;
+
+        // Computed metric wins over the user's colliding values.
+        assert_eq!(
+            props.get("added-data-files").unwrap(),
+            "1",
+            "computed added-data-files must override the user-supplied value"
+        );
+        assert_eq!(
+            props.get("added-records").unwrap(),
+            "1",
+            "computed added-records must override the user-supplied non-integer value"
+        );
+    }
+
+    #[tokio::test]
     async fn test_append_snapshot_properties() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
