@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -25,6 +25,23 @@ use crate::table::Table;
 use crate::transaction::action::{ActionCommit, TransactionAction};
 use crate::util::snapshot::is_ancestor_of;
 use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
+
+/// Every validation failure in this action is a `DataInvalid`.
+fn invalid(message: impl Into<String>) -> Error {
+    Error::new(ErrorKind::DataInvalid, message)
+}
+
+/// A branch reference with no retention overrides.
+fn default_branch(snapshot_id: i64) -> SnapshotReference {
+    SnapshotReference {
+        snapshot_id,
+        retention: SnapshotRetention::Branch {
+            min_snapshots_to_keep: None,
+            max_snapshot_age_ms: None,
+            max_ref_age_ms: None,
+        },
+    }
+}
 
 /// A transaction action that manages snapshot references (branches and tags), mirroring Java
 /// `ManageSnapshots` / `UpdateSnapshotReferencesOperation`. It creates, removes, replaces, and
@@ -204,7 +221,7 @@ impl ManageSnapshotsAction {
     }
 
     /// Validates `op` against the running `working_refs` and `metadata`, then applies it to
-    /// `working_refs`. Mirrors Java `UpdateSnapshotReferencesOperation`'s per-method checks.
+    /// `working_refs`.
     fn apply_op(
         op: &RefOp,
         working_refs: &mut HashMap<String, SnapshotReference>,
@@ -214,22 +231,12 @@ impl ManageSnapshotsAction {
             RefOp::CreateBranch { name, snapshot_id } => {
                 Self::ensure_absent(working_refs, name)?;
                 Self::ensure_snapshot_exists(metadata, *snapshot_id)?;
-                working_refs.insert(name.clone(), SnapshotReference {
-                    snapshot_id: *snapshot_id,
-                    retention: SnapshotRetention::Branch {
-                        min_snapshots_to_keep: None,
-                        max_snapshot_age_ms: None,
-                        max_ref_age_ms: None,
-                    },
-                });
+                working_refs.insert(name.clone(), default_branch(*snapshot_id));
             }
             RefOp::CreateTag { name, snapshot_id } => {
                 // `main` must be a branch; reject it as a tag name even if the ref isn't set yet.
                 if name == MAIN_BRANCH {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "Cannot create a tag with the reserved name main",
-                    ));
+                    return Err(invalid("Cannot create a tag with the reserved name main"));
                 }
                 Self::ensure_absent(working_refs, name)?;
                 Self::ensure_snapshot_exists(metadata, *snapshot_id)?;
@@ -242,10 +249,7 @@ impl ManageSnapshotsAction {
             }
             RefOp::RemoveBranch { name } => {
                 if name == MAIN_BRANCH {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "Cannot remove the main branch",
-                    ));
+                    return Err(invalid("Cannot remove the main branch"));
                 }
                 Self::ensure_branch(working_refs, name)?;
                 working_refs.remove(name);
@@ -256,10 +260,7 @@ impl ManageSnapshotsAction {
             }
             RefOp::RenameBranch { from, to } => {
                 if from == MAIN_BRANCH {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "Cannot rename the main branch",
-                    ));
+                    return Err(invalid("Cannot rename the main branch"));
                 }
                 Self::ensure_branch(working_refs, from)?;
                 Self::ensure_absent(working_refs, to)?;
@@ -279,45 +280,41 @@ impl ManageSnapshotsAction {
                 to,
                 fast_forward,
             } => {
-                let to_ref = working_refs.get(to).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Cannot replace branch {from}: source ref does not exist: {to}"),
-                    )
-                })?;
-                let to_snapshot_id = to_ref.snapshot_id;
+                let to_snapshot_id = working_refs
+                    .get(to)
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "Cannot replace branch {from}: source ref does not exist: {to}"
+                        ))
+                    })?
+                    .snapshot_id;
 
-                // An existing destination must be a branch; a missing one is created as a branch.
-                let from_retention = match working_refs.get(from) {
+                // An existing destination keeps its retention; a missing one is created as a branch.
+                let new_ref = match working_refs.get(from) {
                     Some(existing) => {
                         if !existing.is_branch() {
-                            return Err(Error::new(
-                                ErrorKind::DataInvalid,
-                                format!("Ref {from} is a tag, not a branch"),
-                            ));
+                            return Err(invalid(format!("Ref {from} is a tag, not a branch")));
+                        }
+                        // Already there: nothing to replace, and a no-op must not produce a
+                        // requirement. Return before the fast-forward ancestor check.
+                        if existing.snapshot_id == to_snapshot_id {
+                            return Ok(());
                         }
                         if *fast_forward
                             && !is_ancestor_of(metadata, to_snapshot_id, existing.snapshot_id)
                         {
-                            return Err(Error::new(
-                                ErrorKind::DataInvalid,
-                                format!(
-                                    "Cannot fast-forward branch {from}: its snapshot is not an ancestor of {to}"
-                                ),
-                            ));
+                            return Err(invalid(format!(
+                                "Cannot fast-forward branch {from}: its snapshot is not an ancestor of {to}"
+                            )));
                         }
-                        existing.retention.clone()
+                        SnapshotReference {
+                            snapshot_id: to_snapshot_id,
+                            retention: existing.retention.clone(),
+                        }
                     }
-                    None => SnapshotRetention::Branch {
-                        min_snapshots_to_keep: None,
-                        max_snapshot_age_ms: None,
-                        max_ref_age_ms: None,
-                    },
+                    None => default_branch(to_snapshot_id),
                 };
-                working_refs.insert(from.clone(), SnapshotReference {
-                    snapshot_id: to_snapshot_id,
-                    retention: from_retention,
-                });
+                working_refs.insert(from.clone(), new_ref);
             }
             RefOp::ReplaceTag { name, snapshot_id } => {
                 let reference = Self::ensure_tag(working_refs, name)?.clone();
@@ -351,12 +348,9 @@ impl ManageSnapshotsAction {
             }
             RefOp::SetMaxRefAgeMs { name, value } => {
                 Self::ensure_positive(*value, "max_ref_age_ms")?;
-                let reference = working_refs.get_mut(name).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Ref does not exist: {name}"),
-                    )
-                })?;
+                let reference = working_refs
+                    .get_mut(name)
+                    .ok_or_else(|| invalid(format!("Ref does not exist: {name}")))?;
                 match &mut reference.retention {
                     SnapshotRetention::Branch { max_ref_age_ms, .. }
                     | SnapshotRetention::Tag { max_ref_age_ms } => *max_ref_age_ms = Some(*value),
@@ -368,20 +362,16 @@ impl ManageSnapshotsAction {
 
     fn ensure_absent(refs: &HashMap<String, SnapshotReference>, name: &str) -> Result<()> {
         if refs.contains_key(name) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Ref already exists: {name}"),
-            ));
+            return Err(invalid(format!("Ref already exists: {name}")));
         }
         Ok(())
     }
 
     fn ensure_snapshot_exists(metadata: &TableMetadataRef, snapshot_id: i64) -> Result<()> {
         if metadata.snapshot_by_id(snapshot_id).is_none() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot set snapshot ref: unknown snapshot id {snapshot_id}"),
-            ));
+            return Err(invalid(format!(
+                "Cannot set snapshot ref: unknown snapshot id {snapshot_id}"
+            )));
         }
         Ok(())
     }
@@ -391,17 +381,11 @@ impl ManageSnapshotsAction {
         refs: &'a mut HashMap<String, SnapshotReference>,
         name: &str,
     ) -> Result<&'a mut SnapshotReference> {
-        let reference = refs.get_mut(name).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Branch does not exist: {name}"),
-            )
-        })?;
+        let reference = refs
+            .get_mut(name)
+            .ok_or_else(|| invalid(format!("Branch does not exist: {name}")))?;
         if !reference.is_branch() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Ref {name} is a tag, not a branch"),
-            ));
+            return Err(invalid(format!("Ref {name} is a tag, not a branch")));
         }
         Ok(reference)
     }
@@ -411,37 +395,22 @@ impl ManageSnapshotsAction {
         refs: &'a mut HashMap<String, SnapshotReference>,
         name: &str,
     ) -> Result<&'a mut SnapshotReference> {
-        let reference = refs.get_mut(name).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Tag does not exist: {name}"),
-            )
-        })?;
+        let reference = refs
+            .get_mut(name)
+            .ok_or_else(|| invalid(format!("Tag does not exist: {name}")))?;
         if reference.is_branch() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Ref {name} is a branch, not a tag"),
-            ));
+            return Err(invalid(format!("Ref {name} is a branch, not a tag")));
         }
         Ok(reference)
     }
 
     fn ensure_positive(value: i64, field: &str) -> Result<()> {
         if value <= 0 {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("{field} must be a positive number, was {value}"),
-            ));
+            return Err(invalid(format!(
+                "{field} must be a positive number, was {value}"
+            )));
         }
         Ok(())
-    }
-
-    /// Refs read as the source (`to`) of `replace_branch_with_ref`/`fast_forward_branch`.
-    fn source_refs(&self) -> impl Iterator<Item = &str> {
-        self.ops.iter().filter_map(|op| match op {
-            RefOp::ReplaceBranchWithRef { to, .. } => Some(to.as_str()),
-            _ => None,
-        })
     }
 }
 
@@ -457,7 +426,7 @@ impl TransactionAction for ManageSnapshotsAction {
         }
 
         // Remove refs that disappeared, set ones that were added or changed; unchanged refs (and
-        // net no-ops) emit nothing.
+        // net no-ops) emit nothing. Diffing yields at most one update per ref name.
         let mut updates: Vec<TableUpdate> = vec![];
         let mut refs_with_updates: Vec<String> = vec![];
 
@@ -483,27 +452,16 @@ impl TransactionAction for ManageSnapshotsAction {
             return Ok(ActionCommit::new(vec![], vec![]));
         }
 
-        // One requirement per updated ref, keyed on its base snapshot id; `None` asserts the ref did
-        // not exist in base. Built from the diff (not every touched ref) and deduped by name.
+        // One requirement per changed ref, asserting its base snapshot id (`None` means the ref
+        // must not exist yet).
         let mut requirements: Vec<TableRequirement> = vec![TableRequirement::UuidMatch {
             uuid: metadata.uuid(),
         }];
-        // Also assert source refs (the `to` read by replace_branch_with_ref/fast_forward_branch) on
-        // their base head, so a concurrent advance of e.g. `main` conflicts. Sources not in base were
-        // created in this same transaction, so there is no base head to assert.
-        let source_refs = self
-            .source_refs()
-            .filter(|ref_name| base_refs.contains_key(*ref_name))
-            .map(str::to_string);
-        let mut seen: HashSet<String> = HashSet::new();
-        for ref_name in refs_with_updates.into_iter().chain(source_refs) {
-            if seen.insert(ref_name.clone()) {
-                let snapshot_id = base_refs.get(&ref_name).map(|r| r.snapshot_id);
-                requirements.push(TableRequirement::RefSnapshotIdMatch {
-                    r#ref: ref_name,
-                    snapshot_id,
-                });
-            }
+        for ref_name in &refs_with_updates {
+            requirements.push(TableRequirement::RefSnapshotIdMatch {
+                r#ref: ref_name.clone(),
+                snapshot_id: base_refs.get(ref_name).map(|r| r.snapshot_id),
+            });
         }
 
         Ok(ActionCommit::new(updates, requirements))
@@ -788,10 +746,67 @@ mod tests {
         // `b` now points at main's snapshot (2).
         assert_eq!(set_ref(&updates, "b"), Some(&branch(2)));
         assert_eq!(requirement_for(&requirements, "b"), Some(&Some(1)));
-        // `main` is the source: not updated, but still asserted on its base head (2).
+        // `main` is only the source: not updated and not asserted (only changed refs are asserted).
         assert!(!removed_ref(&updates, MAIN_BRANCH));
         assert!(set_ref(&updates, MAIN_BRANCH).is_none());
-        assert_eq!(requirement_for(&requirements, MAIN_BRANCH), Some(&Some(2)));
+        assert!(requirement_for(&requirements, MAIN_BRANCH).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_replace_branch_with_ref_to_tag() {
+        // `to` may be a tag; `b` moves to the tag's snapshot.
+        let table = table_with(
+            vec![snapshot(1, None, 35, TS + 1), snapshot(2, None, 36, TS + 2)],
+            vec![(MAIN_BRANCH, branch(1)), ("b", branch(1)), ("t", tag(2))],
+        );
+        let (updates, _) = commit(&table, action().replace_branch_with_ref("b", "t")).await;
+        assert_eq!(set_ref(&updates, "b"), Some(&branch(2)));
+    }
+
+    #[tokio::test]
+    async fn test_fast_forward_to_tag() {
+        // 1 -> 2 -> 3 ; tag `t` at 3, `b` at 1 fast-forwards to it.
+        let table = table_with(
+            vec![
+                snapshot(1, None, 35, TS + 1),
+                snapshot(2, Some(1), 36, TS + 2),
+                snapshot(3, Some(2), 37, TS + 3),
+            ],
+            vec![(MAIN_BRANCH, branch(3)), ("b", branch(1)), ("t", tag(3))],
+        );
+        let (updates, _) = commit(&table, action().fast_forward_branch("b", "t")).await;
+        assert_eq!(set_ref(&updates, "b"), Some(&branch(3)));
+    }
+
+    #[tokio::test]
+    async fn test_replace_branch_with_ref_from_tag_fails() {
+        let table = table_with(
+            vec![snapshot(1, None, 35, TS + 1), snapshot(2, None, 36, TS + 2)],
+            vec![(MAIN_BRANCH, branch(2)), ("t", tag(1))],
+        );
+        assert!(
+            Arc::new(action().replace_branch_with_ref("t", MAIN_BRANCH))
+                .commit(&table)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fast_forward_from_tag_fails() {
+        let table = table_with(
+            vec![
+                snapshot(1, None, 35, TS + 1),
+                snapshot(2, Some(1), 36, TS + 2),
+            ],
+            vec![(MAIN_BRANCH, branch(2)), ("t", tag(1))],
+        );
+        assert!(
+            Arc::new(action().fast_forward_branch("t", MAIN_BRANCH))
+                .commit(&table)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -814,8 +829,8 @@ mod tests {
         assert_eq!(set_ref(&updates, "b"), Some(&branch(3)));
         // No base ref for `b`, so it asserts absence.
         assert_eq!(requirement_for(&requirements, "b"), Some(&None));
-        // The source `main` is still asserted on its base head even when `from` is created fresh.
-        assert_eq!(requirement_for(&requirements, MAIN_BRANCH), Some(&Some(3)));
+        // The source `main` is not asserted (only changed refs are).
+        assert!(requirement_for(&requirements, MAIN_BRANCH).is_none());
     }
 
     #[tokio::test]
@@ -874,6 +889,36 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn test_noop_replace_branch_with_ref_emits_nothing() {
+        // `b` already points at main's snapshot, so there is nothing to update or assert.
+        let table = table_with(
+            vec![snapshot(1, None, 35, TS + 1), snapshot(2, None, 36, TS + 2)],
+            vec![(MAIN_BRANCH, branch(2)), ("b", branch(2))],
+        );
+        let (updates, requirements) =
+            commit(&table, action().replace_branch_with_ref("b", MAIN_BRANCH)).await;
+        assert!(updates.is_empty());
+        assert!(requirements.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_noop_fast_forward_emits_nothing() {
+        // A fast-forward to where `b` already is records nothing, so it can't conflict with a
+        // concurrent move of `main`.
+        let table = table_with(
+            vec![
+                snapshot(1, None, 35, TS + 1),
+                snapshot(2, Some(1), 36, TS + 2),
+            ],
+            vec![(MAIN_BRANCH, branch(2)), ("b", branch(2))],
+        );
+        let (updates, requirements) =
+            commit(&table, action().fast_forward_branch("b", MAIN_BRANCH)).await;
+        assert!(updates.is_empty());
+        assert!(requirements.is_empty());
     }
 
     #[tokio::test]
@@ -1099,5 +1144,149 @@ mod tests {
         let tx = Transaction::new(&table);
         let tx = tx.manage_snapshots().create_tag("t", 1).apply(tx).unwrap();
         assert_eq!(tx.actions.len(), 1);
+    }
+}
+
+/// Drives updates *and* requirements through a real `MemoryCatalog` to check the emitted
+/// requirements are enforced on commit.
+///
+/// We hand a `TableCommit` straight to `Catalog::update_table` instead of using
+/// `Transaction::commit`, which would reload the table and rebuild the action against fresh
+/// metadata on each attempt — hiding the conflict in a single-threaded test.
+#[cfg(test)]
+mod e2e_tests {
+    use std::sync::Arc;
+
+    use crate::memory::tests::new_memory_catalog;
+    use crate::spec::{
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, Struct,
+    };
+    use crate::table::Table;
+    use crate::transaction::Transaction;
+    use crate::transaction::action::{ApplyTransactionAction, TransactionAction};
+    use crate::transaction::manage_snapshots::ManageSnapshotsAction;
+    use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+    use crate::{Catalog, ErrorKind, TableCommit};
+
+    fn file_with_rows(record_count: u64) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(format!("test/{record_count}.parquet"))
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(record_count)
+            .partition(Struct::from_iter([Some(Literal::long(0))]))
+            .partition_spec_id(0)
+            .build()
+            .unwrap()
+    }
+
+    /// Builds a catalog with two snapshots (s1, s2) where `main` is at s2 and branch `b` at s1.
+    /// The returned table is the current catalog state and holds both snapshots.
+    async fn seed() -> (impl Catalog, Table, i64, i64) {
+        let catalog = new_memory_catalog().await;
+        let t0 = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let tx = Transaction::new(&t0);
+        let t1 = tx
+            .fast_append()
+            .add_data_files(vec![file_with_rows(10)])
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+        let s1 = t1.metadata().current_snapshot().unwrap().snapshot_id();
+
+        // Pin branch `b` at s1 before main advances.
+        let tx = Transaction::new(&t1);
+        let t1b = tx
+            .manage_snapshots()
+            .create_branch("b", s1)
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        let tx = Transaction::new(&t1b);
+        let t2 = tx
+            .fast_append()
+            .add_data_files(vec![file_with_rows(20)])
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+        let s2 = t2.metadata().current_snapshot().unwrap().snapshot_id();
+
+        (catalog, t2, s1, s2)
+    }
+
+    /// Builds a `TableCommit` (updates + requirements) from an action against `table`'s metadata.
+    async fn run_action(table: &Table, action: ManageSnapshotsAction) -> TableCommit {
+        let mut ac = Arc::new(action).commit(table).await.unwrap();
+        TableCommit::builder()
+            .ident(table.identifier().to_owned())
+            .updates(ac.take_updates())
+            .requirements(ac.take_requirements())
+            .build()
+    }
+
+    // The `b == s1` requirement is rejected once another writer moves `b`.
+    #[tokio::test]
+    async fn test_e2e_conflict_on_concurrent_ref_move() {
+        let (catalog, table, _s1, s2) = seed().await;
+        let commit = run_action(&table, ManageSnapshotsAction::new().replace_branch("b", s2)).await;
+
+        let tx = Transaction::new(&table);
+        tx.manage_snapshots()
+            .replace_branch("b", s2)
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        let err = catalog.update_table(commit).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::CatalogCommitConflicts);
+    }
+
+    // The "`t` must not exist" requirement is rejected once another writer creates `t`.
+    #[tokio::test]
+    async fn test_e2e_conflict_on_concurrent_tag_create() {
+        let (catalog, table, s1, _s2) = seed().await;
+        let commit = run_action(&table, ManageSnapshotsAction::new().create_tag("t", s1)).await;
+
+        let tx = Transaction::new(&table);
+        tx.manage_snapshots()
+            .create_tag("t", s1)
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        let err = catalog.update_table(commit).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::CatalogCommitConflicts);
+    }
+
+    // A commit whose requirements still hold applies and persists.
+    #[tokio::test]
+    async fn test_e2e_commit_applies_through_catalog() {
+        let (catalog, table, s1, s2) = seed().await;
+        let commit = run_action(
+            &table,
+            ManageSnapshotsAction::new()
+                .replace_branch("b", s2)
+                .create_tag("t", s1),
+        )
+        .await;
+
+        let updated = catalog.update_table(commit).await.unwrap();
+        let refs = updated.metadata().refs();
+        assert_eq!(refs.get("b").unwrap().snapshot_id, s2);
+        assert_eq!(refs.get("t").unwrap().snapshot_id, s1);
+        assert_eq!(refs.get(MAIN_BRANCH).unwrap().snapshot_id, s2);
     }
 }
