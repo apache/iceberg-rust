@@ -945,3 +945,125 @@ async fn test_insert_into_partitioned() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_insert_into_empty_result() -> Result<()> {
+    let iceberg_catalog = get_iceberg_catalog().await;
+    let namespace = NamespaceIdent::new("test_insert_empty".to_string());
+    set_test_namespace(&iceberg_catalog, &namespace).await?;
+
+    let creation = get_table_creation(temp_path(), "empty_table", None)?;
+    iceberg_catalog.create_table(&namespace, creation).await?;
+
+    let client = Arc::new(iceberg_catalog);
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client.clone()).await?);
+
+    let ctx = SessionContext::new();
+    ctx.register_catalog("catalog", catalog);
+
+    // Insert zero rows using a WHERE false condition
+    let df = ctx
+        .sql(
+            "INSERT INTO catalog.test_insert_empty.empty_table SELECT * FROM (VALUES (1, 'a')) AS t(foo1, foo2) WHERE false",
+        )
+        .await
+        .unwrap();
+    let batches = df.collect().await.unwrap();
+
+    // Must return exactly one batch with one row and one column
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.num_rows(), 1);
+    assert_eq!(batch.num_columns(), 1);
+
+    // The count column must be UInt64 with value 0
+    let count_array = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap();
+    assert_eq!(count_array.value(0), 0);
+
+    // No snapshot should be created for an empty insert
+    let table_ident = TableIdent::new(namespace.clone(), "empty_table".to_string());
+    let table = client.load_table(&table_ident).await?;
+    assert!(
+        table.metadata().current_snapshot().is_none(),
+        "Empty insert must not create a new snapshot"
+    );
+
+    // Querying the table should return no rows
+    let df = ctx
+        .sql("SELECT * FROM catalog.test_insert_empty.empty_table")
+        .await
+        .unwrap();
+    let batches = df.collect().await.unwrap();
+    assert!(batches.is_empty() || batches.iter().all(|b| b.num_rows() == 0));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_insert_into_partitioned_empty_result() -> Result<()> {
+    let iceberg_catalog = get_iceberg_catalog().await;
+    let namespace = NamespaceIdent::new("test_insert_empty_partitioned".to_string());
+    set_test_namespace(&iceberg_catalog, &namespace).await?;
+
+    let schema = Schema::builder()
+        .with_schema_id(0)
+        .with_fields(vec![
+            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::required(2, "category", Type::Primitive(PrimitiveType::String)).into(),
+        ])
+        .build()?;
+
+    let partition_spec = UnboundPartitionSpec::builder()
+        .with_spec_id(0)
+        .add_partition_field(2, "category", Transform::Identity)?
+        .build();
+
+    let creation = TableCreation::builder()
+        .name("partitioned_empty_table".to_string())
+        .location(temp_path())
+        .schema(schema)
+        .partition_spec(partition_spec)
+        .properties(HashMap::new())
+        .build();
+
+    iceberg_catalog.create_table(&namespace, creation).await?;
+
+    let client = Arc::new(iceberg_catalog);
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client.clone()).await?);
+
+    let ctx = SessionContext::new();
+    ctx.register_catalog("catalog", catalog);
+
+    let df = ctx
+        .sql(
+            "INSERT INTO catalog.test_insert_empty_partitioned.partitioned_empty_table SELECT * FROM (VALUES (1, 'electronics')) AS t(id, category) WHERE false",
+        )
+        .await
+        .unwrap();
+    let batches = df.collect().await.unwrap();
+
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.num_rows(), 1);
+    assert_eq!(batch.num_columns(), 1);
+
+    let count_array = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap();
+    assert_eq!(count_array.value(0), 0);
+
+    let table_ident = TableIdent::new(namespace.clone(), "partitioned_empty_table".to_string());
+    let table = client.load_table(&table_ident).await?;
+    assert!(
+        table.metadata().current_snapshot().is_none(),
+        "Empty insert on partitioned table must not create a new snapshot"
+    );
+
+    Ok(())
+}
