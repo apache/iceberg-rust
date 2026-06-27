@@ -46,7 +46,7 @@ use iceberg_datafusion::physical_plan::{
 use serde::{Deserialize, Serialize};
 
 use crate::bridge::{
-    CatalogConfigProto, TAG_DELEGATED, TAG_ICEBERG, encode_blob, get_catalog, load_table,
+    CatalogConfigWire, TAG_DELEGATED, TAG_ICEBERG, encode_blob, get_catalog, load_table,
     split_tagged, to_df_err,
 };
 
@@ -56,7 +56,7 @@ use crate::bridge::{
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 enum IcebergPhysicalNode {
     Scan {
-        catalog: CatalogConfigProto,
+        catalog: CatalogConfigWire,
         table: TableIdent,
         snapshot_id: Option<i64>,
         projection: Option<Vec<String>>,
@@ -67,15 +67,15 @@ enum IcebergPhysicalNode {
         predicates: Option<Predicate>,
     },
     Write {
-        catalog: CatalogConfigProto,
+        catalog: CatalogConfigWire,
         table: TableIdent,
     },
     Commit {
-        catalog: CatalogConfigProto,
+        catalog: CatalogConfigWire,
         table: TableIdent,
     },
     Metadata {
-        catalog: CatalogConfigProto,
+        catalog: CatalogConfigWire,
         table: TableIdent,
         /// The metadata table kind, as its lowercase string name.
         metadata_type: String,
@@ -87,7 +87,7 @@ enum IcebergPhysicalNode {
 /// but it can be rebuilt on the far node from the (self-contained) partition spec
 /// and table schema, so those are all that travels on the wire.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct PartitionExprProto {
+struct PartitionExprWire {
     partition_spec: PartitionSpec,
     schema: Schema,
 }
@@ -248,7 +248,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
             let snapshot_id = scan
                 .snapshot_id()
                 .or_else(|| scan.table().metadata().current_snapshot_id());
-            let proto = IcebergPhysicalNode::Scan {
+            let node = IcebergPhysicalNode::Scan {
                 catalog: config.into(),
                 table: scan.table().identifier().clone(),
                 snapshot_id,
@@ -256,29 +256,29 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
                 limit: scan.limit(),
                 predicates: scan.predicates().cloned(),
             };
-            return encode_blob(buf, &proto);
+            return encode_blob(buf, &node);
         }
 
         if let Some(write) = node.as_any().downcast_ref::<IcebergWriteExec>() {
             let config = write
                 .catalog_config()
                 .ok_or_else(|| missing_config_err("IcebergWriteExec"))?;
-            let proto = IcebergPhysicalNode::Write {
+            let node = IcebergPhysicalNode::Write {
                 catalog: config.into(),
                 table: write.table().identifier().clone(),
             };
-            return encode_blob(buf, &proto);
+            return encode_blob(buf, &node);
         }
 
         if let Some(commit) = node.as_any().downcast_ref::<IcebergCommitExec>() {
             let config = commit
                 .catalog_config()
                 .ok_or_else(|| missing_config_err("IcebergCommitExec"))?;
-            let proto = IcebergPhysicalNode::Commit {
+            let node = IcebergPhysicalNode::Commit {
                 catalog: config.into(),
                 table: commit.table().identifier().clone(),
             };
-            return encode_blob(buf, &proto);
+            return encode_blob(buf, &node);
         }
 
         if let Some(meta) = node.as_any().downcast_ref::<IcebergMetadataScan>() {
@@ -286,12 +286,12 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
             let config = provider
                 .catalog_config()
                 .ok_or_else(|| missing_config_err("IcebergMetadataScan"))?;
-            let proto = IcebergPhysicalNode::Metadata {
+            let node = IcebergPhysicalNode::Metadata {
                 catalog: config.into(),
                 table: provider.table().identifier().clone(),
                 metadata_type: provider.metadata_type().as_str().to_string(),
             };
-            return encode_blob(buf, &proto);
+            return encode_blob(buf, &node);
         }
 
         buf.push(TAG_DELEGATED);
@@ -306,11 +306,11 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
         // The partition-value expression a partitioned write injects holds a
         // live calculator; serialize the spec + schema it can be rebuilt from.
         if let Some(expr) = node.as_any().downcast_ref::<PartitionExpr>() {
-            let proto = PartitionExprProto {
+            let wire = PartitionExprWire {
                 partition_spec: expr.partition_spec().as_ref().clone(),
                 schema: expr.table_schema().as_ref().clone(),
             };
-            return encode_blob(buf, &proto);
+            return encode_blob(buf, &wire);
         }
         buf.push(TAG_DELEGATED);
         self.inner.try_encode_expr(node, buf)
@@ -325,9 +325,9 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
         match tag {
             TAG_DELEGATED => self.inner.try_decode_expr(rest, inputs),
             TAG_ICEBERG => {
-                let proto: PartitionExprProto = serde_json::from_slice(rest).map_err(to_df_err)?;
+                let wire: PartitionExprWire = serde_json::from_slice(rest).map_err(to_df_err)?;
                 let expr =
-                    PartitionExpr::try_new(Arc::new(proto.partition_spec), Arc::new(proto.schema))?;
+                    PartitionExpr::try_new(Arc::new(wire.partition_spec), Arc::new(wire.schema))?;
                 Ok(Arc::new(expr))
             }
             other => Err(DataFusionError::Internal(format!(
@@ -356,8 +356,8 @@ mod tests {
 
     use super::*;
 
-    fn sample_catalog() -> CatalogConfigProto {
-        CatalogConfigProto {
+    fn sample_catalog() -> CatalogConfigWire {
+        CatalogConfigWire {
             r#type: "rest".to_string(),
             name: "rest".to_string(),
             props: BTreeMap::from([
@@ -401,6 +401,86 @@ mod tests {
             predicates: Some(Reference::new("a").less_than(Datum::long(5))),
         };
         assert_eq!(node, roundtrip(&node));
+    }
+
+    #[test]
+    fn scan_node_with_compound_predicate_roundtrips() {
+        use iceberg::expr::Reference;
+        use iceberg::spec::Datum;
+
+        // Exercise AND / OR / IN / IS NULL together — Predicate is the trickiest type.
+        let predicate = Reference::new("a")
+            .less_than(Datum::long(5))
+            .and(Reference::new("b").is_null())
+            .or(Reference::new("c").is_in([Datum::string("x"), Datum::string("y")]));
+        let node = IcebergPhysicalNode::Scan {
+            catalog: sample_catalog(),
+            table: TableIdent::from_strs(["ns", "tbl"]).unwrap(),
+            snapshot_id: None,
+            projection: None,
+            limit: None,
+            predicates: Some(predicate),
+        };
+        assert_eq!(node, roundtrip(&node));
+    }
+
+    #[test]
+    fn scan_node_without_predicates_field_decodes_to_none() {
+        use iceberg::expr::Reference;
+        use iceberg::spec::Datum;
+
+        // `predicates` is `#[serde(default)]`: a payload missing the key still decodes.
+        let node = IcebergPhysicalNode::Scan {
+            catalog: sample_catalog(),
+            table: TableIdent::from_strs(["ns", "tbl"]).unwrap(),
+            snapshot_id: Some(7),
+            projection: None,
+            limit: None,
+            predicates: Some(Reference::new("a").less_than(Datum::long(5))),
+        };
+        let mut value = serde_json::to_value(&node).unwrap();
+        value["Scan"].as_object_mut().unwrap().remove("predicates");
+
+        let decoded: IcebergPhysicalNode = serde_json::from_value(value).expect("decode");
+        assert!(matches!(decoded, IcebergPhysicalNode::Scan {
+            predicates: None,
+            snapshot_id: Some(7),
+            ..
+        }));
+    }
+
+    #[test]
+    fn partition_expr_wire_roundtrips() {
+        use iceberg::spec::{NestedField, PrimitiveType, Transform, Type};
+
+        // Schema + PartitionSpec are the heaviest serde types in the crate.
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "region", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .add_partition_field("region", "region", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let wire = PartitionExprWire {
+            partition_spec,
+            schema,
+        };
+
+        let mut buf = Vec::new();
+        encode_blob(&mut buf, &wire).expect("encode");
+        assert_eq!(buf[0], TAG_ICEBERG, "blob must carry the iceberg tag");
+        let decoded: PartitionExprWire = serde_json::from_slice(&buf[1..]).expect("decode");
+
+        assert_eq!(decoded.partition_spec, wire.partition_spec);
+        assert_eq!(decoded.schema, wire.schema);
     }
 
     #[test]

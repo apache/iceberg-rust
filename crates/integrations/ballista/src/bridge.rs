@@ -103,7 +103,7 @@ where
 /// one catalog, so we cache by config. Every cached catalog lives on
 /// [`CATALOG_RT`], which never shuts down, so entries stay valid for the life
 /// of the process and can be served to any caller.
-static CATALOGS: LazyLock<Mutex<HashMap<CatalogConfigProto, Arc<dyn Catalog>>>> =
+static CATALOGS: LazyLock<Mutex<HashMap<CatalogConfigWire, Arc<dyn Catalog>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Builds a catalog from its config.
@@ -129,7 +129,7 @@ pub(crate) async fn build_catalog(
 pub(crate) fn get_catalog(
     config: &IcebergCatalogConfig,
 ) -> Result<Arc<dyn Catalog>, DataFusionError> {
-    let key = CatalogConfigProto::from(config);
+    let key = CatalogConfigWire::from(config);
     if let Some(catalog) = CATALOGS.lock().unwrap().get(&key) {
         return Ok(catalog.clone());
     }
@@ -186,7 +186,7 @@ pub(crate) fn split_tagged<'a>(
 /// Serializable mirror of [`IcebergCatalogConfig`] (which is intentionally not
 /// serde-aware in the iceberg crate to avoid a serde dependency there).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub(crate) struct CatalogConfigProto {
+pub(crate) struct CatalogConfigWire {
     pub r#type: String,
     pub name: String,
     // BTreeMap (not HashMap) so the struct can derive Hash for the catalog
@@ -194,7 +194,7 @@ pub(crate) struct CatalogConfigProto {
     pub props: BTreeMap<String, String>,
 }
 
-impl From<&IcebergCatalogConfig> for CatalogConfigProto {
+impl From<&IcebergCatalogConfig> for CatalogConfigWire {
     fn from(c: &IcebergCatalogConfig) -> Self {
         Self {
             r#type: c.r#type.clone(),
@@ -208,8 +208,46 @@ impl From<&IcebergCatalogConfig> for CatalogConfigProto {
     }
 }
 
-impl From<CatalogConfigProto> for IcebergCatalogConfig {
-    fn from(p: CatalogConfigProto) -> Self {
+impl From<CatalogConfigWire> for IcebergCatalogConfig {
+    fn from(p: CatalogConfigWire) -> Self {
         IcebergCatalogConfig::new(p.r#type, p.name, p.props.into_iter().collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_props() -> [(String, String); 3] {
+        [
+            ("uri".to_string(), "http://localhost:8181".to_string()),
+            ("warehouse".to_string(), "s3://bucket/wh".to_string()),
+            ("s3.region".to_string(), "us-east-1".to_string()),
+        ]
+    }
+
+    #[test]
+    fn catalog_config_wire_roundtrips_to_identical_config() {
+        let config =
+            IcebergCatalogConfig::new("rest", "rest", sample_props().into_iter().collect());
+        let restored: IcebergCatalogConfig = CatalogConfigWire::from(&config).into();
+        assert_eq!(restored, config);
+    }
+
+    #[test]
+    fn catalog_config_wire_serialization_is_deterministic() {
+        // BTreeMap props serialize in key order, so the same entries yield the same
+        // bytes regardless of HashMap ordering — what the cache key relies on.
+        let forward: HashMap<_, _> = sample_props().into_iter().collect();
+        let reversed: HashMap<_, _> = sample_props().into_iter().rev().collect();
+
+        let a = CatalogConfigWire::from(&IcebergCatalogConfig::new("rest", "rest", forward));
+        let b = CatalogConfigWire::from(&IcebergCatalogConfig::new("rest", "rest", reversed));
+        let a_bytes = serde_json::to_vec(&a).unwrap();
+        assert_eq!(a_bytes, serde_json::to_vec(&b).unwrap());
+
+        // encode→decode→encode is a fixed point.
+        let decoded: CatalogConfigWire = serde_json::from_slice(&a_bytes).unwrap();
+        assert_eq!(serde_json::to_vec(&decoded).unwrap(), a_bytes);
     }
 }

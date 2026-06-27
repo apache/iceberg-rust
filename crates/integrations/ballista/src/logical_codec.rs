@@ -42,7 +42,7 @@ use iceberg_datafusion::{IcebergMetadataTableProvider, IcebergTableProvider};
 use serde::{Deserialize, Serialize};
 
 use crate::bridge::{
-    CatalogConfigProto, TAG_DELEGATED, TAG_ICEBERG, block_on, encode_blob, get_catalog, load_table,
+    CatalogConfigWire, TAG_DELEGATED, TAG_ICEBERG, block_on, encode_blob, get_catalog, load_table,
     split_tagged, to_df_err,
 };
 
@@ -50,10 +50,10 @@ use crate::bridge::{
 /// either the catalog-backed data provider or a metadata-table provider on a
 /// remote node.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-enum IcebergProviderProto {
+enum IcebergProviderWire {
     /// The catalog-backed [`IcebergTableProvider`].
     Table {
-        catalog: CatalogConfigProto,
+        catalog: CatalogConfigWire,
         table: TableIdent,
         /// Pinned snapshot for time-travel reads, if any.
         #[serde(default)]
@@ -61,7 +61,7 @@ enum IcebergProviderProto {
     },
     /// An [`IcebergMetadataTableProvider`] (e.g. `tbl$snapshots`).
     Metadata {
-        catalog: CatalogConfigProto,
+        catalog: CatalogConfigWire,
         table: TableIdent,
         /// The metadata table kind, as its lowercase string name.
         metadata_type: String,
@@ -117,10 +117,9 @@ impl LogicalExtensionCodec for IcebergLogicalCodec {
                 .inner
                 .try_decode_table_provider(rest, table_ref, schema, ctx),
             TAG_ICEBERG => {
-                let proto: IcebergProviderProto =
-                    serde_json::from_slice(rest).map_err(to_df_err)?;
-                match proto {
-                    IcebergProviderProto::Table {
+                let wire: IcebergProviderWire = serde_json::from_slice(rest).map_err(to_df_err)?;
+                match wire {
+                    IcebergProviderWire::Table {
                         catalog,
                         table,
                         snapshot_id,
@@ -135,7 +134,7 @@ impl LogicalExtensionCodec for IcebergLogicalCodec {
                         .with_snapshot_id(snapshot_id);
                         Ok(Arc::new(provider))
                     }
-                    IcebergProviderProto::Metadata {
+                    IcebergProviderWire::Metadata {
                         catalog,
                         table,
                         metadata_type,
@@ -172,12 +171,12 @@ impl LogicalExtensionCodec for IcebergLogicalCodec {
                         .to_string(),
                 )
             })?;
-            let proto = IcebergProviderProto::Table {
+            let wire = IcebergProviderWire::Table {
                 catalog: config.into(),
                 table: provider.table_ident().clone(),
                 snapshot_id: provider.snapshot_id(),
             };
-            return encode_blob(buf, &proto);
+            return encode_blob(buf, &wire);
         }
         if let Some(provider) = node.as_any().downcast_ref::<IcebergMetadataTableProvider>() {
             let config = provider.catalog_config().ok_or_else(|| {
@@ -188,12 +187,12 @@ impl LogicalExtensionCodec for IcebergLogicalCodec {
                         .to_string(),
                 )
             })?;
-            let proto = IcebergProviderProto::Metadata {
+            let wire = IcebergProviderWire::Metadata {
                 catalog: config.into(),
                 table: provider.table().identifier().clone(),
                 metadata_type: provider.metadata_type().as_str().to_string(),
             };
-            return encode_blob(buf, &proto);
+            return encode_blob(buf, &wire);
         }
         buf.push(TAG_DELEGATED);
         self.inner.try_encode_table_provider(table_ref, node, buf)
@@ -213,5 +212,149 @@ impl LogicalExtensionCodec for IcebergLogicalCodec {
         node: Arc<dyn FileFormatFactory>,
     ) -> Result<(), DataFusionError> {
         self.inner.try_encode_file_format(buf, node)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+    use datafusion::datasource::empty::EmptyTable;
+    use datafusion::prelude::SessionContext;
+
+    use super::*;
+
+    fn sample_catalog() -> CatalogConfigWire {
+        CatalogConfigWire {
+            r#type: "rest".to_string(),
+            name: "rest".to_string(),
+            props: BTreeMap::from([("uri".to_string(), "http://localhost:8181".to_string())]),
+        }
+    }
+
+    fn roundtrip(wire: &IcebergProviderWire) -> IcebergProviderWire {
+        let mut buf = Vec::new();
+        encode_blob(&mut buf, wire).expect("encode");
+        assert_eq!(buf[0], TAG_ICEBERG, "blob must carry the iceberg tag");
+        serde_json::from_slice(&buf[1..]).expect("decode")
+    }
+
+    #[test]
+    fn table_provider_wire_roundtrips() {
+        let wire = IcebergProviderWire::Table {
+            catalog: sample_catalog(),
+            table: TableIdent::from_strs(["ns", "tbl"]).unwrap(),
+            snapshot_id: Some(42),
+        };
+        assert_eq!(wire, roundtrip(&wire));
+    }
+
+    #[test]
+    fn metadata_provider_wire_roundtrips() {
+        let wire = IcebergProviderWire::Metadata {
+            catalog: sample_catalog(),
+            table: TableIdent::from_strs(["ns", "tbl"]).unwrap(),
+            metadata_type: "snapshots".to_string(),
+        };
+        assert_eq!(wire, roundtrip(&wire));
+    }
+
+    #[test]
+    fn table_provider_without_snapshot_id_decodes_to_none() {
+        // `snapshot_id` is `#[serde(default)]`: a payload missing the key still decodes.
+        let wire = IcebergProviderWire::Table {
+            catalog: sample_catalog(),
+            table: TableIdent::from_strs(["ns", "tbl"]).unwrap(),
+            snapshot_id: Some(99),
+        };
+        let mut value = serde_json::to_value(&wire).unwrap();
+        value["Table"]
+            .as_object_mut()
+            .unwrap()
+            .remove("snapshot_id");
+
+        let decoded: IcebergProviderWire = serde_json::from_value(value).expect("decode");
+        assert!(matches!(decoded, IcebergProviderWire::Table {
+            snapshot_id: None,
+            ..
+        }));
+    }
+
+    /// Stand-in inner codec for the delegation test. The real Ballista codec can't
+    /// serve here — its `try_encode_table_provider` is a permanent stub — so this
+    /// mock echoes a marker to prove framing reached it and forwarded the payload.
+    #[derive(Debug)]
+    struct MarkerInnerCodec;
+
+    impl LogicalExtensionCodec for MarkerInnerCodec {
+        fn try_decode(
+            &self,
+            _buf: &[u8],
+            _inputs: &[LogicalPlan],
+            _ctx: &TaskContext,
+        ) -> Result<Extension, DataFusionError> {
+            unreachable!()
+        }
+
+        fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<(), DataFusionError> {
+            unreachable!()
+        }
+
+        fn try_encode_table_provider(
+            &self,
+            _table_ref: &TableReference,
+            _node: Arc<dyn TableProvider>,
+            buf: &mut Vec<u8>,
+        ) -> Result<(), DataFusionError> {
+            buf.extend_from_slice(b"INNER-PROVIDER");
+            Ok(())
+        }
+
+        fn try_decode_table_provider(
+            &self,
+            buf: &[u8],
+            _table_ref: &TableReference,
+            schema: SchemaRef,
+            _ctx: &TaskContext,
+        ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
+            assert_eq!(
+                buf, b"INNER-PROVIDER",
+                "inner codec must get its bytes, tag stripped"
+            );
+            Ok(Arc::new(EmptyTable::new(schema)))
+        }
+    }
+
+    #[test]
+    fn non_iceberg_table_provider_is_framed_and_delegated_to_inner() {
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "a",
+            DataType::Int32,
+            false,
+        )]));
+        let codec = IcebergLogicalCodec::new(Arc::new(MarkerInnerCodec));
+        let table_ref = TableReference::bare("t");
+        let provider: Arc<dyn TableProvider> = Arc::new(EmptyTable::new(schema.clone()));
+
+        let mut buf = Vec::new();
+        codec
+            .try_encode_table_provider(&table_ref, provider, &mut buf)
+            .expect("encode");
+        assert_eq!(
+            buf[0], TAG_DELEGATED,
+            "non-Iceberg provider must be delegated"
+        );
+        assert_eq!(
+            &buf[1..],
+            b"INNER-PROVIDER",
+            "inner payload follows the tag"
+        );
+
+        let ctx = SessionContext::new();
+        let decoded = codec
+            .try_decode_table_provider(&buf, &table_ref, schema, &ctx.task_ctx())
+            .expect("decode");
+        assert!(decoded.as_any().downcast_ref::<EmptyTable>().is_some());
     }
 }
