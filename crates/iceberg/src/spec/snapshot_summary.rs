@@ -506,22 +506,31 @@ fn update_totals(
         },
     };
 
-    let added = summary
-        .additional_properties
-        .get(added_property)
-        .map_or(0, |value| {
-            value
-                .parse::<u64>()
-                .expect("must be parsable as it was just serialized")
-        });
-    let removed = summary
-        .additional_properties
-        .get(removed_property)
-        .map_or(0, |value| {
-            value
-                .parse::<u64>()
-                .expect("must be parsable as it was just serialized")
-        });
+    // Parse the added/removed deltas, tolerating an unparseable value by skipping
+    // the total entirely rather than panicking. Computed metrics always overwrite
+    // user-supplied summary properties (see `SnapshotProducer::summary`), so a bad
+    // value should only ever come from a previous snapshot's summary; matching
+    // iceberg-java's `updateTotal`, we ignore it instead of failing the commit.
+    let parse_delta = |property: &str| -> Option<u64> {
+        match summary.additional_properties.get(property) {
+            None => Some(0),
+            Some(value) => match value.parse::<u64>() {
+                Ok(v) => Some(v),
+                Err(parse_err) => {
+                    tracing::warn!(
+                        "Property '{property}' could not be parsed when computing '{total_property}': {parse_err}. \
+                         Skipping total computation.",
+                    );
+                    None
+                }
+            },
+        }
+    };
+
+    let (Some(added), Some(removed)) = (parse_delta(added_property), parse_delta(removed_property))
+    else {
+        return;
+    };
 
     let new_total = previous_total + added - removed;
     summary
@@ -1154,6 +1163,45 @@ mod tests {
                 "{total_field} should not be set when previous summary lacks it",
             );
         }
+    }
+
+    #[test]
+    fn test_update_totals_tolerates_unparseable_added_value() {
+        // A non-integer added value (which can survive in a previous snapshot's
+        // summary) must not panic the commit. Matching iceberg-java's `updateTotal`
+        // try/catch, the affected total is skipped while other totals still compute.
+        let prev_props: HashMap<String, String> = [(TOTAL_DATA_FILES, "8"), (TOTAL_RECORDS, "80")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+
+        let previous_summary = Summary {
+            operation: Operation::Append,
+            additional_properties: prev_props,
+        };
+
+        let new_props: HashMap<String, String> =
+            [(ADDED_DATA_FILES, "not-a-number"), (ADDED_RECORDS, "40")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+
+        let summary = Summary {
+            operation: Operation::Append,
+            additional_properties: new_props,
+        };
+
+        // Must not panic.
+        let updated = update_snapshot_summaries(summary, Some(&previous_summary), false).unwrap();
+        let props = &updated.additional_properties;
+
+        // The total whose added delta was unparseable is skipped...
+        assert!(
+            !props.contains_key(TOTAL_DATA_FILES),
+            "TOTAL_DATA_FILES should be skipped when its added value is unparseable",
+        );
+        // ...while a sibling total with valid deltas still computes.
+        assert_eq!(props.get(TOTAL_RECORDS).unwrap(), "120");
     }
 
     #[test]
