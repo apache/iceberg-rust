@@ -133,6 +133,12 @@ impl FileScanTaskReader {
             .next()
             .is_some_and(|f| f.metadata().get(PARQUET_FIELD_ID_META_KEY).is_none());
 
+        // Position-based fallback applies only when the file has no embedded field IDs
+        // AND no name mapping is available. With a name mapping, field IDs are assigned
+        // to the Arrow schema below, and projection/predicate planning must use them
+        // (see #2403).
+        let use_position_fallback = missing_field_ids && task.name_mapping.is_none();
+
         // Three-branch schema resolution strategy matching Java's ReadConf constructor
         //
         // Per Iceberg spec Column Projection rules:
@@ -214,15 +220,16 @@ impl FileScanTaskReader {
             .collect();
 
         // Create projection mask based on field IDs
-        // - If file has embedded IDs: field-ID-based projection (missing_field_ids=false)
-        // - If name mapping applied: field-ID-based projection (missing_field_ids=true but IDs now match)
-        // - If fallback IDs: position-based projection (missing_field_ids=true)
+        // - If file has embedded IDs: field-ID-based projection
+        // - If name mapping applied: field-ID-based projection using the IDs the name
+        //   mapping assigned to the Arrow schema
+        // - Otherwise: position-based fallback projection
         let projection_mask = ArrowReader::get_arrow_projection_mask(
             &project_field_ids_without_metadata,
             &task.schema,
             record_batch_stream_builder.parquet_schema(),
             record_batch_stream_builder.schema(),
-            missing_field_ids, // Whether to use position-based (true) or field-ID-based (false) projection
+            use_position_fallback, // Whether to use position-based (true) or field-ID-based (false) projection
         )?;
 
         record_batch_stream_builder =
@@ -302,7 +309,9 @@ impl FileScanTaskReader {
         if let Some(predicate) = final_predicate {
             let (iceberg_field_ids, field_id_map) = ArrowReader::build_field_id_set_and_map(
                 record_batch_stream_builder.parquet_schema(),
+                record_batch_stream_builder.schema(),
                 &predicate,
+                use_position_fallback,
             )?;
 
             let row_filter = ArrowReader::get_row_filter(
@@ -337,13 +346,13 @@ impl FileScanTaskReader {
             }
 
             if self.row_selection_enabled {
-                row_selection = Some(ArrowReader::get_row_selection_for_filter_predicate(
+                row_selection = ArrowReader::get_row_selection_for_filter_predicate(
                     &predicate,
                     record_batch_stream_builder.metadata(),
                     &selected_row_group_indices,
                     &field_id_map,
                     &task.schema,
-                )?);
+                )?;
             }
         }
 
