@@ -29,7 +29,7 @@ use crate::scan::{
 };
 use crate::spec::{
     ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping, SchemaRef,
-    SnapshotRef, TableMetadataRef,
+    SnapshotRef, StructType, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -48,6 +48,7 @@ pub(crate) struct ManifestFileContext {
     delete_file_index: DeleteFileIndex,
     name_mapping: Option<Arc<NameMapping>>,
     case_sensitive: bool,
+    unified_partition_type: Option<Arc<StructType>>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -63,6 +64,7 @@ pub(crate) struct ManifestEntryContext {
     pub delete_file_index: DeleteFileIndex,
     pub name_mapping: Option<Arc<NameMapping>>,
     pub case_sensitive: bool,
+    pub unified_partition_type: Option<Arc<StructType>>,
 }
 
 impl ManifestFileContext {
@@ -80,6 +82,7 @@ impl ManifestFileContext {
             delete_file_index,
             name_mapping,
             case_sensitive,
+            unified_partition_type,
         } = self;
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
@@ -96,6 +99,7 @@ impl ManifestFileContext {
                 delete_file_index: delete_file_index.clone(),
                 name_mapping: name_mapping.clone(),
                 case_sensitive,
+                unified_partition_type: unified_partition_type.clone(),
             };
 
             sender
@@ -138,6 +142,7 @@ impl ManifestEntryContext {
             // TODO: Pass actual PartitionSpec through context chain for native flow
             .with_partition_spec(None)
             .with_name_mapping(self.name_mapping)
+            .with_unified_partition_type(self.unified_partition_type.clone())
             .with_case_sensitive(self.case_sensitive)
             .build())
     }
@@ -161,6 +166,8 @@ pub(crate) struct PlanContext {
     pub partition_filter_cache: Arc<PartitionFilterCache>,
     pub manifest_evaluator_cache: Arc<ManifestEvaluatorCache>,
     pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
+
+    pub unified_partition_type: Option<Arc<StructType>>,
 }
 
 impl PlanContext {
@@ -284,6 +291,7 @@ impl PlanContext {
             delete_file_index,
             name_mapping: self.name_mapping.clone(),
             case_sensitive: self.case_sensitive,
+            unified_partition_type: self.unified_partition_type.clone(),
         }
     }
 }
