@@ -84,13 +84,13 @@ impl FastAppendAction {
 #[async_trait]
 impl TransactionAction for FastAppendAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
-        let snapshot_producer = SnapshotProducer::new(
-            table,
-            self.commit_uuid.unwrap_or_else(Uuid::now_v7),
-            self.key_metadata.clone(),
-            self.snapshot_properties.clone(),
-            self.added_data_files.clone(),
-        );
+        let snapshot_producer = SnapshotProducer::builder()
+            .with_table(table)
+            .with_commit_uuid(self.commit_uuid.unwrap_or_else(Uuid::now_v7))
+            .with_key_metadata(self.key_metadata.clone())
+            .with_snapshot_properties(self.snapshot_properties.clone())
+            .with_added_data_files(self.added_data_files.clone())
+            .build();
 
         // validate added files
         snapshot_producer.validate_added_data_files()?;

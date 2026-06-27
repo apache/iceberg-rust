@@ -17,18 +17,19 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::ops::RangeFrom;
+use std::ops::{Deref, RangeFrom};
 
 use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
+use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
-    ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, Snapshot,
-    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType, Summary,
-    TableProperties, update_snapshot_summaries,
+    DataContentType, DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType,
+    ManifestEntry, ManifestFile, ManifestListWriter, ManifestWriter, ManifestWriterBuilder,
+    Operation, Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct,
+    StructType, Summary, TableProperties, update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -69,7 +70,6 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
     fn operation(&self) -> Operation;
 
     /// Returns manifest entries that should be marked as deleted in the new snapshot.
-    #[allow(unused)]
     fn delete_entries(
         &self,
         snapshot_produce: &SnapshotProducer,
@@ -109,41 +109,39 @@ pub(crate) trait ManifestProcess: Send + Sync {
     ) -> Vec<ManifestFile>;
 }
 
+#[derive(TypedBuilder)]
+#[builder(field_defaults(setter(prefix = "with_")))]
 pub(crate) struct SnapshotProducer<'a> {
     pub(crate) table: &'a Table,
+    #[builder(
+        setter(skip),
+        default_code = "SnapshotProducer::generate_unique_snapshot_id(table)"
+    )]
     snapshot_id: i64,
     commit_uuid: Uuid,
+    #[builder(default)]
     key_metadata: Option<Vec<u8>>,
+    #[builder(default)]
     snapshot_properties: HashMap<String, String>,
+    #[builder(default)]
     added_data_files: Vec<DataFile>,
+    #[builder(default)]
+    added_delete_files: Vec<DataFile>,
+    #[builder(default)]
+    removed_data_files: Vec<DataFile>,
+    #[builder(default)]
+    removed_delete_files: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
+    #[builder(setter(skip), default_code = "(0..)")]
     manifest_counter: RangeFrom<u64>,
 }
 
 impl<'a> SnapshotProducer<'a> {
-    pub(crate) fn new(
-        table: &'a Table,
-        commit_uuid: Uuid,
-        key_metadata: Option<Vec<u8>>,
-        snapshot_properties: HashMap<String, String>,
-        added_data_files: Vec<DataFile>,
-    ) -> Self {
-        Self {
-            table,
-            snapshot_id: Self::generate_unique_snapshot_id(table),
-            commit_uuid,
-            key_metadata,
-            snapshot_properties,
-            added_data_files,
-            manifest_counter: (0..),
-        }
-    }
-
     pub(crate) fn validate_added_data_files(&self) -> Result<()> {
         for data_file in &self.added_data_files {
-            if data_file.content_type() != crate::spec::DataContentType::Data {
+            if data_file.content_type() != DataContentType::Data {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Only data content type is allowed for fast append",
@@ -242,7 +240,11 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_id
     }
 
-    fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
+    pub(crate) fn new_manifest_writer(
+        &mut self,
+        content: ManifestContentType,
+        spec_id: i32,
+    ) -> Result<ManifestWriter> {
         let new_manifest_path = format!(
             "{}/{}/{}-m{}.{}",
             self.table.metadata().location(),
@@ -259,8 +261,14 @@ impl<'a> SnapshotProducer<'a> {
             self.table.metadata().current_schema().clone(),
             self.table
                 .metadata()
-                .default_partition_spec()
-                .as_ref()
+                .partition_spec_by_id(spec_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Partition spec with id: {spec_id} is not found!"),
+                    )
+                })?
+                .deref()
                 .clone(),
         );
         match self.table.metadata().format_version() {
@@ -308,18 +316,25 @@ impl<'a> SnapshotProducer<'a> {
     }
 
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
-    async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
-        let added_data_files = std::mem::take(&mut self.added_data_files);
-        if added_data_files.is_empty() {
+    async fn write_added_manifest(
+        &mut self,
+        content_type: ManifestContentType,
+    ) -> Result<ManifestFile> {
+        let added_files = match content_type {
+            ManifestContentType::Data => std::mem::take(&mut self.added_data_files),
+            ManifestContentType::Deletes => std::mem::take(&mut self.added_delete_files),
+        };
+
+        if added_files.is_empty() {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
-                "No added data files found when write an added manifest file",
+                "No added files found when write an added manifest file",
             ));
         }
 
         let snapshot_id = self.snapshot_id;
         let format_version = self.table.metadata().format_version();
-        let manifest_entries = added_data_files.into_iter().map(|data_file| {
+        let manifest_entries = added_files.into_iter().map(|data_file| {
             let builder = ManifestEntry::builder()
                 .status(crate::spec::ManifestStatus::Added)
                 .data_file(data_file);
@@ -331,11 +346,65 @@ impl<'a> SnapshotProducer<'a> {
                 builder.build()
             }
         });
-        let mut writer = self.new_manifest_writer(ManifestContentType::Data)?;
+        let mut writer = self.new_manifest_writer(
+            content_type,
+            self.table.metadata().default_partition_spec_id(),
+        )?;
         for entry in manifest_entries {
             writer.add_entry(entry)?;
         }
         writer.write_manifest_file().await
+    }
+
+    // Write manifest files for deleted manifest entries
+    async fn write_deleted_manifest(
+        &mut self,
+        deleted_entries: Vec<ManifestEntry>,
+    ) -> Result<Vec<ManifestFile>> {
+        if deleted_entries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Initialize partition groups
+        let mut partition_groups = HashMap::new();
+        for entry in deleted_entries {
+            partition_groups
+                .entry(entry.data_file().partition_spec_id)
+                .or_insert_with(Vec::new)
+                .push(entry);
+        }
+
+        // Write manifest files for each spec-entries pair
+        let mut deleted_manifests = Vec::new();
+        for (spec_id, entries) in partition_groups {
+            let mut data_manifest_writer: Option<ManifestWriter> = None;
+            let mut delete_manifest_writer: Option<ManifestWriter> = None;
+            for entry in entries {
+                match entry.data_file().content_type() {
+                    DataContentType::Data => data_manifest_writer
+                        .get_or_insert(
+                            self.new_manifest_writer(ManifestContentType::Data, spec_id)?,
+                        )
+                        .add_delete_entry(entry)?,
+                    DataContentType::PositionDeletes | DataContentType::EqualityDeletes => {
+                        delete_manifest_writer
+                            .get_or_insert(
+                                self.new_manifest_writer(ManifestContentType::Deletes, spec_id)?,
+                            )
+                            .add_delete_entry(entry)?
+                    }
+                }
+            }
+
+            if let Some(writer) = data_manifest_writer {
+                deleted_manifests.push(writer.write_manifest_file().await?);
+            };
+            if let Some(writer) = delete_manifest_writer {
+                deleted_manifests.push(writer.write_manifest_file().await?);
+            };
+        }
+
+        Ok(deleted_manifests)
     }
 
     async fn manifest_file<OP: SnapshotProduceOperation, MP: ManifestProcess>(
@@ -348,10 +417,15 @@ impl<'a> SnapshotProducer<'a> {
         // TODO: Allowing snapshot property setup with no added data files is a workaround.
         // We should clean it up after all necessary actions are supported.
         // For details, please refer to https://github.com/apache/iceberg-rust/issues/1548
-        if self.added_data_files.is_empty() && self.snapshot_properties.is_empty() {
+        if self.added_data_files.is_empty()
+            && self.added_delete_files.is_empty()
+            && self.removed_data_files.is_empty()
+            && self.removed_delete_files.is_empty()
+            && self.snapshot_properties.is_empty()
+        {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
-                "No added data files or added snapshot properties found when write a manifest file",
+                "No added data files, delete files, or snapshot properties found when writing a manifest file",
             ));
         }
 
@@ -360,12 +434,20 @@ impl<'a> SnapshotProducer<'a> {
 
         // Process added entries.
         if !self.added_data_files.is_empty() {
-            let added_manifest = self.write_added_manifest().await?;
+            let added_manifest = self.write_added_manifest(ManifestContentType::Data).await?;
+            manifest_files.push(added_manifest);
+        }
+        if !self.added_delete_files.is_empty() {
+            let added_manifest = self
+                .write_added_manifest(ManifestContentType::Deletes)
+                .await?;
             manifest_files.push(added_manifest);
         }
 
-        // # TODO
-        // Support process delete entries.
+        let delete_manifests = self
+            .write_deleted_manifest(snapshot_produce_operation.delete_entries(self).await?)
+            .await?;
+        manifest_files.extend(delete_manifests);
 
         let manifest_files = manifest_process.process_manifests(self, manifest_files);
         Ok(manifest_files)
@@ -394,11 +476,50 @@ impl<'a> SnapshotProducer<'a> {
 
         summary_collector.set_partition_summary_limit(partition_summary_limit);
 
+        // Helper: look up the partition spec for a file. Returns DataInvalid
+        // if the file references a spec that doesn't exist in the table.
+        let spec_for = |data_file: &DataFile| {
+            table_metadata
+                .partition_spec_by_id(data_file.partition_spec_id)
+                .cloned()
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Cannot find partition spec {} for file: {}",
+                            data_file.partition_spec_id,
+                            data_file.file_path()
+                        ),
+                    )
+                })
+        };
+
         for data_file in &self.added_data_files {
             summary_collector.add_file(
                 data_file,
                 table_metadata.current_schema().clone(),
-                table_metadata.default_partition_spec().clone(),
+                spec_for(data_file)?,
+            );
+        }
+        for delete_file in &self.added_delete_files {
+            summary_collector.add_file(
+                delete_file,
+                table_metadata.current_schema().clone(),
+                spec_for(delete_file)?,
+            );
+        }
+        for data_file in &self.removed_data_files {
+            summary_collector.remove_file(
+                data_file,
+                table_metadata.current_schema().clone(),
+                spec_for(data_file)?,
+            );
+        }
+        for delete_file in &self.removed_delete_files {
+            summary_collector.remove_file(
+                delete_file,
+                table_metadata.current_schema().clone(),
+                spec_for(delete_file)?,
             );
         }
 
@@ -525,5 +646,184 @@ impl<'a> SnapshotProducer<'a> {
         ];
 
         Ok(ActionCommit::new(updates, requirements))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestContentType,
+        ManifestEntry, ManifestStatus, Struct,
+    };
+    use crate::transaction::tests::make_v2_minimal_table;
+
+    fn make_entry(
+        path: &str,
+        content: DataContentType,
+        spec_id: i32,
+        partition: Struct,
+        seq: i64,
+    ) -> ManifestEntry {
+        let data_file = DataFileBuilder::default()
+            .content(content)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(spec_id)
+            .partition(partition)
+            .build()
+            .unwrap();
+
+        ManifestEntry::builder()
+            .status(ManifestStatus::Existing)
+            .snapshot_id(1)
+            .sequence_number(seq)
+            .file_sequence_number(seq)
+            .data_file(data_file)
+            .build()
+    }
+
+    fn make_producer(table: &Table) -> SnapshotProducer<'_> {
+        SnapshotProducer::builder()
+            .with_table(table)
+            .with_commit_uuid(Uuid::now_v7())
+            .build()
+    }
+
+    #[tokio::test]
+    async fn test_write_deleted_manifest_empty_returns_empty() {
+        let table = make_v2_minimal_table();
+        let mut producer = make_producer(&table);
+
+        let result = producer.write_deleted_manifest(vec![]).await.unwrap();
+
+        assert!(
+            result.is_empty(),
+            "empty input should produce no manifest files"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_deleted_manifest_splits_data_and_deletes() {
+        let table = make_v2_minimal_table();
+        let mut producer = make_producer(&table);
+
+        let spec_id = table.metadata().default_partition_spec_id();
+        let partition = Struct::from_iter([Some(Literal::long(1))]);
+
+        let data_entry = make_entry(
+            "test/data-0.parquet",
+            DataContentType::Data,
+            spec_id,
+            partition.clone(),
+            5,
+        );
+        let pos_delete_entry = make_entry(
+            "test/pos-delete-0.parquet",
+            DataContentType::PositionDeletes,
+            spec_id,
+            partition.clone(),
+            6,
+        );
+        let eq_delete_entry = make_entry(
+            "test/eq-delete-0.parquet",
+            DataContentType::EqualityDeletes,
+            spec_id,
+            partition,
+            7,
+        );
+
+        let manifests = producer
+            .write_deleted_manifest(vec![data_entry, pos_delete_entry, eq_delete_entry])
+            .await
+            .unwrap();
+
+        // Expect one data manifest + one delete manifest for the single partition group.
+        assert_eq!(
+            manifests.len(),
+            2,
+            "expected one data and one delete manifest"
+        );
+
+        let mut data_manifests = 0;
+        let mut delete_manifests = 0;
+        for mf in &manifests {
+            let manifest = mf.load_manifest(table.file_io()).await.unwrap();
+            // Every entry in a deleted manifest must have Deleted status.
+            for entry in manifest.entries() {
+                assert_eq!(
+                    entry.status(),
+                    ManifestStatus::Deleted,
+                    "entry in deleted manifest must have Deleted status",
+                );
+            }
+            match mf.content {
+                ManifestContentType::Data => {
+                    data_manifests += 1;
+                    assert_eq!(manifest.entries().len(), 1);
+                    assert_eq!(
+                        manifest.entries()[0].data_file().content_type(),
+                        DataContentType::Data,
+                    );
+                }
+                ManifestContentType::Deletes => {
+                    delete_manifests += 1;
+                    assert_eq!(manifest.entries().len(), 2);
+                    for entry in manifest.entries() {
+                        assert!(matches!(
+                            entry.data_file().content_type(),
+                            DataContentType::PositionDeletes | DataContentType::EqualityDeletes
+                        ));
+                    }
+                }
+            }
+        }
+        assert_eq!(data_manifests, 1);
+        assert_eq!(delete_manifests, 1);
+    }
+
+    #[tokio::test]
+    async fn test_write_added_manifest_for_delete_files() {
+        let table = make_v2_minimal_table();
+        let spec_id = table.metadata().default_partition_spec_id();
+        let partition = Struct::from_iter([Some(Literal::long(2))]);
+
+        let delete_file = DataFileBuilder::default()
+            .content(DataContentType::PositionDeletes)
+            .file_path("test/pos-delete-added.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(spec_id)
+            .partition(partition)
+            .build()
+            .unwrap();
+
+        let mut producer = SnapshotProducer::builder()
+            .with_table(&table)
+            .with_commit_uuid(Uuid::now_v7())
+            .with_added_delete_files(vec![delete_file])
+            .build();
+
+        let manifest_file = producer
+            .write_added_manifest(ManifestContentType::Deletes)
+            .await
+            .unwrap();
+
+        assert_eq!(manifest_file.content, ManifestContentType::Deletes);
+
+        let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
+        assert_eq!(manifest.entries().len(), 1);
+        let entry = &manifest.entries()[0];
+        assert_eq!(entry.status(), ManifestStatus::Added);
+        assert_eq!(
+            entry.data_file().content_type(),
+            DataContentType::PositionDeletes,
+        );
+
+        // Producer should have drained its added_delete_files.
+        assert!(producer.added_delete_files.is_empty());
     }
 }
