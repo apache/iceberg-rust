@@ -60,11 +60,15 @@ use crate::to_datafusion_error;
 /// The output of this execution plan is a record batch containing a single column with serialized
 /// data file information that can be used for committing the write operation to the table.
 #[derive(Debug)]
-pub(crate) struct IcebergWriteExec {
+pub struct IcebergWriteExec {
     table: Table,
     input: Arc<dyn ExecutionPlan>,
     result_schema: ArrowSchemaRef,
     plan_properties: Arc<PlanProperties>,
+    /// Optional serializable catalog/storage config, populated when this node is
+    /// built through a config-backed provider so it can be reconstructed on a
+    /// remote node by a distributed engine.
+    catalog_config: Option<crate::IcebergCatalogConfig>,
 }
 
 impl IcebergWriteExec {
@@ -76,7 +80,28 @@ impl IcebergWriteExec {
             input,
             result_schema: Self::make_result_schema(),
             plan_properties,
+            catalog_config: None,
         }
+    }
+
+    /// Attaches a serializable catalog/storage config to this node so that a
+    /// distributed engine can reconstruct it on a remote node.
+    pub fn with_catalog_config(
+        mut self,
+        catalog_config: Option<crate::IcebergCatalogConfig>,
+    ) -> Self {
+        self.catalog_config = catalog_config;
+        self
+    }
+
+    /// Returns the serializable catalog/storage config, if any.
+    pub fn catalog_config(&self) -> Option<&crate::IcebergCatalogConfig> {
+        self.catalog_config.as_ref()
+    }
+
+    /// Returns the table this node writes to.
+    pub fn table(&self) -> &Table {
+        &self.table
     }
 
     fn compute_properties(
@@ -172,11 +197,10 @@ impl ExecutionPlan for IcebergWriteExec {
             )));
         }
 
-        Ok(Arc::new(Self::new(
-            self.table.clone(),
-            Arc::clone(&children[0]),
-            self.schema(),
-        )))
+        Ok(Arc::new(
+            Self::new(self.table.clone(), Arc::clone(&children[0]), self.schema())
+                .with_catalog_config(self.catalog_config.clone()),
+        ))
     }
 
     /// Executes the write operation for the given partition.

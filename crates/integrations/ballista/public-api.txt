@@ -1,0 +1,31 @@
+pub mod iceberg_ballista
+pub use iceberg_ballista::IcebergCatalogConfig
+pub struct iceberg_ballista::IcebergLogicalCodec
+impl iceberg_ballista::IcebergLogicalCodec
+pub fn iceberg_ballista::IcebergLogicalCodec::new(inner: alloc::sync::Arc<dyn datafusion_proto::logical_plan::LogicalExtensionCodec>) -> Self
+impl core::default::Default for iceberg_ballista::IcebergLogicalCodec
+pub fn iceberg_ballista::IcebergLogicalCodec::default() -> Self
+impl core::fmt::Debug for iceberg_ballista::IcebergLogicalCodec
+pub fn iceberg_ballista::IcebergLogicalCodec::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl datafusion_proto::logical_plan::LogicalExtensionCodec for iceberg_ballista::IcebergLogicalCodec
+pub fn iceberg_ballista::IcebergLogicalCodec::try_decode(&self, buf: &[u8], inputs: &[datafusion_expr::logical_plan::plan::LogicalPlan], ctx: &datafusion_execution::task::TaskContext) -> core::result::Result<datafusion_expr::logical_plan::plan::Extension, datafusion_common::error::DataFusionError>
+pub fn iceberg_ballista::IcebergLogicalCodec::try_decode_file_format(&self, buf: &[u8], ctx: &datafusion_execution::task::TaskContext) -> core::result::Result<alloc::sync::Arc<dyn datafusion_datasource::file_format::FileFormatFactory>, datafusion_common::error::DataFusionError>
+pub fn iceberg_ballista::IcebergLogicalCodec::try_decode_table_provider(&self, buf: &[u8], table_ref: &datafusion_common::table_reference::TableReference, schema: arrow_schema::schema::SchemaRef, ctx: &datafusion_execution::task::TaskContext) -> core::result::Result<alloc::sync::Arc<dyn datafusion_catalog::table::TableProvider>, datafusion_common::error::DataFusionError>
+pub fn iceberg_ballista::IcebergLogicalCodec::try_encode(&self, node: &datafusion_expr::logical_plan::plan::Extension, buf: &mut alloc::vec::Vec<u8>) -> core::result::Result<(), datafusion_common::error::DataFusionError>
+pub fn iceberg_ballista::IcebergLogicalCodec::try_encode_file_format(&self, buf: &mut alloc::vec::Vec<u8>, node: alloc::sync::Arc<dyn datafusion_datasource::file_format::FileFormatFactory>) -> core::result::Result<(), datafusion_common::error::DataFusionError>
+pub fn iceberg_ballista::IcebergLogicalCodec::try_encode_table_provider(&self, table_ref: &datafusion_common::table_reference::TableReference, node: alloc::sync::Arc<dyn datafusion_catalog::table::TableProvider>, buf: &mut alloc::vec::Vec<u8>) -> core::result::Result<(), datafusion_common::error::DataFusionError>
+pub struct iceberg_ballista::IcebergPhysicalCodec
+impl iceberg_ballista::IcebergPhysicalCodec
+pub fn iceberg_ballista::IcebergPhysicalCodec::new(inner: alloc::sync::Arc<dyn datafusion_proto::physical_plan::PhysicalExtensionCodec>) -> Self
+impl core::default::Default for iceberg_ballista::IcebergPhysicalCodec
+pub fn iceberg_ballista::IcebergPhysicalCodec::default() -> Self
+impl core::fmt::Debug for iceberg_ballista::IcebergPhysicalCodec
+pub fn iceberg_ballista::IcebergPhysicalCodec::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl datafusion_proto::physical_plan::PhysicalExtensionCodec for iceberg_ballista::IcebergPhysicalCodec
+pub fn iceberg_ballista::IcebergPhysicalCodec::try_decode(&self, buf: &[u8], inputs: &[alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>], ctx: &datafusion_execution::task::TaskContext) -> core::result::Result<alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>, datafusion_common::error::DataFusionError>
+pub fn iceberg_ballista::IcebergPhysicalCodec::try_decode_expr(&self, buf: &[u8], inputs: &[alloc::sync::Arc<dyn datafusion_physical_expr_common::physical_expr::PhysicalExpr>]) -> core::result::Result<alloc::sync::Arc<dyn datafusion_physical_expr_common::physical_expr::PhysicalExpr>, datafusion_common::error::DataFusionError>
+pub fn iceberg_ballista::IcebergPhysicalCodec::try_encode(&self, node: alloc::sync::Arc<dyn datafusion_physical_plan::execution_plan::ExecutionPlan>, buf: &mut alloc::vec::Vec<u8>) -> core::result::Result<(), datafusion_common::error::DataFusionError>
+pub fn iceberg_ballista::IcebergPhysicalCodec::try_encode_expr(&self, node: &alloc::sync::Arc<dyn datafusion_physical_expr_common::physical_expr::PhysicalExpr>, buf: &mut alloc::vec::Vec<u8>) -> core::result::Result<(), datafusion_common::error::DataFusionError>
+pub async fn iceberg_ballista::register_iceberg_catalog(ctx: &datafusion::execution::context::SessionContext, register_name: &str, config: iceberg_datafusion::catalog_config::IcebergCatalogConfig) -> core::result::Result<(), datafusion_common::error::DataFusionError>
+pub fn iceberg_ballista::register_iceberg_codecs(config: datafusion_execution::config::SessionConfig) -> datafusion_execution::config::SessionConfig
+pub async fn iceberg_ballista::register_iceberg_table(ctx: &datafusion::execution::context::SessionContext, register_name: &str, config: iceberg_datafusion::catalog_config::IcebergCatalogConfig, namespace: iceberg::catalog::NamespaceIdent, table: impl core::convert::Into<alloc::string::String>) -> core::result::Result<(), datafusion_common::error::DataFusionError>

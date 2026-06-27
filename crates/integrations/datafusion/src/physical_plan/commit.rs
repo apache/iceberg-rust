@@ -41,13 +41,17 @@ use crate::to_datafusion_error;
 /// IcebergCommitExec is responsible for collecting the files written and use
 /// [`Transaction::fast_append`] to commit the data files written.
 #[derive(Debug)]
-pub(crate) struct IcebergCommitExec {
+pub struct IcebergCommitExec {
     table: Table,
     catalog: Arc<dyn Catalog>,
     input: Arc<dyn ExecutionPlan>,
     schema: ArrowSchemaRef,
     count_schema: ArrowSchemaRef,
     plan_properties: Arc<PlanProperties>,
+    /// Optional serializable catalog/storage config, populated when this node is
+    /// built through a config-backed provider so it can be reconstructed on a
+    /// remote node by a distributed engine.
+    catalog_config: Option<crate::IcebergCatalogConfig>,
 }
 
 impl IcebergCommitExec {
@@ -68,7 +72,29 @@ impl IcebergCommitExec {
             schema,
             count_schema,
             plan_properties,
+            catalog_config: None,
         }
+    }
+
+    /// Attaches a serializable catalog/storage config to this node so that a
+    /// distributed engine can reconstruct it (including the catalog) on a remote
+    /// node.
+    pub fn with_catalog_config(
+        mut self,
+        catalog_config: Option<crate::IcebergCatalogConfig>,
+    ) -> Self {
+        self.catalog_config = catalog_config;
+        self
+    }
+
+    /// Returns the serializable catalog/storage config, if any.
+    pub fn catalog_config(&self) -> Option<&crate::IcebergCatalogConfig> {
+        self.catalog_config.as_ref()
+    }
+
+    /// Returns the table this node commits to.
+    pub fn table(&self) -> &Table {
+        &self.table
     }
 
     // Compute the plan properties for this execution plan
@@ -160,12 +186,15 @@ impl ExecutionPlan for IcebergCommitExec {
             )));
         }
 
-        Ok(Arc::new(IcebergCommitExec::new(
-            self.table.clone(),
-            self.catalog.clone(),
-            children[0].clone(),
-            self.schema.clone(),
-        )))
+        Ok(Arc::new(
+            IcebergCommitExec::new(
+                self.table.clone(),
+                self.catalog.clone(),
+                children[0].clone(),
+                self.schema.clone(),
+            )
+            .with_catalog_config(self.catalog_config.clone()),
+        ))
     }
 
     fn execute(
@@ -592,6 +621,7 @@ mod tests {
 
         let iceberg_table_provider = IcebergTableProvider::try_new(
             catalog.clone(),
+            None,
             namespace.clone(),
             table_name.to_string(),
         )
