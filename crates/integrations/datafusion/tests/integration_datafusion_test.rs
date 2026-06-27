@@ -131,7 +131,7 @@ async fn test_provider_plan_stream_schema() -> Result<()> {
 
     let task_ctx = Arc::new(df.task_ctx());
     let plan = df.create_physical_plan().await.unwrap();
-    let stream = plan.execute(1, task_ctx).unwrap();
+    let stream = plan.execute(0, task_ctx).unwrap();
 
     // Ensure both the plan and the stream conform to the same schema
     assert_eq!(plan.schema(), stream.schema());
@@ -600,8 +600,8 @@ async fn test_insert_into_nested() -> Result<()> {
     // Insert data with nested structs
     let insert_sql = r#"
     INSERT INTO catalog.test_insert_nested.nested_table
-    SELECT 
-        1 as id, 
+    SELECT
+        1 as id,
         'Alice' as name,
         named_struct(
             'address', named_struct(
@@ -615,8 +615,8 @@ async fn test_insert_into_nested() -> Result<()> {
             )
         ) as profile
     UNION ALL
-    SELECT 
-        2 as id, 
+    SELECT
+        2 as id,
         'Bob' as name,
         named_struct(
             'address', named_struct(
@@ -738,15 +738,15 @@ async fn test_insert_into_nested() -> Result<()> {
     let df = ctx
         .sql(
             r#"
-            SELECT 
-                id, 
+            SELECT
+                id,
                 name,
                 profile.address.street,
                 profile.address.city,
                 profile.address.zip,
                 profile.contact.email,
                 profile.contact.phone
-            FROM catalog.test_insert_nested.nested_table 
+            FROM catalog.test_insert_nested.nested_table
             ORDER BY id
         "#,
         )
@@ -852,8 +852,8 @@ async fn test_insert_into_partitioned() -> Result<()> {
     let df = ctx
         .sql(
             r#"
-            INSERT INTO catalog.test_partitioned_write.partitioned_table 
-            VALUES 
+            INSERT INTO catalog.test_partitioned_write.partitioned_table
+            VALUES
                 (1, 'electronics', 'laptop'),
                 (2, 'electronics', 'phone'),
                 (3, 'books', 'novel'),

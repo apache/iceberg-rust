@@ -287,7 +287,7 @@ impl Table {
     }
 
     /// Returns the [`Runtime`] for this table.
-    pub(crate) fn runtime(&self) -> &Runtime {
+    pub fn runtime(&self) -> &Runtime {
         &self.runtime
     }
 

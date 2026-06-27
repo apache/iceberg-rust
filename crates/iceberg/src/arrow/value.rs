@@ -17,6 +17,12 @@
 
 use std::sync::Arc;
 
+use arrow_array::builder::{
+    BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder, FixedSizeBinaryBuilder,
+    Float32Builder, Float64Builder, Int32Builder, Int64Builder, LargeBinaryBuilder,
+    LargeStringBuilder, StringBuilder, Time64MicrosecondBuilder, TimestampMicrosecondBuilder,
+    TimestampNanosecondBuilder,
+};
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, FixedSizeBinaryArray,
     FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array, LargeBinaryArray,
@@ -620,187 +626,309 @@ pub fn arrow_primitive_to_literal(
     )
 }
 
+enum PrimitiveLiteralArrayBuilderInner {
+    Boolean(BooleanBuilder),
+    Int32(Int32Builder),
+    Date32(Date32Builder),
+    Int64(Int64Builder),
+    Time64Microsecond(Time64MicrosecondBuilder),
+    TimestampMicrosecond(TimestampMicrosecondBuilder),
+    TimestampNanosecond(TimestampNanosecondBuilder),
+    Float32(Float32Builder),
+    Float64(Float64Builder),
+    Utf8(StringBuilder),
+    LargeUtf8(LargeStringBuilder),
+    Binary(BinaryBuilder),
+    LargeBinary(LargeBinaryBuilder),
+    Decimal128(Decimal128Builder),
+    FixedSizeBinary(FixedSizeBinaryBuilder),
+}
+
+/// Incrementally build an Arrow array from Iceberg primitive literals.
+///
+/// The builder's Arrow type is fixed at construction and must match the type
+/// DataFusion or the reader will consume. `append_or_null` returns `true` only
+/// when the provided literal matched that Arrow type and was appended as a
+/// non-null value.
+pub struct PrimitiveLiteralArrayBuilder {
+    inner: PrimitiveLiteralArrayBuilderInner,
+}
+
+impl PrimitiveLiteralArrayBuilder {
+    /// Create a builder for supported primitive Arrow types.
+    pub fn try_new(data_type: &DataType, capacity: usize) -> Result<Self> {
+        let inner = match data_type {
+            DataType::Boolean => {
+                PrimitiveLiteralArrayBuilderInner::Boolean(BooleanBuilder::with_capacity(capacity))
+            }
+            DataType::Int32 => {
+                PrimitiveLiteralArrayBuilderInner::Int32(Int32Builder::with_capacity(capacity))
+            }
+            DataType::Date32 => {
+                PrimitiveLiteralArrayBuilderInner::Date32(Date32Builder::with_capacity(capacity))
+            }
+            DataType::Int64 => {
+                PrimitiveLiteralArrayBuilderInner::Int64(Int64Builder::with_capacity(capacity))
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                PrimitiveLiteralArrayBuilderInner::Time64Microsecond(
+                    Time64MicrosecondBuilder::with_capacity(capacity),
+                )
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                PrimitiveLiteralArrayBuilderInner::TimestampMicrosecond(
+                    TimestampMicrosecondBuilder::with_capacity(capacity)
+                        .with_data_type(data_type.clone()),
+                )
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                PrimitiveLiteralArrayBuilderInner::TimestampNanosecond(
+                    TimestampNanosecondBuilder::with_capacity(capacity)
+                        .with_data_type(data_type.clone()),
+                )
+            }
+            DataType::Float32 => {
+                PrimitiveLiteralArrayBuilderInner::Float32(Float32Builder::with_capacity(capacity))
+            }
+            DataType::Float64 => {
+                PrimitiveLiteralArrayBuilderInner::Float64(Float64Builder::with_capacity(capacity))
+            }
+            DataType::Utf8 => PrimitiveLiteralArrayBuilderInner::Utf8(
+                StringBuilder::with_capacity(capacity, capacity),
+            ),
+            DataType::LargeUtf8 => PrimitiveLiteralArrayBuilderInner::LargeUtf8(
+                LargeStringBuilder::with_capacity(capacity, capacity),
+            ),
+            DataType::Binary => PrimitiveLiteralArrayBuilderInner::Binary(
+                BinaryBuilder::with_capacity(capacity, capacity),
+            ),
+            DataType::LargeBinary => PrimitiveLiteralArrayBuilderInner::LargeBinary(
+                LargeBinaryBuilder::with_capacity(capacity, capacity),
+            ),
+            DataType::Decimal128(_, _) => PrimitiveLiteralArrayBuilderInner::Decimal128(
+                Decimal128Builder::with_capacity(capacity).with_data_type(data_type.clone()),
+            ),
+            DataType::FixedSizeBinary(width) if *width >= 0 => {
+                PrimitiveLiteralArrayBuilderInner::FixedSizeBinary(
+                    FixedSizeBinaryBuilder::with_capacity(capacity, *width),
+                )
+            }
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!("Unsupported primitive literal array type: {data_type:?}"),
+                ));
+            }
+        };
+
+        Ok(Self { inner })
+    }
+
+    /// Append a primitive literal or a null value.
+    ///
+    /// Returns `false` when `prim_lit` is null or does not match the builder's
+    /// Arrow type. In either case a null is appended so all columns retain the
+    /// same row count.
+    pub fn append_or_null(&mut self, prim_lit: Option<&PrimitiveLiteral>) -> Result<bool> {
+        let Some(prim_lit) = prim_lit else {
+            self.append_null();
+            return Ok(false);
+        };
+
+        let appended = match (&mut self.inner, prim_lit) {
+            (PrimitiveLiteralArrayBuilderInner::Boolean(builder), PrimitiveLiteral::Boolean(v)) => {
+                builder.append_value(*v);
+                true
+            }
+            (PrimitiveLiteralArrayBuilderInner::Int32(builder), PrimitiveLiteral::Int(v)) => {
+                builder.append_value(*v);
+                true
+            }
+            (PrimitiveLiteralArrayBuilderInner::Date32(builder), PrimitiveLiteral::Int(v)) => {
+                builder.append_value(*v);
+                true
+            }
+            (PrimitiveLiteralArrayBuilderInner::Int64(builder), PrimitiveLiteral::Long(v)) => {
+                builder.append_value(*v);
+                true
+            }
+            (
+                PrimitiveLiteralArrayBuilderInner::Time64Microsecond(builder),
+                PrimitiveLiteral::Long(v),
+            ) => {
+                builder.append_value(*v);
+                true
+            }
+            (
+                PrimitiveLiteralArrayBuilderInner::TimestampMicrosecond(builder),
+                PrimitiveLiteral::Long(v),
+            ) => {
+                builder.append_value(*v);
+                true
+            }
+            (
+                PrimitiveLiteralArrayBuilderInner::TimestampNanosecond(builder),
+                PrimitiveLiteral::Long(v),
+            ) => {
+                builder.append_value(*v);
+                true
+            }
+            (PrimitiveLiteralArrayBuilderInner::Float32(builder), PrimitiveLiteral::Float(v)) => {
+                builder.append_value(v.0);
+                true
+            }
+            (PrimitiveLiteralArrayBuilderInner::Float64(builder), PrimitiveLiteral::Double(v)) => {
+                builder.append_value(v.0);
+                true
+            }
+            (PrimitiveLiteralArrayBuilderInner::Utf8(builder), PrimitiveLiteral::String(v)) => {
+                builder.append_value(v.as_str());
+                true
+            }
+            (
+                PrimitiveLiteralArrayBuilderInner::LargeUtf8(builder),
+                PrimitiveLiteral::String(v),
+            ) => {
+                builder.append_value(v.as_str());
+                true
+            }
+            (PrimitiveLiteralArrayBuilderInner::Binary(builder), PrimitiveLiteral::Binary(v)) => {
+                builder.append_value(v.as_slice());
+                true
+            }
+            (
+                PrimitiveLiteralArrayBuilderInner::LargeBinary(builder),
+                PrimitiveLiteral::Binary(v),
+            ) => {
+                builder.append_value(v.as_slice());
+                true
+            }
+            (
+                PrimitiveLiteralArrayBuilderInner::Decimal128(builder),
+                PrimitiveLiteral::Int128(v),
+            ) => {
+                builder.append_value(*v);
+                true
+            }
+            (
+                PrimitiveLiteralArrayBuilderInner::Decimal128(builder),
+                PrimitiveLiteral::UInt128(v),
+            ) => {
+                builder.append_value(*v as i128);
+                true
+            }
+            (
+                PrimitiveLiteralArrayBuilderInner::FixedSizeBinary(builder),
+                PrimitiveLiteral::Binary(v),
+            ) => append_fixed_size_binary_or_null(builder, v.as_slice()),
+            (
+                PrimitiveLiteralArrayBuilderInner::FixedSizeBinary(builder),
+                PrimitiveLiteral::UInt128(v),
+            ) => {
+                let bytes = Uuid::from_u128(*v).into_bytes();
+                append_fixed_size_binary_or_null(builder, bytes.as_slice())
+            }
+            (builder, _) => {
+                append_null_to_inner(builder);
+                false
+            }
+        };
+
+        Ok(appended)
+    }
+
+    fn append_null(&mut self) {
+        append_null_to_inner(&mut self.inner);
+    }
+
+    /// Finish the builder and return the typed Arrow array.
+    pub fn finish(mut self) -> Result<ArrayRef> {
+        Ok(match &mut self.inner {
+            PrimitiveLiteralArrayBuilderInner::Boolean(builder) => Arc::new(builder.finish()),
+            PrimitiveLiteralArrayBuilderInner::Int32(builder) => Arc::new(builder.finish()),
+            PrimitiveLiteralArrayBuilderInner::Date32(builder) => Arc::new(builder.finish()),
+            PrimitiveLiteralArrayBuilderInner::Int64(builder) => Arc::new(builder.finish()),
+            PrimitiveLiteralArrayBuilderInner::Time64Microsecond(builder) => {
+                Arc::new(builder.finish())
+            }
+            PrimitiveLiteralArrayBuilderInner::TimestampMicrosecond(builder) => {
+                Arc::new(builder.finish())
+            }
+            PrimitiveLiteralArrayBuilderInner::TimestampNanosecond(builder) => {
+                Arc::new(builder.finish())
+            }
+            PrimitiveLiteralArrayBuilderInner::Float32(builder) => Arc::new(builder.finish()),
+            PrimitiveLiteralArrayBuilderInner::Float64(builder) => Arc::new(builder.finish()),
+            PrimitiveLiteralArrayBuilderInner::Utf8(builder) => Arc::new(builder.finish()),
+            PrimitiveLiteralArrayBuilderInner::LargeUtf8(builder) => Arc::new(builder.finish()),
+            PrimitiveLiteralArrayBuilderInner::Binary(builder) => Arc::new(builder.finish()),
+            PrimitiveLiteralArrayBuilderInner::LargeBinary(builder) => Arc::new(builder.finish()),
+            PrimitiveLiteralArrayBuilderInner::Decimal128(builder) => Arc::new(builder.finish()),
+            PrimitiveLiteralArrayBuilderInner::FixedSizeBinary(builder) => {
+                Arc::new(builder.finish())
+            }
+        })
+    }
+}
+
+fn append_null_to_inner(builder: &mut PrimitiveLiteralArrayBuilderInner) {
+    match builder {
+        PrimitiveLiteralArrayBuilderInner::Boolean(builder) => builder.append_null(),
+        PrimitiveLiteralArrayBuilderInner::Int32(builder) => builder.append_null(),
+        PrimitiveLiteralArrayBuilderInner::Date32(builder) => builder.append_null(),
+        PrimitiveLiteralArrayBuilderInner::Int64(builder) => builder.append_null(),
+        PrimitiveLiteralArrayBuilderInner::Time64Microsecond(builder) => builder.append_null(),
+        PrimitiveLiteralArrayBuilderInner::TimestampMicrosecond(builder) => builder.append_null(),
+        PrimitiveLiteralArrayBuilderInner::TimestampNanosecond(builder) => builder.append_null(),
+        PrimitiveLiteralArrayBuilderInner::Float32(builder) => builder.append_null(),
+        PrimitiveLiteralArrayBuilderInner::Float64(builder) => builder.append_null(),
+        PrimitiveLiteralArrayBuilderInner::Utf8(builder) => builder.append_null(),
+        PrimitiveLiteralArrayBuilderInner::LargeUtf8(builder) => builder.append_null(),
+        PrimitiveLiteralArrayBuilderInner::Binary(builder) => builder.append_null(),
+        PrimitiveLiteralArrayBuilderInner::LargeBinary(builder) => builder.append_null(),
+        PrimitiveLiteralArrayBuilderInner::Decimal128(builder) => builder.append_null(),
+        PrimitiveLiteralArrayBuilderInner::FixedSizeBinary(builder) => builder.append_null(),
+    }
+}
+
+fn append_fixed_size_binary_or_null(builder: &mut FixedSizeBinaryBuilder, value: &[u8]) -> bool {
+    if builder.append_value(value).is_ok() {
+        true
+    } else {
+        builder.append_null();
+        false
+    }
+}
+
 /// Create a single-element array from a primitive literal.
 ///
 /// This is used for creating constant arrays (Run-End Encoded arrays) where we need
 /// a single value that represents all rows.
-pub(crate) fn create_primitive_array_single_element(
+pub fn create_primitive_array_single_element(
     data_type: &DataType,
     prim_lit: &Option<PrimitiveLiteral>,
 ) -> Result<ArrayRef> {
-    match (data_type, prim_lit) {
-        (DataType::Boolean, Some(PrimitiveLiteral::Boolean(v))) => {
-            Ok(Arc::new(BooleanArray::from(vec![*v])))
-        }
-        (DataType::Boolean, None) => Ok(Arc::new(BooleanArray::from(vec![Option::<bool>::None]))),
-        (DataType::Int32, Some(PrimitiveLiteral::Int(v))) => {
-            Ok(Arc::new(Int32Array::from(vec![*v])))
-        }
-        (DataType::Int32, None) => Ok(Arc::new(Int32Array::from(vec![Option::<i32>::None]))),
-        (DataType::Date32, Some(PrimitiveLiteral::Int(v))) => {
-            Ok(Arc::new(Date32Array::from(vec![*v])))
-        }
-        (DataType::Date32, None) => Ok(Arc::new(Date32Array::from(vec![Option::<i32>::None]))),
-        (DataType::Int64, Some(PrimitiveLiteral::Long(v))) => {
-            Ok(Arc::new(Int64Array::from(vec![*v])))
-        }
-        (DataType::Int64, None) => Ok(Arc::new(Int64Array::from(vec![Option::<i64>::None]))),
-        (DataType::Timestamp(TimeUnit::Microsecond, timezone), Some(PrimitiveLiteral::Long(v))) => {
-            let array = TimestampMicrosecondArray::from(vec![*v]);
-            if let Some(timezone) = timezone {
-                Ok(Arc::new(array.with_timezone(timezone.clone())))
-            } else {
-                Ok(Arc::new(array))
-            }
-        }
-        (DataType::Timestamp(TimeUnit::Microsecond, timezone), None) => {
-            let array = TimestampMicrosecondArray::from(vec![Option::<i64>::None]);
-            if let Some(timezone) = timezone {
-                Ok(Arc::new(array.with_timezone(timezone.clone())))
-            } else {
-                Ok(Arc::new(array))
-            }
-        }
-        (DataType::Timestamp(TimeUnit::Nanosecond, timezone), Some(PrimitiveLiteral::Long(v))) => {
-            let array = TimestampNanosecondArray::from(vec![*v]);
-            if let Some(timezone) = timezone {
-                Ok(Arc::new(array.with_timezone(timezone.clone())))
-            } else {
-                Ok(Arc::new(array))
-            }
-        }
-        (DataType::Timestamp(TimeUnit::Nanosecond, timezone), None) => {
-            let array = TimestampNanosecondArray::from(vec![Option::<i64>::None]);
-            if let Some(timezone) = timezone {
-                Ok(Arc::new(array.with_timezone(timezone.clone())))
-            } else {
-                Ok(Arc::new(array))
-            }
-        }
-        (DataType::Float32, Some(PrimitiveLiteral::Float(v))) => {
-            Ok(Arc::new(Float32Array::from(vec![v.0])))
-        }
-        (DataType::Float32, None) => Ok(Arc::new(Float32Array::from(vec![Option::<f32>::None]))),
-        (DataType::Float64, Some(PrimitiveLiteral::Double(v))) => {
-            Ok(Arc::new(Float64Array::from(vec![v.0])))
-        }
-        (DataType::Float64, None) => Ok(Arc::new(Float64Array::from(vec![Option::<f64>::None]))),
-        (DataType::Utf8, Some(PrimitiveLiteral::String(v))) => {
-            Ok(Arc::new(StringArray::from(vec![v.as_str()])))
-        }
-        (DataType::Utf8, None) => Ok(Arc::new(StringArray::from(vec![Option::<&str>::None]))),
-        (DataType::Binary, Some(PrimitiveLiteral::Binary(v))) => {
-            Ok(Arc::new(BinaryArray::from_vec(vec![v.as_slice()])))
-        }
-        (DataType::Binary, None) => Ok(Arc::new(BinaryArray::from_opt_vec(vec![
-            Option::<&[u8]>::None,
-        ]))),
-        (DataType::Decimal128(precision, scale), Some(PrimitiveLiteral::Int128(v))) => {
-            let array = Decimal128Array::from(vec![{ *v }])
-                .with_precision_and_scale(*precision, *scale)
-                .map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
-                        ),
-                    )
-                })?;
-            Ok(Arc::new(array))
-        }
-        (DataType::Decimal128(precision, scale), Some(PrimitiveLiteral::UInt128(v))) => {
-            let array = Decimal128Array::from(vec![*v as i128])
-                .with_precision_and_scale(*precision, *scale)
-                .map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
-                        ),
-                    )
-                })?;
-            Ok(Arc::new(array))
-        }
-        (DataType::Decimal128(precision, scale), None) => {
-            let array = Decimal128Array::from(vec![Option::<i128>::None])
-                .with_precision_and_scale(*precision, *scale)
-                .map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Failed to create Decimal128Array with precision {precision} and scale {scale}: {e}"
-                        ),
-                    )
-                })?;
-            Ok(Arc::new(array))
-        }
-        (DataType::Struct(fields), None) => {
-            // Create a single-element StructArray with nulls
-            let null_arrays: Vec<ArrayRef> = fields
-                .iter()
-                .map(|f| {
-                    // Recursively create null arrays for struct fields
-                    // For primitive fields in structs, use simple null arrays (not REE within struct)
-                    match f.data_type() {
-                        DataType::Boolean => {
-                            Ok(Arc::new(BooleanArray::from(vec![Option::<bool>::None]))
-                                as ArrayRef)
-                        }
-                        DataType::Int32 | DataType::Date32 => {
-                            Ok(Arc::new(Int32Array::from(vec![Option::<i32>::None])) as ArrayRef)
-                        }
-                        DataType::Int64 => {
-                            Ok(Arc::new(Int64Array::from(vec![Option::<i64>::None])) as ArrayRef)
-                        }
-                        DataType::Timestamp(TimeUnit::Microsecond, timezone) => {
-                            let array = TimestampMicrosecondArray::from(vec![Option::<i64>::None]);
-                            if let Some(timezone) = timezone {
-                                Ok(Arc::new(array.with_timezone(timezone.clone())) as ArrayRef)
-                            } else {
-                                Ok(Arc::new(array) as ArrayRef)
-                            }
-                        }
-                        DataType::Timestamp(TimeUnit::Nanosecond, timezone) => {
-                            let array = TimestampNanosecondArray::from(vec![Option::<i64>::None]);
-                            if let Some(timezone) = timezone {
-                                Ok(Arc::new(array.with_timezone(timezone.clone())) as ArrayRef)
-                            } else {
-                                Ok(Arc::new(array) as ArrayRef)
-                            }
-                        }
-                        DataType::Float32 => {
-                            Ok(Arc::new(Float32Array::from(vec![Option::<f32>::None])) as ArrayRef)
-                        }
-                        DataType::Float64 => {
-                            Ok(Arc::new(Float64Array::from(vec![Option::<f64>::None])) as ArrayRef)
-                        }
-                        DataType::Utf8 => {
-                            Ok(Arc::new(StringArray::from(vec![Option::<&str>::None])) as ArrayRef)
-                        }
-                        DataType::Binary => {
-                            Ok(
-                                Arc::new(BinaryArray::from_opt_vec(vec![Option::<&[u8]>::None]))
-                                    as ArrayRef,
-                            )
-                        }
-                        _ => Err(Error::new(
-                            ErrorKind::Unexpected,
-                            format!("Unsupported struct field type: {:?}", f.data_type()),
-                        )),
-                    }
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(Arc::new(arrow_array::StructArray::new(
-                fields.clone(),
-                null_arrays,
-                Some(arrow_buffer::NullBuffer::new_null(1)),
-            )))
-        }
-        _ => Err(Error::new(
+    if let (DataType::Struct(fields), None) = (data_type, prim_lit) {
+        let null_arrays = fields
+            .iter()
+            .map(|f| create_primitive_array_single_element(f.data_type(), &None))
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(Arc::new(arrow_array::StructArray::new(
+            fields.clone(),
+            null_arrays,
+            Some(arrow_buffer::NullBuffer::new_null(1)),
+        )));
+    }
+
+    let mut builder = PrimitiveLiteralArrayBuilder::try_new(data_type, 1)?;
+    let appended = builder.append_or_null(prim_lit.as_ref())?;
+    if prim_lit.is_some() && !appended {
+        return Err(Error::new(
             ErrorKind::Unexpected,
             format!("Unsupported constant type combination: {data_type:?} with {prim_lit:?}"),
-        )),
+        ));
     }
+    builder.finish()
 }
 
 /// Create a repeated array from a primitive literal for a given number of rows.
@@ -1845,6 +1973,70 @@ mod test {
             }
             other => panic!("Expected Decimal128, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_primitive_literal_array_builder_timestamp_timezone_and_null() {
+        let target_type = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        let mut builder = PrimitiveLiteralArrayBuilder::try_new(&target_type, 2).unwrap();
+        let value = PrimitiveLiteral::Long(1_740_600_000_000_000);
+
+        assert!(builder.append_or_null(Some(&value)).unwrap());
+        assert!(!builder.append_or_null(None).unwrap());
+
+        let array = builder.finish().unwrap();
+        assert_eq!(array.data_type(), &target_type);
+        assert_eq!(array.len(), 2);
+        assert!(array.is_null(1));
+    }
+
+    #[test]
+    fn test_primitive_literal_array_builder_large_binary() {
+        let mut builder = PrimitiveLiteralArrayBuilder::try_new(&DataType::LargeBinary, 2).unwrap();
+        let value = PrimitiveLiteral::Binary(vec![1, 2, 3]);
+
+        assert!(builder.append_or_null(Some(&value)).unwrap());
+        assert!(!builder.append_or_null(None).unwrap());
+
+        let array = builder.finish().unwrap();
+        let binary_array = array
+            .as_any()
+            .downcast_ref::<LargeBinaryArray>()
+            .expect("expected LargeBinaryArray");
+        assert_eq!(binary_array.value(0), &[1, 2, 3]);
+        assert!(binary_array.is_null(1));
+    }
+
+    #[test]
+    fn test_primitive_literal_array_builder_fixed_size_binary_uuid() {
+        let mut builder =
+            PrimitiveLiteralArrayBuilder::try_new(&DataType::FixedSizeBinary(16), 2).unwrap();
+        let uuid_bytes = [7_u8; 16];
+        let uuid = Uuid::from_bytes(uuid_bytes);
+        let uuid_value = PrimitiveLiteral::UInt128(uuid.as_u128());
+        let wrong_width_value = PrimitiveLiteral::Binary(vec![1, 2]);
+
+        assert!(builder.append_or_null(Some(&uuid_value)).unwrap());
+        assert!(!builder.append_or_null(Some(&wrong_width_value)).unwrap());
+
+        let array = builder.finish().unwrap();
+        let fixed_array = array
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .expect("expected FixedSizeBinaryArray");
+        assert_eq!(fixed_array.value(0), uuid_bytes.as_slice());
+        assert!(fixed_array.is_null(1));
+    }
+
+    #[test]
+    fn test_create_single_element_errors_on_mismatched_literal() {
+        let value = PrimitiveLiteral::String("not an int".to_string());
+
+        assert!(create_primitive_array_single_element(&DataType::Int32, &Some(value)).is_err());
+
+        let null_array = create_primitive_array_single_element(&DataType::Int32, &None).unwrap();
+        assert_eq!(null_array.len(), 1);
+        assert!(null_array.is_null(0));
     }
 
     #[test]
