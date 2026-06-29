@@ -95,6 +95,7 @@ pub use runtime::{Runtime, RuntimeHandle};
 pub mod arrow;
 pub(crate) mod delete_file_index;
 pub mod encryption;
+pub mod formats;
 pub mod test_utils;
 pub mod writer;
 
