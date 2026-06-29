@@ -53,9 +53,23 @@ pub fn compute_unified_partition_type<'a>(
                 continue;
             }
 
-            // Skip void transforms (dropped partition columns) and unknown transforms
-            if matches!(field.transform, Transform::Void | Transform::Unknown) {
+            // Skip void transforms (dropped partition columns)
+            if matches!(field.transform, Transform::Void) {
                 continue;
+            }
+
+            // Reject unknown transforms — the table uses a spec feature that
+            // this version of iceberg-rust doesn't support. Matching Java's
+            // behavior where getResultType() throws for unknown transforms.
+            if matches!(field.transform, Transform::Unknown) {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!(
+                        "Partition field '{}' uses an unknown transform that is not \
+                         supported by this version of iceberg-rust",
+                        field.name
+                    ),
+                ));
             }
 
             seen_field_ids.insert(field.field_id);

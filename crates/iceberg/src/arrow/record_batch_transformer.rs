@@ -31,7 +31,9 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::value::{create_primitive_array_repeated, create_primitive_array_single_element};
 use crate::arrow::{datum_to_arrow_type_with_ree, schema_to_arrow_schema};
-use crate::metadata_columns::{RESERVED_FIELD_ID_PARTITION, get_metadata_field};
+use crate::metadata_columns::{
+    RESERVED_COL_NAME_PARTITION, RESERVED_FIELD_ID_PARTITION, get_metadata_field,
+};
 use crate::spec::{
     Datum, Literal, PartitionSpec, PrimitiveLiteral, Schema as IcebergSchema, Struct, StructType,
     Transform,
@@ -436,11 +438,12 @@ impl RecordBatchTransformer {
                 {
                     let struct_type = DataType::Struct(pc.fields.clone());
                     let nullable = pc.fields.is_empty();
-                    let arrow_field = Field::new("_partition", struct_type, nullable)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            RESERVED_FIELD_ID_PARTITION.to_string(),
-                        )]));
+                    let arrow_field =
+                        Field::new(RESERVED_COL_NAME_PARTITION, struct_type, nullable)
+                            .with_metadata(HashMap::from([(
+                                PARQUET_FIELD_ID_META_KEY.to_string(),
+                                RESERVED_FIELD_ID_PARTITION.to_string(),
+                            )]));
                     return Ok(Arc::new(arrow_field));
                 }
 
