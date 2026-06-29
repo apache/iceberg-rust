@@ -116,6 +116,9 @@ impl AddColumn {
 pub struct UpdateSchemaAction {
     additions: Vec<AddColumn>,
     deletes: Vec<String>,
+    /// Pending doc updates, as `(column name, new doc)` pairs in insertion order.
+    /// A `None` doc clears the column's existing doc.
+    doc_updates: Vec<(String, Option<String>)>,
 }
 
 impl UpdateSchemaAction {
@@ -124,6 +127,7 @@ impl UpdateSchemaAction {
         Self {
             additions: Vec::new(),
             deletes: Vec::new(),
+            doc_updates: Vec::new(),
         }
     }
 
@@ -146,6 +150,19 @@ impl UpdateSchemaAction {
     /// At commit time, the column must exist in the current schema.
     pub fn delete_column(mut self, name: impl ToString) -> Self {
         self.deletes.push(name.to_string());
+        self
+    }
+
+    /// Update the documentation string of an existing column, preserving its
+    /// field ID and every other attribute. Pass `None` to clear the doc.
+    ///
+    /// Unlike deleting and re-adding the column (which assigns a fresh field ID
+    /// and breaks reads of older data files), this keeps the column identity
+    /// stable. The name may reference a nested field using the dotted path form
+    /// (e.g. `"address.city"`), matching [`Self::delete_column`]. At commit time
+    /// the column must exist in the current schema.
+    pub fn update_column_doc(mut self, name: impl ToString, doc: Option<String>) -> Self {
+        self.doc_updates.push((name.to_string(), doc));
         self
     }
 }
@@ -260,40 +277,72 @@ fn rebuild_fields(
     fields: &[NestedFieldRef],
     adds: &HashMap<Option<i32>, Vec<NestedFieldRef>>,
     delete_ids: &HashSet<i32>,
+    doc_updates: &HashMap<i32, Option<String>>,
     parent_id: Option<i32>,
 ) -> Vec<NestedFieldRef> {
     fields
         .iter()
         .filter(|f| !delete_ids.contains(&f.id))
-        .map(|f| rebuild_field(f, adds, delete_ids))
+        .map(|f| rebuild_field(f, adds, delete_ids, doc_updates))
         .chain(adds.get(&parent_id).into_iter().flatten().cloned())
         .collect()
+}
+
+/// Returns the doc a rebuilt field should carry: the pending update for this
+/// field ID if one was recorded (which may itself clear the doc with `None`),
+/// otherwise the field's existing doc unchanged.
+fn resolved_doc(
+    field: &NestedFieldRef,
+    doc_updates: &HashMap<i32, Option<String>>,
+) -> Option<String> {
+    match doc_updates.get(&field.id) {
+        Some(new_doc) => new_doc.clone(),
+        None => field.doc.clone(),
+    }
 }
 
 /// Recursively rebuild a single field. If the field (or any descendant) is a struct
 /// that has pending additions, those additions are appended to the struct's fields.
 /// Fields whose IDs appear in `delete_ids` are filtered out at every struct level.
+/// A pending doc update for a field's ID replaces its doc while preserving its ID.
 fn rebuild_field(
     field: &NestedFieldRef,
     adds: &HashMap<Option<i32>, Vec<NestedFieldRef>>,
     delete_ids: &HashSet<i32>,
+    doc_updates: &HashMap<i32, Option<String>>,
 ) -> NestedFieldRef {
     match field.field_type.as_ref() {
-        Type::Primitive(_) => field.clone(),
+        Type::Primitive(_) => {
+            // Fast path: nothing nested to rebuild, only the doc may change.
+            if doc_updates.contains_key(&field.id) {
+                Arc::new(NestedField {
+                    id: field.id,
+                    name: field.name.clone(),
+                    required: field.required,
+                    field_type: field.field_type.clone(),
+                    doc: resolved_doc(field, doc_updates),
+                    initial_default: field.initial_default.clone(),
+                    write_default: field.write_default.clone(),
+                })
+            } else {
+                field.clone()
+            }
+        }
         Type::Struct(s) => {
-            let new_fields = rebuild_fields(s.fields(), adds, delete_ids, Some(field.id));
+            let new_fields =
+                rebuild_fields(s.fields(), adds, delete_ids, doc_updates, Some(field.id));
             Arc::new(NestedField {
                 id: field.id,
                 name: field.name.clone(),
                 required: field.required,
                 field_type: Box::new(Type::Struct(StructType::new(new_fields))),
-                doc: field.doc.clone(),
+                doc: resolved_doc(field, doc_updates),
                 initial_default: field.initial_default.clone(),
                 write_default: field.write_default.clone(),
             })
         }
         Type::List(l) => {
-            let new_element = rebuild_field(&l.element_field, adds, delete_ids);
+            let new_element = rebuild_field(&l.element_field, adds, delete_ids, doc_updates);
             Arc::new(NestedField {
                 id: field.id,
                 name: field.name.clone(),
@@ -301,14 +350,14 @@ fn rebuild_field(
                 field_type: Box::new(Type::List(ListType {
                     element_field: new_element,
                 })),
-                doc: field.doc.clone(),
+                doc: resolved_doc(field, doc_updates),
                 initial_default: field.initial_default.clone(),
                 write_default: field.write_default.clone(),
             })
         }
         Type::Map(m) => {
-            let new_key = rebuild_field(&m.key_field, adds, delete_ids);
-            let new_value = rebuild_field(&m.value_field, adds, delete_ids);
+            let new_key = rebuild_field(&m.key_field, adds, delete_ids, doc_updates);
+            let new_value = rebuild_field(&m.value_field, adds, delete_ids, doc_updates);
             Arc::new(NestedField {
                 id: field.id,
                 name: field.name.clone(),
@@ -317,7 +366,7 @@ fn rebuild_field(
                     key_field: new_key,
                     value_field: new_value,
                 })),
-                doc: field.doc.clone(),
+                doc: resolved_doc(field, doc_updates),
                 initial_default: field.initial_default.clone(),
                 write_default: field.write_default.clone(),
             })
@@ -362,6 +411,20 @@ impl TransactionAction for UpdateSchemaAction {
                     })
             })
             .collect::<Result<HashSet<i32>>>()?;
+
+        // --- 1b. Resolve doc updates from column name to field ID ---
+        // Each name (which may be a dotted nested path) must exist in the current
+        // schema. The last update for a given field ID wins.
+        let mut doc_updates: HashMap<i32, Option<String>> = HashMap::new();
+        for (name, doc) in &self.doc_updates {
+            let field = base_schema.field_by_name(name).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::PreconditionFailed,
+                    format!("Cannot update doc of missing column: {name}"),
+                )
+            })?;
+            doc_updates.insert(field.id, doc.clone());
+        }
 
         // --- 2. Resolve parents, validate additions, assign IDs, and group by parent ID ---
         // We assign IDs inline (before grouping) to preserve the caller's insertion order,
@@ -446,6 +509,7 @@ impl TransactionAction for UpdateSchemaAction {
             base_schema.as_struct().fields(),
             &additions_by_parent,
             &delete_ids,
+            &doc_updates,
             None,
         );
 
@@ -1144,5 +1208,110 @@ mod tests {
             .field_by_name("address.city")
             .expect("address.city should exist");
         assert_eq!(city.id, 6);
+    }
+
+    // -----------------------------------------------------------------------
+    // update_column_doc tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_update_column_doc_preserves_field_id() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        // `z` is field id 3 in the V2 test table.
+        let original_id = table
+            .metadata()
+            .current_schema()
+            .field_by_name("z")
+            .unwrap()
+            .id;
+
+        let action = tx
+            .update_schema()
+            .update_column_doc("z", Some("the z column".to_string()));
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_schema = match &updates[0] {
+            TableUpdate::AddSchema { schema } => schema,
+            other => panic!("expected AddSchema, got {other:?}"),
+        };
+
+        let z = new_schema.field_by_name("z").expect("z should exist");
+        assert_eq!(z.doc.as_deref(), Some("the z column"));
+        // The field id must be unchanged — this is the whole point of the API.
+        assert_eq!(z.id, original_id);
+        // Sibling fields are untouched.
+        assert!(new_schema.field_by_name("x").unwrap().doc.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_column_doc_on_nested_field() {
+        let table = make_v2_table_with_nested();
+        let tx = Transaction::new(&table);
+
+        // `person.name` is field id 5.
+        let action = tx
+            .update_schema()
+            .update_column_doc("person.name", Some("full name".to_string()));
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_schema = match &updates[0] {
+            TableUpdate::AddSchema { schema } => schema,
+            other => panic!("expected AddSchema, got {other:?}"),
+        };
+
+        let name = new_schema
+            .field_by_name("person.name")
+            .expect("person.name should exist");
+        assert_eq!(name.doc.as_deref(), Some("full name"));
+        assert_eq!(name.id, 5);
+        // The enclosing struct keeps its id and other children.
+        let person = new_schema.field_by_name("person").expect("person exists");
+        assert_eq!(person.id, 4);
+    }
+
+    #[tokio::test]
+    async fn test_update_column_doc_clears_doc() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        // First set a doc, then clear it in a second update on the same table.
+        let action = tx
+            .update_schema()
+            .update_column_doc("z", Some("temporary".to_string()))
+            .update_column_doc("z", None);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_schema = match &updates[0] {
+            TableUpdate::AddSchema { schema } => schema,
+            other => panic!("expected AddSchema, got {other:?}"),
+        };
+
+        // Last update (None) wins, so the doc is cleared.
+        assert!(new_schema.field_by_name("z").unwrap().doc.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_column_doc_missing_column_errors() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let action = tx
+            .update_schema()
+            .update_column_doc("does_not_exist", Some("x".to_string()));
+        let err = match Arc::new(action).commit(&table).await {
+            Err(e) => e,
+            Ok(_) => panic!("should reject updating doc of a missing column"),
+        };
+        assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
+        assert!(
+            err.message().contains("does_not_exist"),
+            "error should mention the missing column, got: {}",
+            err.message()
+        );
     }
 }
