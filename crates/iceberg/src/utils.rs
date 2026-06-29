@@ -340,6 +340,46 @@ pub(crate) async fn load_manifests(
         .await
 }
 
+/// Streams the manifests for `manifest_files`, invoking `f` on each loaded
+/// [`Manifest`] (with its [`ManifestFile`]) and dropping it immediately
+/// afterwards.
+///
+/// Unlike [`load_manifests`], this never holds more than `concurrency` manifests
+/// in memory at once. Use it when you only need to fold a summary out of
+/// (potentially very many / very large) manifests — e.g. collecting data-file
+/// paths during snapshot-expiration cleanup — instead of retaining every loaded
+/// manifest at once.
+pub(crate) async fn for_each_manifest<F>(
+    file_io: &FileIO,
+    manifest_files: Vec<ManifestFile>,
+    concurrency: usize,
+    mut f: F,
+) -> Result<()>
+where
+    F: FnMut(&ManifestFile, &Manifest),
+{
+    let concurrency = concurrency.max(1);
+
+    let mut stream = stream::iter(manifest_files)
+        .map(|manifest_file| {
+            let file_io = file_io.clone();
+            async move {
+                let manifest = manifest_file.load_manifest(&file_io).await?;
+                Ok::<_, crate::Error>((manifest_file, manifest))
+            }
+        })
+        .buffer_unordered(concurrency);
+
+    while let Some(loaded) = stream.next().await {
+        let (manifest_file, manifest) = loaded?;
+        f(&manifest_file, &manifest);
+        // `manifest_file`/`manifest` are dropped here, bounding peak memory to at
+        // most `concurrency` manifests in flight (rather than all of them).
+    }
+
+    Ok(())
+}
+
 /// Strategy for cleaning up unreachable files after snapshot expiration.
 pub struct ReachableFileCleanupStrategy {
     file_io: FileIO,
@@ -418,20 +458,22 @@ impl ReachableFileCleanupStrategy {
             self.collect_expired_snapshots(before_expiration, after_expiration);
 
         let deletion_candidates = {
+            // Stream the expired snapshots' manifest lists, folding their entries
+            // into the candidate set and dropping each list immediately, rather
+            // than holding every loaded list in memory alongside the set.
             let mut deletion_candidates = HashSet::default();
-            let loaded = load_manifest_lists(
+            for_each_manifest_list(
                 &self.file_io,
                 before_expiration,
                 expired_snapshots,
                 self.load_concurrency,
+                |manifest_list| {
+                    for manifest_file in manifest_list.entries() {
+                        deletion_candidates.insert(manifest_file.clone());
+                    }
+                },
             )
             .await?;
-
-            for (_, manifest_list) in loaded {
-                for manifest_file in manifest_list.entries() {
-                    deletion_candidates.insert(manifest_file.clone());
-                }
-            }
             deletion_candidates
         };
 
@@ -472,21 +514,24 @@ impl ReachableFileCleanupStrategy {
         mut deletion_candidates: HashSet<ManifestFile>,
     ) -> Result<(HashSet<ManifestFile>, HashSet<ManifestFile>)> {
         let snapshots: Vec<_> = snapshots.cloned().collect();
-        let loaded = load_manifest_lists(
+
+        // Stream the surviving snapshots' manifest lists, pruning each entry from
+        // the candidate set and recording it as referenced, dropping each list
+        // immediately rather than holding all of them at once.
+        let mut referenced_manifests = HashSet::default();
+        for_each_manifest_list(
             &self.file_io,
             table_meta_data_ref,
             snapshots,
             self.load_concurrency,
+            |manifest_list| {
+                for manifest_file in manifest_list.entries() {
+                    deletion_candidates.remove(manifest_file);
+                    referenced_manifests.insert(manifest_file.clone());
+                }
+            },
         )
         .await?;
-
-        let mut referenced_manifests = HashSet::default();
-        for (_, manifest_list) in loaded {
-            for manifest_file in manifest_list.entries() {
-                deletion_candidates.remove(manifest_file);
-                referenced_manifests.insert(manifest_file.clone());
-            }
-        }
 
         Ok((deletion_candidates, referenced_manifests))
     }
@@ -502,41 +547,45 @@ impl ReachableFileCleanupStrategy {
         manifest_files: &HashSet<ManifestFile>,
         referenced_manifests: &HashSet<ManifestFile>,
     ) -> Result<HashSet<String>> {
-        // Load manifests to delete concurrently
+        // Stream the manifests being deleted, folding their data-file paths into
+        // the candidate set and dropping each manifest immediately.
         let manifests_to_delete_vec: Vec<_> = manifest_files.iter().cloned().collect();
-        let loaded_to_delete = load_manifests(
+        let mut files_to_delete = HashSet::default();
+        for_each_manifest(
             &self.file_io,
             manifests_to_delete_vec,
             self.load_concurrency,
+            |_, manifest| {
+                for entry in manifest.entries() {
+                    files_to_delete.insert(entry.data_file().file_path().to_owned());
+                }
+            },
         )
         .await?;
-
-        let mut files_to_delete = HashSet::default();
-        for (_, manifest) in loaded_to_delete {
-            for entry in manifest.entries() {
-                files_to_delete.insert(entry.data_file().file_path().to_owned());
-            }
-        }
 
         if files_to_delete.is_empty() {
             return Ok(files_to_delete);
         }
 
-        // Load referenced manifests concurrently
+        // Stream the surviving (referenced) manifests, removing files they still
+        // actively reference from the deletion set. Only protect files that are
+        // actively referenced (Added or Existing); entries with Deleted status
+        // are tombstones — they indicate the file was removed from the table and
+        // should not prevent its deletion from storage.
         let referenced_vec: Vec<_> = referenced_manifests.iter().cloned().collect();
-        let loaded_referenced =
-            load_manifests(&self.file_io, referenced_vec, self.load_concurrency).await?;
-
-        // Only protect files that are actively referenced (Added or Existing).
-        // Entries with Deleted status are tombstones — they indicate the file was
-        // removed from the table and should not prevent its deletion from storage.
-        for (_, manifest) in loaded_referenced {
-            for entry in manifest.entries() {
-                if entry.status() != ManifestStatus::Deleted {
-                    files_to_delete.remove(entry.data_file().file_path());
+        for_each_manifest(
+            &self.file_io,
+            referenced_vec,
+            self.load_concurrency,
+            |_, manifest| {
+                for entry in manifest.entries() {
+                    if entry.status() != ManifestStatus::Deleted {
+                        files_to_delete.remove(entry.data_file().file_path());
+                    }
                 }
-            }
-        }
+            },
+        )
+        .await?;
 
         Ok(files_to_delete)
     }
