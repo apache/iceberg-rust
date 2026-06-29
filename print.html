@@ -888,7 +888,7 @@ You do not need to be a committer to create and own the tracking issue.</p>
 #### GitHub Side
 
 - [ ] Draft GitHub release
-- [ ] Bump version in project and update changelog
+- [ ] Bump version in project, update dependencies list, and update changelog
 - [ ] Create and push release candidate tag
 
 #### ASF Side
@@ -920,15 +920,26 @@ The tag should not exist at this stage and GitHub will offer to create it when t
 <li>Generate the release note by clicking the <code>Generate release notes</code> button.</li>
 <li>Save the draft.</li>
 </ul>
-<h3 id="update-crate-versions-and-changelog"><a class="header" href="#update-crate-versions-and-changelog">Update crate versions and changelog</a></h3>
+<h3 id="update-crate-versions-dependencies-list-and-changelog"><a class="header" href="#update-crate-versions-dependencies-list-and-changelog">Update crate versions, dependencies list, and changelog</a></h3>
+<p>The following changes can be made in one pull request.</p>
+<h4 id="bump-crate-versions"><a class="header" href="#bump-crate-versions">Bump crate versions</a></h4>
 <p>Bump all components' version in the project to the new Iceberg Rust version.
 This version is the final version, not the release candidate version.</p>
 <ul>
 <li>Rust core and Python binding: bump version in root <code>Cargo.toml</code> under <code>[workspace.package]</code>.</li>
 </ul>
+<h4 id="update-changelogmd"><a class="header" href="#update-changelogmd">Update CHANGELOG.md</a></h4>
 <p>Use the content of the draft GitHub release to update <code>CHANGELOG.md</code>.
 Since drafting a GitHub release requires <code>content: write</code> GitHub permissions, this step must be owned by a committer.</p>
-<p>Open a pull request with both the changes to the crate versions and the associated changelog for the new versions.</p>
+<h4 id="update-dependency-lists"><a class="header" href="#update-dependency-lists">Update dependency lists</a></h4>
+<p>Run the following command to update the dependencies list of every package:</p>
+<pre><code class="language-shell">dev/release/dependencies.sh generate
+</code></pre>
+<p>Run the following command to verify the licenses meet the project's policy.</p>
+<pre><code class="language-shell">dev/release/dependencies.sh check
+</code></pre>
+<h4 id="open-pull-request"><a class="header" href="#open-pull-request">Open pull request</a></h4>
+<p>Open a pull request with all three changes.</p>
 <h3 id="create-release-candidate-tag-and-artifacts"><a class="header" href="#create-release-candidate-tag-and-artifacts">Create release candidate tag and artifacts</a></h3>
 <p>After the version bump PR gets merged, check out the exact commit to release and run:</p>
 <pre><code class="language-shell">dev/release/create_rc.sh ${iceberg_version} ${rc}
