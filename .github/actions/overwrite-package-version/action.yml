@@ -25,7 +25,7 @@ runs:
   using: "composite"
   steps:
     - name: Install toml-cli
-      run: cargo install toml-cli
+      run: cargo install --locked toml-cli
       shell: bash
 
     - name: Set pyproject version
