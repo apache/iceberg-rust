@@ -404,8 +404,13 @@ impl<'a> SnapshotProducer<'a> {
 
         let previous_snapshot = table_metadata.current_snapshot();
 
-        let mut additional_properties = summary_collector.build();
-        additional_properties.extend(self.snapshot_properties.clone());
+        // User-supplied snapshot properties are applied first, then the computed
+        // metrics overwrite any colliding keys. This matches iceberg-java
+        // (`SnapshotProducer.summary`), where computed `added-*`/`total-*` values
+        // are written after user properties so a user cannot shadow them with a
+        // bad (or merely wrong) value that would corrupt the snapshot summary.
+        let mut additional_properties = self.snapshot_properties.clone();
+        additional_properties.extend(summary_collector.build());
 
         let summary = Summary {
             operation: snapshot_produce_operation.operation(),
