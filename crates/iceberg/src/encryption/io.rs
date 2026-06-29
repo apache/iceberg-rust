@@ -130,9 +130,18 @@ impl EncryptedOutputFile {
 
     /// Creates a writer that transparently encrypts on each write.
     pub async fn writer(&self) -> Result<Box<dyn FileWrite>> {
-        let raw_writer = self.inner.writer().await?;
-        let cipher = build_cipher(&self.key_metadata)?;
-        let aad_prefix: Box<[u8]> = self.key_metadata.aad_prefix().unwrap_or_default().into();
+        Self::wrap_writer(self.inner.writer().await?, &self.key_metadata)
+    }
+
+    /// Wrap an already-opened raw writer with AES-GCM stream encryption keyed
+    /// from `key_metadata`. Used by writers that want to lazily open their
+    /// underlying output and still apply standard encryption.
+    pub(crate) fn wrap_writer(
+        raw_writer: Box<dyn FileWrite>,
+        key_metadata: &StandardKeyMetadata,
+    ) -> Result<Box<dyn FileWrite>> {
+        let cipher = build_cipher(key_metadata)?;
+        let aad_prefix: Box<[u8]> = key_metadata.aad_prefix().unwrap_or_default().into();
         Ok(Box::new(AesGcmFileWrite::new(
             raw_writer, cipher, aad_prefix,
         )))
