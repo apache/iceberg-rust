@@ -28,7 +28,7 @@ use crate::spec::{
 };
 use crate::table::Table;
 use crate::transaction::{ActionCommit, TransactionAction};
-use crate::utils::{DEFAULT_LOAD_CONCURRENCY_LIMIT, load_manifests};
+use crate::utils::{DEFAULT_LOAD_CONCURRENCY_LIMIT, try_for_each_manifest};
 use crate::{Error, ErrorKind};
 
 const KEPT_MANIFESTS_COUNT: &str = "manifests-kept";
@@ -409,37 +409,40 @@ impl TransactionAction for RewriteManifestsAction {
                 manifests_to_rewrite.push(manifest_file);
             }
 
-            // Load all manifests to rewrite concurrently.
-            let loaded_manifests = load_manifests(
+            // Stream the manifests to rewrite, routing their entries into the
+            // writers and dropping each loaded manifest immediately instead of
+            // holding all of them in memory at once (a large rewrite batch would
+            // otherwise retain every loaded manifest for the whole loop).
+            // Writers are stateful, so the closure runs sequentially.
+            try_for_each_manifest(
                 table.file_io(),
                 manifests_to_rewrite,
                 DEFAULT_LOAD_CONCURRENCY_LIMIT,
+                |manifest_file, manifest| {
+                    let spec_id = &manifest_file.partition_spec_id;
+                    for entry in manifest.entries() {
+                        if !entry.is_alive() {
+                            continue;
+                        }
+
+                        let key = cluster_func(entry.data_file());
+                        let writer_key = (key, *spec_id);
+
+                        let writer = match writers.entry(writer_key) {
+                            std::collections::btree_map::Entry::Occupied(e) => e.into_mut(),
+                            std::collections::btree_map::Entry::Vacant(e) => {
+                                let w = snapshot_producer
+                                    .new_manifest_writer(ManifestContentType::Data, *spec_id)?;
+                                e.insert(w)
+                            }
+                        };
+                        writer.add_existing_entry(entry.as_ref().clone())?;
+                        entry_count += 1;
+                    }
+                    Ok(())
+                },
             )
             .await?;
-
-            // Route entries to writers (sequential — writers are stateful).
-            for (manifest_file, manifest) in &loaded_manifests {
-                let spec_id = &manifest_file.partition_spec_id;
-                for entry in manifest.entries() {
-                    if !entry.is_alive() {
-                        continue;
-                    }
-
-                    let key = cluster_func(entry.data_file());
-                    let writer_key = (key, *spec_id);
-
-                    let writer = match writers.entry(writer_key) {
-                        std::collections::btree_map::Entry::Occupied(e) => e.into_mut(),
-                        std::collections::btree_map::Entry::Vacant(e) => {
-                            let w = snapshot_producer
-                                .new_manifest_writer(ManifestContentType::Data, *spec_id)?;
-                            e.insert(w)
-                        }
-                    };
-                    writer.add_existing_entry(entry.as_ref().clone())?;
-                    entry_count += 1;
-                }
-            }
 
             // Close all writers and collect new manifests (deterministic order)
             for (_key, writer) in writers {

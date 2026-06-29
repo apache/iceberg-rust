@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -949,21 +950,29 @@ partition_struct: {:?}, partition_type: {:?}",
 
         let mut duplicate_files = Vec::new();
 
-        // Load all manifests concurrently, then scan entries
+        // Scan the current snapshot's manifests to detect duplicate adds and
+        // validate deletes.
         if let Some(current_snapshot) = branch_snapshot_ref {
             let manifest_list = current_snapshot
                 .load_manifest_list(table.file_io(), table.metadata_ref().as_ref())
                 .await?;
 
             let manifest_files: Vec<_> = manifest_list.entries().to_vec();
-            let loaded_manifests = load_manifests(
-                table.file_io(),
-                manifest_files,
-                crate::utils::DEFAULT_LOAD_CONCURRENCY_LIMIT,
-            )
-            .await?;
+            // Stream the current snapshot's manifests instead of loading them all
+            // up front: each manifest is dropped immediately after it is scanned,
+            // and the early-exit below stops pulling further manifests once both
+            // validation checks are satisfied. This bounds peak memory and avoids
+            // loading the whole manifest set for large snapshots.
+            let file_io = table.file_io().clone();
+            let mut manifest_stream = futures::stream::iter(manifest_files)
+                .map(|manifest_file| {
+                    let file_io = file_io.clone();
+                    async move { manifest_file.load_manifest(&file_io).await }
+                })
+                .buffer_unordered(crate::utils::DEFAULT_LOAD_CONCURRENCY_LIMIT);
 
-            'outer: for (_, manifest) in &loaded_manifests {
+            'outer: while let Some(manifest) = manifest_stream.next().await {
+                let manifest = manifest?;
                 for entry in manifest.entries() {
                     if !entry.is_alive() {
                         continue;

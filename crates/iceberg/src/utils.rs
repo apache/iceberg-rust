@@ -340,6 +340,46 @@ pub(crate) async fn load_manifests(
         .await
 }
 
+/// Streams the manifests for `manifest_files`, invoking the fallible closure `f`
+/// on each loaded [`Manifest`] (with its [`ManifestFile`]) and dropping it
+/// immediately afterwards.
+///
+/// Unlike [`load_manifests`], this never holds more than `concurrency` manifests
+/// in memory at once. Use it when you only need to fold entries out of
+/// (potentially very many / very large) manifests — e.g. routing entries into
+/// manifest writers during a rewrite — instead of retaining every loaded
+/// manifest at once.
+pub(crate) async fn try_for_each_manifest<F>(
+    file_io: &FileIO,
+    manifest_files: Vec<ManifestFile>,
+    concurrency: usize,
+    mut f: F,
+) -> Result<()>
+where
+    F: FnMut(&ManifestFile, &Manifest) -> Result<()>,
+{
+    let concurrency = concurrency.max(1);
+
+    let mut stream = stream::iter(manifest_files)
+        .map(|manifest_file| {
+            let file_io = file_io.clone();
+            async move {
+                let manifest = manifest_file.load_manifest(&file_io).await?;
+                Ok::<_, crate::Error>((manifest_file, manifest))
+            }
+        })
+        .buffer_unordered(concurrency);
+
+    while let Some(loaded) = stream.next().await {
+        let (manifest_file, manifest) = loaded?;
+        f(&manifest_file, &manifest)?;
+        // `manifest_file`/`manifest` are dropped here, bounding peak memory to at
+        // most `concurrency` manifests in flight (rather than all of them).
+    }
+
+    Ok(())
+}
+
 /// Streams the manifests for `manifest_files`, invoking `f` on each loaded
 /// [`Manifest`] (with its [`ManifestFile`]) and dropping it immediately
 /// afterwards.
