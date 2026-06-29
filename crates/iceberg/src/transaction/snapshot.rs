@@ -527,3 +527,214 @@ impl<'a> SnapshotProducer<'a> {
         Ok(ActionCommit::new(updates, requirements))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, ManifestStatus, Struct,
+    };
+    use crate::transaction::tests::make_v2_minimal_table;
+
+    fn make_producer(table: &Table) -> SnapshotProducer<'_> {
+        let key_metadata = None;
+        let snapshot_properties = HashMap::default();
+        let added_data_files = vec![];
+        SnapshotProducer::new(
+            table,
+            Uuid::now_v7(),
+            key_metadata,
+            snapshot_properties,
+            added_data_files,
+        )
+    }
+
+    fn make_file_builder(table: &Table, path: &str, content: DataContentType) -> DataFileBuilder {
+        let mut builder = DataFileBuilder::default();
+        builder
+            .content(content)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(100))]));
+        builder
+    }
+
+    fn make_file(table: &Table, path: &str, content: DataContentType) -> DataFile {
+        make_file_builder(table, path, content).build().unwrap()
+    }
+
+    #[test]
+    fn test_validate_added_data_files_rejects_non_data_content() {
+        let table = make_v2_minimal_table();
+        let valid_file = make_file(&table, "test/valid.parquet", DataContentType::Data);
+        let delete_file = make_file(
+            &table,
+            "test/delete.parquet",
+            DataContentType::PositionDeletes,
+        );
+
+        let mut producer = make_producer(&table);
+        producer.added_data_files = vec![valid_file, delete_file];
+
+        let err = producer
+            .validate_added_data_files()
+            .expect_err("should reject non-Data content type");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string().contains("Only data content type"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_added_data_files_rejects_mismatched_partition_spec_id() {
+        let table = make_v2_minimal_table();
+        let wrong_spec_id = table.metadata().default_partition_spec_id() + 999;
+        let file_with_wrong_spec_id =
+            make_file_builder(&table, "test/data.parquet", DataContentType::Data)
+                .partition_spec_id(wrong_spec_id)
+                .build()
+                .unwrap();
+
+        let mut producer = make_producer(&table);
+        producer.added_data_files = vec![file_with_wrong_spec_id];
+
+        let err = producer
+            .validate_added_data_files()
+            .expect_err("should reject mismatched partition spec id");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string().contains("partition spec id does not match"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_added_data_files_rejects_incompatible_partition_value() {
+        let table = make_v2_minimal_table();
+
+        // Partition field is Long; pass a string literal to trigger type mismatch.
+        let file_with_incompatible_partition_val =
+            make_file_builder(&table, "test/data.parquet", DataContentType::Data)
+                .partition_spec_id(table.metadata().default_partition_spec_id())
+                .partition(Struct::from_iter([Some(Literal::string("wrong_type"))]))
+                .build()
+                .unwrap();
+
+        let mut producer = make_producer(&table);
+        producer.added_data_files = vec![file_with_incompatible_partition_val];
+
+        let err = producer
+            .validate_added_data_files()
+            .expect_err("should reject incompatible partition value type");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message()
+                .contains("value is not compatible partition type"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_added_data_files_rejects_wrong_partition_field_count() {
+        let table = make_v2_minimal_table();
+        let default_partition_spec = table.metadata().default_partition_spec();
+        assert!(
+            default_partition_spec.fields().len() == 1,
+            "expected minimal test table to have 1 partition field"
+        );
+
+        // Given the partition spec has 1 field, the producer should error if we provide more than 1 field.
+        let file = make_file_builder(&table, "test/data.parquet", DataContentType::Data)
+            .partition_spec_id(default_partition_spec.spec_id())
+            .partition(Struct::from_iter([
+                Some(Literal::long(1)),
+                Some(Literal::long(2)),
+            ]))
+            .build()
+            .unwrap();
+
+        let mut producer = make_producer(&table);
+        producer.added_data_files = vec![file];
+
+        let err = producer
+            .validate_added_data_files()
+            .expect_err("should reject partition with wrong number of fields");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string()
+                .contains("not compatible with partition type"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_added_data_files_accepts_null_partition_value() {
+        let table = make_v2_minimal_table();
+        let file = make_file_builder(&table, "test/data.parquet", DataContentType::Data)
+            .partition(Struct::from_iter([None]))
+            .build()
+            .unwrap();
+
+        let mut producer = make_producer(&table);
+        producer.added_data_files = vec![file];
+
+        producer
+            .validate_added_data_files()
+            .expect("null partition value should pass validation");
+    }
+
+    #[test]
+    fn test_validate_added_data_files_accepts_valid_data_file() {
+        let table = make_v2_minimal_table();
+        let file = make_file(&table, "test/valid.parquet", DataContentType::Data);
+
+        let mut producer = make_producer(&table);
+        producer.added_data_files = vec![file];
+
+        producer
+            .validate_added_data_files()
+            .expect("valid data file should pass validation");
+    }
+
+    #[tokio::test]
+    async fn test_write_added_manifest_empty_returns_error() {
+        let table = make_v2_minimal_table();
+        let mut producer = make_producer(&table);
+
+        let err = producer
+            .write_added_manifest()
+            .await
+            .expect_err("manifest write must fail with no data file changes");
+        assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
+        assert!(
+            err.message().contains("No added data files found"),
+            "unexpected error message: {err}"
+        )
+    }
+
+    #[tokio::test]
+    async fn test_write_added_manifest_multiple_files() {
+        let table = make_v2_minimal_table();
+        let mut producer = make_producer(&table);
+        producer.added_data_files = vec![
+            make_file(&table, "test/a.parquet", DataContentType::Data),
+            make_file(&table, "test/b.parquet", DataContentType::Data),
+            make_file(&table, "test/c.parquet", DataContentType::Data),
+        ];
+
+        let manifest_file = producer.write_added_manifest().await.unwrap();
+
+        let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
+        assert_eq!(manifest.entries().len(), 3);
+        for entry in manifest.entries() {
+            assert_eq!(entry.status(), ManifestStatus::Added);
+        }
+
+        // added_data_files should be drained after write.
+        assert!(producer.added_data_files.is_empty());
+    }
+}
