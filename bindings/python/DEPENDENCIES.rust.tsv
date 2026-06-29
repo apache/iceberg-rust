@@ -71,7 +71,7 @@ bumpalo@3.20.2		X									X
 bytemuck@1.25.0		X									X					X	
 bytemuck_derive@1.10.2		X									X					X	
 byteorder@1.5.0											X				X		
-bytes@1.11.1											X						
+bytes@1.12.0											X						
 bzip2@0.6.1		X									X						
 cbc@0.1.2		X									X						
 cc@1.2.57		X									X						
