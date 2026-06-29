@@ -162,12 +162,20 @@ impl SchemaProvider for IcebergSchemaProvider {
         let df_schema = table.schema();
         let iceberg_schema = arrow_schema_to_schema_auto_assign_ids(df_schema.as_ref())
             .map_err(to_datafusion_error)?;
+        let format_version = iceberg_schema.min_format_version();
 
         // Create the table in the Iceberg catalog
-        let table_creation = TableCreation::builder()
-            .name(name.clone())
-            .schema(iceberg_schema)
-            .build();
+        let table_creation = match format_version {
+            Some(format_version) => TableCreation::builder()
+                .name(name.clone())
+                .format_version(format_version)
+                .schema(iceberg_schema)
+                .build(),
+            None => TableCreation::builder()
+                .name(name.clone())
+                .schema(iceberg_schema)
+                .build(),
+        };
 
         let catalog = self.catalog.clone();
         let namespace = self.namespace.clone();
@@ -288,10 +296,11 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::array::{Int32Array, StringArray};
-    use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema, TimeUnit};
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::datasource::MemTable;
     use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+    use iceberg::spec::FormatVersion;
     use iceberg::{Catalog, CatalogBuilder, NamespaceIdent};
     use tempfile::TempDir;
 
@@ -373,6 +382,37 @@ mod tests {
 
         // Verify the table was registered
         assert!(schema_provider.table_exist("empty_table"));
+    }
+
+    #[tokio::test]
+    async fn test_register_timestamp_ns_table_uses_v3() {
+        let (schema_provider, _temp_dir) = create_test_schema_provider().await;
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            true,
+        )]));
+
+        let empty_batch = RecordBatch::new_empty(arrow_schema.clone());
+        let mem_table = MemTable::try_new(arrow_schema, vec![vec![empty_batch]]).unwrap();
+
+        let result =
+            schema_provider.register_table("timestamp_ns_table".to_string(), Arc::new(mem_table));
+
+        assert!(result.is_ok(), "Expected success, got: {result:?}");
+
+        let table_ident = TableIdent::new(
+            schema_provider.namespace.clone(),
+            "timestamp_ns_table".to_string(),
+        );
+        let table = schema_provider
+            .catalog
+            .load_table(&table_ident)
+            .await
+            .unwrap();
+
+        assert_eq!(FormatVersion::V3, table.metadata().format_version());
     }
 
     #[tokio::test]
