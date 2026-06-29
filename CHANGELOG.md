@@ -263,6 +263,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * chore(deps): Bump taiki-e/install-action from 2.81.7 to 2.82.2 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2735
 * chore(deps): Bump minijinja from 2.20.0 to 2.21.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2736
 * chore: Update all cargo install references to use --locked by @dannycjones in https://github.com/apache/iceberg-rust/pull/2739
+* fix: Update Python binding test fixtures to close catalogs by @dannycjones in https://github.com/apache/iceberg-rust/pull/2721
 
 ## [v0.9.0] - 2026-03-10
 
