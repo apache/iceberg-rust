@@ -19,6 +19,11 @@
 
 set -Eeuo pipefail
 
+# Keep this in sync with CARGO_DENY_VERSION in .github/workflows/dependencies.yml.
+# The generated DEPENDENCIES.rust.tsv files are version-sensitive, so the local
+# cargo-deny must match the version CI uses to avoid spurious diffs.
+EXPECTED_CARGO_DENY_VERSION="0.19.9"
+
 CURRENT_STEP=""
 
 on_error() {
@@ -100,7 +105,26 @@ require_cargo_deny() {
   require_command cargo
   if ! cargo deny --version >/dev/null 2>&1; then
     echo "This script requires 'cargo-deny' for dependency license checks." >&2
-    echo "Install it with: cargo install --locked cargo-deny" >&2
+    echo "Install it with: cargo install --locked cargo-deny@${EXPECTED_CARGO_DENY_VERSION}" >&2
+    return 1
+  fi
+
+  # The TSV output is sensitive to the cargo-deny version: different versions
+  # resolve the dependency graph differently, producing diffs that CI rejects.
+  # Assert the active binary matches the version CI pins so a shadowed or
+  # mismatched install fails loudly instead of generating wrong files.
+  local actual_version
+  actual_version="$(cargo deny --version | awk '{print $2}')"
+  if [ "${actual_version}" != "${EXPECTED_CARGO_DENY_VERSION}" ]; then
+    echo "ERROR: cargo-deny version mismatch." >&2
+    echo "  expected: ${EXPECTED_CARGO_DENY_VERSION} (pinned by CI)" >&2
+    echo "  found:    ${actual_version} ($(command -v cargo-deny))" >&2
+    echo "" >&2
+    echo "Install the pinned version with:" >&2
+    echo "  cargo install --locked cargo-deny@${EXPECTED_CARGO_DENY_VERSION}" >&2
+    echo "" >&2
+    echo "If multiple cargo-deny binaries are installed, 'which -a cargo-deny'" >&2
+    echo "shows which one is shadowing the others on your PATH." >&2
     return 1
   fi
 }
