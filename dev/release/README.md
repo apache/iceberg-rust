@@ -84,6 +84,7 @@ Common options:
 dev/release/verify_rc.sh 0.9.1 2 --verify_signature 0
 dev/release/verify_rc.sh 0.9.1 2 --import_gpg_keys 1
 dev/release/verify_rc.sh 0.9.1 2 --build 0 --python 0 --check_headers 0
+dev/release/verify_rc.sh 0.9.1 2 --python_bin /opt/homebrew/bin/python3.11
 ```
 
 Defaults:
@@ -95,6 +96,7 @@ Defaults:
 - `--check_headers 1`: check Apache license headers against the extracted source archive.
 - `--build 1`: build and test the Rust source distribution.
 - `--python 1`: build and test pyiceberg-core.
+- `--python_bin <unset>`: set `PYO3_PYTHON` and `UV_PYTHON` for Python-linked Rust and pyiceberg-core checks.
 - `--tmp_dir <auto>`: verification sandbox; auto-created and deleted on success when omitted.
 
 ## Promote an RC to a Release
