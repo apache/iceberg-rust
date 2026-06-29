@@ -52,6 +52,7 @@ pub struct ParquetWriterBuilder {
     props: WriterProperties,
     schema: SchemaRef,
     match_mode: FieldMatchMode,
+    row_group_size_bytes: Option<usize>,
 }
 
 impl ParquetWriterBuilder {
@@ -75,7 +76,32 @@ impl ParquetWriterBuilder {
             props,
             schema,
             match_mode,
+            row_group_size_bytes: None,
         }
+    }
+
+    /// Target an on-disk **encoded (post-compression)** size for each row group.
+    ///
+    /// [`WriterProperties::max_row_group_size`] bounds a row group only by row
+    /// *count*, so the on-disk size of a group depends on how well the data
+    /// compresses — uniform-row-count groups can vary wildly in bytes. When this
+    /// is set, the writer additionally cuts a row group as soon as its anticipated
+    /// encoded size (parquet's [`AsyncArrowWriter::in_progress_size`]) reaches
+    /// `bytes`, yielding byte-uniform row groups without the caller having to
+    /// predict a compression ratio. This is the analogue of Java Iceberg's
+    /// `write.parquet.row-group-size-bytes`.
+    ///
+    /// The row-count cap still applies as an upper bound; whichever limit is hit
+    /// first cuts the group.
+    ///
+    /// The size is checked **after each [`FileWriter::write`] call** (parquet's
+    /// recommended `in_progress_size`-driven flush pattern), so a row group can
+    /// overshoot the target by at most one written batch. Callers that hand the
+    /// writer one very large batch will therefore see coarser cuts; streaming
+    /// callers that write in modest batches get byte-uniform row groups.
+    pub fn with_row_group_size_bytes(mut self, bytes: usize) -> Self {
+        self.row_group_size_bytes = Some(bytes);
+        self
     }
 
     /// Build a `ParquetWriterBuilder` from Iceberg table properties and a
@@ -118,6 +144,7 @@ impl FileWriterBuilder for ParquetWriterBuilder {
             schema: self.schema.clone(),
             inner_writer: None,
             writer_properties: self.props.clone(),
+            row_group_size_bytes: self.row_group_size_bytes,
             current_row_num: 0,
             output_file,
             nan_value_count_visitor: NanValueCountVisitor::new_with_match_mode(self.match_mode),
@@ -249,6 +276,10 @@ pub struct ParquetWriter {
     output_file: OutputFile,
     inner_writer: Option<AsyncArrowWriter<AsyncFileWriter>>,
     writer_properties: WriterProperties,
+    /// Optional encoded-size target per row group; see
+    /// [`ParquetWriterBuilder::with_row_group_size_bytes`]. `None` ⇒ row groups
+    /// are bounded only by the row-count cap in `writer_properties`.
+    row_group_size_bytes: Option<usize>,
     current_row_num: usize,
     nan_value_count_visitor: NanValueCountVisitor,
 }
@@ -547,6 +578,24 @@ impl FileWriter for ParquetWriter {
             )
             .with_source(err)
         })?;
+
+        // Cut a row group once its anticipated encoded size reaches the configured
+        // byte target. `in_progress_size` is parquet's estimate of the post-encoding
+        // (post-compression) size of the open row group, so this bounds row groups by
+        // on-disk bytes regardless of compression ratio. The row-count cap in
+        // `writer_properties` still applies — whichever fires first cuts the group.
+        if self
+            .row_group_size_bytes
+            .is_some_and(|target| writer.in_progress_size() >= target)
+        {
+            writer.flush().await.map_err(|err| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Failed to flush row group in parquet writer.",
+                )
+                .with_source(err)
+            })?;
+        }
 
         Ok(())
     }
@@ -892,6 +941,107 @@ mod tests {
         // check the written file
         let expect_batch = concat_batches(&schema, vec![&to_write, &to_write_null]).unwrap();
         check_parquet_data_file(&file_io, &data_file, &expect_batch).await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_writer_row_group_size_bytes() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let schema = {
+            let fields =
+                vec![
+                    Field::new("col", DataType::Int64, false).with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "0".to_string(),
+                    )])),
+                ];
+            Arc::new(arrow_schema::Schema::new(fields))
+        };
+        // Pseudo-random, ~incompressible values with dictionary + compression off, so
+        // the encoded size is ~8 bytes/row and a small byte target deterministically
+        // cuts many row groups regardless of encoding heuristics.
+        let values: Vec<i64> = (0..100_000i64)
+            .map(|i| (i as u64).wrapping_mul(2_654_435_761) as i64)
+            .collect();
+
+        let output_file = file_io.new_output(
+            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
+        )?;
+
+        // ~800 KB of encoded data with a 64 KiB row-group byte target. The row-count
+        // cap is left at the parquet default (~1M rows), so only the byte target can
+        // cut the data into multiple groups. The size is checked after each write, so
+        // feed the rows in modest batches (as a streaming caller would) rather than
+        // one giant batch.
+        let target_bytes: usize = 64 * 1024;
+        let mut pw = ParquetWriterBuilder::new(
+            WriterProperties::builder()
+                .set_dictionary_enabled(false)
+                .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+                .build(),
+            Arc::new(schema.as_ref().try_into().unwrap()),
+        )
+        .with_row_group_size_bytes(target_bytes)
+        .build(output_file)
+        .await?;
+        for chunk in values.chunks(4_000) {
+            let col = Arc::new(Int64Array::from_iter_values(chunk.iter().copied())) as ArrayRef;
+            let batch = RecordBatch::try_new(schema.clone(), vec![col]).unwrap();
+            pw.write(&batch).await?;
+        }
+        let res = pw.close().await?;
+        assert_eq!(res.len(), 1);
+        let data_file = res
+            .into_iter()
+            .next()
+            .unwrap()
+            .content(DataContentType::Data)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        assert_eq!(data_file.record_count(), 100_000);
+
+        // The byte target is far below the total encoded size, so the size-based cut
+        // fired repeatedly instead of emitting one default row group. ~800 KB / 64 KiB
+        // with a one-batch (32 KiB) overshoot tolerance lands at ~9 groups; assert a
+        // band rather than an exact count so a parquet patch bump nudging the
+        // in_progress_size estimate doesn't make this brittle.
+        let input_content = file_io
+            .new_input(data_file.file_path.clone())?
+            .read()
+            .await?;
+        let metadata =
+            parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(input_content)
+                .unwrap()
+                .metadata()
+                .clone();
+        let row_group_sizes: Vec<i64> = (0..metadata.num_row_groups())
+            .map(|i| metadata.row_group(i).compressed_size())
+            .collect();
+        assert!(
+            (5..=15).contains(&row_group_sizes.len()),
+            "expected ~9 byte-targeted row groups, got {}",
+            row_group_sizes.len()
+        );
+        // Every group but the last (the smaller remainder) crossed the target before
+        // being cut and overshoots by at most one written batch, so each sits in a
+        // band around the 64 KiB target — the byte-sizing contract.
+        for &size in &row_group_sizes[..row_group_sizes.len() - 1] {
+            assert!(
+                (target_bytes as i64 / 2..=target_bytes as i64 * 3).contains(&size),
+                "row group size {size} B is outside the byte-target band (target {target_bytes} B)"
+            );
+        }
 
         Ok(())
     }
