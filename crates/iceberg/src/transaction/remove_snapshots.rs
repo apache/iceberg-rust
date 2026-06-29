@@ -27,7 +27,7 @@ use crate::error::Result;
 use crate::spec::{MAIN_BRANCH, SnapshotReference, SnapshotRetention, TableMetadataRef};
 use crate::table::Table;
 use crate::transaction::{ActionCommit, TransactionAction};
-use crate::utils::{DEFAULT_LOAD_CONCURRENCY_LIMIT, ancestors_of, load_manifest_lists};
+use crate::utils::{DEFAULT_LOAD_CONCURRENCY_LIMIT, ancestors_of, for_each_manifest_list};
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 /// Default value for max snapshot age in milliseconds.
@@ -331,19 +331,25 @@ impl TransactionAction for RemoveSnapshotAction {
                 }
             }
 
-            let loaded_lists = load_manifest_lists(
+            // Stream the retained snapshots' manifest lists instead of loading
+            // them all up front. We only need the set of reachable partition
+            // spec ids, so fold each list into `reachable_specs` and drop it
+            // immediately. Collecting every retained manifest list at once is
+            // O(N) in memory and can OOM on tables whose retained manifest lists
+            // are large (e.g. high-churn tables without manifest compaction).
+            // See https://github.com/risingwavelabs/iceberg-rust/issues/173.
+            for_each_manifest_list(
                 table.file_io(),
                 &table_meta,
                 retained_snapshots,
                 DEFAULT_LOAD_CONCURRENCY_LIMIT,
+                |manifest_list| {
+                    for manifest in manifest_list.entries() {
+                        reachable_specs.insert(manifest.partition_spec_id);
+                    }
+                },
             )
             .await?;
-
-            for (_, manifest_list) in loaded_lists {
-                for manifest in manifest_list.entries() {
-                    reachable_specs.insert(manifest.partition_spec_id);
-                }
-            }
 
             let spec_to_remove: Vec<i32> = table_meta
                 .partition_specs_iter()

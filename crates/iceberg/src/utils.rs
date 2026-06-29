@@ -280,6 +280,45 @@ pub(crate) async fn load_manifest_lists(
         .await
 }
 
+/// Streams the manifest lists for `snapshots`, invoking `f` on each loaded
+/// [`ManifestList`] and dropping it immediately afterwards.
+///
+/// Unlike [`load_manifest_lists`], this never holds more than `concurrency`
+/// manifest lists in memory at once. Use it when you only need to fold a small
+/// summary out of (potentially very large) manifest lists — e.g. collecting the
+/// set of reachable partition-spec ids during snapshot expiration — so that a
+/// table with many (or very large) retained manifest lists does not blow up the
+/// process working set.
+pub(crate) async fn for_each_manifest_list<F>(
+    file_io: &FileIO,
+    table_metadata: &TableMetadataRef,
+    snapshots: Vec<SnapshotRef>,
+    concurrency: usize,
+    mut f: F,
+) -> Result<()>
+where
+    F: FnMut(&ManifestList),
+{
+    let concurrency = concurrency.max(1);
+
+    let mut stream = stream::iter(snapshots)
+        .map(|snapshot| {
+            let file_io = file_io.clone();
+            let table_metadata = table_metadata.clone();
+            async move { snapshot.load_manifest_list(&file_io, &table_metadata).await }
+        })
+        .buffer_unordered(concurrency);
+
+    while let Some(manifest_list) = stream.next().await {
+        let manifest_list = manifest_list?;
+        f(&manifest_list);
+        // `manifest_list` is dropped here, bounding peak memory to at most
+        // `concurrency` manifest lists in flight (rather than all of them).
+    }
+
+    Ok(())
+}
+
 /// Concurrently loads manifests for the given manifest files.
 pub(crate) async fn load_manifests(
     file_io: &FileIO,
