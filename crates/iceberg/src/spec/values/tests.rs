@@ -263,6 +263,27 @@ fn json_binary() {
 }
 
 #[test]
+fn json_geospatial_defaults_reject_non_null() {
+    let cases = vec![
+        Type::Primitive(PrimitiveType::Geometry(Default::default())),
+        Type::Primitive(PrimitiveType::Geography(Default::default())),
+    ];
+
+    for ty in cases {
+        assert!(Literal::try_from_json(serde_json::json!("00010fff"), &ty).is_err());
+        assert_eq!(
+            Literal::try_from_json(serde_json::Value::Null, &ty).unwrap(),
+            None
+        );
+        assert!(
+            Literal::Primitive(PrimitiveLiteral::Binary(vec![0, 1, 15, 255]))
+                .try_into_json(&ty)
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn json_fixed() {
     let record = r#""00010fff""#;
 
@@ -450,6 +471,23 @@ fn avro_bytes_string() {
     let bytes = vec![105u8, 99u8, 101u8, 98u8, 101u8, 114u8, 103u8];
 
     check_avro_bytes_serde(bytes, Datum::string("iceberg"), &PrimitiveType::String);
+}
+
+#[test]
+fn avro_bytes_geospatial() {
+    let cases = vec![
+        PrimitiveType::Geometry(Default::default()),
+        PrimitiveType::Geography(Default::default()),
+    ];
+
+    for ty in cases {
+        let bytes = vec![1u8, 2u8, 3u8, 4u8];
+        check_avro_bytes_serde(
+            bytes.clone(),
+            Datum::new(ty.clone(), PrimitiveLiteral::Binary(bytes)),
+            &ty,
+        );
+    }
 }
 
 #[test]

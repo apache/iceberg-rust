@@ -275,6 +275,10 @@ impl MinMaxColAggregator {
             ));
         };
 
+        if matches!(ty, PrimitiveType::Geometry(_) | PrimitiveType::Geography(_)) {
+            return Ok(());
+        }
+
         if value.min_is_exact() {
             let Some(min_datum) = get_parquet_stat_min_as_datum(&ty, &value)? else {
                 return Err(Error::new(
@@ -621,7 +625,10 @@ mod tests {
     use arrow_schema::{DataType, Field, Fields, SchemaRef as ArrowSchemaRef};
     use arrow_select::concat::concat_batches;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+    use parquet::basic::{EdgeInterpolationAlgorithm, LogicalType};
+    use parquet::data_type::ByteArray;
     use parquet::file::statistics::ValueStatistics;
+    use parquet_geospatial::testing::wkb_point_xy;
     use tempfile::TempDir;
     use uuid::Uuid;
 
@@ -629,7 +636,10 @@ mod tests {
     use crate::arrow::schema_to_arrow_schema;
     use crate::io::FileIO;
     use crate::spec::decimal_utils::{decimal_mantissa, decimal_new, decimal_scale};
-    use crate::spec::{PrimitiveLiteral, Struct, *};
+    use crate::spec::{
+        EdgeInterpolationAlgorithm as IcebergEdgeInterpolationAlgorithm, PrimitiveLiteral, Struct,
+        *,
+    };
     use crate::writer::file_writer::location_generator::{
         DefaultFileNameGenerator, DefaultLocationGenerator, FileNameGenerator, LocationGenerator,
     };
@@ -2245,6 +2255,101 @@ mod tests {
         assert_eq!(std::fs::read_dir(temp_dir.path()).unwrap().count(), 0);
     }
 
+    #[tokio::test]
+    async fn test_parquet_writer_geospatial_logical_types() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(
+                        0,
+                        "geom",
+                        Type::Primitive(PrimitiveType::Geometry(GeometryType::default())),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        1,
+                        "geog",
+                        Type::Primitive(PrimitiveType::Geography(
+                            GeographyType::new(None, IcebergEdgeInterpolationAlgorithm::Karney)
+                                .unwrap(),
+                        )),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let arrow_schema: ArrowSchemaRef = Arc::new(schema_to_arrow_schema(&schema).unwrap());
+        let geom_wkb = wkb_point_xy(1.0, 2.0);
+        let geog_wkb = wkb_point_xy(3.0, 4.0);
+        let geom = Arc::new(arrow_array::LargeBinaryArray::from_vec(vec![
+            geom_wkb.as_slice(),
+        ])) as ArrayRef;
+        let geog = Arc::new(arrow_array::LargeBinaryArray::from_vec(vec![
+            geog_wkb.as_slice(),
+        ])) as ArrayRef;
+        let to_write = RecordBatch::try_new(arrow_schema.clone(), vec![geom, geog]).unwrap();
+
+        let output_file = file_io.new_output(
+            location_gen.generate_location(None, &file_name_gen.generate_file_name()),
+        )?;
+        let mut pw = ParquetWriterBuilder::new(WriterProperties::builder().build(), schema)
+            .build(output_file)
+            .await?;
+
+        pw.write(&to_write).await?;
+        let res = pw.close().await?;
+        assert_eq!(res.len(), 1);
+        let data_file = res
+            .into_iter()
+            .next()
+            .unwrap()
+            .content(crate::spec::DataContentType::Data)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        assert_eq!(data_file.record_count(), 1);
+        assert_eq!(*data_file.value_counts(), HashMap::from([(0, 1), (1, 1)]));
+        assert_eq!(
+            *data_file.null_value_counts(),
+            HashMap::from([(0, 0), (1, 0)])
+        );
+        assert!(data_file.lower_bounds().is_empty());
+        assert!(data_file.upper_bounds().is_empty());
+
+        let input_file = file_io.new_input(data_file.file_path())?;
+        let file_metadata = input_file.metadata().await?;
+        let reader = input_file.reader().await?;
+        let mut parquet_reader = ArrowFileReader::new(file_metadata, reader);
+        let parquet_metadata = parquet_reader.get_metadata(None).await?;
+        let schema_descr = parquet_metadata.file_metadata().schema_descr();
+
+        assert_eq!(
+            schema_descr.column(0).logical_type_ref(),
+            Some(&LogicalType::Geometry { crs: None })
+        );
+        assert_eq!(
+            schema_descr.column(1).logical_type_ref(),
+            Some(&LogicalType::Geography {
+                crs: None,
+                algorithm: Some(EdgeInterpolationAlgorithm::KARNEY),
+            })
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn test_min_max_aggregator() {
         let schema = Arc::new(
@@ -2278,5 +2383,38 @@ mod tests {
 
         assert_eq!(lower_bounds, HashMap::from([(0, Datum::int(i32::MIN))]));
         assert_eq!(upper_bounds, HashMap::from([(0, Datum::int(i32::MAX))]));
+    }
+
+    #[test]
+    fn test_min_max_aggregator_skips_geospatial_byte_statistics() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(
+                        0,
+                        "geom",
+                        Type::Primitive(PrimitiveType::Geometry(Default::default())),
+                    )
+                    .with_id(0)
+                    .into(),
+                ])
+                .build()
+                .expect("Failed to create schema"),
+        );
+        let mut min_max_agg = MinMaxColAggregator::new(schema);
+        let stats = Statistics::ByteArray(ValueStatistics::new(
+            Some(ByteArray::from(vec![1, 2, 3])),
+            Some(ByteArray::from(vec![4, 5, 6])),
+            None,
+            None,
+            false,
+        ));
+
+        min_max_agg.update(0, stats).unwrap();
+        let (lower_bounds, upper_bounds) = min_max_agg.produce();
+
+        assert!(lower_bounds.is_empty());
+        assert!(upper_bounds.is_empty());
     }
 }

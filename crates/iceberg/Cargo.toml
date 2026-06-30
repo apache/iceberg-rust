@@ -63,7 +63,8 @@ moka = { version = "0.12.10", features = ["future"] }
 murmur3 = { workspace = true }
 once_cell = { workspace = true }
 ordered-float = { workspace = true }
-parquet = { workspace = true, features = ["async", "encryption"] }
+parquet = { workspace = true, features = ["async", "encryption", "geospatial"] }
+parquet-geospatial = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 roaring = { workspace = true }
