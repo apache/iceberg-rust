@@ -27,6 +27,7 @@ use itertools::Itertools;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
+use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics;
@@ -36,6 +37,7 @@ use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
     get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum,
 };
+use crate::encryption::{FileEncryptionHandler, StandardKeyMetadata};
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
@@ -46,12 +48,34 @@ use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
 use crate::{Error, ErrorKind, Result};
 
+/// Build Parquet Modular Encryption properties from per-file key material.
+///
+/// PME uses the DEK as the footer key (uniform encryption: same key for footer
+/// and all column chunks) and the AAD prefix as the file-level AAD.
+fn build_file_encryption_properties(
+    key_metadata: &StandardKeyMetadata,
+) -> Result<Arc<FileEncryptionProperties>> {
+    let mut builder =
+        FileEncryptionProperties::builder(key_metadata.encryption_key().as_bytes().to_vec());
+    if let Some(aad) = key_metadata.aad_prefix() {
+        builder = builder.with_aad_prefix(aad.to_vec());
+    }
+    builder.build().map_err(|e| {
+        Error::new(
+            ErrorKind::Unexpected,
+            "Failed to build parquet file encryption properties",
+        )
+        .with_source(e)
+    })
+}
+
 /// ParquetWriterBuilder is used to builder a [`ParquetWriter`]
 #[derive(Clone, Debug)]
 pub struct ParquetWriterBuilder {
     props: WriterProperties,
     schema: SchemaRef,
     match_mode: FieldMatchMode,
+    file_encryption_handler: Option<Arc<dyn FileEncryptionHandler>>,
 }
 
 impl ParquetWriterBuilder {
@@ -71,7 +95,22 @@ impl ParquetWriterBuilder {
             props,
             schema,
             match_mode,
+            file_encryption_handler: None,
         }
+    }
+
+    /// Configure per-file encryption via a [`FileEncryptionHandler`].
+    ///
+    /// When set, every file produced by this builder is wrapped in AES-GCM
+    /// stream encryption keyed from the handler's `next_key_metadata`, and the
+    /// resulting [`DataFile::key_metadata`] carries the encoded
+    /// [`StandardKeyMetadata`] so readers can decrypt the file.
+    pub fn with_file_encryption_handler(
+        mut self,
+        handler: Arc<dyn FileEncryptionHandler>,
+    ) -> Self {
+        self.file_encryption_handler = Some(handler);
+        self
     }
 }
 
@@ -85,6 +124,8 @@ impl FileWriterBuilder for ParquetWriterBuilder {
             writer_properties: self.props.clone(),
             current_row_num: 0,
             output_file,
+            file_encryption_handler: self.file_encryption_handler.clone(),
+            resolved_key_metadata: None,
             nan_value_count_visitor: NanValueCountVisitor::new_with_match_mode(self.match_mode),
         })
     }
@@ -212,6 +253,12 @@ impl SchemaVisitor for IndexByParquetPathName {
 pub struct ParquetWriter {
     schema: SchemaRef,
     output_file: OutputFile,
+    /// When set, the writer wraps its raw output with AES-GCM stream
+    /// encryption using key material from this handler.
+    file_encryption_handler: Option<Arc<dyn FileEncryptionHandler>>,
+    /// Set on lazy init when encryption is enabled — captured here so
+    /// `close()` can emit it on the resulting `DataFile::key_metadata`.
+    resolved_key_metadata: Option<StandardKeyMetadata>,
     inner_writer: Option<AsyncArrowWriter<AsyncFileWriter>>,
     writer_properties: WriterProperties,
     current_row_num: usize,
@@ -307,7 +354,7 @@ impl MinMaxColAggregator {
 }
 
 impl ParquetWriter {
-    /// Converts parquet files to data files
+    /// Converts already-written parquet files into [`DataFile`]s.
     #[allow(dead_code)]
     pub(crate) async fn parquet_files_to_data_files(
         file_io: &FileIO,
@@ -337,6 +384,7 @@ impl ParquetWriter {
                 file_path,
                 // TODO: Implement nan_value_counts here
                 HashMap::new(),
+                None,
             )?;
             builder.partition_spec_id(table_metadata.default_partition_spec_id());
             let data_file = builder.build().unwrap();
@@ -353,6 +401,7 @@ impl ParquetWriter {
         written_size: usize,
         file_path: String,
         nan_value_counts: HashMap<i32, u64>,
+        key_metadata: Option<Vec<u8>>,
     ) -> Result<DataFileBuilder> {
         let index_by_parquet_path = {
             let mut visitor = IndexByParquetPathName::new();
@@ -412,6 +461,7 @@ impl ParquetWriter {
             // - We can ignore implementing distinct_counts due to this: https://lists.apache.org/thread/j52tsojv0x4bopxyzsp7m7bqt23n5fnd
             .lower_bounds(lower_bounds)
             .upper_bounds(upper_bounds)
+            .key_metadata(key_metadata)
             .split_offsets(Some(
                 metadata
                     .row_groups()
@@ -490,12 +540,23 @@ impl FileWriter for ParquetWriter {
             writer
         } else {
             let arrow_schema: ArrowSchemaRef = Arc::new(self.schema.as_ref().try_into()?);
-            let inner_writer = self.output_file.writer().await?;
-            let async_writer = AsyncFileWriter::new(inner_writer);
+            let writer_properties = if let Some(handler) = &self.file_encryption_handler {
+                let key_metadata = handler.next_key_metadata().await?;
+                let file_encryption_properties = build_file_encryption_properties(&key_metadata)?;
+                self.resolved_key_metadata = Some(key_metadata);
+                self.writer_properties
+                    .clone()
+                    .into_builder()
+                    .with_file_encryption_properties(file_encryption_properties)
+                    .build()
+            } else {
+                self.writer_properties.clone()
+            };
+            let async_writer = AsyncFileWriter::new(self.output_file.writer().await?);
             let writer = AsyncArrowWriter::try_new(
                 async_writer,
                 arrow_schema.clone(),
-                Some(self.writer_properties.clone()),
+                Some(writer_properties),
             )
             .map_err(|err| {
                 Error::new(ErrorKind::Unexpected, "Failed to build parquet writer.")
@@ -540,12 +601,18 @@ impl FileWriter for ParquetWriter {
         } else {
             let parquet_metadata = Arc::new(metadata);
 
+            let key_metadata = self
+                .resolved_key_metadata
+                .as_ref()
+                .map(|km| km.encode().map(|b| b.into_vec()))
+                .transpose()?;
             Ok(vec![Self::parquet_to_data_file_builder(
                 self.schema,
                 parquet_metadata,
                 written_size,
                 self.output_file.location().to_string(),
                 self.nan_value_count_visitor.nan_value_counts,
+                key_metadata,
             )?])
         }
     }
@@ -627,6 +694,8 @@ mod tests {
 
     use super::*;
     use crate::arrow::schema_to_arrow_schema;
+    use crate::encryption::kms::{KeyManagementClient, MemoryKeyManagementClient};
+    use crate::encryption::EncryptionManager;
     use crate::io::FileIO;
     use crate::spec::decimal_utils::{decimal_mantissa, decimal_new, decimal_scale};
     use crate::spec::{PrimitiveLiteral, Struct, *};
@@ -857,6 +926,85 @@ mod tests {
         // check the written file
         let expect_batch = concat_batches(&schema, vec![&to_write, &to_write_null]).unwrap();
         check_parquet_data_file(&file_io, &data_file, &expect_batch).await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_writer_encrypted_round_trip() -> Result<()> {
+        use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+        use parquet::encryption::decrypt::FileDecryptionProperties;
+
+        let file_io = FileIO::new_with_memory();
+        let path = "memory:///encrypted_parquet.parquet";
+
+        let kms = MemoryKeyManagementClient::new();
+        kms.add_master_key("master-1").unwrap();
+        let manager = Arc::new(
+            EncryptionManager::builder()
+                .kms_client(Arc::new(kms) as Arc<dyn KeyManagementClient>)
+                .table_key_id("master-1")
+                .build(),
+        );
+
+        let arrow_schema = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("col", DataType::Int64, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "0".to_string(),
+            )])),
+        ]));
+        let batch = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![Arc::new(Int64Array::from_iter_values(0..16)) as ArrayRef],
+        )
+        .unwrap();
+
+        let mut pw = ParquetWriterBuilder::new(
+            WriterProperties::builder().build(),
+            Arc::new(arrow_schema.as_ref().try_into().unwrap()),
+        )
+        .with_file_encryption_handler(manager as Arc<dyn FileEncryptionHandler>)
+        .build(file_io.new_output(path)?)
+        .await?;
+        pw.write(&batch).await?;
+        let mut builders = pw.close().await?;
+
+        let data_file = builders
+            .pop()
+            .unwrap()
+            .content(DataContentType::Data)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        let decoded_km = StandardKeyMetadata::decode(
+            data_file
+                .key_metadata()
+                .expect("encrypted data file must carry key_metadata"),
+        )?;
+
+        // Read back via PME: build FileDecryptionProperties from the per-file
+        // key material and hand them to the parquet reader. The file on disk
+        // is a valid parquet file — no stream decryption involved.
+        let mut decryption_builder = FileDecryptionProperties::builder(
+            decoded_km.encryption_key().as_bytes().to_vec(),
+        );
+        if let Some(aad) = decoded_km.aad_prefix() {
+            decryption_builder = decryption_builder.with_aad_prefix(aad.to_vec());
+        }
+        let decryption_properties = decryption_builder.build().unwrap();
+
+        let ciphertext = file_io.new_input(path)?.read().await?;
+        let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            ciphertext,
+            ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        let batches: Vec<RecordBatch> = reader.map(|b| b.unwrap()).collect();
+        assert_eq!(batch, concat_batches(&arrow_schema, &batches).unwrap());
 
         Ok(())
     }

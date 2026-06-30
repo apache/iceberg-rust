@@ -40,6 +40,12 @@ pub trait FileWriterBuilder<O = DefaultOutput>: Clone + Send + Sync + 'static {
     /// The associated file writer type.
     type R: FileWriter<O>;
     /// Build file writer.
+    ///
+    /// Whether the resulting file is encrypted is determined by the builder's
+    /// own configuration (e.g. a [`FileEncryptionHandler`] configured upfront),
+    /// not by the caller picking a different `build` method.
+    ///
+    /// [`FileEncryptionHandler`]: crate::encryption::FileEncryptionHandler
     fn build(&self, output_file: OutputFile) -> impl Future<Output = Result<Self::R>> + Send;
 }
 
