@@ -25,6 +25,7 @@
 //! - [`IcebergStaticTableProvider`]: Static provider for read-only access to a specific
 //!   table snapshot. Use for consistent analytical queries or time-travel scenarios.
 
+mod bucketing;
 pub mod metadata_table;
 pub mod table_provider_factory;
 
@@ -40,10 +41,14 @@ use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result as DFResult;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::{ExecutionPlan, Partitioning};
+use futures::TryStreamExt;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::inspect::MetadataTableType;
+use iceberg::scan::FileScanTask;
 use iceberg::spec::TableProperties;
 use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
@@ -53,7 +58,7 @@ use crate::error::to_datafusion_error;
 use crate::physical_plan::commit::IcebergCommitExec;
 use crate::physical_plan::project::project_with_partition;
 use crate::physical_plan::repartition::repartition;
-use crate::physical_plan::scan::IcebergTableScan;
+use crate::physical_plan::scan::IcebergTableScanBuilder;
 use crate::physical_plan::sort::sort_by_partition;
 use crate::physical_plan::write::IcebergWriteExec;
 
@@ -87,7 +92,6 @@ impl IcebergTableProvider {
     ) -> Result<Self> {
         let table_ident = TableIdent::new(namespace, name.into());
 
-        // Load table once to get initial schema
         let table = catalog.load_table(&table_ident).await?;
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
 
@@ -102,7 +106,6 @@ impl IcebergTableProvider {
         &self,
         r#type: MetadataTableType,
     ) -> Result<IcebergMetadataTableProvider> {
-        // Load fresh table metadata for metadata table access
         let table = self.catalog.load_table(&self.table_ident).await?;
         Ok(IcebergMetadataTableProvider { table, r#type })
     }
@@ -124,27 +127,88 @@ impl TableProvider for IcebergTableProvider {
 
     async fn scan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        // Load fresh table metadata from catalog
+        // Second load: fetch the latest snapshot so scans always reflect current table state.
         let table = self
             .catalog
             .load_table(&self.table_ident)
             .await
             .map_err(to_datafusion_error)?;
 
-        // Create scan with fresh metadata (always use current snapshot)
-        Ok(Arc::new(IcebergTableScan::new(
-            table,
-            None, // Always use current snapshot for catalog-backed provider
-            self.schema.clone(),
-            projection,
-            filters,
-            limit,
-        )))
+        // Use the same builder path for eager file planning and execution so
+        // snapshot, projection, and filter handling cannot drift.
+        let scan_builder = IcebergTableScanBuilder::new(table.clone(), self.schema.clone())
+            // Always use current snapshot for catalog-backed provider.
+            .with_snapshot_id(None)
+            .with_projection(projection)
+            .with_filters(filters)
+            .with_limit(limit);
+        let table_scan_config = scan_builder.table_scan_config();
+
+        let tasks: Vec<FileScanTask> = scan_builder
+            .build_iceberg_table_scan(&table_scan_config)?
+            .plan_files()
+            .await
+            .map_err(to_datafusion_error)?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(to_datafusion_error)?;
+
+        // Output schema after projection: column indices in `Hash` exprs and any
+        // Arrow array we hash must reference this schema, not the full table schema.
+        let output_schema = scan_builder.output_schema()?;
+
+        let target_partitions = state.config().target_partitions();
+        let task_count = tasks.len();
+        // Always produce at least 1 partition so that DataFusion can schedule
+        // the plan normally and callers can safely call execute(0). An empty
+        // bucket simply yields an empty record-batch stream.
+        let n_partitions = target_partitions.min(task_count).max(1);
+
+        // identity_cols is Some(non-empty) iff every condition for declaring
+        // Partitioning::Hash is met: the table's default spec has identity-transform
+        // fields, every such source column is present in the output projection, and
+        // every column type is supported by the identity hash materialization path.
+        // Any miss collapses to None, which forces UnknownPartitioning regardless
+        // of bucketing strategy.
+        let identity_cols = bucketing::compute_identity_cols(&table, &output_schema);
+
+        let (buckets, all_had_full_key) =
+            bucketing::bucket_tasks(tasks, n_partitions, identity_cols.as_deref());
+
+        let partitioning = if task_count == 0 {
+            Partitioning::UnknownPartitioning(n_partitions)
+        } else {
+            match identity_cols {
+                Some(cols) if !cols.is_empty() && all_had_full_key => {
+                    let exprs: Vec<Arc<dyn PhysicalExpr>> = cols
+                        .iter()
+                        .map(|c| {
+                            Arc::new(Column::new(&c.name, c.output_idx)) as Arc<dyn PhysicalExpr>
+                        })
+                        .collect();
+                    // This declaration is only sound if the Arrow arrays built from
+                    // partition literals hash identically to the column arrays the
+                    // reader emits at scan time. DataFusion's hash dispatch is
+                    // dtype-specific, so any drift in the reader output type (for
+                    // example Utf8 vs Utf8View) must either update the bucketing
+                    // path to materialize that exact dtype or fall back to
+                    // UnknownPartitioning.
+                    Partitioning::Hash(exprs, n_partitions)
+                }
+                _ => Partitioning::UnknownPartitioning(n_partitions),
+            }
+        };
+
+        Ok(Arc::new(
+            scan_builder
+                .with_task_buckets(buckets, partitioning)
+                .build_with_table_scan_config(table_scan_config)?,
+        ))
     }
 
     fn supports_filters_pushdown(
@@ -161,7 +225,6 @@ impl TableProvider for IcebergTableProvider {
         input: Arc<dyn ExecutionPlan>,
         _insert_op: InsertOp,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        // Load fresh table metadata from catalog
         let table = self
             .catalog
             .load_table(&self.table_ident)
@@ -188,7 +251,6 @@ impl TableProvider for IcebergTableProvider {
         let repartitioned_plan =
             repartition(plan_with_partition, table.metadata_ref(), target_partitions)?;
 
-        // Apply sort node when it's not fanout mode
         let fanout_enabled = table
             .metadata()
             .properties()
@@ -314,15 +376,14 @@ impl TableProvider for IcebergStaticTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        // Use cached table (no refresh)
-        Ok(Arc::new(IcebergTableScan::new(
-            self.table.clone(),
-            self.snapshot_id,
-            self.schema.clone(),
-            projection,
-            filters,
-            limit,
-        )))
+        Ok(Arc::new(
+            IcebergTableScanBuilder::new(self.table.clone(), self.schema.clone())
+                .with_snapshot_id(self.snapshot_id)
+                .with_projection(projection)
+                .with_filters(filters)
+                .with_limit(limit)
+                .build()?,
+        ))
     }
 
     fn supports_filters_pushdown(
@@ -353,6 +414,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use async_trait::async_trait;
     use datafusion::common::Column;
     use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::SessionContext;
@@ -360,10 +422,13 @@ mod tests {
     use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
     use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
     use iceberg::table::{StaticTable, Table};
-    use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
+    use iceberg::{
+        Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCommit, TableCreation, TableIdent,
+    };
     use tempfile::TempDir;
 
     use super::*;
+    use crate::physical_plan::scan::IcebergTableScan;
 
     async fn get_test_table_from_metadata_file() -> Table {
         let metadata_file_name = "TableMetadataV2Valid.json";
@@ -864,5 +929,781 @@ mod tests {
             None,
             "Limit should be None when not specified"
         );
+    }
+
+    // Bucketed scan tests
+
+    async fn make_catalog_and_table_for_bucketing()
+    -> (Arc<dyn Catalog>, NamespaceIdent, String, tempfile::TempDir) {
+        use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+        use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+        use iceberg::{CatalogBuilder, TableCreation};
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let warehouse = temp_dir.path().to_str().unwrap().to_string();
+
+        let catalog = Arc::new(
+            MemoryCatalogBuilder::default()
+                .load(
+                    "memory",
+                    std::collections::HashMap::from([(
+                        MEMORY_CATALOG_WAREHOUSE.to_string(),
+                        warehouse.clone(),
+                    )]),
+                )
+                .await
+                .unwrap(),
+        );
+
+        let namespace = NamespaceIdent::new("ns".to_string());
+        catalog
+            .create_namespace(&namespace, std::collections::HashMap::new())
+            .await
+            .unwrap();
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        catalog
+            .create_table(
+                &namespace,
+                TableCreation::builder()
+                    .name("t".to_string())
+                    .location(format!("{warehouse}/t"))
+                    .schema(schema)
+                    .properties(std::collections::HashMap::new())
+                    .build(),
+            )
+            .await
+            .unwrap();
+
+        (catalog, namespace, "t".to_string(), temp_dir)
+    }
+
+    /// Registers `n` synthetic data files in the table metadata via the iceberg
+    /// transaction API. No actual parquet files are written, only the metadata
+    /// entries that `plan_files()` reads are created.
+    async fn append_fake_data_files(
+        catalog: &Arc<dyn Catalog>,
+        namespace: &NamespaceIdent,
+        table_name: &str,
+        n: usize,
+    ) {
+        use iceberg::spec::{DataContentType, DataFileBuilder, DataFileFormat};
+        use iceberg::transaction::{ApplyTransactionAction, Transaction};
+
+        let table = catalog
+            .load_table(&TableIdent::new(namespace.clone(), table_name.to_string()))
+            .await
+            .unwrap();
+
+        let data_files = (0..n)
+            .map(|i| {
+                DataFileBuilder::default()
+                    .content(DataContentType::Data)
+                    .file_path(format!(
+                        "{}/data/fake_{i}.parquet",
+                        table.metadata().location()
+                    ))
+                    .file_format(DataFileFormat::Parquet)
+                    .file_size_in_bytes(128)
+                    .record_count(1)
+                    .partition_spec_id(table.metadata().default_partition_spec_id())
+                    .build()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(data_files);
+        action
+            .apply(tx)
+            .unwrap()
+            .commit(catalog.as_ref())
+            .await
+            .unwrap();
+    }
+
+    fn ctx_with_target_partitions(n: usize) -> SessionContext {
+        use datafusion::prelude::SessionConfig;
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(n))
+    }
+
+    #[derive(Debug, Clone)]
+    struct SingleTableCatalog {
+        table: Table,
+    }
+
+    impl SingleTableCatalog {
+        fn new(table: Table) -> Self {
+            Self { table }
+        }
+    }
+
+    #[async_trait]
+    impl Catalog for SingleTableCatalog {
+        async fn list_namespaces(
+            &self,
+            _parent: Option<&NamespaceIdent>,
+        ) -> Result<Vec<NamespaceIdent>> {
+            unimplemented!("SingleTableCatalog only supports load_table in these tests")
+        }
+
+        async fn create_namespace(
+            &self,
+            _namespace: &NamespaceIdent,
+            _properties: HashMap<String, String>,
+        ) -> Result<Namespace> {
+            unimplemented!("SingleTableCatalog only supports load_table in these tests")
+        }
+
+        async fn get_namespace(&self, _namespace: &NamespaceIdent) -> Result<Namespace> {
+            unimplemented!("SingleTableCatalog only supports load_table in these tests")
+        }
+
+        async fn namespace_exists(&self, _namespace: &NamespaceIdent) -> Result<bool> {
+            unimplemented!("SingleTableCatalog only supports load_table in these tests")
+        }
+
+        async fn update_namespace(
+            &self,
+            _namespace: &NamespaceIdent,
+            _properties: HashMap<String, String>,
+        ) -> Result<()> {
+            unimplemented!("SingleTableCatalog only supports load_table in these tests")
+        }
+
+        async fn drop_namespace(&self, _namespace: &NamespaceIdent) -> Result<()> {
+            unimplemented!("SingleTableCatalog only supports load_table in these tests")
+        }
+
+        async fn list_tables(&self, _namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
+            unimplemented!("SingleTableCatalog only supports load_table in these tests")
+        }
+
+        async fn create_table(
+            &self,
+            _namespace: &NamespaceIdent,
+            _creation: TableCreation,
+        ) -> Result<Table> {
+            unimplemented!("SingleTableCatalog only supports load_table in these tests")
+        }
+
+        async fn load_table(&self, table: &TableIdent) -> Result<Table> {
+            if table == self.table.identifier() {
+                Ok(self.table.clone())
+            } else {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Unknown test table: {table}"),
+                ))
+            }
+        }
+
+        async fn drop_table(&self, _table: &TableIdent) -> Result<()> {
+            unimplemented!("SingleTableCatalog only supports load_table in these tests")
+        }
+
+        async fn purge_table(&self, _table: &TableIdent) -> Result<()> {
+            unimplemented!("SingleTableCatalog only supports load_table in these tests")
+        }
+
+        async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
+            Ok(table == self.table.identifier())
+        }
+
+        async fn rename_table(&self, _src: &TableIdent, _dest: &TableIdent) -> Result<()> {
+            unimplemented!("SingleTableCatalog only supports load_table in these tests")
+        }
+
+        async fn register_table(
+            &self,
+            _table: &TableIdent,
+            _metadata_location: String,
+        ) -> Result<Table> {
+            unimplemented!("SingleTableCatalog only supports load_table in these tests")
+        }
+
+        async fn update_table(&self, _commit: TableCommit) -> Result<Table> {
+            unimplemented!("SingleTableCatalog only supports load_table in these tests")
+        }
+    }
+
+    /// An empty table must produce a single empty-bucket scan so that DataFusion
+    /// can schedule the plan normally. execute(0) on an empty bucket simply
+    /// returns an empty record-batch stream.
+    #[tokio::test]
+    async fn test_empty_table_single_empty_bucket() {
+        let (catalog, namespace, table_name, _temp_dir) =
+            make_catalog_and_table_for_bucketing().await;
+        // no files appended
+        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+        let plan = provider
+            .scan(&ctx_with_target_partitions(8).state(), None, &[], None)
+            .await
+            .unwrap();
+        let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+        let buckets = scan.buckets().expect("expected eager scan buckets");
+
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].len(), 0);
+        assert_eq!(scan.properties().partitioning.partition_count(), 1);
+    }
+
+    /// When the table has no identity-partition columns, every task takes the
+    /// fallback (file_path) bucket path, so the declaration must drop to
+    /// `UnknownPartitioning`. The bucket count should still equal
+    /// min(target_partitions, num_files).
+    #[tokio::test]
+    async fn test_unpartitioned_falls_back_to_unknown() {
+        use datafusion::physical_plan::Partitioning;
+
+        let (catalog, namespace, table_name, _temp_dir) =
+            make_catalog_and_table_for_bucketing().await;
+        append_fake_data_files(&catalog, &namespace, &table_name, 5).await;
+
+        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+        let plan = provider
+            .scan(&ctx_with_target_partitions(3).state(), None, &[], None)
+            .await
+            .unwrap();
+        let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+        let buckets = scan.buckets().expect("expected eager scan buckets");
+
+        let total_files: usize = buckets.iter().map(|b| b.len()).sum();
+        assert_eq!(total_files, 5);
+        assert_eq!(buckets.len(), 3);
+        assert!(matches!(
+            scan.properties().partitioning,
+            Partitioning::UnknownPartitioning(3)
+        ));
+    }
+
+    /// Bucket count must be capped at the number of files: spinning up more
+    /// DataFusion partitions than there are tasks would just leave empty
+    /// streams, wasting scheduler slots.
+    #[tokio::test]
+    async fn test_bucket_count_capped_at_file_count() {
+        let (catalog, namespace, table_name, _temp_dir) =
+            make_catalog_and_table_for_bucketing().await;
+        append_fake_data_files(&catalog, &namespace, &table_name, 2).await;
+
+        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+        let plan = provider
+            .scan(&ctx_with_target_partitions(16).state(), None, &[], None)
+            .await
+            .unwrap();
+        let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+        let buckets = scan.buckets().expect("expected eager scan buckets");
+
+        assert_eq!(buckets.len(), 2);
+    }
+
+    /// target_partitions = 1 collapses every task into a single bucket, giving
+    /// the same execution profile as a single-partition scan.
+    #[tokio::test]
+    async fn test_single_target_partition_single_bucket() {
+        let (catalog, namespace, table_name, _temp_dir) =
+            make_catalog_and_table_for_bucketing().await;
+        append_fake_data_files(&catalog, &namespace, &table_name, 4).await;
+
+        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+        let plan = provider
+            .scan(&ctx_with_target_partitions(1).state(), None, &[], None)
+            .await
+            .unwrap();
+        let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+        let buckets = scan.buckets().expect("expected eager scan buckets");
+
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_catalog_backed_eager_scan_uses_builder_projection_and_predicate() {
+        use datafusion::prelude::{col, lit};
+        use iceberg::expr::Reference;
+        use iceberg::spec::Datum;
+
+        let (catalog, namespace, table_name, _temp_dir) =
+            make_catalog_and_table_for_bucketing().await;
+        append_fake_data_files(&catalog, &namespace, &table_name, 2).await;
+
+        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+        let projection = vec![1_usize];
+        let filters = vec![col("id").eq(lit(1_i32))];
+
+        let plan = provider
+            .scan(
+                &ctx_with_target_partitions(2).state(),
+                Some(&projection),
+                &filters,
+                None,
+            )
+            .await
+            .unwrap();
+        let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+
+        assert!(scan.buckets().is_some(), "expected eager scan buckets");
+        assert_eq!(scan.projection().unwrap(), &["name".to_string()]);
+        assert_eq!(
+            scan.predicates(),
+            Some(&Reference::new("id").equal_to(Datum::int(1)))
+        );
+    }
+
+    async fn make_partitioned_catalog_and_table_for_bucketing()
+    -> (Arc<dyn Catalog>, NamespaceIdent, String, tempfile::TempDir) {
+        use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+        use iceberg::spec::{
+            NestedField, PrimitiveType, Schema, Transform, Type, UnboundPartitionSpec,
+        };
+        use iceberg::{CatalogBuilder, TableCreation};
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let warehouse = temp_dir.path().to_str().unwrap().to_string();
+
+        let catalog = Arc::new(
+            MemoryCatalogBuilder::default()
+                .load(
+                    "memory",
+                    std::collections::HashMap::from([(
+                        MEMORY_CATALOG_WAREHOUSE.to_string(),
+                        warehouse.clone(),
+                    )]),
+                )
+                .await
+                .unwrap(),
+        );
+
+        let namespace = NamespaceIdent::new("ns".to_string());
+        catalog
+            .create_namespace(&namespace, std::collections::HashMap::new())
+            .await
+            .unwrap();
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_spec = UnboundPartitionSpec::builder()
+            .with_spec_id(0)
+            .add_partition_field(2, "name_part", Transform::Identity)
+            .unwrap()
+            .build();
+
+        catalog
+            .create_table(
+                &namespace,
+                TableCreation::builder()
+                    .name("t".to_string())
+                    .location(format!("{warehouse}/t"))
+                    .schema(schema)
+                    .partition_spec(partition_spec)
+                    .properties(std::collections::HashMap::new())
+                    .build(),
+            )
+            .await
+            .unwrap();
+
+        (catalog, namespace, "t".to_string(), temp_dir)
+    }
+
+    /// Like [`append_fake_data_files`] but each file carries a partition tuple
+    /// matching the table's identity-partition spec on `name`.
+    async fn append_partitioned_fake_data_files(
+        catalog: &Arc<dyn Catalog>,
+        namespace: &NamespaceIdent,
+        table_name: &str,
+        partition_values: Vec<&str>,
+    ) {
+        append_partitioned_fake_data_files_with_optional_values(
+            catalog,
+            namespace,
+            table_name,
+            partition_values.into_iter().map(Some).collect(),
+        )
+        .await;
+    }
+
+    async fn append_partitioned_fake_data_files_with_optional_values(
+        catalog: &Arc<dyn Catalog>,
+        namespace: &NamespaceIdent,
+        table_name: &str,
+        partition_values: Vec<Option<&str>>,
+    ) {
+        use iceberg::spec::{DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct};
+        use iceberg::transaction::{ApplyTransactionAction, Transaction};
+
+        let table = catalog
+            .load_table(&TableIdent::new(namespace.clone(), table_name.to_string()))
+            .await
+            .unwrap();
+
+        let data_files = partition_values
+            .iter()
+            .enumerate()
+            .map(|(i, value)| {
+                DataFileBuilder::default()
+                    .content(DataContentType::Data)
+                    .file_path(format!(
+                        "{}/data/fake_{i}.parquet",
+                        table.metadata().location()
+                    ))
+                    .file_format(DataFileFormat::Parquet)
+                    .file_size_in_bytes(128)
+                    .record_count(1)
+                    .partition_spec_id(table.metadata().default_partition_spec_id())
+                    .partition(Struct::from_iter(vec![
+                        value.as_ref().map(|value| Literal::string(*value)),
+                    ]))
+                    .build()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(data_files);
+        action
+            .apply(tx)
+            .unwrap()
+            .commit(catalog.as_ref())
+            .await
+            .unwrap();
+    }
+
+    /// Identity-partitioned table whose source column is in the projection
+    /// must produce `Partitioning::Hash` referencing that column.
+    #[tokio::test]
+    async fn test_identity_partitioned_declares_hash() {
+        use datafusion::physical_expr::expressions::Column;
+        use datafusion::physical_plan::Partitioning;
+
+        let (catalog, namespace, table_name, _temp_dir) =
+            make_partitioned_catalog_and_table_for_bucketing().await;
+        append_partitioned_fake_data_files(&catalog, &namespace, &table_name, vec![
+            "a", "b", "c", "a", "b", "c",
+        ])
+        .await;
+
+        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+        let plan = provider
+            .scan(&ctx_with_target_partitions(3).state(), None, &[], None)
+            .await
+            .unwrap();
+        let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+        let buckets = scan.buckets().expect("expected eager scan buckets");
+
+        let total_files: usize = buckets.iter().map(|b| b.len()).sum();
+        assert_eq!(total_files, 6);
+
+        match &scan.properties().partitioning {
+            Partitioning::Hash(exprs, n) => {
+                assert_eq!(*n, 3);
+                assert_eq!(exprs.len(), 1);
+                let col = exprs[0]
+                    .as_any()
+                    .downcast_ref::<Column>()
+                    .expect("expected Column expr");
+                assert_eq!(col.name(), "name");
+            }
+            other => panic!("expected Partitioning::Hash, got {other:?}"),
+        }
+    }
+
+    /// Empty identity-partitioned tables still use one empty bucket, but do not
+    /// claim hash partitioning because there are no tasks proving a full key.
+    #[tokio::test]
+    async fn test_empty_identity_partitioned_table_falls_back_to_unknown() {
+        use datafusion::physical_plan::Partitioning;
+
+        let (catalog, namespace, table_name, _temp_dir) =
+            make_partitioned_catalog_and_table_for_bucketing().await;
+
+        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+        let plan = provider
+            .scan(&ctx_with_target_partitions(8).state(), None, &[], None)
+            .await
+            .unwrap();
+        let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+        let buckets = scan.buckets().expect("expected eager scan buckets");
+
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].len(), 0);
+        assert!(matches!(
+            scan.properties().partitioning,
+            Partitioning::UnknownPartitioning(1)
+        ));
+    }
+
+    /// Identity partition task buckets must match DataFusion's own hash
+    /// repartition bucket calculation for the same concrete Arrow array type.
+    #[tokio::test]
+    async fn test_identity_partitioned_hash_buckets_match_datafusion_repartition() {
+        use datafusion::arrow::array::{ArrayRef, StringArray};
+        use datafusion::common::hash_utils::create_hashes;
+        use datafusion::physical_plan::Partitioning;
+        use datafusion::physical_plan::repartition::REPARTITION_RANDOM_STATE;
+
+        let partition_values = vec!["a", "b", "c", "a", "b", "c", "z"];
+        let n_partitions = 4_usize;
+
+        let (catalog, namespace, table_name, _temp_dir) =
+            make_partitioned_catalog_and_table_for_bucketing().await;
+        append_partitioned_fake_data_files(
+            &catalog,
+            &namespace,
+            &table_name,
+            partition_values.clone(),
+        )
+        .await;
+
+        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+        let plan = provider
+            .scan(
+                &ctx_with_target_partitions(n_partitions).state(),
+                None,
+                &[],
+                None,
+            )
+            .await
+            .unwrap();
+        let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+        let buckets = scan.buckets().expect("expected eager scan buckets");
+
+        assert!(matches!(
+            scan.properties().partitioning,
+            Partitioning::Hash(_, 4)
+        ));
+
+        let arrays: Vec<ArrayRef> = vec![Arc::new(StringArray::from(partition_values))];
+        let mut hashes = vec![0_u64; arrays[0].len()];
+        create_hashes(
+            &arrays,
+            REPARTITION_RANDOM_STATE.random_state(),
+            &mut hashes,
+        )
+        .unwrap();
+
+        let mut actual_bucket_by_file = vec![None; hashes.len()];
+        for (bucket_idx, bucket) in buckets.iter().enumerate() {
+            for task in bucket.iter() {
+                let file_idx = task
+                    .data_file_path()
+                    .strip_suffix(".parquet")
+                    .and_then(|path| path.rsplit_once("fake_").map(|(_, idx)| idx))
+                    .and_then(|idx| idx.parse::<usize>().ok())
+                    .expect("fake data file path should include its row index");
+                actual_bucket_by_file[file_idx] = Some(bucket_idx);
+            }
+        }
+
+        for (file_idx, hash) in hashes.iter().enumerate() {
+            let expected_bucket = (hash % n_partitions as u64) as usize;
+            assert_eq!(
+                actual_bucket_by_file[file_idx],
+                Some(expected_bucket),
+                "file {file_idx} should be assigned to DataFusion hash bucket {expected_bucket}"
+            );
+        }
+    }
+
+    fn table_with_additional_partition_spec(table: &Table) -> Table {
+        use iceberg::TableUpdate;
+        use iceberg::spec::{Transform, UnboundPartitionSpec};
+
+        let extra_spec = UnboundPartitionSpec::builder()
+            .with_spec_id(1)
+            .add_partition_field(1, "id_part", Transform::Identity)
+            .unwrap()
+            .build();
+        let metadata = TableUpdate::AddSpec { spec: extra_spec }
+            .apply(table.metadata().clone().into_builder(None))
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let mut builder = Table::builder()
+            .file_io(table.file_io().clone())
+            .metadata(Arc::new(metadata))
+            .identifier(table.identifier().clone())
+            .runtime(table.runtime().clone());
+        if let Some(metadata_location) = table.metadata_location() {
+            builder = builder.metadata_location(metadata_location);
+        }
+        builder.build().unwrap()
+    }
+
+    /// If a table has partition spec evolution, older files may have partition
+    /// tuples that do not align with the default spec. The scan must therefore
+    /// keep the eager buckets but avoid declaring hash partitioning.
+    #[tokio::test]
+    async fn test_spec_evolution_falls_back_to_unknown_partitioning() {
+        use datafusion::physical_plan::Partitioning;
+
+        let (catalog, namespace, table_name, _temp_dir) =
+            make_partitioned_catalog_and_table_for_bucketing().await;
+        append_partitioned_fake_data_files(&catalog, &namespace, &table_name, vec![
+            "a", "b", "c", "d",
+        ])
+        .await;
+
+        let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
+        let table = catalog.load_table(&table_ident).await.unwrap();
+        let evolved_table = table_with_additional_partition_spec(&table);
+        assert_eq!(evolved_table.metadata().partition_specs_iter().len(), 2);
+
+        let provider = IcebergTableProvider::try_new(
+            Arc::new(SingleTableCatalog::new(evolved_table)),
+            namespace,
+            table_name,
+        )
+        .await
+        .unwrap();
+        let plan = provider
+            .scan(&ctx_with_target_partitions(4).state(), None, &[], None)
+            .await
+            .unwrap();
+        let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+
+        assert!(matches!(
+            scan.properties().partitioning,
+            Partitioning::UnknownPartitioning(4)
+        ));
+    }
+
+    /// If the scan output dtype for an identity partition source cannot be
+    /// materialized for DataFusion-compatible hashing, the hash declaration is
+    /// unsound. Timestamp dtypes are supported here, so this uses `Utf8View` as
+    /// a deliberately unsupported output dtype.
+    #[tokio::test]
+    async fn test_unsupported_output_partition_dtype_falls_back_to_unknown_partitioning() {
+        use datafusion::arrow::datatypes::{DataType, Field as ArrowField, Schema as ArrowSchema};
+        use datafusion::physical_plan::Partitioning;
+
+        let (catalog, namespace, table_name, _temp_dir) =
+            make_partitioned_catalog_and_table_for_bucketing().await;
+        append_partitioned_fake_data_files(&catalog, &namespace, &table_name, vec![
+            "a", "b", "c", "d",
+        ])
+        .await;
+
+        let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
+        let table = catalog.load_table(&table_ident).await.unwrap();
+        let schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("id", DataType::Int32, false),
+            ArrowField::new("name", DataType::Utf8View, false),
+        ]));
+        let provider = IcebergTableProvider {
+            catalog: Arc::new(SingleTableCatalog::new(table)),
+            table_ident,
+            schema,
+        };
+
+        let plan = provider
+            .scan(&ctx_with_target_partitions(4).state(), None, &[], None)
+            .await
+            .unwrap();
+        let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+
+        assert!(matches!(
+            scan.properties().partitioning,
+            Partitioning::UnknownPartitioning(4)
+        ));
+    }
+
+    /// A null identity partition value forces that task through fallback hashing.
+    /// Since at least one task did not have a full hash key, the scan must not
+    /// claim DataFusion hash partitioning.
+    #[tokio::test]
+    async fn test_null_partition_value_falls_back_to_unknown_partitioning() {
+        use datafusion::physical_plan::Partitioning;
+
+        let (catalog, namespace, table_name, _temp_dir) =
+            make_partitioned_catalog_and_table_for_bucketing().await;
+        append_partitioned_fake_data_files_with_optional_values(
+            &catalog,
+            &namespace,
+            &table_name,
+            vec![Some("a"), None, Some("c"), Some("d")],
+        )
+        .await;
+
+        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+        let plan = provider
+            .scan(&ctx_with_target_partitions(4).state(), None, &[], None)
+            .await
+            .unwrap();
+        let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+        let buckets = scan.buckets().expect("expected eager scan buckets");
+
+        let total_files: usize = buckets.iter().map(|bucket| bucket.len()).sum();
+        assert_eq!(total_files, 4);
+        assert!(matches!(
+            scan.properties().partitioning,
+            Partitioning::UnknownPartitioning(4)
+        ));
+    }
+
+    /// A projection that omits the partition source column drops
+    /// `compute_identity_cols` to `None`, collapsing to `UnknownPartitioning`.
+    #[tokio::test]
+    async fn test_projection_without_partition_col_falls_back_to_unknown() {
+        use datafusion::physical_plan::Partitioning;
+
+        let (catalog, namespace, table_name, _temp_dir) =
+            make_partitioned_catalog_and_table_for_bucketing().await;
+        append_partitioned_fake_data_files(&catalog, &namespace, &table_name, vec!["a", "b"]).await;
+
+        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+        // Project only "id" (idx 0), excluding the partition column "name" (idx 1).
+        let projection = vec![0_usize];
+        let plan = provider
+            .scan(
+                &ctx_with_target_partitions(3).state(),
+                Some(&projection),
+                &[],
+                None,
+            )
+            .await
+            .unwrap();
+        let scan = plan.as_any().downcast_ref::<IcebergTableScan>().unwrap();
+
+        assert!(matches!(
+            scan.properties().partitioning,
+            Partitioning::UnknownPartitioning(_)
+        ));
     }
 }
