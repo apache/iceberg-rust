@@ -923,82 +923,86 @@ mod test {
         assert!(struct_column.is_null(2));
     }
 
+    /// Evolved table schema for the #2618 regression test: `id` plus three
+    /// later-added optional nested columns — a list, a map, and a struct that
+    /// itself contains a nested list (`ys`). The nested-in-struct list is the
+    /// case a per-type NULL-fill would miss.
+    fn schema_with_added_nested_columns() -> Schema {
+        Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(
+                    2,
+                    "xs",
+                    Type::List(ListType {
+                        element_field: NestedField::list_element(
+                            3,
+                            Type::Primitive(PrimitiveType::Int),
+                            false,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+                NestedField::optional(
+                    4,
+                    "props",
+                    Type::Map(MapType {
+                        key_field: NestedField::map_key_element(
+                            5,
+                            Type::Primitive(PrimitiveType::String),
+                        )
+                        .into(),
+                        value_field: NestedField::map_value_element(
+                            6,
+                            Type::Primitive(PrimitiveType::Int),
+                            false,
+                        )
+                        .into(),
+                    }),
+                )
+                .into(),
+                NestedField::optional(
+                    7,
+                    "s",
+                    Type::Struct(crate::spec::StructType::new(vec![
+                        NestedField::optional(8, "a", Type::Primitive(PrimitiveType::String))
+                            .into(),
+                        NestedField::optional(
+                            9,
+                            "ys",
+                            Type::List(ListType {
+                                element_field: NestedField::list_element(
+                                    10,
+                                    Type::Primitive(PrimitiveType::Long),
+                                    false,
+                                )
+                                .into(),
+                            }),
+                        )
+                        .into(),
+                    ])),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
     #[test]
     fn schema_evolution_adds_list_map_and_nested_struct_columns_with_nulls() {
-        // Reproduces https://github.com/apache/iceberg-rust/issues/2618.
-        // Columns added by schema evolution can be of any nested type (list, map,
-        // or a struct that itself contains nested children). Old data files lack
-        // these columns, so the transformer must fill them with typed all-NULL
-        // arrays instead of erroring with "unexpected target column type".
-        let snapshot_schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::optional(
-                        2,
-                        "xs",
-                        Type::List(ListType {
-                            element_field: NestedField::list_element(
-                                3,
-                                Type::Primitive(PrimitiveType::Int),
-                                false,
-                            )
-                            .into(),
-                        }),
-                    )
-                    .into(),
-                    NestedField::optional(
-                        4,
-                        "props",
-                        Type::Map(MapType {
-                            key_field: NestedField::map_key_element(
-                                5,
-                                Type::Primitive(PrimitiveType::String),
-                            )
-                            .into(),
-                            value_field: NestedField::map_value_element(
-                                6,
-                                Type::Primitive(PrimitiveType::Int),
-                                false,
-                            )
-                            .into(),
-                        }),
-                    )
-                    .into(),
-                    NestedField::optional(
-                        7,
-                        "s",
-                        Type::Struct(crate::spec::StructType::new(vec![
-                            NestedField::optional(8, "a", Type::Primitive(PrimitiveType::String))
-                                .into(),
-                            NestedField::optional(
-                                9,
-                                "ys",
-                                Type::List(ListType {
-                                    element_field: NestedField::list_element(
-                                        10,
-                                        Type::Primitive(PrimitiveType::Long),
-                                        false,
-                                    )
-                                    .into(),
-                                }),
-                            )
-                            .into(),
-                        ])),
-                    )
-                    .into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-        let projected_iceberg_field_ids = [1, 2, 4, 7];
+        // Regression test for https://github.com/apache/iceberg-rust/issues/2618.
+        //
+        // The story the test tells, in order:
+        //   1. An old data file was written with only the `id` column.
+        //   2. The table schema has since evolved, adding optional list / map /
+        //      struct columns (see `schema_with_added_nested_columns`).
+        //   3. Reading the old file against the evolved schema must fill those
+        //      absent columns with typed all-NULL arrays — previously this errored
+        //      with "unexpected target column type" for the nested types.
 
-        let mut transformer =
-            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_iceberg_field_ids)
-                .build();
-
-        // The old data file only contains `id`.
+        // (1) The old data file: just `id`.
         let file_schema = Arc::new(ArrowSchema::new(vec![simple_field(
             "id",
             DataType::Int32,
@@ -1009,11 +1013,17 @@ mod test {
             RecordBatch::try_new(file_schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
                 .unwrap();
 
+        // (2) Read it against the evolved schema, projecting id + the three added columns.
+        let snapshot_schema = Arc::new(schema_with_added_nested_columns());
+        let projected_iceberg_field_ids = [1, 2, 4, 7];
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_iceberg_field_ids)
+                .build();
         let result = transformer.process_record_batch(file_batch).unwrap();
 
+        // (3a) `id` survives unchanged.
         assert_eq!(result.num_columns(), 4);
         assert_eq!(result.num_rows(), 3);
-
         let id_column = result
             .column(0)
             .as_any()
@@ -1021,7 +1031,7 @@ mod test {
             .unwrap();
         assert_eq!(id_column.values(), &[1, 2, 3]);
 
-        // The added columns must use the evolved schema's Arrow types and be all-NULL.
+        // (3b) The added columns carry the evolved schema's Arrow types and are all-NULL.
         assert!(matches!(
             result.schema().field(1).data_type(),
             DataType::List(_)
@@ -1030,10 +1040,6 @@ mod test {
             result.schema().field(2).data_type(),
             DataType::Map(_, _)
         ));
-        assert!(matches!(
-            result.schema().field(3).data_type(),
-            DataType::Struct(_)
-        ));
         for (idx, name) in [(1, "xs"), (2, "props"), (3, "s")] {
             assert_eq!(
                 result.column(idx).null_count(),
@@ -1041,6 +1047,24 @@ mod test {
                 "added nested column `{name}` should be all-NULL"
             );
         }
+
+        // (3c) The all-NULL struct still carries its full nested shape (`a` plus the
+        // nested list `ys`), not a degenerate empty struct — this is what the
+        // type-preserving NULL fill guarantees over an enumerate-each-type fix.
+        let result_schema = result.schema();
+        let DataType::Struct(struct_fields) = result_schema.field(3).data_type() else {
+            panic!("field `s` should be a struct");
+        };
+        let child_names: Vec<&str> = struct_fields.iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(child_names, vec!["a", "ys"]);
+        assert!(matches!(
+            struct_fields
+                .iter()
+                .find(|f| f.name() == "ys")
+                .unwrap()
+                .data_type(),
+            DataType::List(_)
+        ));
     }
 
     pub fn source_record_batch() -> RecordBatch {

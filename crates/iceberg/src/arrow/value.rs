@@ -627,9 +627,8 @@ pub(crate) fn create_primitive_array_single_element(
     data_type: &DataType,
     prim_lit: &Option<PrimitiveLiteral>,
 ) -> Result<ArrayRef> {
-    // With no value, the single element is NULL. `new_null_array` supports every
-    // Arrow type, including nested ones (list/map/struct), which matters for
-    // columns added by schema evolution after a data file was written (#2618).
+    // No value: a single NULL of any (possibly nested) type (#2618). The `1` is
+    // `new_null_array`'s row count.
     if prim_lit.is_none() {
         return Ok(arrow_array::new_null_array(data_type, 1));
     }
@@ -716,9 +715,7 @@ pub(crate) fn create_primitive_array_repeated(
     prim_lit: &Option<PrimitiveLiteral>,
     num_rows: usize,
 ) -> Result<ArrayRef> {
-    // With no value to repeat, the column is all-NULL. `new_null_array` supports
-    // every Arrow type, including nested ones (list/map/struct), which matters for
-    // columns added by schema evolution after a data file was written (#2618).
+    // No value to repeat: an all-NULL column of any (possibly nested) type (#2618).
     if prim_lit.is_none() {
         return Ok(arrow_array::new_null_array(data_type, num_rows));
     }
