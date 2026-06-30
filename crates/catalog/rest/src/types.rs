@@ -480,4 +480,32 @@ mod tests {
         assert_eq!(request.stage_create, None);
         assert!(request.properties.is_empty());
     }
+
+    #[test]
+    fn config_parses_advertised_endpoints() {
+        let json = r#"{"overrides":{},"defaults":{},
+            "endpoints":["GET /v1/{prefix}/namespaces","POST /v1/{prefix}/namespaces/{namespace}/tables"]}"#;
+        let config: CatalogConfig = serde_json::from_str(json).unwrap();
+        let endpoints = config.endpoints.expect("endpoints should be present");
+        assert_eq!(endpoints.len(), 2);
+        assert!(endpoints.contains(&"GET /v1/{prefix}/namespaces".parse().unwrap()));
+    }
+
+    #[test]
+    fn config_without_endpoints_field_deserializes_to_none() {
+        // `Option<Vec<Endpoint>>` defaults to `None` for a missing field without
+        // an explicit `#[serde(default)]`.
+        let config: CatalogConfig =
+            serde_json::from_str(r#"{"overrides":{},"defaults":{}}"#).unwrap();
+        assert!(config.endpoints.is_none());
+    }
+
+    #[test]
+    fn malformed_endpoint_fails_config_parse() {
+        // A single malformed endpoint string fails the whole config parse,
+        // matching the Java reference (`ConfigResponseParser` rejects it rather
+        // than silently dropping it).
+        let json = r#"{"overrides":{},"defaults":{},"endpoints":["GET_v1/namespaces"]}"#;
+        assert!(serde_json::from_str::<CatalogConfig>(json).is_err());
+    }
 }
