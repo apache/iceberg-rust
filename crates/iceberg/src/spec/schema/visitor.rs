@@ -69,12 +69,20 @@ pub trait SchemaVisitor {
     fn map(&mut self, map: &MapType, key_value: Self::T, value: Self::T) -> Result<Self::T>;
     /// Called when see a primitive type.
     fn primitive(&mut self, p: &PrimitiveType) -> Result<Self::T>;
+    /// Called when see a variant type.
+    fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Variant type is not supported by this visitor",
+        ))
+    }
 }
 
 /// Visiting a type in post order.
 pub(crate) fn visit_type<V: SchemaVisitor>(r#type: &Type, visitor: &mut V) -> Result<V::T> {
     match r#type {
         Type::Primitive(p) => visitor.primitive(p),
+        Type::Variant(v) => visitor.variant(v),
         Type::List(list) => {
             visitor.before_list_element(&list.element_field)?;
             let value = visit_type(&list.element_field.field_type, visitor)?;
@@ -185,6 +193,13 @@ pub trait SchemaWithPartnerVisitor<P> {
     ) -> Result<Self::T>;
     /// Called when see a primitive type.
     fn primitive(&mut self, p: &PrimitiveType, partner: &P) -> Result<Self::T>;
+    /// Called when see a variant type.
+    fn variant(&mut self, _v: &VariantType, _partner: &P) -> Result<Self::T> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Variant type is not supported by this visitor",
+        ))
+    }
 }
 
 /// Accessor used to get child partner from parent partner.
@@ -210,6 +225,7 @@ pub(crate) fn visit_type_with_partner<P, V: SchemaWithPartnerVisitor<P>, A: Part
 ) -> Result<V::T> {
     match r#type {
         Type::Primitive(p) => visitor.primitive(p, partner),
+        Type::Variant(v) => visitor.variant(v, partner),
         Type::List(list) => {
             let list_element_partner = accessor.list_element_partner(partner)?;
             visitor.before_list_element(&list.element_field, list_element_partner)?;
