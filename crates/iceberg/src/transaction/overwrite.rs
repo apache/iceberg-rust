@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::spec::{
-    DataFile, FormatVersion, ManifestContentType, ManifestEntry, ManifestFile,
+    DataFile, FormatVersion, Manifest, ManifestContentType, ManifestEntry, ManifestFile,
     ManifestWriterBuilder, Operation,
 };
 use crate::table::Table;
@@ -208,7 +208,7 @@ impl OverwriteOperation {
         &self,
         snapshot_produce: &SnapshotProducer<'_>,
         manifest_file: &ManifestFile,
-        manifest: &crate::spec::Manifest,
+        manifest: &Manifest,
     ) -> Result<ManifestFile> {
         let table = snapshot_produce.table;
 
@@ -259,14 +259,14 @@ mod tests {
     use std::sync::Arc;
 
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, ManifestStatus,
-        Operation, SnapshotRef, Struct,
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
+        ManifestStatus, Operation, SnapshotRef, Struct,
     };
     use crate::transaction::tests::make_v2_minimal_table;
     use crate::transaction::{Transaction, TransactionAction};
     use crate::{TableRequirement, TableUpdate};
 
-    fn test_data_file(path: &str, partition_spec_id: i32) -> crate::spec::DataFile {
+    fn test_data_file(path: &str, partition_spec_id: i32) -> DataFile {
         DataFileBuilder::default()
             .content(DataContentType::Data)
             .file_path(path.to_string())
