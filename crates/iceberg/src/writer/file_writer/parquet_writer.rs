@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef as ArrowSchemaRef;
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -32,6 +33,7 @@ use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics;
 
 use super::{FileWriter, FileWriterBuilder};
+use crate::arrow::timestamp_tz::coerce_timestamp_columns;
 use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
     get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum,
@@ -79,8 +81,10 @@ impl FileWriterBuilder for ParquetWriterBuilder {
     type R = ParquetWriter;
 
     async fn build(&self, output_file: OutputFile) -> Result<Self::R> {
+        let arrow_schema: ArrowSchemaRef = Arc::new(self.schema.as_ref().try_into()?);
         Ok(ParquetWriter {
             schema: self.schema.clone(),
+            arrow_schema,
             inner_writer: None,
             writer_properties: self.props.clone(),
             current_row_num: 0,
@@ -211,6 +215,7 @@ impl SchemaVisitor for IndexByParquetPathName {
 /// `ParquetWriter`` is used to write arrow data into parquet file on storage.
 pub struct ParquetWriter {
     schema: SchemaRef,
+    arrow_schema: ArrowSchemaRef,
     output_file: OutputFile,
     inner_writer: Option<AsyncArrowWriter<AsyncFileWriter>>,
     writer_properties: WriterProperties,
@@ -473,7 +478,7 @@ impl ParquetWriter {
 }
 
 impl FileWriter for ParquetWriter {
-    async fn write(&mut self, batch: &arrow_array::RecordBatch) -> Result<()> {
+    async fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         // Skip empty batch
         if batch.num_rows() == 0 {
             return Ok(());
@@ -489,12 +494,11 @@ impl FileWriter for ParquetWriter {
         let writer = if let Some(writer) = &mut self.inner_writer {
             writer
         } else {
-            let arrow_schema: ArrowSchemaRef = Arc::new(self.schema.as_ref().try_into()?);
             let inner_writer = self.output_file.writer().await?;
             let async_writer = AsyncFileWriter::new(inner_writer);
             let writer = AsyncArrowWriter::try_new(
                 async_writer,
-                arrow_schema.clone(),
+                self.arrow_schema.clone(),
                 Some(self.writer_properties.clone()),
             )
             .map_err(|err| {
@@ -505,7 +509,9 @@ impl FileWriter for ParquetWriter {
             self.inner_writer.as_mut().unwrap()
         };
 
-        writer.write(batch).await.map_err(|err| {
+        let batch = coerce_timestamp_columns(batch, &self.arrow_schema)?;
+
+        writer.write(&batch).await.map_err(|err| {
             Error::new(
                 ErrorKind::Unexpected,
                 "Failed to write using parquet writer.",
@@ -630,10 +636,13 @@ mod tests {
     use crate::io::FileIO;
     use crate::spec::decimal_utils::{decimal_mantissa, decimal_new, decimal_scale};
     use crate::spec::{PrimitiveLiteral, Struct, *};
+    use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
     use crate::writer::file_writer::location_generator::{
         DefaultFileNameGenerator, DefaultLocationGenerator, FileNameGenerator, LocationGenerator,
     };
+    use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
     use crate::writer::tests::check_parquet_data_file;
+    use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 
     fn schema_for_all_type() -> Schema {
         Schema::builder()
@@ -2243,6 +2252,78 @@ mod tests {
 
         // Check that file should have been deleted.
         assert_eq!(std::fs::read_dir(temp_dir.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_writer_casts_utc_alias_timezone() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let file_io = FileIO::new_with_fs();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("utc-alias".to_string(), None, DataFileFormat::Parquet);
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamptz))
+                        .into(),
+                    NestedField::optional(
+                        2,
+                        "ts_ns",
+                        Type::Primitive(PrimitiveType::TimestamptzNs),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let pw = ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone());
+        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            pw,
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        );
+        let mut data_file_writer = DataFileWriterBuilder::new(rolling_writer_builder)
+            .build(None)
+            .await?;
+
+        // Build batch with tz="UTC"
+        let target_arrow_schema = Arc::new(schema_to_arrow_schema(&schema).unwrap());
+        let utc_fields: Vec<Field> = target_arrow_schema
+            .fields()
+            .iter()
+            .map(|f| match f.data_type() {
+                DataType::Timestamp(unit, Some(_)) => f
+                    .as_ref()
+                    .clone()
+                    .with_data_type(DataType::Timestamp(*unit, Some("UTC".into()))),
+                _ => f.as_ref().clone(),
+            })
+            .collect();
+        let batch_schema = Arc::new(arrow_schema::Schema::new_with_metadata(
+            utc_fields,
+            target_arrow_schema.metadata().clone(),
+        ));
+        let micros = Arc::new(
+            arrow_array::TimestampMicrosecondArray::from(vec![Some(0_i64), Some(1_000_000)])
+                .with_timezone("UTC"),
+        ) as ArrayRef;
+        let nanos = Arc::new(
+            arrow_array::TimestampNanosecondArray::from(vec![Some(0_i64), Some(1_000_000_000)])
+                .with_timezone("UTC"),
+        ) as ArrayRef;
+        let batch = RecordBatch::try_new(batch_schema, vec![micros, nanos])?;
+
+        data_file_writer.write(batch).await?;
+        let data_files = data_file_writer.close().await?;
+        assert_eq!(data_files.len(), 1);
+        assert_eq!(data_files[0].record_count, 2);
+        Ok(())
     }
 
     #[test]
