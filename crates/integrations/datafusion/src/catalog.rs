@@ -23,6 +23,7 @@ use datafusion::catalog::{CatalogProvider, SchemaProvider};
 use futures::future::try_join_all;
 use iceberg::{Catalog, NamespaceIdent, Result};
 
+use crate::IcebergCatalogConfig;
 use crate::schema::IcebergSchemaProvider;
 
 /// Provides an interface to manage and access multiple schemas
@@ -47,6 +48,24 @@ impl IcebergCatalogProvider {
     /// attempts to create a schema provider for each namespace, and
     /// collects these providers into a `HashMap`.
     pub async fn try_new(client: Arc<dyn Catalog>) -> Result<Self> {
+        Self::try_new_impl(client, None).await
+    }
+
+    /// Like [`try_new`](Self::try_new), but threads a serializable
+    /// [`IcebergCatalogConfig`] into every schema and table provider it creates,
+    /// so the catalog's tables can be queried by a distributed engine such as
+    /// Ballista. The `client` must already be built from the same `config`.
+    pub async fn try_new_with_config(
+        client: Arc<dyn Catalog>,
+        config: IcebergCatalogConfig,
+    ) -> Result<Self> {
+        Self::try_new_impl(client, Some(config)).await
+    }
+
+    async fn try_new_impl(
+        client: Arc<dyn Catalog>,
+        config: Option<IcebergCatalogConfig>,
+    ) -> Result<Self> {
         // TODO:
         // Schemas and providers should be cached and evicted based on time
         // As of right now; schemas might become stale.
@@ -63,6 +82,7 @@ impl IcebergCatalogProvider {
                 .map(|name| {
                     IcebergSchemaProvider::try_new(
                         client.clone(),
+                        config.clone(),
                         NamespaceIdent::new(name.clone()),
                     )
                 })
