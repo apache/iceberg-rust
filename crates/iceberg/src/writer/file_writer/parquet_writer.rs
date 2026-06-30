@@ -91,10 +91,13 @@ impl ParquetWriterBuilder {
             max_chunk_size: table_props.cdc_max_chunk_size,
             norm_level: table_props.cdc_norm_level,
         });
+        // TODO: translate the remaining write.parquet.* keys (e.g. compression-codec,
+        // row-group-size-bytes, page-size-bytes).
+        // This constructor is intended to be the single place that maps them.
         let props = WriterProperties::builder()
             .set_content_defined_chunking(cdc)
             .build();
-        Self::new(props, schema)
+        Self::new_with_match_mode(props, schema, FieldMatchMode::Id)
     }
 
     /// Set the field match mode used to map Arrow fields to Iceberg fields.
