@@ -361,6 +361,13 @@ impl CachingDeleteFileLoader {
                     ));
                 };
 
+                if pos < 0 {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("negative position in delete file: {pos}"),
+                    ));
+                }
+
                 result
                     .entry(file_path.to_string())
                     .or_default()
@@ -766,6 +773,22 @@ mod tests {
 
         let result = delete_filter.get_delete_vector(&file_scan_tasks[1]);
         assert!(result.is_none()); // no pos dels for file 3
+    }
+
+    #[tokio::test]
+    async fn test_parse_positional_deletes_rejects_negative_positions() {
+        let schema = crate::arrow::delete_filter::tests::create_pos_del_schema();
+        let file_path_col = Arc::new(StringArray::from_iter_values(vec!["data.parquet"]));
+        let pos_col = Arc::new(Int64Array::from_iter_values(vec![-1i64]));
+        let batch = RecordBatch::try_new(schema, vec![file_path_col, pos_col]).unwrap();
+        let stream = futures::stream::iter(vec![Ok(batch)]).boxed();
+
+        let err = CachingDeleteFileLoader::parse_positional_deletes_record_batch_stream(stream)
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("negative position"));
     }
 
     /// Verifies that evolve_schema on partial-schema equality deletes works correctly
