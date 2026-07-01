@@ -141,6 +141,18 @@ impl ManifestEntryContext {
             .with_case_sensitive(self.case_sensitive)
             .build())
     }
+
+    /// Consume this `ManifestEntryContext`, returning a COW rewrite file candidate.
+    pub(crate) async fn into_cow_rewrite_file(self) -> Result<crate::cow_rewrite::CowRewriteFile> {
+        let old_data_file = self.manifest_entry.data_file().clone();
+        let mut scan_task = self.into_file_scan_task().await?;
+        scan_task.predicate = None;
+
+        Ok(crate::cow_rewrite::CowRewriteFile {
+            old_data_file,
+            scan_task,
+        })
+    }
 }
 
 /// PlanContext wraps a [`SnapshotRef`] alongside all the other
