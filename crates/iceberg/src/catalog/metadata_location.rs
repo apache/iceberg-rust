@@ -26,12 +26,15 @@ use crate::spec::{TableMetadata, parse_metadata_file_compression};
 use crate::{Error, ErrorKind, Result};
 
 /// Helper for parsing a location of the format: `<location>/metadata/<version>-<uuid>.metadata.json`
-/// or with compression: `<location>/metadata/<version>-<uuid>.gz.metadata.json`
+/// or with compression: `<location>/metadata/<version>-<uuid>.gz.metadata.json`.
+///
+/// Also supports Java HadoopCatalog's naming convention: `<location>/metadata/v<version>.metadata.json`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MetadataLocation {
     table_location: String,
     version: i32,
-    id: Uuid,
+    /// `None` for Java HadoopCatalog's `v<n>.metadata.json` format.
+    id: Option<Uuid>,
     compression_codec: CompressionCodec,
 }
 
@@ -52,7 +55,7 @@ impl MetadataLocation {
         Self {
             table_location: table_location.to_string(),
             version: 0,
-            id: Uuid::new_v4(),
+            id: Some(Uuid::new_v4()),
             compression_codec: CompressionCodec::None,
         }
     }
@@ -64,7 +67,7 @@ impl MetadataLocation {
         Self {
             table_location: table_location.to_string(),
             version: 0,
-            id: Uuid::new_v4(),
+            id: Some(Uuid::new_v4()),
             compression_codec: Self::compression_from_properties(metadata.properties()),
         }
     }
@@ -75,7 +78,7 @@ impl MetadataLocation {
         Self {
             table_location: self.table_location.clone(),
             version: self.version + 1,
-            id: Uuid::new_v4(),
+            id: Some(Uuid::new_v4()),
             compression_codec: self.compression_codec,
         }
     }
@@ -104,10 +107,9 @@ impl MetadataLocation {
         Ok(prefix.to_string())
     }
 
-    /// Parses a file name of the format `<version>-<uuid>.metadata.json`
-    /// or with compression: `<version>-<uuid>.gz.metadata.json`.
-    /// Parse errors for compression codec result in CompressionCodec::None.
-    fn parse_file_name(file_name: &str) -> Result<(i32, Uuid, CompressionCodec)> {
+    /// Parses a file name of the format `<version>-<uuid>.metadata.json`,
+    /// `<version>-<uuid>.gz.metadata.json`, or Java HadoopCatalog's `v<version>.metadata.json`.
+    fn parse_file_name(file_name: &str) -> Result<(i32, Option<Uuid>, CompressionCodec)> {
         let stripped = file_name.strip_suffix(".metadata.json").ok_or(Error::new(
             ErrorKind::Unexpected,
             format!("Invalid metadata file ending: {file_name}"),
@@ -121,15 +123,23 @@ impl MetadataLocation {
             (stripped, CompressionCodec::None)
         };
 
-        let (version, id) = stripped.split_once('-').ok_or(Error::new(
+        // Try standard iceberg-rust format: <version>-<uuid>
+        if let Some((version_str, id_str)) = stripped.split_once('-')
+            && let (Ok(version), Ok(id)) = (version_str.parse::<i32>(), Uuid::parse_str(id_str))
+        {
+            return Ok((version, Some(id), compression_codec));
+        }
+
+        // Try Java HadoopCatalog format: v<version>
+        if let Some(version_str) = stripped.strip_prefix('v')
+            && let Ok(version) = version_str.parse::<i32>()
+        {
+            return Ok((version, None, compression_codec));
+        }
+
+        Err(Error::new(
             ErrorKind::Unexpected,
             format!("Invalid metadata file name format: {file_name}"),
-        ))?;
-
-        Ok((
-            version.parse::<i32>()?,
-            Uuid::parse_str(id)?,
-            compression_codec,
         ))
     }
 }
@@ -137,11 +147,18 @@ impl MetadataLocation {
 impl Display for MetadataLocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let suffix = self.compression_codec.suffix().unwrap_or("");
-        write!(
-            f,
-            "{}/metadata/{:0>5}-{}{}.metadata.json",
-            self.table_location, self.version, self.id, suffix
-        )
+        match self.id {
+            Some(id) => write!(
+                f,
+                "{}/metadata/{:0>5}-{}{}.metadata.json",
+                self.table_location, self.version, id, suffix
+            ),
+            None => write!(
+                f,
+                "{}/metadata/v{}{}.metadata.json",
+                self.table_location, self.version, suffix
+            ),
+        }
     }
 }
 
@@ -157,7 +174,7 @@ impl FromStr for MetadataLocation {
         let prefix = Self::parse_metadata_path_prefix(path)?;
         let (version, id, compression_codec) = Self::parse_file_name(file_name)?;
 
-        Ok(MetadataLocation {
+        Ok(Self {
             table_location: prefix,
             version,
             id,
@@ -200,7 +217,7 @@ mod test {
                 Ok(MetadataLocation {
                     table_location: "".to_string(),
                     version: 1234567,
-                    id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
+                    id: Some(Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap()),
                     compression_codec: CompressionCodec::None,
                 }),
             ),
@@ -210,7 +227,7 @@ mod test {
                 Ok(MetadataLocation {
                     table_location: "/abc".to_string(),
                     version: 1234567,
-                    id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
+                    id: Some(Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap()),
                     compression_codec: CompressionCodec::None,
                 }),
             ),
@@ -220,7 +237,7 @@ mod test {
                 Ok(MetadataLocation {
                     table_location: "/abc/def".to_string(),
                     version: 1234567,
-                    id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
+                    id: Some(Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap()),
                     compression_codec: CompressionCodec::None,
                 }),
             ),
@@ -230,7 +247,7 @@ mod test {
                 Ok(MetadataLocation {
                     table_location: "https://127.0.0.1".to_string(),
                     version: 1234567,
-                    id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
+                    id: Some(Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap()),
                     compression_codec: CompressionCodec::None,
                 }),
             ),
@@ -240,7 +257,7 @@ mod test {
                 Ok(MetadataLocation {
                     table_location: "/abc".to_string(),
                     version: 1234567,
-                    id: Uuid::from_str("81056704-ce5b-41c4-bb83-eb6408081af6").unwrap(),
+                    id: Some(Uuid::from_str("81056704-ce5b-41c4-bb83-eb6408081af6").unwrap()),
                     compression_codec: CompressionCodec::None,
                 }),
             ),
@@ -250,7 +267,7 @@ mod test {
                 Ok(MetadataLocation {
                     table_location: "/abc".to_string(),
                     version: 0,
-                    id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
+                    id: Some(Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap()),
                     compression_codec: CompressionCodec::None,
                 }),
             ),
@@ -260,7 +277,37 @@ mod test {
                 Ok(MetadataLocation {
                     table_location: "/abc".to_string(),
                     version: 1234567,
-                    id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
+                    id: Some(Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap()),
+                    compression_codec: CompressionCodec::gzip_default(),
+                }),
+            ),
+            // Java HadoopCatalog format: v<n>.metadata.json
+            (
+                "/abc/metadata/v1.metadata.json",
+                Ok(MetadataLocation {
+                    table_location: "/abc".to_string(),
+                    version: 1,
+                    id: None,
+                    compression_codec: CompressionCodec::None,
+                }),
+            ),
+            // Java HadoopCatalog with higher version
+            (
+                "s3://bucket/warehouse/db/table/metadata/v123.metadata.json",
+                Ok(MetadataLocation {
+                    table_location: "s3://bucket/warehouse/db/table".to_string(),
+                    version: 123,
+                    id: None,
+                    compression_codec: CompressionCodec::None,
+                }),
+            ),
+            // Java HadoopCatalog with gzip
+            (
+                "/abc/metadata/v5.gz.metadata.json",
+                Ok(MetadataLocation {
+                    table_location: "/abc".to_string(),
+                    version: 5,
+                    id: None,
                     compression_codec: CompressionCodec::gzip_default(),
                 }),
             ),
@@ -325,6 +372,33 @@ mod test {
             assert_eq!(next.version, input.version + 1);
             assert_ne!(next.id, input.id);
         }
+    }
+
+    #[test]
+    fn test_java_hadoop_format_with_next_version() {
+        let location =
+            MetadataLocation::from_str("/warehouse/db/t/metadata/v3.metadata.json").unwrap();
+        assert_eq!(location.version, 3);
+        assert_eq!(location.id, None);
+
+        let next = location.with_next_version();
+        assert_eq!(next.version, 4);
+        assert!(next.id.is_some());
+
+        let next_str = next.to_string();
+        assert!(next_str.starts_with("/warehouse/db/t/metadata/00004-"));
+        assert!(next_str.ends_with(".metadata.json"));
+        // Round-trip the new location
+        let reparsed = MetadataLocation::from_str(&next_str).unwrap();
+        assert_eq!(reparsed.version, 4);
+        assert!(reparsed.id.is_some());
+    }
+
+    #[test]
+    fn test_java_hadoop_format_round_trip() {
+        let input = "s3://bucket/table/metadata/v1.metadata.json";
+        let location = MetadataLocation::from_str(input).unwrap();
+        assert_eq!(location.to_string(), input);
     }
 
     #[test]
