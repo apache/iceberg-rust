@@ -228,7 +228,8 @@ mod test {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use super::ManifestContentType;
+    use super::{ManifestContentType, ManifestFile};
+    use crate::ErrorKind;
     use crate::encryption::{EncryptedOutputFile, StandardKeyMetadata};
     use crate::io::FileIO;
     use crate::spec::{
@@ -246,8 +247,14 @@ mod test {
         assert_eq!(ManifestContentType::default() as i32, 0);
     }
 
-    #[tokio::test]
-    async fn test_load_manifest_decrypts_when_key_metadata_present() {
+    /// Writes a single-entry manifest, encrypting it with `key_metadata`, and
+    /// returns the resulting [`ManifestFile`]. The manifest is stored in `io`
+    /// at `path`.
+    async fn write_encrypted_manifest(
+        io: &FileIO,
+        path: &str,
+        key_metadata: StandardKeyMetadata,
+    ) -> ManifestFile {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![Arc::new(NestedField::optional(
@@ -264,12 +271,6 @@ mod test {
             .build()
             .unwrap();
 
-        let key_metadata =
-            StandardKeyMetadata::new(b"0123456789abcdef").with_aad_prefix(b"test-aad-prefix!");
-        let encoded_key_metadata = key_metadata.encode().unwrap().to_vec();
-
-        let io = FileIO::new_with_memory();
-        let path = "memory:///test/encrypted_manifest.avro";
         let output_file = io.new_output(path).unwrap();
         let encrypted_output = EncryptedOutputFile::new(output_file, key_metadata);
 
@@ -314,7 +315,18 @@ mod test {
             })
             .unwrap();
 
-        let manifest_file = writer.write_manifest_file().await.unwrap();
+        writer.write_manifest_file().await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_load_manifest_decrypts_when_key_metadata_present() {
+        let key_metadata =
+            StandardKeyMetadata::new(b"0123456789abcdef").with_aad_prefix(b"test-aad-prefix!");
+        let encoded_key_metadata = key_metadata.encode().unwrap().to_vec();
+
+        let io = FileIO::new_with_memory();
+        let path = "memory:///test/encrypted_manifest.avro";
+        let manifest_file = write_encrypted_manifest(&io, path, key_metadata).await;
         assert_eq!(manifest_file.key_metadata, Some(encoded_key_metadata));
 
         let manifest = manifest_file.load_manifest(&io).await.unwrap();
@@ -324,5 +336,52 @@ mod test {
             "s3://bucket/table/data/00000.parquet"
         );
         assert_eq!(manifest.entries()[0].data_file.record_count, 100);
+    }
+
+    #[tokio::test]
+    async fn test_load_manifest_fails_with_wrong_key() {
+        let key_metadata =
+            StandardKeyMetadata::new(b"0123456789abcdef").with_aad_prefix(b"test-aad-prefix!");
+
+        let io = FileIO::new_with_memory();
+        let path = "memory:///test/wrong_key_manifest.avro";
+        let mut manifest_file = write_encrypted_manifest(&io, path, key_metadata).await;
+
+        // Point the manifest file at key metadata carrying a different DEK (but
+        // the same AAD prefix). The bytes on disk were encrypted with the
+        // original key, so GCM authentication must fail rather than silently
+        // returning garbage.
+        let wrong_key_metadata =
+            StandardKeyMetadata::new(b"fedcba9876543210").with_aad_prefix(b"test-aad-prefix!");
+        manifest_file.key_metadata = Some(wrong_key_metadata.encode().unwrap().to_vec());
+
+        let err = manifest_file
+            .load_manifest(&io)
+            .await
+            .expect_err("load_manifest must fail when decrypting with the wrong key");
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+    }
+
+    #[tokio::test]
+    async fn test_load_manifest_fails_with_wrong_aad() {
+        let key_metadata =
+            StandardKeyMetadata::new(b"0123456789abcdef").with_aad_prefix(b"test-aad-prefix!");
+
+        let io = FileIO::new_with_memory();
+        let path = "memory:///test/wrong_aad_manifest.avro";
+        let mut manifest_file = write_encrypted_manifest(&io, path, key_metadata).await;
+
+        // Point the manifest file at key metadata carrying the correct DEK but a
+        // different AAD prefix. The per-block AAD is `aad_prefix || block_index`,
+        // so GCM authentication must fail even though the key is right.
+        let wrong_aad_metadata =
+            StandardKeyMetadata::new(b"0123456789abcdef").with_aad_prefix(b"wrong-aad-prefix");
+        manifest_file.key_metadata = Some(wrong_aad_metadata.encode().unwrap().to_vec());
+
+        let err = manifest_file
+            .load_manifest(&io)
+            .await
+            .expect_err("load_manifest must fail when decrypting with the wrong AAD prefix");
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
     }
 }
