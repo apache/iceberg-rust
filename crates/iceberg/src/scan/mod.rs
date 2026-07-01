@@ -625,8 +625,9 @@ pub mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
+    use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch,
+        Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, RunArray,
         StringArray,
     };
     use futures::{TryStreamExt, stream};
@@ -641,7 +642,7 @@ pub mod tests {
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::{FileIO, OutputFile};
-    use crate::metadata_columns::RESERVED_COL_NAME_FILE;
+    use crate::metadata_columns::{RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_SPEC_ID};
     use crate::scan::FileScanTask;
     use crate::spec::{
         DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, DataFileBuilder, DataFileFormat, Datum,
@@ -861,7 +862,7 @@ pub mod tests {
                                 .file_format(DataFileFormat::Parquet)
                                 .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
-                                .partition(Struct::from_iter([Some(Literal::long(100))]))
+                                .partition(Struct::from_iter([Some(Literal::long(1))]))
                                 .key_metadata(None)
                                 .build()
                                 .unwrap(),
@@ -884,7 +885,7 @@ pub mod tests {
                                 .file_format(DataFileFormat::Parquet)
                                 .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
-                                .partition(Struct::from_iter([Some(Literal::long(200))]))
+                                .partition(Struct::from_iter([Some(Literal::long(1))]))
                                 .build()
                                 .unwrap(),
                         )
@@ -906,7 +907,7 @@ pub mod tests {
                                 .file_format(DataFileFormat::Parquet)
                                 .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
-                                .partition(Struct::from_iter([Some(Literal::long(300))]))
+                                .partition(Struct::from_iter([Some(Literal::long(1))]))
                                 .build()
                                 .unwrap(),
                         )
@@ -2021,8 +2022,6 @@ pub mod tests {
 
     #[tokio::test]
     async fn test_select_with_file_column() {
-        use arrow_array::cast::AsArray;
-
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
@@ -2066,7 +2065,7 @@ pub mod tests {
         // Decode the RunArray to verify it contains the file path
         let run_array = file_col
             .as_any()
-            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
+            .downcast_ref::<RunArray<Int32Type>>()
             .expect("_file column should be a RunArray");
 
         let values = run_array.values();
@@ -2364,5 +2363,115 @@ pub mod tests {
 
         // Assert it finished (didn't timeout)
         assert!(result.is_ok(), "Scan timed out - deadlock detected");
+    }
+
+    #[tokio::test]
+    async fn test_select_with_spec_id_column() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Select regular columns plus the _spec_id column
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_SPEC_ID, "z"])
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        // Verify we have 3 columns: x, _spec_id, and z
+        assert_eq!(batches[0].num_columns(), 3);
+
+        // Verify the x column exists and has correct data
+        let col1 = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col1.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
+
+        // Verify the _spec_id column exists
+        let spec_id_col = batches[0].column_by_name(RESERVED_COL_NAME_SPEC_ID);
+        assert!(
+            spec_id_col.is_some(),
+            "_spec_id column should be present in the batch"
+        );
+
+        // Verify the _spec_id data type
+        let spec_id_col = spec_id_col.unwrap();
+        assert!(
+            matches!(
+                spec_id_col.data_type(),
+                arrow_schema::DataType::RunEndEncoded(_, _)
+            ),
+            "_spec_id column should use RunEndEncoded type"
+        );
+
+        // Decode the RunArray to verify it contains the spec id
+        let run_array = spec_id_col
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .expect("_spec_id column should be a RunArray");
+
+        let values = run_array.values();
+        let int_values = values.as_primitive::<Int32Type>();
+        assert_eq!(int_values.len(), 1, "Should have a single _spec_id");
+
+        let spec_id = int_values.value(0);
+        assert_eq!(spec_id, 0, "_spec_id should be 0, got: {spec_id}");
+
+        // Verify 'z' column exists
+        assert!(batches[0].column_by_name("z").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_select_with_spec_id_column_from_unpartitioned_table() {
+        let mut fixture = TableTestFixture::new_unpartitioned();
+        fixture.setup_unpartitioned_manifest_files().await;
+
+        // Select regular columns plus the _spec_id column
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_SPEC_ID])
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        // Verify we have 2 columns: x and _spec_id
+        assert_eq!(batches[0].num_columns(), 2);
+
+        // Verify the _spec_id column exists
+        let spec_id_col = batches[0].column_by_name(RESERVED_COL_NAME_SPEC_ID);
+        assert!(
+            spec_id_col.is_some(),
+            "_spec_id column should be present in the batch"
+        );
+
+        // Verify the _spec_id data type
+        let spec_id_col = spec_id_col.unwrap();
+        assert!(
+            matches!(
+                spec_id_col.data_type(),
+                arrow_schema::DataType::RunEndEncoded(_, _)
+            ),
+            "_spec_id column should use RunEndEncoded type"
+        );
+
+        // Decode the RunArray to verify it contains the spec id
+        let run_array = spec_id_col
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .expect("_spec_id column should be a RunArray");
+
+        let values = run_array.values();
+        let int_values = values.as_primitive::<Int32Type>();
+        assert_eq!(int_values.len(), 1, "Should have a single _spec_id");
+
+        let spec_id = int_values.value(0);
+        assert_eq!(spec_id, 0, "_spec_id should be 0, got: {spec_id}");
     }
 }

@@ -383,11 +383,7 @@ impl RecordBatchTransformer {
                             .get(field_id)
                             .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
                             .0;
-                        let datum = constant_fields.get(field_id).ok_or(Error::new(
-                            ErrorKind::Unexpected,
-                            "constant field not found",
-                        ))?;
-                        let arrow_type = datum_to_arrow_type_with_ree(datum);
+                        let arrow_type = field.data_type().clone();
                         // Use the type from constant_fields (REE for constants)
                         let constant_field =
                             Field::new(field.name(), arrow_type, field.is_nullable())
@@ -486,7 +482,20 @@ impl RecordBatchTransformer {
                 // they exist in the Parquet file. This is per Iceberg spec rule #1: partition metadata
                 // is authoritative and should be preferred over file data.
                 if let Some(datum) = constant_fields.get(field_id) {
-                    let arrow_type = datum_to_arrow_type_with_ree(datum);
+                    let arrow_type = if get_metadata_field(*field_id).is_ok() {
+                        datum_to_arrow_type_with_ree(datum)
+                    } else {
+                        field_id_to_mapped_schema_map
+                            .get(field_id)
+                            .ok_or(Error::new(
+                                ErrorKind::Unexpected,
+                                "could not find field in schema",
+                            ))?
+                            .0
+                            .data_type()
+                            .clone()
+                    };
+
                     return Ok(ColumnSource::Add {
                         value: Some(datum.literal().clone()),
                         target_type: arrow_type,
