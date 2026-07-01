@@ -15,19 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod catalog;
-pub use catalog::*;
+use datafusion::common::config::ConfigExtension;
+use datafusion::common::extensions_options;
 
-mod config;
-pub use config::IcebergDataFusionConfig;
+extensions_options! {
+    /// Configuration options for Iceberg's DataFusion integration.
+    pub struct IcebergDataFusionConfig {
+        /// Plan Iceberg file scan tasks during TableProvider::scan().
+        pub enable_eager_scan_planning: bool, default = false
+    }
+}
 
-mod error;
-pub use error::*;
-
-pub mod physical_plan;
-mod schema;
-pub mod table;
-pub use table::table_provider_factory::IcebergTableProviderFactory;
-pub use table::*;
-
-pub(crate) mod task_writer;
+impl ConfigExtension for IcebergDataFusionConfig {
+    const PREFIX: &'static str = "iceberg";
+}
