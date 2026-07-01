@@ -91,13 +91,34 @@ impl AddColumn {
     }
 }
 
+/// Declarative specification for renaming a column in [`UpdateSchemaAction`].
+///
+/// Construct via the typed builder, then pass the value to
+/// [`UpdateSchemaAction::rename`]:
+///
+/// ```ignore
+/// action.rename(RenameColumn::builder().name("old").new_name("new").build());
+/// ```
+///
+/// The field ID is preserved across renames — only the leaf name changes.
+/// `name` uses `SCHEMA_NAME_DELIMITER` for nested fields (e.g. `"person.name"`);
+/// `new_name` must be unqualified.
+#[derive(TypedBuilder)]
+pub struct RenameColumn {
+    #[builder(setter(into))]
+    name: String,
+    #[builder(setter(into))]
+    new_name: String,
+}
+
 /// Schema evolution API modeled after the Java `SchemaUpdate` implementation.
 ///
-/// This action accumulates schema modifications (column additions and deletions)
-/// via builder methods. At commit time, it validates all operations against the
-/// current table schema, auto-assigns field IDs from `table.metadata().last_column_id()`,
-/// builds a new schema, and emits `AddSchema` + `SetCurrentSchema` updates with a
-/// `CurrentSchemaIdMatch` requirement.
+/// This action accumulates schema modifications (column additions, renames, and
+/// deletions) via builder methods. At commit time, it validates all operations
+/// against the current table schema, auto-assigns field IDs from
+/// `table.metadata().last_column_id()`, builds a new schema, and emits
+/// `AddSchema` + `SetCurrentSchema` updates with a `CurrentSchemaIdMatch`
+/// requirement.
 ///
 /// # Example
 ///
@@ -109,6 +130,7 @@ impl AddColumn {
 ///         AddColumn::optional("email", Type::Primitive(PrimitiveType::String))
 ///             .with_parent("person")
 ///     )
+///     .rename(RenameColumn::builder().name("old_name").new_name("new_name").build())
 ///     .delete_column("old_col");
 /// let tx = action.apply(tx).unwrap();
 /// let table = tx.commit(&catalog).await.unwrap();
@@ -116,6 +138,7 @@ impl AddColumn {
 pub struct UpdateSchemaAction {
     additions: Vec<AddColumn>,
     deletes: Vec<String>,
+    renames: Vec<(String, String)>,
 }
 
 impl UpdateSchemaAction {
@@ -124,6 +147,7 @@ impl UpdateSchemaAction {
         Self {
             additions: Vec::new(),
             deletes: Vec::new(),
+            renames: Vec::new(),
         }
     }
 
@@ -146,6 +170,16 @@ impl UpdateSchemaAction {
     /// At commit time, the column must exist in the current schema.
     pub fn delete_column(mut self, name: impl ToString) -> Self {
         self.deletes.push(name.to_string());
+        self
+    }
+
+    /// Rename a column.
+    ///
+    /// The field ID is preserved; only the leaf name changes. `RenameColumn::name`
+    /// uses `SCHEMA_NAME_DELIMITER` for nested fields (e.g. `"person.name"`).
+    /// If the same field is renamed more than once, the last rename wins.
+    pub fn rename(mut self, rename: RenameColumn) -> Self {
+        self.renames.push((rename.name, rename.new_name));
         self
     }
 }
@@ -254,18 +288,19 @@ fn resolve_parent_target<'a>(
 // Schema tree rebuild
 // ---------------------------------------------------------------------------
 
-/// Rebuild a slice of fields, applying deletions and additions at every level,
-/// plus any additions keyed by `parent_id` (`None` represents the table root).
+/// Rebuild a slice of fields, applying deletions, renames, and additions at every
+/// level, plus any additions keyed by `parent_id` (`None` represents the table root).
 fn rebuild_fields(
     fields: &[NestedFieldRef],
     adds: &HashMap<Option<i32>, Vec<NestedFieldRef>>,
     delete_ids: &HashSet<i32>,
+    renames: &HashMap<i32, String>,
     parent_id: Option<i32>,
 ) -> Vec<NestedFieldRef> {
     fields
         .iter()
         .filter(|f| !delete_ids.contains(&f.id))
-        .map(|f| rebuild_field(f, adds, delete_ids))
+        .map(|f| rebuild_field(f, adds, delete_ids, renames))
         .chain(adds.get(&parent_id).into_iter().flatten().cloned())
         .collect()
 }
@@ -273,18 +308,40 @@ fn rebuild_fields(
 /// Recursively rebuild a single field. If the field (or any descendant) is a struct
 /// that has pending additions, those additions are appended to the struct's fields.
 /// Fields whose IDs appear in `delete_ids` are filtered out at every struct level.
+/// Fields whose IDs appear in `renames` are emitted with the new name; the field ID
+/// is preserved.
 fn rebuild_field(
     field: &NestedFieldRef,
     adds: &HashMap<Option<i32>, Vec<NestedFieldRef>>,
     delete_ids: &HashSet<i32>,
+    renames: &HashMap<i32, String>,
 ) -> NestedFieldRef {
+    let name = renames
+        .get(&field.id)
+        .cloned()
+        .unwrap_or_else(|| field.name.clone());
+
     match field.field_type.as_ref() {
-        Type::Primitive(_) => field.clone(),
+        Type::Primitive(_) => {
+            if renames.contains_key(&field.id) {
+                Arc::new(NestedField {
+                    id: field.id,
+                    name,
+                    required: field.required,
+                    field_type: field.field_type.clone(),
+                    doc: field.doc.clone(),
+                    initial_default: field.initial_default.clone(),
+                    write_default: field.write_default.clone(),
+                })
+            } else {
+                field.clone()
+            }
+        }
         Type::Struct(s) => {
-            let new_fields = rebuild_fields(s.fields(), adds, delete_ids, Some(field.id));
+            let new_fields = rebuild_fields(s.fields(), adds, delete_ids, renames, Some(field.id));
             Arc::new(NestedField {
                 id: field.id,
-                name: field.name.clone(),
+                name,
                 required: field.required,
                 field_type: Box::new(Type::Struct(StructType::new(new_fields))),
                 doc: field.doc.clone(),
@@ -293,10 +350,10 @@ fn rebuild_field(
             })
         }
         Type::List(l) => {
-            let new_element = rebuild_field(&l.element_field, adds, delete_ids);
+            let new_element = rebuild_field(&l.element_field, adds, delete_ids, renames);
             Arc::new(NestedField {
                 id: field.id,
-                name: field.name.clone(),
+                name,
                 required: field.required,
                 field_type: Box::new(Type::List(ListType {
                     element_field: new_element,
@@ -307,11 +364,11 @@ fn rebuild_field(
             })
         }
         Type::Map(m) => {
-            let new_key = rebuild_field(&m.key_field, adds, delete_ids);
-            let new_value = rebuild_field(&m.value_field, adds, delete_ids);
+            let new_key = rebuild_field(&m.key_field, adds, delete_ids, renames);
+            let new_value = rebuild_field(&m.value_field, adds, delete_ids, renames);
             Arc::new(NestedField {
                 id: field.id,
-                name: field.name.clone(),
+                name,
                 required: field.required,
                 field_type: Box::new(Type::Map(MapType {
                     key_field: new_key,
@@ -363,7 +420,67 @@ impl TransactionAction for UpdateSchemaAction {
             })
             .collect::<Result<HashSet<i32>>>()?;
 
-        // --- 2. Resolve parents, validate additions, assign IDs, and group by parent ID ---
+        // --- 2. Resolve renames to field IDs and validate ---
+        //
+        // Renames run before additions so an addition may re-use a name that is
+        // being renamed away in the same action. They run after deletes so a
+        // rename can re-use a name that is being deleted. A field that is both
+        // staged for deletion and rename is an error — the intent is ambiguous.
+        //
+        // If the same field is renamed multiple times, the last rename wins
+        // (matches `pyiceberg.table.update.schema.UpdateSchema.rename_column`).
+        let mut rename_map: HashMap<i32, String> = HashMap::new();
+        for (path_from, new_name) in &self.renames {
+            let field = base_schema.field_by_name(path_from).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::PreconditionFailed,
+                    format!("Cannot rename missing column: {path_from}"),
+                )
+            })?;
+
+            if delete_ids.contains(&field.id) {
+                return Err(Error::new(
+                    ErrorKind::PreconditionFailed,
+                    format!("Cannot rename a column that will be deleted: {path_from}"),
+                ));
+            }
+
+            if new_name.contains(SCHEMA_NAME_DELIMITER) {
+                return Err(Error::new(
+                    ErrorKind::PreconditionFailed,
+                    format!(
+                        "Cannot rename to '{new_name}': new name must be unqualified, not a path"
+                    ),
+                ));
+            }
+
+            // Name-collision check: no sibling at the same parent level can already
+            // hold `new_name`, unless that sibling is being deleted or renamed away.
+            // The renamed field itself is excluded (a no-op self-rename is legal).
+            let siblings: &[NestedFieldRef] = match path_from.rfind(SCHEMA_NAME_DELIMITER) {
+                None => base_schema.as_struct().fields(),
+                Some(idx) => {
+                    let parent_path = &path_from[..idx];
+                    let (_, parent_struct) = resolve_parent_target(base_schema, parent_path)?;
+                    parent_struct.fields()
+                }
+            };
+            if siblings.iter().any(|f| {
+                f.name == *new_name
+                    && f.id != field.id
+                    && !delete_ids.contains(&f.id)
+                    && !rename_map.contains_key(&f.id)
+            }) {
+                return Err(Error::new(
+                    ErrorKind::PreconditionFailed,
+                    format!("Cannot rename to '{new_name}': name already exists"),
+                ));
+            }
+
+            rename_map.insert(field.id, new_name.clone());
+        }
+
+        // --- 3. Resolve parents, validate additions, assign IDs, and group by parent ID ---
         // We assign IDs inline (before grouping) to preserve the caller's insertion order,
         // since HashMap iteration order is non-deterministic.
         let mut additions_by_parent: HashMap<Option<i32>, Vec<NestedFieldRef>> = HashMap::new();
@@ -395,9 +512,12 @@ impl TransactionAction for UpdateSchemaAction {
 
             let parent_id = match &add.parent {
                 None => {
-                    // Root-level: check name conflict against root-level fields.
+                    // Root-level: check name conflict against root-level fields. A
+                    // sibling counts as a conflict unless it is being deleted or
+                    // renamed away in this same action.
                     if let Some(existing) = base_schema.field_by_name(&pending_field.name)
                         && !delete_ids.contains(&existing.id)
+                        && !rename_map.contains_key(&existing.id)
                     {
                         return Err(Error::new(
                             ErrorKind::PreconditionFailed,
@@ -417,6 +537,7 @@ impl TransactionAction for UpdateSchemaAction {
                     if parent_struct.fields().iter().any(|f| {
                         f.name == pending_field.name
                             && !delete_ids.contains(&f.id)
+                            && !rename_map.contains_key(&f.id)
                             && !delete_ids.contains(&resolved_parent_id)
                     }) {
                         return Err(Error::new(
@@ -441,11 +562,12 @@ impl TransactionAction for UpdateSchemaAction {
                 .push(field);
         }
 
-        // --- 4. Rebuild the schema tree with additions and deletions ---
+        // --- 4. Rebuild the schema tree with additions, deletions, and renames ---
         let new_fields = rebuild_fields(
             base_schema.as_struct().fields(),
             &additions_by_parent,
             &delete_ids,
+            &rename_map,
             None,
         );
 
@@ -482,7 +604,9 @@ mod tests {
     use crate::transaction::Transaction;
     use crate::transaction::action::{ApplyTransactionAction, TransactionAction};
     use crate::transaction::tests::make_v2_table;
-    use crate::transaction::update_schema::{AddColumn, DEFAULT_FIELD_ID, UpdateSchemaAction};
+    use crate::transaction::update_schema::{
+        AddColumn, DEFAULT_FIELD_ID, RenameColumn, UpdateSchemaAction,
+    };
     use crate::{ErrorKind, TableIdent, TableRequirement, TableUpdate};
 
     // The V2 test table has:
@@ -1144,5 +1268,304 @@ mod tests {
             .field_by_name("address.city")
             .expect("address.city should exist");
         assert_eq!(city.id, 6);
+    }
+
+    // -----------------------------------------------------------------------
+    // Rename tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_rename_column() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let action = tx.update_schema().rename(
+            RenameColumn::builder()
+                .name("z")
+                .new_name("renamed_z")
+                .build(),
+        );
+
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_schema = match &updates[0] {
+            TableUpdate::AddSchema { schema } => schema,
+            other => panic!("expected AddSchema, got {other:?}"),
+        };
+
+        let renamed = new_schema
+            .field_by_name("renamed_z")
+            .expect("renamed_z should exist");
+        // Field ID is preserved across rename — this is the core invariant.
+        assert_eq!(renamed.id, 3, "rename must preserve field ID");
+        assert!(
+            new_schema.field_by_name("z").is_none(),
+            "old name should be gone"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rename_nested_column() {
+        let table = make_v2_table_with_nested();
+        let tx = Transaction::new(&table);
+
+        let action = tx.update_schema().rename(
+            RenameColumn::builder()
+                .name("person.name")
+                .new_name("fullname")
+                .build(),
+        );
+
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_schema = match &updates[0] {
+            TableUpdate::AddSchema { schema } => schema,
+            other => panic!("expected AddSchema, got {other:?}"),
+        };
+
+        let renamed = new_schema
+            .field_by_name("person.fullname")
+            .expect("person.fullname should exist");
+        assert_eq!(renamed.id, 5, "nested rename must preserve field ID");
+        assert!(
+            new_schema.field_by_name("person.name").is_none(),
+            "old nested name should be gone"
+        );
+        // Other sibling untouched.
+        assert!(new_schema.field_by_name("person.age").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_rename_missing_column_fails() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let action = tx.update_schema().rename(
+            RenameColumn::builder()
+                .name("nonexistent")
+                .new_name("whatever")
+                .build(),
+        );
+
+        let result = Arc::new(action).commit(&table).await;
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("should reject renaming a non-existent column"),
+        };
+        assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
+        assert!(
+            err.message().contains("missing column"),
+            "error should mention missing column, got: {}",
+            err.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rename_and_delete_same_column_fails() {
+        // A field cannot be both renamed and deleted in the same action — the
+        // intent is ambiguous. Matches PyIceberg behavior.
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let action = tx.update_schema().delete_column("z").rename(
+            RenameColumn::builder()
+                .name("z")
+                .new_name("renamed_z")
+                .build(),
+        );
+
+        let result = Arc::new(action).commit(&table).await;
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("should reject rename of a column also marked for deletion"),
+        };
+        assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
+        assert!(
+            err.message().contains("will be deleted"),
+            "error should mention delete conflict, got: {}",
+            err.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rename_to_existing_sibling_fails() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        // "y" is a sibling that isn't being deleted or renamed away.
+        let action = tx
+            .update_schema()
+            .rename(RenameColumn::builder().name("z").new_name("y").build());
+
+        let result = Arc::new(action).commit(&table).await;
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("should reject rename to an existing sibling name"),
+        };
+        assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
+        assert!(
+            err.message().contains("already exists"),
+            "error should mention name conflict, got: {}",
+            err.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rename_path_with_dot_in_new_name_fails() {
+        // The new name is the unqualified leaf name; embedding a path delimiter
+        // would otherwise be silently treated as moving across structs.
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let action = tx.update_schema().rename(
+            RenameColumn::builder()
+                .name("z")
+                .new_name("some.dotted.name")
+                .build(),
+        );
+
+        let result = Arc::new(action).commit(&table).await;
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("should reject rename to a qualified path"),
+        };
+        assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
+        assert!(
+            err.message().contains("unqualified"),
+            "error should mention unqualified-name requirement, got: {}",
+            err.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rename_identifier_field_preserves_identifier_ids() {
+        // The V2 test table has identifier_field_ids: [1, 2] (x and y).
+        // Renaming x must keep field ID 1 in identifier_field_ids — Iceberg
+        // identifies columns by ID, not name, so the rename is transparent to
+        // the identifier set.
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let action = tx.update_schema().rename(
+            RenameColumn::builder()
+                .name("x")
+                .new_name("primary_key")
+                .build(),
+        );
+
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_schema = match &updates[0] {
+            TableUpdate::AddSchema { schema } => schema,
+            other => panic!("expected AddSchema, got {other:?}"),
+        };
+
+        let renamed = new_schema
+            .field_by_name("primary_key")
+            .expect("primary_key should exist");
+        assert_eq!(renamed.id, 1);
+
+        let ids: Vec<i32> = new_schema.identifier_field_ids().collect();
+        assert!(
+            ids.contains(&1),
+            "identifier_field_ids should still contain the renamed field's ID, got: {ids:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rename_frees_name_for_addition() {
+        // Renaming "z" → "z_old" should free the name "z" so a new column with
+        // that name can be added in the same action.
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let action = tx
+            .update_schema()
+            .rename(RenameColumn::builder().name("z").new_name("z_old").build())
+            .add_column(AddColumn::optional(
+                "z",
+                Type::Primitive(PrimitiveType::Int),
+            ));
+
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_schema = match &updates[0] {
+            TableUpdate::AddSchema { schema } => schema,
+            other => panic!("expected AddSchema, got {other:?}"),
+        };
+
+        let old = new_schema
+            .field_by_name("z_old")
+            .expect("z_old should exist");
+        assert_eq!(old.id, 3, "rename must preserve original ID");
+
+        let new = new_schema.field_by_name("z").expect("new z should exist");
+        assert_eq!(new.id, 4, "added z should get a fresh ID");
+    }
+
+    #[tokio::test]
+    async fn test_rename_same_column_twice_last_wins() {
+        // Matches PyIceberg semantics: the last rename for a given field ID
+        // wins. Useful when a caller composes a sequence of edits.
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let action = tx
+            .update_schema()
+            .rename(
+                RenameColumn::builder()
+                    .name("z")
+                    .new_name("first_attempt")
+                    .build(),
+            )
+            .rename(
+                RenameColumn::builder()
+                    .name("z")
+                    .new_name("second_attempt")
+                    .build(),
+            );
+
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_schema = match &updates[0] {
+            TableUpdate::AddSchema { schema } => schema,
+            other => panic!("expected AddSchema, got {other:?}"),
+        };
+
+        assert!(
+            new_schema.field_by_name("second_attempt").is_some(),
+            "last rename should win"
+        );
+        assert!(new_schema.field_by_name("first_attempt").is_none());
+        assert!(new_schema.field_by_name("z").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_rename_self_is_noop() {
+        // Renaming a field to its current name is legal and a no-op (matches
+        // PyIceberg, which doesn't special-case but produces an identical
+        // schema).
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let action = tx
+            .update_schema()
+            .rename(RenameColumn::builder().name("z").new_name("z").build());
+
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_schema = match &updates[0] {
+            TableUpdate::AddSchema { schema } => schema,
+            other => panic!("expected AddSchema, got {other:?}"),
+        };
+
+        let z = new_schema.field_by_name("z").expect("z should still exist");
+        assert_eq!(z.id, 3);
     }
 }
