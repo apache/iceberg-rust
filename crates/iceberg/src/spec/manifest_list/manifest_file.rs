@@ -275,10 +275,11 @@ mod test {
 
         let mut writer = ManifestWriterBuilder::new_from_encrypted(
             encrypted_output,
-            Some(1), 
+            Some(1),
             schema.clone(),
             partition_spec.clone(),
         )
+        .expect("Expected a valid writer")
         .build_v3_data();
 
         writer
