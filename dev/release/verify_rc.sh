@@ -95,6 +95,11 @@ Options:
       Whether to build and test pyiceberg-core.
       Default: 1
 
+  --python_bin <path>
+      Python interpreter for Python-linked Rust and pyiceberg-core checks.
+      Sets PYO3_PYTHON and UV_PYTHON for build and test steps.
+      Default: unset
+
   --tmp_dir <dir>
       Verification sandbox. If omitted, a temporary directory is created and deleted on success.
       Default: auto-created temporary directory
@@ -106,6 +111,7 @@ Examples:
   $0 0.9.1 2
   $0 0.9.1 2 --download 0
   $0 0.9.1 2 --import_gpg_keys 1
+  $0 0.9.1 2 --python_bin /opt/homebrew/bin/python3.11
   $0 0.9.1 2 --download 0 --build 0 --python 0 --check_headers 0 --verify_signature 0
 USAGE
 }
@@ -238,6 +244,11 @@ parse_args() {
         PYTHON="$2"
         shift 2
         ;;
+      --python_bin | --python-bin)
+        require_option_value "$1" "${2:-}"
+        PYTHON_BIN="$2"
+        shift 2
+        ;;
       --tmp_dir | --tmp-dir)
         require_option_value "$1" "${2:-}"
         VERIFY_TMPDIR="$2"
@@ -272,6 +283,11 @@ validate_args() {
 
   if [[ ! "${RC}" =~ ^[0-9]+$ ]]; then
     echo "RC '${RC}' must be a number, for example: 0, 1, or 2." >&2
+    return 1
+  fi
+
+  if [ -n "${PYTHON_BIN}" ] && ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+    echo "Python interpreter '${PYTHON_BIN}' was not found." >&2
     return 1
   fi
 }
@@ -369,13 +385,21 @@ check_license_headers() {
   docker run --rm -v "${VERIFY_TMPDIR}/${ARCHIVE_BASE_NAME}:/github/workspace" apache/skywalking-eyes header check
 }
 
+run_with_python_bin() {
+  if [ -n "${PYTHON_BIN}" ]; then
+    PYO3_PYTHON="${PYTHON_BIN}" UV_PYTHON="${PYTHON_BIN}" "$@"
+  else
+    "$@"
+  fi
+}
+
 test_source_distribution() {
   require_command make
   (
     trap - ERR
     cd "${ARCHIVE_BASE_NAME}"
-    make build
-    make test
+    run_with_python_bin make build
+    run_with_python_bin make test
   )
 }
 
@@ -385,8 +409,8 @@ test_python_distribution() {
   (
     trap - ERR
     cd "${ARCHIVE_BASE_NAME}/bindings/python"
-    make install
-    make test
+    run_with_python_bin make install
+    run_with_python_bin make test
   )
 }
 
@@ -407,6 +431,7 @@ IMPORT_GPG_KEYS="0"
 CHECK_HEADERS="1"
 BUILD="1"
 PYTHON="1"
+PYTHON_BIN="${PYTHON_BIN:-}"
 
 show_help_if_requested "$@"
 run_step "Parse command arguments" parse_args "$@"
