@@ -27,6 +27,7 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 
 use super::KeyManagementClient;
+use super::factory::KmsClientFactory;
 use crate::encryption::{AesGcmCipher, AesKeySize, SecureKey, SensitiveBytes};
 use crate::error::lock_error;
 use crate::{Error, ErrorKind, Result};
@@ -139,6 +140,39 @@ impl MemoryKeyManagementClient {
             .read()
             .map(|keys| keys.contains_key(key_id))
             .unwrap_or(false)
+    }
+}
+
+/// Factory for creating [`MemoryKeyManagementClient`] instances.
+///
+/// This factory creates a fresh in-memory KMS client for each call.
+/// Useful for testing encryption flows without a real KMS backend.
+#[derive(Debug, Clone)]
+pub struct MemoryKmsClientFactory {
+    master_keys: Arc<RwLock<HashMap<String, SensitiveBytes>>>,
+    master_key_size: AesKeySize,
+}
+
+impl MemoryKmsClientFactory {
+    /// Creates a new factory that will produce clients sharing the given master keys.
+    pub fn new(kms: &MemoryKeyManagementClient) -> Self {
+        Self {
+            master_keys: Arc::clone(&kms.master_keys),
+            master_key_size: kms.master_key_size,
+        }
+    }
+}
+
+#[async_trait]
+impl KmsClientFactory for MemoryKmsClientFactory {
+    async fn create_kms_client(
+        &self,
+        _properties: &HashMap<String, String>,
+    ) -> Result<Arc<dyn KeyManagementClient>> {
+        Ok(Arc::new(MemoryKeyManagementClient {
+            master_keys: Arc::clone(&self.master_keys),
+            master_key_size: self.master_key_size,
+        }))
     }
 }
 

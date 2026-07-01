@@ -113,8 +113,15 @@ impl TableBuilder {
     /// If the table metadata has the `encryption.key-id` property set, a
     /// [`KeyManagementClient`] must be provided here so the table can build
     /// an [`EncryptionManager`]; otherwise [`Self::build`] will return an error.
-    pub fn kms_client(mut self, kms_client: Arc<dyn KeyManagementClient>) -> Self {
-        self.kms_client = Some(kms_client);
+    ///
+    /// Accepts either an `Arc<dyn KeyManagementClient>` or an
+    /// `Option<Arc<dyn KeyManagementClient>>`, so catalogs that hold an
+    /// optional client can forward it directly. Passing `None` is a no-op.
+    pub fn kms_client(
+        mut self,
+        kms_client: impl Into<Option<Arc<dyn KeyManagementClient>>>,
+    ) -> Self {
+        self.kms_client = kms_client.into();
         self
     }
 
