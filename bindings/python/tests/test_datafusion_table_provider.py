@@ -40,7 +40,7 @@ def warehouse(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture(scope="session")
-def catalog(warehouse: Path) -> Catalog:
+def catalog(warehouse: Path):
     catalog = load_catalog(
         "default",
         **{
@@ -48,7 +48,8 @@ def catalog(warehouse: Path) -> Catalog:
             "warehouse": f"file://{warehouse}",
         },
     )
-    return catalog
+    yield catalog
+    catalog.close()
 
 
 @pytest.fixture(scope="session")

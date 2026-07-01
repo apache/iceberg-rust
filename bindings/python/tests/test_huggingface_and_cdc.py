@@ -47,13 +47,15 @@ requires_datafusion_53 = pytest.mark.skipif(
 @pytest.fixture(scope="module")
 def local_catalog(tmp_path_factory: pytest.TempPathFactory):
     warehouse = tmp_path_factory.mktemp("cdc_warehouse")
-    return load_catalog(
+    catalog = load_catalog(
         "default",
         **{
             "uri": f"sqlite:///{warehouse}/pyiceberg_catalog.db",
             "warehouse": f"file://{warehouse}",
         },
     )
+    yield catalog
+    catalog.close()
 
 
 @pytest.fixture(scope="module")
@@ -168,7 +170,8 @@ def hf_cdc_table(sample_table):
     # HfFileSystem.dircache may reflect the pre-write state; invalidate it so
     # subsequent reads (info/open) see the files just uploaded via xet.
     tbl.io.get_fs("hf").invalidate_cache()
-    return tbl, token
+    yield tbl, token
+    catalog.close()
 
 
 @requires_hf

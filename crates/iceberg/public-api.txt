@@ -2078,7 +2078,7 @@ pub fn iceberg::spec::ManifestWriterBuilder::build_v2_data(self) -> iceberg::spe
 pub fn iceberg::spec::ManifestWriterBuilder::build_v2_deletes(self) -> iceberg::spec::ManifestWriter
 pub fn iceberg::spec::ManifestWriterBuilder::build_v3_data(self) -> iceberg::spec::ManifestWriter
 pub fn iceberg::spec::ManifestWriterBuilder::build_v3_deletes(self) -> iceberg::spec::ManifestWriter
-pub fn iceberg::spec::ManifestWriterBuilder::new(output: iceberg::io::OutputFile, snapshot_id: core::option::Option<i64>, key_metadata: core::option::Option<alloc::vec::Vec<u8>>, schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpec) -> Self
+pub fn iceberg::spec::ManifestWriterBuilder::new(output: iceberg::io::OutputFile, snapshot_id: core::option::Option<i64>, schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpec) -> Self
 pub fn iceberg::spec::ManifestWriterBuilder::new_from_encrypted(encrypted_output: iceberg::encryption::EncryptedOutputFile, snapshot_id: core::option::Option<i64>, schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpec) -> iceberg::Result<Self>
 pub struct iceberg::spec::Map
 impl iceberg::spec::Map
@@ -2705,7 +2705,10 @@ pub iceberg::spec::TableProperties::commit_total_retry_timeout_ms: u64
 pub iceberg::spec::TableProperties::encryption_data_key_length: usize
 pub iceberg::spec::TableProperties::encryption_key_id: core::option::Option<alloc::string::String>
 pub iceberg::spec::TableProperties::gc_enabled: bool
+pub iceberg::spec::TableProperties::max_ref_age_ms: i64
+pub iceberg::spec::TableProperties::max_snapshot_age_ms: i64
 pub iceberg::spec::TableProperties::metadata_compression_codec: iceberg::compression::CompressionCodec
+pub iceberg::spec::TableProperties::min_snapshots_to_keep: usize
 pub iceberg::spec::TableProperties::write_datafusion_fanout_enabled: bool
 pub iceberg::spec::TableProperties::write_format_default: alloc::string::String
 pub iceberg::spec::TableProperties::write_target_file_size_bytes: usize
@@ -2735,10 +2738,16 @@ pub const iceberg::spec::TableProperties::PROPERTY_ENCRYPTION_KEY_ID: &str
 pub const iceberg::spec::TableProperties::PROPERTY_FORMAT_VERSION: &str
 pub const iceberg::spec::TableProperties::PROPERTY_GC_ENABLED: &str
 pub const iceberg::spec::TableProperties::PROPERTY_GC_ENABLED_DEFAULT: bool
+pub const iceberg::spec::TableProperties::PROPERTY_MAX_REF_AGE_MS: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MAX_REF_AGE_MS_DEFAULT: i64
+pub const iceberg::spec::TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT: i64
 pub const iceberg::spec::TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC: &str
 pub const iceberg::spec::TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX: &str
 pub const iceberg::spec::TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize
+pub const iceberg::spec::TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP: &str
+pub const iceberg::spec::TableProperties::PROPERTY_MIN_SNAPSHOTS_TO_KEEP_DEFAULT: usize
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_ENABLED: &str
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_ENABLED_DEFAULT: bool
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE: &str
@@ -3069,6 +3078,7 @@ pub fn iceberg::transaction::AddColumn::builder() -> AddColumnBuilder<((), (), (
 pub struct iceberg::transaction::Transaction
 impl iceberg::transaction::Transaction
 pub async fn iceberg::transaction::Transaction::commit(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>
+pub fn iceberg::transaction::Transaction::expire_snapshots(&self) -> iceberg::transaction::expire_snapshots::ExpireSnapshotsAction
 pub fn iceberg::transaction::Transaction::fast_append(&self) -> iceberg::transaction::append::FastAppendAction
 pub fn iceberg::transaction::Transaction::new(table: &iceberg::table::Table) -> Self
 pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::sort_order::ReplaceSortOrderAction
@@ -3195,8 +3205,10 @@ pub async fn iceberg::writer::file_writer::ParquetWriter::close(self) -> iceberg
 pub async fn iceberg::writer::file_writer::ParquetWriter::write(&mut self, batch: &arrow_array::record_batch::RecordBatch) -> iceberg::Result<()>
 pub struct iceberg::writer::file_writer::ParquetWriterBuilder
 impl iceberg::writer::file_writer::ParquetWriterBuilder
+pub fn iceberg::writer::file_writer::ParquetWriterBuilder::from_table_properties(table_props: &iceberg::spec::TableProperties, schema: iceberg::spec::SchemaRef) -> Self
 pub fn iceberg::writer::file_writer::ParquetWriterBuilder::new(props: parquet::file::properties::WriterProperties, schema: iceberg::spec::SchemaRef) -> Self
 pub fn iceberg::writer::file_writer::ParquetWriterBuilder::new_with_match_mode(props: parquet::file::properties::WriterProperties, schema: iceberg::spec::SchemaRef, match_mode: iceberg::arrow::FieldMatchMode) -> Self
+pub fn iceberg::writer::file_writer::ParquetWriterBuilder::with_match_mode(self, match_mode: iceberg::arrow::FieldMatchMode) -> Self
 impl core::clone::Clone for iceberg::writer::file_writer::ParquetWriterBuilder
 pub fn iceberg::writer::file_writer::ParquetWriterBuilder::clone(&self) -> iceberg::writer::file_writer::ParquetWriterBuilder
 impl core::fmt::Debug for iceberg::writer::file_writer::ParquetWriterBuilder
