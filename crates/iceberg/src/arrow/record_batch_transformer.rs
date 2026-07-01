@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_array::{
@@ -28,7 +28,7 @@ use arrow_schema::{
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::value::{create_primitive_array_repeated, create_primitive_array_single_element};
-use crate::arrow::{datum_to_arrow_type_with_ree, schema_to_arrow_schema};
+use crate::arrow::{datum_to_arrow_type_with_ree, schema_to_arrow_schema, type_to_arrow_type};
 use crate::metadata_columns::get_metadata_field;
 use crate::spec::{
     Datum, Literal, PartitionSpec, PrimitiveLiteral, Schema as IcebergSchema, Struct, Transform,
@@ -193,6 +193,7 @@ pub(crate) struct RecordBatchTransformerBuilder {
     snapshot_schema: Arc<IcebergSchema>,
     projected_iceberg_field_ids: Vec<i32>,
     constant_fields: HashMap<i32, Datum>,
+    virtual_fields: HashSet<i32>,
 }
 
 impl RecordBatchTransformerBuilder {
@@ -204,6 +205,7 @@ impl RecordBatchTransformerBuilder {
             snapshot_schema,
             projected_iceberg_field_ids: projected_iceberg_field_ids.to_vec(),
             constant_fields: HashMap::new(),
+            virtual_fields: HashSet::new(),
         }
     }
 
@@ -240,11 +242,18 @@ impl RecordBatchTransformerBuilder {
         Ok(self)
     }
 
+    /// Set virtual fields such as '_pos'
+    pub(crate) fn with_virtual_field(mut self, field_id: i32) -> Self {
+        self.virtual_fields.insert(field_id);
+        self
+    }
+
     pub(crate) fn build(self) -> RecordBatchTransformer {
         RecordBatchTransformer {
             snapshot_schema: self.snapshot_schema,
             projected_iceberg_field_ids: self.projected_iceberg_field_ids,
             constant_fields: self.constant_fields,
+            virtual_fields: self.virtual_fields,
             batch_transform: None,
         }
     }
@@ -289,6 +298,11 @@ pub(crate) struct RecordBatchTransformer {
     // Datum holds both the Iceberg type and the value
     constant_fields: HashMap<i32, Datum>,
 
+    // Field IDs whose data is delivered by the source batch as an arrow-rs virtual column
+    // (e.g. _pos via RowNumber). These fields bypass the snapshot-schema lookup and the
+    // Iceberg projection rules (name mapping / initial-default / null)
+    virtual_fields: HashSet<i32>,
+
     // BatchTransform gets lazily constructed based on the schema of
     // the first RecordBatch we receive from the file
     batch_transform: Option<BatchTransform>,
@@ -330,6 +344,7 @@ impl RecordBatchTransformer {
                     self.snapshot_schema.as_ref(),
                     &self.projected_iceberg_field_ids,
                     &self.constant_fields,
+                    &self.virtual_fields,
                 )?);
 
                 self.process_record_batch(record_batch)?
@@ -349,6 +364,7 @@ impl RecordBatchTransformer {
         snapshot_schema: &IcebergSchema,
         projected_iceberg_field_ids: &[i32],
         constant_fields: &HashMap<i32, Datum>,
+        virtual_fields: &HashSet<i32>,
     ) -> Result<BatchTransform> {
         let mapped_unprojected_arrow_schema = Arc::new(schema_to_arrow_schema(snapshot_schema)?);
         let field_id_to_mapped_schema_map =
@@ -394,6 +410,16 @@ impl RecordBatchTransformer {
                                 .with_metadata(field.metadata().clone());
                         Ok(Arc::new(constant_field))
                     }
+                } else if virtual_fields.contains(field_id) {
+                    let virtual_field = get_metadata_field(*field_id)?;
+                    let arrow_type = type_to_arrow_type(&virtual_field.field_type)?;
+                    let arrow_field =
+                        Field::new(&virtual_field.name, arrow_type, !virtual_field.required)
+                            .with_metadata(HashMap::from([(
+                                PARQUET_FIELD_ID_META_KEY.to_string(),
+                                virtual_field.id.to_string(),
+                            )]));
+                    Ok(Arc::new(arrow_field))
                 } else {
                     // Regular field - use schema as-is
                     Ok(field_id_to_mapped_schema_map
@@ -417,6 +443,7 @@ impl RecordBatchTransformer {
                     projected_iceberg_field_ids,
                     field_id_to_mapped_schema_map,
                     constant_fields,
+                    virtual_fields,
                 )?,
                 target_schema,
             }),
@@ -474,6 +501,7 @@ impl RecordBatchTransformer {
         projected_iceberg_field_ids: &[i32],
         field_id_to_mapped_schema_map: HashMap<i32, (FieldRef, usize)>,
         constant_fields: &HashMap<i32, Datum>,
+        virtual_fields: &HashSet<i32>,
     ) -> Result<Vec<ColumnSource>> {
         let field_id_to_source_schema_map =
             Self::build_field_id_to_arrow_schema_map(source_schema)?;
@@ -493,12 +521,22 @@ impl RecordBatchTransformer {
                     });
                 }
 
+                if virtual_fields.contains(field_id) {
+                    let (_, source_index) = field_id_to_source_schema_map
+                        .get(field_id)
+                        .ok_or_else(|| Error::new(
+                            ErrorKind::Unexpected,
+                            format!("virtual column for field id {field_id} is not present in source batch — ensure ArrowReaderOptions::with_virtual_columns was applied"),
+                        ))?;
+                    return Ok(ColumnSource::PassThrough { source_index: *source_index });
+                }
+
                 let (target_field, _) =
                     field_id_to_mapped_schema_map
                         .get(field_id)
                         .ok_or(Error::new(
                             ErrorKind::Unexpected,
-                            "could not find field in schema",
+                            format!("could not find field {field_id} in schema"),
                         ))?;
                 let target_type = target_field.data_type();
 
@@ -1674,5 +1712,79 @@ mod test {
         assert!(data_col.is_null(0));
         assert!(data_col.is_null(1));
         assert!(data_col.is_null(2));
+    }
+
+    #[test]
+    fn pos_column() {
+        use crate::metadata_columns::RESERVED_FIELD_ID_POS;
+
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Simulate what arrow-rs's virtual-column reader produces: file columns
+        // followed by the _pos Int64 column carrying absolute file row indices.
+        let parquet_schema = Arc::new(ArrowSchema::new(vec![
+            simple_field("id", DataType::Int32, false, "1"),
+            simple_field("name", DataType::Utf8, true, "2"),
+            simple_field(
+                "_pos",
+                DataType::Int64,
+                false,
+                &RESERVED_FIELD_ID_POS.to_string(),
+            ),
+        ]));
+
+        let projected_field_ids = [1, 2, RESERVED_FIELD_ID_POS];
+
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
+                .with_virtual_field(RESERVED_FIELD_ID_POS)
+                .build();
+
+        let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
+            Arc::new(Int32Array::from(vec![100, 200, 300])),
+            Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            Arc::new(Int64Array::from(vec![0, 1, 2])),
+        ])
+        .unwrap();
+
+        let result = transformer.process_record_batch(parquet_batch).unwrap();
+
+        assert_eq!(result.num_columns(), 3);
+        assert_eq!(result.num_rows(), 3);
+
+        // id column from file
+        let id_col = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_col.values(), &[100, 200, 300]);
+
+        // name column from file
+        let name_col = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(name_col.value(0), "a");
+
+        // _pos column
+        let pos_col = result
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+
+        assert_eq!(pos_col.len(), 3);
+        assert_eq!(pos_col.values(), &[0, 1, 2]);
     }
 }

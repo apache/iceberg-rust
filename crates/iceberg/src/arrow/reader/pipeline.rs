@@ -20,12 +20,14 @@
 //! predicates, row-group / row selection, and delete handling into a stream
 //! of transformed Arrow `RecordBatch`es.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
+use arrow_schema::{DataType, Field};
 use futures::{StreamExt, TryStreamExt};
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
-use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ParquetRecordBatchStreamBuilder};
+use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ParquetRecordBatchStreamBuilder, RowNumber};
 
 use super::{
     ArrowFileReader, ArrowReader, ParquetReadOptions, add_fallback_field_ids_to_arrow_schema,
@@ -37,7 +39,7 @@ use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics, ScanResult};
 use crate::error::Result;
 use crate::io::{FileIO, FileMetadata, FileRead};
-use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, is_metadata_field};
+use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, RESERVED_FIELD_ID_POS, is_metadata_field};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::Datum;
 use crate::{Error, ErrorKind};
@@ -207,6 +209,36 @@ impl FileScanTaskReader {
             arrow_metadata
         };
 
+        let project_pos = task.project_field_ids().contains(&RESERVED_FIELD_ID_POS);
+
+        let arrow_metadata = if project_pos {
+            let row_number_field = Arc::new(
+                Field::new("row_number", DataType::Int64, false)
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        RESERVED_FIELD_ID_POS.to_string(),
+                    )]))
+                    .with_extension_type(RowNumber),
+            );
+
+            let options = ArrowReaderOptions::new()
+                .with_schema(Arc::clone(arrow_metadata.schema()))
+                .with_virtual_columns(vec![row_number_field])?;
+
+            ArrowReaderMetadata::try_new(Arc::clone(arrow_metadata.metadata()), options).map_err(
+                |e| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "Failed to create ArrowReaderMetadata with the 'row_number' virtual_column"
+                            .to_string(),
+                    )
+                    .with_source(e)
+                },
+            )?
+        } else {
+            arrow_metadata
+        };
+
         // Build the stream reader, reusing the already-opened file reader
         let mut record_batch_stream_builder =
             ParquetRecordBatchStreamBuilder::new_with_metadata(parquet_file_reader, arrow_metadata);
@@ -253,6 +285,11 @@ impl FileScanTaskReader {
         {
             record_batch_transformer_builder =
                 record_batch_transformer_builder.with_partition(partition_spec, partition_data)?;
+        }
+
+        if project_pos {
+            record_batch_transformer_builder =
+                record_batch_transformer_builder.with_virtual_field(RESERVED_FIELD_ID_POS);
         }
 
         let mut record_batch_transformer = record_batch_transformer_builder.build();
