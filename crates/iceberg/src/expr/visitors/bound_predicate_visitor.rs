@@ -180,16 +180,16 @@ pub(crate) fn visit<V: BoundPredicateVisitor>(
             visitor.not(inner_result)
         }
         BoundPredicate::Unary(expr) => match expr.op() {
-            PredicateOperator::IsNull => visitor.is_null(expr.term(), predicate),
-            PredicateOperator::NotNull => visitor.not_null(expr.term(), predicate),
-            PredicateOperator::IsNan => visitor.is_nan(expr.term(), predicate),
-            PredicateOperator::NotNan => visitor.not_nan(expr.term(), predicate),
+            PredicateOperator::IsNull => visitor.is_null(expr.term().reference(), predicate),
+            PredicateOperator::NotNull => visitor.not_null(expr.term().reference(), predicate),
+            PredicateOperator::IsNan => visitor.is_nan(expr.term().reference(), predicate),
+            PredicateOperator::NotNan => visitor.not_nan(expr.term().reference(), predicate),
             op => {
                 panic!("Unexpected op for unary predicate: {}", &op)
             }
         },
         BoundPredicate::Binary(expr) => {
-            let reference = expr.term();
+            let reference = expr.term().reference();
             let literal = expr.literal();
             match expr.op() {
                 PredicateOperator::LessThan => visitor.less_than(reference, literal, predicate),
@@ -214,7 +214,7 @@ pub(crate) fn visit<V: BoundPredicateVisitor>(
             }
         }
         BoundPredicate::Set(expr) => {
-            let reference = expr.term();
+            let reference = expr.term().reference();
             let literals = expr.literals();
             match expr.op() {
                 PredicateOperator::In => visitor.r#in(reference, literals, predicate),
@@ -523,7 +523,7 @@ mod tests {
     fn test_is_null() {
         let predicate = Predicate::Unary(UnaryExpression::new(
             PredicateOperator::IsNull,
-            Reference::new("c"),
+            Reference::new("c").into(),
         ));
         let bound_predicate = predicate.bind(create_test_schema(), false).unwrap();
 
@@ -538,7 +538,7 @@ mod tests {
     fn test_not_null() {
         let predicate = Predicate::Unary(UnaryExpression::new(
             PredicateOperator::NotNull,
-            Reference::new("a"),
+            Reference::new("a").into(),
         ));
         let bound_predicate = predicate.bind(create_test_schema(), false).unwrap();
 
@@ -553,7 +553,7 @@ mod tests {
     fn test_is_nan() {
         let predicate = Predicate::Unary(UnaryExpression::new(
             PredicateOperator::IsNan,
-            Reference::new("b"),
+            Reference::new("b").into(),
         ));
         let bound_predicate = predicate.bind(create_test_schema(), false).unwrap();
 
@@ -568,7 +568,7 @@ mod tests {
     fn test_not_nan() {
         let predicate = Predicate::Unary(UnaryExpression::new(
             PredicateOperator::NotNan,
-            Reference::new("b"),
+            Reference::new("b").into(),
         ));
         let bound_predicate = predicate.bind(create_test_schema(), false).unwrap();
 
@@ -583,7 +583,7 @@ mod tests {
     fn test_less_than() {
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::LessThan,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::int(10),
         ));
         let bound_predicate = predicate.bind(create_test_schema(), false).unwrap();
@@ -599,7 +599,7 @@ mod tests {
     fn test_less_than_or_eq() {
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::LessThanOrEq,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::int(10),
         ));
         let bound_predicate = predicate.bind(create_test_schema(), false).unwrap();
@@ -615,7 +615,7 @@ mod tests {
     fn test_greater_than() {
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::GreaterThan,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::int(10),
         ));
         let bound_predicate = predicate.bind(create_test_schema(), false).unwrap();
@@ -631,7 +631,7 @@ mod tests {
     fn test_greater_than_or_eq() {
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::GreaterThanOrEq,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::int(10),
         ));
         let bound_predicate = predicate.bind(create_test_schema(), false).unwrap();
@@ -647,7 +647,7 @@ mod tests {
     fn test_eq() {
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::Eq,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::int(10),
         ));
         let bound_predicate = predicate.bind(create_test_schema(), false).unwrap();
@@ -663,7 +663,7 @@ mod tests {
     fn test_not_eq() {
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::NotEq,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::int(10),
         ));
         let bound_predicate = predicate.bind(create_test_schema(), false).unwrap();
@@ -679,7 +679,7 @@ mod tests {
     fn test_starts_with() {
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::StartsWith,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::int(10),
         ));
         let bound_predicate = predicate.bind(create_test_schema(), false).unwrap();
@@ -695,7 +695,7 @@ mod tests {
     fn test_not_starts_with() {
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::NotStartsWith,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::int(10),
         ));
         let bound_predicate = predicate.bind(create_test_schema(), false).unwrap();
@@ -711,7 +711,7 @@ mod tests {
     fn test_in() {
         let predicate = Predicate::Set(SetExpression::new(
             PredicateOperator::In,
-            Reference::new("a"),
+            Reference::new("a").into(),
             FnvHashSet::from_iter(vec![Datum::int(1)]),
         ));
         let bound_predicate = predicate.bind(create_test_schema(), false).unwrap();
@@ -727,7 +727,7 @@ mod tests {
     fn test_not_in() {
         let predicate = Predicate::Set(SetExpression::new(
             PredicateOperator::NotIn,
-            Reference::new("a"),
+            Reference::new("a").into(),
             FnvHashSet::from_iter(vec![Datum::int(1)]),
         ));
         let bound_predicate = predicate.bind(create_test_schema(), false).unwrap();
