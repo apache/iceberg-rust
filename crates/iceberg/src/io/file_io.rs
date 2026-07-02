@@ -162,6 +162,18 @@ impl FileIO {
         self.get_storage()?.exists(path.as_ref()).await
     }
 
+    /// Recursively list all FILES under a prefix (directories are not
+    /// returned). Entry paths are absolute, in the same form as the given
+    /// prefix, so they can be passed straight back to [`FileIO`] operations
+    /// and compared against paths recorded in table metadata.
+    ///
+    /// # Arguments
+    ///
+    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    pub async fn list_prefix(&self, path: impl AsRef<str>) -> Result<Vec<ListEntry>> {
+        self.get_storage()?.list_prefix(path.as_ref()).await
+    }
+
     /// Creates input file.
     ///
     /// # Arguments
@@ -240,6 +252,21 @@ impl FileIOBuilder {
 pub struct FileMetadata {
     /// The size of the file.
     pub size: u64,
+}
+
+/// A single file returned by [`FileIO::list_prefix`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListEntry {
+    /// Absolute path, in the same form as the listed prefix — directly usable
+    /// with [`FileIO`] operations and comparable to paths recorded in table
+    /// metadata.
+    pub path: String,
+    /// The size of the file in bytes.
+    pub size: u64,
+    /// Last-modified time in milliseconds since the Unix epoch, when the
+    /// backing storage tracks it. `None` means unknown — age-based logic
+    /// (e.g. orphan-file cleanup) must treat such files as NOT eligible.
+    pub last_modified_ms: Option<i64>,
 }
 
 /// Trait for reading file.
