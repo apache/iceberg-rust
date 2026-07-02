@@ -688,6 +688,7 @@ pub async fn iceberg::io::FileIO::delete(&self, path: impl core::convert::AsRef<
 pub async fn iceberg::io::FileIO::delete_prefix(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<()>
 pub async fn iceberg::io::FileIO::delete_stream(&self, paths: impl futures_core::stream::Stream<Item = alloc::string::String> + core::marker::Send + 'static) -> iceberg::Result<()>
 pub async fn iceberg::io::FileIO::exists(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<bool>
+pub async fn iceberg::io::FileIO::list_prefix(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<alloc::vec::Vec<iceberg::io::ListEntry>>
 pub fn iceberg::io::FileIO::new_input(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<iceberg::io::InputFile>
 pub fn iceberg::io::FileIO::new_output(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<iceberg::io::OutputFile>
 pub fn iceberg::io::FileIO::new_with_fs() -> Self
@@ -770,6 +771,18 @@ pub async fn iceberg::io::InputFile::read(&self) -> iceberg::Result<bytes::bytes
 pub async fn iceberg::io::InputFile::reader(&self) -> iceberg::Result<alloc::boxed::Box<dyn iceberg::io::FileRead>>
 impl core::fmt::Debug for iceberg::io::InputFile
 pub fn iceberg::io::InputFile::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct iceberg::io::ListEntry
+pub iceberg::io::ListEntry::last_modified_ms: core::option::Option<i64>
+pub iceberg::io::ListEntry::path: alloc::string::String
+pub iceberg::io::ListEntry::size: u64
+impl core::clone::Clone for iceberg::io::ListEntry
+pub fn iceberg::io::ListEntry::clone(&self) -> iceberg::io::ListEntry
+impl core::cmp::Eq for iceberg::io::ListEntry
+impl core::cmp::PartialEq for iceberg::io::ListEntry
+pub fn iceberg::io::ListEntry::eq(&self, other: &iceberg::io::ListEntry) -> bool
+impl core::fmt::Debug for iceberg::io::ListEntry
+pub fn iceberg::io::ListEntry::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::io::ListEntry
 pub struct iceberg::io::LocalFsStorage
 impl iceberg::io::LocalFsStorage
 pub fn iceberg::io::LocalFsStorage::new() -> Self
@@ -784,6 +797,7 @@ pub fn iceberg::io::LocalFsStorage::delete<'life0, 'life1, 'async_trait>(&'life0
 pub fn iceberg::io::LocalFsStorage::delete_prefix<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::LocalFsStorage::delete_stream<'life0, 'async_trait>(&'life0 self, paths: futures_core::stream::BoxStream<'static, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn iceberg::io::LocalFsStorage::exists<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg::io::LocalFsStorage::list_prefix<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::vec::Vec<iceberg::io::ListEntry>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::LocalFsStorage::metadata<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::io::FileMetadata>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::LocalFsStorage::new_input(&self, path: &str) -> iceberg::Result<iceberg::io::InputFile>
 pub fn iceberg::io::LocalFsStorage::new_output(&self, path: &str) -> iceberg::Result<iceberg::io::OutputFile>
@@ -822,6 +836,7 @@ pub fn iceberg::io::MemoryStorage::delete<'life0, 'life1, 'async_trait>(&'life0 
 pub fn iceberg::io::MemoryStorage::delete_prefix<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::MemoryStorage::delete_stream<'life0, 'async_trait>(&'life0 self, paths: futures_core::stream::BoxStream<'static, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn iceberg::io::MemoryStorage::exists<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg::io::MemoryStorage::list_prefix<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::vec::Vec<iceberg::io::ListEntry>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::MemoryStorage::metadata<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::io::FileMetadata>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::MemoryStorage::new_input(&self, path: &str) -> iceberg::Result<iceberg::io::InputFile>
 pub fn iceberg::io::MemoryStorage::new_output(&self, path: &str) -> iceberg::Result<iceberg::io::OutputFile>
@@ -1010,6 +1025,7 @@ pub fn iceberg::io::Storage::delete<'life0, 'life1, 'async_trait>(&'life0 self, 
 pub fn iceberg::io::Storage::delete_prefix<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::Storage::delete_stream<'life0, 'async_trait>(&'life0 self, paths: futures_core::stream::BoxStream<'static, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn iceberg::io::Storage::exists<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg::io::Storage::list_prefix<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::vec::Vec<iceberg::io::ListEntry>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::Storage::metadata<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::io::FileMetadata>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::Storage::new_input(&self, path: &str) -> iceberg::Result<iceberg::io::InputFile>
 pub fn iceberg::io::Storage::new_output(&self, path: &str) -> iceberg::Result<iceberg::io::OutputFile>
@@ -1022,6 +1038,7 @@ pub fn iceberg::io::LocalFsStorage::delete<'life0, 'life1, 'async_trait>(&'life0
 pub fn iceberg::io::LocalFsStorage::delete_prefix<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::LocalFsStorage::delete_stream<'life0, 'async_trait>(&'life0 self, paths: futures_core::stream::BoxStream<'static, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn iceberg::io::LocalFsStorage::exists<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg::io::LocalFsStorage::list_prefix<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::vec::Vec<iceberg::io::ListEntry>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::LocalFsStorage::metadata<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::io::FileMetadata>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::LocalFsStorage::new_input(&self, path: &str) -> iceberg::Result<iceberg::io::InputFile>
 pub fn iceberg::io::LocalFsStorage::new_output(&self, path: &str) -> iceberg::Result<iceberg::io::OutputFile>
@@ -1034,6 +1051,7 @@ pub fn iceberg::io::MemoryStorage::delete<'life0, 'life1, 'async_trait>(&'life0 
 pub fn iceberg::io::MemoryStorage::delete_prefix<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::MemoryStorage::delete_stream<'life0, 'async_trait>(&'life0 self, paths: futures_core::stream::BoxStream<'static, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn iceberg::io::MemoryStorage::exists<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg::io::MemoryStorage::list_prefix<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::vec::Vec<iceberg::io::ListEntry>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::MemoryStorage::metadata<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::io::FileMetadata>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::MemoryStorage::new_input(&self, path: &str) -> iceberg::Result<iceberg::io::InputFile>
 pub fn iceberg::io::MemoryStorage::new_output(&self, path: &str) -> iceberg::Result<iceberg::io::OutputFile>
@@ -1047,6 +1065,46 @@ impl iceberg::io::StorageFactory for iceberg::io::LocalFsStorageFactory
 pub fn iceberg::io::LocalFsStorageFactory::build(&self, _config: &iceberg::io::StorageConfig) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
 impl iceberg::io::StorageFactory for iceberg::io::MemoryStorageFactory
 pub fn iceberg::io::MemoryStorageFactory::build(&self, _config: &iceberg::io::StorageConfig) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::Storage>>
+pub mod iceberg::maintenance
+pub enum iceberg::maintenance::PrefixMismatchMode
+pub iceberg::maintenance::PrefixMismatchMode::Delete
+pub iceberg::maintenance::PrefixMismatchMode::Error
+pub iceberg::maintenance::PrefixMismatchMode::Ignore
+impl core::clone::Clone for iceberg::maintenance::PrefixMismatchMode
+pub fn iceberg::maintenance::PrefixMismatchMode::clone(&self) -> iceberg::maintenance::PrefixMismatchMode
+impl core::cmp::Eq for iceberg::maintenance::PrefixMismatchMode
+impl core::cmp::PartialEq for iceberg::maintenance::PrefixMismatchMode
+pub fn iceberg::maintenance::PrefixMismatchMode::eq(&self, other: &iceberg::maintenance::PrefixMismatchMode) -> bool
+impl core::default::Default for iceberg::maintenance::PrefixMismatchMode
+pub fn iceberg::maintenance::PrefixMismatchMode::default() -> iceberg::maintenance::PrefixMismatchMode
+impl core::fmt::Debug for iceberg::maintenance::PrefixMismatchMode
+pub fn iceberg::maintenance::PrefixMismatchMode::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for iceberg::maintenance::PrefixMismatchMode
+impl core::marker::StructuralPartialEq for iceberg::maintenance::PrefixMismatchMode
+pub struct iceberg::maintenance::RemoveOrphanFilesAction
+impl iceberg::maintenance::RemoveOrphanFilesAction
+pub fn iceberg::maintenance::RemoveOrphanFilesAction::delete_concurrency(self, concurrency: usize) -> Self
+pub fn iceberg::maintenance::RemoveOrphanFilesAction::dry_run(self, dry_run: bool) -> Self
+pub fn iceberg::maintenance::RemoveOrphanFilesAction::equal_authorities(self, authorities: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
+pub fn iceberg::maintenance::RemoveOrphanFilesAction::equal_schemes(self, schemes: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
+pub async fn iceberg::maintenance::RemoveOrphanFilesAction::execute(self) -> iceberg::Result<iceberg::maintenance::RemoveOrphanFilesResult>
+pub fn iceberg::maintenance::RemoveOrphanFilesAction::location(self, location: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn iceberg::maintenance::RemoveOrphanFilesAction::new(table: iceberg::table::Table) -> Self
+pub fn iceberg::maintenance::RemoveOrphanFilesAction::older_than_ms(self, timestamp_ms: i64) -> Self
+pub fn iceberg::maintenance::RemoveOrphanFilesAction::prefix_mismatch_mode(self, mode: iceberg::maintenance::PrefixMismatchMode) -> Self
+pub struct iceberg::maintenance::RemoveOrphanFilesResult
+pub iceberg::maintenance::RemoveOrphanFilesResult::deleted_files: alloc::vec::Vec<alloc::string::String>
+pub iceberg::maintenance::RemoveOrphanFilesResult::failed_deletes: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+pub iceberg::maintenance::RemoveOrphanFilesResult::listed_count: usize
+pub iceberg::maintenance::RemoveOrphanFilesResult::orphan_files: alloc::vec::Vec<alloc::string::String>
+pub iceberg::maintenance::RemoveOrphanFilesResult::referenced_count: usize
+pub iceberg::maintenance::RemoveOrphanFilesResult::skipped_missing_mtime: usize
+pub iceberg::maintenance::RemoveOrphanFilesResult::skipped_recent: usize
+impl core::default::Default for iceberg::maintenance::RemoveOrphanFilesResult
+pub fn iceberg::maintenance::RemoveOrphanFilesResult::default() -> iceberg::maintenance::RemoveOrphanFilesResult
+impl core::fmt::Debug for iceberg::maintenance::RemoveOrphanFilesResult
+pub fn iceberg::maintenance::RemoveOrphanFilesResult::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const iceberg::maintenance::DEFAULT_OLDER_THAN_MS: i64
 pub mod iceberg::memory
 pub struct iceberg::memory::MemoryCatalog
 impl core::fmt::Debug for iceberg::memory::MemoryCatalog

@@ -33,7 +33,7 @@ use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
 use crate::io::{
-    FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
+    FileMetadata, FileRead, FileWrite, InputFile, ListEntry, OutputFile, Storage, StorageConfig,
     StorageFactory,
 };
 use crate::{Error, ErrorKind, Result};
@@ -63,10 +63,25 @@ use crate::{Error, ErrorKind, Result};
 pub struct MemoryStorage {
     #[serde(skip, default = "default_memory_data")]
     data: Arc<RwLock<HashMap<String, Bytes>>>,
+    /// Last-modified stamps (ms since epoch) per normalized path, so
+    /// age-based logic (orphan-file cleanup) is testable on memory storage.
+    #[serde(skip, default = "default_memory_mtimes")]
+    mtimes: Arc<RwLock<HashMap<String, i64>>>,
 }
 
 fn default_memory_data() -> Arc<RwLock<HashMap<String, Bytes>>> {
     Arc::new(RwLock::new(HashMap::new()))
+}
+
+fn default_memory_mtimes() -> Arc<RwLock<HashMap<String, i64>>> {
+    Arc::new(RwLock::new(HashMap::new()))
+}
+
+pub(crate) fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 impl MemoryStorage {
@@ -74,6 +89,7 @@ impl MemoryStorage {
     pub fn new() -> Self {
         Self {
             data: Arc::new(RwLock::new(HashMap::new())),
+            mtimes: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -169,7 +185,11 @@ impl Storage for MemoryStorage {
                 format!("Failed to acquire write lock: {e}"),
             )
         })?;
-        data.insert(normalized, bs);
+        data.insert(normalized.clone(), bs);
+        drop(data);
+        if let Ok(mut mtimes) = self.mtimes.write() {
+            mtimes.insert(normalized, now_ms());
+        }
         Ok(())
     }
 
@@ -177,6 +197,7 @@ impl Storage for MemoryStorage {
         let normalized = Self::normalize_path(path);
         Ok(Box::new(MemoryFileWrite::new(
             self.data.clone(),
+            self.mtimes.clone(),
             normalized,
         )))
     }
@@ -227,6 +248,42 @@ impl Storage for MemoryStorage {
             self.delete(&path).await?;
         }
         Ok(())
+    }
+
+    async fn list_prefix(&self, path: &str) -> Result<Vec<ListEntry>> {
+        let normalized = Self::normalize_path(path);
+        let norm_prefix = if normalized.ends_with('/') || normalized.is_empty() {
+            normalized
+        } else {
+            format!("{normalized}/")
+        };
+        let abs_prefix = if path.ends_with('/') {
+            path.to_string()
+        } else {
+            format!("{path}/")
+        };
+        let data = self.data.read().map_err(|e| {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!("Failed to acquire read lock: {e}"),
+            )
+        })?;
+        let mtimes = self.mtimes.read().map_err(|e| {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!("Failed to acquire read lock: {e}"),
+            )
+        })?;
+        Ok(data
+            .iter()
+            .filter(|(k, _)| k.starts_with(&norm_prefix))
+            .map(|(k, bytes)| ListEntry {
+                // Reconstruct in the caller's prefix form so paths round-trip.
+                path: format!("{abs_prefix}{}", &k[norm_prefix.len()..]),
+                size: bytes.len() as u64,
+                last_modified_ms: mtimes.get(k).copied(),
+            })
+            .collect())
     }
 
     fn new_input(&self, path: &str) -> Result<InputFile> {
@@ -296,6 +353,7 @@ impl FileRead for MemoryFileRead {
 #[derive(Debug)]
 pub struct MemoryFileWrite {
     data: Arc<RwLock<HashMap<String, Bytes>>>,
+    mtimes: Arc<RwLock<HashMap<String, i64>>>,
     path: String,
     buffer: Vec<u8>,
     closed: bool,
@@ -303,9 +361,14 @@ pub struct MemoryFileWrite {
 
 impl MemoryFileWrite {
     /// Create a new `MemoryFileWrite` for the given path.
-    pub fn new(data: Arc<RwLock<HashMap<String, Bytes>>>, path: String) -> Self {
+    pub fn new(
+        data: Arc<RwLock<HashMap<String, Bytes>>>,
+        mtimes: Arc<RwLock<HashMap<String, i64>>>,
+        path: String,
+    ) -> Self {
         Self {
             data,
+            mtimes,
             path,
             buffer: Vec::new(),
             closed: false,
@@ -342,6 +405,10 @@ impl FileWrite for MemoryFileWrite {
             self.path.clone(),
             Bytes::from(std::mem::take(&mut self.buffer)),
         );
+        drop(data);
+        if let Ok(mut mtimes) = self.mtimes.write() {
+            mtimes.insert(self.path.clone(), now_ms());
+        }
         self.closed = true;
         Ok(())
     }
@@ -654,5 +721,41 @@ mod tests {
         // Delete with empty stream should succeed
         let path_stream = stream::iter(Vec::<String>::new()).boxed();
         storage.delete_stream(path_stream).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_list_prefix() {
+        let storage = MemoryStorage::new();
+        storage
+            .write(
+                "memory://warehouse/t/data/a.parquet",
+                Bytes::from_static(b"aa"),
+            )
+            .await
+            .unwrap();
+        storage
+            .write(
+                "memory://warehouse/t/metadata/v1.json",
+                Bytes::from_static(b"m"),
+            )
+            .await
+            .unwrap();
+        storage
+            .write(
+                "memory://warehouse/other/b.parquet",
+                Bytes::from_static(b"b"),
+            )
+            .await
+            .unwrap();
+
+        let mut entries = storage.list_prefix("memory://warehouse/t").await.unwrap();
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+        assert_eq!(entries.len(), 2);
+        // Paths come back in the caller's prefix form and round-trip to reads.
+        assert_eq!(entries[0].path, "memory://warehouse/t/data/a.parquet");
+        assert_eq!(entries[0].size, 2);
+        assert!(entries[0].last_modified_ms.is_some());
+        assert_eq!(entries[1].path, "memory://warehouse/t/metadata/v1.json");
+        assert!(storage.exists(&entries[0].path).await.unwrap());
     }
 }
