@@ -89,6 +89,16 @@ async fn create_table_with_manifests(
     num_manifests: usize,
     table_name: &str,
 ) -> (RestCatalog, Table) {
+    create_table_with_manifests_and_properties(num_manifests, table_name, []).await
+}
+
+/// Like `create_table_with_manifests`, but sets the given table properties on
+/// creation (e.g. `commit.manifest.target-size-bytes`).
+async fn create_table_with_manifests_and_properties(
+    num_manifests: usize,
+    table_name: &str,
+    properties: impl IntoIterator<Item = (String, String)>,
+) -> (RestCatalog, Table) {
     let fixture = get_test_fixture();
     let rest_catalog = RestCatalogBuilder::default()
         .load("rest", fixture.catalog_config.clone())
@@ -99,6 +109,7 @@ async fn create_table_with_manifests(
     let table_creation = TableCreation::builder()
         .name(table_name.to_string())
         .schema(schema.clone())
+        .properties(properties)
         .build();
     let mut table = rest_catalog
         .create_table(ns.name(), table_creation)
@@ -200,6 +211,94 @@ async fn test_rewrite_manifests_cluster_by() {
     assert_eq!(summary.get("manifests-kept").unwrap(), "0");
     assert_eq!(summary.get("manifests-replaced").unwrap(), "3");
     assert_eq!(summary.get("entries-processed").unwrap(), "3");
+}
+
+/// Test: `commit.manifest.target-size-bytes` triggers manifest rollover.
+///
+/// This is the inverse of `test_rewrite_manifests_cluster_by`: the same
+/// single-cluster clustering that normally consolidates everything into ONE
+/// manifest is forced to roll over into many by setting the target size to 1
+/// byte. Every entry seals its writer, so each alive entry lands in its own
+/// output manifest.
+///
+/// 1. Create a table with `commit.manifest.target-size-bytes=1` and 4 manifests.
+/// 2. Rewrite with `cluster_by` mapping every file to the same key.
+/// 3. Verify the output has multiple manifests (one per entry), not one, while
+///    file count and data are preserved.
+#[tokio::test]
+async fn test_rewrite_manifests_target_size_rollover() {
+    const NUM_FILES: usize = 4;
+    let (rest_catalog, table) =
+        create_table_with_manifests_and_properties(NUM_FILES, "t_rwm_rollover", [(
+            "commit.manifest.target-size-bytes".to_string(),
+            "1".to_string(),
+        )])
+        .await;
+
+    // Start with NUM_FILES separate manifests (one per fast_append).
+    let snapshot = table.metadata().current_snapshot().unwrap();
+    let manifest_list = snapshot
+        .load_manifest_list(table.file_io(), table.metadata())
+        .await
+        .unwrap();
+    assert_eq!(manifest_list.entries().len(), NUM_FILES);
+
+    // Cluster everything into a single key. Without rollover this would produce
+    // exactly one manifest (see test_rewrite_manifests_cluster_by); with a 1-byte
+    // target each entry rolls over into its own manifest.
+    let tx = Transaction::new(&table);
+    let action = tx
+        .rewrite_manifests()
+        .cluster_by(Box::new(|_data_file| "all".to_string()));
+    let tx = action.apply(tx).unwrap();
+    let table = tx.commit(&rest_catalog).await.unwrap();
+
+    let snapshot = table.metadata().current_snapshot().unwrap();
+    let manifest_list = snapshot
+        .load_manifest_list(table.file_io(), table.metadata())
+        .await
+        .unwrap();
+    assert_eq!(
+        manifest_list.entries().len(),
+        NUM_FILES,
+        "1-byte target should roll over each entry into its own manifest \
+         instead of consolidating into one"
+    );
+
+    // Every output manifest holds exactly one entry; total entries preserved.
+    let mut total_entries = 0;
+    for entry in manifest_list.entries() {
+        let manifest = entry.load_manifest(table.file_io()).await.unwrap();
+        assert_eq!(
+            manifest.entries().len(),
+            1,
+            "each rolled-over manifest should contain a single entry"
+        );
+        total_entries += manifest.entries().len();
+    }
+    assert_eq!(total_entries, NUM_FILES);
+
+    // File count is preserved: created == replaced.
+    let summary = &snapshot.summary().additional_properties;
+    assert_eq!(summary.get("manifests-created").unwrap(), "4");
+    assert_eq!(summary.get("manifests-replaced").unwrap(), "4");
+    assert_eq!(summary.get("manifests-kept").unwrap(), "0");
+    assert_eq!(summary.get("entries-processed").unwrap(), "4");
+
+    // Data is unchanged.
+    let batches: Vec<RecordBatch> = table
+        .scan()
+        .select_all()
+        .build()
+        .unwrap()
+        .to_arrow()
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
+    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total_rows, NUM_FILES * 4);
 }
 
 /// Test: rewrite manifests with rewrite_if predicate only rewrites matching manifests.

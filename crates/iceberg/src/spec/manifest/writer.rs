@@ -176,7 +176,48 @@ pub struct ManifestWriter {
 
     manifest_entries: Vec<ManifestEntry>,
 
+    /// Running estimate of the serialized (Avro) footprint of the entries added
+    /// so far. Updated incrementally in `add_entry_inner`. This is an
+    /// approximation used by size-bounded rewrite operations to decide when to
+    /// roll over to a new manifest; it is not the exact on-disk length.
+    estimated_size: u64,
+
     metadata: ManifestMetadata,
+}
+
+/// Rough estimate of a single manifest entry's serialized (Avro) footprint.
+///
+/// Captures the dominant variable-length terms — the data file path and the
+/// per-column statistic maps — plus a fixed per-entry overhead. Exact byte
+/// accuracy is intentionally not a goal: callers use this only to bound a
+/// manifest near a configured target size, so a cheap, allocation-free estimate
+/// is preferable to serializing the entry.
+fn estimate_manifest_entry_size(entry: &ManifestEntry) -> u64 {
+    // Fixed per-entry overhead: status, snapshot/sequence numbers, record_count,
+    // file_size_in_bytes, content/format enums, partition_spec_id, and Avro framing.
+    const FIXED_ENTRY_OVERHEAD: u64 = 128;
+    // Per key/value cost for the i32 -> i64 count maps (column_sizes,
+    // value_counts, null_value_counts, nan_value_counts).
+    const PER_COUNT_KV: u64 = 12;
+    // Per key/value cost for the bound maps (i32 key + a small scalar value).
+    const PER_BOUND_KV: u64 = 24;
+
+    let df = &entry.data_file;
+    let mut size = FIXED_ENTRY_OVERHEAD;
+    size += df.file_path.len() as u64;
+    size += (df.column_sizes.len()
+        + df.value_counts.len()
+        + df.null_value_counts.len()
+        + df.nan_value_counts.len()) as u64
+        * PER_COUNT_KV;
+    size += (df.lower_bounds.len() + df.upper_bounds.len()) as u64 * PER_BOUND_KV;
+    if let Some(key_metadata) = &df.key_metadata {
+        size += key_metadata.len() as u64;
+    }
+    if let Some(split_offsets) = &df.split_offsets {
+        size += split_offsets.len() as u64 * 8;
+    }
+    size
 }
 
 impl ManifestWriter {
@@ -201,8 +242,18 @@ impl ManifestWriter {
             min_seq_num: None,
             key_metadata,
             manifest_entries: Vec::new(),
+            estimated_size: 0,
             metadata,
         }
+    }
+
+    /// Approximate serialized size (in bytes) of the manifest accumulated so far.
+    ///
+    /// This is an estimate (see [`estimate_manifest_entry_size`]), not the exact
+    /// on-disk Avro length, and is used by size-bounded rewrite operations to
+    /// roll a manifest over to a new file once it approaches a target size.
+    pub(crate) fn estimated_manifest_size(&self) -> u64 {
+        self.estimated_size
     }
 
     fn construct_partition_summaries(
@@ -393,6 +444,7 @@ impl ManifestWriter {
         {
             self.min_seq_num = Some(self.min_seq_num.map_or(seq_num, |v| min(v, seq_num)));
         }
+        self.estimated_size += estimate_manifest_entry_size(&entry);
         self.manifest_entries.push(entry);
         Ok(())
     }
@@ -799,5 +851,88 @@ mod tests {
             actual_manifest.metadata().content,
             ManifestContentType::Deletes,
         );
+    }
+
+    #[tokio::test]
+    async fn test_estimated_manifest_size_tracks_entries() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    Arc::new(NestedField::optional(
+                        1,
+                        "id",
+                        Type::Primitive(PrimitiveType::Long),
+                    )),
+                    Arc::new(NestedField::optional(
+                        2,
+                        "data",
+                        Type::Primitive(PrimitiveType::String),
+                    )),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("size_estimate_manifest.avro");
+        let io = FileIOBuilder::new_fs_io().build().unwrap();
+        let output_file = io.new_output(path.to_str().unwrap()).unwrap();
+        let mut writer =
+            ManifestWriterBuilder::new(output_file, Some(1), None, schema.clone(), partition_spec)
+                .build_v2_data();
+
+        // A fresh writer has no accumulated size.
+        assert_eq!(writer.estimated_manifest_size(), 0);
+
+        // Two existing entries with equal-length paths and identical stat maps,
+        // so the per-entry estimate is identical for both.
+        let make_existing = |file_path: &str| ManifestEntry {
+            status: ManifestStatus::Existing,
+            snapshot_id: Some(1),
+            sequence_number: Some(1),
+            file_sequence_number: Some(1),
+            data_file: DataFile {
+                content: DataContentType::Data,
+                file_path: file_path.to_string(),
+                file_format: DataFileFormat::Parquet,
+                partition: Struct::empty(),
+                record_count: 1,
+                file_size_in_bytes: 1024,
+                column_sizes: HashMap::from([(1, 61), (2, 73)]),
+                value_counts: HashMap::from([(1, 1), (2, 1)]),
+                null_value_counts: HashMap::from([(1, 0), (2, 0)]),
+                nan_value_counts: HashMap::new(),
+                lower_bounds: HashMap::new(),
+                upper_bounds: HashMap::new(),
+                key_metadata: None,
+                split_offsets: Some(vec![4]),
+                equality_ids: None,
+                sort_order_id: None,
+                partition_spec_id: 0,
+                first_row_id: None,
+                referenced_data_file: None,
+                content_offset: None,
+                content_size_in_bytes: None,
+            },
+        };
+
+        writer
+            .add_existing_entry(make_existing("s3://b/t/data/0000.parquet"))
+            .unwrap();
+        let after_one = writer.estimated_manifest_size();
+        assert!(after_one > 0, "estimate should grow after adding an entry");
+
+        writer
+            .add_existing_entry(make_existing("s3://b/t/data/0001.parquet"))
+            .unwrap();
+        let after_two = writer.estimated_manifest_size();
+        // Identical entries ⇒ the running estimate scales linearly. This is the
+        // monotonic, threshold-crossing signal the rewrite_manifests rollover
+        // relies on to seal a manifest near the target size.
+        assert_eq!(after_two, after_one * 2);
     }
 }
