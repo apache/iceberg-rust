@@ -161,6 +161,10 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
             .with_file_type(ctx.manifest_entry.content_type())
             .with_partition_spec_id(ctx.partition_spec_id)
             .with_equality_ids(ctx.manifest_entry.data_file.equality_ids.clone())
+            .with_file_format(ctx.manifest_entry.data_file().file_format())
+            .with_referenced_data_file(ctx.manifest_entry.data_file().referenced_data_file())
+            .with_content_offset(ctx.manifest_entry.data_file().content_offset())
+            .with_content_size_in_bytes(ctx.manifest_entry.data_file().content_size_in_bytes())
             .build()
     }
 }
@@ -184,4 +188,24 @@ pub struct FileScanTaskDeleteFile {
     /// equality ids for equality deletes (null for anything other than equality-deletes)
     #[builder(default)]
     pub equality_ids: Option<Vec<i32>>,
+
+    /// Format of the delete file. `Puffin` marks a V3 deletion vector
+    /// (as opposed to a Parquet positional/equality delete file).
+    #[builder(default = DataFileFormat::Parquet)]
+    pub file_format: DataFileFormat,
+
+    /// The data file a V3 deletion vector applies to (the manifest entry's
+    /// `referenced_data_file`). `None` for positional/equality delete files.
+    #[builder(default)]
+    pub referenced_data_file: Option<String>,
+
+    /// Offset of the deletion-vector blob within the file (the manifest entry's
+    /// `content_offset`). `None` for positional/equality delete files.
+    #[builder(default)]
+    pub content_offset: Option<i64>,
+
+    /// Size in bytes of the deletion-vector blob (the manifest entry's
+    /// `content_size_in_bytes`). `None` for positional/equality delete files.
+    #[builder(default)]
+    pub content_size_in_bytes: Option<i64>,
 }

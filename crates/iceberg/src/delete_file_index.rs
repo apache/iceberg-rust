@@ -25,7 +25,7 @@ use tokio::sync::Notify;
 
 use crate::runtime::Runtime;
 use crate::scan::{DeleteFileContext, FileScanTaskDeleteFile};
-use crate::spec::{DataContentType, DataFile, Struct};
+use crate::spec::{DataContentType, DataFile, DataFileFormat, Struct};
 
 /// Index of delete files
 #[derive(Debug, Clone)]
@@ -46,8 +46,10 @@ struct PopulatedDeleteFileIndex {
     pos_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
     // TODO: do we need this?
     // pos_deletes_by_path: HashMap<String, Vec<Arc<DeleteFileContext>>>,
-
-    // TODO: Deletion Vector support
+    /// V3 deletion vectors indexed by the data file path they apply to (the
+    /// manifest entry's `referenced_data_file`). The spec allows at most one
+    /// deletion vector per data file.
+    dvs_by_data_file_path: HashMap<String, Arc<DeleteFileContext>>,
 }
 
 impl DeleteFileIndex {
@@ -128,9 +130,28 @@ impl PopulatedDeleteFileIndex {
             HashMap::default();
 
         let mut global_equality_deletes: Vec<Arc<DeleteFileContext>> = vec![];
+        let mut dvs_by_data_file_path: HashMap<String, Arc<DeleteFileContext>> = HashMap::default();
 
         files.into_iter().for_each(|ctx| {
             let arc_ctx = Arc::new(ctx);
+
+            // V3 deletion vectors are PositionDeletes-content entries stored as Puffin
+            // files carrying a `referenced_data_file`. Index them by that path (the spec
+            // allows at most one DV per data file) instead of by partition.
+            let dv_referenced = {
+                let df = arc_ctx.manifest_entry.data_file();
+                if df.content_type() == DataContentType::PositionDeletes
+                    && df.file_format() == DataFileFormat::Puffin
+                {
+                    df.referenced_data_file()
+                } else {
+                    None
+                }
+            };
+            if let Some(referenced) = dv_referenced {
+                dvs_by_data_file_path.insert(referenced, arc_ctx);
+                return;
+            }
 
             let partition = arc_ctx.manifest_entry.data_file().partition();
 
@@ -161,6 +182,7 @@ impl PopulatedDeleteFileIndex {
             global_equality_deletes,
             eq_deletes_by_partition,
             pos_deletes_by_partition,
+            dvs_by_data_file_path,
         }
     }
 
@@ -195,11 +217,21 @@ impl PopulatedDeleteFileIndex {
                 .for_each(|delete| results.push(delete.as_ref().into()));
         }
 
-        // TODO: the spec states that:
-        //     "The data file's file_path is equal to the delete file's referenced_data_file if it is non-null".
-        //     we're not yet doing that here. The referenced data file's name will also be present in the positional
-        //     delete file's file path column.
-        if let Some(deletes) = self.pos_deletes_by_partition.get(data_file.partition()) {
+        // V3 deletion vectors are matched to a specific data file via
+        // `referenced_data_file` and, per the spec, supersede positional delete files
+        // for that data file ("when a DV applies, positional-delete files must NOT be
+        // applied"). A DV applies when its sequence number is >= the data file's.
+        if let Some(dv) = self
+            .dvs_by_data_file_path
+            .get(data_file.file_path())
+            .filter(|dv| {
+                seq_num
+                    .map(|seq_num| dv.manifest_entry.sequence_number() >= Some(seq_num))
+                    .unwrap_or(true)
+            })
+        {
+            results.push(dv.as_ref().into());
+        } else if let Some(deletes) = self.pos_deletes_by_partition.get(data_file.partition()) {
             deletes
                 .iter()
                 // filter that returns true if the provided delete file's sequence number is **greater than or equal to** `seq_num`
