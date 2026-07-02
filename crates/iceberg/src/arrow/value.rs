@@ -972,7 +972,7 @@ pub(crate) fn create_primitive_array_repeated(
         (dt, _) => {
             return Err(Error::new(
                 ErrorKind::Unexpected,
-                format!("unexpected target column type {dt}, prim_lit {:?}", prim_lit),
+                format!("unexpected target column type {dt}, prim_lit {prim_lit:?}"),
             ));
         }
     })
