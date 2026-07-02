@@ -24,7 +24,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [v0.10.0] - 2026-06-23
+## [v0.10.0] - 2026-06-29
 
 ### Breaking Changes
 
@@ -251,6 +251,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * feat(transaction): remove statistics file metadata for expired snapshots by @dhruvarya-db in https://github.com/apache/iceberg-rust/pull/2667
 * fix: fix RUSTSEC-2026-0185 by @CTTY in https://github.com/apache/iceberg-rust/pull/2703
 * fix(reader): graceful handling of missing column index by @sandugood in https://github.com/apache/iceberg-rust/pull/2693
+* fix: avoid lost-wakeup hang in DeleteFileIndex::get_deletes_for_data_file by @dhruvarya-db in https://github.com/apache/iceberg-rust/pull/2696
+* chore: Move dependency list generation back to release manager task by @dannycjones in https://github.com/apache/iceberg-rust/pull/2706
+* fix(transaction): don't let user properties override computed summary metrics by @viirya in https://github.com/apache/iceberg-rust/pull/2726
+* chore(deps): Bump rust-lang/crates-io-auth-action from 1.0.4 to 1.0.5 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2728
+* chore(deps-dev): Bump huggingface-hub from 1.18.0 to 1.20.1 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2730
+* chore(deps-dev): Bump maturin from 1.13.3 to 1.14.1 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2731
+* chore(deps-dev): Bump pytest from 9.0.3 to 9.1.1 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2732
+* chore(deps): Bump actions/checkout from 6.0.3 to 7.0.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2733
+* chore(deps): Bump bytes from 1.11.1 to 1.12.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2734
+* chore(deps): Bump taiki-e/install-action from 2.81.7 to 2.82.2 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2735
+* chore(deps): Bump minijinja from 2.20.0 to 2.21.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2736
+* chore: Update all cargo install references to use --locked by @dannycjones in https://github.com/apache/iceberg-rust/pull/2739
+* fix: Update Python binding test fixtures to close catalogs by @dannycjones in https://github.com/apache/iceberg-rust/pull/2721
+* chore: Update changelog and dependency lists for 0.10.0 by @dannycjones in https://github.com/apache/iceberg-rust/pull/2745
+* chore(ci): Remove '--locked' flag on toml-cli install by @dannycjones in https://github.com/apache/iceberg-rust/pull/2750
 
 ## [v0.9.0] - 2026-03-10
 

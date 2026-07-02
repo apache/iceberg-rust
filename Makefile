@@ -27,7 +27,7 @@ check-clippy:
 	cargo clippy --all-targets --all-features --workspace -- -D warnings
 
 install-cargo-machete:
-	cargo install cargo-machete@0.7.0
+	cargo install --locked cargo-machete@0.7.0
 
 cargo-machete: install-cargo-machete
 	cargo machete
@@ -98,7 +98,7 @@ clean:
 	cargo clean
 
 install-mdbook:
-	cargo install mdbook@0.4.36
+	cargo install --locked mdbook@0.4.36
 
 site: install-mdbook
 	cd website && mdbook serve
