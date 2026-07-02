@@ -225,9 +225,17 @@ impl SnapshotProduceOperation for RowDeltaOperation {
             for entry in manifest.entries() {
                 if deleted_paths.contains(entry.data_file().file_path()) {
                     writer.add_delete_entry((**entry).clone())?;
-                } else {
+                } else if entry.is_alive() {
                     writer.add_existing_entry((**entry).clone())?;
                 }
+                // else: an already-DELETED (status=2) entry not removed by this
+                // operation — DROP it. Carrying it forward as EXISTING would
+                // RESURRECT a superseded file: for deletion vectors a data file
+                // accumulates one DELETED DV entry per prior rewrite, so
+                // resurrecting them yields multiple "live" DVs for one data
+                // file and readers fail with "Can't index multiple DVs". The
+                // deletion stays recorded in its originating snapshot's
+                // manifest; it does not belong in this one.
             }
             result.push(writer.write_manifest_file().await?);
         }
@@ -572,5 +580,95 @@ mod tests {
             "file-B should have an EXISTING entry in S2"
         );
         assert!(found_added_c, "file-C should have an ADDED entry in S2");
+    }
+
+    /// Resurrection guard: an already-DELETED entry in a rewritten manifest is
+    /// dropped, never carried forward as EXISTING. Without the `is_alive()`
+    /// check, S3's rewrite of the manifest holding file-A's DELETED entry
+    /// would resurrect file-A — for deletion vectors this yields multiple
+    /// live DVs per data file and readers fail with "Can't index multiple DVs".
+    #[tokio::test]
+    async fn test_row_delta_rewrite_does_not_resurrect_deleted_entries() {
+        let base_table = make_v2_minimal_table();
+
+        // S1: append file-A and file-B (one manifest holds both).
+        let file_a = make_data_file(&base_table, "test/a.parquet", 100);
+        let file_b = make_data_file(&base_table, "test/b.parquet", 200);
+        let mut c1 = Arc::new(
+            Transaction::new(&base_table)
+                .fast_append()
+                .add_data_files(vec![file_a.clone(), file_b.clone()]),
+        )
+        .commit(&base_table)
+        .await
+        .unwrap();
+        let snap1 = if let TableUpdate::AddSnapshot { snapshot } =
+            c1.take_updates().into_iter().next().unwrap()
+        {
+            snapshot
+        } else {
+            panic!("expected AddSnapshot");
+        };
+        let table_s1 = table_with_snapshot(&base_table, snap1).await;
+
+        // S2: CoW-rewrite file-A into file-A2 — the rewritten manifest now
+        // records file-A as DELETED and file-B as EXISTING.
+        let file_a2 = make_data_file(&table_s1, "test/a2.parquet", 100);
+        let mut c2 = Arc::new(
+            Transaction::new(&table_s1)
+                .row_delta()
+                .remove_data_files(vec![file_a.clone()])
+                .add_data_files(vec![file_a2]),
+        )
+        .commit(&table_s1)
+        .await
+        .unwrap();
+        let snap2 = if let TableUpdate::AddSnapshot { snapshot } =
+            c2.take_updates().into_iter().next().unwrap()
+        {
+            snapshot
+        } else {
+            panic!("expected AddSnapshot");
+        };
+        let table_s2 = table_with_snapshot(&table_s1, snap2).await;
+
+        // S3: CoW-rewrite file-B — this rewrites the manifest that still
+        // carries file-A's DELETED entry. file-A must NOT come back as EXISTING.
+        let file_b2 = make_data_file(&table_s2, "test/b2.parquet", 200);
+        let mut c3 = Arc::new(
+            Transaction::new(&table_s2)
+                .row_delta()
+                .remove_data_files(vec![file_b.clone()])
+                .add_data_files(vec![file_b2]),
+        )
+        .commit(&table_s2)
+        .await
+        .unwrap();
+        let updates3 = c3.take_updates();
+        let snap3 = if let TableUpdate::AddSnapshot { ref snapshot } = updates3[0] {
+            snapshot
+        } else {
+            panic!("expected AddSnapshot");
+        };
+
+        let manifest_list = table_s2
+            .manifest_list_reader(&std::sync::Arc::new(snap3.clone()))
+            .load()
+            .await
+            .unwrap();
+        for manifest_file in manifest_list.entries() {
+            let manifest = manifest_file
+                .load_manifest(table_s2.file_io())
+                .await
+                .unwrap();
+            for entry in manifest.entries() {
+                if entry.data_file().file_path() == "test/a.parquet" {
+                    assert!(
+                        !entry.is_alive(),
+                        "file-A was superseded in S2; the S3 rewrite must not resurrect it"
+                    );
+                }
+            }
+        }
     }
 }
