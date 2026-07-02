@@ -2078,8 +2078,8 @@ pub fn iceberg::spec::ManifestWriterBuilder::build_v2_data(self) -> iceberg::spe
 pub fn iceberg::spec::ManifestWriterBuilder::build_v2_deletes(self) -> iceberg::spec::ManifestWriter
 pub fn iceberg::spec::ManifestWriterBuilder::build_v3_data(self) -> iceberg::spec::ManifestWriter
 pub fn iceberg::spec::ManifestWriterBuilder::build_v3_deletes(self) -> iceberg::spec::ManifestWriter
-pub fn iceberg::spec::ManifestWriterBuilder::new(output: iceberg::io::OutputFile, snapshot_id: core::option::Option<i64>, key_metadata: core::option::Option<alloc::vec::Vec<u8>>, schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpec) -> Self
-pub fn iceberg::spec::ManifestWriterBuilder::new_from_encrypted(encrypted_output: iceberg::encryption::EncryptedOutputFile, snapshot_id: core::option::Option<i64>, key_metadata: core::option::Option<alloc::vec::Vec<u8>>, schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpec) -> Self
+pub fn iceberg::spec::ManifestWriterBuilder::new(output: iceberg::io::OutputFile, snapshot_id: core::option::Option<i64>, schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpec) -> Self
+pub fn iceberg::spec::ManifestWriterBuilder::new_from_encrypted(encrypted_output: iceberg::encryption::EncryptedOutputFile, snapshot_id: core::option::Option<i64>, schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpec) -> iceberg::Result<Self>
 pub struct iceberg::spec::Map
 impl iceberg::spec::Map
 pub fn iceberg::spec::Map::get(&self, key: &iceberg::spec::Literal) -> core::option::Option<&core::option::Option<iceberg::spec::Literal>>
