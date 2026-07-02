@@ -42,7 +42,7 @@ use iceberg::writer::file_writer::location_generator::{
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
+use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
 use tempfile::TempDir;
