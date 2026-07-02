@@ -18,20 +18,39 @@
 //! Benchmarks for [`ArrowReader`], focused on the per-`FileScanTask` overhead
 //! that dominates scans of tables with many small data files (see epic #2172).
 //!
+//! # What this measures
+//!
 //! The files are written to a local temp directory and read back through the
-//! normal `FileIO` (local FS) path, so these measure CPU and per-task work
-//! (operator construction, metadata loading, schema resolution, projection /
-//! row-filter setup, stream wiring) rather than network latency. They give an
-//! in-repo, reproducible baseline against which I/O- and CPU-reuse
-//! optimizations can be measured.
+//! normal `FileIO` (local FS) path, so the time-based groups measure the CPU /
+//! decode / per-task setup path: metadata parsing, schema resolution,
+//! projection and row-filter setup, and stream wiring. After the first sample
+//! the files sit in the OS page cache, so these are *warm-cache* numbers, not
+//! cold first-touch reads.
+//!
+//! Every group asserts the expected total row count, so a change that reads
+//! fewer (or duplicated) rows fails loudly instead of reporting a bogus win.
+//!
+//! # What this cannot measure
+//!
+//! The local-FS `FileIO` has no credential-provider init, request signing,
+//! TLS, or network round-trips — the expensive parts of per-task object-store
+//! access. Consequently:
+//!
+//! - operator caching (#2177) will look near-flat here, and
+//! - the latency-hiding items (#2173, #2181) are not measurable at all.
+//!
+//! A flat local result for those must not be read as "the optimization does
+//! not help" — that misreading is part of why #2100 was closed. Likewise the
+//! schema is `Int64` + `Utf8` only: timestamp / decimal / nested / INT96
+//! column-decode regressions will not show up in these numbers.
 //!
 //! The `same_file_splits` group additionally reports `ScanMetrics::bytes_read`
 //! as its throughput basis. Because that is a deterministic count (not a
-//! wall-clock sample), it surfaces redundant I/O directly: reading one file as
-//! N byte-range splits fetches the Parquet metadata N times, so total bytes
-//! read grows with the split count even though the file contents are identical.
-//! This is the cost that same-file metadata caching (proposed in #2172,
-//! attempted in #2100) targets, and is measurable even on the local FS.
+//! wall-clock sample), it surfaces redundant I/O directly even on the local
+//! FS: reading one file as N byte-range splits fetches the Parquet metadata N
+//! times, so total bytes read grows with the split count even though the file
+//! contents are identical. This is the cost that same-file metadata caching
+//! (proposed in #2172, attempted in #2100) targets.
 //!
 //! Run with: `cargo bench -p iceberg --bench arrow_reader`
 
@@ -259,7 +278,16 @@ fn tasks_with_predicate(paths: &[String], schema: &SchemaRef) -> Vec<FileScanTas
 /// Read every task to completion, draining all record batches. `filtering`
 /// turns on row-group filtering and row selection (only meaningful when the
 /// tasks carry a predicate).
-async fn read_all(tasks: Vec<FileScanTask>, concurrency: usize, filtering: bool) {
+///
+/// Asserts that exactly `expected_rows` rows come back: a configuration that
+/// reads too few rows — or duplicates rows, like the sub-row-group-split bug
+/// in #2614 — would otherwise time faster and read as a performance win.
+async fn read_all(
+    tasks: Vec<FileScanTask>,
+    concurrency: usize,
+    filtering: bool,
+    expected_rows: usize,
+) {
     let file_io = FileIO::new_with_fs();
     let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
         .with_data_file_concurrency_limit(concurrency)
@@ -277,6 +305,12 @@ async fn read_all(tasks: Vec<FileScanTask>, concurrency: usize, filtering: bool)
         .await
         .expect("read all batches");
 
+    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        total_rows, expected_rows,
+        "benchmark read returned the wrong number of rows; timings would be meaningless"
+    );
+
     criterion::black_box(batches);
 }
 
@@ -285,7 +319,10 @@ async fn read_all(tasks: Vec<FileScanTask>, concurrency: usize, filtering: bool)
 /// deterministic measurement, which makes it the right tool for surfacing
 /// redundant I/O — e.g. the per-split metadata re-fetch that same-file metadata
 /// caching (proposed in #2172, attempted in #2100) targets.
-async fn read_all_bytes(tasks: Vec<FileScanTask>, concurrency: usize) -> u64 {
+///
+/// The same `expected_rows` assertion as [`read_all`] applies, so the byte
+/// counts always describe a correct read.
+async fn read_all_bytes(tasks: Vec<FileScanTask>, concurrency: usize, expected_rows: usize) -> u64 {
     let file_io = FileIO::new_with_fs();
     let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
         .with_data_file_concurrency_limit(concurrency)
@@ -295,11 +332,17 @@ async fn read_all_bytes(tasks: Vec<FileScanTask>, concurrency: usize) -> u64 {
 
     let result = reader.read(task_stream).expect("build read stream");
     let metrics = result.metrics().clone();
-    let _: Vec<RecordBatch> = result
+    let batches: Vec<RecordBatch> = result
         .stream()
         .try_collect()
         .await
         .expect("read all batches");
+
+    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        total_rows, expected_rows,
+        "benchmark read returned the wrong number of rows; byte counts would be meaningless"
+    );
 
     metrics.bytes_read()
 }
@@ -323,7 +366,7 @@ fn bench_many_small_files(c: &mut Criterion) {
             |b, _| {
                 b.to_async(&tokio).iter(|| {
                     let tasks = tasks_for(&paths, &iceberg_schema);
-                    read_all(tasks, num_cpus_limit(), false)
+                    read_all(tasks, num_cpus_limit(), false, num_files * ROWS_PER_FILE)
                 });
             },
         );
@@ -350,7 +393,7 @@ fn bench_concurrency(c: &mut Criterion) {
             |b, &concurrency| {
                 b.to_async(&tokio).iter(|| {
                     let tasks = tasks_for(&paths, &iceberg_schema);
-                    read_all(tasks, concurrency, false)
+                    read_all(tasks, concurrency, false, num_files * ROWS_PER_FILE)
                 });
             },
         );
@@ -375,7 +418,7 @@ fn bench_migrated_table(c: &mut Criterion) {
     group.bench_function("name_mapping", |b| {
         b.to_async(&tokio).iter(|| {
             let tasks = tasks_with_name_mapping(&paths, &iceberg_schema);
-            read_all(tasks, num_cpus_limit(), false)
+            read_all(tasks, num_cpus_limit(), false, num_files * ROWS_PER_FILE)
         });
     });
     group.finish();
@@ -404,6 +447,7 @@ fn bench_same_file_splits(c: &mut Criterion) {
         let bytes_read = tokio.block_on(read_all_bytes(
             same_file_split_tasks(&path, &iceberg_schema, num_splits),
             num_cpus_limit(),
+            total_rows,
         ));
         eprintln!(
             "same_file_splits/{num_splits}: bytes_read = {bytes_read} \
@@ -418,7 +462,9 @@ fn bench_same_file_splits(c: &mut Criterion) {
             |b, &num_splits| {
                 b.to_async(&tokio).iter(|| {
                     let tasks = same_file_split_tasks(&path, &iceberg_schema, num_splits);
-                    read_all(tasks, num_cpus_limit(), false)
+                    // `total_rows` doubles as the #2614 duplication guard: N splits
+                    // of one file must reassemble it exactly once.
+                    read_all(tasks, num_cpus_limit(), false, total_rows)
                 });
             },
         );
@@ -442,7 +488,13 @@ fn bench_with_predicate(c: &mut Criterion) {
     group.bench_function("id_lt_half", |b| {
         b.to_async(&tokio).iter(|| {
             let tasks = tasks_with_predicate(&paths, &iceberg_schema);
-            read_all(tasks, num_cpus_limit(), true)
+            // `id < ROWS_PER_FILE / 2` matches exactly half the rows per file.
+            read_all(
+                tasks,
+                num_cpus_limit(),
+                true,
+                num_files * (ROWS_PER_FILE / 2),
+            )
         });
     });
     group.finish();
