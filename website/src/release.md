@@ -17,7 +17,7 @@
   ~ under the License.
 -->
 
-This document explains how the release manager releases Apache Iceberg Rust in accordance with Apache requirements.
+This document explains how the release process works for Apache Iceberg Rust in accordance with Apache requirements.
 
 ## Introduction
 
@@ -43,6 +43,13 @@ In this guide:
 
 The RC tag includes `rc.<number>`. The ASF dev distribution directory uses `rc<number>`. The source archive name uses only the final version.
 
+## Release Manager
+
+The release manager is the person taking ownership of a particular Iceberg Rust release.
+
+This is usually a committer for the Apache Iceberg project, however the role can be supported by non-committers in the early stages of coordinating a release.
+Where this can be supported by a non-committer, this will be mentioned in the guide.
+
 ## Preparation
 
 <div class="warning">
@@ -66,6 +73,8 @@ The local release helpers are under `dev/release/`. They log every step before i
 ## Start a tracking issue about the next release
 
 Start a tracking issue on GitHub for the upcoming release to track all tasks that need to be completed.
+You should own this tracking issue and coordinate with the community when to target a new release and what changes need to be included.
+You do not need to be a committer to create and own the tracking issue.
 
 Title:
 
@@ -88,8 +97,8 @@ This issue is used to track tasks of the iceberg rust ${iceberg_version} release
 
 #### GitHub Side
 
-- [ ] Bump version in project
-- [ ] Update docs
+- [ ] Draft GitHub release
+- [ ] Bump version in project, update dependencies list, and update changelog
 - [ ] Create and push release candidate tag
 
 #### ASF Side
@@ -103,9 +112,9 @@ This issue is used to track tasks of the iceberg rust ${iceberg_version} release
 
 ### Official Release
 
-- [ ] Push the release git tag
 - [ ] Publish artifacts to SVN RELEASE branch
 - [ ] Change Iceberg Rust Website download link
+- [ ] Publish GitHub release, automatically pushing the Git tag
 - [ ] Send the announcement
 
 For details of each step, please refer to: https://rust.iceberg.apache.org/release
@@ -113,16 +122,50 @@ For details of each step, please refer to: https://rust.iceberg.apache.org/relea
 
 ## GitHub Side
 
-### Bump version in project
+The following steps should be followed once the release is ready to begin.
+
+### Draft GitHub release
+
+- [Draft a new GitHub Release using the GitHub web UI](https://github.com/apache/iceberg-rust/releases/new).
+- Enter the git tag of this release version, of the form `v0.y.z`. For example, `v0.9.0`.
+  The tag should not exist at this stage and GitHub will offer to create it when the release is published.
+- Make sure the branch target is `main` for minor release (such as `0.9.0`), or the minor version branch for a patch release (such as `0.9.1`).
+- Generate the release note by clicking the `Generate release notes` button.
+- Save the draft.
+
+### Update crate versions, dependencies list, and changelog
+
+The following changes can be made in one pull request.
+
+#### Bump crate versions
 
 Bump all components' version in the project to the new Iceberg Rust version.
 This version is the final version, not the release candidate version.
 
 - Rust core and Python binding: bump version in root `Cargo.toml` under `[workspace.package]`.
 
-### Update docs
+#### Update CHANGELOG.md
 
-Update `CHANGELOG.md` by drafting a new release [note on GitHub Releases](https://github.com/apache/iceberg-rust/releases/new).
+Use the content of the draft GitHub release to update `CHANGELOG.md`.
+Since drafting a GitHub release requires `content: write` GitHub permissions, this step must be owned by a committer.
+
+#### Update dependency lists
+
+Run the following command to update the dependencies list of every package:
+
+```shell
+dev/release/dependencies.sh generate
+```
+
+Run the following command to verify the licenses meet the project's policy.
+
+```shell
+dev/release/dependencies.sh check
+```
+
+#### Open pull request
+
+Open a pull request with all three changes.
 
 ### Create release candidate tag and artifacts
 
@@ -424,22 +467,17 @@ Useful options include:
 - `--dev_dist_url https://dist.apache.org/repos/dist/dev/iceberg`: SVN directory URL containing RC artifact directories.
 - `--release_dist_url https://dist.apache.org/repos/dist/release/iceberg`: SVN directory URL where final release artifact directories are published.
 
-The release script does not push the final release tag. Review the output, then push the tag manually:
+The release script does not push the final release tag.
+Review the output and then move on to the next step to publish the GitHub release and tag.
 
-```shell
-git push origin "v${iceberg_version}"
-```
+### Publish the GitHub Release
 
-Pushing the final release tag triggers the publish workflow for crates and pyiceberg-core.
+A GitHub release should have been drafted earlier in the release process.
+Open the release and publish it now.
 
-### Create a GitHub Release
+On publish, the Git tag will be created for the release.
 
-- Click [here](https://github.com/apache/iceberg-rust/releases/new) to create a new release.
-- Pick the git tag of this release version from the dropdown menu.
-- Make sure the branch target is `main`.
-- Generate the release note by clicking the `Generate release notes` button.
-- Add the release note from every component's `upgrade.md` if there are breaking changes before the content generated by GitHub. Check them carefully.
-- Publish the release.
+The creation of the final release tag triggers the publish workflow for crates and pyiceberg-core.
 
 ### Send the announcement
 
