@@ -15,9 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
-
-use iceberg::io::{OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_ENDPOINT};
 use iceberg::{Error, ErrorKind, Result};
 use opendal::services::OssConfig;
 use opendal::{Configurator, Operator};
@@ -26,7 +23,11 @@ use url::Url;
 use crate::utils::from_opendal_error;
 
 /// Parse iceberg props to oss config.
-pub(crate) fn oss_config_parse(mut m: HashMap<String, String>) -> Result<OssConfig> {
+pub(crate) fn oss_config_parse(
+    mut m: std::collections::HashMap<String, String>,
+) -> Result<OssConfig> {
+    use iceberg::io::{OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_ENDPOINT};
+
     let mut cfg: OssConfig = OssConfig::default();
     if let Some(endpoint) = m.remove(OSS_ENDPOINT) {
         cfg.endpoint = Some(endpoint);

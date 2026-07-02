@@ -102,7 +102,25 @@ fn build_storage_for_scheme(
                 config: Arc::new(config),
             })
         }
-        #[cfg(feature = "opendal-oss")]
+        // OSS: if `s3.*` props are present (REST catalog vended credentials),
+        // route through S3 backend (OSS is S3-API-compatible).
+        // Otherwise fall back to native OSS backend (RAM/OIDC auth).
+        #[cfg(all(feature = "opendal-oss", feature = "opendal-s3"))]
+        "oss" => {
+            if crate::has_s3_config(props) {
+                let config = crate::s3::s3_config_parse(props.clone())?;
+                Ok(OpenDalStorage::S3 {
+                    config: Arc::new(config),
+                    customized_credential_load: customized_credential_load.clone(),
+                })
+            } else {
+                let config = crate::oss::oss_config_parse(props.clone())?;
+                Ok(OpenDalStorage::Oss {
+                    config: Arc::new(config),
+                })
+            }
+        }
+        #[cfg(all(feature = "opendal-oss", not(feature = "opendal-s3")))]
         "oss" => {
             let config = crate::oss::oss_config_parse(props.clone())?;
             Ok(OpenDalStorage::Oss {
@@ -370,5 +388,63 @@ mod tests {
             Arc::ptr_eq(&abfss, &abfs),
             "abfss and abfs should share one instance"
         );
+    }
+
+    #[cfg(all(feature = "opendal-oss", feature = "opendal-s3"))]
+    #[test]
+    fn oss_routes_through_s3_when_s3_config_present() {
+        use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT};
+
+        let mut props = HashMap::new();
+        props.insert(S3_ACCESS_KEY_ID.to_string(), "AKIA_TEST".to_string());
+        props.insert(
+            S3_ENDPOINT.to_string(),
+            "https://oss-cn-shanghai.aliyuncs.com".to_string(),
+        );
+
+        let storage = build_storage_for_scheme("oss", &props, &None).unwrap();
+        assert!(
+            matches!(storage, OpenDalStorage::S3 { .. }),
+            "OSS with s3.* config should route through S3 backend"
+        );
+    }
+
+    #[cfg(all(feature = "opendal-oss", feature = "opendal-s3"))]
+    #[test]
+    fn oss_falls_back_to_native_without_s3_config() {
+        let props = HashMap::new();
+
+        let storage = build_storage_for_scheme("oss", &props, &None).unwrap();
+        assert!(
+            matches!(storage, OpenDalStorage::Oss { .. }),
+            "OSS without s3.* config should use native OSS backend"
+        );
+    }
+
+    #[cfg(all(feature = "opendal-oss", feature = "opendal-s3"))]
+    #[test]
+    fn oss_resolve_uses_s3_backend_and_caches() {
+        use iceberg::io::{S3_ACCESS_KEY_ID, S3_ENDPOINT};
+
+        let mut props = HashMap::new();
+        props.insert(S3_ACCESS_KEY_ID.to_string(), "AKIA_TEST".to_string());
+        props.insert(
+            S3_ENDPOINT.to_string(),
+            "https://oss-cn-shanghai.aliyuncs.com".to_string(),
+        );
+
+        let resolving = OpenDalResolvingStorage {
+            props,
+            storages: RwLock::new(HashMap::new()),
+            #[cfg(feature = "opendal-s3")]
+            customized_credential_load: None,
+        };
+
+        let storage = resolving.resolve("oss://my-bucket/path/to/file").unwrap();
+        assert!(matches!(storage.as_ref(), OpenDalStorage::S3 { .. }));
+
+        // Second call should hit the cache.
+        let cached = resolving.resolve("oss://my-bucket/other").unwrap();
+        assert!(Arc::ptr_eq(&storage, &cached));
     }
 }
