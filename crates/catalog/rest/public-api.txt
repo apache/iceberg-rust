@@ -1,4 +1,22 @@
 pub mod iceberg_catalog_rest
+pub enum iceberg_catalog_rest::PayloadHashMode
+pub iceberg_catalog_rest::PayloadHashMode::IcebergRest
+pub iceberg_catalog_rest::PayloadHashMode::StandardAws
+impl core::clone::Clone for iceberg_catalog_rest::PayloadHashMode
+pub fn iceberg_catalog_rest::PayloadHashMode::clone(&self) -> iceberg_catalog_rest::PayloadHashMode
+impl core::cmp::Eq for iceberg_catalog_rest::PayloadHashMode
+impl core::cmp::PartialEq for iceberg_catalog_rest::PayloadHashMode
+pub fn iceberg_catalog_rest::PayloadHashMode::eq(&self, other: &iceberg_catalog_rest::PayloadHashMode) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::PayloadHashMode
+pub fn iceberg_catalog_rest::PayloadHashMode::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for iceberg_catalog_rest::PayloadHashMode
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::PayloadHashMode
+pub struct iceberg_catalog_rest::AwsCredentials
+pub iceberg_catalog_rest::AwsCredentials::access_key_id: alloc::string::String
+pub iceberg_catalog_rest::AwsCredentials::secret_access_key: alloc::string::String
+pub iceberg_catalog_rest::AwsCredentials::session_token: core::option::Option<alloc::string::String>
+impl core::clone::Clone for iceberg_catalog_rest::AwsCredentials
+pub fn iceberg_catalog_rest::AwsCredentials::clone(&self) -> iceberg_catalog_rest::AwsCredentials
 pub struct iceberg_catalog_rest::CommitTableRequest
 pub iceberg_catalog_rest::CommitTableRequest::identifier: core::option::Option<iceberg::catalog::TableIdent>
 pub iceberg_catalog_rest::CommitTableRequest::requirements: alloc::vec::Vec<iceberg::catalog::TableRequirement>
@@ -208,6 +226,7 @@ pub fn iceberg_catalog_rest::RestCatalog::update_table<'life0, 'async_trait>(&'l
 pub struct iceberg_catalog_rest::RestCatalogBuilder
 impl iceberg_catalog_rest::RestCatalogBuilder
 pub fn iceberg_catalog_rest::RestCatalogBuilder::with_client(self, client: reqwest::async_impl::client::Client) -> Self
+pub fn iceberg_catalog_rest::RestCatalogBuilder::with_signer(self, signer: alloc::sync::Arc<dyn iceberg_catalog_rest::HttpRequestSigner>) -> Self
 impl core::default::Default for iceberg_catalog_rest::RestCatalogBuilder
 pub fn iceberg_catalog_rest::RestCatalogBuilder::default() -> Self
 impl core::fmt::Debug for iceberg_catalog_rest::RestCatalogBuilder
@@ -217,6 +236,15 @@ pub type iceberg_catalog_rest::RestCatalogBuilder::C = iceberg_catalog_rest::Res
 pub fn iceberg_catalog_rest::RestCatalogBuilder::load(self, name: impl core::convert::Into<alloc::string::String>, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> impl core::future::future::Future<Output = iceberg::error::Result<Self::C>> + core::marker::Send
 pub fn iceberg_catalog_rest::RestCatalogBuilder::with_runtime(self, runtime: iceberg::runtime::Runtime) -> Self
 pub fn iceberg_catalog_rest::RestCatalogBuilder::with_storage_factory(self, storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> Self
+pub struct iceberg_catalog_rest::SigV4Signer
+impl iceberg_catalog_rest::SigV4Signer
+pub fn iceberg_catalog_rest::SigV4Signer::new(credentials: iceberg_catalog_rest::AwsCredentials, region: alloc::string::String, service: alloc::string::String, mode: iceberg_catalog_rest::PayloadHashMode) -> Self
+impl core::clone::Clone for iceberg_catalog_rest::SigV4Signer
+pub fn iceberg_catalog_rest::SigV4Signer::clone(&self) -> iceberg_catalog_rest::SigV4Signer
+impl core::fmt::Debug for iceberg_catalog_rest::SigV4Signer
+pub fn iceberg_catalog_rest::SigV4Signer::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg_catalog_rest::HttpRequestSigner for iceberg_catalog_rest::SigV4Signer
+pub fn iceberg_catalog_rest::SigV4Signer::sign(&self, request: &mut reqwest::async_impl::request::Request) -> iceberg::error::Result<()>
 pub struct iceberg_catalog_rest::StorageCredential
 pub iceberg_catalog_rest::StorageCredential::config: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
 pub iceberg_catalog_rest::StorageCredential::prefix: alloc::string::String
@@ -264,5 +292,15 @@ pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::serialize<__S>(&
 impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
 pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_SIGNING_ACCESS_KEY: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_SIGNING_NAME: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_SIGNING_REGION: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_SIGNING_SECRET_KEY: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_SIGNING_SESSION_TOKEN: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_SIGV4_ENABLED: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_URI: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_WAREHOUSE: &str
+pub trait iceberg_catalog_rest::HttpRequestSigner: core::marker::Send + core::marker::Sync + core::fmt::Debug
+pub fn iceberg_catalog_rest::HttpRequestSigner::sign(&self, request: &mut reqwest::async_impl::request::Request) -> iceberg::error::Result<()>
+impl iceberg_catalog_rest::HttpRequestSigner for iceberg_catalog_rest::SigV4Signer
+pub fn iceberg_catalog_rest::SigV4Signer::sign(&self, request: &mut reqwest::async_impl::request::Request) -> iceberg::error::Result<()>
