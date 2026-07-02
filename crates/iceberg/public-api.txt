@@ -3075,6 +3075,13 @@ pub fn iceberg::transaction::AddColumn::optional(name: impl alloc::string::ToStr
 pub fn iceberg::transaction::AddColumn::required(name: impl alloc::string::ToString, field_type: iceberg::spec::Type, initial_default: iceberg::spec::Literal) -> Self
 impl iceberg::transaction::AddColumn
 pub fn iceberg::transaction::AddColumn::builder() -> AddColumnBuilder<((), (), (), (), (), (), ())>
+pub struct iceberg::transaction::RewriteManifestsAction
+impl iceberg::transaction::RewriteManifestsAction
+pub fn iceberg::transaction::RewriteManifestsAction::min_input_manifests(self, count: usize) -> Self
+pub fn iceberg::transaction::RewriteManifestsAction::set_commit_uuid(self, commit_uuid: uuid::Uuid) -> Self
+pub fn iceberg::transaction::RewriteManifestsAction::set_snapshot_properties(self, snapshot_properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
+pub fn iceberg::transaction::RewriteManifestsAction::target_manifest_size_bytes(self, size_bytes: u64) -> Self
+pub fn iceberg::transaction::RewriteManifestsAction::validate_from_snapshot(self, snapshot_id: i64) -> Self
 pub struct iceberg::transaction::Transaction
 impl iceberg::transaction::Transaction
 pub async fn iceberg::transaction::Transaction::commit(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>
@@ -3082,6 +3089,7 @@ pub fn iceberg::transaction::Transaction::expire_snapshots(&self) -> iceberg::tr
 pub fn iceberg::transaction::Transaction::fast_append(&self) -> iceberg::transaction::append::FastAppendAction
 pub fn iceberg::transaction::Transaction::new(table: &iceberg::table::Table) -> Self
 pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::sort_order::ReplaceSortOrderAction
+pub fn iceberg::transaction::Transaction::rewrite_manifests(&self) -> iceberg::transaction::RewriteManifestsAction
 pub fn iceberg::transaction::Transaction::update_location(&self) -> iceberg::transaction::update_location::UpdateLocationAction
 pub fn iceberg::transaction::Transaction::update_schema(&self) -> iceberg::transaction::update_schema::UpdateSchemaAction
 pub fn iceberg::transaction::Transaction::update_statistics(&self) -> iceberg::transaction::update_statistics::UpdateStatisticsAction
@@ -3092,7 +3100,7 @@ pub fn iceberg::transaction::Transaction::clone(&self) -> iceberg::transaction::
 pub trait iceberg::transaction::ApplyTransactionAction
 pub fn iceberg::transaction::ApplyTransactionAction::apply(self, tx: iceberg::transaction::Transaction) -> iceberg::Result<iceberg::transaction::Transaction>
 impl<T: TransactionAction + 'static> iceberg::transaction::ApplyTransactionAction for T
-pub fn T::apply(self, tx: iceberg::transaction::Transaction) -> iceberg::Result<iceberg::transaction::Transaction> where Self: core::marker::Sized
+pub fn T::apply(self, tx: iceberg::transaction::Transaction) -> core::result::Result<iceberg::transaction::Transaction, iceberg::Error>
 pub mod iceberg::transform
 pub trait iceberg::transform::TransformFunction: core::marker::Send + core::marker::Sync + core::fmt::Debug
 pub fn iceberg::transform::TransformFunction::transform(&self, input: arrow_array::array::ArrayRef) -> iceberg::Result<arrow_array::array::ArrayRef>
