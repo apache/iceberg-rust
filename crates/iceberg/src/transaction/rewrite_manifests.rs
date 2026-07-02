@@ -231,11 +231,7 @@ impl TransactionAction for RewriteManifestsAction {
         // per-entry byte size of the source manifests as the estimator (the
         // writer exposes no running length).
         let target_size = self.resolve_target_size(table);
-        let avg_entry_bytes = if total_entries > 0 {
-            (total_bytes / total_entries).max(1)
-        } else {
-            1
-        };
+        let avg_entry_bytes = total_bytes.checked_div(total_entries).unwrap_or(1).max(1);
         let entries_per_manifest = ((target_size / avg_entry_bytes).max(1)) as usize;
 
         let chunks: Vec<Vec<ManifestEntry>> = alive_entries
