@@ -169,6 +169,30 @@ impl serde_core::ser::Serialize for iceberg::compression::CompressionCodec
 pub fn iceberg::compression::CompressionCodec::serialize<S: serde_core::ser::Serializer>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::compression::CompressionCodec
 pub fn iceberg::compression::CompressionCodec::deserialize<D: serde_core::de::Deserializer<'de>>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub mod iceberg::delete_vector
+pub struct iceberg::delete_vector::DeleteVector
+impl iceberg::delete_vector::DeleteVector
+pub fn iceberg::delete_vector::DeleteVector::from_puffin_blob(blob: iceberg::puffin::Blob) -> iceberg::Result<Self>
+pub fn iceberg::delete_vector::DeleteVector::insert(&mut self, pos: u64) -> bool
+pub fn iceberg::delete_vector::DeleteVector::insert_positions(&mut self, positions: &[u64]) -> iceberg::Result<usize>
+pub fn iceberg::delete_vector::DeleteVector::is_empty(&self) -> bool
+pub fn iceberg::delete_vector::DeleteVector::iter(&self) -> iceberg::delete_vector::DeleteVectorIterator<'_>
+pub fn iceberg::delete_vector::DeleteVector::len(&self) -> u64
+pub fn iceberg::delete_vector::DeleteVector::new(roaring_treemap: roaring::treemap::RoaringTreemap) -> iceberg::delete_vector::DeleteVector
+pub fn iceberg::delete_vector::DeleteVector::to_puffin_blob(&self, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::Result<iceberg::puffin::Blob>
+pub async fn iceberg::delete_vector::DeleteVector::write_to_puffin_file(&self, file_io: &iceberg::io::FileIO, location: alloc::string::String, referenced_data_file: alloc::string::String, partition: iceberg::spec::Struct, partition_spec_id: i32) -> iceberg::Result<iceberg::spec::DataFile>
+impl core::default::Default for iceberg::delete_vector::DeleteVector
+pub fn iceberg::delete_vector::DeleteVector::default() -> iceberg::delete_vector::DeleteVector
+impl core::fmt::Debug for iceberg::delete_vector::DeleteVector
+pub fn iceberg::delete_vector::DeleteVector::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::bit::BitOrAssign for iceberg::delete_vector::DeleteVector
+pub fn iceberg::delete_vector::DeleteVector::bitor_assign(&mut self, other: Self)
+pub struct iceberg::delete_vector::DeleteVectorIterator<'a>
+impl iceberg::delete_vector::DeleteVectorIterator<'_>
+pub fn iceberg::delete_vector::DeleteVectorIterator<'_>::advance_to(&mut self, pos: u64)
+impl core::iter::traits::iterator::Iterator for iceberg::delete_vector::DeleteVectorIterator<'_>
+pub type iceberg::delete_vector::DeleteVectorIterator<'_>::Item = u64
+pub fn iceberg::delete_vector::DeleteVectorIterator<'_>::next(&mut self) -> core::option::Option<Self::Item>
 pub mod iceberg::encryption
 pub mod iceberg::encryption::kms
 pub struct iceberg::encryption::kms::GeneratedKey
@@ -1210,10 +1234,18 @@ impl iceberg::puffin::PuffinReader
 pub async fn iceberg::puffin::PuffinReader::blob(&self, blob_metadata: &iceberg::puffin::BlobMetadata) -> iceberg::Result<iceberg::puffin::Blob>
 pub async fn iceberg::puffin::PuffinReader::file_metadata(&self) -> iceberg::Result<&iceberg::puffin::FileMetadata>
 pub fn iceberg::puffin::PuffinReader::new(input_file: iceberg::io::InputFile) -> Self
+pub struct iceberg::puffin::PuffinWriteResult
+pub iceberg::puffin::PuffinWriteResult::blobs_metadata: alloc::vec::Vec<iceberg::puffin::BlobMetadata>
+pub iceberg::puffin::PuffinWriteResult::file_size_in_bytes: u64
+impl core::clone::Clone for iceberg::puffin::PuffinWriteResult
+pub fn iceberg::puffin::PuffinWriteResult::clone(&self) -> iceberg::puffin::PuffinWriteResult
+impl core::fmt::Debug for iceberg::puffin::PuffinWriteResult
+pub fn iceberg::puffin::PuffinWriteResult::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::puffin::PuffinWriter
 impl iceberg::puffin::PuffinWriter
 pub async fn iceberg::puffin::PuffinWriter::add(&mut self, blob: iceberg::puffin::Blob, compression_codec: iceberg::compression::CompressionCodec) -> iceberg::Result<()>
 pub async fn iceberg::puffin::PuffinWriter::close(self) -> iceberg::Result<()>
+pub async fn iceberg::puffin::PuffinWriter::close_with_metadata(self) -> iceberg::Result<iceberg::puffin::PuffinWriteResult>
 pub async fn iceberg::puffin::PuffinWriter::new(output_file: &iceberg::io::OutputFile, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, compress_footer: bool) -> iceberg::Result<Self>
 pub const iceberg::puffin::APACHE_DATASKETCHES_THETA_V1: &str
 pub const iceberg::puffin::CREATED_BY_PROPERTY: &str
@@ -3082,6 +3114,7 @@ pub fn iceberg::transaction::Transaction::expire_snapshots(&self) -> iceberg::tr
 pub fn iceberg::transaction::Transaction::fast_append(&self) -> iceberg::transaction::append::FastAppendAction
 pub fn iceberg::transaction::Transaction::new(table: &iceberg::table::Table) -> Self
 pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::sort_order::ReplaceSortOrderAction
+pub fn iceberg::transaction::Transaction::row_delta(&self) -> iceberg::transaction::row_delta::RowDeltaAction
 pub fn iceberg::transaction::Transaction::update_location(&self) -> iceberg::transaction::update_location::UpdateLocationAction
 pub fn iceberg::transaction::Transaction::update_schema(&self) -> iceberg::transaction::update_schema::UpdateSchemaAction
 pub fn iceberg::transaction::Transaction::update_statistics(&self) -> iceberg::transaction::update_statistics::UpdateStatisticsAction
