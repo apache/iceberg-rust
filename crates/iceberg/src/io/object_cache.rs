@@ -492,4 +492,42 @@ mod tests {
         assert_eq!(parsed.schema.schema_id(), schema_id);
         assert_eq!(parsed.partition_spec.spec_id(), spec_id);
     }
+
+    #[test]
+    fn test_manifest_metadata_parse_self_describes_when_ids_not_recorded() {
+        use std::collections::HashMap;
+
+        use crate::spec::{ManifestMetadata, Type};
+
+        let fixture = TableTestFixture::new();
+        let table_metadata = fixture.table.metadata_ref();
+
+        // A manifest written WITHOUT `schema-id` / `partition-spec-id` keys
+        // (some writers omit them). Its self-described schema — a single long
+        // column that does NOT match the table's schemas — must win: assuming
+        // the default id 0 and looking that up in the table metadata would
+        // mis-type this manifest's column bounds.
+        let mut meta: HashMap<String, Vec<u8>> = HashMap::new();
+        meta.insert("format-version".to_string(), b"2".to_vec());
+        meta.insert("content".to_string(), b"data".to_vec());
+        meta.insert(
+            "schema".to_string(),
+            br#"{"type":"struct","schema-id":0,"fields":[{"id":1,"name":"foo","required":false,"type":"long"}]}"#
+                .to_vec(),
+        );
+        meta.insert("partition-spec".to_string(), b"[]".to_vec());
+
+        let parsed = ManifestMetadata::parse_with(&meta, Some(&table_metadata)).unwrap();
+        let field = parsed.schema.field_by_id(1).unwrap();
+        assert_eq!(field.name, "foo");
+        assert_eq!(
+            *field.field_type,
+            Type::Primitive(crate::spec::PrimitiveType::Long)
+        );
+        assert_ne!(
+            parsed.schema.as_ref().as_struct(),
+            table_metadata.current_schema().as_struct(),
+            "must not silently adopt a table schema the manifest never referenced"
+        );
+    }
 }
