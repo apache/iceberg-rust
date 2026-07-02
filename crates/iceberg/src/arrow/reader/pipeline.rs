@@ -253,9 +253,8 @@ impl FileScanTaskReader {
         if task
             .project_field_ids()
             .contains(&RESERVED_FIELD_ID_SPEC_ID)
-            && let Some(partition_spec) = &task.partition_spec
         {
-            let spec_id_datum = Datum::int(partition_spec.spec_id());
+            let spec_id_datum = Datum::int(task.partition_spec.clone().unwrap().spec_id());
             record_batch_transformer_builder = record_batch_transformer_builder
                 .with_constant(RESERVED_FIELD_ID_SPEC_ID, spec_id_datum);
         }
