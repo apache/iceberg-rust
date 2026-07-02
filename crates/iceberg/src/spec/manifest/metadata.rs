@@ -65,7 +65,7 @@ impl ManifestMetadata {
     /// The lookup happens ONLY for ids the manifest actually records. A writer
     /// that omits the `schema-id` key (some engines do) may have written the
     /// manifest under any historical schema — assuming the default id 0 would
-    /// mis-type column bounds after a type promotion (e.g. 8-byte long bounds
+    /// mistype column bounds after a type promotion (e.g. 8-byte long bounds
     /// decoded as int), so the manifest's self-described schema is the only
     /// reliable description of its bytes and is parsed instead. When
     /// `table_metadata` is `None` (or does not contain a recorded id) the

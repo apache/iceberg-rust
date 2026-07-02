@@ -506,7 +506,7 @@ mod tests {
         // (some writers omit them). Its self-described schema — a single long
         // column that does NOT match the table's schemas — must win: assuming
         // the default id 0 and looking that up in the table metadata would
-        // mis-type this manifest's column bounds.
+        // mistype this manifest's column bounds.
         let mut meta: HashMap<String, Vec<u8>> = HashMap::new();
         meta.insert("format-version".to_string(), b"2".to_vec());
         meta.insert("content".to_string(), b"data".to_vec());
