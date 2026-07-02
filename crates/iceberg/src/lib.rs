@@ -86,6 +86,7 @@ pub mod inspect;
 pub mod scan;
 
 pub mod expr;
+pub mod maintenance;
 pub mod transaction;
 pub mod transform;
 
