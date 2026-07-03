@@ -395,8 +395,6 @@ verify_git_tag_matches_archive() {
   local tag_archive_dir="git-tag-archive"
   local tag_archive_file="git-tag-source.tar.gz"
 
-  rm -rf "${tag_checkout_dir}" "${tag_archive_dir}" "${tag_archive_file}"
-
   # Clone only the RC tag from the git repository.
   git clone --quiet --depth 1 --branch "${RC_TAG}" "${GIT_REPO_URL}" "${tag_checkout_dir}"
 
