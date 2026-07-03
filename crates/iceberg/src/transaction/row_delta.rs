@@ -672,3 +672,316 @@ mod tests {
         }
     }
 }
+
+/// End-to-end coverage for the COMBINED RowDelta commit: a deletion vector
+/// against an existing data file plus a new data-file append, in ONE
+/// transaction. This is the SCD2/upsert merge shape — the demote of a
+/// superseded row and the insert of its replacement must be crash-atomic,
+/// which a single snapshot gives by construction. Uses a real V3 table
+/// (memory catalog), real Parquet data files, and a real Puffin DV, and reads
+/// the result back through the DV-applying scan.
+#[cfg(test)]
+mod e2e_tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use arrow_array::{Int32Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+    use futures::TryStreamExt;
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+    use parquet::file::properties::WriterProperties;
+    use roaring::RoaringTreemap;
+    use tempfile::TempDir;
+
+    use crate::catalog::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+    use crate::delete_vector::DeleteVector;
+    use crate::spec::{
+        DataContentType, DataFile, DataFileFormat, FormatVersion, Literal, ManifestList,
+        NestedField, Operation, PrimitiveType, Schema, Struct, Type,
+    };
+    use crate::table::Table;
+    use crate::transaction::{ApplyTransactionAction, Transaction};
+    use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+    use crate::writer::file_writer::ParquetWriterBuilder;
+    use crate::writer::file_writer::location_generator::{
+        DefaultFileNameGenerator, DefaultLocationGenerator,
+    };
+    use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+    use crate::writer::{IcebergWriter, IcebergWriterBuilder};
+    use crate::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
+
+    fn arrow_schema() -> Arc<ArrowSchema> {
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("ver", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]))
+    }
+
+    fn batch(ids: Vec<i32>, vers: Vec<i32>) -> RecordBatch {
+        RecordBatch::try_new(arrow_schema(), vec![
+            Arc::new(Int32Array::from(ids)),
+            Arc::new(Int32Array::from(vers)),
+        ])
+        .unwrap()
+    }
+
+    /// Write `batch` to a single new data file. `prefix` must be unique per
+    /// write: `DefaultFileNameGenerator`'s counter resets per instance, so a
+    /// shared prefix would collide two writes onto one path.
+    async fn write_data_file(table: &Table, prefix: &str, batch: RecordBatch) -> Vec<DataFile> {
+        let schema = table.metadata().current_schema().clone();
+        let rolling = RollingFileWriterBuilder::new_with_default_file_size(
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), schema),
+            table.file_io().clone(),
+            DefaultLocationGenerator::new(table.metadata()).unwrap(),
+            DefaultFileNameGenerator::new(prefix.to_string(), None, DataFileFormat::Parquet),
+        );
+        let mut writer = DataFileWriterBuilder::new(rolling)
+            .build(None)
+            .await
+            .unwrap();
+        writer.write(batch).await.unwrap();
+        writer.close().await.unwrap()
+    }
+
+    /// All live (id, ver) rows via a scan — deletion vectors applied.
+    async fn live_rows(table: &Table) -> Vec<(i32, i32)> {
+        let mut stream = table
+            .scan()
+            .select_all()
+            .build()
+            .unwrap()
+            .to_arrow()
+            .await
+            .unwrap();
+        let mut rows = Vec::new();
+        while let Some(b) = stream.try_next().await.unwrap() {
+            let ids = b
+                .column_by_name("id")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            let vers = b
+                .column_by_name("ver")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            for i in 0..b.num_rows() {
+                rows.push((ids.value(i), vers.value(i)));
+            }
+        }
+        rows.sort_unstable();
+        rows
+    }
+
+    /// (file_path, content_type, data_sequence_number) for every ALIVE
+    /// manifest entry in the current snapshot.
+    async fn live_entries(table: &Table) -> Vec<(String, DataContentType, i64)> {
+        let snap = table.metadata().current_snapshot().unwrap();
+        let bytes = table
+            .file_io()
+            .new_input(snap.manifest_list())
+            .unwrap()
+            .read()
+            .await
+            .unwrap();
+        let ml =
+            ManifestList::parse_with_version(&bytes, table.metadata().format_version()).unwrap();
+        let mut out = Vec::new();
+        for mf in ml.entries() {
+            let m = mf.load_manifest(table.file_io()).await.unwrap();
+            for e in m.entries() {
+                if e.is_alive() {
+                    out.push((
+                        e.data_file().file_path().to_string(),
+                        e.data_file().content_type(),
+                        e.sequence_number().expect("sequence number inherited"),
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    /// Seed a V3 (id, ver) table with one data file (1..4, v1). Returns the
+    /// catalog, ident, and the seed file's path.
+    async fn seed_table(warehouse: &TempDir) -> (impl Catalog, TableIdent, String) {
+        let catalog = MemoryCatalogBuilder::default()
+            .load(
+                "memory",
+                HashMap::from([(
+                    MEMORY_CATALOG_WAREHOUSE.to_string(),
+                    warehouse.path().to_str().unwrap().to_string(),
+                )]),
+            )
+            .await
+            .unwrap();
+        let ns = NamespaceIdent::new("db".to_string());
+        catalog.create_namespace(&ns, HashMap::new()).await.unwrap();
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "ver", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+        let ident = TableIdent::new(ns.clone(), "t".to_string());
+        let table = catalog
+            .create_table(
+                &ns,
+                TableCreation::builder()
+                    .name("t".to_string())
+                    .schema(schema)
+                    .format_version(FormatVersion::V3)
+                    .build(),
+            )
+            .await
+            .unwrap();
+
+        let data_files =
+            write_data_file(&table, "seed", batch(vec![1, 2, 3, 4], vec![1, 1, 1, 1])).await;
+        let file_a = data_files[0].file_path().to_string();
+        let tx = Transaction::new(&table);
+        let table = tx
+            .fast_append()
+            .add_data_files(data_files)
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+        assert_eq!(live_rows(&table).await.len(), 4);
+
+        (catalog, ident, file_a)
+    }
+
+    /// One RowDelta commit carries a DV demoting a row in the seed file AND a
+    /// new data file with its replacement: exactly one snapshot, correct end
+    /// state, and the same-sequence DV binds only to its referenced file (the
+    /// appended file's position 0 holds the replacement row, which survives).
+    #[tokio::test]
+    async fn row_delta_demote_and_append_commit_as_single_snapshot() {
+        let warehouse = TempDir::new().unwrap();
+        let (catalog, ident, file_a) = seed_table(&warehouse).await;
+        let table = catalog.load_table(&ident).await.unwrap();
+        let snapshots_before = table.metadata().snapshots().count();
+
+        // DV on the seed file dropping position 1 — the old (2, v1).
+        let mut positions = RoaringTreemap::new();
+        positions.insert(1);
+        let dv_path = format!("{}/dv-merge-0.puffin", warehouse.path().to_str().unwrap());
+        let dv_file = DeleteVector::new(positions)
+            .write_to_puffin_file(
+                table.file_io(),
+                dv_path,
+                file_a.clone(),
+                Struct::from_iter(Vec::<Option<Literal>>::new()),
+                0,
+            )
+            .await
+            .unwrap();
+
+        // New file: replacement (2, v2) at POSITION 0 + a fresh insert (5, v1).
+        let new_files = write_data_file(&table, "merged", batch(vec![2, 5], vec![2, 1])).await;
+
+        let tx = Transaction::new(&table);
+        let table = tx
+            .row_delta()
+            .add_data_files(new_files)
+            .add_delete_files(vec![dv_file])
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            table.metadata().snapshots().count(),
+            snapshots_before + 1,
+            "demote + append must land in a single snapshot"
+        );
+        assert_eq!(
+            table
+                .metadata()
+                .current_snapshot()
+                .unwrap()
+                .summary()
+                .operation,
+            Operation::Overwrite,
+            "RowDelta with data + deletes commits an Overwrite"
+        );
+        assert_eq!(live_rows(&table).await, vec![
+            (1, 1),
+            (2, 2),
+            (3, 1),
+            (4, 1),
+            (5, 1)
+        ]);
+    }
+
+    /// Sequence-number semantics of the combined commit: the seed file keeps
+    /// its original sequence; the appended file and the DV share the new
+    /// snapshot's sequence.
+    #[tokio::test]
+    async fn row_delta_combined_commit_sequence_numbers() {
+        let warehouse = TempDir::new().unwrap();
+        let (catalog, ident, file_a) = seed_table(&warehouse).await;
+        let table = catalog.load_table(&ident).await.unwrap();
+
+        let mut positions = RoaringTreemap::new();
+        positions.insert(1);
+        let dv_path = format!("{}/dv-merge-1.puffin", warehouse.path().to_str().unwrap());
+        let dv_file = DeleteVector::new(positions)
+            .write_to_puffin_file(
+                table.file_io(),
+                dv_path,
+                file_a.clone(),
+                Struct::from_iter(Vec::<Option<Literal>>::new()),
+                0,
+            )
+            .await
+            .unwrap();
+        let new_files = write_data_file(&table, "merged", batch(vec![2, 5], vec![2, 1])).await;
+        let file_b = new_files[0].file_path().to_string();
+
+        let tx = Transaction::new(&table);
+        let table = tx
+            .row_delta()
+            .add_data_files(new_files)
+            .add_delete_files(vec![dv_file])
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        let entries = live_entries(&table).await;
+        let seq_of = |path: &str, content: DataContentType| -> i64 {
+            entries
+                .iter()
+                .find(|(p, c, _)| p == path && *c == content)
+                .unwrap_or_else(|| panic!("no alive entry for {path} ({content:?})"))
+                .2
+        };
+
+        assert_eq!(seq_of(&file_a, DataContentType::Data), 1);
+        assert_eq!(seq_of(&file_b, DataContentType::Data), 2);
+        let dv_seq = entries
+            .iter()
+            .find(|(_, c, _)| *c == DataContentType::PositionDeletes)
+            .expect("DV entry alive")
+            .2;
+        assert_eq!(dv_seq, 2);
+        assert_eq!(entries.len(), 3, "seed + appended + DV, nothing else");
+    }
+}
