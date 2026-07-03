@@ -83,6 +83,15 @@ Options:
       Whether to download and import Apache Iceberg release keys before signature verification.
       Default: 0
 
+  --verify_git_tag <0|1>
+      Whether to verify that the source archive matches the git tag v<version>-rc.<rc>.
+      The tag is cloned and re-archived, then compared against the extracted archive.
+      Default: 1
+
+  --git_repo_url <url>
+      Git repository URL used to clone the RC tag for the git tag comparison.
+      Default: https://github.com/apache/iceberg-rust.git
+
   --check_headers <0|1>
       Whether to check Apache license headers against the extracted source archive.
       Default: 1
@@ -106,6 +115,7 @@ Examples:
   $0 0.9.1 2
   $0 0.9.1 2 --download 0
   $0 0.9.1 2 --import_gpg_keys 1
+  $0 0.9.1 2 --verify_git_tag 0
   $0 0.9.1 2 --download 0 --build 0 --python 0 --check_headers 0 --verify_signature 0
 USAGE
 }
@@ -220,6 +230,17 @@ parse_args() {
         IMPORT_GPG_KEYS="$2"
         shift 2
         ;;
+      --verify_git_tag | --verify-git-tag)
+        require_option_value "$1" "${2:-}"
+        validate_bool_option "$1" "$2"
+        VERIFY_GIT_TAG="$2"
+        shift 2
+        ;;
+      --git_repo_url | --git-repo-url)
+        require_option_value "$1" "${2:-}"
+        GIT_REPO_URL="$2"
+        shift 2
+        ;;
       --check_headers | --check-headers)
         require_option_value "$1" "${2:-}"
         validate_bool_option "$1" "$2"
@@ -277,6 +298,7 @@ validate_args() {
 }
 
 derive_release_names() {
+  RC_TAG="v${VERSION}-rc.${RC}"
   RC_ID="apache-iceberg-rust-${VERSION}-rc${RC}"
   ARCHIVE_BASE_NAME="apache-iceberg-rust-${VERSION}"
   ARCHIVE_FILE_NAME="${ARCHIVE_BASE_NAME}.tar.gz"
@@ -364,6 +386,38 @@ extract_source_archive() {
   tar -xzf "${ARCHIVE_FILE_NAME}"
 }
 
+verify_git_tag_matches_archive() {
+  require_command git
+  require_command tar
+  require_command diff
+
+  local tag_checkout_dir="git-tag-checkout"
+  local tag_archive_dir="git-tag-archive"
+  local tag_archive_file="git-tag-source.tar.gz"
+
+  rm -rf "${tag_checkout_dir}" "${tag_archive_dir}" "${tag_archive_file}"
+
+  # Clone only the RC tag from the git repository.
+  git clone --quiet --depth 1 --branch "${RC_TAG}" "${GIT_REPO_URL}" "${tag_checkout_dir}"
+
+  # Recreate the source archive from the tag using the same layout as create_rc.sh
+  # (git archive honors .gitattributes export-ignore rules, e.g. the website dir).
+  git -C "${tag_checkout_dir}" archive \
+    --format=tar.gz \
+    --prefix="${ARCHIVE_BASE_NAME}/" \
+    --output="${VERIFY_TMPDIR}/${tag_archive_file}" \
+    HEAD
+
+  mkdir -p "${tag_archive_dir}"
+  tar -xzf "${tag_archive_file}" -C "${tag_archive_dir}"
+
+  # Fail if the released archive differs from what the git tag produces.
+  if ! diff -r "${tag_archive_dir}/${ARCHIVE_BASE_NAME}" "${ARCHIVE_BASE_NAME}"; then
+    echo "Source archive does not match git tag ${RC_TAG}." >&2
+    return 1
+  fi
+}
+
 check_license_headers() {
   require_command docker
   docker run --rm -v "${VERIFY_TMPDIR}/${ARCHIVE_BASE_NAME}:/github/workspace" apache/skywalking-eyes header check
@@ -404,6 +458,8 @@ RELEASE_DIST_DIR="dist"
 DOWNLOAD="1"
 VERIFY_SIGNATURE="1"
 IMPORT_GPG_KEYS="0"
+VERIFY_GIT_TAG="1"
+GIT_REPO_URL="https://github.com/apache/iceberg-rust.git"
 CHECK_HEADERS="1"
 BUILD="1"
 PYTHON="1"
@@ -434,6 +490,12 @@ fi
 run_step "Fetch source archive checksum" fetch_file "${ARCHIVE_FILE_NAME}.sha512"
 run_step "Verify source archive checksum" verify_checksum
 run_step "Extract source archive" extract_source_archive
+
+if enabled "${VERIFY_GIT_TAG}"; then
+  run_step "Verify source archive matches git tag ${RC_TAG}" verify_git_tag_matches_archive
+else
+  skip_step "Verify source archive matches git tag ${RC_TAG}"
+fi
 
 if enabled "${CHECK_HEADERS}"; then
   run_step "Check license headers" check_license_headers
