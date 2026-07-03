@@ -699,4 +699,24 @@ mod tests {
                 .is_empty()
         );
     }
+
+    #[tokio::test]
+    async fn test_list_prefix_is_directory_style() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap().to_string();
+        let storage = LocalFsStorage::new();
+        let file = format!("{root}/t/data/a.parquet");
+        storage
+            .write(&file, Bytes::from_static(b"aa"))
+            .await
+            .unwrap();
+
+        // A trailing-slash prefix is equivalent to the non-slash form.
+        let entries = storage.list_prefix(&format!("{root}/t/")).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, format!("{root}/t/data/a.parquet"));
+
+        // A path naming an existing FILE is not matched as a raw prefix.
+        assert!(storage.list_prefix(&file).await.unwrap().is_empty());
+    }
 }
