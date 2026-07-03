@@ -758,4 +758,31 @@ mod tests {
         assert_eq!(entries[1].path, "memory://warehouse/t/metadata/v1.json");
         assert!(storage.exists(&entries[0].path).await.unwrap());
     }
+
+    #[tokio::test]
+    async fn test_list_prefix_is_directory_style() {
+        let storage = MemoryStorage::new();
+        storage
+            .write(
+                "memory://warehouse/t/data/a.parquet",
+                Bytes::from_static(b"aa"),
+            )
+            .await
+            .unwrap();
+
+        // A trailing-slash prefix is equivalent to the non-slash form.
+        let entries = storage.list_prefix("memory://warehouse/t/").await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "memory://warehouse/t/data/a.parquet");
+
+        // A path naming an existing FILE is not matched as a raw prefix:
+        // it is normalized to `.../a.parquet/`, under which nothing exists.
+        assert!(
+            storage
+                .list_prefix("memory://warehouse/t/data/a.parquet")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
 }

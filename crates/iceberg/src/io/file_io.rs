@@ -167,6 +167,26 @@ impl FileIO {
     /// prefix, so they can be passed straight back to [`FileIO`] operations
     /// and compared against paths recorded in table metadata.
     ///
+    /// # Prefix semantics
+    ///
+    /// The prefix is treated as a *directory-style location*, not a raw
+    /// object-key prefix: implementations normalize a prefix without a
+    /// trailing `/` by appending one before listing. Consequently:
+    ///
+    /// * `list_prefix("s3://bucket/t")` and `list_prefix("s3://bucket/t/")`
+    ///   are equivalent;
+    /// * a path naming an existing FILE yields an empty list (it is not
+    ///   matched as a raw prefix) — use [`FileIO::exists`] to check for a
+    ///   specific file;
+    /// * a prefix with nothing under it yields an empty list, not an error.
+    ///
+    /// This directory-style contract matches the maintenance use case
+    /// (listing a table location, or its `data/`/`metadata/` directories,
+    /// for orphan-file cleanup). Java's `SupportsPrefixOperations.listPrefix`
+    /// leaves the exact-file/raw-prefix case implementation-defined; here it
+    /// is fixed to directory-style so callers do not have to defend against
+    /// both behaviors.
+    ///
     /// # Arguments
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
