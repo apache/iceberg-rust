@@ -685,6 +685,36 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "opendal-memory")]
+    #[tokio::test]
+    async fn test_list_prefix_is_directory_style_for_opendal_memory() {
+        let storage = OpenDalStorage::Memory(default_memory_operator());
+        let file = "memory:/warehouse/t/data/a.parquet";
+        storage
+            .write(file, Bytes::from_static(b"aa"))
+            .await
+            .unwrap();
+
+        let (op, relative_path) = storage.create_operator(&file).unwrap();
+        let raw_entries = op.list_with(relative_path).recursive(true).await.unwrap();
+        assert!(raw_entries.iter().any(
+            |entry| entry.path() == "warehouse/t/data/a.parquet" && !entry.metadata().is_dir()
+        ));
+
+        let mut entries = storage.list_prefix("memory:/warehouse/t").await.unwrap();
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, file);
+        assert_eq!(entries[0].size, 2);
+
+        let slash_entries = storage.list_prefix("memory:/warehouse/t/").await.unwrap();
+        assert_eq!(slash_entries.len(), 1);
+        assert_eq!(slash_entries[0].path, file);
+
+        assert!(storage.list_prefix(file).await.unwrap().is_empty());
+        assert!(storage.exists(file).await.unwrap());
+    }
+
     #[cfg(feature = "opendal-fs")]
     #[test]
     fn test_relativize_path_fs() {
