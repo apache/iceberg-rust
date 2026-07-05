@@ -39,4 +39,4 @@ jobs:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       with:
         persist-credentials: false
-    - uses: apache/infrastructure-actions/allowlist-check@5d6d53e66c7f6f831d4fd0c8fd1a610054ed8a26  # main
+    - uses: apache/infrastructure-actions/allowlist-check@5d6d53e66c7f6f831d4fd0c8fd1a610054ed8a26  # zizmor: ignore[ref-version-mismatch] action does not support tag-based releases yet; pinned from main
