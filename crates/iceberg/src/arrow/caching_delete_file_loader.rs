@@ -360,6 +360,12 @@ impl CachingDeleteFileLoader {
                         "null values in delete file",
                     ));
                 };
+                if pos < 0 {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("negative position in delete file {file_path}: {pos}"),
+                    ));
+                }
 
                 if pos < 0 {
                     return Err(Error::new(
