@@ -359,45 +359,29 @@ impl RecordBatchTransformer {
         let fields: Result<Vec<_>> = projected_iceberg_field_ids
             .iter()
             .map(|field_id| {
-                // Check if this is a constant field
-                if constant_fields.contains_key(field_id) {
-                    // For metadata/virtual fields (like _file), get name from metadata_columns
-                    // For partition fields, get name from schema (they exist in schema)
-                    if let Ok(iceberg_field) = get_metadata_field(*field_id) {
-                        // This is a metadata/virtual field - convert Iceberg field to Arrow
-                        let datum = constant_fields.get(field_id).ok_or(Error::new(
-                            ErrorKind::Unexpected,
-                            "constant field not found",
-                        ))?;
-                        let arrow_type = datum_to_arrow_type_with_ree(datum);
-                        let arrow_field =
-                            Field::new(&iceberg_field.name, arrow_type, !iceberg_field.required)
-                                .with_metadata(HashMap::from([(
-                                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                                    iceberg_field.id.to_string(),
-                                )]));
-                        Ok(Arc::new(arrow_field))
-                    } else {
-                        // This is a partition constant field (exists in schema but uses constant value)
-                        let field = &field_id_to_mapped_schema_map
-                            .get(field_id)
-                            .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
-                            .0;
-                        let arrow_type = field.data_type().clone();
-                        // Use the type from constant_fields (REE for constants)
-                        let constant_field =
-                            Field::new(field.name(), arrow_type, field.is_nullable())
-                                .with_metadata(field.metadata().clone());
-                        Ok(Arc::new(constant_field))
-                    }
-                } else {
-                    // Regular field - use schema as-is
-                    Ok(field_id_to_mapped_schema_map
-                        .get(field_id)
-                        .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
-                        .0
-                        .clone())
+                // Metadata/virtual fields (like _file, _spec_id) don't exist in the table
+                // schema, so build their Arrow field from the metadata column definition and
+                // the pre-computed constant's type.
+                if let Some(datum) = constant_fields.get(field_id)
+                    && let Ok(iceberg_field) = get_metadata_field(*field_id)
+                {
+                    let arrow_type = datum_to_arrow_type_with_ree(datum);
+                    let arrow_field =
+                        Field::new(&iceberg_field.name, arrow_type, !iceberg_field.required)
+                            .with_metadata(HashMap::from([(
+                                PARQUET_FIELD_ID_META_KEY.to_string(),
+                                iceberg_field.id.to_string(),
+                            )]));
+                    return Ok(Arc::new(arrow_field));
                 }
+
+                // Regular fields and identity-partitioned constant fields both exist in the
+                // table schema, so use the mapped Arrow field as-is.
+                Ok(field_id_to_mapped_schema_map
+                    .get(field_id)
+                    .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
+                    .0
+                    .clone())
             })
             .collect();
 
