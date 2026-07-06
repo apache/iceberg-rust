@@ -52,4 +52,16 @@ ignore = [
   # moves to pyo3 >=0.29.
   "RUSTSEC-2026-0176",
   "RUSTSEC-2026-0177",
+  # `quick-xml` < 0.41.0 has quadratic duplicate-attribute validation and
+  # unbounded namespace-declaration allocation (parser DoS).
+  #
+  # It is transitive through object_store 0.13.2 (DataFusion 53 / Parquet 58),
+  # OpenDAL 0.57.0, and reqsign-aws-v4 3.0.0. Their released compatible
+  # versions cannot select the fixed quick-xml >=0.41.0 release.
+  #
+  # Per SECURITY-THREAT-MODEL.md, malformed-input parser CPU/memory DoS is
+  # hardening rather than an Iceberg Rust trust-boundary vulnerability. Remove
+  # once the transitive dependency set permits quick-xml >=0.41.0.
+  "RUSTSEC-2026-0194",
+  "RUSTSEC-2026-0195",
 ]

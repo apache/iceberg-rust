@@ -24,6 +24,249 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.10.0] - 2026-06-29
+
+### Breaking Changes
+
+* **API Changes:**
+  * feat!(catalog): adding support for purge_table by @CTTY in https://github.com/apache/iceberg-rust/pull/2232
+  * feat!: Enhance compression codec enum. by @emkornfield in https://github.com/apache/iceberg-rust/pull/2288
+  * feat!(runtime): Support custom Runtime in Catalog by @CTTY in https://github.com/apache/iceberg-rust/pull/2308
+  * refactor!(writer): borrow TableMetadata in DefaultLocationGenerator::new by @smaheshwar-pltr in https://github.com/apache/iceberg-rust/pull/2604
+
+* **Compatibility:**
+  * chore: Bump MSRV to 1.94 by @dannycjones in https://github.com/apache/iceberg-rust/pull/2652
+
+## All Changes
+* feat: Honor compression settings for metadata.json on write by @emkornfield in https://github.com/apache/iceberg-rust/pull/1876
+* chore(deps): Bump quinn-proto from 0.11.13 to 0.11.14 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2228
+* Add catalog test suite to unify catalog's behavior. by @blackmwk in https://github.com/apache/iceberg-rust/pull/2131
+* chore(deps): Bump datafusion from 52.2.0 to 52.3.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2235
+* chore(deps): Bump serde_with from 3.17.0 to 3.18.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2233
+* chore(deps): Bump tempfile from 3.26.0 to 3.27.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2234
+* chore(deps): Bump lz4_flex from 0.12.0 to 0.12.1 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2239
+* chore(deps): Bump lz4_flex from 0.12.0 to 0.12.1 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2238
+* feat(io): Add delete_stream to Storage trait by @CTTY in https://github.com/apache/iceberg-rust/pull/2216
+* feat(storage): implement opendal resolving storage by @CTTY in https://github.com/apache/iceberg-rust/pull/2231
+* doc: Update README.md to include more components by @CTTY in https://github.com/apache/iceberg-rust/pull/2248
+* fix(python): use resolving storage for python binding by @CTTY in https://github.com/apache/iceberg-rust/pull/2246
+* chore: Change publish parallism back to 1 by @CTTY in https://github.com/apache/iceberg-rust/pull/2254
+* Infra: Remove GitHub Actions from Dependabot configuration by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2267
+* ci: pin third-party actions to Apache-approved SHAs by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2266
+* chore(deps): fix audit check and disable inherited aws sdk default features by @maybe-vibe in https://github.com/apache/iceberg-rust/pull/2274
+* chore(deps): Bump minijinja from 2.17.1 to 2.18.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2273
+* chore(deps): Bump datafusion from 52.3.0 to 52.4.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2271
+* chore(deps): Bump datafusion-cli from 52.2.0 to 52.3.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2272
+* chore(deps): Bump datafusion-sqllogictest from 52.2.0 to 52.3.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2270
+* fix: explicitly set Python interpreter in maturin build to prevent using wrong version by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2277
+* chore(deps): Bump rustls-webpki from 0.103.7 to 0.103.10 in bindings/python by @blackmwk in https://github.com/apache/iceberg-rust/pull/2278
+* chore(deps): Bump bytes from 1.11.0 to 1.11.1 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2281
+* chore(deps): Bump time from 0.3.44 to 0.3.47 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2282
+* docs: Add DataFusion Comet to Users section of README by @mbutrovich in https://github.com/apache/iceberg-rust/pull/2283
+* feat(encryption) [1/N] Support encryption: Add crypto for AES-GCM by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2026
+* feat!(catalog): adding support for purge_table by @CTTY in https://github.com/apache/iceberg-rust/pull/2232
+* deps: upgrade DataFusion to 53.0, Arrow to 58 by @mbutrovich in https://github.com/apache/iceberg-rust/pull/2206
+* chore(deps): Bump uuid from 1.22.0 to 1.23.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2291
+* ci: improve github workflows by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2289
+* Make `convert_filters_to_predicate` public by @LLDay in https://github.com/apache/iceberg-rust/pull/2118
+* ci: fix zizmor security findings by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2290
+* fix(spec): clean up -1 snapshot ID sentinel usage and add deserialization test by @geserdugarov in https://github.com/apache/iceberg-rust/pull/2294
+* feat!: Enhance compression codec enum. by @emkornfield in https://github.com/apache/iceberg-rust/pull/2288
+* ci: allows nightly to run on workflow dispatch by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2304
+* ci: ensure use bash shell for env by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2305
+* feat(iceberg): Add snapshot utils to scan ancestors by @CTTY in https://github.com/apache/iceberg-rust/pull/2285
+* Fix zizmor workflow by @blackmwk in https://github.com/apache/iceberg-rust/pull/2324
+* chore(deps): Bump crate-ci/typos from 1.44.0 to 1.45.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2318
+* chore(deps): Bump taiki-e/install-action from 2.70.0 to 2.73.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2319
+* chore(deps): Bump aws-sdk-s3tables from 1.53.0 to 1.54.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2320
+* Fix ci workflow failure by @blackmwk in https://github.com/apache/iceberg-rust/pull/2325
+* chore(deps): Bump tokio from 1.50.0 to 1.51.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2321
+* chore(deps): Bump minijinja from 2.18.0 to 2.19.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2322
+* fix(s3tables): use 's3' as the default scheme by @rchowell in https://github.com/apache/iceberg-rust/pull/2313
+* fix(storage/s3): default to virtual-host-style addressing by @plusplusjiajia in https://github.com/apache/iceberg-rust/pull/2330
+* Fix RUSTSEC-2026-0097 by @blackmwk in https://github.com/apache/iceberg-rust/pull/2331
+* chore: update comment tag to match the exact version to fix zizmor by @CTTY in https://github.com/apache/iceberg-rust/pull/2333
+* ci: fix zizmor workflow by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2334
+* chore(deps): Bump astral-sh/setup-uv from 7.3.1 to 8.0.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2314
+* tests(s3tables): add s3tables end-to-end test to verify table creation/loading plus reading/writing by @dannycjones in https://github.com/apache/iceberg-rust/pull/2315
+* fix: build_fallback_field_id_map produces incorrect column indices for schemas with nested types by @mbutrovich in https://github.com/apache/iceberg-rust/pull/2307
+* fix: incorrect Parquet INT96 timestamp values from ArrowReader by @mbutrovich in https://github.com/apache/iceberg-rust/pull/2301
+* feat(encryption) [2/N] Support encryption: Add streaming encryption/decryption by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2286
+* refactor(storage): remove the configured_scheme parameter from storage impls by @rchowell in https://github.com/apache/iceberg-rust/pull/2338
+* chore(deps): Bump PyO3/maturin-action from 1.50.1 to 1.51.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2346
+* chore(deps): Bump actions/upload-artifact from 7.0.0 to 7.0.1 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2345
+* support fixedbinary(n) by @jeff-sqds in https://github.com/apache/iceberg-rust/pull/2348
+* chore: bump datafusion to 53.1.0 by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2350
+* chore(deps): Bump rustls-webpki from 0.103.10 to 0.103.12 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2352
+* fix: NaN pushdown correctly pushes down NaNs correctness issue  by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2351
+* fix: Bump rustls-webpki from 0.103.12 to 0.103.13 to fix RUSTSEC-2026-0104 by @CTTY in https://github.com/apache/iceberg-rust/pull/2356
+* feat(datafusion): show pushed-down limit in IcebergTableScan EXPLAIN output by @toutane in https://github.com/apache/iceberg-rust/pull/2360
+* Split arrow reader into smaller modules by @blackmwk in https://github.com/apache/iceberg-rust/pull/2358
+* fix: allow missing sequence-number in v2 snapshots for v1-upgraded tables by @jembishop in https://github.com/apache/iceberg-rust/pull/2127
+* chore(deps): Bump tokio from 1.51.1 to 1.52.1 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2374
+* chore(deps): Bump datafusion-cli from 53.0.0 to 53.1.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2373
+* chore(deps): Bump crate-ci/typos from 1.45.0 to 1.45.1 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2372
+* chore(deps): Bump astral-sh/setup-uv from 8.0.0 to 8.1.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2371
+* chore(deps): Bump taiki-e/install-action from 2.75.7 to 2.75.18 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2370
+* chore(deps): Bump datafusion-sqllogictest from 53.0.0 to 53.1.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2369
+* chore(deps): Bump zizmorcore/zizmor-action from 0.5.2 to 0.5.3 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2368
+* docs: bump version for python binding by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2377
+* feat(reader): Add read_with_metrics() for scan I/O metrics by @mbutrovich in https://github.com/apache/iceberg-rust/pull/2349
+* feat(encryption) [3/N] Support encryption: KMS by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2339
+* chore: Improve release process by @CTTY in https://github.com/apache/iceberg-rust/pull/2381
+* docs(arrow): clarify ScanMetrics::bytes_read includes delete files by @mbutrovich in https://github.com/apache/iceberg-rust/pull/2379
+* feat(encryption) [4/N] Support encryption: StandardKeyMetadata by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2340
+* ci(python): verify wheel abi3 compatibility with --no-build by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2388
+* chore(deps): Bump aws-sdk-glue from 1.142.0 to 1.142.1 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2399
+* chore(deps): Bump taiki-e/install-action from 2.75.18 to 2.75.22 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2400
+* fix(sqllogictest): add missing tokio `rt-multi-thread` feature by @toutane in https://github.com/apache/iceberg-rust/pull/2386
+* feat(datatypes): add optional and required constructors for MapType by @TwinklerG in https://github.com/apache/iceberg-rust/pull/2405
+* CI: Use specific patch versions in workflow action comments by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2412
+* docs: Correct docs for Int128 and UInt128 being big-endian not little-endian by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2397
+* fix(tests): remove unnecessary `.to_string()` calls for metadata_location by @TwinklerG in https://github.com/apache/iceberg-rust/pull/2407
+* fix(catalog/memory): relax strict ms inequality in test_update_table by @Kurtiscwright in https://github.com/apache/iceberg-rust/pull/2395
+* chore(deps): bump opendal to 0.56, migrate to reqsign-core 3.0 by @kszucs in https://github.com/apache/iceberg-rust/pull/2401
+* fix(transaction): fix previous snapshot summary fetching by @dentiny in https://github.com/apache/iceberg-rust/pull/2391
+* chore(deps): Bump reqwest from 0.12.28 to 0.13.3 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2429
+* chore(deps): Bump serde_with from 3.18.0 to 3.19.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2428
+* chore(deps): Bump github/codeql-action from 4.35.2 to 4.35.3 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2426
+* chore(deps): Bump taiki-e/install-action from 2.75.22 to 2.75.30 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2425
+* chore(deps): Bump crate-ci/typos from 1.45.1 to 1.46.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2424
+* chore(deps): Bump the arrow-parquet group with 6 updates by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2427
+* feat(schema): Add `update_schema` action to enable table schema updates by @tomighita in https://github.com/apache/iceberg-rust/pull/2120
+* Fix RUSTSEC-2026-0122 by @blackmwk in https://github.com/apache/iceberg-rust/pull/2437
+* Fix pyiceberg-core dev dependency resolution by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2442
+* chore(deps): Bump urllib3 from 2.6.3 to 2.7.0 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2434
+* feat(encryption) [5/N] Support encryption: Encryption Manager by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2383
+* chore(deps-dev): Bump pytest from 8.4.2 to 9.0.3 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2326
+* chore: add `uv` to dependabot for /bindings/python by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2444
+* chore: update deps for /bindings/python by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2445
+* chore(deps): Bump reqwest from 0.12.28 to 0.13.3 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2450
+* chore(deps): Bump rand from 0.9.4 to 0.10.1 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2449
+* chore(deps): Bump taiki-e/install-action from 2.75.30 to 2.77.1 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2446
+* chore(deps): Bump the arrow-parquet group with 2 updates by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2448
+* ci: add check_standalone job to verify each crate compiles independently by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2389
+* fix(puffin): add missing magic number validation for puffins by @dentiny in https://github.com/apache/iceberg-rust/pull/2416
+* feat!(runtime): Support custom Runtime in Catalog by @CTTY in https://github.com/apache/iceberg-rust/pull/2308
+* chore(deps): Bump taiki-e/install-action from 2.77.1 to 2.77.4 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2461
+* chore(deps): Bump reqwest from 0.12.28 to 0.13.3 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2460
+* chore(deps): Bump crate-ci/typos from 1.46.0 to 1.46.1 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2459
+* chore(deps): Bump github/codeql-action from 4.35.3 to 4.35.4 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2457
+* chore(deps-dev): Bump maturin from 1.13.1 to 1.13.2 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2458
+* feat(encryption) [6/N] support `ArrowReaderOptions` in `get_metadata` by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2402
+* feat(partition): adjust transform boundary for timestamp types by @dentiny in https://github.com/apache/iceberg-rust/pull/2422
+* chore(deps): Bump idna from 3.13 to 3.15 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2470
+* feat: HuggingFace Hub storage backend and CDC table properties by @kszucs in https://github.com/apache/iceberg-rust/pull/2375
+* fix(spec): support JSON binary literals by @fallintoplace in https://github.com/apache/iceberg-rust/pull/2476
+* chore: Add a lock check to CI by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2484
+* chore(deps): Bump serde_with from 3.19.0 to 3.20.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2499
+* chore(deps): Bump crate-ci/typos from 1.46.1 to 1.46.2 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2491
+* chore(deps): Bump taiki-e/install-action from 2.77.4 to 2.79.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2492
+* chore(deps): Bump peaceiris/actions-gh-pages from 4.0.0 to 4.1.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2493
+* chore(deps): Bump zizmorcore/zizmor-action from 0.5.3 to 0.5.6 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2494
+* chore(deps-dev): Bump maturin from 1.13.2 to 1.13.3 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2495
+* chore(deps): Bump github/codeql-action from 4.35.4 to 4.35.5 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2497
+* docs: add pyiceberg-core release validation by @officialasishkumar in https://github.com/apache/iceberg-rust/pull/2502
+* chore(deps): Bump reqwest from 0.12.28 to 0.13.3 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2498
+* ci(toml): check toml fmt by @TwinklerG in https://github.com/apache/iceberg-rust/pull/2504
+* Add Hugging Face storage option to storage/opendal/README by @lhoestq in https://github.com/apache/iceberg-rust/pull/2487
+* chore(deps): Bump the arrow-parquet group across 1 directory with 6 updates by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2496
+* Use cargo publish to publish crates by @blackmwk in https://github.com/apache/iceberg-rust/pull/2489
+* feat(arrow): pass `&FieldRef` instead of `&Field` in `ArrowSchemaVisitor` to achieve cheap clone by @TwinklerG in https://github.com/apache/iceberg-rust/pull/2471
+* Add Spice.ai to Users by @lukekim in https://github.com/apache/iceberg-rust/pull/2516
+* chore(spec): remove stale #[allow(dead_code)] from snapshot_summary by @SreeramGarlapati in https://github.com/apache/iceberg-rust/pull/2514
+* fix(spec): don't panic on overwrite-truncate when previous totals exceed i32::MAX or are non-numeric by @SreeramGarlapati in https://github.com/apache/iceberg-rust/pull/2511
+* Infra: add bindings/python into root workspace by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2506
+* feat(iceberg): log warning when available_parallelism falls back to default by @huan233usc in https://github.com/apache/iceberg-rust/pull/2520
+* chore(deps): Bump urllib3 from 2.6.3 to 2.7.0 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2523
+* docs: add Iceberg security model by @sungwy in https://github.com/apache/iceberg-rust/pull/2524
+* Add some scripts to help release by @blackmwk in https://github.com/apache/iceberg-rust/pull/2522
+* feat(ci): add cargo-public-api checks for public API stability by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2525
+* Ignore RUSTSEC-2024-0014 by @blackmwk in https://github.com/apache/iceberg-rust/pull/2531
+* chore(deps): Bump minijinja from 2.19.0 to 2.20.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2555
+* chore(deps): Bump reqwest from 0.12.28 to 0.13.3 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2554
+* chore(deps): Bump github/codeql-action from 4.35.5 to 4.36.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2553
+* chore(deps): Bump dashmap from 6.1.0 to 6.2.1 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2552
+* chore(deps): Bump the arrow-parquet group with 2 updates by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2551
+* chore(deps): Bump actions/stale from 10.2.0 to 10.3.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2549
+* chore(deps): Bump crate-ci/typos from 1.46.2 to 1.46.3 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2548
+* chore(deps): Bump taiki-e/install-action from 2.77.4 to 2.79.7 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2547
+* chore(ci): omit blanket/auto-trait/auto-derived impls from public API by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2542
+* fix(transaction): preserve delete-only manifests in FastAppend by @viirya in https://github.com/apache/iceberg-rust/pull/2545
+* Increase the throughput of the `validate_duplicate_files` by @tomighita in https://github.com/apache/iceberg-rust/pull/2296
+* chore(refactor): add manifest list reader by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2541
+* fix(ci): correct checkout version comment for zizmor by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2578
+* Split manifest_list into smaller modules by @blackmwk in https://github.com/apache/iceberg-rust/pull/2577
+* chore(refactor) add file scan task builder by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2582
+* feat(avro): enable snappy codec support by @romusz in https://github.com/apache/iceberg-rust/pull/2573
+* chore(refactor) refactor ManifestWriterBuilder to take Box<dyn FileWrite> and location by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2568
+* chore(refactor) refactor manifest list writer to take Box<dyn FileWrite> to prep for encryption by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2564
+* chore(deps): bump opendal from 0.56 to 0.57 by @kszucs in https://github.com/apache/iceberg-rust/pull/2588
+* ci: consolidate HF/CDC integration tests into existing CI jobs by @kszucs in https://github.com/apache/iceberg-rust/pull/2587
+* chore(deps): Bump taiki-e/install-action from 2.79.7 to 2.81.1 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2599
+* chore(deps): Bump crate-ci/typos from 1.46.3 to 1.47.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2598
+* chore(deps-dev): Bump huggingface-hub from 1.15.0 to 1.17.0 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2597
+* chore(deps): Bump reqwest from 0.12.28 to 0.13.3 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2600
+* fix(catalog-sql): forward catalog props to FileIO by @kszucs in https://github.com/apache/iceberg-rust/pull/2528
+* fix(storage-opendal): add TimeoutLayer inside RetryLayer to bound hangs by @AlJohri in https://github.com/apache/iceberg-rust/pull/2455
+* fix(catalog): Only list iceberg tables for Glue by @CTTY in https://github.com/apache/iceberg-rust/pull/2570
+* fix(spec): Fix incorrect totals when previous is omitted or invalid by @dannycjones in https://github.com/apache/iceberg-rust/pull/2589
+* fix(s3tables): add TableNotFound error handling by @dannycjones in https://github.com/apache/iceberg-rust/pull/2595
+* fix(reader): `filter_row_groups_by_byte_range` duplicates rows for sub-row-group file splits by @mbutrovich in https://github.com/apache/iceberg-rust/pull/2615
+* fix: use name-mapped field IDs for projection and predicate pushdown by @viirya in https://github.com/apache/iceberg-rust/pull/2612
+* refactor!(writer): borrow TableMetadata in DefaultLocationGenerator::new by @smaheshwar-pltr in https://github.com/apache/iceberg-rust/pull/2604
+* feat(encryption) [7/N] Read encrypted manifest list by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2453
+* cleanup: remove stale #[allow(dead_code)] from expr visitors and spec by @huan233usc in https://github.com/apache/iceberg-rust/pull/2616
+* fix(catalog/s3tables): stop dropping endpoint_url for empty properties by @Kurtiscwright in https://github.com/apache/iceberg-rust/pull/2623
+* chore(ci) cargo lock taplo cli by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2627
+* ci(python): avoid duplicate bindings build by @abnobdoss in https://github.com/apache/iceberg-rust/pull/2636
+* chore(deps): Bump crate-ci/typos from 1.47.0 to 1.47.2 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2646
+* feat(encryption): [10/N] Block encrypted writes until we support it in full. by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2626
+* chore(ci): ignore pyo3 RUSTSEC-2026-0176 and -0177 in audit by @NoahKusaba in https://github.com/apache/iceberg-rust/pull/2637
+* chore(deps): Bump reqwest from 0.12.28 to 0.13.3 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2645
+* chore(deps): Bump github/codeql-action from 4.36.0 to 4.36.2 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2644
+* chore(deps-dev): Bump huggingface-hub from 1.17.0 to 1.18.0 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2643
+* chore(deps): Bump serde_with from 3.20.0 to 3.21.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2642
+* chore(deps): Bump actions/checkout from 6.0.2 to 6.0.3 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2641
+* chore(deps): Bump astral-sh/setup-uv from 8.1.0 to 8.2.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2639
+* chore(deps): Bump taiki-e/install-action from 2.81.1 to 2.81.7 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2640
+* fix: add space in decimal type serialization for cross-engine compat by @SreeramGarlapati in https://github.com/apache/iceberg-rust/pull/2538
+* fix: support decimal datum conversion by precision by @abnobdoss in https://github.com/apache/iceberg-rust/pull/2508
+* chore(ci): migrate to trusted publishing by @dannycjones in https://github.com/apache/iceberg-rust/pull/2593
+* chore: Bump MSRV to 1.94 by @dannycjones in https://github.com/apache/iceberg-rust/pull/2652
+* feat(datafusion): push down isnan over NaN-preserving numeric expressions by @huan233usc in https://github.com/apache/iceberg-rust/pull/2592
+* ci: Update version tag in publish.yml by @CTTY in https://github.com/apache/iceberg-rust/pull/2662
+* feat(transaction): add ExpireSnapshotsAction by @dhruvarya-db in https://github.com/apache/iceberg-rust/pull/2591
+* Fix: replace --profile py-release with --release in Python release workflows by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/2638
+* feat(transaction): default expiry to history.expire.* table properties by @dhruvarya-db in https://github.com/apache/iceberg-rust/pull/2664
+* ci: save Rust caches only from main by @abnobdoss in https://github.com/apache/iceberg-rust/pull/2669
+* Extract name mapping from table properties by @prakharjain09 in https://github.com/apache/iceberg-rust/pull/2519
+* chore(dev): bump iceberg-rest-fixture to 1.10.1 by @huan233usc in https://github.com/apache/iceberg-rust/pull/2673
+* chore: Move dependency list generation from a release task to a PR author responsibility by @dannycjones in https://github.com/apache/iceberg-rust/pull/2676
+* ci: disable debuginfo and incremental in Rust CI by @abnobdoss in https://github.com/apache/iceberg-rust/pull/2672
+* chore(deps): Bump rust-lang/crates-io-auth-action from 1.0.3 to 1.0.4 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2688
+* CI: Check ASF action allowlist on every PR by @ebyhr in https://github.com/apache/iceberg-rust/pull/2694
+* fix(rest): skip serializing unset optional fields in CreateTableRequest by @rahulsmahadev in https://github.com/apache/iceberg-rust/pull/2610
+* chore: Update release runbook by @dannycjones in https://github.com/apache/iceberg-rust/pull/2674
+* feat(transaction): remove statistics file metadata for expired snapshots by @dhruvarya-db in https://github.com/apache/iceberg-rust/pull/2667
+* fix: fix RUSTSEC-2026-0185 by @CTTY in https://github.com/apache/iceberg-rust/pull/2703
+* fix(reader): graceful handling of missing column index by @sandugood in https://github.com/apache/iceberg-rust/pull/2693
+* fix: avoid lost-wakeup hang in DeleteFileIndex::get_deletes_for_data_file by @dhruvarya-db in https://github.com/apache/iceberg-rust/pull/2696
+* chore: Move dependency list generation back to release manager task by @dannycjones in https://github.com/apache/iceberg-rust/pull/2706
+* fix(transaction): don't let user properties override computed summary metrics by @viirya in https://github.com/apache/iceberg-rust/pull/2726
+* chore(deps): Bump rust-lang/crates-io-auth-action from 1.0.4 to 1.0.5 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2728
+* chore(deps-dev): Bump huggingface-hub from 1.18.0 to 1.20.1 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2730
+* chore(deps-dev): Bump maturin from 1.13.3 to 1.14.1 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2731
+* chore(deps-dev): Bump pytest from 9.0.3 to 9.1.1 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2732
+* chore(deps): Bump actions/checkout from 6.0.3 to 7.0.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2733
+* chore(deps): Bump bytes from 1.11.1 to 1.12.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2734
+* chore(deps): Bump taiki-e/install-action from 2.81.7 to 2.82.2 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2735
+* chore(deps): Bump minijinja from 2.20.0 to 2.21.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2736
+* chore: Update all cargo install references to use --locked by @dannycjones in https://github.com/apache/iceberg-rust/pull/2739
+* fix: Update Python binding test fixtures to close catalogs by @dannycjones in https://github.com/apache/iceberg-rust/pull/2721
+* chore: Update changelog and dependency lists for 0.10.0 by @dannycjones in https://github.com/apache/iceberg-rust/pull/2745
+* chore(ci): Remove '--locked' flag on toml-cli install by @dannycjones in https://github.com/apache/iceberg-rust/pull/2750
+
 ## [v0.9.0] - 2026-03-10
 
 ### Breaking Changes

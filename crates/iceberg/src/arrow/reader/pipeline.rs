@@ -357,13 +357,13 @@ impl FileScanTaskReader {
             }
 
             if self.row_selection_enabled {
-                row_selection = Some(ArrowReader::get_row_selection_for_filter_predicate(
+                row_selection = ArrowReader::get_row_selection_for_filter_predicate(
                     &predicate,
                     record_batch_stream_builder.metadata(),
                     &selected_row_group_indices,
                     &field_id_map,
                     &task.schema,
-                )?);
+                )?;
             }
         }
 
