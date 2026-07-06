@@ -1002,7 +1002,7 @@ pub mod tests {
                                 .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
                                 .partition(Struct::from_iter([
-                                    Some(Literal::long(1)),
+                                    Some(Literal::long(100)),
                                     Some(Literal::string("apa")),
                                     Some(Literal::int(27)),
                                 ]))
@@ -1029,7 +1029,7 @@ pub mod tests {
                                 .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
                                 .partition(Struct::from_iter([
-                                    Some(Literal::long(1)),
+                                    Some(Literal::long(200)),
                                     Some(Literal::string("ice")),
                                     Some(Literal::int(5)),
                                 ]))
@@ -1055,7 +1055,7 @@ pub mod tests {
                                 .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
                                 .partition(Struct::from_iter([
-                                    Some(Literal::long(1)),
+                                    Some(Literal::long(300)),
                                     Some(Literal::string("apa")),
                                     Some(Literal::int(19)),
                                 ]))
@@ -2644,6 +2644,11 @@ pub mod tests {
 
         let batch_stream = table_scan.to_arrow().await.unwrap();
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        // Verify the x column exists and has correct data
+        let col1 = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col1.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
 
         // Verify the _spec_id column exists
         let spec_id_col = batches[0].column_by_name(RESERVED_COL_NAME_SPEC_ID);
