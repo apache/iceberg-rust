@@ -301,6 +301,87 @@ async fn test_rewrite_manifests_target_size_rollover() {
     assert_eq!(total_rows, NUM_FILES * 4);
 }
 
+/// Test: a per-commit snapshot property sets the manifest target size and takes
+/// precedence over the table property.
+///
+/// The target size resolves in order: `set_snapshot_properties` on the action,
+/// then the table property, then the default. Here the table property would
+/// consolidate everything into one manifest (large target), but a 1-byte
+/// snapshot property forces each entry into its own manifest — proving the
+/// snapshot property wins without persisting anything on the table.
+#[tokio::test]
+async fn test_rewrite_manifests_target_size_from_snapshot_property() {
+    const NUM_FILES: usize = 4;
+    // Table property is deliberately huge so, on its own, it would consolidate
+    // all entries into a single manifest.
+    let (rest_catalog, table) =
+        create_table_with_manifests_and_properties(NUM_FILES, "t_rwm_snap_target", [(
+            "commit.manifest.target-size-bytes".to_string(),
+            "1073741824".to_string(), // 1 GiB
+        )])
+        .await;
+
+    let snapshot = table.metadata().current_snapshot().unwrap();
+    let manifest_list = snapshot
+        .load_manifest_list(table.file_io(), table.metadata())
+        .await
+        .unwrap();
+    assert_eq!(manifest_list.entries().len(), NUM_FILES);
+
+    // A 1-byte target supplied as a snapshot property overrides the 1 GiB table
+    // property, rolling each entry into its own manifest.
+    let mut props = std::collections::HashMap::new();
+    props.insert(
+        "commit.manifest.target-size-bytes".to_string(),
+        "1".to_string(),
+    );
+    let tx = Transaction::new(&table);
+    let action = tx
+        .rewrite_manifests()
+        .cluster_by(Box::new(|_data_file| "all".to_string()))
+        .set_snapshot_properties(props);
+    let tx = action.apply(tx).unwrap();
+    let table = tx.commit(&rest_catalog).await.unwrap();
+
+    let snapshot = table.metadata().current_snapshot().unwrap();
+    let manifest_list = snapshot
+        .load_manifest_list(table.file_io(), table.metadata())
+        .await
+        .unwrap();
+    assert_eq!(
+        manifest_list.entries().len(),
+        NUM_FILES,
+        "snapshot-property 1-byte target should override the 1 GiB table \
+         property and roll each entry into its own manifest"
+    );
+
+    // The table property is unchanged (the override is per-commit only).
+    assert_eq!(
+        table
+            .metadata()
+            .properties()
+            .get("commit.manifest.target-size-bytes")
+            .map(String::as_str),
+        Some("1073741824"),
+        "snapshot-property override must not mutate the table property"
+    );
+
+    // Data is preserved.
+    let batches: Vec<RecordBatch> = table
+        .scan()
+        .select_all()
+        .build()
+        .unwrap()
+        .to_arrow()
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
+    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total_rows, NUM_FILES * 4);
+}
+
 /// Test: rewrite manifests with rewrite_if predicate only rewrites matching manifests.
 ///
 /// 1. Create 3 manifests via fast_append.

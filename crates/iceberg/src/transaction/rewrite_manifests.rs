@@ -388,10 +388,22 @@ impl TransactionAction for RewriteManifestsAction {
             // for the same cluster key. Mirrors Spark/Iceberg
             // `commit.manifest.target-size-bytes` (default 8 MiB) so a hot
             // partition no longer produces one unbounded manifest.
-            let target_manifest_size_bytes: u64 = table
-                .metadata()
-                .properties()
+            //
+            // Resolution order: the per-commit snapshot property set on this
+            // action via `set_snapshot_properties` wins, so a caller can size
+            // the manifests for a single rewrite without persisting a table
+            // property (the snapshot property is also recorded in the snapshot
+            // summary); otherwise fall back to the table property, then the
+            // Iceberg default.
+            let target_manifest_size_bytes: u64 = self
+                .snapshot_properties
                 .get(MANIFEST_TARGET_SIZE_BYTES)
+                .or_else(|| {
+                    table
+                        .metadata()
+                        .properties()
+                        .get(MANIFEST_TARGET_SIZE_BYTES)
+                })
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(MANIFEST_TARGET_SIZE_BYTES_DEFAULT as u64);
 
