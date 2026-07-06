@@ -242,7 +242,8 @@ impl RecordBatchTransformerBuilder {
         Ok(self)
     }
 
-    /// Set virtual fields such as '_pos'
+    /// Set virtual fields such as '_pos'. Caller must have registered a corresponding
+    /// ArrowReaderOptions::with_virtual_columns call on the reader
     pub(crate) fn with_virtual_field(mut self, field_id: i32) -> Self {
         self.virtual_fields.insert(field_id);
         self
