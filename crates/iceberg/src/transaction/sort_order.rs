@@ -281,4 +281,40 @@ mod tests {
         };
         assert_eq!(err.kind(), ErrorKind::Unexpected);
     }
+
+    #[tokio::test]
+    async fn test_sort_order_transform_survives_metadata_json_round_trip() {
+        use crate::catalog::Catalog;
+        use crate::memory::tests::new_memory_catalog;
+        use crate::spec::SortDirection;
+        use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+
+        // Commit a transform-based sort order through a real catalog: the memory
+        // catalog serializes the updated table metadata to a metadata.json file
+        // (`TableMetadata::write_to`), and `load_table` reads that file back and
+        // parses it (`TableMetadata::read_from`). This exercises the full
+        // JSON round-trip of the transform (e.g. `"bucket[16]"`), not just the
+        // in-memory `TableUpdate`.
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .replace_sort_order()
+            .asc_with_transform("x", Transform::Bucket(16), NullOrder::First)
+            .desc_with_transform("y", Transform::Truncate(4), NullOrder::Last)
+            .apply(tx)
+            .unwrap();
+        let committed = tx.commit(&catalog).await.unwrap();
+
+        // Reload from the catalog: this parses the metadata.json written above.
+        let reloaded = catalog.load_table(committed.identifier()).await.unwrap();
+        let sort_order = reloaded.metadata().default_sort_order();
+
+        assert_eq!(sort_order.fields.len(), 2);
+        assert_eq!(sort_order.fields[0].transform, Transform::Bucket(16));
+        assert_eq!(sort_order.fields[0].direction, SortDirection::Ascending);
+        assert_eq!(sort_order.fields[1].transform, Transform::Truncate(4));
+        assert_eq!(sort_order.fields[1].direction, SortDirection::Descending);
+    }
 }
