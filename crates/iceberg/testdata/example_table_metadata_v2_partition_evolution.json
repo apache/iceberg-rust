@@ -47,8 +47,8 @@
           "field-id": 1000
         },
         {
-          "name": "a_trunc_5",
-          "transform": "truncate[5]",
+          "name": "a_trunc_3",
+          "transform": "truncate[3]",
           "source-id": 4,
           "field-id": 1001
         }
@@ -64,8 +64,8 @@
           "field-id": 1000
         },
         {
-          "name": "a_trunc_5",
-          "transform": "truncate[5]",
+          "name": "a_trunc_3",
+          "transform": "truncate[3]",
           "source-id": 4,
           "field-id": 1001
         },

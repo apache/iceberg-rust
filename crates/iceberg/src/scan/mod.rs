@@ -1005,7 +1005,7 @@ pub mod tests {
                                 .record_count(1)
                                 .partition(Struct::from_iter([
                                     Some(Literal::long(1)),
-                                    Some(Literal::string("apach")),
+                                    Some(Literal::string("apa")),
                                     Some(Literal::int(27)),
                                 ]))
                                 .key_metadata(None)
@@ -1032,7 +1032,7 @@ pub mod tests {
                                 .record_count(1)
                                 .partition(Struct::from_iter([
                                     Some(Literal::long(1)),
-                                    Some(Literal::string("icebe")),
+                                    Some(Literal::string("ice")),
                                     Some(Literal::int(5)),
                                 ]))
                                 .build()
@@ -1058,7 +1058,7 @@ pub mod tests {
                                 .record_count(1)
                                 .partition(Struct::from_iter([
                                     Some(Literal::long(1)),
-                                    Some(Literal::string("apach")),
+                                    Some(Literal::string("apa")),
                                     Some(Literal::int(19)),
                                 ]))
                                 .build()
