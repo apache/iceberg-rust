@@ -2608,6 +2608,7 @@ pub fn iceberg::spec::TableMetadata::last_updated_ms(&self) -> i64
 pub fn iceberg::spec::TableMetadata::last_updated_timestamp(&self) -> iceberg::Result<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
 pub fn iceberg::spec::TableMetadata::location(&self) -> &str
 pub fn iceberg::spec::TableMetadata::metadata_compression_codec(&self) -> iceberg::Result<iceberg::compression::CompressionCodec>
+pub fn iceberg::spec::TableMetadata::metadata_location_root(&self) -> alloc::string::String
 pub fn iceberg::spec::TableMetadata::metadata_log(&self) -> &[iceberg::spec::MetadataLog]
 pub fn iceberg::spec::TableMetadata::next_row_id(&self) -> u64
 pub fn iceberg::spec::TableMetadata::next_sequence_number(&self) -> i64

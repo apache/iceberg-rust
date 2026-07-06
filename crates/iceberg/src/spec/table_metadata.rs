@@ -47,6 +47,11 @@ use crate::{Error, ErrorKind};
 static MAIN_BRANCH: &str = "main";
 pub(crate) static ONE_MINUTE_MS: i64 = 60_000;
 
+/// Table property for the base location of metadata files.
+const WRITE_METADATA_LOCATION: &str = "write.metadata.path";
+/// Default subdirectory when `write.metadata.path` is not configured.
+const DEFAULT_METADATA_DIR: &str = "metadata";
+
 /// Sentinel value used by the Java implementation and older metadata files
 /// to represent a missing/empty current snapshot ID. During deserialization,
 /// this value is normalized to `None`.
@@ -362,6 +367,24 @@ impl TableMetadata {
     #[inline]
     pub fn properties(&self) -> &HashMap<String, String> {
         &self.properties
+    }
+
+    /// Returns the base location for metadata files.
+    ///
+    /// Honors the `write.metadata.path` table property when set, otherwise defaults
+    /// to the `metadata` directory under the table location.
+    pub fn metadata_location_root(&self) -> String {
+        self.metadata_location_root_with_base(self.location())
+    }
+
+    /// Like [`Self::metadata_location_root`], but uses an explicit table location as
+    /// the base for the default `<location>/metadata` when `write.metadata.path` is not
+    /// configured.
+    pub(crate) fn metadata_location_root_with_base(&self, base: &str) -> String {
+        self.properties
+            .get(WRITE_METADATA_LOCATION)
+            .map(|location| location.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| format!("{base}/{DEFAULT_METADATA_DIR}"))
     }
 
     /// Returns the metadata compression codec from table properties.
@@ -4282,5 +4305,53 @@ mod tests {
             deserialized_snapshot.row_range().unwrap();
         assert_eq!(deserialized_first_row_id, 100);
         assert_eq!(deserialized_added_rows, 50);
+    }
+
+    #[test]
+    fn test_metadata_location_root_default() {
+        // Verify metadata files go to `<location>/metadata` when `write.metadata.path` is not set
+        let metadata = get_test_table_metadata("TableMetadataV2Valid.json");
+        assert_eq!(metadata.location(), "s3://bucket/test/location");
+        assert_eq!(
+            metadata.metadata_location_root(),
+            "s3://bucket/test/location/metadata"
+        );
+    }
+
+    #[test]
+    fn test_metadata_location_root_honors_write_metadata_path() {
+        let metadata = get_test_table_metadata("TableMetadataV2Valid.json")
+            .into_builder(None)
+            .set_properties(HashMap::from([(
+                super::WRITE_METADATA_LOCATION.to_string(),
+                "s3://other-bucket/custom-meta".to_string(),
+            )]))
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        assert_eq!(
+            metadata.metadata_location_root(),
+            "s3://other-bucket/custom-meta"
+        );
+    }
+
+    #[test]
+    fn test_metadata_location_root_trims_trailing_slash() {
+        // A configured path with a trailing slash must not yield a doubled separator
+        let metadata = get_test_table_metadata("TableMetadataV2Valid.json")
+            .into_builder(None)
+            .set_properties(HashMap::from([(
+                super::WRITE_METADATA_LOCATION.to_string(),
+                "s3://other-bucket/custom-meta/".to_string(),
+            )]))
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        assert_eq!(
+            metadata.metadata_location_root(),
+            "s3://other-bucket/custom-meta"
+        );
     }
 }
