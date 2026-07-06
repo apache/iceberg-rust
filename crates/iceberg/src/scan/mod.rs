@@ -845,7 +845,6 @@ pub mod tests {
             let mut writer = ManifestWriterBuilder::new(
                 self.next_manifest_file(),
                 Some(current_snapshot.snapshot_id()),
-                None,
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
             )
@@ -1074,7 +1073,6 @@ pub mod tests {
             let mut writer = ManifestWriterBuilder::new(
                 self.next_manifest_file(),
                 Some(current_snapshot.snapshot_id()),
-                None,
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
             )
@@ -1185,7 +1183,6 @@ pub mod tests {
             let mut writer = ManifestWriterBuilder::new(
                 self.next_manifest_file(),
                 Some(current_snapshot.snapshot_id()),
-                None,
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
             )
@@ -1220,7 +1217,6 @@ pub mod tests {
             let mut writer = ManifestWriterBuilder::new(
                 self.next_manifest_file(),
                 Some(current_snapshot.snapshot_id()),
-                None,
                 current_schema.clone(),
                 current_partition_spec.as_ref().clone(),
             )
