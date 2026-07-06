@@ -229,8 +229,7 @@ impl FileScanTaskReader {
                 |e| {
                     Error::new(
                         ErrorKind::Unexpected,
-                        "Failed to create ArrowReaderMetadata with the 'row_number' virtual_column"
-                            .to_string(),
+                        "Failed to create ArrowReaderMetadata with the 'row_number' virtual_column",
                     )
                     .with_source(e)
                 },
