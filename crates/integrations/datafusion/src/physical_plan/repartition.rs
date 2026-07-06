@@ -503,7 +503,7 @@ mod tests {
                 let column_names: Vec<String> = exprs
                     .iter()
                     .filter_map(|expr| {
-                        expr.as_any()
+                        expr
                             .downcast_ref::<Column>()
                             .map(|col| col.name().to_string())
                     })
@@ -731,7 +731,7 @@ mod tests {
                 let column_names: Vec<String> = exprs
                     .iter()
                     .filter_map(|expr| {
-                        expr.as_any()
+                        expr
                             .downcast_ref::<Column>()
                             .map(|col| col.name().to_string())
                     })
