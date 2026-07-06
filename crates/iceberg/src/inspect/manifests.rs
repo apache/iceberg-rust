@@ -366,12 +366,12 @@ mod tests {
                 -- child 2: "lower_bound" (Utf8)
                 StringArray
                 [
-                  "1",
+                  "100",
                 ]
                 -- child 3: "upper_bound" (Utf8)
                 StringArray
                 [
-                  "1",
+                  "300",
                 ]
                 ],
                 ]"#]],

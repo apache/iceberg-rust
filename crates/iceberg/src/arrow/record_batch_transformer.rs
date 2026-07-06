@@ -477,29 +477,39 @@ impl RecordBatchTransformer {
         projected_iceberg_field_ids
             .iter()
             .map(|field_id| {
-                // Check if this is a constant field (metadata/virtual or identity-partitioned)
-                // Constant fields always use their pre-computed constant values, regardless of whether
-                // they exist in the Parquet file. This is per Iceberg spec rule #1: partition metadata
-                // is authoritative and should be preferred over file data.
+                // Check if this is a constant field (metadata/virtual or identity-partitioned).
+                //
+                // Metadata/virtual fields (like _file, _spec_id) never exist in the data file,
+                // so they always use their pre-computed constant value.
+                //
+                // For identity-partitioned fields, the Iceberg spec's "Column Projection" rules
+                // only apply to "field ids which are not present in a data file". When the column
+                // IS present in the Parquet file, it must be read from the file; the partition
+                // metadata constant is only a fallback for when the column is absent (e.g. add_files).
                 if let Some(datum) = constant_fields.get(field_id) {
-                    let arrow_type = if get_metadata_field(*field_id).is_ok() {
-                        datum_to_arrow_type_with_ree(datum)
-                    } else {
-                        field_id_to_mapped_schema_map
-                            .get(field_id)
-                            .ok_or(Error::new(
-                                ErrorKind::Unexpected,
-                                "could not find field in schema",
-                            ))?
-                            .0
-                            .data_type()
-                            .clone()
-                    };
+                    let is_metadata_field = get_metadata_field(*field_id).is_ok();
+                    let present_in_file = field_id_to_source_schema_map.contains_key(field_id);
 
-                    return Ok(ColumnSource::Add {
-                        value: Some(datum.literal().clone()),
-                        target_type: arrow_type,
-                    });
+                    if is_metadata_field || !present_in_file {
+                        let arrow_type = if is_metadata_field {
+                            datum_to_arrow_type_with_ree(datum)
+                        } else {
+                            field_id_to_mapped_schema_map
+                                .get(field_id)
+                                .ok_or(Error::new(
+                                    ErrorKind::Unexpected,
+                                    "could not find field in schema",
+                                ))?
+                                .0
+                                .data_type()
+                                .clone()
+                        };
+
+                        return Ok(ColumnSource::Add {
+                            value: Some(datum.literal().clone()),
+                            target_type: arrow_type,
+                        });
+                    }
                 }
 
                 let (target_field, _) =

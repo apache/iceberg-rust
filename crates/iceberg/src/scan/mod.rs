@@ -897,7 +897,7 @@ pub mod tests {
                                 .file_format(DataFileFormat::Parquet)
                                 .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
-                                .partition(Struct::from_iter([Some(Literal::long(1))]))
+                                .partition(Struct::from_iter([Some(Literal::long(100))]))
                                 .key_metadata(None)
                                 .build()
                                 .unwrap(),
@@ -920,7 +920,7 @@ pub mod tests {
                                 .file_format(DataFileFormat::Parquet)
                                 .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
-                                .partition(Struct::from_iter([Some(Literal::long(1))]))
+                                .partition(Struct::from_iter([Some(Literal::long(200))]))
                                 .build()
                                 .unwrap(),
                         )
@@ -942,7 +942,7 @@ pub mod tests {
                                 .file_format(DataFileFormat::Parquet)
                                 .file_size_in_bytes(parquet_file_size)
                                 .record_count(1)
-                                .partition(Struct::from_iter([Some(Literal::long(1))]))
+                                .partition(Struct::from_iter([Some(Literal::long(300))]))
                                 .build()
                                 .unwrap(),
                         )
