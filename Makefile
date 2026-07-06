@@ -26,6 +26,7 @@ check-fmt:
 check-clippy:
 	cargo clippy --all-targets --all-features --workspace -- -D warnings
 
+# Keep version in sync with the CI lint install step in .github/workflows/ci.yml.
 install-cargo-machete:
 	cargo install --locked cargo-machete@0.7.0
 
@@ -38,6 +39,7 @@ install-cargo-nextest:
 nextest: install-cargo-nextest
 	cargo nextest run --all-targets --all-features --workspace
 
+# Keep version in sync with the CI lint install step in .github/workflows/ci.yml.
 install-taplo-cli:
 	cargo install --locked taplo-cli@0.9.3
 
