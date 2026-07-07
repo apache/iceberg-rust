@@ -26,8 +26,9 @@ check-fmt:
 check-clippy:
 	cargo clippy --all-targets --all-features --workspace -- -D warnings
 
+# Keep version in sync with the CI lint install step in .github/workflows/ci.yml.
 install-cargo-machete:
-	cargo install cargo-machete@0.7.0
+	cargo install --locked cargo-machete@0.7.0
 
 cargo-machete: install-cargo-machete
 	cargo machete
@@ -38,8 +39,9 @@ install-cargo-nextest:
 nextest: install-cargo-nextest
 	cargo nextest run --all-targets --all-features --workspace
 
+# Keep version in sync with the CI lint install step in .github/workflows/ci.yml.
 install-taplo-cli:
-	cargo install taplo-cli@0.9.3
+	cargo install --locked taplo-cli@0.9.3
 
 fix-toml: install-taplo-cli
 	taplo fmt
@@ -65,7 +67,7 @@ generate-public-api: install-cargo-public-api
 		manifest=$${entry##*:}; \
 		crate_dir=$$(dirname "$$manifest"); \
 		echo "Generating public API for $$crate..."; \
-		cargo public-api -p "$$crate" --all-features > "$$crate_dir/public-api.txt"; \
+		cargo public-api -p "$$crate" --all-features -ss > "$$crate_dir/public-api.txt"; \
 	done
 
 check-public-api: install-cargo-public-api
@@ -75,7 +77,7 @@ check-public-api: install-cargo-public-api
 		manifest=$${entry##*:}; \
 		crate_dir=$$(dirname "$$manifest"); \
 		echo "Checking public API for $$crate..."; \
-		cargo public-api -p "$$crate" --all-features | diff - "$$crate_dir/public-api.txt" || { \
+		cargo public-api -p "$$crate" --all-features -ss | diff - "$$crate_dir/public-api.txt" || { \
 			echo "ERROR: Public API for $$crate has changed. Run 'make generate-public-api' to update."; \
 			fail=1; \
 		}; \
@@ -98,7 +100,7 @@ clean:
 	cargo clean
 
 install-mdbook:
-	cargo install mdbook@0.4.36
+	cargo install --locked mdbook@0.4.36
 
 site: install-mdbook
 	cd website && mdbook serve

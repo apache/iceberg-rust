@@ -20,12 +20,14 @@
 use std::sync::Arc;
 
 use crate::arrow::ArrowReaderBuilder;
+use crate::encryption::EncryptionManager;
+use crate::encryption::kms::KeyManagementClient;
 use crate::inspect::MetadataTable;
 use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
 use crate::runtime::Runtime;
 use crate::scan::TableScanBuilder;
-use crate::spec::{SchemaRef, TableMetadata, TableMetadataRef};
+use crate::spec::{ManifestListReader, SchemaRef, SnapshotRef, TableMetadata, TableMetadataRef};
 use crate::{Error, ErrorKind, Result, TableIdent};
 
 /// Builder to create table scan.
@@ -34,6 +36,7 @@ pub struct TableBuilder {
     metadata_location: Option<String>,
     metadata: Option<TableMetadataRef>,
     identifier: Option<TableIdent>,
+    kms_client: Option<Arc<dyn KeyManagementClient>>,
     readonly: bool,
     disable_cache: bool,
     cache_size_bytes: Option<u64>,
@@ -47,6 +50,7 @@ impl TableBuilder {
             metadata_location: None,
             metadata: None,
             identifier: None,
+            kms_client: None,
             readonly: false,
             disable_cache: false,
             cache_size_bytes: None,
@@ -104,6 +108,16 @@ impl TableBuilder {
         self
     }
 
+    /// optional - sets the KMS client used to unwrap keys for table encryption.
+    ///
+    /// If the table metadata has the `encryption.key-id` property set, a
+    /// [`KeyManagementClient`] must be provided here so the table can build
+    /// an [`EncryptionManager`]; otherwise [`Self::build`] will return an error.
+    pub fn kms_client(mut self, kms_client: Arc<dyn KeyManagementClient>) -> Self {
+        self.kms_client = Some(kms_client);
+        self
+    }
+
     /// build the Table
     pub fn build(self) -> Result<Table> {
         let Self {
@@ -111,6 +125,7 @@ impl TableBuilder {
             metadata_location,
             metadata,
             identifier,
+            kms_client,
             readonly,
             disable_cache,
             cache_size_bytes,
@@ -145,15 +160,25 @@ impl TableBuilder {
             ));
         };
 
+        let encryption_manager =
+            EncryptionManager::from_table_metadata(kms_client.as_ref(), &metadata)?;
+
         let object_cache = if disable_cache {
-            Arc::new(ObjectCache::with_disabled_cache(file_io.clone()))
+            Arc::new(ObjectCache::with_disabled_cache(
+                file_io.clone(),
+                encryption_manager.clone(),
+            ))
         } else if let Some(cache_size_bytes) = cache_size_bytes {
             Arc::new(ObjectCache::new_with_capacity(
                 file_io.clone(),
                 cache_size_bytes,
+                encryption_manager.clone(),
             ))
         } else {
-            Arc::new(ObjectCache::new(file_io.clone()))
+            Arc::new(ObjectCache::new(
+                file_io.clone(),
+                encryption_manager.clone(),
+            ))
         };
 
         Ok(Table {
@@ -164,6 +189,7 @@ impl TableBuilder {
             readonly,
             object_cache,
             runtime,
+            encryption_manager,
         })
     }
 }
@@ -178,6 +204,7 @@ pub struct Table {
     readonly: bool,
     object_cache: Arc<ObjectCache>,
     runtime: Runtime,
+    encryption_manager: Option<Arc<EncryptionManager>>,
 }
 
 impl Table {
@@ -238,6 +265,16 @@ impl Table {
         self.object_cache.clone()
     }
 
+    /// Returns the [`EncryptionManager`] for this table, if encryption is
+    /// configured.
+    ///
+    /// A manager is present iff the table metadata has the
+    /// `encryption.key-id` property set and a [`KeyManagementClient`] was
+    /// supplied to the [`TableBuilder`].
+    pub fn encryption_manager(&self) -> Option<&EncryptionManager> {
+        self.encryption_manager.as_deref()
+    }
+
     /// Creates a table scan.
     pub fn scan(&self) -> TableScanBuilder<'_> {
         TableScanBuilder::new(self)
@@ -262,6 +299,16 @@ impl Table {
     /// Returns the current schema as a shared reference.
     pub fn current_schema_ref(&self) -> SchemaRef {
         self.metadata.current_schema().clone()
+    }
+
+    /// Creates a [`ManifestListReader`] for the given snapshot.
+    pub fn manifest_list_reader(&self, snapshot: &SnapshotRef) -> ManifestListReader {
+        ManifestListReader::new(
+            snapshot.clone(),
+            self.file_io.clone(),
+            self.metadata.clone(),
+            self.encryption_manager.clone(),
+        )
     }
 
     /// Create a reader for the table.
@@ -358,7 +405,22 @@ impl StaticTable {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
+    use crate::encryption::SensitiveBytes;
+    use crate::encryption::kms::MemoryKeyManagementClient;
+    use crate::spec::TableProperties;
+
+    fn load_test_metadata(filename: &str) -> TableMetadata {
+        let path = format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            filename
+        );
+        let json = fs::read_to_string(path).unwrap();
+        serde_json::from_str(&json).unwrap()
+    }
 
     #[tokio::test]
     async fn test_static_table_from_file() {
@@ -431,5 +493,108 @@ mod tests {
             .unwrap();
         assert!(!table.readonly());
         assert_eq!(table.identifier.name(), "table");
+    }
+
+    fn make_kms() -> Arc<dyn KeyManagementClient> {
+        let kms = MemoryKeyManagementClient::new();
+        kms.add_master_key("master-1").unwrap();
+        Arc::new(kms)
+    }
+
+    #[tokio::test]
+    async fn table_decrypts_manifest_list_via_object_cache() {
+        // The fixture contains a snapshot with key-id, encryption-keys (KEK + wrapped DEK),
+        // all generated with the master key bytes below.
+        let mut metadata: TableMetadata = load_test_metadata("TableMetadataV3ValidEncryption.json");
+
+        // Point the snapshot's manifest-list at the testdata file on disk.
+        let manifest_list_path = format!(
+            "{}/testdata/manifests_lists/manifest-list-v3-encrypted.avro",
+            env!("CARGO_MANIFEST_DIR"),
+        );
+        let snapshot = metadata.snapshots.get_mut(&1).unwrap();
+        let mut patched = snapshot.as_ref().clone();
+        patched.manifest_list = manifest_list_path;
+        *snapshot = Arc::new(patched);
+
+        // Seed the KMS with the same master key bytes used to generate the fixture.
+        let kms: Arc<dyn KeyManagementClient> = {
+            let k = MemoryKeyManagementClient::new();
+            k.add_master_key_bytes(
+                "master-1",
+                SensitiveBytes::new([
+                    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
+                    0x0d, 0x0e, 0x0f,
+                ]),
+            )
+            .unwrap();
+            Arc::new(k)
+        };
+
+        let table = Table::builder()
+            .file_io(FileIO::new_with_fs())
+            .metadata(metadata)
+            .identifier(TableIdent::from_strs(["ns", "enc"]).unwrap())
+            .kms_client(kms)
+            .runtime(Runtime::try_current().unwrap())
+            .build()
+            .unwrap();
+
+        let snapshot_ref = table.metadata().current_snapshot().unwrap();
+        let manifest_list = table
+            .object_cache()
+            .get_manifest_list(snapshot_ref, &table.metadata_ref())
+            .await
+            .unwrap();
+        assert_eq!(manifest_list.entries().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn table_builder_errors_when_encryption_key_id_set_but_no_kms() {
+        let metadata: TableMetadata = load_test_metadata("TableMetadataV3ValidEncryption.json");
+
+        let err = Table::builder()
+            .file_io(FileIO::new_with_memory())
+            .metadata(metadata)
+            .identifier(TableIdent::from_strs(["ns", "enc"]).unwrap())
+            .runtime(Runtime::try_current().unwrap())
+            .build()
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
+    }
+
+    #[tokio::test]
+    async fn table_builder_skips_encryption_on_pre_v3_table() {
+        // Encryption is a v3 spec feature; pre-v3 tables silently skip
+        // encryption even if encryption.key-id is set.
+        let mut metadata: TableMetadata = load_test_metadata("TableMetadataV2ValidMinimal.json");
+        metadata.properties.insert(
+            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+            "master-1".to_string(),
+        );
+
+        let table = Table::builder()
+            .file_io(FileIO::new_with_memory())
+            .metadata(metadata)
+            .identifier(TableIdent::from_strs(["ns", "enc"]).unwrap())
+            .kms_client(make_kms())
+            .runtime(Runtime::try_current().unwrap())
+            .build()
+            .unwrap();
+        assert!(table.encryption_manager().is_none());
+    }
+
+    #[tokio::test]
+    async fn table_builder_skips_encryption_when_property_absent() {
+        let metadata: TableMetadata = load_test_metadata("TableMetadataV3ValidMinimal.json");
+        let table = Table::builder()
+            .file_io(FileIO::new_with_memory())
+            .metadata(metadata)
+            .identifier(TableIdent::from_strs(["ns", "plain"]).unwrap())
+            .kms_client(make_kms())
+            .runtime(Runtime::try_current().unwrap())
+            .build()
+            .unwrap();
+        assert!(table.encryption_manager().is_none());
     }
 }

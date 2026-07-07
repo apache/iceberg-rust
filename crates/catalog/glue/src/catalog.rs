@@ -38,7 +38,7 @@ use iceberg_storage_opendal::OpenDalStorageFactory;
 use crate::error::{from_aws_build_error, from_aws_sdk_error};
 use crate::utils::{
     convert_to_database, convert_to_glue_table, convert_to_namespace, get_default_table_location,
-    get_metadata_location, validate_namespace,
+    get_metadata_location, is_iceberg_table, validate_namespace,
 };
 use crate::with_catalog_id;
 
@@ -472,9 +472,21 @@ impl Catalog for GlueCatalog {
         }
 
         let db_name = validate_namespace(namespace)?;
-        let table_list = self.list_tables(namespace).await?;
 
-        if !table_list.is_empty() {
+        // Check for ANY Glue table in the database, not just Iceberg tables.
+        // Glue's `delete_database` will fail if any table (Iceberg or not) is
+        // still present, and `list_tables` only returns Iceberg tables, so we
+        // query Glue directly here.
+        let builder = self
+            .client
+            .0
+            .get_tables()
+            .database_name(&db_name)
+            .max_results(1);
+        let builder = with_catalog_id!(builder, self.config);
+        let resp = builder.send().await.map_err(from_aws_sdk_error)?;
+
+        if !resp.table_list().is_empty() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!("Database with name: {} is not empty", &db_name),
@@ -489,12 +501,16 @@ impl Catalog for GlueCatalog {
         Ok(())
     }
 
-    /// Asynchronously lists all tables within a specified namespace.
+    /// Asynchronously lists all Iceberg tables within a specified namespace.
+    ///
+    /// Glue databases may contain a mix of Iceberg and non-Iceberg tables
+    /// (e.g. plain Hive tables). Only tables whose `table_type` parameter is
+    /// set to `ICEBERG` (case-insensitive) are returned
     ///
     /// # Returns
     /// A `Result<Vec<TableIdent>>`, which is:
     /// - `Ok(vec![...])` containing a vector of `TableIdent` instances, each
-    /// representing a table within the specified namespace.
+    /// representing an Iceberg table within the specified namespace.
     /// - `Err(...)` if an error occurs during namespace validation or while
     /// querying the database.
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
@@ -519,6 +535,7 @@ impl Catalog for GlueCatalog {
             let tables: Vec<_> = resp
                 .table_list()
                 .iter()
+                .filter(|tbl| is_iceberg_table(&tbl.parameters))
                 .map(|tbl| TableIdent::new(namespace.clone(), tbl.name().to_string()))
                 .collect();
 
@@ -645,12 +662,7 @@ impl Catalog for GlueCatalog {
     async fn purge_table(&self, table: &TableIdent) -> Result<()> {
         let table_info = self.load_table(table).await?;
         self.drop_table(table).await?;
-        iceberg::drop_table_data(
-            table_info.file_io(),
-            table_info.metadata(),
-            table_info.metadata_location(),
-        )
-        .await
+        iceberg::drop_table_data(&table_info).await
     }
 
     /// Asynchronously checks the existence of a specified table

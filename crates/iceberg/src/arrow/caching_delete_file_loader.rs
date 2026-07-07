@@ -932,38 +932,35 @@ mod tests {
         let eq_delete_path = setup_write_equality_delete_file_1(table_location.to_str().unwrap());
 
         // Create FileScanTask with BOTH positional and equality deletes
-        let pos_del = FileScanTaskDeleteFile {
-            file_path: pos_del_path.clone(),
-            file_size_in_bytes: std::fs::metadata(&pos_del_path).unwrap().len(),
-            file_type: DataContentType::PositionDeletes,
-            partition_spec_id: 0,
-            equality_ids: None,
-        };
+        let pos_del = FileScanTaskDeleteFile::builder()
+            .with_file_path(pos_del_path.clone())
+            .with_file_size_in_bytes(std::fs::metadata(&pos_del_path).unwrap().len())
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_partition_spec_id(0)
+            .build();
 
-        let eq_del = FileScanTaskDeleteFile {
-            file_path: eq_delete_path.clone(),
-            file_size_in_bytes: std::fs::metadata(&eq_delete_path).unwrap().len(),
-            file_type: DataContentType::EqualityDeletes,
-            partition_spec_id: 0,
-            equality_ids: Some(vec![2, 3]), // Only use field IDs that exist in both schemas
-        };
+        let eq_del = FileScanTaskDeleteFile::builder()
+            .with_file_path(eq_delete_path.clone())
+            .with_file_size_in_bytes(std::fs::metadata(&eq_delete_path).unwrap().len())
+            .with_file_type(DataContentType::EqualityDeletes)
+            .with_partition_spec_id(0)
+            .with_equality_ids(Some(vec![2, 3])) // Only use field IDs that exist in both schemas
+            .build();
 
-        let file_scan_task = FileScanTask {
-            file_size_in_bytes: 0,
-            start: 0,
-            length: 0,
-            record_count: None,
-            data_file_path: format!("{}/data-1.parquet", table_location.to_str().unwrap()),
-            data_file_format: DataFileFormat::Parquet,
-            schema: data_file_schema.clone(),
-            project_field_ids: vec![2, 3],
-            predicate: None,
-            deletes: vec![pos_del, eq_del],
-            partition: None,
-            partition_spec: None,
-            name_mapping: None,
-            case_sensitive: false,
-        };
+        let file_scan_task = FileScanTask::builder()
+            .with_file_size_in_bytes(0)
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(format!(
+                "{}/data-1.parquet",
+                table_location.to_str().unwrap()
+            ))
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(data_file_schema.clone())
+            .with_project_field_ids(vec![2, 3])
+            .with_deletes(vec![pos_del, eq_del])
+            .with_case_sensitive(false)
+            .build();
 
         // Load the deletes - should handle both types without error
         let delete_file_loader =

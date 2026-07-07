@@ -99,12 +99,15 @@ pub async fn create_sdk_config(
             )
             .await;
 
-        return aws_config::defaults(BehaviorVersion::latest())
+        let mut assumed_config = aws_config::defaults(BehaviorVersion::latest())
             .credentials_provider(assume_role_provider)
-            .region(base_config.region().cloned())
-            .endpoint_url(endpoint_uri.map(|s| s.as_str()).unwrap_or_default())
-            .load()
-            .await;
+            .region(base_config.region().cloned());
+
+        if let Some(endpoint) = endpoint_uri {
+            assumed_config = assumed_config.endpoint_url(endpoint);
+        }
+
+        return assumed_config.load().await;
     }
 
     config.load().await

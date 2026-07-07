@@ -23,7 +23,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use aws_sdk_s3tables::operation::create_table::CreateTableOutput;
 use aws_sdk_s3tables::operation::get_namespace::GetNamespaceOutput;
-use aws_sdk_s3tables::operation::get_table::GetTableOutput;
+use aws_sdk_s3tables::operation::get_table::{GetTableError, GetTableOutput};
 use aws_sdk_s3tables::operation::list_tables::ListTablesOutput;
 use aws_sdk_s3tables::operation::update_table_metadata_location::UpdateTableMetadataLocationError;
 use aws_sdk_s3tables::types::OpenTableFormat;
@@ -242,7 +242,23 @@ impl S3TablesCatalog {
             .table_bucket_arn(self.config.table_bucket_arn.clone())
             .namespace(table_ident.namespace().to_url_string())
             .name(table_ident.name());
-        let resp: GetTableOutput = req.send().await.map_err(from_aws_sdk_error)?;
+
+        let resp = req.send().await.map_err(|err| {
+            if err
+                .as_service_error()
+                .is_some_and(GetTableError::is_not_found_exception)
+            {
+                // S3 Tables GetTable API only reports that the resource was not found, and does not distinguish between namespaces and tables.
+                // https://docs.aws.amazon.com/AmazonS3/latest/API/API_s3Buckets_GetTable.html#API_s3Buckets_GetTable_Errors
+                Error::new(
+                    ErrorKind::TableNotFound,
+                    format!("Table {table_ident} is not found, either because the namespace or table did not exist"),
+                )
+                .with_source(err)
+            } else {
+                from_aws_sdk_error(err)
+            }
+        })?;
 
         // when a table is created, it's possible that the metadata location is not set.
         let metadata_location = resp.metadata_location().ok_or_else(|| {
@@ -784,14 +800,26 @@ mod tests {
             Err(e) => panic!("Error loading catalog: {e}"),
         };
 
-        let table = catalog
+        let _table = catalog
             .load_table(&TableIdent::new(
                 NamespaceIdent::new("aws_s3_metadata".to_string()),
                 "query_storage_metadata".to_string(),
             ))
             .await
-            .unwrap();
-        println!("{table:?}");
+            .expect("table that exists should be loaded");
+
+        let load_table_err = catalog
+            .load_table(&TableIdent::new(
+                NamespaceIdent::new("not_a_namespace".to_string()),
+                "not_a_table_name".to_string(),
+            ))
+            .await
+            .expect_err("loading a table that does not exist should fail");
+        assert_eq!(
+            load_table_err.kind(),
+            ErrorKind::TableNotFound,
+            "must return table not found error for non-existent table"
+        );
     }
 
     #[tokio::test]
@@ -1244,7 +1272,7 @@ mod tests {
         .unwrap();
 
         // Locations will be generated based on the table metadata, which will be using `s3://` for Amazon S3 Tables.
-        let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+        let location_generator = DefaultLocationGenerator::new(table.metadata()).unwrap();
         let file_name_generator = DefaultFileNameGenerator::new(
             "test".to_string(),
             None,

@@ -152,7 +152,7 @@ require_cargo_deny() {
   require_command cargo
   if ! cargo deny --version >/dev/null 2>&1; then
     echo "This step requires 'cargo-deny' for dependency license checks." >&2
-    echo "Install it with: cargo install cargo-deny" >&2
+    echo "Install it with: cargo install --locked cargo-deny" >&2
     echo "To skip this step locally, pass: --check_deps 0" >&2
     return 1
   fi

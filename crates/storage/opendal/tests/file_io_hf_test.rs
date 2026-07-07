@@ -42,8 +42,11 @@ mod tests {
     macro_rules! require_env {
         ($var:expr) => {
             match std::env::var($var) {
-                Ok(v) => v,
-                Err(_) => {
+                Ok(v) if !v.is_empty() => v,
+                // Treat an unset *or* empty var as "not provided": CI exposes
+                // these via `env: FOO: ${{ secrets.FOO }}`, which sets the var
+                // to an empty string when the secret is absent (e.g. fork PRs).
+                _ => {
                     eprintln!("Skipping HF test: {} not set", $var);
                     return;
                 }

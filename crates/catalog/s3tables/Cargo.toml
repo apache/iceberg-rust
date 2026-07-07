@@ -35,7 +35,7 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 aws-sdk-s3tables = { workspace = true }
 iceberg = { workspace = true }
-iceberg-aws = { path = "../../integrations/aws" }
+iceberg-aws = { workspace = true }
 iceberg-storage-opendal = { workspace = true, features = ["opendal-s3"] }
 
 [dev-dependencies]

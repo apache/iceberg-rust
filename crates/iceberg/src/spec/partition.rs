@@ -246,6 +246,7 @@ pub struct UnboundPartitionField {
     /// A partition field id that is used to identify a partition field and is unique within a partition spec.
     /// In v2 table metadata, it is unique across all partition specs.
     #[builder(default, setter(strip_option(fallback = field_id_opt)))]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub field_id: Option<i32>,
     /// A partition name.
     pub name: String,
@@ -260,6 +261,7 @@ pub struct UnboundPartitionField {
 #[serde(rename_all = "kebab-case")]
 pub struct UnboundPartitionSpec {
     /// Identifier for PartitionSpec
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) spec_id: Option<i32>,
     /// Details of the partition spec
     pub(crate) fields: Vec<UnboundPartitionField>,
@@ -910,6 +912,38 @@ mod tests {
         assert_eq!(None, partition_spec.fields[0].field_id);
         assert_eq!("ts_day", partition_spec.fields[0].name);
         assert_eq!(Transform::Day, partition_spec.fields[0].transform);
+    }
+
+    #[test]
+    fn test_unbound_partition_spec_serialization_skips_none_fields() {
+        let spec = UnboundPartitionSpec::builder()
+            .add_partition_field(4, "ts_day".to_string(), Transform::Day)
+            .unwrap()
+            .build();
+
+        let value = serde_json::to_value(&spec).unwrap();
+        let object = value.as_object().unwrap();
+        assert!(!object.contains_key("spec-id"));
+        let field = object["fields"][0].as_object().unwrap();
+        assert!(!field.contains_key("field-id"));
+
+        let value = serde_json::to_value(spec.with_spec_id(1)).unwrap();
+        let object = value.as_object().unwrap();
+        assert_eq!(Some(&serde_json::json!(1)), object.get("spec-id"));
+
+        // Explicit nulls must still deserialize to `None` for backwards
+        // compatibility.
+        let spec: UnboundPartitionSpec = serde_json::from_str(
+            r#"{
+                "spec-id": null,
+                "fields": [
+                    {"source-id": 4, "name": "ts_day", "transform": "day", "field-id": null}
+                ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(None, spec.spec_id);
+        assert_eq!(None, spec.fields[0].field_id);
     }
 
     #[test]

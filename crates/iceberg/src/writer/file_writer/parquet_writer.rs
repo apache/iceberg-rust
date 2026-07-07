@@ -28,7 +28,7 @@ use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{CdcOptions, WriterProperties};
 use parquet::file::statistics::Statistics;
 
 use super::{FileWriter, FileWriterBuilder};
@@ -40,7 +40,7 @@ use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
     NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
-    StructType, TableMetadata, Type, visit_schema,
+    StructType, TableMetadata, TableProperties, Type, visit_schema,
 };
 use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
@@ -57,6 +57,10 @@ pub struct ParquetWriterBuilder {
 impl ParquetWriterBuilder {
     /// Create a new `ParquetWriterBuilder`
     /// To construct the write result, the schema should contain the `PARQUET_FIELD_ID_META_KEY` metadata for each field.
+    ///
+    /// When writing into an existing Iceberg table, prefer
+    /// [`Self::from_table_properties`], which derives `WriterProperties` from
+    /// the table's `write.parquet.*` properties.
     pub fn new(props: WriterProperties, schema: SchemaRef) -> Self {
         Self::new_with_match_mode(props, schema, FieldMatchMode::Id)
     }
@@ -72,6 +76,37 @@ impl ParquetWriterBuilder {
             schema,
             match_mode,
         }
+    }
+
+    /// Build a `ParquetWriterBuilder` from Iceberg table properties and a
+    /// schema, translating `write.parquet.*` settings into `WriterProperties`
+    /// instead of using parquet-rs defaults.
+    ///
+    /// Currently translates the content-defined-chunking keys
+    /// (`write.parquet.content-defined-chunking.*`); other keys fall back to
+    /// parquet-rs defaults.
+    pub fn from_table_properties(table_props: &TableProperties, schema: SchemaRef) -> Self {
+        let cdc = table_props.cdc_enabled.then_some(CdcOptions {
+            min_chunk_size: table_props.cdc_min_chunk_size,
+            max_chunk_size: table_props.cdc_max_chunk_size,
+            norm_level: table_props.cdc_norm_level,
+        });
+        // TODO: translate the remaining write.parquet.* keys (e.g. compression-codec,
+        // row-group-size-bytes, page-size-bytes).
+        // This constructor is intended to be the single place that maps them.
+        let props = WriterProperties::builder()
+            .set_content_defined_chunking(cdc)
+            .build();
+        Self::new_with_match_mode(props, schema, FieldMatchMode::Id)
+    }
+
+    /// Set the field match mode used to map Arrow fields to Iceberg fields.
+    ///
+    /// Defaults to [`FieldMatchMode::Id`]. Use [`FieldMatchMode::Name`] when the
+    /// incoming Arrow schema does not carry Iceberg field-id metadata.
+    pub fn with_match_mode(mut self, match_mode: FieldMatchMode) -> Self {
+        self.match_mode = match_mode;
+        self
     }
 }
 
@@ -2278,5 +2313,82 @@ mod tests {
 
         assert_eq!(lower_bounds, HashMap::from([(0, Datum::int(i32::MIN))]));
         assert_eq!(upper_bounds, HashMap::from([(0, Datum::int(i32::MAX))]));
+    }
+
+    // -----------------------------------------------------------------
+    // ParquetWriterBuilder::from_table_properties
+    // -----------------------------------------------------------------
+
+    fn cdc_test_schema() -> SchemaRef {
+        Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::required(2, "payload", Type::Primitive(PrimitiveType::String))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    fn table_props(entries: HashMap<String, String>) -> TableProperties {
+        TableProperties::try_from(&entries).unwrap()
+    }
+
+    #[test]
+    fn test_from_table_properties_no_cdc_by_default() {
+        let tp = table_props(HashMap::new());
+        let builder = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema());
+        assert!(builder.props.content_defined_chunking().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_from_table_properties_propagate_to_writer() {
+        // `build()` must carry the translated `WriterProperties` through to the
+        // `ParquetWriter` unchanged — otherwise the `write.parquet.*` settings
+        // derived in `from_table_properties` would never reach parquet-rs.
+        //
+        // Asserting on the writer's `WriterProperties` (rather than re-reading a
+        // written file) keeps this a direct propagation check: every future
+        // `write.parquet.*` option just adds an assertion on its corresponding
+        // `WriterProperties` getter here.
+        let tp = table_props(HashMap::from([
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_ENABLED.to_string(),
+                "true".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_MIN_CHUNK_SIZE.to_string(),
+                "4096".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_MAX_CHUNK_SIZE.to_string(),
+                "8192".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL.to_string(),
+                "2".to_string(),
+            ),
+        ]));
+
+        let tmp = TempDir::new().unwrap();
+        let output = FileIO::new_with_fs()
+            .new_output(format!("{}/cdc.parquet", tmp.path().to_str().unwrap()))
+            .unwrap();
+        let writer = ParquetWriterBuilder::from_table_properties(&tp, cdc_test_schema())
+            .build(output)
+            .await
+            .unwrap();
+
+        let cdc = writer
+            .writer_properties
+            .content_defined_chunking()
+            .copied()
+            .expect("CDC should be enabled on the built writer");
+        assert_eq!(cdc.min_chunk_size, 4096);
+        assert_eq!(cdc.max_chunk_size, 8192);
+        assert_eq!(cdc.norm_level, 2);
     }
 }

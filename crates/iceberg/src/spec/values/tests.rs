@@ -460,8 +460,8 @@ fn avro_bytes_decimal() {
         (vec![251u8, 46u8], -1234, 2, 38),
         (vec![4u8, 210u8], 1234, 3, 38),
         (vec![251u8, 46u8], -1234, 3, 38),
-        (vec![42u8], 42, 2, 1),
-        (vec![214u8], -42, 2, 1),
+        (vec![42u8], 42, 2, 2),
+        (vec![214u8], -42, 2, 2),
     ];
 
     for (input_bytes, decimal_num, expect_scale, expect_precision) in cases {
@@ -1423,4 +1423,155 @@ fn test_date_from_json_as_number() {
     );
 
     // Both formats should produce the same Literal value
+}
+
+#[test]
+fn test_datum_to_decimal_narrows_precision_when_scale_matches() {
+    let target_type = Type::Primitive(PrimitiveType::Decimal {
+        precision: 9,
+        scale: 2,
+    });
+    let datum = Datum::decimal_from_str("123.45").unwrap();
+
+    let converted = datum.to(&target_type).unwrap();
+
+    assert_eq!(converted.data_type(), &PrimitiveType::Decimal {
+        precision: 9,
+        scale: 2,
+    });
+    assert_eq!(converted.literal(), &PrimitiveLiteral::Int128(12345));
+}
+
+#[test]
+fn test_datum_to_decimal_widens_precision_when_scale_matches() {
+    let target_type = Type::Primitive(PrimitiveType::Decimal {
+        precision: 38,
+        scale: 2,
+    });
+    let datum = Datum::decimal_with_precision(decimal_from_i128_with_scale(12345, 2), 9).unwrap();
+
+    let converted = datum.to(&target_type).unwrap();
+
+    assert_eq!(converted.data_type(), &PrimitiveType::Decimal {
+        precision: 38,
+        scale: 2,
+    });
+    assert_eq!(converted.literal(), &PrimitiveLiteral::Int128(12345));
+}
+
+#[test]
+fn test_datum_to_decimal_accepts_zero_mantissa() {
+    let target_type = Type::Primitive(PrimitiveType::Decimal {
+        precision: 1,
+        scale: 0,
+    });
+    let datum = Datum::decimal_with_precision(decimal_from_i128_with_scale(0, 0), 9).unwrap();
+
+    let converted = datum.to(&target_type).unwrap();
+
+    assert_eq!(converted.data_type(), &PrimitiveType::Decimal {
+        precision: 1,
+        scale: 0,
+    });
+    assert_eq!(converted.literal(), &PrimitiveLiteral::Int128(0));
+}
+
+#[test]
+fn test_datum_to_decimal_accepts_negative_mantissa() {
+    let target_type = Type::Primitive(PrimitiveType::Decimal {
+        precision: 2,
+        scale: 1,
+    });
+    let datum = Datum::decimal_from_str("-1.5").unwrap();
+
+    let converted = datum.to(&target_type).unwrap();
+
+    assert_eq!(converted.data_type(), &PrimitiveType::Decimal {
+        precision: 2,
+        scale: 1,
+    });
+    assert_eq!(converted.literal(), &PrimitiveLiteral::Int128(-15));
+}
+
+#[test]
+fn test_datum_to_decimal_rejects_precision_too_narrow() {
+    let target_type = Type::Primitive(PrimitiveType::Decimal {
+        precision: 1,
+        scale: 1,
+    });
+    let datum = Datum::decimal_from_str("1.5").unwrap();
+
+    let result = datum.to(&target_type);
+
+    assert!(result.is_err(), "expect error but got {result:?}");
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::DataInvalid);
+}
+
+#[test]
+fn test_datum_to_decimal_rejects_value_that_fits_storage_bytes_but_not_precision() {
+    let target_type = Type::Primitive(PrimitiveType::Decimal {
+        precision: 1,
+        scale: 1,
+    });
+    let datum = Datum::decimal_from_str("4.2").unwrap();
+
+    let result = datum.to(&target_type);
+
+    assert!(result.is_err(), "expect error but got {result:?}");
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::DataInvalid);
+}
+
+#[test]
+fn test_datum_to_decimal_accepts_single_digit_mantissa_for_precision_one() {
+    let target_type = Type::Primitive(PrimitiveType::Decimal {
+        precision: 1,
+        scale: 1,
+    });
+    let datum = Datum::decimal_from_str("0.5").unwrap();
+
+    let converted = datum.to(&target_type).unwrap();
+
+    assert_eq!(converted.data_type(), &PrimitiveType::Decimal {
+        precision: 1,
+        scale: 1,
+    });
+    assert_eq!(converted.literal(), &PrimitiveLiteral::Int128(5));
+}
+
+#[test]
+fn test_datum_decimal_with_precision_rejects_value_that_exceeds_digit_precision() {
+    let result = Datum::decimal_with_precision(decimal_from_i128_with_scale(42, 2), 1);
+
+    assert!(result.is_err(), "expect error but got {result:?}");
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::DataInvalid);
+}
+
+#[test]
+fn test_datum_decimal_with_precision_accepts_value_that_fits_digit_precision() {
+    let datum = Datum::decimal_with_precision(decimal_from_i128_with_scale(5, 1), 1).unwrap();
+
+    assert_eq!(datum.data_type(), &PrimitiveType::Decimal {
+        precision: 1,
+        scale: 1,
+    });
+    assert_eq!(datum.literal(), &PrimitiveLiteral::Int128(5));
+}
+
+#[test]
+fn test_datum_to_decimal_rejects_scale_change() {
+    let target_type = Type::Primitive(PrimitiveType::Decimal {
+        precision: 9,
+        scale: 3,
+    });
+    let datum = Datum::decimal_from_str("123.45").unwrap();
+
+    let result = datum.to(&target_type);
+    assert!(result.is_err(), "expect error but got {result:?}");
+
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    assert!(
+        err.to_string()
+            .contains("Decimal scale conversion is not supported")
+    );
 }
