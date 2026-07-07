@@ -16,7 +16,7 @@ anstyle-parse@0.2.7		X								X
 anstyle-parse@1.0.0		X								X					
 anstyle-query@1.1.5		X								X					
 anstyle-wincon@3.0.11		X								X					
-anyhow@1.0.102		X								X					
+anyhow@1.0.103		X								X					
 apache-avro@0.21.0		X													
 ar_archive_writer@0.5.1			X												
 array-init@2.1.0		X								X					
@@ -61,7 +61,7 @@ bumpalo@3.20.2		X								X
 bytemuck@1.25.0		X								X				X	
 bytemuck_derive@1.10.2		X								X				X	
 byteorder@1.5.0										X			X		
-bytes@1.11.1										X					
+bytes@1.12.0										X					
 bzip2@0.6.1		X								X					
 cc@1.2.57		X								X					
 cfg-if@1.0.4		X								X					
@@ -144,8 +144,8 @@ dyn-clone@1.0.20		X								X
 educe@0.6.0										X					
 either@1.15.0		X								X					
 encode_unicode@1.0.0		X								X					
-enum-ordinalize@4.3.2										X					
-enum-ordinalize-derive@4.3.2										X					
+enum-ordinalize@4.4.1										X					
+enum-ordinalize-derive@4.4.1										X					
 env_filter@1.0.0		X								X					
 env_logger@0.11.9		X								X					
 equivalent@1.0.2		X								X					
@@ -198,10 +198,10 @@ hyper@1.8.1										X
 hyper-util@0.1.20										X					
 iana-time-zone@0.1.65		X								X					
 iana-time-zone-haiku@0.1.2		X								X					
-iceberg@0.9.0		X													
-iceberg-datafusion@0.9.0		X													
-iceberg-sqllogictest@0.9.0		X													
-iceberg_test_utils@0.9.0		X													
+iceberg@0.10.0		X													
+iceberg-datafusion@0.10.0		X													
+iceberg-sqllogictest@0.10.0		X													
+iceberg_test_utils@0.10.0		X													
 icu_collections@2.1.1												X			
 icu_locale_core@2.1.1												X			
 icu_normalizer@2.1.1												X			
@@ -470,7 +470,7 @@ zerocopy@0.8.47		X		X						X
 zerocopy-derive@0.8.47		X		X						X					
 zerofrom@0.1.6												X			
 zerofrom-derive@0.1.6												X			
-zeroize@1.8.2		X								X					
+zeroize@1.9.0		X								X					
 zerotrie@0.2.3												X			
 zerovec@0.11.5												X			
 zerovec-derive@0.11.2												X			

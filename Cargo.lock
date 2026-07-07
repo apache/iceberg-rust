@@ -221,9 +221,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "apache-avro"
@@ -1272,9 +1272,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
-version = "1.11.1"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
+checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
 dependencies = [
  "serde",
 ]
@@ -2929,18 +2929,18 @@ checksum = "c34f04666d835ff5d62e058c3995147c06f42fe86ff053337632bca83e42702d"
 
 [[package]]
 name = "enum-ordinalize"
-version = "4.3.2"
+version = "4.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a1091a7bb1f8f2c4b28f1fe2cef4980ca2d410a3d727d67ecc3178c9b0800f0"
+checksum = "07f808d588c10e464ea6f7d3eaed500049eff30aaac103460f61828c2d65b3eb"
 dependencies = [
  "enum-ordinalize-derive",
 ]
 
 [[package]]
 name = "enum-ordinalize-derive"
-version = "4.3.2"
+version = "4.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ca9601fb2d62598ee17836250842873a413586e5d7ed88b356e38ddbb0ec631"
+checksum = "42e528e2d34ba8a67a1a650b86beae8ef69fc5fdb638016f386b973226590432"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3741,7 +3741,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -3803,7 +3803,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-cache-moka"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "iceberg",
  "moka",
@@ -3811,7 +3811,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-glue"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3826,7 +3826,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-hms"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3849,7 +3849,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-loader"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "async-trait",
  "iceberg",
@@ -3869,7 +3869,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-rest"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3889,7 +3889,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-s3tables"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -3909,7 +3909,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-catalog-sql"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "async-trait",
  "iceberg",
@@ -3923,7 +3923,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-datafusion"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3940,7 +3940,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-examples"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "futures",
  "iceberg",
@@ -3951,7 +3951,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-integration-tests"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -3968,7 +3968,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-playground"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3990,7 +3990,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-sqllogictest"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4012,7 +4012,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg-storage-opendal"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4033,7 +4033,7 @@ dependencies = [
 
 [[package]]
 name = "iceberg_test_utils"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "iceberg",
  "tracing-subscriber",
@@ -4750,9 +4750,9 @@ dependencies = [
 
 [[package]]
 name = "minijinja"
-version = "2.20.0"
+version = "2.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2929e494b2280e1e18959bb2e121da03347ae896896fdfaceaab43c88a02803f"
+checksum = "cb3d648e68cea56d9858d535ee28f9538404e2dd8cb08ed0bd05dca379477f39"
 dependencies = [
  "memo-map",
  "serde",
@@ -5913,7 +5913,7 @@ dependencies = [
 
 [[package]]
 name = "pyiceberg_core_rust"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "arrow",
  "datafusion-ffi",
@@ -9515,9 +9515,9 @@ dependencies = [
 
 [[package]]
 name = "zeroize"
-version = "1.8.2"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b97154e67e32c85465826e8bcc1c59429aaaf107c1e4a9e53c8d8ccd5eff88d0"
+checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
 
 [[package]]
 name = "zerotrie"

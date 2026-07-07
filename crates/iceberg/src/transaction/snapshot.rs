@@ -113,7 +113,6 @@ pub(crate) struct SnapshotProducer<'a> {
     pub(crate) table: &'a Table,
     snapshot_id: i64,
     commit_uuid: Uuid,
-    key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
@@ -126,7 +125,6 @@ impl<'a> SnapshotProducer<'a> {
     pub(crate) fn new(
         table: &'a Table,
         commit_uuid: Uuid,
-        key_metadata: Option<Vec<u8>>,
         snapshot_properties: HashMap<String, String>,
         added_data_files: Vec<DataFile>,
     ) -> Self {
@@ -134,7 +132,6 @@ impl<'a> SnapshotProducer<'a> {
             table,
             snapshot_id: Self::generate_unique_snapshot_id(table),
             commit_uuid,
-            key_metadata,
             snapshot_properties,
             added_data_files,
             manifest_counter: (0..),
@@ -255,7 +252,6 @@ impl<'a> SnapshotProducer<'a> {
         let builder = ManifestWriterBuilder::new(
             output_file,
             Some(self.snapshot_id),
-            self.key_metadata.clone(),
             self.table.metadata().current_schema().clone(),
             self.table
                 .metadata()
@@ -404,8 +400,13 @@ impl<'a> SnapshotProducer<'a> {
 
         let previous_snapshot = table_metadata.current_snapshot();
 
-        let mut additional_properties = summary_collector.build();
-        additional_properties.extend(self.snapshot_properties.clone());
+        // User-supplied snapshot properties are applied first, then the computed
+        // metrics overwrite any colliding keys. This matches iceberg-java
+        // (`SnapshotProducer.summary`), where computed `added-*`/`total-*` values
+        // are written after user properties so a user cannot shadow them with a
+        // bad (or merely wrong) value that would corrupt the snapshot summary.
+        let mut additional_properties = self.snapshot_properties.clone();
+        additional_properties.extend(summary_collector.build());
 
         let summary = Summary {
             operation: snapshot_produce_operation.operation(),
