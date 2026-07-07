@@ -24,9 +24,19 @@ compile = false
 precompiled_flavor = "install_only_stripped"
 
 [tools]
+"cargo:cargo-machete" = { version = "0.7.0", depends = "rust" }
+"cargo:cargo-nextest" = { version = "0.9.138", depends = "rust" }
+"cargo:cargo-public-api" = { version = "0.51.0", depends = "rust" }
+jq = "1.8.2"
+mdbook = "0.4.36"
 protoc = "35.1"
 python = "3.12.13"
-rust = { version = "nightly-2026-03-05", components = "rustfmt,clippy" }
+ruff = "0.15.20"
+rust = [
+  { version = "nightly-2026-03-05", components = "rustfmt,clippy" },
+  { version = "1.94.0" },
+]
+taplo = "0.9.3"
 uv = "0.9.3"
 
 [tasks.build]
@@ -46,23 +56,19 @@ run = "cargo clippy --all-targets --all-features --workspace -- -D warnings"
 [tasks.fix-toml]
 description = "Format TOML files"
 run = "taplo fmt"
-tools.taplo = "0.9.3"
 
 [tasks.check-toml]
 description = "Check TOML formatting"
 run = "taplo fmt --check"
-tools.taplo = "0.9.3"
 
 [tasks.cargo-machete]
 description = "Find unused Cargo dependencies"
 run = "cargo machete"
-tools."cargo:cargo-machete" = "0.7.0"
 
 [tasks.check-msrv]
 depends = ["python:verify-libpython"]
 description = "Check the workspace with the minimum supported Rust version"
-run = "cargo check --workspace"
-tools.rust = "1.94.0"
+run = "cargo +1.94.0 check --workspace"
 
 [tasks.generate-public-api]
 description = "Regenerate public API snapshots for publishable crates"
@@ -79,8 +85,6 @@ done < <(
     jq -r '.packages[] | select(.publish == null) | [.name, .manifest_path] | @tsv'
 )
 '''
-tools."cargo:cargo-public-api" = "0.51.0"
-tools.jq = "1.8.2"
 
 [tasks.check-public-api]
 description = "Check public API snapshots for publishable crates"
@@ -108,8 +112,6 @@ done < <(
 
 exit "$failed"
 '''
-tools."cargo:cargo-public-api" = "0.51.0"
-tools.jq = "1.8.2"
 
 [tasks.check]
 depends = ["check-fmt", "check-clippy", "check-toml", "cargo-machete"]
@@ -129,7 +131,6 @@ run = "cargo test --no-fail-fast --lib --all-features --workspace"
 depends = ["python:verify-libpython"]
 description = "Run all workspace tests with cargo-nextest"
 run = "cargo nextest run --all-targets --all-features --workspace"
-tools."cargo:cargo-nextest" = "0.9.138"
 
 [tasks.test]
 description = "Run Docker-backed integration tests and always clean up"
@@ -161,13 +162,11 @@ run = "cargo clean"
 description = "Serve the documentation website locally"
 dir = "website"
 run = "mdbook serve"
-tools.mdbook = "0.4.36"
 
 [tasks.site-build]
 description = "Build the documentation website"
 dir = "website"
 run = "mdbook build"
-tools.mdbook = "0.4.36"
 
 [tasks.docker-up]
 description = "Start integration-test services"
@@ -211,10 +210,8 @@ run = "uv run --no-sync pytest"
 description = "Check Python formatting"
 dir = "bindings/python"
 run = "ruff format --check ."
-tools.ruff = "0.15.20"
 
 [tasks."python:check-style"]
 description = "Check Python style"
 dir = "bindings/python"
 run = "ruff check ."
-tools.ruff = "0.15.20"
