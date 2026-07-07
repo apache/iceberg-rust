@@ -51,23 +51,19 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-
-      - name: Install lint tools
-        # Keep versions in sync with the local install targets in Makefile.
-        uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9 # v2.82.2
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
-          tool: taplo@0.9.3,cargo-machete@0.7.0
+          version: 2026.6.14
 
       - name: Check License Header
         uses: apache/skywalking-eyes/header@61275cc80d0798a405cb070f7d3a8aaf7cf2c2c1 # v0.8.0
 
       - name: Check toml format
-        run: taplo fmt --check
+        run: mise run check-toml
 
       - name: Cargo format
-        run: make check-fmt
+        run: mise run check-fmt
 
       - name: Check diff
         run: git diff --exit-code
@@ -76,7 +72,7 @@ jobs:
         run: cargo update --workspace --locked
 
       - name: Cargo Machete
-        run: cargo machete
+        run: mise run cargo-machete
 
       - name: Check typos
         uses: crate-ci/typos@37bb98842b0d8c4ffebdb75301a13db0267cef89 # v1.47.2
@@ -89,16 +85,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          version: 2026.6.14
 
       - name: Cargo clippy
-        run: make check-clippy
+        run: mise run check-clippy
 
   build:
     needs: lint
@@ -118,21 +111,18 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          version: 2026.6.14
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Build
-        run: make build
+        run: mise run build
 
   # Checks each crate individually to catch missing feature declarations that
   # are otherwise masked by Cargo's feature unification across the workspace.
@@ -144,24 +134,25 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          version: 2026.6.14
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Check each crate standalone
+        shell: bash
         run: |
-          for pkg in $(cargo metadata --no-deps --format-version=1 | jq -r '.packages[].name'); do
+          set -euo pipefail
+          packages=$(cargo metadata --no-deps --format-version=1 | python -c \
+            'import json, sys; print("\n".join(package["name"] for package in json.load(sys.stdin)["packages"]))')
+          for pkg in $packages; do
             echo "Checking $pkg..."
-            cargo check -p "$pkg" --all-targets || exit 1
+            cargo check -p "$pkg" --all-targets
           done
 
   # Verifies the core iceberg crate compiles without default features, ensuring
@@ -184,8 +175,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          version: 2026.6.14
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -205,37 +198,28 @@ jobs:
       max-parallel: 15
       matrix:
         test-suite:
-          - { name: "default", args: "--all-targets --all-features --workspace" }
-          - { name: "doc", args: "--doc --all-features --workspace" }
-    name: Tests (${{ matrix.test-suite.name }})
+          - default
+          - doc
+    name: Tests (${{ matrix.test-suite }})
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          version: 2026.6.14
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          key: ${{ matrix.test-suite.name }}
+          key: ${{ matrix.test-suite }}
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
-      - name: Install cargo-nextest
-        if: matrix.test-suite.name == 'default'
-        uses: taiki-e/install-action@bffeee26d4db9be238a4ea78d8826604ebcb594d # v2.82.5
-        with:
-          tool: cargo-nextest
-
       - name: Start Docker containers
-        if: matrix.test-suite.name == 'default'
-        run: make docker-up
+        if: matrix.test-suite == 'default'
+        run: mise run docker-up
 
       - name: Run tests
         shell: bash
@@ -246,15 +230,15 @@ jobs:
           HF_BUCKET: ${{ secrets.HF_BUCKET }}
           HF_DATASET: ${{ secrets.HF_DATASET }}
         run: |
-          if [ "${{ matrix.test-suite.name }}" = "default" ]; then
-            cargo nextest run ${{ matrix.test-suite.args }}
+          if [ "${{ matrix.test-suite }}" = "default" ]; then
+            mise run nextest
           else
-            cargo test --no-fail-fast ${{ matrix.test-suite.args }}
+            mise run doc-test
           fi
 
       - name: Stop Docker containers
-        if: always() && matrix.test-suite.name == 'default'
-        run: make docker-down
+        if: always() && matrix.test-suite == 'default'
+        run: mise run docker-down
 
   msrv:
     name: Verify MSRV
@@ -264,18 +248,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Get MSRV
-        id: get-msrv
-        uses: ./.github/actions/get-msrv
-      - name: Setup MSRV Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ steps.get-msrv.outputs.msrv }}
-      - name: Setup Nightly Rust toolchain
-        uses: ./.github/actions/setup-builder
+          version: 2026.6.14
       - name: Check MSRV
-        run: make check-msrv
+        run: mise run check-msrv

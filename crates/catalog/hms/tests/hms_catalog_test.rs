@@ -17,7 +17,7 @@
 
 //! Integration tests for hms catalog.
 //!
-//! These tests assume Docker containers are started externally via `make docker-up`.
+//! These tests assume Docker containers are started externally via `mise run docker-up`.
 //! Each test uses unique namespaces based on module path to avoid conflicts.
 
 use std::collections::HashMap;

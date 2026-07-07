@@ -17,7 +17,7 @@
 
 //! Integration tests for FileIO Google Cloud Storage (GCS).
 //!
-//! These tests assume Docker containers are started externally via `make docker-up`.
+//! These tests assume Docker containers are started externally via `mise run docker-up`.
 
 #[cfg(feature = "opendal-gcs")]
 mod tests {

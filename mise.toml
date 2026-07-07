@@ -1,0 +1,220 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+min_version = "2026.6.14"
+
+[settings.python]
+# Python is also a build dependency: the DataFusion bindings need libpython.
+# Refuse to fall back to a locally compiled interpreter with a different layout.
+compile = false
+precompiled_flavor = "install_only_stripped"
+
+[tools]
+protoc = "35.1"
+python = "3.12.13"
+rust = { version = "nightly-2026-03-05", components = "rustfmt,clippy" }
+uv = "0.9.3"
+
+[tasks.build]
+depends = ["python:verify-libpython"]
+description = "Build all workspace targets and features"
+run = "cargo build --all-targets --all-features --workspace"
+
+[tasks.check-fmt]
+description = "Check Rust formatting"
+run = "cargo fmt --all -- --check"
+
+[tasks.check-clippy]
+depends = ["python:verify-libpython"]
+description = "Run Clippy for all workspace targets and features"
+run = "cargo clippy --all-targets --all-features --workspace -- -D warnings"
+
+[tasks.fix-toml]
+description = "Format TOML files"
+run = "taplo fmt"
+tools.taplo = "0.9.3"
+
+[tasks.check-toml]
+description = "Check TOML formatting"
+run = "taplo fmt --check"
+tools.taplo = "0.9.3"
+
+[tasks.cargo-machete]
+description = "Find unused Cargo dependencies"
+run = "cargo machete"
+tools."cargo:cargo-machete" = "0.7.0"
+
+[tasks.check-msrv]
+depends = ["python:verify-libpython"]
+description = "Check the workspace with the minimum supported Rust version"
+run = "cargo check --workspace"
+tools.rust = "1.94.0"
+
+[tasks.generate-public-api]
+description = "Regenerate public API snapshots for publishable crates"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+while IFS=$'\t' read -r crate manifest; do
+  crate_dir=$(dirname "$manifest")
+  echo "Generating public API for $crate..."
+  cargo public-api -p "$crate" --all-features -ss > "$crate_dir/public-api.txt"
+done < <(
+  cargo metadata --no-deps --format-version 1 |
+    jq -r '.packages[] | select(.publish == null) | [.name, .manifest_path] | @tsv'
+)
+'''
+tools."cargo:cargo-public-api" = "0.51.0"
+tools.jq = "1.8.2"
+
+[tasks.check-public-api]
+description = "Check public API snapshots for publishable crates"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+tmp_dir=$(mktemp -d)
+trap 'rm -rf "$tmp_dir"' EXIT
+failed=0
+
+while IFS=$'\t' read -r crate manifest; do
+  crate_dir=$(dirname "$manifest")
+  generated="$tmp_dir/$crate.txt"
+  echo "Checking public API for $crate..."
+  cargo public-api -p "$crate" --all-features -ss > "$generated"
+  if ! diff -u "$crate_dir/public-api.txt" "$generated"; then
+    echo "ERROR: Public API for $crate has changed. Run 'mise run generate-public-api' to update."
+    failed=1
+  fi
+done < <(
+  cargo metadata --no-deps --format-version 1 |
+    jq -r '.packages[] | select(.publish == null) | [.name, .manifest_path] | @tsv'
+)
+
+exit "$failed"
+'''
+tools."cargo:cargo-public-api" = "0.51.0"
+tools.jq = "1.8.2"
+
+[tasks.check]
+depends = ["check-fmt", "check-clippy", "check-toml", "cargo-machete"]
+description = "Run all formatting and lint checks"
+
+[tasks.doc-test]
+depends = ["python:verify-libpython"]
+description = "Run workspace documentation tests"
+run = "cargo test --no-fail-fast --doc --all-features --workspace"
+
+[tasks.unit-test]
+depends = ["doc-test"]
+description = "Run workspace documentation and library tests"
+run = "cargo test --no-fail-fast --lib --all-features --workspace"
+
+[tasks.nextest]
+depends = ["python:verify-libpython"]
+description = "Run all workspace tests with cargo-nextest"
+run = "cargo nextest run --all-targets --all-features --workspace"
+tools."cargo:cargo-nextest" = "0.9.138"
+
+[tasks.test]
+description = "Run Docker-backed integration tests and always clean up"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+cleanup() {
+  task_status=$?
+  trap - EXIT
+  cleanup_status=0
+  mise run docker-down || cleanup_status=$?
+  if [ "$task_status" -ne 0 ]; then
+    exit "$task_status"
+  fi
+  exit "$cleanup_status"
+}
+trap cleanup EXIT
+
+mise run docker-up
+mise run nextest
+'''
+
+[tasks.clean]
+description = "Remove Cargo build artifacts"
+run = "cargo clean"
+
+[tasks.site]
+description = "Serve the documentation website locally"
+dir = "website"
+run = "mdbook serve"
+tools.mdbook = "0.4.36"
+
+[tasks.site-build]
+description = "Build the documentation website"
+dir = "website"
+run = "mdbook build"
+tools.mdbook = "0.4.36"
+
+[tasks.docker-up]
+description = "Start integration-test services"
+run = "docker compose -f dev/docker-compose.yaml up -d --build --wait"
+
+[tasks.docker-down]
+description = "Stop integration-test services and remove their volumes"
+run = "docker compose -f dev/docker-compose.yaml down -v --remove-orphans --timeout 0"
+
+[tasks.docker-logs]
+description = "Follow integration-test service logs"
+raw = true
+run = "docker compose -f dev/docker-compose.yaml logs -f"
+
+[tasks."python:verify-libpython"]
+description = "Verify that mise Python provides a shared libpython"
+run = "python dev/verify_libpython.py"
+
+[tasks."python:build"]
+depends = ["python:verify-libpython"]
+description = "Build and install the Python extension into its virtual environment"
+dir = "bindings/python"
+run = "uv run --no-sync maturin develop"
+
+[tasks."python:install"]
+depends = ["python:verify-libpython"]
+description = "Install Python development dependencies and rebuild the extension"
+dir = "bindings/python"
+run = [
+  "uv sync --python 3.12 --no-managed-python --no-python-downloads --group dev --no-install-project",
+  { task = "python:build" },
+]
+
+[tasks."python:test"]
+depends = ["python:verify-libpython"]
+description = "Run Python binding tests"
+dir = "bindings/python"
+run = "uv run --no-sync pytest"
+
+[tasks."python:check-format"]
+description = "Check Python formatting"
+dir = "bindings/python"
+run = "ruff format --check ."
+tools.ruff = "0.15.20"
+
+[tasks."python:check-style"]
+description = "Check Python style"
+dir = "bindings/python"
+run = "ruff check ."
+tools.ruff = "0.15.20"

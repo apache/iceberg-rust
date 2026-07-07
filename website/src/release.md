@@ -66,6 +66,7 @@ Install the release tooling used by the local scripts:
 - `cargo-deny`
 - `docker`
 - `gpg`
+- `mise` 2026.6.14 or newer
 - `svn`
 
 The local release helpers are under `dev/release/`. They log every step before it runs and after it succeeds. If a step fails, the script prints the failed step and stops.
@@ -428,17 +429,18 @@ After downloading them, here are the instructions on how to verify them.
   ```bash
   tar -xzf apache-iceberg-rust-*.tar.gz
   cd apache-iceberg-rust-*/
-  make build && make test
+  # Review mise.toml before trusting the release candidate.
+  mise trust
+  mise install
+  mise run build
+  mise run test
   ```
 
 - Verify pyiceberg-core build and tests:
 
   ```bash
-  (
-    cd bindings/python
-    make install
-    make test
-  )
+  mise run python:install
+  mise run python:test
   ```
 
 - Verify license headers:

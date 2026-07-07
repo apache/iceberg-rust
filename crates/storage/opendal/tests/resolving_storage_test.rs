@@ -17,7 +17,7 @@
 
 //! Integration tests for OpenDalResolvingStorage.
 //!
-//! These tests assume Docker containers are started externally via `make docker-up`.
+//! These tests assume Docker containers are started externally via `mise run docker-up`.
 //! Each test uses unique file paths based on module path to avoid conflicts.
 
 #[cfg(all(

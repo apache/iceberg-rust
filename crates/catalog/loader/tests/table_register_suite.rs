@@ -17,7 +17,7 @@
 
 //! Common register-table behavior across catalogs.
 //!
-//! These tests assume Docker containers are started externally via `make docker-up`.
+//! These tests assume Docker containers are started externally via `mise run docker-up`.
 
 mod common;
 

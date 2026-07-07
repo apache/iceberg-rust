@@ -22,11 +22,11 @@ description: 'Prepare Rust Build Environment'
 inputs:
   rust-version:
     description: 'version of rust to install and use'
+    required: true
 runs:
   using: "composite"
   steps:
     - name: Setup specified Rust toolchain
-      if: ${{ inputs.rust-version != '' }}
       shell: bash
       env:
         RUST_VERSION: ${{ inputs.rust-version }}
@@ -34,13 +34,6 @@ runs:
         echo "Installing ${RUST_VERSION}"
         rustup toolchain install ${RUST_VERSION}
         rustup override set ${RUST_VERSION}
-        rustup component add rustfmt clippy
-    - name: Setup Rust toolchain according to rust-toolchain.toml
-      shell: bash
-      if: ${{ inputs.rust-version == '' }}
-      run: |
-        echo "Installing toolchain according to rust-toolchain.toml"
-        rustup show
         rustup component add rustfmt clippy
     - name: Fixup git permissions
       # https://github.com/actions/checkout/issues/766

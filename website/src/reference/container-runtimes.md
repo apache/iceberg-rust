@@ -19,7 +19,7 @@
 
 # Container Runtimes
 
-Iceberg-rust uses containers for integration tests, where `docker` and `docker compose` start containers for MinIO and various catalogs. You can use any of the following container runtimes.
+Iceberg-rust uses containers for integration tests, where `docker` and `docker compose` start containers for MinIO and various catalogs. Complete the repository's mise setup first, then use any of the following container runtimes.
 
 ## Docker Desktop
 
@@ -40,7 +40,7 @@ Iceberg-rust uses containers for integration tests, where `docker` and `docker c
 
 4. Try some integration tests!
     ```shell
-    make test
+    mise run test
     ```
 
 ## OrbStack (macOS)
@@ -69,7 +69,7 @@ Iceberg-rust uses containers for integration tests, where `docker` and `docker c
 
 4. Try some integration tests!
     ```shell
-    make test
+    mise run test
     ```
 
 ## Podman
@@ -131,7 +131,7 @@ Iceberg-rust uses containers for integration tests, where `docker` and `docker c
 
 8. Try some integration tests!
     ```shell
-    cargo test -p iceberg --test file_io_s3_test
+    mise run test
     ```
 
 ### Note on rootless containers

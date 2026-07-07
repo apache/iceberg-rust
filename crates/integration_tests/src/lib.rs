@@ -25,7 +25,7 @@ use iceberg_catalog_rest::REST_CATALOG_PROP_URI;
 use iceberg_test_utils::{get_minio_endpoint, get_rest_catalog_endpoint, set_up};
 
 /// Global test fixture that uses environment-based configuration.
-/// This assumes Docker containers are started externally (e.g., via `make docker-up`).
+/// This assumes Docker containers are started externally (e.g., via `mise run docker-up`).
 pub struct GlobalTestFixture {
     pub catalog_config: HashMap<String, String>,
 }

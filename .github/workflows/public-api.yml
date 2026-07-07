@@ -23,7 +23,9 @@ on:
       - main
   pull_request:
     paths:
+      - '.github/workflows/public-api.yml'
       - 'crates/**'
+      - 'mise.toml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
@@ -40,23 +42,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          version: 2026.6.14
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install cargo-public-api
-        uses: taiki-e/install-action@bffeee26d4db9be238a4ea78d8826604ebcb594d # v2.82.5
-        with:
-          tool: cargo-public-api
-
       - name: Check public API
-        run: make check-public-api
+        run: mise run check-public-api

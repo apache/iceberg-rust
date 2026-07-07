@@ -24,6 +24,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/website.yml"
+      - "mise.toml"
       - "website/**"
 
 concurrency:
@@ -43,19 +44,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup mdBook
-        uses: peaceiris/actions-mdbook@ee69d230fe19748b7abf22df32acaa93833fad08 # v2.0.0
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
-          mdbook-version: "0.4.36"
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          version: 2026.6.14
 
       - name: Build
-        working-directory: website
-        run: mdbook build
+        run: mise run site-build
 
       - name: Copy asf file
         run: cp .asf.yaml ./website/book/.asf.yaml
