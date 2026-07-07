@@ -24,7 +24,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [v0.10.0] - 2026-06-29
+## [v0.10.0] - 2026-07-07
 
 ### Breaking Changes
 
@@ -266,6 +266,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * fix: Update Python binding test fixtures to close catalogs by @dannycjones in https://github.com/apache/iceberg-rust/pull/2721
 * chore: Update changelog and dependency lists for 0.10.0 by @dannycjones in https://github.com/apache/iceberg-rust/pull/2745
 * chore(ci): Remove '--locked' flag on toml-cli install by @dannycjones in https://github.com/apache/iceberg-rust/pull/2750
+* ci: cache Python bindings Rust artifacts by @abnobdoss in https://github.com/apache/iceberg-rust/pull/2679
+* chore: Update changelog for 0.10.0 by @dannycjones in https://github.com/apache/iceberg-rust/pull/2751
+* fix(datafusion): return single row with count 0 for empty inserts by @u70b3 in https://github.com/apache/iceberg-rust/pull/2712
+* fix(datafusion): reject non-append insert operations by @u70b3 in https://github.com/apache/iceberg-rust/pull/2714
+* feat(writer): honor write.parquet.* via ParquetWriterBuilder::from_table_properties by @kszucs in https://github.com/apache/iceberg-rust/pull/2561
+* refactor(encryption) remove key_metadata from the constructor of an unencrypted manifest writer by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2666
+* chore(deps): Bump reqwest from 0.12.28 to 0.13.3 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2690
+* chore(deps): Bump zeroize from 1.8.2 to 1.9.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2691
+* refactor(encryption) use `StandardKeyMetadata` from `EncryptedOutputFile` in `ManifestWriterBuilder` by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2628
+* Resolve RUSTSEC-2026-0194 RUSTSEC-2026-0195 by @blackmwk in https://github.com/apache/iceberg-rust/pull/2761
+* Restrict trigger push branch for GitHub Workflow by @apupier in https://github.com/apache/iceberg-rust/pull/2757
+* chore: update verify_rc script to verify tag against tarball by @CTTY in https://github.com/apache/iceberg-rust/pull/2760
+* Resolve RUSTSEC-2026-0190 by @blackmwk in https://github.com/apache/iceberg-rust/pull/2763
+* chore(deps): Bump reqwest from 0.12.28 to 0.13.3 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2770
+* chore(deps): Bump enum-ordinalize from 4.3.2 to 4.4.1 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2769
+* chore(deps): Bump actions/setup-python from 6.2.0 to 6.3.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2768
+* chore(deps): Bump taiki-e/install-action from 2.82.2 to 2.82.5 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2767
+* chore(deps-dev): Bump huggingface-hub from 1.20.1 to 1.21.0 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2766
+* ci: split lint checks and slim clippy by @abnobdoss in https://github.com/apache/iceberg-rust/pull/2771
+* Fix zizmor pin by @blackmwk in https://github.com/apache/iceberg-rust/pull/2762
+* feat(encryption) [8/N] Read encrypted manifest file by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2586
+* Reject negative positional delete positions by @fallintoplace in https://github.com/apache/iceberg-rust/pull/2631
 
 ## [v0.9.0] - 2026-03-10
 
