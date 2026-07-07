@@ -691,6 +691,90 @@ mod tests {
         );
     }
 
+    // A delete row with a null value in the column matches only rows whose value is null (Iceberg
+    // spec, Equality Delete Files), so the keep predicate is `col IS NOT NULL`.
+    #[tokio::test]
+    async fn test_equality_delete_predicate_matches_null_delete_value() {
+        let schema = Arc::new(arrow_schema::Schema::new(vec![simple_field(
+            "status",
+            DataType::Utf8,
+            true,
+            "3",
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec![
+            None as Option<&str>,
+        ])) as ArrayRef])
+        .unwrap();
+        let stream: ArrowRecordBatchStream = futures::stream::iter(vec![Ok(batch)]).boxed();
+
+        let predicate = CachingDeleteFileLoader::parse_equality_deletes_record_batch_stream(
+            stream,
+            HashSet::from_iter(vec![3]),
+        )
+        .await
+        .expect("error parsing equality delete stream");
+
+        assert_eq!(predicate.to_string(), "status IS NOT NULL");
+    }
+
+    // A delete row with several equality columns keeps a data row that differs in any one of them,
+    // so the per-column keep predicates are OR-ed.
+    #[tokio::test]
+    async fn test_equality_delete_predicate_multiple_columns() {
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            simple_field("id", DataType::Int64, true, "1"),
+            simple_field("status", DataType::Utf8, true, "3"),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+            Arc::new(StringArray::from(vec![Some("X")])) as ArrayRef,
+        ])
+        .unwrap();
+        let stream: ArrowRecordBatchStream = futures::stream::iter(vec![Ok(batch)]).boxed();
+
+        let predicate = CachingDeleteFileLoader::parse_equality_deletes_record_batch_stream(
+            stream,
+            HashSet::from_iter(vec![1, 3]),
+        )
+        .await
+        .expect("error parsing equality delete stream");
+
+        assert_eq!(
+            predicate.to_string(),
+            "((id IS NULL) OR (id != 1)) OR ((status IS NULL) OR (status != \"X\"))"
+        );
+    }
+
+    // A data row is kept only if it matches none of the delete rows, so the per-row keep
+    // predicates are AND-ed.
+    #[tokio::test]
+    async fn test_equality_delete_predicate_multiple_delete_rows() {
+        let schema = Arc::new(arrow_schema::Schema::new(vec![simple_field(
+            "status",
+            DataType::Utf8,
+            true,
+            "3",
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec![
+            Some("A"),
+            Some("B"),
+        ])) as ArrayRef])
+        .unwrap();
+        let stream: ArrowRecordBatchStream = futures::stream::iter(vec![Ok(batch)]).boxed();
+
+        let predicate = CachingDeleteFileLoader::parse_equality_deletes_record_batch_stream(
+            stream,
+            HashSet::from_iter(vec![3]),
+        )
+        .await
+        .expect("error parsing equality delete stream");
+
+        assert_eq!(
+            predicate.to_string(),
+            "((status IS NULL) OR (status != \"A\")) AND ((status IS NULL) OR (status != \"B\"))"
+        );
+    }
+
     /// Create a simple field with metadata.
     fn simple_field(name: &str, ty: DataType, nullable: bool, value: &str) -> Field {
         arrow_schema::Field::new(name, ty, nullable).with_metadata(HashMap::from([(
