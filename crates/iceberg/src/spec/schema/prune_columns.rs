@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use crate::spec::VariantType;
 
 struct PruneColumn {
     selected: HashSet<i32>,
@@ -236,6 +237,10 @@ impl SchemaVisitor for PruneColumn {
     }
 
     fn primitive(&mut self, _p: &PrimitiveType) -> Result<Option<Type>> {
+        Ok(None)
+    }
+
+    fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
         Ok(None)
     }
 }
@@ -759,5 +764,34 @@ mod tests {
         let result = prune_columns(&schema, selected, true);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), Type::Struct(schema.as_struct().clone()));
+    }
+
+    #[test]
+    fn test_prune_columns_variant() {
+        // foo (String, id=1) + v (Variant, id=2).
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        // A variant is a leaf (like a primitive): selecting it keeps it, the same way
+        // for select_full_types true and false.
+        let only_variant = Type::Struct(StructType::new(vec![
+            NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
+        ]));
+        for full in [false, true] {
+            let result = prune_columns(&schema, HashSet::from([2]), full).unwrap();
+            assert_eq!(result, only_variant, "select_full_types={full}");
+        }
+
+        // Selecting a sibling prunes the variant out.
+        let only_foo = Type::Struct(StructType::new(vec![
+            NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
+        ]));
+        let result = prune_columns(&schema, HashSet::from([1]), false).unwrap();
+        assert_eq!(result, only_foo);
     }
 }

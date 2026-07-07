@@ -491,6 +491,7 @@ impl TableMetadata {
         // Normalize location (remove trailing slash)
         self.location = self.location.trim_end_matches('/').to_string();
         self.validate_snapshot_sequence_number()?;
+        self.validate_schema_format_compatibility()?;
         self.try_normalize_partition_spec()?;
         self.try_normalize_sort_order()?;
         Ok(self)
@@ -704,6 +705,13 @@ impl TableMetadata {
         }
 
         Ok(())
+    }
+
+    /// Validates that every type used in the current schema is supported by the
+    /// table's format version.  Delegates to [`Schema::check_format_compatibility`].
+    fn validate_schema_format_compatibility(&self) -> Result<()> {
+        self.current_schema()
+            .check_format_compatibility(self.format_version)
     }
 }
 

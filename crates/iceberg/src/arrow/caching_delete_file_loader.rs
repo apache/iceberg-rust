@@ -36,7 +36,7 @@ use crate::scan::{ArrowRecordBatchStream, FileScanTask};
 use crate::spec::{
     DataContentType, DataFileFormat, Datum, ListType, MapType, NestedField, NestedFieldRef,
     PartnerAccessor, PrimitiveType, Schema, SchemaRef, SchemaWithPartnerVisitor, StructType, Type,
-    visit_schema_with_partner,
+    VariantType, visit_schema_with_partner,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -647,6 +647,10 @@ impl SchemaWithPartnerVisitor<ArrayRef> for EqDelColumnProcessor<'_> {
     }
 
     fn primitive(&mut self, _primitive: &PrimitiveType, _partner: &ArrayRef) -> Result<()> {
+        Ok(())
+    }
+
+    fn variant(&mut self, _v: &VariantType, _partner: &ArrayRef) -> Result<()> {
         Ok(())
     }
 }
