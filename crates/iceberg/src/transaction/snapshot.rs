@@ -338,10 +338,9 @@ impl<'a> SnapshotProducer<'a> {
         writer.write_manifest_file().await
     }
 
-    /// Collects the list of manifest files to be included in the new snapshot.
-    ///
-    /// This method also writes the new manifests where required.
-    async fn produce_manifest_file_list<OP: SnapshotProduceOperation, MP: ManifestProcess>(
+    /// Creates new manifests for data files added or removed,
+    /// and collects all of the manifests to be included in the new snapshot as [ManifestFile] entries.
+    async fn produce_manifests<OP: SnapshotProduceOperation, MP: ManifestProcess>(
         &mut self,
         snapshot_produce_operation: &OP,
         manifest_process: &MP,
@@ -470,15 +469,15 @@ impl<'a> SnapshotProducer<'a> {
             ),
         };
 
-        // Calling self.summary() before self.produce_manifest_file_list() is important because self.added_data_files
-        // will be set to an empty vec after self.produce_manifest_file_list() returns, resulting in an empty summary
+        // Calling self.summary() before self.produce_manifests() is important because self.added_data_files
+        // will be set to an empty vec after self.produce_manifests() returns, resulting in an empty summary
         // being generated.
         let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
             Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
         })?;
 
         let new_manifests = self
-            .produce_manifest_file_list(&snapshot_produce_operation, &process)
+            .produce_manifests(&snapshot_produce_operation, &process)
             .await?;
 
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;
