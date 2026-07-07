@@ -367,13 +367,6 @@ impl CachingDeleteFileLoader {
                     ));
                 }
 
-                if pos < 0 {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("negative position in delete file: {pos}"),
-                    ));
-                }
-
                 result
                     .entry(file_path.to_string())
                     .or_default()
