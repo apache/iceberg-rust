@@ -39,7 +39,9 @@ use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics, ScanResult};
 use crate::error::Result;
 use crate::io::{FileIO, FileMetadata, FileRead};
-use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, RESERVED_FIELD_ID_POS, is_metadata_field};
+use crate::metadata_columns::{
+    RESERVED_COL_NAME_POS, RESERVED_FIELD_ID_FILE, RESERVED_FIELD_ID_POS, is_metadata_field,
+};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::Datum;
 use crate::{Error, ErrorKind};
@@ -213,7 +215,7 @@ impl FileScanTaskReader {
 
         let arrow_metadata = if project_pos {
             let row_number_field = Arc::new(
-                Field::new("row_number", DataType::Int64, false)
+                Field::new(RESERVED_COL_NAME_POS, DataType::Int64, false)
                     .with_metadata(HashMap::from([(
                         PARQUET_FIELD_ID_META_KEY.to_string(),
                         RESERVED_FIELD_ID_POS.to_string(),

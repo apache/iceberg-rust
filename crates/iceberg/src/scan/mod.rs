@@ -2429,4 +2429,46 @@ pub mod tests {
         assert_eq!(schema.field(1).name(), "x");
         assert_eq!(schema.field(2).name(), "y");
     }
+
+    #[tokio::test]
+    async fn test_pos_column_with_filter() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // a NOT STARTSWITH "Apa"
+        let predicate = Reference::new("a").not_starts_with(Datum::string("Apa"));
+        // Select '_pos' columns twice
+        let table_scan = fixture
+            .table
+            .scan()
+            .select([RESERVED_COL_NAME_POS, "a", RESERVED_COL_NAME_POS, "x"])
+            .with_row_selection_enabled(true)
+            .with_filter(predicate)
+            .build()
+            .unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        assert_eq!(batches[0].num_rows(), 512);
+
+        // fetch the 1st _pos column by name and verify it is Int64Array with the expected values
+        let pos_col = batches[0]
+            .column_by_name("_pos")
+            .expect("_pos column should be present in the batch");
+        let pos_array: &Int64Array = pos_col
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("_pos column should be a Int64Array");
+        assert_eq!(*pos_array, Int64Array::from_iter_values(512i64..1024));
+
+        // fetch the 2nd _pos column by index and verify it is Int64Array with the expected values
+        let pos_col = batches[0].column(2);
+        let pos_array: &Int64Array = pos_col
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("_pos column should be a Int64Array");
+        assert_eq!(*pos_array, Int64Array::from_iter_values(512i64..1024));
+    }
 }

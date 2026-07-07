@@ -471,28 +471,37 @@ impl RecordBatchTransformer {
             return SchemaComparison::Different;
         }
 
-        let mut names_changed = false;
+        let field_eq = |a: &FieldRef, b: &FieldRef| {
+            a.name() == b.name()
+                && a.data_type() == b.data_type()
+                && a.is_nullable() == b.is_nullable()
+        };
 
-        for (source_field, target_field) in source_schema
-            .fields()
-            .iter()
-            .zip(target_schema.fields().iter())
-        {
-            if source_field.data_type() != target_field.data_type()
-                || source_field.is_nullable() != target_field.is_nullable()
-            {
-                return SchemaComparison::Different;
-            }
+        let positional = || source_schema.fields().iter().zip(target_schema.fields());
 
-            if source_field.name() != target_field.name() {
-                names_changed = true;
-            }
+        // Field-by-field identical: nothing to do.
+        if positional().all(|(s, t)| field_eq(s, t)) {
+            return SchemaComparison::Equivalent;
         }
 
-        if names_changed {
-            SchemaComparison::NameChangesOnly
+        // Same set of fields but reordered: rebuild in target (selection) order.
+        // Lengths are equal and field names are unique, so this is set-equality.
+        let reordered = target_schema
+            .fields()
+            .iter()
+            .all(|t| source_schema.fields().iter().any(|s| field_eq(s, t)));
+        if reordered {
+            return SchemaComparison::Different;
+        }
+
+        // Not a reordering: any type/nullability difference needs a full
+        // rebuild; otherwise only names differ and we can just relabel.
+        if positional()
+            .any(|(s, t)| s.data_type() != t.data_type() || s.is_nullable() != t.is_nullable())
+        {
+            SchemaComparison::Different
         } else {
-            SchemaComparison::Equivalent
+            SchemaComparison::NameChangesOnly
         }
     }
 
