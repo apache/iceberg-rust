@@ -442,9 +442,9 @@ pub(crate) mod tests {
 
     use regex::Regex;
     use tempfile::TempDir;
-
+    use crate::encryption::kms::MemoryKmsClientFactory;
     use super::*;
-    use crate::io::FileIO;
+    use crate::io::{FileIO, LocalFsStorageFactory};
     use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     use crate::test_utils::test_runtime;
     use crate::transaction::{ApplyTransactionAction, Transaction};
@@ -1948,6 +1948,91 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::TableNotFound);
+    }
+
+    /// Master key bytes used to generate the encrypted testdata fixtures.
+    /// See `testdata/manifests_lists/README.md`.
+    const FIXTURE_MASTER_KEY_ID: &str = "master-1";
+    const FIXTURE_MASTER_KEY_BYTES: [u8; 16] = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+        0x0f,
+    ];
+
+    /// Builds a `MemoryKmsClientFactory` seeded with the fixture master key.
+    fn fixture_kms_factory() -> MemoryKmsClientFactory {
+        use crate::encryption::SensitiveBytes;
+        use crate::encryption::kms::MemoryKeyManagementClient;
+
+        let kms = MemoryKeyManagementClient::new();
+        kms.add_master_key_bytes(
+            FIXTURE_MASTER_KEY_ID,
+            SensitiveBytes::new(FIXTURE_MASTER_KEY_BYTES),
+        )
+        .unwrap();
+        MemoryKmsClientFactory::new(&kms)
+    }
+
+    /// Loads the encrypted V3 metadata fixture and patches its snapshot's
+    /// manifest-list to point at the on-disk encrypted testdata file.
+    fn load_encrypted_fixture_metadata() -> TableMetadata {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let metadata_json = std::fs::read_to_string(format!(
+            "{manifest_dir}/testdata/table_metadata/TableMetadataV3ValidEncryption.json"
+        ))
+        .unwrap();
+        let mut metadata: TableMetadata = serde_json::from_str(&metadata_json).unwrap();
+
+        let manifest_list_path =
+            format!("{manifest_dir}/testdata/manifests_lists/manifest-list-v3-encrypted.avro");
+        let snapshot = metadata.snapshots.get_mut(&1).unwrap();
+        let mut patched = snapshot.as_ref().clone();
+        patched.manifest_list = manifest_list_path;
+        *snapshot = Arc::new(patched);
+
+        metadata
+    }
+
+    #[tokio::test]
+    async fn catalog_kms_factory_client_reaches_table_encryption_manager() {
+        let warehouse = temp_path();
+        let catalog = MemoryCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .with_kms_client_factory(Arc::new(fixture_kms_factory()))
+            .load(
+                "memory",
+                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse)]),
+            )
+            .await
+            .unwrap();
+
+        let namespace_ident = NamespaceIdent::new("enc_ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let metadata = load_encrypted_fixture_metadata();
+        let metadata_dir = TempDir::new().unwrap();
+        let metadata_location =
+            format!("{}/v1.metadata.json", metadata_dir.path().to_str().unwrap());
+        std::fs::write(&metadata_location, serde_json::to_vec(&metadata).unwrap()).unwrap();
+
+        let table_ident = TableIdent::new(namespace_ident, "enc".to_string());
+        catalog
+            .register_table(&table_ident, metadata_location)
+            .await
+            .unwrap();
+
+        let table = catalog.load_table(&table_ident).await.unwrap();
+        assert!(
+            table.encryption_manager().is_some(),
+            "factory-built KMS client should have reached the table's EncryptionManager"
+        );
+
+        let snapshot_ref = table.metadata().current_snapshot().unwrap();
+        let manifest_list = table
+            .object_cache()
+            .get_manifest_list(snapshot_ref, &table.metadata_ref())
+            .await
+            .unwrap();
+        assert_eq!(manifest_list.entries().len(), 0);
     }
 
     fn build_table(ident: TableIdent) -> Table {
