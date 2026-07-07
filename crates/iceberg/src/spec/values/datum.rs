@@ -1086,6 +1086,16 @@ impl Datum {
         }
     }
 
+    fn f64_to_f32(val: f64) -> Datum {
+        if val > f32::MAX as f64 {
+            Datum::new(PrimitiveType::Float, PrimitiveLiteral::AboveMax)
+        } else if val < -(f32::MAX as f64) {
+            Datum::new(PrimitiveType::Float, PrimitiveLiteral::BelowMin)
+        } else {
+            Datum::float(val as f32)
+        }
+    }
+
     fn string_to_i128<S: AsRef<str>>(s: S) -> Result<i128> {
         s.as_ref().parse::<i128>().map_err(|e| {
             Error::new(ErrorKind::DataInvalid, "Can't parse string to i128.").with_source(e)
@@ -1122,6 +1132,12 @@ impl Datum {
                     (PrimitiveLiteral::Int(val), _, PrimitiveType::Long) => Ok(Datum::long(*val)),
                     (PrimitiveLiteral::Long(val), _, PrimitiveType::Int) => {
                         Ok(Datum::i64_to_i32(*val))
+                    }
+                    (PrimitiveLiteral::Double(val), _, PrimitiveType::Float) => {
+                        Ok(Datum::f64_to_f32(val.0))
+                    }
+                    (PrimitiveLiteral::Float(val), _, PrimitiveType::Double) => {
+                        Ok(Datum::double(val.0 as f64))
                     }
                     (PrimitiveLiteral::Long(val), _, PrimitiveType::Timestamp) => {
                         Ok(Datum::timestamp_micros(*val))
