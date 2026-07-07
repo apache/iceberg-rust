@@ -442,8 +442,9 @@ pub(crate) mod tests {
 
     use regex::Regex;
     use tempfile::TempDir;
-    use crate::encryption::kms::MemoryKmsClientFactory;
+
     use super::*;
+    use crate::encryption::kms::MemoryKmsClientFactory;
     use crate::io::{FileIO, LocalFsStorageFactory};
     use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     use crate::test_utils::test_runtime;
