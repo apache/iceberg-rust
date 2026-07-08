@@ -52,15 +52,6 @@ impl GlueSchemaBuilder {
 
         visit_schema(current_schema, &mut builder)?;
 
-        builder.is_current = false;
-
-        for schema in metadata.schemas_iter() {
-            if schema.schema_id() == current_schema.schema_id() {
-                continue;
-            }
-
-            visit_schema(schema, &mut builder)?;
-        }
 
         Ok(builder)
     }
