@@ -1086,7 +1086,7 @@ impl Datum {
         }
     }
 
-    fn f64_to_f32(val: f64) -> Datum {
+    fn f64_to_f32<T: Into<f64>>(val: f64) -> Datum {
         if val > f32::MAX as f64 {
             Datum::new(PrimitiveType::Float, PrimitiveLiteral::AboveMax)
         } else if val < (f32::MIN as f64) {
