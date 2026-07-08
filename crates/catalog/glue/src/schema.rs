@@ -52,8 +52,8 @@ impl GlueSchemaBuilder {
 
         visit_schema(current_schema, &mut builder)?;
 
+        // Keeping the returned builder state unchanged for compatibility with callers that may inspect it before calling `build`.
         builder.is_current = false;
-
 
         Ok(builder)
     }
@@ -324,6 +324,78 @@ mod tests {
             create_column("c11", "string", "11", false)?,
             create_column("c12", "binary", "12", false)?,
             create_column("c13", "binary", "13", false)?,
+        ];
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_schema_evolution_only_converts_current_schema_fields() -> Result<()> {
+        let initial_schema = serde_json::from_str::<Schema>(
+            r#"{
+                "type": "struct",
+                "schema-id": 1,
+                "fields": [
+                    {
+                        "id": 1,
+                        "name": "id",
+                        "required": true,
+                        "type": "long"
+                    },
+                    {
+                        "id": 2,
+                        "name": "name",
+                        "required": false,
+                        "type": "string"
+                    }
+                ]
+            }"#,
+        )?;
+        let metadata = create_metadata(initial_schema)?;
+
+        let evolved_schema = serde_json::from_str::<Schema>(
+            r#"{
+                "type": "struct",
+                "schema-id": 2,
+                "fields": [
+                    {
+                        "id": 1,
+                        "name": "id",
+                        "required": true,
+                        "type": "long"
+                    },
+                    {
+                        "id": 2,
+                        "name": "name",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
+                        "id": 3,
+                        "name": "age",
+                        "required": false,
+                        "type": "int"
+                    }
+                ]
+            }"#,
+        )?;
+
+        let metadata = TableMetadataBuilder::new_from_metadata(metadata, None)
+            .add_schema(evolved_schema)?
+            .set_current_schema(TableMetadataBuilder::LAST_ADDED)?
+            .build()?
+            .metadata;
+
+        assert_eq!(metadata.schemas_iter().len(), 2);
+
+        let result = GlueSchemaBuilder::from_iceberg(&metadata)?.build();
+
+        let expected = vec![
+            create_column("id", "bigint", "1", false)?,
+            create_column("name", "string", "2", true)?,
+            create_column("age", "int", "3", true)?,
         ];
 
         assert_eq!(result, expected);
