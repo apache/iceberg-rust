@@ -52,6 +52,8 @@ impl GlueSchemaBuilder {
 
         visit_schema(current_schema, &mut builder)?;
 
+        builder.is_current = false;
+
 
         Ok(builder)
     }
