@@ -197,9 +197,14 @@ pub fn iceberg::encryption::kms::MemoryKeyManagementClient::unwrap_key<'life0, '
 pub fn iceberg::encryption::kms::MemoryKeyManagementClient::wrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::vec::Vec<u8>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub struct iceberg::encryption::kms::MemoryKmsClientFactory
 impl iceberg::encryption::kms::MemoryKmsClientFactory
-pub fn iceberg::encryption::kms::MemoryKmsClientFactory::new(kms: &iceberg::encryption::kms::MemoryKeyManagementClient) -> Self
+pub fn iceberg::encryption::kms::MemoryKmsClientFactory::add_master_key(&self, key_id: impl core::convert::Into<alloc::string::String>) -> iceberg::Result<()>
+pub fn iceberg::encryption::kms::MemoryKmsClientFactory::add_master_key_bytes(&self, key_id: impl core::convert::Into<alloc::string::String>, key_bytes: iceberg::encryption::SensitiveBytes) -> iceberg::Result<()>
+pub fn iceberg::encryption::kms::MemoryKmsClientFactory::new() -> Self
+pub fn iceberg::encryption::kms::MemoryKmsClientFactory::with_master_key_size(master_key_size: iceberg::encryption::AesKeySize) -> Self
 impl core::clone::Clone for iceberg::encryption::kms::MemoryKmsClientFactory
 pub fn iceberg::encryption::kms::MemoryKmsClientFactory::clone(&self) -> iceberg::encryption::kms::MemoryKmsClientFactory
+impl core::default::Default for iceberg::encryption::kms::MemoryKmsClientFactory
+pub fn iceberg::encryption::kms::MemoryKmsClientFactory::default() -> iceberg::encryption::kms::MemoryKmsClientFactory
 impl core::fmt::Debug for iceberg::encryption::kms::MemoryKmsClientFactory
 pub fn iceberg::encryption::kms::MemoryKmsClientFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::encryption::kms::KmsClientFactory for iceberg::encryption::kms::MemoryKmsClientFactory

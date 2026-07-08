@@ -1962,15 +1962,15 @@ pub(crate) mod tests {
     /// Builds a `MemoryKmsClientFactory` seeded with the fixture master key.
     fn fixture_kms_factory() -> MemoryKmsClientFactory {
         use crate::encryption::SensitiveBytes;
-        use crate::encryption::kms::MemoryKeyManagementClient;
 
-        let kms = MemoryKeyManagementClient::new();
-        kms.add_master_key_bytes(
-            FIXTURE_MASTER_KEY_ID,
-            SensitiveBytes::new(FIXTURE_MASTER_KEY_BYTES),
-        )
-        .unwrap();
-        MemoryKmsClientFactory::new(&kms)
+        let factory = MemoryKmsClientFactory::new();
+        factory
+            .add_master_key_bytes(
+                FIXTURE_MASTER_KEY_ID,
+                SensitiveBytes::new(FIXTURE_MASTER_KEY_BYTES),
+            )
+            .unwrap();
+        factory
     }
 
     /// Loads the encrypted V3 metadata fixture and patches its snapshot's
