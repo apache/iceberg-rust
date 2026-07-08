@@ -81,6 +81,7 @@ impl TransactionAction for FastAppendAction {
             self.commit_uuid.unwrap_or_else(Uuid::now_v7),
             self.snapshot_properties.clone(),
             self.added_data_files.clone(),
+            vec![],
         );
 
         // validate added files
