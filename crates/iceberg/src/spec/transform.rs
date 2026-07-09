@@ -1111,8 +1111,14 @@ mod tests {
 
     #[test]
     fn test_parse_known_transforms() {
-        assert_eq!("identity".parse::<Transform>().unwrap(), Transform::Identity);
-        assert_eq!("bucket[16]".parse::<Transform>().unwrap(), Transform::Bucket(16));
+        assert_eq!(
+            "identity".parse::<Transform>().unwrap(),
+            Transform::Identity
+        );
+        assert_eq!(
+            "bucket[16]".parse::<Transform>().unwrap(),
+            Transform::Bucket(16)
+        );
         assert_eq!(
             "truncate[4]".parse::<Transform>().unwrap(),
             Transform::Truncate(4)
