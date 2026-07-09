@@ -121,3 +121,6 @@ dependency versions without always upgrading to the latest.
 ## Code of Conduct
 
 We expect all community members to follow our [Code of Conduct](https://www.apache.org/foundation/policies/conduct.html).
+
+### RFC Process
+For large changes, big brand new features or substantial changes to public facing APIs it can be recommended to open two PRs one with an RFC explaining in prose the scope and use case, with a second PR with initial code implementations. Please reference the [Iceberg Proposals](https://iceberg.apache.org/contribute/?h=contri#apache-iceberg-improvement-proposals) section of the contributing guide for additional details. Iceberg-Rust's previous RFCs live in `/docs/rfc/`
