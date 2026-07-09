@@ -86,11 +86,10 @@ impl MetadataLocation {
         }
     }
 
-    /// Updates the metadata location with the metadata directory
-    /// and compression settings derived from the new metadata.
+    /// Updates the metadata location with compression settings from the new metadata.
     pub fn with_new_metadata(&self, new_metadata: &TableMetadata) -> Self {
         Self {
-            metadata_dir: new_metadata.metadata_location_root(),
+            metadata_dir: self.metadata_dir.clone(),
             version: self.version,
             id: self.id,
             compression_codec: Self::compression_from_properties(new_metadata.properties()),
@@ -439,33 +438,5 @@ mod test {
             "unexpected location: {custom_loc}"
         );
         assert!(custom_loc.to_string().ends_with(".metadata.json"));
-    }
-
-    #[test]
-    fn test_with_new_metadata_honors_write_metadata_path() {
-        // Parse the current (default-location) metadata file, bump the
-        // version, then apply new metadata that sets `write.metadata.path`. Test the metadata
-        // directory is derived from the metadata object, not the previous path)
-        let current = MetadataLocation::from_str(
-            "/test/table/metadata/00000-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
-        )
-        .unwrap();
-
-        let props = HashMap::from([(
-            "write.metadata.path".to_string(),
-            "s3://bucket/custom-meta".to_string(),
-        )]);
-        let new_meta = create_test_metadata(props);
-
-        let next = current.with_next_version().with_new_metadata(&new_meta);
-        assert_eq!(next.version, 1);
-        assert!(
-            next.to_string()
-                .starts_with("s3://bucket/custom-meta/00001-"),
-            "unexpected location: {next}"
-        );
-
-        let reparsed = MetadataLocation::from_str(&next.to_string()).unwrap();
-        assert_eq!(reparsed, next);
     }
 }

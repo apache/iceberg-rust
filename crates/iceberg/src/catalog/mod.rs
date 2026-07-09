@@ -2442,13 +2442,12 @@ mod tests {
             "v2"
         );
 
-        // metadata version should be bumped and the new metadata file is written under the updated
-        // table location's metadata directory
+        // metadata version should be bumped
         assert!(
             updated_table
                 .metadata_location()
                 .unwrap()
-                .starts_with("s3://bucket/test/new_location/data/metadata/00001-")
+                .starts_with("s3://bucket/test/location/metadata/00001-")
         );
 
         assert_eq!(
