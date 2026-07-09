@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["GeneratedKey","MemoryKeyManagementClient"],"trait":["KeyManagementClient"]};
+window.SIDEBAR_ITEMS = {"struct":["GeneratedKey","MemoryKeyManagementClient","MemoryKmsClientFactory"],"trait":["KeyManagementClient","KmsClientFactory"]};

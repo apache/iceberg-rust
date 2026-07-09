@@ -21,8 +21,10 @@
 <a href=#21 id=21 data-nosnippet>21</a>//! integration and implementations for different key management systems.
 <a href=#22 id=22 data-nosnippet>22</a>
 <a href=#23 id=23 data-nosnippet>23</a></span><span class="kw">mod </span>client;
-<a href=#24 id=24 data-nosnippet>24</a><span class="kw">mod </span>memory;
-<a href=#25 id=25 data-nosnippet>25</a>
-<a href=#26 id=26 data-nosnippet>26</a><span class="kw">pub use </span>client::{GeneratedKey, KeyManagementClient};
-<a href=#27 id=27 data-nosnippet>27</a><span class="kw">pub use </span>memory::MemoryKeyManagementClient;
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">mod </span>factory;
+<a href=#25 id=25 data-nosnippet>25</a><span class="kw">mod </span>memory;
+<a href=#26 id=26 data-nosnippet>26</a>
+<a href=#27 id=27 data-nosnippet>27</a><span class="kw">pub use </span>client::{GeneratedKey, KeyManagementClient};
+<a href=#28 id=28 data-nosnippet>28</a><span class="kw">pub use </span>factory::KmsClientFactory;
+<a href=#29 id=29 data-nosnippet>29</a><span class="kw">pub use </span>memory::{MemoryKeyManagementClient, MemoryKmsClientFactory};
 </code></pre></div></section></main></body></html>
