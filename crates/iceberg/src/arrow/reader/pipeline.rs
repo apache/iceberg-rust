@@ -498,12 +498,12 @@ mod tests {
     use futures::TryStreamExt;
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
-    use parquet::encryption::encrypt::FileEncryptionProperties;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
     use crate::Runtime;
     use crate::arrow::ArrowReaderBuilder;
+    use crate::arrow::test_utils::write_encrypted_parquet;
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskStream};
     use crate::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, SchemaRef, Type};
@@ -684,33 +684,10 @@ mod tests {
         }
     }
 
-    fn write_encrypted_parquet(
-        path: &str,
-        batch: &RecordBatch,
-        key: &[u8],
-        aad_prefix: Option<&[u8]>,
-    ) {
-        let mut builder = FileEncryptionProperties::builder(key.to_vec());
-        if let Some(aad) = aad_prefix {
-            builder = builder.with_aad_prefix(aad.to_vec());
-        }
-        let encryption_properties = builder.build().unwrap();
-
-        let props = WriterProperties::builder()
-            .set_compression(Compression::SNAPPY)
-            .with_file_encryption_properties(encryption_properties)
-            .build();
-
-        let file = File::create(path).unwrap();
-        let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
-        writer.write(batch).expect("Writing batch");
-        writer.close().unwrap();
-    }
-
     #[tokio::test]
     async fn test_read_encrypted_parquet() {
         let encryption_key = b"0123456789abcdef";
-        let aad_prefix = b"my-table-uuid!!";
+        let aad_prefix = b"aad_prefix";
 
         let schema = Arc::new(
             Schema::builder()

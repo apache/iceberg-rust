@@ -147,6 +147,7 @@ mod tests {
 
     use super::*;
     use crate::arrow::delete_filter::tests::setup;
+    use crate::arrow::test_utils::write_encrypted_parquet;
 
     #[tokio::test]
     async fn test_basic_delete_file_loader_read_delete_file() {
@@ -172,28 +173,6 @@ mod tests {
         assert_eq!(result.len(), 1);
     }
 
-    fn write_encrypted_parquet(path: &str, batch: &arrow_array::RecordBatch, key: &[u8]) {
-        use std::fs::File;
-
-        use parquet::arrow::ArrowWriter;
-        use parquet::basic::Compression;
-        use parquet::encryption::encrypt::FileEncryptionProperties;
-        use parquet::file::properties::WriterProperties;
-
-        let encryption_properties = FileEncryptionProperties::builder(key.to_vec())
-            .build()
-            .unwrap();
-        let props = WriterProperties::builder()
-            .set_compression(Compression::SNAPPY)
-            .with_file_encryption_properties(encryption_properties)
-            .build();
-
-        let file = File::create(path).unwrap();
-        let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
-        writer.write(batch).unwrap();
-        writer.close().unwrap();
-    }
-
     #[tokio::test]
     async fn test_read_encrypted_positional_delete_file() {
         use std::sync::Arc;
@@ -206,6 +185,7 @@ mod tests {
         use crate::spec::DataContentType;
 
         let encryption_key = b"0123456789abcdef";
+        let aad_prefix = b"aad_prefix";
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap();
@@ -221,12 +201,15 @@ mod tests {
         .unwrap();
 
         let del_path = format!("{table_location}/encrypted-pos-del.parquet");
-        write_encrypted_parquet(&del_path, &batch, encryption_key);
+        write_encrypted_parquet(&del_path, &batch, encryption_key, Some(aad_prefix));
 
-        let key_metadata = StandardKeyMetadata::new(encryption_key).encode().unwrap();
+        let key_metadata = StandardKeyMetadata::new(encryption_key)
+            .with_aad_prefix(aad_prefix)
+            .encode()
+            .unwrap();
 
         let schema = Arc::new(
-            crate::spec::Schema::builder()
+            Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
                     crate::spec::NestedField::required(
@@ -281,6 +264,7 @@ mod tests {
         use crate::spec::DataContentType;
 
         let encryption_key = b"0123456789abcdef";
+        let aad_prefix = b"my-table-uuid!!";
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap();
@@ -296,12 +280,15 @@ mod tests {
         let batch = RecordBatch::try_new(arrow_schema.clone(), vec![id_col]).unwrap();
 
         let del_path = format!("{table_location}/encrypted-eq-del.parquet");
-        write_encrypted_parquet(&del_path, &batch, encryption_key);
+        write_encrypted_parquet(&del_path, &batch, encryption_key, Some(aad_prefix));
 
-        let key_metadata = StandardKeyMetadata::new(encryption_key).encode().unwrap();
+        let key_metadata = StandardKeyMetadata::new(encryption_key)
+            .with_aad_prefix(aad_prefix)
+            .encode()
+            .unwrap();
 
         let schema = Arc::new(
-            crate::spec::Schema::builder()
+            Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
                     crate::spec::NestedField::required(
