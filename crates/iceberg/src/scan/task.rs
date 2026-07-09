@@ -174,6 +174,9 @@ impl From<&DeleteFileContext> for FileScanTaskDeleteFile {
             .with_file_type(ctx.manifest_entry.content_type())
             .with_partition_spec_id(ctx.partition_spec_id)
             .with_equality_ids(ctx.manifest_entry.data_file.equality_ids.clone())
+            .with_referenced_data_file(ctx.manifest_entry.data_file.referenced_data_file.clone())
+            .with_content_offset(ctx.manifest_entry.data_file.content_offset)
+            .with_content_size_in_bytes(ctx.manifest_entry.data_file.content_size_in_bytes)
             .with_key_metadata(
                 ctx.manifest_entry
                     .data_file
@@ -204,6 +207,21 @@ pub struct FileScanTaskDeleteFile {
     /// equality ids for equality deletes (null for anything other than equality-deletes)
     #[builder(default)]
     pub equality_ids: Option<Vec<i32>>,
+
+    /// For a deletion vector, the location of the data file whose rows it deletes. Required for
+    /// deletion vectors, and may also be set on a position delete file scoped to one data file.
+    #[builder(default)]
+    pub referenced_data_file: Option<String>,
+
+    /// For a deletion vector, the offset of the blob within its Puffin file. Set only for
+    /// deletion vectors, where it locates the blob for direct access.
+    #[builder(default)]
+    pub content_offset: Option<i64>,
+
+    /// For a deletion vector, the length in bytes of the blob within its Puffin file. Set
+    /// whenever `content_offset` is.
+    #[builder(default)]
+    pub content_size_in_bytes: Option<i64>,
 
     /// Key metadata for encrypted delete files (Parquet Modular Encryption).
     /// When present, the reader uses this to build `FileDecryptionProperties`.
