@@ -304,10 +304,125 @@ mod tests {
 
     use crate::catalog::MockCatalog;
     use crate::io::FileIOBuilder;
-    use crate::spec::TableMetadata;
+    use crate::spec::{
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
+        ManifestListWriter, ManifestWriterBuilder, Operation, Snapshot, SnapshotReference,
+        SnapshotRetention, Struct, Summary, TableMetadata,
+    };
     use crate::table::Table;
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
+
+    /// Fixture constants shared by the `overwrite_files` / `rewrite_files` tests.
+    pub const PARENT_SNAPSHOT_ID: i64 = 42;
+    pub const PARENT_SEQUENCE_NUMBER: i64 = 1;
+    pub const REMOVED_DELETE_FILE: &str = "test/removed-position-delete.parquet";
+    pub const RETAINED_DELETE_FILE: &str = "test/retained-position-delete.parquet";
+
+    const TABLE_LOCATION: &str = "memory:///test/location";
+    const MANIFEST_LIST_LOCATION: &str = "memory:///test/location/metadata/manifest-list-1.avro";
+    const DELETE_MANIFEST_LOCATION: &str =
+        "memory:///test/location/metadata/delete-manifest-1.avro";
+
+    pub fn position_delete_file(table: &Table, path: &str) -> DataFile {
+        DataFileBuilder::default()
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .content(DataContentType::PositionDeletes)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap()
+    }
+
+    /// A V2 table whose `main` snapshot tracks a single *delete* manifest holding
+    /// both [`REMOVED_DELETE_FILE`] and [`RETAINED_DELETE_FILE`].
+    ///
+    /// The table location is rewritten to a `memory://` path so that actions
+    /// which write new manifests (e.g. `existing_manifest`) can do so through the
+    /// in-memory `FileIO`.
+    pub async fn make_v2_table_with_delete_manifest() -> Table {
+        let base = make_v2_minimal_table();
+        let metadata = base
+            .metadata()
+            .clone()
+            .into_builder(Some("s3://bucket/test/location/metadata/v1.json".into()))
+            .set_location(TABLE_LOCATION.to_string())
+            .build()
+            .unwrap()
+            .metadata;
+        let base = base.with_metadata(Arc::new(metadata));
+
+        let file_io = base.file_io().clone();
+        let mut manifest_writer = ManifestWriterBuilder::new(
+            file_io.new_output(DELETE_MANIFEST_LOCATION).unwrap(),
+            Some(PARENT_SNAPSHOT_ID),
+            None,
+            base.metadata().current_schema().clone(),
+            base.metadata().default_partition_spec().as_ref().clone(),
+        )
+        .build_v2_deletes();
+
+        // `add_existing_file` preserves snapshot id / sequence numbers, which
+        // `delete_entries` unwraps when it rewrites an entry as `Deleted`.
+        for path in [REMOVED_DELETE_FILE, RETAINED_DELETE_FILE] {
+            manifest_writer
+                .add_existing_file(
+                    position_delete_file(&base, path),
+                    PARENT_SNAPSHOT_ID,
+                    PARENT_SEQUENCE_NUMBER,
+                    Some(PARENT_SEQUENCE_NUMBER),
+                )
+                .unwrap();
+        }
+        let delete_manifest = manifest_writer.write_manifest_file().await.unwrap();
+
+        let mut manifest_list_writer = ManifestListWriter::v2(
+            file_io.new_output(MANIFEST_LIST_LOCATION).unwrap(),
+            PARENT_SNAPSHOT_ID,
+            None,
+            PARENT_SEQUENCE_NUMBER,
+        );
+        manifest_list_writer
+            .add_manifests(vec![delete_manifest].into_iter())
+            .unwrap();
+        manifest_list_writer.close().await.unwrap();
+
+        let parent_snapshot = Snapshot::builder()
+            .with_snapshot_id(PARENT_SNAPSHOT_ID)
+            .with_timestamp_ms(base.metadata().last_updated_ms() + 1)
+            .with_sequence_number(PARENT_SEQUENCE_NUMBER)
+            .with_schema_id(0)
+            .with_manifest_list(MANIFEST_LIST_LOCATION)
+            .with_summary(Summary {
+                operation: Operation::Overwrite,
+                additional_properties: HashMap::new(),
+            })
+            .build();
+
+        let metadata = base
+            .metadata()
+            .clone()
+            .into_builder(Some("s3://bucket/test/location/metadata/v1.json".into()))
+            .add_snapshot(parent_snapshot)
+            .unwrap()
+            .set_ref(MAIN_BRANCH, SnapshotReference {
+                snapshot_id: PARENT_SNAPSHOT_ID,
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            })
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        base.with_metadata(Arc::new(metadata))
+    }
 
     pub fn make_v1_table() -> Table {
         let file = File::open(format!(

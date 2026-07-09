@@ -28,8 +28,7 @@ use super::{
 };
 use crate::error::Result;
 use crate::spec::{
-    DataContentType, DataFile, ManifestContentType, ManifestEntry, ManifestFile, ManifestStatus,
-    Operation,
+    DataContentType, DataFile, ManifestEntry, ManifestFile, ManifestStatus, Operation,
 };
 use crate::table::Table;
 use crate::transaction::snapshot::SnapshotProduceOperation;
@@ -287,19 +286,22 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
                 existing_files.push(manifest_file.clone());
             } else {
                 // Rewrite the manifest file without the deleted data files
-                if manifest
-                    .entries()
-                    .iter()
-                    .any(|entry| !found_deleted_files.contains(entry.data_file().file_path()))
-                {
+                let survives = |entry: &ManifestEntry| {
+                    entry.is_alive() && !found_deleted_files.contains(entry.data_file().file_path())
+                };
+
+                if manifest.entries().iter().any(|entry| survives(entry)) {
                     let mut manifest_writer = snapshot_produce.new_manifest_writer(
-                        ManifestContentType::Data,
+                        manifest_file.content,
                         manifest_file.partition_spec_id,
                     )?;
 
                     for entry in manifest.entries() {
-                        if !found_deleted_files.contains(entry.data_file().file_path()) {
-                            manifest_writer.add_entry((**entry).clone())?;
+                        // Carry survivors forward as `Existing`: `add_entry` would
+                        // restamp them as `Added` under the new snapshot and drop
+                        // their file sequence number.
+                        if survives(entry) {
+                            manifest_writer.add_existing_entry((**entry).clone())?;
                         }
                     }
 
@@ -360,5 +362,107 @@ impl TransactionAction for RewriteFilesAction {
 impl Default for RewriteFilesAction {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use uuid::Uuid;
+
+    use super::RewriteFilesOperation;
+    use crate::spec::{ManifestContentType, ManifestStatus};
+    use crate::transaction::snapshot::{SnapshotProduceOperation, SnapshotProducer};
+    use crate::transaction::tests::{
+        PARENT_SEQUENCE_NUMBER, PARENT_SNAPSHOT_ID, REMOVED_DELETE_FILE, RETAINED_DELETE_FILE,
+        make_v2_table_with_delete_manifest, position_delete_file,
+    };
+
+    /// Regression test: an rewrite that removes one delete file must not mark
+    /// *unrelated* delete files as deleted.
+    #[tokio::test]
+    async fn test_rewrite_only_marks_removed_delete_files() {
+        let table = make_v2_table_with_delete_manifest().await;
+        let removed = position_delete_file(&table, REMOVED_DELETE_FILE);
+
+        let producer = SnapshotProducer::new(
+            &table,
+            Uuid::now_v7(),
+            None,
+            None,
+            HashMap::new(),
+            vec![],
+            vec![],
+            vec![],
+            vec![removed],
+        );
+
+        let deleted_entries = RewriteFilesOperation
+            .delete_entries(&producer)
+            .await
+            .unwrap();
+        let deleted_paths: Vec<&str> = deleted_entries
+            .iter()
+            .map(|entry| entry.data_file().file_path())
+            .collect();
+
+        assert_eq!(
+            deleted_paths,
+            vec![REMOVED_DELETE_FILE],
+            "only the removed delete file should be marked deleted; \
+             {RETAINED_DELETE_FILE} must stay live"
+        );
+    }
+
+    /// Regression test: rewriting a partially-deleted *delete* manifest must
+    /// preserve its `Deletes` content type. See the `overwrite_files` twin.
+    #[tokio::test]
+    async fn test_rewrite_preserves_delete_manifest_content_type() {
+        let table = make_v2_table_with_delete_manifest().await;
+        let removed = position_delete_file(&table, REMOVED_DELETE_FILE);
+
+        let mut producer = SnapshotProducer::new(
+            &table,
+            Uuid::now_v7(),
+            None,
+            None,
+            HashMap::new(),
+            vec![],
+            vec![],
+            vec![],
+            vec![removed],
+        );
+
+        let existing = RewriteFilesOperation
+            .existing_manifest(&mut producer)
+            .await
+            .unwrap();
+
+        assert_eq!(existing.len(), 1, "the delete manifest should be rewritten");
+        assert_eq!(
+            existing[0].content,
+            ManifestContentType::Deletes,
+            "a rewritten delete manifest must stay a Deletes manifest"
+        );
+
+        let entries = existing[0].load_manifest(table.file_io()).await.unwrap();
+        let paths: Vec<&str> = entries
+            .entries()
+            .iter()
+            .map(|entry| entry.data_file().file_path())
+            .collect();
+        assert_eq!(paths, vec![RETAINED_DELETE_FILE]);
+
+        // The survivor is carried forward untouched, not restamped as a new
+        // addition of this snapshot.
+        let retained = &entries.entries()[0];
+        assert_eq!(retained.status(), ManifestStatus::Existing);
+        assert_eq!(retained.snapshot_id(), Some(PARENT_SNAPSHOT_ID));
+        assert_eq!(retained.sequence_number(), Some(PARENT_SEQUENCE_NUMBER));
+        assert_eq!(
+            retained.file_sequence_number(),
+            Some(PARENT_SEQUENCE_NUMBER)
+        );
     }
 }
