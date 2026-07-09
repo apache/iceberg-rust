@@ -518,8 +518,20 @@ impl RestCatalog {
     ///
     /// Unlike [`Catalog::update_table`], this method does not retry: on a
     /// conflict the base metadata of every prepared table may be stale, so
-    /// re-preparing the whole transaction is the caller's decision. Errors
-    /// from HTTP 409 are marked retryable.
+    /// re-preparing the whole transaction is the caller's decision.
+    ///
+    /// Two contract points callers must handle:
+    ///
+    /// * **A success returns no refreshed metadata** (the endpoint responds
+    ///   200/204 with an empty body), so post-commit state is not applied to
+    ///   any in-memory `Table`. Reload each affected table from the catalog
+    ///   before building further transactions on top of it.
+    /// * **Error semantics are the atomicity surface.** HTTP 409 means the
+    ///   commit did not apply and is safe to retry after re-preparing (the
+    ///   error is marked retryable). HTTP 500/502/503/504 mean the commit
+    ///   state is *unknown* — it may or may not have applied — so these are
+    ///   NOT marked retryable: blindly resubmitting can double-apply. Reload
+    ///   the tables and inspect before retrying.
     pub async fn commit_transaction(&self, commits: Vec<TableCommit>) -> Result<()> {
         if commits.is_empty() {
             return Ok(());
@@ -566,6 +578,10 @@ impl RestCatalog {
             StatusCode::GATEWAY_TIMEOUT => Err(Error::new(
                 ErrorKind::Unexpected,
                 "A server-side gateway timeout occurred; the commit state is unknown.",
+            )),
+            StatusCode::SERVICE_UNAVAILABLE => Err(Error::new(
+                ErrorKind::Unexpected,
+                "The service is unavailable; the commit state is unknown.",
             )),
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
