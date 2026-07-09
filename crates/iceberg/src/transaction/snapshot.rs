@@ -186,8 +186,50 @@ impl<'a> SnapshotProducer<'a> {
                 delete_file.partition(),
                 self.table.metadata().default_partition_type(),
             )?;
+            if delete_file.content_type() == crate::spec::DataContentType::EqualityDeletes {
+                self.validate_equality_ids(delete_file)?;
+            }
         }
 
+        Ok(())
+    }
+
+    /// Equality-delete key sanity, enforced at write time so bad files never
+    /// reach a manifest: the key set must be non-empty (an empty set would
+    /// match every row), every id must resolve in the current schema, and
+    /// float/double columns are rejected because equality is undefined for
+    /// them (NaN, +0.0/-0.0) — mirrors iceberg-java's identifier-field rules.
+    fn validate_equality_ids(&self, delete_file: &DataFile) -> Result<()> {
+        let ids = delete_file.equality_ids().unwrap_or_default();
+        if ids.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Equality delete file must declare a non-empty equality_ids set",
+            ));
+        }
+        let schema = self.table.metadata().current_schema();
+        for id in ids {
+            let field = schema.field_by_id(id).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Equality delete references unknown field id {id}"),
+                )
+            })?;
+            if matches!(
+                field.field_type.as_ref(),
+                crate::spec::Type::Primitive(crate::spec::PrimitiveType::Float)
+                    | crate::spec::Type::Primitive(crate::spec::PrimitiveType::Double)
+            ) {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Equality delete on float/double column {:?} (field id {id}) is not \
+                         allowed: floating-point equality is undefined (NaN, signed zero)",
+                        field.name
+                    ),
+                ));
+            }
+        }
         Ok(())
     }
 

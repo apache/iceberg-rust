@@ -30,8 +30,9 @@ use crate::transaction::snapshot::{
 use crate::transaction::{ActionCommit, TransactionAction};
 
 /// RowDeltaAction is a transaction action that commits data files and delete
-/// files (position or equality deletes) together in a single `overwrite`
-/// snapshot.
+/// files (position or equality deletes) together in a single snapshot. The
+/// snapshot operation reflects the delta's content: `append` for data files
+/// only, `delete` for delete files only, `overwrite` for both.
 ///
 /// This is the write-side primitive for merge-on-read row-level changes,
 /// equivalent to `Table.newRowDelta()` in iceberg-java: both the added data
@@ -40,6 +41,15 @@ use crate::transaction::{ActionCommit, TransactionAction};
 /// numbers only. Data files committed in the same row delta are therefore
 /// not affected by its own delete files, which gives upsert semantics when a
 /// row delta pairs equality deletes with the rows' new values.
+///
+/// Not yet implemented (deliberately deferred, matching how other engines
+/// phased this in): the conflict-validation surface of iceberg-java's
+/// `BaseRowDelta` (`validateFromSnapshot`, `validateNoConflictingDataFiles`,
+/// `conflictDetectionFilter`, …). Sequence-number semantics carry row-level
+/// correctness on their own — Flink runs with most validation off for the
+/// same reason — but concurrent-writer workflows that need
+/// serializable-style checks should wait for partition-scoped conflict
+/// detection before relying on this action.
 pub struct RowDeltaAction {
     check_duplicate: bool,
     // below are properties used to create SnapshotProducer when commit
@@ -111,19 +121,32 @@ impl TransactionAction for RowDeltaAction {
             snapshot_producer.validate_duplicate_files().await?;
         }
 
+        let operation = RowDeltaOperation {
+            has_data_files: !self.added_data_files.is_empty(),
+            has_delete_files: !self.added_delete_files.is_empty(),
+        };
         snapshot_producer
-            .commit(RowDeltaOperation, DefaultManifestProcess)
+            .commit(operation, DefaultManifestProcess)
             .await
     }
 }
 
-struct RowDeltaOperation;
+struct RowDeltaOperation {
+    has_data_files: bool,
+    has_delete_files: bool,
+}
 
 impl SnapshotProduceOperation for RowDeltaOperation {
     fn operation(&self) -> Operation {
-        // Matches iceberg-java's BaseRowDelta: a row delta commits both data
-        // and delete files, so the snapshot operation is `overwrite`.
-        Operation::Overwrite
+        // Matches iceberg-java's BaseRowDelta: the snapshot operation
+        // reflects what the delta actually contains — data files only is an
+        // `append`, delete files only is a `delete`, and both together is an
+        // `overwrite`.
+        match (self.has_data_files, self.has_delete_files) {
+            (true, false) => Operation::Append,
+            (false, true) => Operation::Delete,
+            _ => Operation::Overwrite,
+        }
     }
 
     async fn delete_entries(
@@ -356,6 +379,52 @@ mod tests {
             manifest_list.entries()[0].content,
             ManifestContentType::Deletes
         );
+        // Content-based operation selection: deletes-only is a `delete`.
+        assert_eq!(new_snapshot.summary().operation, Operation::Delete);
+    }
+
+    #[tokio::test]
+    async fn test_row_delta_data_only_is_append() {
+        // Content-based operation selection: data-only is an `append`.
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+        let action = tx.row_delta().add_data_files(vec![test_data_file(&table)]);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+        let TableUpdate::AddSnapshot { snapshot } = &updates[0] else {
+            unreachable!()
+        };
+        assert_eq!(snapshot.summary().operation, Operation::Append);
+    }
+
+    #[tokio::test]
+    async fn test_row_delta_rejects_empty_equality_ids() {
+        // Write-time guard: an equality delete with an empty key set would
+        // match every row; reject it before it reaches a manifest.
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+        let mut delete_file = test_equality_delete_file(&table);
+        delete_file.equality_ids = Some(vec![]);
+        let action = tx.row_delta().add_delete_files(vec![delete_file]);
+        let err = match Arc::new(action).commit(&table).await {
+            Err(e) => e,
+            Ok(_) => panic!("expected empty equality_ids to be rejected"),
+        };
+        assert!(err.to_string().contains("non-empty equality_ids"));
+    }
+
+    #[tokio::test]
+    async fn test_row_delta_rejects_unknown_equality_field() {
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+        let mut delete_file = test_equality_delete_file(&table);
+        delete_file.equality_ids = Some(vec![9999]);
+        let action = tx.row_delta().add_delete_files(vec![delete_file]);
+        let err = match Arc::new(action).commit(&table).await {
+            Err(e) => e,
+            Ok(_) => panic!("expected unknown equality field to be rejected"),
+        };
+        assert!(err.to_string().contains("unknown field id 9999"));
     }
 
     #[tokio::test]
