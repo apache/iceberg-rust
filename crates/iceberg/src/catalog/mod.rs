@@ -39,6 +39,7 @@ use serde_derive::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
+use crate::encryption::kms::KmsClientFactory;
 use crate::io::StorageFactory;
 use crate::runtime::Runtime;
 use crate::spec::{
@@ -151,6 +152,28 @@ pub trait CatalogBuilder: Default + Debug + Send + Sync {
     ///     .await?;
     /// ```
     fn with_storage_factory(self, storage_factory: Arc<dyn StorageFactory>) -> Self;
+
+    /// Set a [`KmsClientFactory`] to enable table encryption.
+    ///
+    /// When provided, the catalog calls the factory once during
+    /// [`load`](Self::load) with the catalog properties to create a shared
+    /// [`KeyManagementClient`](crate::encryption::KeyManagementClient).
+    /// That client is then passed to each table's `TableBuilder` so tables
+    /// with `encryption.key-id` set can construct an `EncryptionManager`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use iceberg::CatalogBuilder;
+    /// use iceberg::encryption::kms::KmsClientFactory;
+    /// use std::sync::Arc;
+    ///
+    /// let catalog = MyCatalogBuilder::default()
+    ///     .with_kms_client_factory(Arc::new(MyKmsClientFactory))
+    ///     .load("my_catalog", props)
+    ///     .await?;
+    /// ```
+    fn with_kms_client_factory(self, kms_client_factory: Arc<dyn KmsClientFactory>) -> Self;
 
     /// Set a custom tokio Runtime to use for spawning async tasks.
     ///
