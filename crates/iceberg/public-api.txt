@@ -2591,6 +2591,7 @@ pub fn iceberg::spec::TableMetadata::current_schema(&self) -> &iceberg::spec::Sc
 pub fn iceberg::spec::TableMetadata::current_schema_id(&self) -> iceberg::spec::SchemaId
 pub fn iceberg::spec::TableMetadata::current_snapshot(&self) -> core::option::Option<&iceberg::spec::SnapshotRef>
 pub fn iceberg::spec::TableMetadata::current_snapshot_id(&self) -> core::option::Option<i64>
+pub fn iceberg::spec::TableMetadata::default_metadata_dir(table_location: &str) -> alloc::string::String
 pub fn iceberg::spec::TableMetadata::default_partition_spec(&self) -> &iceberg::spec::PartitionSpecRef
 pub fn iceberg::spec::TableMetadata::default_partition_spec_id(&self) -> i32
 pub fn iceberg::spec::TableMetadata::default_partition_type(&self) -> &iceberg::spec::StructType
@@ -2759,6 +2760,8 @@ pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL: &str
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT: i32
 pub const iceberg::spec::TableProperties::PROPERTY_SNAPSHOT_COUNT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_UUID: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_METADATA_PATH: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_METADATA_PATH_DEFAULT_DIR: &str
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT: u64
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str

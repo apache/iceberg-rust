@@ -47,11 +47,6 @@ use crate::{Error, ErrorKind};
 static MAIN_BRANCH: &str = "main";
 pub(crate) static ONE_MINUTE_MS: i64 = 60_000;
 
-/// Table property for the base location of metadata files.
-const WRITE_METADATA_LOCATION: &str = "write.metadata.path";
-/// Default subdirectory when `write.metadata.path` is not configured.
-const DEFAULT_METADATA_DIR: &str = "metadata";
-
 /// Sentinel value used by the Java implementation and older metadata files
 /// to represent a missing/empty current snapshot ID. During deserialization,
 /// this value is normalized to `None`.
@@ -369,6 +364,15 @@ impl TableMetadata {
         &self.properties
     }
 
+    /// Returns the default metadata directory for a table location: the `metadata`
+    /// subdirectory under `table_location`. Used when `write.metadata.path` is not set.
+    pub fn default_metadata_dir(table_location: &str) -> String {
+        format!(
+            "{table_location}/{}",
+            TableProperties::PROPERTY_WRITE_METADATA_PATH_DEFAULT_DIR
+        )
+    }
+
     /// Returns the base location for metadata files.
     ///
     /// Honors the `write.metadata.path` table property when set, otherwise defaults
@@ -382,9 +386,9 @@ impl TableMetadata {
     /// configured.
     pub(crate) fn metadata_location_root_with_base(&self, base: &str) -> String {
         self.properties
-            .get(WRITE_METADATA_LOCATION)
+            .get(TableProperties::PROPERTY_WRITE_METADATA_PATH)
             .map(|location| location.trim_end_matches('/').to_string())
-            .unwrap_or_else(|| format!("{base}/{DEFAULT_METADATA_DIR}"))
+            .unwrap_or_else(|| Self::default_metadata_dir(base))
     }
 
     /// Returns the metadata compression codec from table properties.
@@ -4323,7 +4327,7 @@ mod tests {
         let metadata = get_test_table_metadata("TableMetadataV2Valid.json")
             .into_builder(None)
             .set_properties(HashMap::from([(
-                super::WRITE_METADATA_LOCATION.to_string(),
+                TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
                 "s3://other-bucket/custom-meta".to_string(),
             )]))
             .unwrap()
@@ -4342,7 +4346,7 @@ mod tests {
         let metadata = get_test_table_metadata("TableMetadataV2Valid.json")
             .into_builder(None)
             .set_properties(HashMap::from([(
-                super::WRITE_METADATA_LOCATION.to_string(),
+                TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
                 "s3://other-bucket/custom-meta/".to_string(),
             )]))
             .unwrap()

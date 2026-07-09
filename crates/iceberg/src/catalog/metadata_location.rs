@@ -53,7 +53,7 @@ impl MetadataLocation {
     )]
     pub fn new_with_table_location(table_location: impl ToString) -> Self {
         Self {
-            metadata_dir: format!("{}/metadata", table_location.to_string()),
+            metadata_dir: TableMetadata::default_metadata_dir(&table_location.to_string()),
             version: 0,
             id: Uuid::new_v4(),
             compression_codec: CompressionCodec::None,

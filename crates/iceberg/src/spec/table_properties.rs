@@ -228,6 +228,14 @@ impl TableProperties {
     /// Default target file size
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
 
+    /// Base location for metadata files (manifests, manifest lists, table metadata).
+    /// When unset, metadata files default to the `metadata` directory under the table
+    /// location.
+    pub const PROPERTY_WRITE_METADATA_PATH: &str = "write.metadata.path";
+    /// Default subdirectory (under the table location) for metadata files when
+    /// [`Self::PROPERTY_WRITE_METADATA_PATH`] is not configured.
+    pub const PROPERTY_WRITE_METADATA_PATH_DEFAULT_DIR: &str = "metadata";
+
     /// Compression codec for metadata files (JSON)
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
     /// Default metadata compression codec - uncompressed
