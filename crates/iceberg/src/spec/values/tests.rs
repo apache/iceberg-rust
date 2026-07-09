@@ -1184,6 +1184,50 @@ fn test_datum_long_convert_to_int_below_min() {
 }
 
 #[test]
+fn test_datum_double_convert_to_float() {
+    let datum = Datum::double(2.5);
+
+    let result = datum.to(&Primitive(PrimitiveType::Float)).unwrap();
+
+    let expected = Datum::float(2.5);
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_datum_double_convert_to_float_above_max() {
+    let datum = Datum::double(1e39);
+
+    let result = datum.to(&Primitive(PrimitiveType::Float)).unwrap();
+
+    let expected = Datum::new(PrimitiveType::Float, PrimitiveLiteral::AboveMax);
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_datum_double_convert_to_float_below_min() {
+    let datum = Datum::double(-1e39);
+
+    let result = datum.to(&Primitive(PrimitiveType::Float)).unwrap();
+
+    let expected = Datum::new(PrimitiveType::Float, PrimitiveLiteral::BelowMin);
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_datum_float_convert_to_double() {
+    let datum = Datum::float(2.5);
+
+    let result = datum.to(&Primitive(PrimitiveType::Double)).unwrap();
+
+    let expected = Datum::double(2.5);
+
+    assert_eq!(result, expected);
+}
+
+#[test]
 fn test_datum_long_convert_to_timestamp() {
     let datum = Datum::long(12345);
 

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -81,7 +80,7 @@ impl IcebergSchemaProvider {
         .await?;
 
         let tables = Arc::new(DashMap::new());
-        for (name, provider) in table_names.into_iter().zip(providers.into_iter()) {
+        for (name, provider) in table_names.into_iter().zip(providers) {
             tables.insert(name, Arc::new(provider));
         }
 
@@ -95,10 +94,6 @@ impl IcebergSchemaProvider {
 
 #[async_trait]
 impl SchemaProvider for IcebergSchemaProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         self.tables
             .iter()

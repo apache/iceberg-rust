@@ -28,7 +28,6 @@
 pub mod metadata_table;
 pub mod table_provider_factory;
 
-use std::any::Any;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -110,10 +109,6 @@ impl IcebergTableProvider {
 
 #[async_trait]
 impl TableProvider for IcebergTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> ArrowSchemaRef {
         self.schema.clone()
     }
@@ -161,6 +156,12 @@ impl TableProvider for IcebergTableProvider {
         input: Arc<dyn ExecutionPlan>,
         _insert_op: InsertOp,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        if _insert_op != InsertOp::Append {
+            return Err(DataFusionError::NotImplemented(format!(
+                "IcebergTableProvider supports only append inserts, got {_insert_op}"
+            )));
+        }
+
         // Load fresh table metadata from catalog
         let table = self
             .catalog
@@ -418,10 +419,6 @@ impl IcebergStaticTableProvider {
 
 #[async_trait]
 impl TableProvider for IcebergStaticTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> ArrowSchemaRef {
         self.schema.clone()
     }
@@ -834,6 +831,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_catalog_backed_provider_rejects_non_append_op() {
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap();
+        let ctx = SessionContext::new();
+
+        for (insert_op, expected_message) in [
+            (
+                InsertOp::Overwrite,
+                "IcebergTableProvider supports only append inserts, got Insert Overwrite",
+            ),
+            (
+                InsertOp::Replace,
+                "IcebergTableProvider supports only append inserts, got Replace Into",
+            ),
+        ] {
+            let input = Arc::new(EmptyExec::new(provider.schema())) as Arc<dyn ExecutionPlan>;
+            let error = provider
+                .insert_into(&ctx.state(), input, insert_op)
+                .await
+                .expect_err("non-append inserts should be rejected");
+
+            assert!(
+                matches!(
+                    error,
+                    DataFusionError::NotImplemented(ref message) if message == expected_message
+                ),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn test_insert_plan_fanout_enabled_no_sort() {
         use datafusion::datasource::TableProvider;
         use datafusion::logical_expr::dml::InsertOp;
@@ -917,7 +950,6 @@ mod tests {
 
         // Verify that the scan plan is an IcebergTableScan
         let iceberg_scan = scan_plan
-            .as_any()
             .downcast_ref::<IcebergTableScan>()
             .expect("Expected IcebergTableScan");
 
@@ -948,7 +980,6 @@ mod tests {
 
         // Verify that the scan plan is an IcebergTableScan
         let iceberg_scan = scan_plan
-            .as_any()
             .downcast_ref::<IcebergTableScan>()
             .expect("Expected IcebergTableScan");
 
@@ -977,7 +1008,6 @@ mod tests {
 
         // Verify that the scan plan is an IcebergTableScan
         let iceberg_scan = scan_plan
-            .as_any()
             .downcast_ref::<IcebergTableScan>()
             .expect("Expected IcebergTableScan");
 
