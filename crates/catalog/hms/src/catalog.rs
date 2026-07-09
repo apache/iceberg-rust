@@ -553,14 +553,16 @@ impl Catalog for HmsCatalog {
             .await
             .map_err(from_thrift_error)?;
 
-        Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.file_io())
             .metadata_location(metadata_location_str)
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
-            .runtime(self.runtime.clone())
-            .kms_client(self.kms_client.clone())
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
     }
 
     /// Loads a table from the Hive Metastore and constructs a `Table` object
@@ -590,7 +592,7 @@ impl Catalog for HmsCatalog {
 
         let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
 
-        Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.file_io())
             .metadata_location(metadata_location)
             .metadata(metadata)
@@ -598,9 +600,11 @@ impl Catalog for HmsCatalog {
                 NamespaceIdent::new(db_name),
                 table.name.clone(),
             ))
-            .runtime(self.runtime.clone())
-            .kms_client(self.kms_client.clone())
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
     }
 
     /// Asynchronously drops a table from the database.

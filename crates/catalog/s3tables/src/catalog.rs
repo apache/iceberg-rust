@@ -285,14 +285,16 @@ impl S3TablesCatalog {
         })?;
         let metadata = TableMetadata::read_from(&self.file_io, metadata_location).await?;
 
-        let table = Table::builder()
+        let mut builder = Table::builder()
             .identifier(table_ident.clone())
             .metadata(metadata)
             .metadata_location(metadata_location)
             .file_io(self.file_io.clone())
-            .runtime(self.runtime.clone())
-            .kms_client(self.kms_client.clone())
-            .build()?;
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        let table = builder.build()?;
         Ok((table, resp.version_token))
     }
 }
@@ -585,14 +587,16 @@ impl Catalog for S3TablesCatalog {
             .await
             .map_err(from_aws_sdk_error)?;
 
-        let table = Table::builder()
+        let mut builder = Table::builder()
             .identifier(table_ident)
             .metadata_location(metadata_location_str)
             .metadata(metadata)
             .file_io(self.file_io.clone())
-            .runtime(self.runtime.clone())
-            .kms_client(self.kms_client.clone())
-            .build()?;
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        let table = builder.build()?;
         Ok(table)
     }
 

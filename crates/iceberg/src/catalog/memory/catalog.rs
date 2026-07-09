@@ -173,14 +173,16 @@ impl MemoryCatalog {
         let metadata_location = root_namespace_state.get_existing_table_location(table_ident)?;
         let metadata = TableMetadata::read_from(&self.file_io, metadata_location).await?;
 
-        Table::builder()
+        let mut builder = Table::builder()
             .identifier(table_ident.clone())
             .metadata(metadata)
             .metadata_location(metadata_location.to_string())
             .file_io(self.file_io.clone())
-            .runtime(self.runtime.clone())
-            .kms_client(self.kms_client.clone())
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
     }
 }
 
@@ -329,14 +331,16 @@ impl Catalog for MemoryCatalog {
 
         root_namespace_state.insert_new_table(&table_ident, metadata_location.to_string())?;
 
-        Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.file_io.clone())
             .metadata_location(metadata_location.to_string())
             .metadata(metadata)
             .identifier(table_ident)
-            .runtime(self.runtime.clone())
-            .kms_client(self.kms_client.clone())
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
     }
 
     /// Load table from the catalog.
@@ -397,14 +401,16 @@ impl Catalog for MemoryCatalog {
 
         let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
 
-        Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.file_io.clone())
             .metadata_location(metadata_location)
             .metadata(metadata)
             .identifier(table_ident.clone())
-            .runtime(self.runtime.clone())
-            .kms_client(self.kms_client.clone())
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
     }
 
     /// Update a table in the catalog.

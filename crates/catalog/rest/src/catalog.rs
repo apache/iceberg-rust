@@ -820,12 +820,14 @@ impl Catalog for RestCatalog {
             .load_file_io(Some(metadata_location), Some(config))
             .await?;
 
-        let table_builder = Table::builder()
+        let mut table_builder = Table::builder()
             .identifier(table_ident.clone())
             .file_io(file_io)
             .metadata(response.metadata)
-            .runtime(self.runtime.clone())
-            .kms_client(self.kms_client.clone());
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            table_builder = table_builder.kms_client(kms_client);
+        }
 
         if let Some(metadata_location) = response.metadata_location {
             table_builder.metadata_location(metadata_location).build()
@@ -878,12 +880,14 @@ impl Catalog for RestCatalog {
             .load_file_io(response.metadata_location.as_deref(), Some(config))
             .await?;
 
-        let table_builder = Table::builder()
+        let mut table_builder = Table::builder()
             .identifier(table_ident.clone())
             .file_io(file_io)
             .metadata(response.metadata)
-            .runtime(self.runtime.clone())
-            .kms_client(self.kms_client.clone());
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            table_builder = table_builder.kms_client(kms_client);
+        }
 
         if let Some(metadata_location) = response.metadata_location {
             table_builder.metadata_location(metadata_location).build()
@@ -1014,14 +1018,16 @@ impl Catalog for RestCatalog {
 
         let file_io = self.load_file_io(Some(metadata_location), None).await?;
 
-        Table::builder()
+        let mut table_builder = Table::builder()
             .identifier(table_ident.clone())
             .file_io(file_io)
             .metadata(response.metadata)
             .metadata_location(metadata_location.clone())
-            .runtime(self.runtime.clone())
-            .kms_client(self.kms_client.clone())
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            table_builder = table_builder.kms_client(kms_client);
+        }
+        table_builder.build()
     }
 
     async fn update_table(&self, mut commit: TableCommit) -> Result<Table> {
@@ -1088,14 +1094,16 @@ impl Catalog for RestCatalog {
             .load_file_io(Some(&response.metadata_location), None)
             .await?;
 
-        Table::builder()
+        let mut table_builder = Table::builder()
             .identifier(commit.identifier().clone())
             .file_io(file_io)
             .metadata(response.metadata)
             .metadata_location(response.metadata_location)
-            .runtime(self.runtime.clone())
-            .kms_client(self.kms_client.clone())
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            table_builder = table_builder.kms_client(kms_client);
+        }
+        table_builder.build()
     }
 }
 

@@ -293,7 +293,7 @@ impl GlueCatalog {
 
         let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
 
-        let table = Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.file_io())
             .metadata_location(metadata_location)
             .metadata(metadata)
@@ -301,9 +301,11 @@ impl GlueCatalog {
                 NamespaceIdent::new(db_name),
                 table_name.to_owned(),
             ))
-            .runtime(self.runtime.clone())
-            .kms_client(self.kms_client.clone())
-            .build()?;
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        let table = builder.build()?;
 
         Ok((table, version_id))
     }
@@ -654,14 +656,16 @@ impl Catalog for GlueCatalog {
 
         builder.send().await.map_err(from_aws_sdk_error)?;
 
-        Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.file_io())
             .metadata_location(metadata_location_str)
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
-            .runtime(self.runtime.clone())
-            .kms_client(self.kms_client.clone())
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
     }
 
     /// Loads a table from the Glue Catalog and constructs a `Table` object
@@ -885,14 +889,16 @@ impl Catalog for GlueCatalog {
             .with_source(anyhow!("aws sdk error: {error:?}"))
         })?;
 
-        Ok(Table::builder()
+        let mut builder = Table::builder()
             .identifier(table_ident.clone())
             .metadata_location(metadata_location)
             .metadata(metadata)
             .file_io(self.file_io())
-            .runtime(self.runtime.clone())
-            .kms_client(self.kms_client.clone())
-            .build()?)
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        Ok(builder.build()?)
     }
 
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {

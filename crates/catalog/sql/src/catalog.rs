@@ -833,14 +833,16 @@ impl Catalog for SqlCatalog {
 
         let metadata = TableMetadata::read_from(&self.fileio, &tbl_metadata_location).await?;
 
-        Ok(Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.fileio.clone())
             .identifier(identifier.clone())
             .metadata_location(tbl_metadata_location)
             .metadata(metadata)
-            .runtime(self.runtime.clone())
-            .kms_client(self.kms_client.clone())
-            .build()?)
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        Ok(builder.build()?)
     }
 
     async fn create_table(
@@ -905,14 +907,16 @@ impl Catalog for SqlCatalog {
              VALUES (?, ?, ?, ?, ?)
             "), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name.clone()), Some(&tbl_metadata_location_str), Some(CATALOG_FIELD_TABLE_RECORD_TYPE)], None).await?;
 
-        Ok(Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.fileio.clone())
             .metadata_location(tbl_metadata_location_str)
             .identifier(tbl_ident)
             .metadata(tbl_metadata)
-            .runtime(self.runtime.clone())
-            .kms_client(self.kms_client.clone())
-            .build()?)
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        Ok(builder.build()?)
     }
 
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
@@ -978,14 +982,16 @@ impl Catalog for SqlCatalog {
              VALUES (?, ?, ?, ?, ?)
             "), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name), Some(&metadata_location), Some(CATALOG_FIELD_TABLE_RECORD_TYPE)], None).await?;
 
-        Ok(Table::builder()
+        let mut builder = Table::builder()
             .identifier(table_ident.clone())
             .metadata_location(metadata_location)
             .metadata(metadata)
             .file_io(self.fileio.clone())
-            .runtime(self.runtime.clone())
-            .kms_client(self.kms_client.clone())
-            .build()?)
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        Ok(builder.build()?)
     }
 
     /// Updates an existing table within the SQL catalog.

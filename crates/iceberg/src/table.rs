@@ -114,14 +114,9 @@ impl TableBuilder {
     /// [`KeyManagementClient`] must be provided here so the table can build
     /// an [`EncryptionManager`]; otherwise [`Self::build`] will return an error.
     ///
-    /// Accepts either an `Arc<dyn KeyManagementClient>` or an
-    /// `Option<Arc<dyn KeyManagementClient>>`, so catalogs that hold an
-    /// optional client can forward it directly. Passing `None` is a no-op.
-    pub fn kms_client(
-        mut self,
-        kms_client: impl Into<Option<Arc<dyn KeyManagementClient>>>,
-    ) -> Self {
-        self.kms_client = kms_client.into();
+    /// This is optional: simply don't call it when no client is available.
+    pub fn kms_client(mut self, kms_client: Arc<dyn KeyManagementClient>) -> Self {
+        self.kms_client = Some(kms_client);
         self
     }
 
