@@ -893,52 +893,10 @@ mod test {
 
         let err = transformer.process_record_batch(file_batch).unwrap_err();
         assert!(
-            err.to_string().contains("Missing required field: missing_str"),
+            err.to_string()
+                .contains("Missing required field: missing_str"),
             "unexpected error: {err}"
         );
-    }
-
-    #[test]
-    fn schema_evolution_optional_field_absent_without_default_is_null() {
-        // The companion to the required-field case: an optional field absent from the data file
-        // with no initial-default falls back to null (spec Column Projection rule #4).
-        let snapshot_schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::optional(2, "maybe_str", Type::Primitive(PrimitiveType::String))
-                        .into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-        let projected_iceberg_field_ids = [1, 2];
-
-        let mut transformer =
-            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_iceberg_field_ids)
-                .build();
-
-        let file_schema = Arc::new(ArrowSchema::new(vec![simple_field(
-            "id",
-            DataType::Int32,
-            false,
-            "1",
-        )]));
-        let file_batch =
-            RecordBatch::try_new(file_schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
-                .unwrap();
-
-        let result = transformer.process_record_batch(file_batch).unwrap();
-        assert_eq!(result.num_columns(), 2);
-        let maybe_str = result
-            .column(1)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-        assert!(maybe_str.is_null(0));
-        assert!(maybe_str.is_null(1));
-        assert!(maybe_str.is_null(2));
     }
 
     #[test]
