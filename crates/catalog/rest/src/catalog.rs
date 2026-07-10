@@ -545,7 +545,8 @@ impl RestCatalog {
         let mut builder = FileIOBuilder::new(factory).with_props(props.clone());
 
         // Vended credentials are scoped per location prefix: give each its own
-        // storage so reads/writes use the matching credentials.
+        // storage. Paths under no vended prefix fall back to the default `props`
+        // above, which carry no credentials.
         if let Some(creds) = storage_credentials {
             for cred in creds {
                 let mut prefixed = props.clone();
@@ -2723,6 +2724,7 @@ mod tests {
                 .build(),
             Some(Arc::new(LocalFsStorageFactory)),
             Runtime::current(),
+            None,
         );
 
         let table = catalog
@@ -2762,6 +2764,7 @@ mod tests {
             RestCatalogConfig::builder().uri(server.url()).build(),
             Some(Arc::new(LocalFsStorageFactory)),
             Runtime::current(),
+            None,
         );
 
         catalog

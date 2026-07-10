@@ -115,6 +115,8 @@ impl FileIO {
     /// prefix storage if any, else the default. Built once, then cached.
     fn get_storage(&self, path: &str) -> Result<Arc<dyn Storage>> {
         // `prefixed` is sorted longest-first, so the first match is most specific.
+        // Selection is by longest matching string prefix, per the Iceberg REST
+        // spec's storage-credentials semantics (and Java's `S3FileIO`).
         for ps in self.prefixed.iter() {
             if path.starts_with(&ps.prefix) {
                 return Self::get_or_build(&ps.storage, &self.factory, &ps.config);
@@ -315,7 +317,7 @@ impl FileIOBuilder {
             })
             .collect();
         // Longest prefix first so routing picks the most specific match.
-        prefixed.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()));
+        prefixed.sort_by_key(|item| std::cmp::Reverse(item.prefix.len()));
         FileIO {
             config: self.config,
             factory: self.factory,
