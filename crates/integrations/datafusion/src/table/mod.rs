@@ -1042,7 +1042,6 @@ mod tests {
 
         let scan_plan = provider.scan(&state, None, &[], None).await.unwrap();
         let iceberg_scan = scan_plan
-            .as_any()
             .downcast_ref::<IcebergTableScan>()
             .expect("Expected IcebergTableScan");
 
@@ -1080,7 +1079,6 @@ mod tests {
 
         let scan_plan = provider.scan(&state, None, &[], None).await.unwrap();
         let iceberg_scan = scan_plan
-            .as_any()
             .downcast_ref::<IcebergTableScan>()
             .expect("Expected IcebergTableScan");
 
@@ -1113,7 +1111,6 @@ mod tests {
 
         let scan_plan = provider.scan(&state, None, &[], None).await.unwrap();
         let iceberg_scan = scan_plan
-            .as_any()
             .downcast_ref::<IcebergTableScan>()
             .expect("Expected IcebergTableScan");
 
