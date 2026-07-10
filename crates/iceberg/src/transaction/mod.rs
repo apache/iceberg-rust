@@ -240,6 +240,12 @@ impl Transaction {
             )?;
         }
 
+        // A location change moves metadata/data to a new prefix that the refresh
+        // load's vended credentials do not cover, so it needs a post-commit reload.
+        let location_changed = existing_updates
+            .iter()
+            .any(|update| matches!(update, TableUpdate::SetLocation { .. }));
+
         let table_commit = TableCommit::builder()
             .ident(self.table.identifier().to_owned())
             .updates(existing_updates)
@@ -247,8 +253,16 @@ impl Transaction {
             .build();
 
         let committed = catalog.update_table(table_commit).await?;
-        // Reuse the credentialed FileIO we already hold; the commit response has none.
-        Ok(committed.with_file_io(self.table.file_io().clone()))
+        if location_changed {
+            // The new location has its own vended credentials; the reused FileIO is
+            // scoped to the old prefix, so reload the table to pick them up.
+            catalog.load_table(committed.identifier()).await
+        } else {
+            // The commit response carries no credentials. Reuse the FileIO from the
+            // refresh load above (not `self.table`, which is left untouched when the
+            // metadata is unchanged) so freshly vended credentials are not dropped.
+            Ok(committed.with_file_io(refreshed.file_io().clone()))
+        }
     }
 }
 

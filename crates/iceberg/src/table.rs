@@ -222,6 +222,12 @@ impl Table {
 
     /// Sets the [`Table`] `FileIO` and returns an updated instance.
     pub(crate) fn with_file_io(mut self, file_io: FileIO) -> Self {
+        self.object_cache = Arc::new(
+            self.object_cache
+                .as_ref()
+                .clone()
+                .with_file_io(file_io.clone()),
+        );
         self.file_io = file_io;
         self
     }
@@ -416,7 +422,9 @@ mod tests {
     use super::*;
     use crate::encryption::SensitiveBytes;
     use crate::encryption::kms::MemoryKeyManagementClient;
+    use crate::io::{FileIOBuilder, MemoryStorageFactory};
     use crate::spec::TableProperties;
+    use crate::test_utils::test_runtime;
 
     fn load_test_metadata(filename: &str) -> TableMetadata {
         let path = format!(
@@ -499,6 +507,40 @@ mod tests {
             .unwrap();
         assert!(!table.readonly());
         assert_eq!(table.identifier.name(), "table");
+    }
+
+    #[test]
+    fn test_with_file_io_updates_object_cache_file_io() {
+        let metadata = load_test_metadata("TableMetadataV2ValidMinimal.json");
+        let original_file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+            .with_prop("marker", "original")
+            .build();
+        let replacement_file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+            .with_prop("marker", "replacement")
+            .build();
+
+        let table = Table::builder()
+            .metadata(metadata)
+            .identifier(TableIdent::from_strs(["ns", "table"]).unwrap())
+            .file_io(original_file_io)
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+            .with_file_io(replacement_file_io);
+
+        assert_eq!(
+            table.file_io().config().get("marker").map(String::as_str),
+            Some("replacement")
+        );
+        assert_eq!(
+            table
+                .object_cache()
+                .file_io()
+                .config()
+                .get("marker")
+                .map(String::as_str),
+            Some("replacement")
+        );
     }
 
     fn make_kms() -> Arc<dyn KeyManagementClient> {
