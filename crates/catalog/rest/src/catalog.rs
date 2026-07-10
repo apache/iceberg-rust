@@ -879,7 +879,8 @@ impl RestSessionCatalog {
         let mut builder = FileIOBuilder::new(factory).with_props(props.clone());
 
         // Vended credentials are scoped per location prefix: give each its own
-        // storage so reads/writes use the matching credentials.
+        // storage. Paths under no vended prefix fall back to the default `props`
+        // above, which carry no credentials.
         if let Some(creds) = storage_credentials {
             for cred in creds {
                 let mut prefixed = props.clone();
