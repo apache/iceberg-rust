@@ -803,21 +803,19 @@ pub mod tests {
         /// Useful for testing snapshot history traversal and incremental scans
         /// with non-append operations in the chain.
         pub fn new_with_deep_history() -> Self {
-            Self::new_with_deep_history_mutated(|_| {})
+            Self::new_from_deep_history_metadata("example_table_metadata_v2_deep_history.json")
         }
 
-        /// Like [`Self::new_with_deep_history`] but rewrites every snapshot to
-        /// reference the older single-column schema (`schema-id` 0) while the
-        /// table's `current-schema-id` stays at the three-column schema
-        /// (`schema-id` 1). This models a table whose schema evolved *after*
-        /// the snapshots in an incremental range were written, so we can assert
-        /// that an incremental scan projects onto the current schema.
+        /// Like [`Self::new_with_deep_history`] but every snapshot references
+        /// the older single-column schema (`schema-id` 0) while the table's
+        /// `current-schema-id` stays at the three-column schema (`schema-id`
+        /// 1). This models a table whose schema evolved *after* the snapshots
+        /// in an incremental range were written, so we can assert that an
+        /// incremental scan projects onto the current schema.
         pub fn new_with_deep_history_stale_schema() -> Self {
-            let fixture = Self::new_with_deep_history_mutated(|metadata| {
-                for snapshot in metadata["snapshots"].as_array_mut().unwrap() {
-                    snapshot["schema-id"] = serde_json::json!(0);
-                }
-            });
+            let fixture = Self::new_from_deep_history_metadata(
+                "example_table_metadata_v2_deep_history_stale_schema.json",
+            );
 
             // Sanity check: current schema (3 cols) differs from the schema the
             // snapshots reference (1 col), otherwise the test would be vacuous.
@@ -825,33 +823,21 @@ pub mod tests {
             fixture
         }
 
-        /// Like [`Self::new_with_deep_history`] but relabels the S4 `overwrite`
-        /// snapshot as a `replace` (the operation a compaction /
-        /// `rewrite_data_files` commits). Used to prove that an incremental
-        /// append scan skips compaction output and never double-counts the
-        /// appended rows against their rewritten copies.
+        /// Like [`Self::new_with_deep_history`] but the S4 snapshot is a
+        /// `replace` (the operation a compaction / `rewrite_data_files`
+        /// commits) rather than an `overwrite`. Used to prove that an
+        /// incremental append scan skips compaction output and never
+        /// double-counts the appended rows against their rewritten copies.
         pub fn new_with_deep_history_compaction() -> Self {
-            Self::new_with_deep_history_mutated(|metadata| {
-                let s4 = metadata["snapshots"]
-                    .as_array_mut()
-                    .unwrap()
-                    .iter_mut()
-                    .find(|s| s["snapshot-id"] == 3057729675574597004i64)
-                    .expect("S4 should be present");
-                assert_eq!(
-                    s4["summary"]["operation"], "overwrite",
-                    "expected S4 to be the overwrite snapshot"
-                );
-                s4["summary"]["operation"] = serde_json::json!("replace");
-            })
+            Self::new_from_deep_history_metadata(
+                "example_table_metadata_v2_deep_history_compaction.json",
+            )
         }
 
-        /// Builds the deep-history fixture, applying `mutate` to the rendered
-        /// metadata JSON before it is deserialized. Mutating the parsed
-        /// [`serde_json::Value`] structurally (by field) keeps variants robust
-        /// against reformatting of the shared testdata file, unlike raw string
-        /// substitution.
-        fn new_with_deep_history_mutated(mutate: impl FnOnce(&mut serde_json::Value)) -> Self {
+        /// Builds a deep-history fixture from the named templated metadata file
+        /// in `testdata`. The five snapshot manifest-list paths are rendered to
+        /// point at this fixture's temp directory.
+        fn new_from_deep_history_metadata(metadata_file: &str) -> Self {
             let tmp_dir = TempDir::new().unwrap();
             let table_location = tmp_dir.path().join("table1");
             let table_metadata1_location = table_location.join("metadata/v1.json");
@@ -866,7 +852,7 @@ pub mod tests {
 
             let table_metadata = {
                 let template_json_str = fs::read_to_string(format!(
-                    "{}/testdata/example_table_metadata_v2_deep_history.json",
+                    "{}/testdata/{metadata_file}",
                     env!("CARGO_MANIFEST_DIR")
                 ))
                 .unwrap();
@@ -878,10 +864,7 @@ pub mod tests {
                     manifest_list_s4_location => &manifest_list_s4,
                     manifest_list_s5_location => &manifest_list_s5,
                 });
-                let mut metadata_value: serde_json::Value =
-                    serde_json::from_str(&metadata_json).unwrap();
-                mutate(&mut metadata_value);
-                serde_json::from_value::<TableMetadata>(metadata_value).unwrap()
+                serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
 
             let table = Table::builder()
