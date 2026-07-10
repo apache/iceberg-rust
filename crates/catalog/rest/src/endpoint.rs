@@ -27,8 +27,10 @@
 //! Use [`RestCatalog::supports_endpoint`](crate::RestCatalog::supports_endpoint)
 //! to check whether the connected server advertised a given [`Endpoint`].
 
+use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use iceberg::{Error, ErrorKind};
 use reqwest::Method;
@@ -51,6 +53,18 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
+    /// Builds an endpoint from a known-valid method and path template.
+    ///
+    /// Intended for internal constants and tests; untrusted input (such as a
+    /// server's config response) is parsed through [`FromStr`], which validates
+    /// it.
+    pub(crate) fn new(method: Method, path: impl Into<String>) -> Self {
+        Self {
+            method,
+            path: path.into(),
+        }
+    }
+
     /// The HTTP method, e.g. `GET` or `POST`.
     pub fn method(&self) -> &str {
         self.method.as_str()
@@ -127,6 +141,53 @@ impl<'de> Deserialize<'de> for Endpoint {
         deserializer.deserialize_str(EndpointVisitor)
     }
 }
+
+/// The standard v1 endpoints assumed to be supported when a server's
+/// `GET /v1/config` response omits the `endpoints` field or sends an empty list
+/// (the two are treated alike). These are the minimum a server is expected to
+/// support; a server that advertises a non-empty list is taken at its word
+/// instead.
+pub(crate) static DEFAULT_ENDPOINTS: LazyLock<HashSet<Endpoint>> = LazyLock::new(|| {
+    [
+        (Method::GET, "/v1/{prefix}/namespaces"),  // list namespaces
+        (Method::POST, "/v1/{prefix}/namespaces"), // create namespace
+        (Method::GET, "/v1/{prefix}/namespaces/{namespace}"), // load namespace
+        (Method::DELETE, "/v1/{prefix}/namespaces/{namespace}"), // drop namespace
+        // update namespace properties
+        (
+            Method::POST,
+            "/v1/{prefix}/namespaces/{namespace}/properties",
+        ),
+        (Method::GET, "/v1/{prefix}/namespaces/{namespace}/tables"), // list tables
+        (Method::POST, "/v1/{prefix}/namespaces/{namespace}/tables"), // create table
+        // load table
+        (
+            Method::GET,
+            "/v1/{prefix}/namespaces/{namespace}/tables/{table}",
+        ),
+        // update table
+        (
+            Method::POST,
+            "/v1/{prefix}/namespaces/{namespace}/tables/{table}",
+        ),
+        // drop table
+        (
+            Method::DELETE,
+            "/v1/{prefix}/namespaces/{namespace}/tables/{table}",
+        ),
+        (Method::POST, "/v1/{prefix}/tables/rename"), // rename table
+        (Method::POST, "/v1/{prefix}/namespaces/{namespace}/register"), // register table
+        // report metrics
+        (
+            Method::POST,
+            "/v1/{prefix}/namespaces/{namespace}/tables/{table}/metrics",
+        ),
+        (Method::POST, "/v1/{prefix}/transactions/commit"), // commit transaction
+    ]
+    .into_iter()
+    .map(|(method, path)| Endpoint::new(method, path))
+    .collect()
+});
 
 #[cfg(test)]
 mod tests {
