@@ -803,48 +803,7 @@ pub mod tests {
         /// Useful for testing snapshot history traversal and incremental scans
         /// with non-append operations in the chain.
         pub fn new_with_deep_history() -> Self {
-            let tmp_dir = TempDir::new().unwrap();
-            let table_location = tmp_dir.path().join("table1");
-            let table_metadata1_location = table_location.join("metadata/v1.json");
-
-            let manifest_list_s1 = table_location.join("metadata/snap-3051729675574597004.avro");
-            let manifest_list_s2 = table_location.join("metadata/snap-3055729675574597004.avro");
-            let manifest_list_s3 = table_location.join("metadata/snap-3056729675574597004.avro");
-            let manifest_list_s4 = table_location.join("metadata/snap-3057729675574597004.avro");
-            let manifest_list_s5 = table_location.join("metadata/snap-3059729675574597004.avro");
-
-            let file_io = FileIO::new_with_fs();
-
-            let table_metadata = {
-                let template_json_str = fs::read_to_string(format!(
-                    "{}/testdata/example_table_metadata_v2_deep_history.json",
-                    env!("CARGO_MANIFEST_DIR")
-                ))
-                .unwrap();
-                let metadata_json = render_template(&template_json_str, context! {
-                    table_location => &table_location,
-                    manifest_list_s1_location => &manifest_list_s1,
-                    manifest_list_s2_location => &manifest_list_s2,
-                    manifest_list_s3_location => &manifest_list_s3,
-                    manifest_list_s4_location => &manifest_list_s4,
-                    manifest_list_s5_location => &manifest_list_s5,
-                });
-                serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
-            };
-
-            let table = Table::builder()
-                .metadata(table_metadata)
-                .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
-                .file_io(file_io.clone())
-                .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
-                .runtime(test_runtime())
-                .build()
-                .unwrap();
-
-            Self {
-                table_location: table_location.to_str().unwrap().to_string(),
-                table,
-            }
+            Self::new_with_deep_history_mutated(|_| {})
         }
 
         /// Like [`Self::new_with_deep_history`] but rewrites every snapshot to
@@ -854,6 +813,45 @@ pub mod tests {
         /// the snapshots in an incremental range were written, so we can assert
         /// that an incremental scan projects onto the current schema.
         pub fn new_with_deep_history_stale_schema() -> Self {
+            let fixture = Self::new_with_deep_history_mutated(|metadata| {
+                for snapshot in metadata["snapshots"].as_array_mut().unwrap() {
+                    snapshot["schema-id"] = serde_json::json!(0);
+                }
+            });
+
+            // Sanity check: current schema (3 cols) differs from the schema the
+            // snapshots reference (1 col), otherwise the test would be vacuous.
+            assert_eq!(fixture.table.metadata().current_schema_id(), 1);
+            fixture
+        }
+
+        /// Like [`Self::new_with_deep_history`] but relabels the S4 `overwrite`
+        /// snapshot as a `replace` (the operation a compaction /
+        /// `rewrite_data_files` commits). Used to prove that an incremental
+        /// append scan skips compaction output and never double-counts the
+        /// appended rows against their rewritten copies.
+        pub fn new_with_deep_history_compaction() -> Self {
+            Self::new_with_deep_history_mutated(|metadata| {
+                let s4 = metadata["snapshots"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|s| s["snapshot-id"] == 3057729675574597004i64)
+                    .expect("S4 should be present");
+                assert_eq!(
+                    s4["summary"]["operation"], "overwrite",
+                    "expected S4 to be the overwrite snapshot"
+                );
+                s4["summary"]["operation"] = serde_json::json!("replace");
+            })
+        }
+
+        /// Builds the deep-history fixture, applying `mutate` to the rendered
+        /// metadata JSON before it is deserialized. Mutating the parsed
+        /// [`serde_json::Value`] structurally (by field) keeps variants robust
+        /// against reformatting of the shared testdata file, unlike raw string
+        /// substitution.
+        fn new_with_deep_history_mutated(mutate: impl FnOnce(&mut serde_json::Value)) -> Self {
             let tmp_dir = TempDir::new().unwrap();
             let table_location = tmp_dir.path().join("table1");
             let table_metadata1_location = table_location.join("metadata/v1.json");
@@ -872,12 +870,6 @@ pub mod tests {
                     env!("CARGO_MANIFEST_DIR")
                 ))
                 .unwrap();
-                // Point every snapshot's schema-id at the older schema 0.
-                // Snapshot entries render as `"schema-id": 1` with no trailing
-                // comma, which distinguishes them from the schema *definition*
-                // line (`"schema-id": 1,`) that must stay untouched.
-                let template_json_str =
-                    template_json_str.replace("\"schema-id\": 1\n", "\"schema-id\": 0\n");
                 let metadata_json = render_template(&template_json_str, context! {
                     table_location => &table_location,
                     manifest_list_s1_location => &manifest_list_s1,
@@ -886,12 +878,11 @@ pub mod tests {
                     manifest_list_s4_location => &manifest_list_s4,
                     manifest_list_s5_location => &manifest_list_s5,
                 });
-                serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
+                let mut metadata_value: serde_json::Value =
+                    serde_json::from_str(&metadata_json).unwrap();
+                mutate(&mut metadata_value);
+                serde_json::from_value::<TableMetadata>(metadata_value).unwrap()
             };
-
-            // Sanity check: current schema (3 cols) differs from the schema the
-            // snapshots reference (1 col), otherwise the test would be vacuous.
-            assert_eq!(table_metadata.current_schema_id(), 1);
 
             let table = Table::builder()
                 .metadata(table_metadata)

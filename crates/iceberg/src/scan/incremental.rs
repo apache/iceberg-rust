@@ -166,6 +166,15 @@ impl AppendSnapshotSet {
 /// snapshots between `from_snapshot_id` and the target snapshot. Only
 /// snapshots with APPEND operations are supported.
 ///
+/// This is **not** a CDC, net-changes, or changelog scan: non-append
+/// snapshots in the range (overwrite, replace/compaction, delete) are
+/// ignored rather than applied as net changes. The scan reads only the rows
+/// added by append snapshots in the range, so its output does not represent
+/// the full table state at `to_snapshot_id`, nor does it reflect rows deleted
+/// or rewritten within the range. In particular, files produced by compaction
+/// (`replace`) are skipped, so appended rows are never double-counted against
+/// their rewritten copies.
+///
 /// Use [`Table::incremental_append_scan`] or
 /// [`Table::incremental_append_scan_inclusive`] to create an instance.
 pub struct IncrementalAppendScanBuilder<'a> {
@@ -666,6 +675,57 @@ mod tests {
         assert!(
             tasks.is_empty(),
             "Exclusive scan from=to should return no files"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_incremental_scan_compaction_not_double_counted() {
+        // Compaction (`rewrite_data_files`) commits a `replace` snapshot whose
+        // rewritten file re-adds rows that were already appended earlier. An
+        // incremental append scan must skip that file so the appended rows are
+        // read exactly once — never double-counted against the rewritten copy.
+        //
+        // Deep history fixture with S4 relabeled as a `replace` (compaction):
+        //   S1 (append) -> S2 (append) -> S3 (append) -> S4 (replace) -> S5 (append, current)
+        // Scanning from S1 (exclusive) to S5 should return only files from
+        // APPEND snapshots: s2.parquet, s3.parquet, s5.parquet. The compacted
+        // s4.parquet must be skipped.
+        let mut fixture = TableTestFixture::new_with_deep_history_compaction();
+        fixture.setup_manifest_files_deep_history().await;
+
+        let s1_id = 3051729675574597004_i64;
+        let s5_id = 3059729675574597004_i64;
+
+        let table_scan = fixture
+            .table
+            .incremental_append_scan(s1_id, Some(s5_id))
+            .build()
+            .unwrap();
+
+        let mut tasks: Vec<_> = table_scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        tasks.sort_by(|a, b| a.data_file_path.cmp(&b.data_file_path));
+
+        let file_names: Vec<&str> = tasks
+            .iter()
+            .map(|t| {
+                t.data_file_path
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&t.data_file_path)
+            })
+            .collect();
+
+        assert_eq!(
+            file_names,
+            vec!["s2.parquet", "s3.parquet", "s5.parquet"],
+            "Compacted file (s4, from the replace snapshot) must be skipped"
         );
     }
 
