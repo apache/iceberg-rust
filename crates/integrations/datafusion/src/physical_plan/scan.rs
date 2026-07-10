@@ -131,23 +131,22 @@ impl ExecutionPlan for IcebergTableScan {
 
     fn execute(
         &self,
-        _partition: usize,
+        partition: usize,
         _context: Arc<TaskContext>,
     ) -> DFResult<SendableRecordBatchStream> {
         let stream: Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>> = match &self
             .file_task_groups
         {
             Some(file_task_groups) => {
-                let Some(file_task_group) = file_task_groups.get(_partition).cloned() else {
+                let Some(file_task_group) = file_task_groups.get(partition).cloned() else {
                     return Err(datafusion::common::DataFusionError::Internal(format!(
-                        "IcebergTableScan partition {_partition} does not exist; scan has {} partitions",
+                        "IcebergTableScan partition {partition} does not exist; scan has {} partitions",
                         file_task_groups.len()
                     )));
                 };
 
-                let task_count = file_task_group.len();
                 let tasks: FileScanTaskStream = Box::pin(futures::stream::iter(
-                    (0..task_count).map(move |idx| Ok(file_task_group[idx].clone())),
+                    (0..file_task_group.len()).map(move |idx| Ok(file_task_group[idx].clone())),
                 ));
                 let stream = self
                     .table
