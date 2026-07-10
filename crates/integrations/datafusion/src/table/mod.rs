@@ -150,7 +150,7 @@ impl TableProvider for IcebergTableProvider {
 
     async fn scan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
@@ -170,7 +170,7 @@ impl TableProvider for IcebergTableProvider {
         );
 
         // Create scan with fresh metadata (always use current snapshot)
-        create_scan_plan(_state, table, scan_config, limit).await
+        create_scan_plan(state, table, scan_config, limit).await
     }
 
     fn supports_filters_pushdown(
@@ -337,7 +337,7 @@ impl TableProvider for IcebergStaticTableProvider {
 
     async fn scan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
@@ -346,7 +346,7 @@ impl TableProvider for IcebergStaticTableProvider {
             IcebergScanConfig::new(self.schema.clone(), self.snapshot_id, projection, filters);
 
         // Use cached table (no refresh)
-        create_scan_plan(_state, self.table.clone(), scan_config, limit).await
+        create_scan_plan(state, self.table.clone(), scan_config, limit).await
     }
 
     fn supports_filters_pushdown(

@@ -109,7 +109,7 @@ fn get_column_names(
 }
 
 /// Groups file scan tasks into `target_partitions` groups using a naive
-/// round-robin assignment. `target_partitions` is clamped to a minimum of 1.
+/// round-robin assignment. Non-empty groups are bounded by `tasks.len()`.
 // TODO: Replace this naive round-robin grouping with size-based grouping once the
 // first parallel scan path is stable. Keep this v1 simple and deterministic.
 fn group_file_scan_tasks_round_robin(
@@ -120,14 +120,13 @@ fn group_file_scan_tasks_round_robin(
         return vec![vec![]];
     }
 
-    let target_partitions = target_partitions.max(1);
+    let target_partitions = target_partitions.max(1).min(tasks.len());
 
     let mut groups: Vec<Vec<FileScanTask>> = vec![Vec::new(); target_partitions];
     for (i, task) in tasks.into_iter().enumerate() {
         groups[i % target_partitions].push(task);
     }
 
-    groups.retain(|group| !group.is_empty());
     groups
 }
 
