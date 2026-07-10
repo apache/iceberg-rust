@@ -329,6 +329,11 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
                 concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
                 row_group_filtering_enabled: self.row_group_filtering_enabled,
                 row_selection_enabled: self.row_selection_enabled,
+                // Project onto the table's current schema (not the to-snapshot's
+                // schema), matching the Java and PyIceberg implementations. Rows
+                // written under an older schema within the range are read against
+                // the current schema, so newer columns become `NULL`.
+                schema_override: Some(self.table.metadata().current_schema().clone()),
             },
             to_snapshot,
             Some(append_set.manifest_file_filter()),
@@ -747,6 +752,51 @@ mod tests {
             tasks[0].data_file_path.ends_with("s3.parquet"),
             "Should return s3.parquet, got: {}",
             tasks[0].data_file_path
+        );
+    }
+
+    #[test]
+    fn test_incremental_scan_projects_onto_current_schema() {
+        // The table's current schema (id 1) has three columns (x, y, z), but
+        // every snapshot references the older schema (id 0) with a single
+        // column (x). An incremental scan must project onto the *current*
+        // schema, matching the Java and PyIceberg implementations, so rows
+        // written under the older schema get NULLs for the newer columns.
+        let table = TableTestFixture::new_with_deep_history_stale_schema().table;
+
+        let s1_id = 3051729675574597004_i64;
+        let s5_id = 3059729675574597004_i64;
+
+        let scan = table
+            .incremental_append_scan(s1_id, Some(s5_id))
+            .build()
+            .unwrap();
+
+        let plan_context = scan
+            .plan_context
+            .as_ref()
+            .expect("incremental scan should have a plan context");
+
+        // The scan must use the current schema (3 columns), not the
+        // to-snapshot's schema (1 column).
+        let current_schema = table.metadata().current_schema();
+        assert_eq!(
+            plan_context.snapshot_schema.schema_id(),
+            current_schema.schema_id(),
+            "incremental scan should project onto the current schema"
+        );
+        assert_eq!(
+            plan_context.snapshot_schema.as_struct().fields().len(),
+            3,
+            "current schema has three columns (x, y, z)"
+        );
+
+        // Sanity check: the to-snapshot itself references the older schema.
+        let to_snapshot = table.metadata().snapshot_by_id(s5_id).unwrap();
+        assert_eq!(
+            to_snapshot.schema(table.metadata()).unwrap().schema_id(),
+            0,
+            "to-snapshot should reference the older single-column schema"
         );
     }
 

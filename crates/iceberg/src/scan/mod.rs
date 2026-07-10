@@ -41,7 +41,9 @@ use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::metadata_columns::{get_metadata_field_id, is_metadata_column_name};
 use crate::runtime::Runtime;
-use crate::spec::{DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, SnapshotRef};
+use crate::spec::{
+    DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, SchemaRef, SnapshotRef,
+};
 use crate::table::Table;
 use crate::util::available_parallelism;
 use crate::{Error, ErrorKind, Result};
@@ -62,6 +64,13 @@ pub(crate) struct ScanConfig<'a> {
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    /// Schema to project the scan onto. When `None`, the schema attached to
+    /// `snapshot` is used (the correct behavior for time-travel scans). An
+    /// incremental scan sets this to the table's current schema so that rows
+    /// written under an older schema in the range are projected onto the
+    /// current schema (newer columns become `NULL`), matching the Java and
+    /// PyIceberg implementations.
+    schema_override: Option<SchemaRef>,
 }
 
 /// Shared build logic: validates columns, resolves field IDs, binds predicates,
@@ -72,7 +81,10 @@ pub(crate) fn build_table_scan(
     manifest_file_filter: Option<ManifestFileFilter>,
     manifest_entry_filter: Option<ManifestEntryFilter>,
 ) -> Result<TableScan> {
-    let schema = snapshot.schema(config.table.metadata())?;
+    let schema = match config.schema_override.clone() {
+        Some(schema) => schema,
+        None => snapshot.schema(config.table.metadata())?,
+    };
 
     // Check that all column names exist in the schema (skip reserved columns).
     if let Some(column_names) = config.column_names.as_ref() {
@@ -366,6 +378,7 @@ impl<'a> TableScanBuilder<'a> {
                 concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
                 row_group_filtering_enabled: self.row_group_filtering_enabled,
                 row_selection_enabled: self.row_selection_enabled,
+                schema_override: None,
             },
             snapshot,
             None,
@@ -818,6 +831,67 @@ pub mod tests {
                 });
                 serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
+
+            let table = Table::builder()
+                .metadata(table_metadata)
+                .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
+                .file_io(file_io.clone())
+                .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
+                .runtime(test_runtime())
+                .build()
+                .unwrap();
+
+            Self {
+                table_location: table_location.to_str().unwrap().to_string(),
+                table,
+            }
+        }
+
+        /// Like [`Self::new_with_deep_history`] but rewrites every snapshot to
+        /// reference the older single-column schema (`schema-id` 0) while the
+        /// table's `current-schema-id` stays at the three-column schema
+        /// (`schema-id` 1). This models a table whose schema evolved *after*
+        /// the snapshots in an incremental range were written, so we can assert
+        /// that an incremental scan projects onto the current schema.
+        pub fn new_with_deep_history_stale_schema() -> Self {
+            let tmp_dir = TempDir::new().unwrap();
+            let table_location = tmp_dir.path().join("table1");
+            let table_metadata1_location = table_location.join("metadata/v1.json");
+
+            let manifest_list_s1 = table_location.join("metadata/snap-3051729675574597004.avro");
+            let manifest_list_s2 = table_location.join("metadata/snap-3055729675574597004.avro");
+            let manifest_list_s3 = table_location.join("metadata/snap-3056729675574597004.avro");
+            let manifest_list_s4 = table_location.join("metadata/snap-3057729675574597004.avro");
+            let manifest_list_s5 = table_location.join("metadata/snap-3059729675574597004.avro");
+
+            let file_io = FileIO::new_with_fs();
+
+            let table_metadata = {
+                let template_json_str = fs::read_to_string(format!(
+                    "{}/testdata/example_table_metadata_v2_deep_history.json",
+                    env!("CARGO_MANIFEST_DIR")
+                ))
+                .unwrap();
+                // Point every snapshot's schema-id at the older schema 0.
+                // Snapshot entries render as `"schema-id": 1` with no trailing
+                // comma, which distinguishes them from the schema *definition*
+                // line (`"schema-id": 1,`) that must stay untouched.
+                let template_json_str =
+                    template_json_str.replace("\"schema-id\": 1\n", "\"schema-id\": 0\n");
+                let metadata_json = render_template(&template_json_str, context! {
+                    table_location => &table_location,
+                    manifest_list_s1_location => &manifest_list_s1,
+                    manifest_list_s2_location => &manifest_list_s2,
+                    manifest_list_s3_location => &manifest_list_s3,
+                    manifest_list_s4_location => &manifest_list_s4,
+                    manifest_list_s5_location => &manifest_list_s5,
+                });
+                serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
+            };
+
+            // Sanity check: current schema (3 cols) differs from the schema the
+            // snapshots reference (1 col), otherwise the test would be vacuous.
+            assert_eq!(table_metadata.current_schema_id(), 1);
 
             let table = Table::builder()
                 .metadata(table_metadata)
