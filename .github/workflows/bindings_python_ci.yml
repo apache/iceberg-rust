@@ -25,7 +25,7 @@ on:
     paths:
       - '**'                                       # Include all files and directories in the repository by default.
       - '!.github/ISSUE_TEMPLATE/**'               # Exclude files and directories that don't impact tests or code like templates, metadata, and documentation.
-      - '!scripts/**'
+      - '!dev/release/**'
       - '!website/**'
       - '!.asf.yml'
       - '!.gitattributes'
@@ -44,26 +44,13 @@ permissions:
   contents: read
 
 jobs:
-  check-rust:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          persist-credentials: false
-      - name: Check format
-        working-directory: "bindings/python"
-        run: cargo fmt --all -- --check
-      - name: Check clippy
-        working-directory: "bindings/python"
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
   check-python:
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           version: "0.9.3"
           enable-cache: true
@@ -89,18 +76,28 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: 3.12
+      # Linux maturin builds may run inside manylinux Docker, so host Rust caches only help Windows/macOS.
+      - name: Setup Rust toolchain
+        if: runner.os != 'Linux'
+        uses: ./.github/actions/setup-builder
+      - name: Cache Rust artifacts
+        if: runner.os != 'Linux'
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: bindings-python
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           working-directory: "bindings/python"
           command: build
           args: --out dist -i python3.12 # Explicitly set interpreter; manylinux containers have multiple Pythons and maturin may pick an older one
-      - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           version: "0.9.3"
           enable-cache: true
@@ -108,14 +105,17 @@ jobs:
         working-directory: "bindings/python"
         shell: bash
         run: |
-          make install
+          uv sync --group dev --no-install-project
       - name: Install built wheel
         working-directory: "bindings/python"
         shell: bash
         run: |
-          uv pip install --reinstall dist/pyiceberg_core-*.whl
+          uv pip install --no-build --reinstall --find-links dist/ pyiceberg-core
       - name: Run tests
         working-directory: "bindings/python"
         shell: bash
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET: ${{ secrets.HF_DATASET }}
         run: |
           make test

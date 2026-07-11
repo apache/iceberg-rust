@@ -43,7 +43,7 @@ use crate::{Error, ErrorKind, Result};
 /// containing `SensitiveBytes` can safely derive or implement `Debug`
 /// without risk of leaking key material.
 #[derive(Clone, PartialEq, Eq)]
-struct SensitiveBytes(Zeroizing<Box<[u8]>>);
+pub struct SensitiveBytes(Zeroizing<Box<[u8]>>);
 
 impl SensitiveBytes {
     /// Wraps the given bytes as sensitive material.
@@ -57,13 +57,11 @@ impl SensitiveBytes {
     }
 
     /// Returns the number of bytes.
-    #[allow(dead_code)] // Encryption work is ongoing so currently unused
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
     /// Returns `true` if the byte slice is empty.
-    #[allow(dead_code)] // Encryption work is ongoing so currently unused
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -85,9 +83,10 @@ impl fmt::Display for SensitiveBytes {
 ///
 /// The Iceberg spec supports 128, 192, and 256-bit keys for AES-GCM.
 /// See: <https://iceberg.apache.org/gcm-stream-spec/#goals>
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AesKeySize {
-    /// 128-bit AES key (16 bytes)
+    /// 128-bit AES key (16 bytes). Default per the Iceberg spec.
+    #[default]
     Bits128 = 128,
     /// 192-bit AES key (24 bytes)
     Bits192 = 192,
@@ -175,6 +174,15 @@ impl SecureKey {
     /// Returns the key bytes.
     pub fn as_bytes(&self) -> &[u8] {
         self.key.as_bytes()
+    }
+}
+
+impl TryFrom<SensitiveBytes> for SecureKey {
+    type Error = Error;
+
+    fn try_from(key: SensitiveBytes) -> Result<Self> {
+        let key_size = AesKeySize::from_key_length(key.len())?;
+        Ok(Self { key, key_size })
     }
 }
 

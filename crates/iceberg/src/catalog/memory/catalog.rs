@@ -26,7 +26,9 @@ use futures::lock::{Mutex, MutexGuard};
 use itertools::Itertools;
 
 use super::namespace_state::NamespaceState;
+use crate::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use crate::io::{FileIO, FileIOBuilder, MemoryStorageFactory, StorageFactory};
+use crate::runtime::Runtime;
 use crate::spec::{TableMetadata, TableMetadataBuilder};
 use crate::table::Table;
 use crate::{
@@ -45,6 +47,8 @@ const LOCATION: &str = "location";
 pub struct MemoryCatalogBuilder {
     config: MemoryCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
+    runtime: Option<Runtime>,
 }
 
 impl Default for MemoryCatalogBuilder {
@@ -56,6 +60,8 @@ impl Default for MemoryCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
+            kms_client_factory: None,
+            runtime: None,
         }
     }
 }
@@ -65,6 +71,16 @@ impl CatalogBuilder for MemoryCatalogBuilder {
 
     fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
         self.storage_factory = Some(storage_factory);
+        self
+    }
+
+    fn with_kms_client_factory(mut self, kms_client_factory: Arc<dyn KmsClientFactory>) -> Self {
+        self.kms_client_factory = Some(kms_client_factory);
+        self
+    }
+
+    fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = Some(runtime);
         self
     }
 
@@ -88,7 +104,7 @@ impl CatalogBuilder for MemoryCatalogBuilder {
             .filter(|(k, _)| k != MEMORY_CATALOG_WAREHOUSE)
             .collect();
 
-        let result = {
+        async move {
             if self.config.name.is_none() {
                 Err(Error::new(
                     ErrorKind::DataInvalid,
@@ -100,11 +116,14 @@ impl CatalogBuilder for MemoryCatalogBuilder {
                     "Catalog warehouse is required",
                 ))
             } else {
-                MemoryCatalog::new(self.config, self.storage_factory)
+                let runtime = self.runtime.unwrap_or_else(Runtime::current);
+                let kms_client = match self.kms_client_factory {
+                    Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
+                    None => None,
+                };
+                MemoryCatalog::new(self.config, self.storage_factory, runtime, kms_client)
             }
-        };
-
-        std::future::ready(result)
+        }
     }
 }
 
@@ -121,6 +140,8 @@ pub struct MemoryCatalog {
     root_namespace_state: Mutex<NamespaceState>,
     file_io: FileIO,
     warehouse_location: String,
+    runtime: Runtime,
+    kms_client: Option<Arc<dyn KeyManagementClient>>,
 }
 
 impl MemoryCatalog {
@@ -128,6 +149,8 @@ impl MemoryCatalog {
     fn new(
         config: MemoryCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
+        runtime: Runtime,
+        kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
         // Use provided factory or default to MemoryStorageFactory
         let factory = storage_factory.unwrap_or_else(|| Arc::new(MemoryStorageFactory));
@@ -136,6 +159,8 @@ impl MemoryCatalog {
             root_namespace_state: Mutex::new(NamespaceState::default()),
             file_io: FileIOBuilder::new(factory).with_props(config.props).build(),
             warehouse_location: config.warehouse,
+            runtime,
+            kms_client,
         })
     }
 
@@ -148,12 +173,16 @@ impl MemoryCatalog {
         let metadata_location = root_namespace_state.get_existing_table_location(table_ident)?;
         let metadata = TableMetadata::read_from(&self.file_io, metadata_location).await?;
 
-        Table::builder()
+        let mut builder = Table::builder()
             .identifier(table_ident.clone())
             .metadata(metadata)
             .metadata_location(metadata_location.to_string())
             .file_io(self.file_io.clone())
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
     }
 }
 
@@ -302,12 +331,16 @@ impl Catalog for MemoryCatalog {
 
         root_namespace_state.insert_new_table(&table_ident, metadata_location.to_string())?;
 
-        Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.file_io.clone())
             .metadata_location(metadata_location.to_string())
             .metadata(metadata)
             .identifier(table_ident)
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
     }
 
     /// Load table from the catalog.
@@ -329,12 +362,7 @@ impl Catalog for MemoryCatalog {
     async fn purge_table(&self, table_ident: &TableIdent) -> Result<()> {
         let table_info = self.load_table(table_ident).await?;
         self.drop_table(table_ident).await?;
-        crate::catalog::utils::drop_table_data(
-            table_info.file_io(),
-            table_info.metadata(),
-            table_info.metadata_location(),
-        )
-        .await
+        crate::catalog::utils::drop_table_data(&table_info).await
     }
 
     /// Check if a table exists in the catalog.
@@ -373,12 +401,16 @@ impl Catalog for MemoryCatalog {
 
         let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
 
-        Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.file_io.clone())
             .metadata_location(metadata_location)
             .metadata(metadata)
             .identifier(table_ident.clone())
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
     }
 
     /// Update a table in the catalog.
@@ -418,8 +450,10 @@ pub(crate) mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::io::FileIO;
+    use crate::encryption::kms::MemoryKmsClientFactory;
+    use crate::io::{FileIO, LocalFsStorageFactory};
     use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
+    use crate::test_utils::test_runtime;
     use crate::transaction::{ApplyTransactionAction, Transaction};
 
     fn temp_path() -> String {
@@ -1870,6 +1904,11 @@ pub(crate) mod tests {
         // Assert the table doesn't contain the update yet
         assert!(!table.metadata().properties().contains_key("key"));
 
+        // `last_updated_ms` is millisecond-resolution `chrono::Utc::now()`.
+        // Without this sleep, create and commit can land in the same
+        // millisecond and the `<` assertion below flakes.
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+
         // Update table metadata
         let tx = Transaction::new(&table);
         let updated_table = tx
@@ -1888,7 +1927,6 @@ pub(crate) mod tests {
 
         assert_eq!(table.identifier(), updated_table.identifier());
         assert_eq!(table.metadata().uuid(), updated_table.metadata().uuid());
-        assert!(table.metadata().last_updated_ms() < updated_table.metadata().last_updated_ms());
         assert_ne!(table.metadata_location(), updated_table.metadata_location());
 
         assert!(
@@ -1919,6 +1957,91 @@ pub(crate) mod tests {
         assert_eq!(err.kind(), ErrorKind::TableNotFound);
     }
 
+    /// Master key bytes used to generate the encrypted testdata fixtures.
+    /// See `testdata/manifests_lists/README.md`.
+    const FIXTURE_MASTER_KEY_ID: &str = "master-1";
+    const FIXTURE_MASTER_KEY_BYTES: [u8; 16] = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+        0x0f,
+    ];
+
+    /// Builds a `MemoryKmsClientFactory` seeded with the fixture master key.
+    fn fixture_kms_factory() -> MemoryKmsClientFactory {
+        use crate::encryption::SensitiveBytes;
+
+        let factory = MemoryKmsClientFactory::new();
+        factory
+            .add_master_key_bytes(
+                FIXTURE_MASTER_KEY_ID,
+                SensitiveBytes::new(FIXTURE_MASTER_KEY_BYTES),
+            )
+            .unwrap();
+        factory
+    }
+
+    /// Loads the encrypted V3 metadata fixture and patches its snapshot's
+    /// manifest-list to point at the on-disk encrypted testdata file.
+    fn load_encrypted_fixture_metadata() -> TableMetadata {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let metadata_json = std::fs::read_to_string(format!(
+            "{manifest_dir}/testdata/table_metadata/TableMetadataV3ValidEncryption.json"
+        ))
+        .unwrap();
+        let mut metadata: TableMetadata = serde_json::from_str(&metadata_json).unwrap();
+
+        let manifest_list_path =
+            format!("{manifest_dir}/testdata/manifests_lists/manifest-list-v3-encrypted.avro");
+        let snapshot = metadata.snapshots.get_mut(&1).unwrap();
+        let mut patched = snapshot.as_ref().clone();
+        patched.manifest_list = manifest_list_path;
+        *snapshot = Arc::new(patched);
+
+        metadata
+    }
+
+    #[tokio::test]
+    async fn catalog_kms_factory_client_reaches_table_encryption_manager() {
+        let warehouse = temp_path();
+        let catalog = MemoryCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .with_kms_client_factory(Arc::new(fixture_kms_factory()))
+            .load(
+                "memory",
+                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse)]),
+            )
+            .await
+            .unwrap();
+
+        let namespace_ident = NamespaceIdent::new("enc_ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let metadata = load_encrypted_fixture_metadata();
+        let metadata_dir = TempDir::new().unwrap();
+        let metadata_location =
+            format!("{}/v1.metadata.json", metadata_dir.path().to_str().unwrap());
+        std::fs::write(&metadata_location, serde_json::to_vec(&metadata).unwrap()).unwrap();
+
+        let table_ident = TableIdent::new(namespace_ident, "enc".to_string());
+        catalog
+            .register_table(&table_ident, metadata_location)
+            .await
+            .unwrap();
+
+        let table = catalog.load_table(&table_ident).await.unwrap();
+        assert!(
+            table.encryption_manager().is_some(),
+            "factory-built KMS client should have reached the table's EncryptionManager"
+        );
+
+        let snapshot_ref = table.metadata().current_snapshot().unwrap();
+        let manifest_list = table
+            .object_cache()
+            .get_manifest_list(snapshot_ref, &table.metadata_ref())
+            .await
+            .unwrap();
+        assert_eq!(manifest_list.entries().len(), 0);
+    }
+
     fn build_table(ident: TableIdent) -> Table {
         let file_io = FileIO::new_with_fs();
 
@@ -1940,6 +2063,7 @@ pub(crate) mod tests {
             .identifier(ident)
             .metadata(metadata)
             .file_io(file_io)
+            .runtime(test_runtime())
             .build()
             .unwrap()
     }

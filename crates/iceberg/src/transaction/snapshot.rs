@@ -19,6 +19,8 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::ops::RangeFrom;
 
+use futures::TryStreamExt;
+use futures::stream::FuturesUnordered;
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -111,7 +113,6 @@ pub(crate) struct SnapshotProducer<'a> {
     pub(crate) table: &'a Table,
     snapshot_id: i64,
     commit_uuid: Uuid,
-    key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
@@ -124,7 +125,6 @@ impl<'a> SnapshotProducer<'a> {
     pub(crate) fn new(
         table: &'a Table,
         commit_uuid: Uuid,
-        key_metadata: Option<Vec<u8>>,
         snapshot_properties: HashMap<String, String>,
         added_data_files: Vec<DataFile>,
     ) -> Self {
@@ -132,7 +132,6 @@ impl<'a> SnapshotProducer<'a> {
             table,
             snapshot_id: Self::generate_unique_snapshot_id(table),
             commit_uuid,
-            key_metadata,
             snapshot_properties,
             added_data_files,
             manifest_counter: (0..),
@@ -164,29 +163,46 @@ impl<'a> SnapshotProducer<'a> {
     }
 
     pub(crate) async fn validate_duplicate_files(&self) -> Result<()> {
+        let Some(current_snapshot) = self.table.metadata().current_snapshot() else {
+            return Ok(());
+        };
+
         let new_files: HashSet<&str> = self
             .added_data_files
             .iter()
             .map(|df| df.file_path.as_str())
             .collect();
 
-        let mut referenced_files = Vec::new();
-        if let Some(current_snapshot) = self.table.metadata().current_snapshot() {
-            let manifest_list = current_snapshot
-                .load_manifest_list(self.table.file_io(), &self.table.metadata_ref())
-                .await?;
-            for manifest_list_entry in manifest_list.entries() {
-                let manifest = manifest_list_entry
-                    .load_manifest(self.table.file_io())
-                    .await?;
-                for entry in manifest.entries() {
-                    let file_path = entry.file_path();
-                    if new_files.contains(file_path) && entry.is_alive() {
-                        referenced_files.push(file_path.to_string());
-                    }
-                }
-            }
-        }
+        let runtime = self.table.runtime();
+        let file_io = self.table.file_io();
+        let manifest_list = self
+            .table
+            .manifest_list_reader(current_snapshot)
+            .load()
+            .await?;
+
+        let new_files_ref = &new_files;
+        let referenced_files: Vec<String> = manifest_list
+            .consume_entries()
+            .into_iter()
+            .map(|entry| {
+                let file_io = file_io.clone();
+                runtime
+                    .io()
+                    .spawn(async move { entry.load_manifest(&file_io).await })
+            })
+            .collect::<FuturesUnordered<_>>()
+            .try_fold(Vec::new(), |mut acc, manifest| async move {
+                acc.extend(
+                    manifest?
+                        .entries()
+                        .iter()
+                        .filter(|e| new_files_ref.contains(e.file_path()) && e.is_alive())
+                        .map(|e| e.file_path().to_string()),
+                );
+                Ok(acc)
+            })
+            .await?;
 
         if !referenced_files.is_empty() {
             return Err(Error::new(
@@ -236,7 +252,6 @@ impl<'a> SnapshotProducer<'a> {
         let builder = ManifestWriterBuilder::new(
             output_file,
             Some(self.snapshot_id),
-            self.key_metadata.clone(),
             self.table.metadata().current_schema().clone(),
             self.table
                 .metadata()
@@ -319,7 +334,9 @@ impl<'a> SnapshotProducer<'a> {
         writer.write_manifest_file().await
     }
 
-    async fn manifest_file<OP: SnapshotProduceOperation, MP: ManifestProcess>(
+    /// Creates new manifests for data files added or removed,
+    /// and collects all of the manifests to be included in the new snapshot as [ManifestFile] entries.
+    async fn produce_manifests<OP: SnapshotProduceOperation, MP: ManifestProcess>(
         &mut self,
         snapshot_produce_operation: &OP,
         manifest_process: &MP,
@@ -383,13 +400,15 @@ impl<'a> SnapshotProducer<'a> {
             );
         }
 
-        let previous_snapshot = table_metadata
-            .snapshot_by_id(self.snapshot_id)
-            .and_then(|snapshot| snapshot.parent_snapshot_id())
-            .and_then(|parent_id| table_metadata.snapshot_by_id(parent_id));
+        let previous_snapshot = table_metadata.current_snapshot();
 
-        let mut additional_properties = summary_collector.build();
-        additional_properties.extend(self.snapshot_properties.clone());
+        // User-supplied snapshot properties are applied first, then the computed
+        // metrics overwrite any colliding keys. This matches iceberg-java
+        // (`SnapshotProducer.summary`), where computed `added-*`/`total-*` values
+        // are written after user properties so a user cannot shadow them with a
+        // bad (or merely wrong) value that would corrupt the snapshot summary.
+        let mut additional_properties = self.snapshot_properties.clone();
+        additional_properties.extend(summary_collector.build());
 
         let summary = Summary {
             operation: snapshot_produce_operation.operation(),
@@ -424,26 +443,26 @@ impl<'a> SnapshotProducer<'a> {
         let manifest_list_path = self.generate_manifest_list_file_path(0);
         let next_seq_num = self.table.metadata().next_sequence_number();
         let first_row_id = self.table.metadata().next_row_id();
+        let writer = self
+            .table
+            .file_io()
+            .new_output(manifest_list_path.clone())?
+            .writer()
+            .await?;
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
-                self.table
-                    .file_io()
-                    .new_output(manifest_list_path.clone())?,
+                writer,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
             ),
             FormatVersion::V2 => ManifestListWriter::v2(
-                self.table
-                    .file_io()
-                    .new_output(manifest_list_path.clone())?,
+                writer,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
             ),
             FormatVersion::V3 => ManifestListWriter::v3(
-                self.table
-                    .file_io()
-                    .new_output(manifest_list_path.clone())?,
+                writer,
                 self.snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
@@ -451,15 +470,15 @@ impl<'a> SnapshotProducer<'a> {
             ),
         };
 
-        // Calling self.summary() before self.manifest_file() is important because self.added_data_files
-        // will be set to an empty vec after self.manifest_file() returns, resulting in an empty summary
+        // Calling self.summary() before self.produce_manifests() is important because self.added_data_files
+        // will be set to an empty vec after self.produce_manifests() returns, resulting in an empty summary
         // being generated.
         let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
             Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
         })?;
 
         let new_manifests = self
-            .manifest_file(&snapshot_produce_operation, &process)
+            .produce_manifests(&snapshot_produce_operation, &process)
             .await?;
 
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;

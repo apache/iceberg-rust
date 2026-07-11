@@ -17,15 +17,19 @@
 
 //! Encryption module for Apache Iceberg.
 //!
-//! This module provides core cryptographic primitives for encrypting
-//! and decrypting data in Iceberg tables.
+//! This module provides core cryptographic primitives and key management
+//! for encrypting and decrypting data in Iceberg tables.
 
 mod crypto;
-mod file_decryptor;
-mod file_encryptor;
+pub(crate) mod io;
+pub(crate) mod key_metadata;
+pub mod kms;
+mod manager;
 mod stream;
 
-pub use crypto::{AesGcmCipher, AesKeySize, SecureKey};
-pub use file_decryptor::AesGcmFileDecryptor;
-pub use file_encryptor::AesGcmFileEncryptor;
+pub use crypto::{AesGcmCipher, AesKeySize, SecureKey, SensitiveBytes};
+pub use io::{EncryptedInputFile, EncryptedOutputFile};
+pub use key_metadata::StandardKeyMetadata;
+pub use kms::{GeneratedKey, KeyManagementClient};
+pub use manager::EncryptionManager;
 pub use stream::{AesGcmFileRead, AesGcmFileWrite};

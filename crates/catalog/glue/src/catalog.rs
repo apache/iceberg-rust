@@ -25,6 +25,7 @@ use async_trait::async_trait;
 use aws_sdk_glue::operation::create_table::CreateTableError;
 use aws_sdk_glue::operation::update_table::UpdateTableError;
 use aws_sdk_glue::types::TableInput;
+use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{
     FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
     S3_SESSION_TOKEN, StorageFactory,
@@ -33,14 +34,14 @@ use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
-    TableCommit, TableCreation, TableIdent,
+    Runtime, TableCommit, TableCreation, TableIdent,
 };
 use iceberg_storage_opendal::OpenDalStorageFactory;
 
 use crate::error::{from_aws_build_error, from_aws_sdk_error};
 use crate::utils::{
     convert_to_database, convert_to_glue_table, convert_to_namespace, create_sdk_config,
-    get_default_table_location, get_metadata_location, validate_namespace,
+    get_default_table_location, get_metadata_location, is_iceberg_table, validate_namespace,
 };
 use crate::{
     AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, with_catalog_id,
@@ -58,6 +59,8 @@ pub const GLUE_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 pub struct GlueCatalogBuilder {
     config: GlueCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
+    runtime: Option<Runtime>,
 }
 
 impl Default for GlueCatalogBuilder {
@@ -71,6 +74,8 @@ impl Default for GlueCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
+            kms_client_factory: None,
+            runtime: None,
         }
     }
 }
@@ -80,6 +85,16 @@ impl CatalogBuilder for GlueCatalogBuilder {
 
     fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
         self.storage_factory = Some(storage_factory);
+        self
+    }
+
+    fn with_kms_client_factory(mut self, kms_client_factory: Arc<dyn KmsClientFactory>) -> Self {
+        self.kms_client_factory = Some(kms_client_factory);
+        self
+    }
+
+    fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = Some(runtime);
         self
     }
 
@@ -129,7 +144,15 @@ impl CatalogBuilder for GlueCatalogBuilder {
                 ));
             }
 
-            GlueCatalog::new(self.config, self.storage_factory).await
+            let runtime = match self.runtime {
+                Some(rt) => rt,
+                None => Runtime::try_current()?,
+            };
+            let kms_client = match self.kms_client_factory {
+                Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
+                None => None,
+            };
+            GlueCatalog::new(self.config, self.storage_factory, runtime, kms_client).await
         }
     }
 }
@@ -151,6 +174,8 @@ pub struct GlueCatalog {
     config: GlueCatalogConfig,
     client: GlueClient,
     file_io: FileIO,
+    runtime: Runtime,
+    kms_client: Option<Arc<dyn KeyManagementClient>>,
 }
 
 impl Debug for GlueCatalog {
@@ -166,6 +191,8 @@ impl GlueCatalog {
     async fn new(
         config: GlueCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
+        runtime: Runtime,
+        kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
         let sdk_config = create_sdk_config(&config.props, config.uri.as_ref()).await;
         let mut file_io_props = config.props.clone();
@@ -214,6 +241,8 @@ impl GlueCatalog {
             config,
             client: GlueClient(client),
             file_io,
+            runtime,
+            kms_client,
         })
     }
     /// Get the catalogs `FileIO`
@@ -264,7 +293,7 @@ impl GlueCatalog {
 
         let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
 
-        let table = Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.file_io())
             .metadata_location(metadata_location)
             .metadata(metadata)
@@ -272,7 +301,11 @@ impl GlueCatalog {
                 NamespaceIdent::new(db_name),
                 table_name.to_owned(),
             ))
-            .build()?;
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        let table = builder.build()?;
 
         Ok((table, version_id))
     }
@@ -489,9 +522,21 @@ impl Catalog for GlueCatalog {
         }
 
         let db_name = validate_namespace(namespace)?;
-        let table_list = self.list_tables(namespace).await?;
 
-        if !table_list.is_empty() {
+        // Check for ANY Glue table in the database, not just Iceberg tables.
+        // Glue's `delete_database` will fail if any table (Iceberg or not) is
+        // still present, and `list_tables` only returns Iceberg tables, so we
+        // query Glue directly here.
+        let builder = self
+            .client
+            .0
+            .get_tables()
+            .database_name(&db_name)
+            .max_results(1);
+        let builder = with_catalog_id!(builder, self.config);
+        let resp = builder.send().await.map_err(from_aws_sdk_error)?;
+
+        if !resp.table_list().is_empty() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!("Database with name: {} is not empty", &db_name),
@@ -506,12 +551,16 @@ impl Catalog for GlueCatalog {
         Ok(())
     }
 
-    /// Asynchronously lists all tables within a specified namespace.
+    /// Asynchronously lists all Iceberg tables within a specified namespace.
+    ///
+    /// Glue databases may contain a mix of Iceberg and non-Iceberg tables
+    /// (e.g. plain Hive tables). Only tables whose `table_type` parameter is
+    /// set to `ICEBERG` (case-insensitive) are returned
     ///
     /// # Returns
     /// A `Result<Vec<TableIdent>>`, which is:
     /// - `Ok(vec![...])` containing a vector of `TableIdent` instances, each
-    /// representing a table within the specified namespace.
+    /// representing an Iceberg table within the specified namespace.
     /// - `Err(...)` if an error occurs during namespace validation or while
     /// querying the database.
     async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
@@ -536,6 +585,7 @@ impl Catalog for GlueCatalog {
             let tables: Vec<_> = resp
                 .table_list()
                 .iter()
+                .filter(|tbl| is_iceberg_table(&tbl.parameters))
                 .map(|tbl| TableIdent::new(namespace.clone(), tbl.name().to_string()))
                 .collect();
 
@@ -606,12 +656,16 @@ impl Catalog for GlueCatalog {
 
         builder.send().await.map_err(from_aws_sdk_error)?;
 
-        Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.file_io())
             .metadata_location(metadata_location_str)
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
     }
 
     /// Loads a table from the Glue Catalog and constructs a `Table` object
@@ -661,12 +715,7 @@ impl Catalog for GlueCatalog {
     async fn purge_table(&self, table: &TableIdent) -> Result<()> {
         let table_info = self.load_table(table).await?;
         self.drop_table(table).await?;
-        iceberg::drop_table_data(
-            table_info.file_io(),
-            table_info.metadata(),
-            table_info.metadata_location(),
-        )
-        .await
+        iceberg::drop_table_data(&table_info).await
     }
 
     /// Asynchronously checks the existence of a specified table
@@ -840,12 +889,16 @@ impl Catalog for GlueCatalog {
             .with_source(anyhow!("aws sdk error: {error:?}"))
         })?;
 
-        Ok(Table::builder()
+        let mut builder = Table::builder()
             .identifier(table_ident.clone())
             .metadata_location(metadata_location)
             .metadata(metadata)
             .file_io(self.file_io())
-            .build()?)
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        Ok(builder.build()?)
     }
 
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {

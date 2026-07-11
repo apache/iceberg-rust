@@ -25,10 +25,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
-use super::table_metadata::SnapshotLog;
 use crate::error::{Result, timestamp_ms_to_utc};
-use crate::io::FileIO;
-use crate::spec::{ManifestList, SchemaId, SchemaRef, TableMetadata};
+use crate::spec::{SchemaId, SchemaRef, TableMetadata};
 use crate::{Error, ErrorKind};
 
 /// The ref name of the main branch of the table.
@@ -194,29 +192,6 @@ impl Snapshot {
         }
     }
 
-    /// Load manifest list.
-    pub async fn load_manifest_list(
-        &self,
-        file_io: &FileIO,
-        table_metadata: &TableMetadata,
-    ) -> Result<ManifestList> {
-        let manifest_list_content = file_io.new_input(&self.manifest_list)?.read().await?;
-        ManifestList::parse_with_version(
-            &manifest_list_content,
-            // TODO: You don't really need the version since you could just project any Avro in
-            // the version that you'd like to get (probably always the latest)
-            table_metadata.format_version(),
-        )
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn log(&self) -> SnapshotLog {
-        SnapshotLog {
-            timestamp_ms: self.timestamp_ms,
-            snapshot_id: self.snapshot_id,
-        }
-    }
-
     /// The row-id of the first newly added row in this snapshot. All rows added in this snapshot will
     /// have a row-id assigned to them greater than this value. All rows with a row-id less than this
     /// value were created in a snapshot that was added to the table (but not necessarily committed to
@@ -291,6 +266,7 @@ pub(super) mod _serde {
         pub snapshot_id: i64,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub parent_snapshot_id: Option<i64>,
+        #[serde(default)]
         pub sequence_number: i64,
         pub timestamp_ms: i64,
         pub manifest_list: String,

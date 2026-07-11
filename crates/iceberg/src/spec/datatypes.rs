@@ -340,7 +340,7 @@ fn serialize_decimal<S>(
 where
     S: Serializer,
 {
-    serializer.serialize_str(&format!("decimal({precision},{scale})"))
+    serializer.serialize_str(&format!("decimal({precision}, {scale})"))
 }
 
 fn deserialize_fixed<'de, D>(deserializer: D) -> std::result::Result<PrimitiveType, D::Error>
@@ -370,7 +370,7 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Float => write!(f, "float"),
             PrimitiveType::Double => write!(f, "double"),
             PrimitiveType::Decimal { precision, scale } => {
-                write!(f, "decimal({precision},{scale})")
+                write!(f, "decimal({precision}, {scale})")
             }
             PrimitiveType::Date => write!(f, "date"),
             PrimitiveType::Time => write!(f, "time"),
@@ -826,6 +826,22 @@ impl MapType {
             value_field,
         }
     }
+
+    /// Construct an optional map type with the given key and value fields.
+    pub fn optional(key_id: i32, key_type: Type, value_id: i32, value_type: Type) -> Self {
+        Self {
+            key_field: NestedField::map_key_element(key_id, key_type).into(),
+            value_field: NestedField::map_value_element(value_id, value_type, false).into(),
+        }
+    }
+
+    /// Construct a required map type with the given key and value fields.
+    pub fn required(key_id: i32, key_type: Type, value_id: i32, value_type: Type) -> Self {
+        Self {
+            key_field: NestedField::map_key_element(key_id, key_type).into(),
+            value_field: NestedField::map_value_element(value_id, value_type, true).into(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -858,7 +874,7 @@ mod tests {
             {"id": 3, "name": "long_field", "required": true, "type": "long"},
             {"id": 4, "name": "float_field", "required": true, "type": "float"},
             {"id": 5, "name": "double_field", "required": true, "type": "double"},
-            {"id": 6, "name": "decimal_field", "required": true, "type": "decimal(9,2)"},
+            {"id": 6, "name": "decimal_field", "required": true, "type": "decimal(9, 2)"},
             {"id": 7, "name": "date_field", "required": true, "type": "date"},
             {"id": 8, "name": "time_field", "required": true, "type": "time"},
             {"id": 9, "name": "timestamp_field", "required": true, "type": "timestamp"},
@@ -1135,6 +1151,16 @@ mod tests {
                 .into(),
             }),
         );
+
+        check_type_serde(
+            record,
+            Type::Map(MapType::optional(
+                4,
+                Type::Primitive(PrimitiveType::String),
+                5,
+                Type::Primitive(PrimitiveType::Double),
+            )),
+        );
     }
 
     #[test]
@@ -1162,6 +1188,40 @@ mod tests {
                 )
                 .into(),
             }),
+        );
+
+        check_type_serde(
+            record,
+            Type::Map(MapType::optional(
+                4,
+                Type::Primitive(PrimitiveType::Int),
+                5,
+                Type::Primitive(PrimitiveType::String),
+            )),
+        );
+    }
+
+    #[test]
+    fn map_required_int() {
+        let record = r#"
+        {
+            "type": "map",
+            "key-id": 4,
+            "key": "int",
+            "value-id": 5,
+            "value-required": true,
+            "value": "string"
+        }
+        "#;
+
+        check_type_serde(
+            record,
+            Type::Map(MapType::required(
+                4,
+                Type::Primitive(PrimitiveType::Int),
+                5,
+                Type::Primitive(PrimitiveType::String),
+            )),
         );
     }
 

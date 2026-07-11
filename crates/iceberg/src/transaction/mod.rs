@@ -54,10 +54,12 @@ mod action;
 
 pub use action::*;
 mod append;
+mod expire_snapshots;
 mod snapshot;
 mod sort_order;
 mod update_location;
 mod update_properties;
+mod update_schema;
 mod update_statistics;
 mod upgrade_format_version;
 
@@ -65,18 +67,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWithContext};
+pub use update_schema::AddColumn;
 
 use crate::error::Result;
 use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::action::BoxedTransactionAction;
 use crate::transaction::append::FastAppendAction;
+use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;
+use crate::transaction::update_schema::UpdateSchemaAction;
 use crate::transaction::update_statistics::UpdateStatisticsAction;
 use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
-use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
+use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
 #[derive(Clone)]
@@ -136,6 +141,11 @@ impl Transaction {
         UpdatePropertiesAction::new()
     }
 
+    /// Creates an update schema action.
+    pub fn update_schema(&self) -> UpdateSchemaAction {
+        UpdateSchemaAction::new()
+    }
+
     /// Creates a fast append action.
     pub fn fast_append(&self) -> FastAppendAction {
         FastAppendAction::new()
@@ -156,6 +166,11 @@ impl Transaction {
         UpdateStatisticsAction::new()
     }
 
+    /// Expire snapshots from the table metadata.
+    pub fn expire_snapshots(&self) -> ExpireSnapshotsAction {
+        ExpireSnapshotsAction::new()
+    }
+
     /// Commit transaction.
     pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
         if self.actions.is_empty() {
@@ -164,6 +179,14 @@ impl Transaction {
         }
 
         let table_props = self.table.metadata().table_properties()?;
+
+        // TODO(https://github.com/apache/iceberg-rust/issues/2034): remove once encrypted writes are supported
+        if table_props.encryption_key_id.is_some() {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Cannot commit to an encrypted table: encrypted writes are not yet supported",
+            ));
+        }
 
         let backoff = Self::build_backoff(table_props)?;
         let tx = self;
@@ -236,9 +259,15 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use crate::catalog::MockCatalog;
+    use crate::encryption::SensitiveBytes;
+    use crate::encryption::kms::{KeyManagementClient, MemoryKeyManagementClient};
     use crate::io::FileIO;
-    use crate::spec::TableMetadata;
+    use crate::memory::tests::new_memory_catalog;
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
+    };
     use crate::table::Table;
+    use crate::test_utils::test_runtime;
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
 
@@ -254,9 +283,10 @@ mod tests {
 
         Table::builder()
             .metadata(resp)
-            .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
+            .metadata_location("s3://bucket/test/location/metadata/v1.json")
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
             .file_io(FileIO::new_with_memory())
+            .runtime(test_runtime())
             .build()
             .unwrap()
     }
@@ -273,9 +303,10 @@ mod tests {
 
         Table::builder()
             .metadata(resp)
-            .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
+            .metadata_location("s3://bucket/test/location/metadata/v1.json")
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
             .file_io(FileIO::new_with_memory())
+            .runtime(test_runtime())
             .build()
             .unwrap()
     }
@@ -292,9 +323,10 @@ mod tests {
 
         Table::builder()
             .metadata(resp)
-            .metadata_location("s3://bucket/test/location/metadata/v1.json".to_string())
+            .metadata_location("s3://bucket/test/location/metadata/v1.json")
             .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
             .file_io(FileIO::new_with_memory())
+            .runtime(test_runtime())
             .build()
             .unwrap()
     }
@@ -498,6 +530,107 @@ mod tests {
             assert!(err.retryable(), "Error should be retryable");
         }
     }
+
+    #[tokio::test]
+    async fn test_transaction_snapshot_summary() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let mut file_seq = 0u32;
+        let mut append_file = |table: &crate::table::Table, record_count: u64, file_size: u64| {
+            file_seq += 1;
+            let file = DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_path(format!("test/{file_seq}.parquet"))
+                .file_format(DataFileFormat::Parquet)
+                .file_size_in_bytes(file_size)
+                .record_count(record_count)
+                .partition(Struct::from_iter([Some(Literal::long(1))]))
+                .partition_spec_id(0)
+                .build()
+                .unwrap();
+            let tx = Transaction::new(table);
+            tx.fast_append()
+                .add_data_files(vec![file])
+                .apply(tx)
+                .unwrap()
+        };
+
+        let table = append_file(&table, /*record_count=*/ 10, /*file_size=*/ 100)
+            .commit(&catalog)
+            .await
+            .unwrap();
+        let table = append_file(&table, /*record_count=*/ 20, /*file_size=*/ 200)
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        let summary = &table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .summary()
+            .additional_properties;
+
+        assert_eq!(summary.get("total-records").unwrap(), "30");
+        assert_eq!(summary.get("total-data-files").unwrap(), "2");
+        assert_eq!(summary.get("total-files-size").unwrap(), "300");
+    }
+
+    #[tokio::test]
+    async fn test_commit_rejects_encrypted_table() {
+        let file = File::open(format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            "TableMetadataV3ValidEncryption.json"
+        ))
+        .unwrap();
+        let reader = BufReader::new(file);
+        let resp = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
+
+        let kms: Arc<dyn KeyManagementClient> = {
+            let k = MemoryKeyManagementClient::new();
+            k.add_master_key_bytes(
+                "master-1",
+                SensitiveBytes::new([
+                    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
+                    0x0d, 0x0e, 0x0f,
+                ]),
+            )
+            .unwrap();
+            Arc::new(k)
+        };
+
+        let table = Table::builder()
+            .metadata(resp)
+            .metadata_location("s3://bucket/test/location/metadata/v1.json")
+            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .file_io(FileIO::new_with_memory())
+            .kms_client(kms)
+            .runtime(crate::test_utils::test_runtime())
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_table_properties()
+            .set("test.key".to_string(), "test.value".to_string())
+            .apply(tx)
+            .unwrap();
+
+        let mock_catalog = MockCatalog::new();
+        let result = tx.commit(&mock_catalog).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(
+            err.message()
+                .contains("encrypted writes are not yet supported"),
+            "unexpected error message: {}",
+            err.message()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -544,13 +677,8 @@ mod test_row_lineage {
         assert_eq!(table.metadata().next_row_id(), 30);
 
         // Check written manifest for first_row_id
-        let manifest_list = table
-            .metadata()
-            .current_snapshot()
-            .unwrap()
-            .load_manifest_list(table.file_io(), table.metadata())
-            .await
-            .unwrap();
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
 
         assert_eq!(manifest_list.entries().len(), 1);
         let manifest_file = &manifest_list.entries()[0];
@@ -572,13 +700,7 @@ mod test_row_lineage {
         assert_eq!(table.metadata().next_row_id(), 30 + 17 + 11);
 
         // Check written manifest for first_row_id
-        let manifest_list = table
-            .metadata()
-            .current_snapshot()
-            .unwrap()
-            .load_manifest_list(table.file_io(), table.metadata())
-            .await
-            .unwrap();
+        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
         assert_eq!(manifest_list.entries().len(), 2);
         let manifest_file = &manifest_list.entries()[1];
         assert_eq!(manifest_file.first_row_id, Some(30));

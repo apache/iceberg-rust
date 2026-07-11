@@ -23,7 +23,7 @@ use futures::StreamExt;
 use futures::channel::mpsc::{Sender, channel};
 use tokio::sync::Notify;
 
-use crate::runtime::spawn;
+use crate::runtime::Runtime;
 use crate::scan::{DeleteFileContext, FileScanTaskDeleteFile};
 use crate::spec::{DataContentType, DataFile, Struct};
 
@@ -41,7 +41,6 @@ enum DeleteFileIndexState {
 
 #[derive(Debug)]
 struct PopulatedDeleteFileIndex {
-    #[allow(dead_code)]
     global_equality_deletes: Vec<Arc<DeleteFileContext>>,
     eq_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
     pos_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
@@ -53,7 +52,7 @@ struct PopulatedDeleteFileIndex {
 
 impl DeleteFileIndex {
     /// create a new `DeleteFileIndex` along with the sender that populates it with delete files
-    pub(crate) fn new() -> (DeleteFileIndex, Sender<DeleteFileContext>) {
+    pub(crate) fn new(runtime: Runtime) -> (DeleteFileIndex, Sender<DeleteFileContext>) {
         // TODO: what should the channel limit be?
         let (tx, rx) = channel(10);
         let notify = Arc::new(Notify::new());
@@ -62,7 +61,7 @@ impl DeleteFileIndex {
         )));
         let delete_file_stream = rx.boxed();
 
-        spawn({
+        runtime.io().spawn({
             let state = state.clone();
             async move {
                 let delete_files: Vec<DeleteFileContext> =
@@ -87,17 +86,22 @@ impl DeleteFileIndex {
         data_file: &DataFile,
         seq_num: Option<i64>,
     ) -> Vec<FileScanTaskDeleteFile> {
-        let notifier = {
+        // Create the `Notified` while holding the read lock. The read lock ensures that
+        // when we go inside it, either the state is already at Populated or it is still
+        // at Populating AND `notify_waiters()` has not been called yet. Any `Notified`
+        // created before the invocation of `notify_waiters()` will be notified by it
+        // even if `await` has not been called on it yet.
+        let notified = {
             let guard = self.state.read().unwrap();
-            match *guard {
-                DeleteFileIndexState::Populating(ref notifier) => notifier.clone(),
-                DeleteFileIndexState::Populated(ref index) => {
+            match &*guard {
+                DeleteFileIndexState::Populating(notifier) => notifier.clone().notified_owned(),
+                DeleteFileIndexState::Populated(index) => {
                     return index.get_deletes_for_data_file(data_file, seq_num);
                 }
             }
         };
 
-        notifier.notified().await;
+        notified.await;
 
         let guard = self.state.read().unwrap();
         match guard.deref() {

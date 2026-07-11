@@ -126,10 +126,6 @@ impl PartialEq for PartitionExpr {
 impl Eq for PartitionExpr {}
 
 impl PhysicalExpr for PartitionExpr {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &ArrowSchema) -> DFResult<DataType> {
         Ok(self.calculator.partition_arrow_type().clone())
     }
@@ -194,6 +190,7 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Fields};
     use datafusion::physical_plan::empty::EmptyExec;
     use iceberg::spec::{NestedField, PrimitiveType, Schema, StructType, Transform, Type};
+    use iceberg::test_utils::test_runtime;
 
     use super::*;
 
@@ -447,7 +444,8 @@ mod tests {
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/metadata.json".to_string())
+            .metadata_location("/test/metadata.json")
+            .runtime(test_runtime())
             .build()
             .unwrap();
 
@@ -505,7 +503,8 @@ mod tests {
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/metadata.json".to_string())
+            .metadata_location("/test/metadata.json")
+            .runtime(test_runtime())
             .build()
             .unwrap();
 
@@ -577,7 +576,8 @@ mod tests {
             .metadata(table_metadata.metadata)
             .identifier(TableIdent::from_strs(["test", "table"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/metadata.json".to_string())
+            .metadata_location("/test/metadata.json")
+            .runtime(test_runtime())
             .build()
             .unwrap();
 

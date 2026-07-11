@@ -26,12 +26,13 @@ use hive_metastore::{
     ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
     ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
 };
+use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
-    TableCommit, TableCreation, TableIdent,
+    Runtime, TableCommit, TableCreation, TableIdent,
 };
 use volo_thrift::MaybeException;
 
@@ -56,6 +57,8 @@ pub const HMS_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 pub struct HmsCatalogBuilder {
     config: HmsCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
+    runtime: Option<Runtime>,
 }
 
 impl Default for HmsCatalogBuilder {
@@ -69,6 +72,8 @@ impl Default for HmsCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
+            kms_client_factory: None,
+            runtime: None,
         }
     }
 }
@@ -78,6 +83,16 @@ impl CatalogBuilder for HmsCatalogBuilder {
 
     fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
         self.storage_factory = Some(storage_factory);
+        self
+    }
+
+    fn with_kms_client_factory(mut self, kms_client_factory: Arc<dyn KmsClientFactory>) -> Self {
+        self.kms_client_factory = Some(kms_client_factory);
+        self
+    }
+
+    fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = Some(runtime);
         self
     }
 
@@ -116,28 +131,36 @@ impl CatalogBuilder for HmsCatalogBuilder {
             })
             .collect();
 
-        let result = {
+        async move {
+            let kms_client = match self.kms_client_factory {
+                Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
+                None => None,
+            };
+
             if self.config.name.is_none() {
-                Err(Error::new(
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog name is required",
-                ))
-            } else if self.config.address.is_empty() {
-                Err(Error::new(
+                ));
+            }
+            if self.config.address.is_empty() {
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog address is required",
-                ))
-            } else if self.config.warehouse.is_empty() {
-                Err(Error::new(
+                ));
+            }
+            if self.config.warehouse.is_empty() {
+                return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Catalog warehouse is required",
-                ))
-            } else {
-                HmsCatalog::new(self.config, self.storage_factory)
+                ));
             }
-        };
-
-        std::future::ready(result)
+            let runtime = match self.runtime {
+                Some(rt) => rt,
+                None => Runtime::try_current()?,
+            };
+            HmsCatalog::new(self.config, self.storage_factory, runtime, kms_client)
+        }
     }
 }
 
@@ -169,6 +192,8 @@ pub struct HmsCatalog {
     config: HmsCatalogConfig,
     client: HmsClient,
     file_io: FileIO,
+    runtime: Runtime,
+    kms_client: Option<Arc<dyn KeyManagementClient>>,
 }
 
 impl Debug for HmsCatalog {
@@ -184,6 +209,8 @@ impl HmsCatalog {
     fn new(
         config: HmsCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
+        runtime: Runtime,
+        kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
         let address = config
             .address
@@ -223,6 +250,8 @@ impl HmsCatalog {
             config,
             client: HmsClient(client),
             file_io,
+            runtime,
+            kms_client,
         })
     }
     /// Get the catalogs `FileIO`
@@ -524,12 +553,16 @@ impl Catalog for HmsCatalog {
             .await
             .map_err(from_thrift_error)?;
 
-        Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.file_io())
             .metadata_location(metadata_location_str)
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
     }
 
     /// Loads a table from the Hive Metastore and constructs a `Table` object
@@ -559,7 +592,7 @@ impl Catalog for HmsCatalog {
 
         let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
 
-        Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.file_io())
             .metadata_location(metadata_location)
             .metadata(metadata)
@@ -567,7 +600,11 @@ impl Catalog for HmsCatalog {
                 NamespaceIdent::new(db_name),
                 table.name.clone(),
             ))
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
     }
 
     /// Asynchronously drops a table from the database.
@@ -607,12 +644,7 @@ impl Catalog for HmsCatalog {
     async fn purge_table(&self, table: &TableIdent) -> Result<()> {
         let table_info = self.load_table(table).await?;
         self.drop_table(table).await?;
-        iceberg::drop_table_data(
-            table_info.file_io(),
-            table_info.metadata(),
-            table_info.metadata_location(),
-        )
-        .await
+        iceberg::drop_table_data(&table_info).await
     }
 
     /// Asynchronously checks the existence of a specified table
