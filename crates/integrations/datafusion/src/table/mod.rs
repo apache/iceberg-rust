@@ -803,7 +803,10 @@ mod tests {
             Some(ScalarValue::Boolean(Some(true)))
         );
         assert_eq!(
-            literal_to_scalar_value(&Type::Primitive(PrimitiveType::Double), &Literal::double(1.5)),
+            literal_to_scalar_value(
+                &Type::Primitive(PrimitiveType::Double),
+                &Literal::double(1.5)
+            ),
             Some(ScalarValue::Float64(Some(1.5)))
         );
         // a type/literal mismatch has no scalar representation
