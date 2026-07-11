@@ -73,11 +73,19 @@ impl fmt::Display for NullOrder {
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, TypedBuilder)]
-#[serde(rename_all = "kebab-case")]
+#[serde(
+    try_from = "_serde_sort_field::SortFieldSerde",
+    into = "_serde_sort_field::SortFieldSerde"
+)]
 /// Entry for every column that is to be sorted
 pub struct SortField {
     /// A source column id from the table’s schema
     pub source_id: i32,
+    /// Source column ids when the transform takes multiple arguments (v3 multi-argument
+    /// transforms). `None` for single-argument transforms, where `source_id` is used instead.
+    /// When set, `source_id` holds the first id so that existing consumers keep working.
+    #[builder(default)]
+    pub source_ids: Option<Vec<i32>>,
     /// A transform that is used to produce values to be sorted on from the source column.
     pub transform: Transform,
     /// A sort direction, that can only be either asc or desc
@@ -88,11 +96,70 @@ pub struct SortField {
 
 impl fmt::Display for SortField {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "SortField {{ source_id: {}, transform: {}, direction: {}, null_order: {} }}",
-            self.source_id, self.transform, self.direction, self.null_order
-        )
+        if let Some(source_ids) = self.source_ids.as_ref().filter(|ids| ids.len() > 1) {
+            write!(
+                f,
+                "SortField {{ source_ids: {source_ids:?}, transform: {}, direction: {}, null_order: {} }}",
+                self.transform, self.direction, self.null_order
+            )
+        } else {
+            write!(
+                f,
+                "SortField {{ source_id: {}, transform: {}, direction: {}, null_order: {} }}",
+                self.source_id, self.transform, self.direction, self.null_order
+            )
+        }
+    }
+}
+
+mod _serde_sort_field {
+    use serde::{Deserialize, Serialize};
+
+    use super::{NullOrder, SortDirection, SortField};
+    use crate::Error;
+    use crate::spec::transform::normalize_transform_sources;
+
+    #[derive(Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub(super) struct SortFieldSerde {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_id: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_ids: Option<Vec<i32>>,
+        transform: Option<String>,
+        direction: SortDirection,
+        null_order: NullOrder,
+    }
+
+    impl TryFrom<SortFieldSerde> for SortField {
+        type Error = Error;
+
+        fn try_from(value: SortFieldSerde) -> Result<Self, Error> {
+            let (source_id, source_ids, transform) =
+                normalize_transform_sources(value.source_id, value.source_ids, value.transform)?;
+            Ok(SortField {
+                source_id,
+                source_ids,
+                transform,
+                direction: value.direction,
+                null_order: value.null_order,
+            })
+        }
+    }
+
+    impl From<SortField> for SortFieldSerde {
+        fn from(value: SortField) -> Self {
+            // Per the spec, single-argument transforms write only source-id and
+            // multi-argument transforms write only source-ids
+            let multi_arg = value.source_ids.as_ref().is_some_and(|ids| ids.len() > 1);
+            Self {
+                source_id: (!multi_arg).then_some(value.source_id),
+                source_ids: if multi_arg { value.source_ids } else { None },
+                transform: Some(value.transform.to_string()),
+                direction: value.direction,
+                null_order: value.null_order,
+            }
+        }
     }
 }
 
@@ -232,6 +299,70 @@ mod tests {
         assert_eq!(3, field.source_id);
         assert_eq!(SortDirection::Descending, field.direction);
         assert_eq!(NullOrder::Last, field.null_order);
+    }
+
+    #[test]
+    fn test_deserialize_sort_field_multi_arg() {
+        let spec = r#"
+        {
+            "transform": "bucket[4]",
+            "source-ids": [19, 20],
+            "direction": "asc",
+            "null-order": "nulls-first"
+        }
+        "#;
+
+        let field: SortField = serde_json::from_str(spec).unwrap();
+
+        // v3 readers must read tables with multi-argument transforms, treating them as unknown
+        assert_eq!(Transform::Unknown, field.transform);
+        assert_eq!(19, field.source_id);
+        assert_eq!(Some(vec![19, 20]), field.source_ids);
+        assert_eq!(
+            "SortField { source_ids: [19, 20], transform: unknown, direction: ascending, null_order: first }",
+            field.to_string()
+        );
+
+        // the field must round-trip with source-ids only
+        let serialized = serde_json::to_value(&field).unwrap();
+        assert_eq!(
+            Some(&serde_json::json!([19, 20])),
+            serialized.get("source-ids")
+        );
+        assert!(serialized.get("source-id").is_none());
+    }
+
+    #[test]
+    fn test_deserialize_sort_field_single_element_source_ids() {
+        let spec = r#"
+        {
+            "transform": "bucket[4]",
+            "source-ids": [19],
+            "direction": "asc",
+            "null-order": "nulls-first"
+        }
+        "#;
+
+        let field: SortField = serde_json::from_str(spec).unwrap();
+
+        // a single-element source-ids is normalized onto source-id
+        assert_eq!(Transform::Bucket(4), field.transform);
+        assert_eq!(19, field.source_id);
+        assert_eq!(None, field.source_ids);
+
+        let serialized = serde_json::to_value(&field).unwrap();
+        assert_eq!(Some(&serde_json::json!(19)), serialized.get("source-id"));
+        assert!(serialized.get("source-ids").is_none());
+    }
+
+    #[test]
+    fn test_deserialize_sort_field_multi_arg_requires_transform() {
+        let spec = r#"{"source-ids": [19, 20], "direction": "asc", "null-order": "nulls-first"}"#;
+        let err = serde_json::from_str::<SortField>(spec).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Transform is required for a multi-argument field")
+        );
     }
 
     #[test]

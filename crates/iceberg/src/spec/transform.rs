@@ -1058,6 +1058,54 @@ impl FromStr for Transform {
     }
 }
 
+/// Normalizes the `source-id`/`source-ids` pair read from partition and sort field JSON.
+///
+/// Per the spec, single-argument transforms are written with `source-id` and multi-argument
+/// transforms with `source-ids`. Multi-argument transforms cannot be evaluated yet; per the
+/// spec, v3 readers must read tables with such transforms, ignoring them, so the transform is
+/// mapped to [`Transform::Unknown`] while the original ids are kept for round-tripping.
+///
+/// Returns the normalized `(source_id, source_ids, transform)` triple, where `source_id` is
+/// the first id so that existing consumers keep working.
+pub(crate) fn normalize_transform_sources(
+    source_id: Option<i32>,
+    source_ids: Option<Vec<i32>>,
+    transform: Option<String>,
+) -> Result<(i32, Option<Vec<i32>>, Transform)> {
+    let parse_transform = |transform: Option<String>| {
+        transform
+            .ok_or_else(|| Error::new(ErrorKind::DataInvalid, "missing field `transform`"))?
+            .parse::<Transform>()
+    };
+
+    if let Some(source_id) = source_id {
+        return Ok((source_id, source_ids, parse_transform(transform)?));
+    }
+
+    match source_ids {
+        Some(source_ids) => match source_ids.as_slice() {
+            [] => Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Empty source-ids is not allowed",
+            )),
+            [source_id] => Ok((*source_id, None, parse_transform(transform)?)),
+            [first, ..] => {
+                if transform.is_none() {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        "Transform is required for a multi-argument field",
+                    ));
+                }
+                Ok((*first, Some(source_ids), Transform::Unknown))
+            }
+        },
+        None => Err(Error::new(
+            ErrorKind::DataInvalid,
+            "missing field `source-id`",
+        )),
+    }
+}
+
 impl Serialize for Transform {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where S: Serializer {
