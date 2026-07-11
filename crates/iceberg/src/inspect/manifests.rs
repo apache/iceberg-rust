@@ -29,7 +29,10 @@ use futures::{StreamExt, stream};
 use crate::Result;
 use crate::arrow::schema_to_arrow_schema;
 use crate::scan::ArrowRecordBatchStream;
-use crate::spec::{Datum, FieldSummary, ListType, NestedField, PrimitiveType, StructType, Type};
+use crate::spec::{
+    Datum, FieldSummary, ListType, ManifestContentType, NestedField, PrimitiveType, StructType,
+    Type,
+};
 use crate::table::Table;
 
 /// Manifests table.
@@ -168,17 +171,38 @@ impl<'a> ManifestsTable<'a> {
                 length.append_value(manifest.manifest_length);
                 partition_spec_id.append_value(manifest.partition_spec_id);
                 added_snapshot_id.append_value(manifest.added_snapshot_id);
-                added_data_files_count.append_value(manifest.added_files_count.unwrap_or(0) as i32);
-                existing_data_files_count
-                    .append_value(manifest.existing_files_count.unwrap_or(0) as i32);
-                deleted_data_files_count
-                    .append_value(manifest.deleted_files_count.unwrap_or(0) as i32);
-                added_delete_files_count
-                    .append_value(manifest.added_files_count.unwrap_or(0) as i32);
-                existing_delete_files_count
-                    .append_value(manifest.existing_files_count.unwrap_or(0) as i32);
-                deleted_delete_files_count
-                    .append_value(manifest.deleted_files_count.unwrap_or(0) as i32);
+                let is_data_manifest = manifest.content == ManifestContentType::Data;
+                let is_delete_manifest = manifest.content == ManifestContentType::Deletes;
+                added_data_files_count.append_value(if is_data_manifest {
+                    manifest.added_files_count.unwrap_or(0) as i32
+                } else {
+                    0
+                });
+                existing_data_files_count.append_value(if is_data_manifest {
+                    manifest.existing_files_count.unwrap_or(0) as i32
+                } else {
+                    0
+                });
+                deleted_data_files_count.append_value(if is_data_manifest {
+                    manifest.deleted_files_count.unwrap_or(0) as i32
+                } else {
+                    0
+                });
+                added_delete_files_count.append_value(if is_delete_manifest {
+                    manifest.added_files_count.unwrap_or(0) as i32
+                } else {
+                    0
+                });
+                existing_delete_files_count.append_value(if is_delete_manifest {
+                    manifest.existing_files_count.unwrap_or(0) as i32
+                } else {
+                    0
+                });
+                deleted_delete_files_count.append_value(if is_delete_manifest {
+                    manifest.deleted_files_count.unwrap_or(0) as i32
+                } else {
+                    0
+                });
 
                 let spec = self
                     .table
@@ -335,15 +359,15 @@ mod tests {
                 ],
                 added_delete_files_count: PrimitiveArray<Int32>
                 [
-                  1,
+                  0,
                 ],
                 existing_delete_files_count: PrimitiveArray<Int32>
                 [
-                  1,
+                  0,
                 ],
                 deleted_delete_files_count: PrimitiveArray<Int32>
                 [
-                  1,
+                  0,
                 ],
                 partition_summaries: ListArray
                 [
@@ -372,6 +396,138 @@ mod tests {
                 StringArray
                 [
                   "300",
+                ]
+                ],
+                ]"#]],
+            &["path", "length"],
+            Some("path"),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_manifests_table_data_and_delete_manifest() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files_with_delete().await;
+
+        let record_batch = fixture.table.inspect().manifests().scan().await.unwrap();
+
+        check_record_batches(
+            record_batch.try_collect::<Vec<_>>().await.unwrap(),
+            expect![[r#"
+                Field { "content": Int32, metadata: {"PARQUET:field_id": "14"} },
+                Field { "path": Utf8, metadata: {"PARQUET:field_id": "1"} },
+                Field { "length": Int64, metadata: {"PARQUET:field_id": "2"} },
+                Field { "partition_spec_id": Int32, metadata: {"PARQUET:field_id": "3"} },
+                Field { "added_snapshot_id": Int64, metadata: {"PARQUET:field_id": "4"} },
+                Field { "added_data_files_count": Int32, metadata: {"PARQUET:field_id": "5"} },
+                Field { "existing_data_files_count": Int32, metadata: {"PARQUET:field_id": "6"} },
+                Field { "deleted_data_files_count": Int32, metadata: {"PARQUET:field_id": "7"} },
+                Field { "added_delete_files_count": Int32, metadata: {"PARQUET:field_id": "15"} },
+                Field { "existing_delete_files_count": Int32, metadata: {"PARQUET:field_id": "16"} },
+                Field { "deleted_delete_files_count": Int32, metadata: {"PARQUET:field_id": "17"} },
+                Field { "partition_summaries": List(non-null Struct("contains_null": non-null Boolean, metadata: {"PARQUET:field_id": "10"}, "contains_nan": Boolean, metadata: {"PARQUET:field_id": "11"}, "lower_bound": Utf8, metadata: {"PARQUET:field_id": "12"}, "upper_bound": Utf8, metadata: {"PARQUET:field_id": "13"}), metadata: {"PARQUET:field_id": "9"}), metadata: {"PARQUET:field_id": "8"} }"#]],
+            expect![[r#"
+                content: PrimitiveArray<Int32>
+                [
+                  0,
+                  1,
+                ],
+                path: (skipped),
+                length: (skipped),
+                partition_spec_id: PrimitiveArray<Int32>
+                [
+                  0,
+                  0,
+                ],
+                added_snapshot_id: PrimitiveArray<Int64>
+                [
+                  3055729675574597004,
+                  3055729675574597004,
+                ],
+                added_data_files_count: PrimitiveArray<Int32>
+                [
+                  1,
+                  0,
+                ],
+                existing_data_files_count: PrimitiveArray<Int32>
+                [
+                  1,
+                  0,
+                ],
+                deleted_data_files_count: PrimitiveArray<Int32>
+                [
+                  1,
+                  0,
+                ],
+                added_delete_files_count: PrimitiveArray<Int32>
+                [
+                  0,
+                  1,
+                ],
+                existing_delete_files_count: PrimitiveArray<Int32>
+                [
+                  0,
+                  0,
+                ],
+                deleted_delete_files_count: PrimitiveArray<Int32>
+                [
+                  0,
+                  0,
+                ],
+                partition_summaries: ListArray
+                [
+                  StructArray
+                -- validity:
+                [
+                  valid,
+                ]
+                [
+                -- child 0: "contains_null" (Boolean)
+                BooleanArray
+                [
+                  false,
+                ]
+                -- child 1: "contains_nan" (Boolean)
+                BooleanArray
+                [
+                  false,
+                ]
+                -- child 2: "lower_bound" (Utf8)
+                StringArray
+                [
+                  "100",
+                ]
+                -- child 3: "upper_bound" (Utf8)
+                StringArray
+                [
+                  "300",
+                ]
+                ],
+                  StructArray
+                -- validity:
+                [
+                  valid,
+                ]
+                [
+                -- child 0: "contains_null" (Boolean)
+                BooleanArray
+                [
+                  false,
+                ]
+                -- child 1: "contains_nan" (Boolean)
+                BooleanArray
+                [
+                  false,
+                ]
+                -- child 2: "lower_bound" (Utf8)
+                StringArray
+                [
+                  "100",
+                ]
+                -- child 3: "upper_bound" (Utf8)
+                StringArray
+                [
+                  "100",
                 ]
                 ],
                 ]"#]],

@@ -831,6 +831,16 @@ pub mod tests {
                 .unwrap()
         }
 
+        /// Like [`Self::next_manifest_file`], but with a caller-chosen (deterministic)
+        /// file name instead of a random UUID. Used where tests need a stable sort
+        /// order across manifests (e.g. sorting the manifests table by `path`).
+        fn named_manifest_file(&self, name: &str) -> OutputFile {
+            self.table
+                .file_io()
+                .new_output(format!("{}/metadata/{}.avro", self.table_location, name))
+                .unwrap()
+        }
+
         pub async fn setup_manifest_files(&mut self) {
             let current_snapshot = self.table.metadata().current_snapshot().unwrap();
             let parent_snapshot = current_snapshot
@@ -932,6 +942,144 @@ pub mod tests {
             );
             manifest_list_write
                 .add_manifests(vec![data_file_manifest].into_iter())
+                .unwrap();
+            manifest_list_write.close().await.unwrap();
+        }
+
+        /// Same as [`Self::setup_manifest_files`], but additionally writes a v2
+        /// deletes manifest (one added `PositionDeletes` entry) and references
+        /// both manifests from the current snapshot's manifest list.
+        pub async fn setup_manifest_files_with_delete(&mut self) {
+            let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+            let parent_snapshot = current_snapshot
+                .parent_snapshot(self.table.metadata())
+                .unwrap();
+            let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+            let current_partition_spec = self.table.metadata().default_partition_spec();
+
+            // Write the data files first, then use the file size in the manifest entries
+            let parquet_file_size = self.write_parquet_data_files();
+
+            let mut writer = ManifestWriterBuilder::new(
+                self.named_manifest_file("manifest-data"),
+                Some(current_snapshot.snapshot_id()),
+                current_schema.clone(),
+                current_partition_spec.as_ref().clone(),
+            )
+            .build_v2_data();
+            writer
+                .add_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(0)
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/1.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(parquet_file_size)
+                                .record_count(1)
+                                .partition(Struct::from_iter([Some(Literal::long(100))]))
+                                .key_metadata(None)
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            writer
+                .add_delete_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Deleted)
+                        .snapshot_id(parent_snapshot.snapshot_id())
+                        .sequence_number(parent_snapshot.sequence_number())
+                        .file_sequence_number(parent_snapshot.sequence_number())
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(0)
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/2.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(parquet_file_size)
+                                .record_count(1)
+                                .partition(Struct::from_iter([Some(Literal::long(200))]))
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            writer
+                .add_existing_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Existing)
+                        .snapshot_id(parent_snapshot.snapshot_id())
+                        .sequence_number(parent_snapshot.sequence_number())
+                        .file_sequence_number(parent_snapshot.sequence_number())
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(0)
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/3.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(parquet_file_size)
+                                .record_count(1)
+                                .partition(Struct::from_iter([Some(Literal::long(300))]))
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            let data_file_manifest = writer.write_manifest_file().await.unwrap();
+
+            // A v2 deletes manifest with a single added position-delete entry.
+            let mut deletes_writer = ManifestWriterBuilder::new(
+                self.named_manifest_file("manifest-deletes"),
+                Some(current_snapshot.snapshot_id()),
+                current_schema.clone(),
+                current_partition_spec.as_ref().clone(),
+            )
+            .build_v2_deletes();
+            deletes_writer
+                .add_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(0)
+                                .content(DataContentType::PositionDeletes)
+                                .file_path(format!("{}/4-deletes.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(1024)
+                                .record_count(1)
+                                .partition(Struct::from_iter([Some(Literal::long(100))]))
+                                .key_metadata(None)
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            let deletes_manifest = deletes_writer.write_manifest_file().await.unwrap();
+
+            // Write to manifest list
+            let manifest_list_writer = self
+                .table
+                .file_io()
+                .new_output(current_snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap();
+            let mut manifest_list_write = ManifestListWriter::v2(
+                manifest_list_writer,
+                current_snapshot.snapshot_id(),
+                current_snapshot.parent_snapshot_id(),
+                current_snapshot.sequence_number(),
+            );
+            manifest_list_write
+                .add_manifests(vec![data_file_manifest, deletes_manifest].into_iter())
                 .unwrap();
             manifest_list_write.close().await.unwrap();
         }
