@@ -622,6 +622,7 @@ pub type iceberg::expr::Term = iceberg::expr::Reference
 pub mod iceberg::inspect
 pub enum iceberg::inspect::MetadataTableType
 pub iceberg::inspect::MetadataTableType::Manifests
+pub iceberg::inspect::MetadataTableType::Refs
 pub iceberg::inspect::MetadataTableType::Snapshots
 impl iceberg::inspect::MetadataTableType
 pub fn iceberg::inspect::MetadataTableType::all_types() -> impl core::iter::traits::iterator::Iterator<Item = Self>
@@ -645,6 +646,7 @@ pub struct iceberg::inspect::MetadataTable<'a>(_)
 impl<'a> iceberg::inspect::MetadataTable<'a>
 pub fn iceberg::inspect::MetadataTable<'a>::manifests(&self) -> iceberg::inspect::ManifestsTable<'_>
 pub fn iceberg::inspect::MetadataTable<'a>::new(table: &'a iceberg::table::Table) -> Self
+pub fn iceberg::inspect::MetadataTable<'a>::refs(&self) -> iceberg::inspect::RefsTable<'_>
 pub fn iceberg::inspect::MetadataTable<'a>::snapshots(&self) -> iceberg::inspect::SnapshotsTable<'_>
 impl<'a> core::fmt::Debug for iceberg::inspect::MetadataTable<'a>
 pub fn iceberg::inspect::MetadataTable<'a>::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -663,6 +665,11 @@ pub fn iceberg::inspect::MetadataTableTypeIter::next(&mut self) -> core::option:
 pub fn iceberg::inspect::MetadataTableTypeIter::nth(&mut self, n: usize) -> core::option::Option<<Self as core::iter::traits::iterator::Iterator>::Item>
 pub fn iceberg::inspect::MetadataTableTypeIter::size_hint(&self) -> (usize, core::option::Option<usize>)
 impl core::iter::traits::marker::FusedIterator for iceberg::inspect::MetadataTableTypeIter
+pub struct iceberg::inspect::RefsTable<'a>
+impl<'a> iceberg::inspect::RefsTable<'a>
+pub fn iceberg::inspect::RefsTable<'a>::new(table: &'a iceberg::table::Table) -> Self
+pub async fn iceberg::inspect::RefsTable<'a>::scan(&self) -> iceberg::Result<iceberg::scan::ArrowRecordBatchStream>
+pub fn iceberg::inspect::RefsTable<'a>::schema(&self) -> iceberg::spec::Schema
 pub struct iceberg::inspect::SnapshotsTable<'a>
 impl<'a> iceberg::inspect::SnapshotsTable<'a>
 pub fn iceberg::inspect::SnapshotsTable<'a>::new(table: &'a iceberg::table::Table) -> Self
