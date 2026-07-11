@@ -2993,12 +2993,14 @@ mod tests {
             .with_order_id(3)
             .with_sort_field(SortField {
                 source_id: 2,
+                source_ids: None,
                 transform: Transform::Identity,
                 direction: SortDirection::Ascending,
                 null_order: NullOrder::First,
             })
             .with_sort_field(SortField {
                 source_id: 3,
+                source_ids: None,
                 transform: Transform::Bucket(4),
                 direction: SortDirection::Descending,
                 null_order: NullOrder::Last,
@@ -3090,12 +3092,14 @@ mod tests {
             .with_order_id(3)
             .with_sort_field(SortField {
                 source_id: 2,
+                source_ids: None,
                 transform: Transform::Identity,
                 direction: SortDirection::Ascending,
                 null_order: NullOrder::First,
             })
             .with_sort_field(SortField {
                 source_id: 3,
+                source_ids: None,
                 transform: Transform::Bucket(4),
                 direction: SortDirection::Descending,
                 null_order: NullOrder::Last,
@@ -3219,12 +3223,14 @@ mod tests {
             .with_order_id(3)
             .with_sort_field(SortField {
                 source_id: 2,
+                source_ids: None,
                 transform: Transform::Identity,
                 direction: SortDirection::Ascending,
                 null_order: NullOrder::First,
             })
             .with_sort_field(SortField {
                 source_id: 3,
+                source_ids: None,
                 transform: Transform::Bucket(4),
                 direction: SortDirection::Descending,
                 null_order: NullOrder::Last,
