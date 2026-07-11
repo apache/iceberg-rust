@@ -53,7 +53,9 @@
 
 mod catalog;
 mod client;
+mod endpoint;
 mod types;
 
 pub use catalog::*;
+pub use endpoint::Endpoint;
 pub use types::*;

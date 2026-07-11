@@ -53,10 +53,5 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install cargo-public-api
-        uses: taiki-e/install-action@bffeee26d4db9be238a4ea78d8826604ebcb594d # v2.82.5
-        with:
-          tool: cargo-public-api
-
       - name: Check public API
         run: make check-public-api
