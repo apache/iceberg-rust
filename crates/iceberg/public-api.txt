@@ -2229,6 +2229,7 @@ pub struct iceberg::spec::PartitionField
 pub iceberg::spec::PartitionField::field_id: i32
 pub iceberg::spec::PartitionField::name: alloc::string::String
 pub iceberg::spec::PartitionField::source_id: i32
+pub iceberg::spec::PartitionField::source_ids: core::option::Option<alloc::vec::Vec<i32>>
 pub iceberg::spec::PartitionField::transform: iceberg::spec::Transform
 impl iceberg::spec::PartitionField
 pub fn iceberg::spec::PartitionField::into_unbound(self) -> iceberg::spec::UnboundPartitionField
@@ -2243,7 +2244,7 @@ impl core::fmt::Debug for iceberg::spec::PartitionField
 pub fn iceberg::spec::PartitionField::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::spec::PartitionField
 impl iceberg::spec::PartitionField
-pub fn iceberg::spec::PartitionField::builder() -> PartitionFieldBuilder<((), (), (), ())>
+pub fn iceberg::spec::PartitionField::builder() -> PartitionFieldBuilder<((), (), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::spec::PartitionField
 pub fn iceberg::spec::PartitionField::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::PartitionField
@@ -2451,6 +2452,7 @@ pub struct iceberg::spec::SortField
 pub iceberg::spec::SortField::direction: iceberg::spec::SortDirection
 pub iceberg::spec::SortField::null_order: iceberg::spec::NullOrder
 pub iceberg::spec::SortField::source_id: i32
+pub iceberg::spec::SortField::source_ids: core::option::Option<alloc::vec::Vec<i32>>
 pub iceberg::spec::SortField::transform: iceberg::spec::Transform
 impl core::clone::Clone for iceberg::spec::SortField
 pub fn iceberg::spec::SortField::clone(&self) -> iceberg::spec::SortField
@@ -2463,7 +2465,7 @@ impl core::fmt::Display for iceberg::spec::SortField
 pub fn iceberg::spec::SortField::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::spec::SortField
 impl iceberg::spec::SortField
-pub fn iceberg::spec::SortField::builder() -> SortFieldBuilder<((), (), (), ())>
+pub fn iceberg::spec::SortField::builder() -> SortFieldBuilder<((), (), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::spec::SortField
 pub fn iceberg::spec::SortField::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::SortField
