@@ -1,0 +1,61 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Regression coverage for projection on populated metadata tables (issue #2819).
+# Only deterministic columns are asserted: count(*), operation, content,
+# partition_spec_id. Non-deterministic columns (committed_at, snapshot_id,
+# parent_id, manifest_list, summary, *_files_count, file paths) are never asserted.
+
+# Seed a single snapshot with one data file in one partition.
+statement ok
+INSERT INTO default.default.test_partitioned_table VALUES (1, 'electronics', 'laptop')
+
+# $manifests projection while exactly one snapshot exists: DATA content (0) in
+# the seeded partition spec (id 0). Exercises projection on the manifests table.
+query II
+SELECT content, partition_spec_id FROM default.default.test_partitioned_table$manifests
+----
+0 0
+
+# count(*) on a populated $snapshots — the empty-projection shape that regressed
+# with the DataFusion "(physical) 6 vs (logical) 0" internal error.
+query I
+SELECT count(*) FROM default.default.test_partitioned_table$snapshots
+----
+1
+
+# Single-column projection on $snapshots — the silent full-row regression:
+# without honoring projection this returned all six snapshot columns.
+query T
+SELECT operation FROM default.default.test_partitioned_table$snapshots
+----
+append
+
+# Add a second snapshot spanning multiple partitions.
+statement ok
+INSERT INTO default.default.test_partitioned_table VALUES (2, 'electronics', 'phone'), (3, 'books', 'novel')
+
+query I
+SELECT count(*) FROM default.default.test_partitioned_table$snapshots
+----
+2
+
+query T rowsort
+SELECT operation FROM default.default.test_partitioned_table$snapshots
+----
+append
+append

@@ -445,6 +445,86 @@ async fn test_metadata_table() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_metadata_table_projection() -> Result<()> {
+    // Regression test for issue #2819: metadata table scans must honor the
+    // projection argument. Before the fix, IcebergMetadataScan reported the
+    // full metadata-table schema and emitted unprojected batches, so `count(*)`
+    // failed with a physical/logical schema mismatch and single-column selects
+    // silently returned every column. Only deterministic columns are asserted.
+    let iceberg_catalog = get_iceberg_catalog().await;
+    let namespace = NamespaceIdent::new("test_metadata_projection".to_string());
+    set_test_namespace(&iceberg_catalog, &namespace).await?;
+
+    let schema = Schema::builder()
+        .with_schema_id(0)
+        .with_fields(vec![
+            NestedField::required(1, "foo", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(2, "bar", Type::Primitive(PrimitiveType::String)).into(),
+        ])
+        .build()?;
+    let creation = get_table_creation(temp_path(), "t1", Some(schema))?;
+    iceberg_catalog.create_table(&namespace, creation).await?;
+
+    let client = Arc::new(iceberg_catalog);
+    let catalog = Arc::new(IcebergCatalogProvider::try_new(client).await?);
+
+    let ctx = SessionContext::new();
+    ctx.register_catalog("catalog", catalog);
+
+    // Populate the table so its metadata tables have a snapshot.
+    ctx.sql("INSERT INTO catalog.test_metadata_projection.t1 VALUES (1, 'a')")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    // Empty projection (`count(*)`) must not fail with a schema mismatch.
+    let count = ctx
+        .sql("SELECT count(*) FROM catalog.test_metadata_projection.t1$snapshots")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    check_record_batches(
+        count,
+        expect![[r#"
+            Field { "count(*)": Int64 }"#]],
+        expect![[r#"
+            count(*): PrimitiveArray<Int64>
+            [
+              1,
+            ]"#]],
+        &[],
+        None,
+    );
+
+    // Single-column projection must return only the projected column.
+    let operation = ctx
+        .sql("SELECT operation FROM catalog.test_metadata_projection.t1$snapshots")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    check_record_batches(
+        operation,
+        expect![[r#"
+            Field { "operation": nullable Utf8, metadata: {"PARQUET:field_id": "4"} }"#]],
+        expect![[r#"
+            operation: StringArray
+            [
+              "append",
+            ]"#]],
+        &[],
+        None,
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_insert_into() -> Result<()> {
     let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("test_insert_into".to_string());

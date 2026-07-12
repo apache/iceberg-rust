@@ -22,7 +22,7 @@ use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, Partitioning, PlanProperties};
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 
 use crate::metadata_table::IcebergMetadataTableProvider;
 
@@ -30,12 +30,18 @@ use crate::metadata_table::IcebergMetadataTableProvider;
 pub struct IcebergMetadataScan {
     provider: IcebergMetadataTableProvider,
     properties: Arc<PlanProperties>,
+    /// Column indices to project, `None` means all columns.
+    projection: Option<Vec<usize>>,
 }
 
 impl IcebergMetadataScan {
-    pub fn new(provider: IcebergMetadataTableProvider) -> Self {
+    pub fn new(provider: IcebergMetadataTableProvider, projection: Option<&Vec<usize>>) -> Self {
+        let output_schema = match projection {
+            None => provider.schema(),
+            Some(projection) => Arc::new(provider.schema().project(projection).unwrap()),
+        };
         let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(provider.schema()),
+            EquivalenceProperties::new(output_schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Incremental,
             Boundedness::Bounded,
@@ -43,6 +49,7 @@ impl IcebergMetadataScan {
         Self {
             provider,
             properties,
+            projection: projection.cloned(),
         }
     }
 }
@@ -82,9 +89,19 @@ impl ExecutionPlan for IcebergMetadataScan {
         _partition: usize,
         _context: std::sync::Arc<datafusion::execution::TaskContext>,
     ) -> datafusion::error::Result<datafusion::execution::SendableRecordBatchStream> {
+        let projection = self.projection.clone();
         let fut = self.provider.clone().scan();
         let stream = futures::stream::once(fut).try_flatten();
-        let schema = self.provider.schema();
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+        let stream = stream.map(move |batch| {
+            let batch = batch?;
+            match &projection {
+                Some(projection) => Ok(batch.project(projection)?),
+                None => Ok(batch),
+            }
+        });
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema(),
+            stream,
+        )))
     }
 }
