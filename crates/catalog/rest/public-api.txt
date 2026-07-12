@@ -1,4 +1,22 @@
 pub mod iceberg_catalog_rest
+pub enum iceberg_catalog_rest::PayloadHashMode
+pub iceberg_catalog_rest::PayloadHashMode::IcebergRest
+pub iceberg_catalog_rest::PayloadHashMode::StandardAws
+impl core::clone::Clone for iceberg_catalog_rest::PayloadHashMode
+pub fn iceberg_catalog_rest::PayloadHashMode::clone(&self) -> iceberg_catalog_rest::PayloadHashMode
+impl core::cmp::Eq for iceberg_catalog_rest::PayloadHashMode
+impl core::cmp::PartialEq for iceberg_catalog_rest::PayloadHashMode
+pub fn iceberg_catalog_rest::PayloadHashMode::eq(&self, other: &iceberg_catalog_rest::PayloadHashMode) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::PayloadHashMode
+pub fn iceberg_catalog_rest::PayloadHashMode::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for iceberg_catalog_rest::PayloadHashMode
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::PayloadHashMode
+pub struct iceberg_catalog_rest::AwsCredentials
+pub iceberg_catalog_rest::AwsCredentials::access_key_id: alloc::string::String
+pub iceberg_catalog_rest::AwsCredentials::secret_access_key: alloc::string::String
+pub iceberg_catalog_rest::AwsCredentials::session_token: core::option::Option<alloc::string::String>
+impl core::clone::Clone for iceberg_catalog_rest::AwsCredentials
+pub fn iceberg_catalog_rest::AwsCredentials::clone(&self) -> iceberg_catalog_rest::AwsCredentials
 pub struct iceberg_catalog_rest::CommitTableRequest
 pub iceberg_catalog_rest::CommitTableRequest::identifier: core::option::Option<iceberg::catalog::TableIdent>
 pub iceberg_catalog_rest::CommitTableRequest::requirements: alloc::vec::Vec<iceberg::catalog::TableRequirement>
@@ -175,6 +193,25 @@ impl serde_core::ser::Serialize for iceberg_catalog_rest::NamespaceResponse
 pub fn iceberg_catalog_rest::NamespaceResponse::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::NamespaceResponse
 pub fn iceberg_catalog_rest::NamespaceResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg_catalog_rest::NoopAuthManager
+impl core::fmt::Debug for iceberg_catalog_rest::NoopAuthManager
+pub fn iceberg_catalog_rest::NoopAuthManager::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg_catalog_rest::AuthManager for iceberg_catalog_rest::NoopAuthManager
+pub fn iceberg_catalog_rest::NoopAuthManager::catalog_session<'life0, 'life1, 'async_trait>(&'life0 self, _props: &'life1 std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::NoopAuthManager::init_session<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct iceberg_catalog_rest::OAuth2Manager
+impl iceberg_catalog_rest::OAuth2Manager
+pub fn iceberg_catalog_rest::OAuth2Manager::new(token_endpoint: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn iceberg_catalog_rest::OAuth2Manager::with_client(self, client: reqwest::async_impl::client::Client) -> Self
+pub fn iceberg_catalog_rest::OAuth2Manager::with_credential(self, client_id: core::option::Option<alloc::string::String>, client_secret: alloc::string::String) -> Self
+pub fn iceberg_catalog_rest::OAuth2Manager::with_extra_headers(self, headers: http::header::map::HeaderMap) -> Self
+pub fn iceberg_catalog_rest::OAuth2Manager::with_extra_oauth_params(self, params: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
+pub fn iceberg_catalog_rest::OAuth2Manager::with_token(self, token: impl core::convert::Into<alloc::string::String>) -> Self
+impl core::fmt::Debug for iceberg_catalog_rest::OAuth2Manager
+pub fn iceberg_catalog_rest::OAuth2Manager::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg_catalog_rest::AuthManager for iceberg_catalog_rest::OAuth2Manager
+pub fn iceberg_catalog_rest::OAuth2Manager::catalog_session<'life0, 'life1, 'async_trait>(&'life0 self, props: &'life1 std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::OAuth2Manager::init_session<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub struct iceberg_catalog_rest::RegisterTableRequest
 pub iceberg_catalog_rest::RegisterTableRequest::metadata_location: alloc::string::String
 pub iceberg_catalog_rest::RegisterTableRequest::name: alloc::string::String
@@ -230,6 +267,7 @@ pub fn iceberg_catalog_rest::RestCatalog::update_namespace<'life0, 'life1, 'asyn
 pub fn iceberg_catalog_rest::RestCatalog::update_table<'life0, 'async_trait>(&'life0 self, commit: iceberg::catalog::TableCommit) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub struct iceberg_catalog_rest::RestCatalogBuilder
 impl iceberg_catalog_rest::RestCatalogBuilder
+pub fn iceberg_catalog_rest::RestCatalogBuilder::with_auth_manager(self, auth_manager: alloc::sync::Arc<dyn iceberg_catalog_rest::AuthManager>) -> Self
 pub fn iceberg_catalog_rest::RestCatalogBuilder::with_client(self, client: reqwest::async_impl::client::Client) -> Self
 impl core::default::Default for iceberg_catalog_rest::RestCatalogBuilder
 pub fn iceberg_catalog_rest::RestCatalogBuilder::default() -> Self
@@ -241,6 +279,22 @@ pub fn iceberg_catalog_rest::RestCatalogBuilder::load(self, name: impl core::con
 pub fn iceberg_catalog_rest::RestCatalogBuilder::with_kms_client_factory(self, kms_client_factory: alloc::sync::Arc<dyn iceberg::encryption::kms::factory::KmsClientFactory>) -> Self
 pub fn iceberg_catalog_rest::RestCatalogBuilder::with_runtime(self, runtime: iceberg::runtime::Runtime) -> Self
 pub fn iceberg_catalog_rest::RestCatalogBuilder::with_storage_factory(self, storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> Self
+pub struct iceberg_catalog_rest::SigV4AuthManager
+impl iceberg_catalog_rest::SigV4AuthManager
+pub fn iceberg_catalog_rest::SigV4AuthManager::new(delegate: alloc::sync::Arc<dyn iceberg_catalog_rest::AuthManager>, signer: iceberg_catalog_rest::SigV4Signer) -> Self
+impl core::fmt::Debug for iceberg_catalog_rest::SigV4AuthManager
+pub fn iceberg_catalog_rest::SigV4AuthManager::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg_catalog_rest::AuthManager for iceberg_catalog_rest::SigV4AuthManager
+pub fn iceberg_catalog_rest::SigV4AuthManager::catalog_session<'life0, 'life1, 'async_trait>(&'life0 self, props: &'life1 std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::SigV4AuthManager::init_session<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub struct iceberg_catalog_rest::SigV4Signer
+impl iceberg_catalog_rest::SigV4Signer
+pub fn iceberg_catalog_rest::SigV4Signer::new(credentials: iceberg_catalog_rest::AwsCredentials, region: alloc::string::String, service: alloc::string::String, mode: iceberg_catalog_rest::PayloadHashMode) -> Self
+pub fn iceberg_catalog_rest::SigV4Signer::sign(&self, request: &mut reqwest::async_impl::request::Request) -> iceberg::error::Result<()>
+impl core::clone::Clone for iceberg_catalog_rest::SigV4Signer
+pub fn iceberg_catalog_rest::SigV4Signer::clone(&self) -> iceberg_catalog_rest::SigV4Signer
+impl core::fmt::Debug for iceberg_catalog_rest::SigV4Signer
+pub fn iceberg_catalog_rest::SigV4Signer::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg_catalog_rest::StorageCredential
 pub iceberg_catalog_rest::StorageCredential::config: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
 pub iceberg_catalog_rest::StorageCredential::prefix: alloc::string::String
@@ -287,6 +341,33 @@ impl serde_core::ser::Serialize for iceberg_catalog_rest::UpdateNamespacePropert
 pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::UpdateNamespacePropertiesResponse
 pub fn iceberg_catalog_rest::UpdateNamespacePropertiesResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub const iceberg_catalog_rest::AUTH_TYPE_NONE: &str
+pub const iceberg_catalog_rest::AUTH_TYPE_OAUTH2: &str
+pub const iceberg_catalog_rest::AUTH_TYPE_SIGV4: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_AUTH_TYPE: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_SIGNING_ACCESS_KEY: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_SIGNING_NAME: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_SIGNING_REGION: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_SIGNING_SECRET_KEY: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_SIGNING_SESSION_TOKEN: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_SIGV4_DELEGATE_AUTH_TYPE: &str
+pub const iceberg_catalog_rest::REST_CATALOG_PROP_SIGV4_ENABLED: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_URI: &str
 pub const iceberg_catalog_rest::REST_CATALOG_PROP_WAREHOUSE: &str
+pub trait iceberg_catalog_rest::AuthManager: core::fmt::Debug + core::marker::Send + core::marker::Sync
+pub fn iceberg_catalog_rest::AuthManager::catalog_session<'life0, 'life1, 'async_trait>(&'life0 self, props: &'life1 std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::AuthManager::init_session<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl iceberg_catalog_rest::AuthManager for iceberg_catalog_rest::NoopAuthManager
+pub fn iceberg_catalog_rest::NoopAuthManager::catalog_session<'life0, 'life1, 'async_trait>(&'life0 self, _props: &'life1 std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::NoopAuthManager::init_session<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl iceberg_catalog_rest::AuthManager for iceberg_catalog_rest::OAuth2Manager
+pub fn iceberg_catalog_rest::OAuth2Manager::catalog_session<'life0, 'life1, 'async_trait>(&'life0 self, props: &'life1 std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::OAuth2Manager::init_session<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl iceberg_catalog_rest::AuthManager for iceberg_catalog_rest::SigV4AuthManager
+pub fn iceberg_catalog_rest::SigV4AuthManager::catalog_session<'life0, 'life1, 'async_trait>(&'life0 self, props: &'life1 std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::SigV4AuthManager::init_session<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait iceberg_catalog_rest::AuthSession: core::fmt::Debug + core::marker::Send + core::marker::Sync
+pub fn iceberg_catalog_rest::AuthSession::authenticate<'life0, 'life1, 'async_trait>(&'life0 self, request: &'life1 mut reqwest::async_impl::request::Request) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::AuthSession::invalidate<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn iceberg_catalog_rest::AuthSession::refresh<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait

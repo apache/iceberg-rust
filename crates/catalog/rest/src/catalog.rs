@@ -38,9 +38,14 @@ use reqwest::{Client, Method, StatusCode, Url};
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
+use crate::auth::{
+    AUTH_TYPE_NONE, AUTH_TYPE_OAUTH2, AUTH_TYPE_SIGV4, AuthManager, NoopAuthManager, OAuth2Manager,
+    SigV4AuthManager,
+};
 use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
+use crate::signing::{AwsCredentials, PayloadHashMode, SigV4Signer};
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
     CreateTableRequest, ListNamespaceResponse, ListTablesResponse, LoadTableResult,
@@ -53,6 +58,23 @@ pub const REST_CATALOG_PROP_URI: &str = "uri";
 pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 /// Disable header redaction in error logs (defaults to false for security)
 pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-redaction";
+/// Authentication scheme: `none`, `oauth2` (default) or `sigv4`.
+pub const REST_CATALOG_PROP_AUTH_TYPE: &str = "rest.auth.type";
+/// Enable AWS SigV4 request signing for the REST catalog.
+pub const REST_CATALOG_PROP_SIGV4_ENABLED: &str = "rest.sigv4-enabled";
+/// SigV4 signing service name (required when sigv4 is enabled).
+pub const REST_CATALOG_PROP_SIGNING_NAME: &str = "rest.signing-name";
+/// SigV4 signing region (required when sigv4 is enabled).
+pub const REST_CATALOG_PROP_SIGNING_REGION: &str = "rest.signing-region";
+/// SigV4 access key id (optional; falls back to the `AWS_ACCESS_KEY_ID` env var).
+pub const REST_CATALOG_PROP_SIGNING_ACCESS_KEY: &str = "rest.signing-access-key-id";
+/// SigV4 secret access key (optional; falls back to the `AWS_SECRET_ACCESS_KEY` env var).
+pub const REST_CATALOG_PROP_SIGNING_SECRET_KEY: &str = "rest.signing-secret-access-key";
+/// SigV4 session token (optional; falls back to the `AWS_SESSION_TOKEN` env var).
+pub const REST_CATALOG_PROP_SIGNING_SESSION_TOKEN: &str = "rest.signing-session-token";
+/// Auth scheme SigV4 wraps: `none` or `oauth2`. When unset, `oauth2` is
+/// inferred if a `token` or `credential` is configured, `none` otherwise.
+pub const REST_CATALOG_PROP_SIGV4_DELEGATE_AUTH_TYPE: &str = "rest.auth.sigv4.delegate-auth-type";
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -76,6 +98,7 @@ impl Default for RestCatalogBuilder {
                 warehouse: None,
                 props: HashMap::new(),
                 client: None,
+                custom_auth_manager: None,
             },
             storage_factory: None,
             kms_client_factory: None,
@@ -160,6 +183,12 @@ impl RestCatalogBuilder {
         self.config.client = Some(client);
         self
     }
+
+    /// Injects a custom auth manager, overriding the `rest.auth.type` configuration.
+    pub fn with_auth_manager(mut self, auth_manager: Arc<dyn AuthManager>) -> Self {
+        self.config.custom_auth_manager = Some(auth_manager);
+        self
+    }
 }
 
 /// Rest catalog configuration.
@@ -178,6 +207,9 @@ pub(crate) struct RestCatalogConfig {
 
     #[builder(default)]
     client: Option<Client>,
+
+    #[builder(default)]
+    custom_auth_manager: Option<Arc<dyn AuthManager>>,
 }
 
 impl RestCatalogConfig {
@@ -244,89 +276,28 @@ impl RestCatalogConfig {
 
     /// Get the credentials from the config. The client can use these credentials to fetch a new
     /// token.
-    ///
-    /// ## Output
-    ///
-    /// - `None`: No credential is set.
-    /// - `Some(None, client_secret)`: No client_id is set, use client_secret directly.
-    /// - `Some(Some(client_id), client_secret)`: Both client_id and client_secret are set.
     pub(crate) fn credential(&self) -> Option<(Option<String>, String)> {
-        let cred = self.props.get("credential")?;
-
-        match cred.split_once(':') {
-            Some((client_id, client_secret)) => {
-                Some((Some(client_id.to_string()), client_secret.to_string()))
-            }
-            None => Some((None, cred.to_string())),
-        }
+        credential_from_props(&self.props)
     }
 
-    /// Get the extra headers from config, which includes:
-    ///
-    /// - `content-type`
-    /// - `x-client-version`
-    /// - `user-agent`
-    /// - All headers specified by `header.xxx` in props.
+    /// Get the extra headers from config, see [`extra_headers_from_props`].
     pub(crate) fn extra_headers(&self) -> Result<HeaderMap> {
-        let mut headers = HeaderMap::from_iter([
-            (
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json"),
-            ),
-            (
-                HeaderName::from_static("x-client-version"),
-                HeaderValue::from_static(ICEBERG_REST_SPEC_VERSION),
-            ),
-            (
-                header::USER_AGENT,
-                HeaderValue::from_str(&format!("iceberg-rs/{CARGO_PKG_VERSION}")).unwrap(),
-            ),
-        ]);
-
-        for (key, value) in self
-            .props
-            .iter()
-            .filter_map(|(k, v)| k.strip_prefix("header.").map(|k| (k, v)))
-        {
-            headers.insert(
-                HeaderName::from_str(key).map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Invalid header name: {key}"),
-                    )
-                    .with_source(e)
-                })?,
-                HeaderValue::from_str(value).map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Invalid header value: {value}"),
-                    )
-                    .with_source(e)
-                })?,
-            );
-        }
-
-        Ok(headers)
+        extra_headers_from_props(&self.props)
     }
 
     /// Get the optional OAuth headers from the config.
     pub(crate) fn extra_oauth_params(&self) -> HashMap<String, String> {
-        let mut params = HashMap::new();
+        oauth_params_from_props(&self.props)
+    }
 
-        if let Some(scope) = self.props.get("scope") {
-            params.insert("scope".to_string(), scope.to_string());
-        } else {
-            params.insert("scope".to_string(), "catalog".to_string());
-        }
-
-        let optional_params = ["audience", "resource"];
-        for param_name in optional_params {
-            if let Some(value) = self.props.get(param_name) {
-                params.insert(param_name.to_string(), value.to_string());
-            }
-        }
-
-        params
+    /// The properties handed to [`AuthManager::catalog_session`], with the
+    /// resolved token endpoint made explicit.
+    pub(crate) fn auth_props(&self) -> HashMap<String, String> {
+        let mut props = self.props.clone();
+        props
+            .entry("oauth2-server-uri".to_string())
+            .or_insert_with(|| self.get_token_endpoint());
+        props
     }
 
     /// Check if header redaction is disabled in error logs.
@@ -338,6 +309,78 @@ impl RestCatalogConfig {
             .get(REST_CATALOG_PROP_DISABLE_HEADER_REDACTION)
             .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
+    }
+
+    fn sigv4_enabled(&self) -> bool {
+        self.props
+            .get(REST_CATALOG_PROP_SIGV4_ENABLED)
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
+    /// The configured auth scheme: explicit `rest.auth.type`, the legacy
+    /// `rest.sigv4-enabled` switch, or the default `oauth2` (which behaves as
+    /// no auth when neither `token` nor `credential` is set).
+    fn auth_type(&self) -> String {
+        self.props
+            .get(REST_CATALOG_PROP_AUTH_TYPE)
+            .cloned()
+            .unwrap_or_else(|| {
+                if self.sigv4_enabled() {
+                    AUTH_TYPE_SIGV4.to_string()
+                } else {
+                    AUTH_TYPE_OAUTH2.to_string()
+                }
+            })
+    }
+
+    /// Resolves the auth manager: a `with_auth_manager` override wins,
+    /// otherwise one is built from the `rest.auth.type` configuration.
+    pub(crate) fn resolve_auth_manager(&self) -> Result<Arc<dyn AuthManager>> {
+        if let Some(auth_manager) = &self.custom_auth_manager {
+            return Ok(auth_manager.clone());
+        }
+        match self.auth_type().as_str() {
+            AUTH_TYPE_NONE => Ok(Arc::new(NoopAuthManager)),
+            AUTH_TYPE_OAUTH2 => Ok(Arc::new(OAuth2Manager::from_config(self)?)),
+            AUTH_TYPE_SIGV4 => {
+                // SigV4 signs on top of a delegate auth (Java parity): explicit
+                // `rest.auth.sigv4.delegate-auth-type`, or inferred from
+                // whether token-based auth is configured.
+                let delegate: Arc<dyn AuthManager> = match self
+                    .props
+                    .get(REST_CATALOG_PROP_SIGV4_DELEGATE_AUTH_TYPE)
+                    .map(String::as_str)
+                {
+                    Some(AUTH_TYPE_NONE) => Arc::new(NoopAuthManager),
+                    Some(AUTH_TYPE_OAUTH2) => Arc::new(OAuth2Manager::from_config(self)?),
+                    Some(other) => {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "unknown '{REST_CATALOG_PROP_SIGV4_DELEGATE_AUTH_TYPE}': {other}"
+                            ),
+                        ));
+                    }
+                    None if self.token().is_some() || self.credential().is_some() => {
+                        Arc::new(OAuth2Manager::from_config(self)?)
+                    }
+                    None => Arc::new(NoopAuthManager),
+                };
+                Ok(Arc::new(SigV4AuthManager::new(
+                    delegate,
+                    self.build_sigv4_signer()?,
+                )))
+            }
+            other => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("unknown '{REST_CATALOG_PROP_AUTH_TYPE}': {other}"),
+            )),
+        }
+    }
+
+    fn build_sigv4_signer(&self) -> Result<SigV4Signer> {
+        sigv4_signer_from_props(&self.props)
     }
 
     /// Merge the `RestCatalogConfig` with the a [`CatalogConfig`] (fetched from the REST server).
@@ -353,6 +396,160 @@ impl RestCatalogConfig {
         self.props = props;
         self
     }
+}
+
+/// Builds a [`SigV4Signer`] from `rest.signing-*` properties (credentials fall
+/// back to the standard `AWS_*` environment variables).
+///
+/// Used both at catalog construction (user properties) and after the config
+/// handshake (properties merged with the server's defaults/overrides), so
+/// server-supplied `rest.signing-*` values are honored.
+pub(crate) fn sigv4_signer_from_props(props: &HashMap<String, String>) -> Result<SigV4Signer> {
+    let region = props
+        .get(REST_CATALOG_PROP_SIGNING_REGION)
+        .cloned()
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "'{REST_CATALOG_PROP_SIGNING_REGION}' is required when '{REST_CATALOG_PROP_SIGV4_ENABLED}' is true"
+                ),
+            )
+        })?;
+    let name = props
+        .get(REST_CATALOG_PROP_SIGNING_NAME)
+        .cloned()
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "'{REST_CATALOG_PROP_SIGNING_NAME}' is required when '{REST_CATALOG_PROP_SIGV4_ENABLED}' is true"
+                ),
+            )
+        })?;
+    let access_key_id = props
+        .get(REST_CATALOG_PROP_SIGNING_ACCESS_KEY)
+        .cloned()
+        .or_else(|| std::env::var("AWS_ACCESS_KEY_ID").ok())
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "missing SigV4 access key id (set 'rest.signing-access-key-id' or AWS_ACCESS_KEY_ID)",
+            )
+        })?;
+    let secret_access_key = props
+        .get(REST_CATALOG_PROP_SIGNING_SECRET_KEY)
+        .cloned()
+        .or_else(|| std::env::var("AWS_SECRET_ACCESS_KEY").ok())
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "missing SigV4 secret access key (set 'rest.signing-secret-access-key' or AWS_SECRET_ACCESS_KEY)",
+            )
+        })?;
+    let session_token = props
+        .get(REST_CATALOG_PROP_SIGNING_SESSION_TOKEN)
+        .cloned()
+        .or_else(|| std::env::var("AWS_SESSION_TOKEN").ok());
+
+    let credentials = AwsCredentials {
+        access_key_id,
+        secret_access_key,
+        session_token,
+    };
+    Ok(SigV4Signer::new(
+        credentials,
+        region,
+        name,
+        PayloadHashMode::IcebergRest,
+    ))
+}
+
+/// Parses the `credential` property.
+///
+/// ## Output
+///
+/// - `None`: No credential is set.
+/// - `Some(None, client_secret)`: No client_id is set, use client_secret directly.
+/// - `Some(Some(client_id), client_secret)`: Both client_id and client_secret are set.
+pub(crate) fn credential_from_props(
+    props: &HashMap<String, String>,
+) -> Option<(Option<String>, String)> {
+    let cred = props.get("credential")?;
+
+    match cred.split_once(':') {
+        Some((client_id, client_secret)) => {
+            Some((Some(client_id.to_string()), client_secret.to_string()))
+        }
+        None => Some((None, cred.to_string())),
+    }
+}
+
+/// The extra headers added to each request, which include:
+///
+/// - `content-type`
+/// - `x-client-version`
+/// - `user-agent`
+/// - All headers specified by `header.xxx` in props.
+pub(crate) fn extra_headers_from_props(props: &HashMap<String, String>) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::from_iter([
+        (
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        ),
+        (
+            HeaderName::from_static("x-client-version"),
+            HeaderValue::from_static(ICEBERG_REST_SPEC_VERSION),
+        ),
+        (
+            header::USER_AGENT,
+            HeaderValue::from_str(&format!("iceberg-rs/{CARGO_PKG_VERSION}")).unwrap(),
+        ),
+    ]);
+
+    for (key, value) in props
+        .iter()
+        .filter_map(|(k, v)| k.strip_prefix("header.").map(|k| (k, v)))
+    {
+        headers.insert(
+            HeaderName::from_str(key).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid header name: {key}"),
+                )
+                .with_source(e)
+            })?,
+            HeaderValue::from_str(value).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid header value: {value}"),
+                )
+                .with_source(e)
+            })?,
+        );
+    }
+
+    Ok(headers)
+}
+
+/// The optional OAuth parameters added to each authentication request.
+pub(crate) fn oauth_params_from_props(props: &HashMap<String, String>) -> HashMap<String, String> {
+    let mut params = HashMap::new();
+
+    if let Some(scope) = props.get("scope") {
+        params.insert("scope".to_string(), scope.to_string());
+    } else {
+        params.insert("scope".to_string(), "catalog".to_string());
+    }
+
+    let optional_params = ["audience", "resource"];
+    for param_name in optional_params {
+        if let Some(value) = props.get(param_name) {
+            params.insert(param_name.to_string(), value.to_string());
+        }
+    }
+
+    params
 }
 
 #[derive(Debug)]
@@ -429,10 +626,10 @@ impl RestCatalog {
     async fn context(&self) -> Result<&RestContext> {
         self.ctx
             .get_or_try_init(|| async {
-                let client = HttpClient::new(&self.user_config)?;
+                let client = HttpClient::new(&self.user_config).await?;
                 let catalog_config = RestCatalog::load_config(&client, &self.user_config).await?;
                 let config = self.user_config.clone().merge_with_config(catalog_config);
-                let client = client.update_with(&config)?;
+                let client = client.update_with(&config).await?;
 
                 Ok(RestContext { config, client })
             })
@@ -510,7 +707,7 @@ impl RestCatalog {
     /// Invalidate the current token without generating a new one. On the next request, the client
     /// will attempt to generate a new token.
     pub async fn invalidate_token(&self) -> Result<()> {
-        self.context().await?.client.invalidate_token().await
+        self.context().await?.client.session().invalidate().await
     }
 
     /// Invalidate the current token and set a new one. Generates a new token before invalidating
@@ -520,7 +717,7 @@ impl RestCatalog {
     /// If credential is invalid, or the request fails, this method will return an error and leave
     /// the current token unchanged.
     pub async fn regenerate_token(&self) -> Result<()> {
-        self.context().await?.client.regenerate_token().await
+        self.context().await?.client.session().refresh().await
     }
 }
 
@@ -1610,6 +1807,313 @@ mod tests {
 
         config_mock.assert_async().await;
         list_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_sigv4_signs_requests() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        // With sigv4 enabled, requests must carry an AWS SigV4 Authorization header.
+        let list_ns_mock = server
+            .mock("GET", "/v1/namespaces")
+            .match_header(
+                "authorization",
+                mockito::Matcher::Regex("^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/".to_string()),
+            )
+            .with_body(r#"{"namespaces": []}"#)
+            .create_async()
+            .await;
+
+        let props = HashMap::from([
+            (
+                REST_CATALOG_PROP_SIGV4_ENABLED.to_string(),
+                "true".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_REGION.to_string(),
+                "us-east-1".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_NAME.to_string(),
+                "glue".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_ACCESS_KEY.to_string(),
+                "AKIDEXAMPLE".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_SECRET_KEY.to_string(),
+                "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY".to_string(),
+            ),
+        ]);
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+            None,
+            Runtime::current(),
+            None,
+        );
+
+        let namespaces = catalog.list_namespaces(None).await.unwrap();
+        assert!(namespaces.is_empty());
+
+        config_mock.assert_async().await;
+        list_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_sigv4_composes_with_token_auth() {
+        // SigV4 signs on top of token auth: the bearer token is relocated to
+        // `X-Iceberg-Authorization` and the signature takes `Authorization`.
+        let props = HashMap::from([
+            (
+                REST_CATALOG_PROP_SIGV4_ENABLED.to_string(),
+                "true".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_REGION.to_string(),
+                "us-east-1".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_NAME.to_string(),
+                "glue".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_ACCESS_KEY.to_string(),
+                "AKIDEXAMPLE".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_SECRET_KEY.to_string(),
+                "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY".to_string(),
+            ),
+            ("token".to_string(), "some-oauth-token".to_string()),
+        ]);
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(props)
+            .build();
+
+        let session = config
+            .resolve_auth_manager()
+            .unwrap()
+            .init_session()
+            .await
+            .unwrap();
+        let mut req = reqwest::Client::new()
+            .get("https://rest.example.com/v1/config")
+            .build()
+            .unwrap();
+        session.authenticate(&mut req).await.unwrap();
+
+        let headers = req.headers();
+        assert_eq!(
+            headers.get("x-iceberg-authorization").unwrap(),
+            "Bearer some-oauth-token"
+        );
+        let auth = headers.get("authorization").unwrap().to_str().unwrap();
+        assert!(auth.starts_with("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/"));
+        // The relocated token is part of the signature.
+        assert!(auth.contains("x-iceberg-authorization"));
+    }
+
+    #[tokio::test]
+    async fn test_auth_type_none_disables_auth() {
+        // An explicit `rest.auth.type=none` wins over a configured token.
+        let props = HashMap::from([
+            (REST_CATALOG_PROP_AUTH_TYPE.to_string(), "none".to_string()),
+            ("token".to_string(), "some-oauth-token".to_string()),
+        ]);
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(props)
+            .build();
+
+        let session = config
+            .resolve_auth_manager()
+            .unwrap()
+            .init_session()
+            .await
+            .unwrap();
+        let mut req = reqwest::Client::new()
+            .get("https://rest.example.com/v1/config")
+            .build()
+            .unwrap();
+        session.authenticate(&mut req).await.unwrap();
+        assert!(req.headers().get("authorization").is_none());
+    }
+
+    #[test]
+    fn test_unknown_auth_type_is_rejected() {
+        let props = HashMap::from([(
+            REST_CATALOG_PROP_AUTH_TYPE.to_string(),
+            "kerberos".to_string(),
+        )]);
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(props)
+            .build();
+
+        let err = config.resolve_auth_manager().unwrap_err();
+        assert!(err.message().contains(REST_CATALOG_PROP_AUTH_TYPE));
+    }
+
+    #[test]
+    fn test_sigv4_requires_region_and_name() {
+        // Missing region.
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(HashMap::from([(
+                REST_CATALOG_PROP_SIGV4_ENABLED.to_string(),
+                "true".to_string(),
+            )]))
+            .build();
+        let err = config.resolve_auth_manager().unwrap_err();
+        assert!(err.message().contains(REST_CATALOG_PROP_SIGNING_REGION));
+
+        // Region present, name missing.
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(HashMap::from([
+                (
+                    REST_CATALOG_PROP_SIGV4_ENABLED.to_string(),
+                    "true".to_string(),
+                ),
+                (
+                    REST_CATALOG_PROP_SIGNING_REGION.to_string(),
+                    "us-east-1".to_string(),
+                ),
+            ]))
+            .build();
+        let err = config.resolve_auth_manager().unwrap_err();
+        assert!(err.message().contains(REST_CATALOG_PROP_SIGNING_NAME));
+    }
+
+    fn sigv4_props() -> HashMap<String, String> {
+        HashMap::from([
+            (
+                REST_CATALOG_PROP_AUTH_TYPE.to_string(),
+                AUTH_TYPE_SIGV4.to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_REGION.to_string(),
+                "us-east-1".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_NAME.to_string(),
+                "execute-api".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_ACCESS_KEY.to_string(),
+                "ak".to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_SIGNING_SECRET_KEY.to_string(),
+                "sk".to_string(),
+            ),
+        ])
+    }
+
+    #[test]
+    fn test_sigv4_delegate_auth_type_explicit() {
+        // `none` forces a Noop delegate even when a token is configured.
+        let mut props = sigv4_props();
+        props.insert("token".to_string(), "tok".to_string());
+        props.insert(
+            REST_CATALOG_PROP_SIGV4_DELEGATE_AUTH_TYPE.to_string(),
+            AUTH_TYPE_NONE.to_string(),
+        );
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(props)
+            .build();
+        let manager = config.resolve_auth_manager().unwrap();
+        assert!(format!("{manager:?}").contains("NoopAuthManager"));
+
+        // `oauth2` forces an OAuth2 delegate even without a token/credential.
+        let mut props = sigv4_props();
+        props.insert(
+            REST_CATALOG_PROP_SIGV4_DELEGATE_AUTH_TYPE.to_string(),
+            AUTH_TYPE_OAUTH2.to_string(),
+        );
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(props)
+            .build();
+        let manager = config.resolve_auth_manager().unwrap();
+        assert!(format!("{manager:?}").contains("OAuth2Manager"));
+
+        // Unknown delegate types are rejected.
+        let mut props = sigv4_props();
+        props.insert(
+            REST_CATALOG_PROP_SIGV4_DELEGATE_AUTH_TYPE.to_string(),
+            "kerberos".to_string(),
+        );
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(props)
+            .build();
+        let err = config.resolve_auth_manager().unwrap_err();
+        assert!(
+            err.message()
+                .contains(REST_CATALOG_PROP_SIGV4_DELEGATE_AUTH_TYPE)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sigv4_catalog_session_rebuilds_signer_from_merged_props() {
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(sigv4_props())
+            .build();
+        let manager = config.resolve_auth_manager().unwrap();
+
+        // Server-supplied `rest.signing-*` in the merged props is honored.
+        let mut merged = sigv4_props();
+        merged.insert(
+            REST_CATALOG_PROP_SIGNING_REGION.to_string(),
+            "eu-west-1".to_string(),
+        );
+        let session = manager.catalog_session(&merged).await.unwrap();
+        assert!(format!("{session:?}").contains("eu-west-1"));
+
+        // Props without a signing config keep the configured signer.
+        let session = manager.catalog_session(&HashMap::new()).await.unwrap();
+        assert!(format!("{session:?}").contains("us-east-1"));
+    }
+
+    #[test]
+    fn test_with_auth_manager_overrides_config() {
+        // A custom auth manager takes precedence over `rest.auth.type`.
+        #[derive(Debug)]
+        struct StubAuthManager;
+        #[async_trait]
+        impl AuthManager for StubAuthManager {
+            async fn init_session(&self) -> Result<Arc<dyn crate::auth::AuthSession>> {
+                unimplemented!()
+            }
+            async fn catalog_session(
+                &self,
+                _props: &HashMap<String, String>,
+            ) -> Result<Arc<dyn crate::auth::AuthSession>> {
+                unimplemented!()
+            }
+        }
+
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(HashMap::from([(
+                REST_CATALOG_PROP_AUTH_TYPE.to_string(),
+                "kerberos".to_string(),
+            )]))
+            .custom_auth_manager(Some(Arc::new(StubAuthManager)))
+            .build();
+
+        // The unknown auth type is never consulted.
+        assert!(config.resolve_auth_manager().is_ok());
     }
 
     #[tokio::test]
