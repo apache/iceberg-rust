@@ -59,11 +59,10 @@ pub use append::FastAppendAction;
 pub use rewrite_manifests::RewriteManifestsAction;
 pub use update_schema::UpdateSchemaAction;
 mod manifest_filter;
+mod replace_files;
 
 pub use manifest_filter::*;
-mod overwrite_files;
 mod remove_snapshots;
-mod rewrite_files;
 mod rewrite_manifests;
 mod snapshot;
 mod sort_order;
@@ -78,13 +77,12 @@ use std::time::Duration;
 
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWithContext};
 use remove_snapshots::RemoveSnapshotAction;
-use rewrite_files::RewriteFilesAction;
+use replace_files::{OverwriteFilesAction, RewriteFilesAction};
 
 use crate::error::Result;
 use crate::spec::TableProperties;
 use crate::table::Table;
 use crate::transaction::append::MergeAppendAction;
-use crate::transaction::overwrite_files::OverwriteFilesAction;
 use crate::transaction::sort_order::ReplaceSortOrderAction;
 use crate::transaction::update_location::UpdateLocationAction;
 use crate::transaction::update_properties::UpdatePropertiesAction;

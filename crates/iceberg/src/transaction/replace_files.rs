@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::{HashMap, HashSet};
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use uuid::Uuid;
@@ -34,148 +35,43 @@ use crate::table::Table;
 use crate::transaction::snapshot::SnapshotProduceOperation;
 use crate::transaction::{ActionCommit, TransactionAction};
 
-/// Transaction action for rewriting files.
-pub struct RewriteFilesAction {
-    // snapshot_produce_action: SnapshotProduceAction<'a>,
-    target_size_bytes: u32,
-    min_count_to_merge: u32,
-    merge_enabled: bool,
-
-    // below are properties used to create SnapshotProducer when commit
-    commit_uuid: Option<Uuid>,
-    key_metadata: Option<Vec<u8>>,
-    snapshot_properties: HashMap<String, String>,
-    added_data_files: Vec<DataFile>,
-    added_delete_files: Vec<DataFile>,
-    removed_data_files: Vec<DataFile>,
-    removed_delete_files: Vec<DataFile>,
-    snapshot_id: Option<i64>,
-    new_data_file_sequence_number: Option<i64>,
-    target_branch: Option<String>,
-    enable_delete_filter_manager: bool,
-    check_file_existence: bool,
+/// Which snapshot [`Operation`] a file replacement records.
+///
+/// `rewrite_files` and `overwrite_files` differ only in this value
+pub(crate) trait ReplaceFilesMode: Send + Sync + 'static {
+    const OPERATION: Operation;
 }
 
-pub struct RewriteFilesOperation;
+/// Files were added and removed without changing table data (compaction,
+/// changing file format, relocating files).
+pub struct Rewrite;
 
-impl RewriteFilesAction {
-    pub fn new() -> Self {
-        Self {
-            target_size_bytes: MANIFEST_TARGET_SIZE_BYTES_DEFAULT,
-            min_count_to_merge: MANIFEST_MIN_MERGE_COUNT_DEFAULT,
-            merge_enabled: MANIFEST_MERGE_ENABLED_DEFAULT,
-            commit_uuid: None,
-            key_metadata: None,
-            snapshot_properties: HashMap::new(),
-            added_data_files: Vec::new(),
-            added_delete_files: Vec::new(),
-            removed_data_files: Vec::new(),
-            removed_delete_files: Vec::new(),
-            snapshot_id: None,
-            new_data_file_sequence_number: None,
-            target_branch: None,
-            enable_delete_filter_manager: false,
-            check_file_existence: false,
-        }
-    }
+/// Files were added and removed in a logical overwrite.
+pub struct Overwrite;
 
-    /// Add data files to the snapshot.
-    pub fn add_data_files(mut self, data_files: impl IntoIterator<Item = DataFile>) -> Self {
-        for file in data_files {
-            match file.content_type() {
-                DataContentType::Data => self.added_data_files.push(file),
-                DataContentType::PositionDeletes | DataContentType::EqualityDeletes => {
-                    self.added_delete_files.push(file)
-                }
-            }
-        }
+impl ReplaceFilesMode for Rewrite {
+    const OPERATION: Operation = Operation::Replace;
+}
 
-        self
-    }
+impl ReplaceFilesMode for Overwrite {
+    const OPERATION: Operation = Operation::Overwrite;
+}
 
-    /// Add remove files to the snapshot.
-    pub fn delete_files(mut self, remove_data_files: impl IntoIterator<Item = DataFile>) -> Self {
-        for file in remove_data_files {
-            match file.content_type() {
-                DataContentType::Data => self.removed_data_files.push(file),
-                DataContentType::PositionDeletes | DataContentType::EqualityDeletes => {
-                    self.removed_delete_files.push(file)
-                }
-            }
-        }
+/// A blanket `impl<M: ReplaceFilesMode> SnapshotProduceOperation for M` would
+/// collide with `impl SnapshotProduceOperation for FastAppendOperation`: the
+/// compiler cannot prove `FastAppendOperation` will never implement
+/// `ReplaceFilesMode`. This wrapper carries the shared implementation instead.
+pub(crate) struct ReplaceFilesOperation<M: ReplaceFilesMode>(PhantomData<M>);
 
-        self
-    }
-
-    pub fn set_snapshot_properties(&mut self, properties: HashMap<String, String>) -> &mut Self {
-        let target_size_bytes: u32 = properties
-            .get(MANIFEST_TARGET_SIZE_BYTES)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(MANIFEST_TARGET_SIZE_BYTES_DEFAULT);
-        let min_count_to_merge: u32 = properties
-            .get(MANIFEST_MIN_MERGE_COUNT)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(MANIFEST_MIN_MERGE_COUNT_DEFAULT);
-        let merge_enabled = properties
-            .get(MANIFEST_MERGE_ENABLED)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(MANIFEST_MERGE_ENABLED_DEFAULT);
-
-        self.target_size_bytes = target_size_bytes;
-        self.min_count_to_merge = min_count_to_merge;
-        self.merge_enabled = merge_enabled;
-        self.snapshot_properties = properties;
-
-        self
-    }
-
-    /// Set commit UUID for the snapshot.
-    pub fn set_commit_uuid(&mut self, commit_uuid: Uuid) -> &mut Self {
-        self.commit_uuid = Some(commit_uuid);
-        self
-    }
-
-    /// Enable delete filter manager for this snapshot.
-    /// By default, delete filter manager is disabled.
-    pub fn set_enable_delete_filter_manager(mut self, enable_delete_filter_manager: bool) -> Self {
-        self.enable_delete_filter_manager = enable_delete_filter_manager;
-        self
-    }
-
-    /// Set key metadata for manifest files.
-    pub fn set_key_metadata(mut self, key_metadata: Vec<u8>) -> Self {
-        self.key_metadata = Some(key_metadata);
-        self
-    }
-
-    /// Set snapshot id
-    pub fn set_snapshot_id(mut self, snapshot_id: i64) -> Self {
-        self.snapshot_id = Some(snapshot_id);
-        self
-    }
-
-    pub fn set_target_branch(mut self, target_branch: String) -> Self {
-        self.target_branch = Some(target_branch);
-        self
-    }
-
-    // If the compaction should use the sequence number of the snapshot at compaction start time for
-    // new data files, instead of using the sequence number of the newly produced snapshot.
-    // This avoids commit conflicts with updates that add newer equality deletes at a higher sequence number.
-    pub fn set_new_data_file_sequence_number(mut self, seq: i64) -> Self {
-        self.new_data_file_sequence_number = Some(seq);
-        self
-    }
-
-    pub fn set_check_file_existence(mut self, check: bool) -> Self {
-        self.check_file_existence = check;
-        self
+impl<M: ReplaceFilesMode> ReplaceFilesOperation<M> {
+    pub(crate) fn new() -> Self {
+        Self(PhantomData)
     }
 }
 
-impl SnapshotProduceOperation for RewriteFilesOperation {
+impl<M: ReplaceFilesMode> SnapshotProduceOperation for ReplaceFilesOperation<M> {
     fn operation(&self) -> Operation {
-        Operation::Replace
+        M::OPERATION
     }
 
     async fn delete_entries(
@@ -314,8 +210,159 @@ impl SnapshotProduceOperation for RewriteFilesOperation {
     }
 }
 
+/// Transaction action that replaces one set of files with another.
+///
+/// `M` is sealed to [`Rewrite`] and [`Overwrite`] via the [`RewriteFilesAction`] /
+/// [`OverwriteFilesAction`] type aliases below; `ReplaceFilesMode` itself stays
+/// `pub(crate)` so no other type can be substituted for `M`.
+#[allow(private_bounds)]
+pub struct ReplaceFilesAction<M: ReplaceFilesMode> {
+    target_size_bytes: u32,
+    min_count_to_merge: u32,
+    merge_enabled: bool,
+
+    // below are properties used to create SnapshotProducer when commit
+    commit_uuid: Option<Uuid>,
+    key_metadata: Option<Vec<u8>>,
+    snapshot_properties: HashMap<String, String>,
+    added_data_files: Vec<DataFile>,
+    added_delete_files: Vec<DataFile>,
+    removed_data_files: Vec<DataFile>,
+    removed_delete_files: Vec<DataFile>,
+    snapshot_id: Option<i64>,
+    new_data_file_sequence_number: Option<i64>,
+    target_branch: Option<String>,
+    enable_delete_filter_manager: bool,
+    check_file_existence: bool,
+
+    _mode: PhantomData<M>,
+}
+
+/// Rewrites files without changing table data — compaction and friends.
+pub type RewriteFilesAction = ReplaceFilesAction<Rewrite>;
+
+/// Rewrites files as a logical overwrite.
+pub type OverwriteFilesAction = ReplaceFilesAction<Overwrite>;
+
+#[allow(private_bounds)]
+impl<M: ReplaceFilesMode> ReplaceFilesAction<M> {
+    pub fn new() -> Self {
+        Self {
+            target_size_bytes: MANIFEST_TARGET_SIZE_BYTES_DEFAULT,
+            min_count_to_merge: MANIFEST_MIN_MERGE_COUNT_DEFAULT,
+            merge_enabled: MANIFEST_MERGE_ENABLED_DEFAULT,
+            commit_uuid: None,
+            key_metadata: None,
+            snapshot_properties: HashMap::new(),
+            added_data_files: Vec::new(),
+            added_delete_files: Vec::new(),
+            removed_data_files: Vec::new(),
+            removed_delete_files: Vec::new(),
+            snapshot_id: None,
+            new_data_file_sequence_number: None,
+            target_branch: None,
+            enable_delete_filter_manager: false,
+            check_file_existence: false,
+            _mode: PhantomData,
+        }
+    }
+
+    /// Add data files to the snapshot.
+    pub fn add_data_files(mut self, data_files: impl IntoIterator<Item = DataFile>) -> Self {
+        for file in data_files {
+            match file.content_type() {
+                DataContentType::Data => self.added_data_files.push(file),
+                DataContentType::PositionDeletes | DataContentType::EqualityDeletes => {
+                    self.added_delete_files.push(file)
+                }
+            }
+        }
+
+        self
+    }
+
+    /// Add remove files to the snapshot.
+    pub fn delete_files(mut self, remove_data_files: impl IntoIterator<Item = DataFile>) -> Self {
+        for file in remove_data_files {
+            match file.content_type() {
+                DataContentType::Data => self.removed_data_files.push(file),
+                DataContentType::PositionDeletes | DataContentType::EqualityDeletes => {
+                    self.removed_delete_files.push(file)
+                }
+            }
+        }
+
+        self
+    }
+
+    pub fn set_snapshot_properties(&mut self, properties: HashMap<String, String>) -> &mut Self {
+        let target_size_bytes: u32 = properties
+            .get(MANIFEST_TARGET_SIZE_BYTES)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(MANIFEST_TARGET_SIZE_BYTES_DEFAULT);
+        let min_count_to_merge: u32 = properties
+            .get(MANIFEST_MIN_MERGE_COUNT)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(MANIFEST_MIN_MERGE_COUNT_DEFAULT);
+        let merge_enabled = properties
+            .get(MANIFEST_MERGE_ENABLED)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(MANIFEST_MERGE_ENABLED_DEFAULT);
+
+        self.target_size_bytes = target_size_bytes;
+        self.min_count_to_merge = min_count_to_merge;
+        self.merge_enabled = merge_enabled;
+        self.snapshot_properties = properties;
+
+        self
+    }
+
+    /// Set commit UUID for the snapshot.
+    pub fn set_commit_uuid(&mut self, commit_uuid: Uuid) -> &mut Self {
+        self.commit_uuid = Some(commit_uuid);
+        self
+    }
+
+    /// Set key metadata for manifest files.
+    pub fn set_key_metadata(mut self, key_metadata: Vec<u8>) -> Self {
+        self.key_metadata = Some(key_metadata);
+        self
+    }
+
+    /// Set snapshot id
+    pub fn set_snapshot_id(mut self, snapshot_id: i64) -> Self {
+        self.snapshot_id = Some(snapshot_id);
+        self
+    }
+
+    /// Enable delete filter manager for this snapshot.
+    /// By default, delete filter manager is disabled.
+    pub fn set_enable_delete_filter_manager(mut self, enable_delete_filter_manager: bool) -> Self {
+        self.enable_delete_filter_manager = enable_delete_filter_manager;
+        self
+    }
+
+    pub fn set_target_branch(mut self, target_branch: String) -> Self {
+        self.target_branch = Some(target_branch);
+        self
+    }
+
+    // If the compaction should use the sequence number of the snapshot at compaction start time for
+    // new data files, instead of using the sequence number of the newly produced snapshot.
+    // This avoids commit conflicts with updates that add newer equality deletes at a higher sequence number.
+    pub fn set_new_data_file_sequence_number(mut self, seq: i64) -> Self {
+        self.new_data_file_sequence_number = Some(seq);
+        self
+    }
+
+    pub fn set_check_file_existence(mut self, check: bool) -> Self {
+        self.check_file_existence = check;
+        self
+    }
+}
+
 #[async_trait::async_trait]
-impl TransactionAction for RewriteFilesAction {
+impl<M: ReplaceFilesMode> TransactionAction for ReplaceFilesAction<M> {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
         let mut snapshot_producer = SnapshotProducer::new(
             table,
@@ -349,17 +396,17 @@ impl TransactionAction for RewriteFilesAction {
             let process =
                 MergeManifestProcess::new(self.target_size_bytes, self.min_count_to_merge);
             snapshot_producer
-                .commit(RewriteFilesOperation, process)
+                .commit(ReplaceFilesOperation::<M>::new(), process)
                 .await
         } else {
             snapshot_producer
-                .commit(RewriteFilesOperation, DefaultManifestProcess)
+                .commit(ReplaceFilesOperation::<M>::new(), DefaultManifestProcess)
                 .await
         }
     }
 }
 
-impl Default for RewriteFilesAction {
+impl<M: ReplaceFilesMode> Default for ReplaceFilesAction<M> {
     fn default() -> Self {
         Self::new()
     }
@@ -371,18 +418,36 @@ mod tests {
 
     use uuid::Uuid;
 
-    use super::RewriteFilesOperation;
-    use crate::spec::{ManifestContentType, ManifestStatus};
+    use super::{Overwrite, ReplaceFilesMode, ReplaceFilesOperation, Rewrite};
+    use crate::spec::{ManifestContentType, ManifestStatus, Operation};
     use crate::transaction::snapshot::{SnapshotProduceOperation, SnapshotProducer};
     use crate::transaction::tests::{
         PARENT_SEQUENCE_NUMBER, PARENT_SNAPSHOT_ID, REMOVED_DELETE_FILE, RETAINED_DELETE_FILE,
         make_v2_table_with_delete_manifest, position_delete_file,
     };
 
-    /// Regression test: an rewrite that removes one delete file must not mark
-    /// *unrelated* delete files as deleted.
-    #[tokio::test]
-    async fn test_rewrite_only_marks_removed_delete_files() {
+    #[test]
+    fn test_modes_map_to_their_operations() {
+        assert_eq!(Rewrite::OPERATION, Operation::Replace);
+        assert_eq!(Overwrite::OPERATION, Operation::Overwrite);
+        assert_eq!(
+            ReplaceFilesOperation::<Rewrite>::new().operation(),
+            Operation::Replace
+        );
+        assert_eq!(
+            ReplaceFilesOperation::<Overwrite>::new().operation(),
+            Operation::Overwrite
+        );
+    }
+
+    /// Regression test: a rewrite/overwrite that removes one delete file must not
+    /// mark *unrelated* delete files as deleted.
+    ///
+    /// `delete_entries` once guarded the delete-file branch with
+    ///   `content == PositionDeletes || content == EqualityDeletes && removed.contains(path)`
+    /// and because `&&` binds tighter than `||`, every `PositionDeletes` entry in
+    /// the parent snapshot matched regardless of `removed_delete_file_paths`.
+    async fn assert_only_removed_delete_files_marked<M: ReplaceFilesMode>() {
         let table = make_v2_table_with_delete_manifest().await;
         let removed = position_delete_file(&table, REMOVED_DELETE_FILE);
 
@@ -398,7 +463,7 @@ mod tests {
             vec![removed],
         );
 
-        let deleted_entries = RewriteFilesOperation
+        let deleted_entries = ReplaceFilesOperation::<M>::new()
             .delete_entries(&producer)
             .await
             .unwrap();
@@ -416,9 +481,9 @@ mod tests {
     }
 
     /// Regression test: rewriting a partially-deleted *delete* manifest must
-    /// preserve its `Deletes` content type. See the `overwrite_files` twin.
-    #[tokio::test]
-    async fn test_rewrite_preserves_delete_manifest_content_type() {
+    /// preserve its `Deletes` content type, and must carry survivors forward as
+    /// `Existing` rather than restamping them as `Added`.
+    async fn assert_delete_manifest_carried_forward_intact<M: ReplaceFilesMode>() {
         let table = make_v2_table_with_delete_manifest().await;
         let removed = position_delete_file(&table, REMOVED_DELETE_FILE);
 
@@ -434,7 +499,7 @@ mod tests {
             vec![removed],
         );
 
-        let existing = RewriteFilesOperation
+        let existing = ReplaceFilesOperation::<M>::new()
             .existing_manifest(&mut producer)
             .await
             .unwrap();
@@ -454,8 +519,6 @@ mod tests {
             .collect();
         assert_eq!(paths, vec![RETAINED_DELETE_FILE]);
 
-        // The survivor is carried forward untouched, not restamped as a new
-        // addition of this snapshot.
         let retained = &entries.entries()[0];
         assert_eq!(retained.status(), ManifestStatus::Existing);
         assert_eq!(retained.snapshot_id(), Some(PARENT_SNAPSHOT_ID));
@@ -464,5 +527,25 @@ mod tests {
             retained.file_sequence_number(),
             Some(PARENT_SEQUENCE_NUMBER)
         );
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_only_marks_removed_delete_files() {
+        assert_only_removed_delete_files_marked::<Overwrite>().await;
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_only_marks_removed_delete_files() {
+        assert_only_removed_delete_files_marked::<Rewrite>().await;
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_preserves_delete_manifest_content_type() {
+        assert_delete_manifest_carried_forward_intact::<Overwrite>().await;
+    }
+
+    #[tokio::test]
+    async fn test_rewrite_preserves_delete_manifest_content_type() {
+        assert_delete_manifest_carried_forward_intact::<Rewrite>().await;
     }
 }

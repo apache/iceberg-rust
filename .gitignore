@@ -26,3 +26,4 @@ dist/*
 *.pyc
 *.whl
 *.tar.gz
+docs/superpowers

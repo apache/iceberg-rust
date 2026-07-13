@@ -1246,7 +1246,7 @@ mod tests {
         DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, Operation,
         Snapshot, SnapshotReference, SnapshotRetention, Struct, Summary,
     };
-    use crate::transaction::rewrite_files::RewriteFilesOperation;
+    use crate::transaction::replace_files::{Overwrite, ReplaceFilesOperation, Rewrite};
     use crate::transaction::tests::make_v2_minimal_table;
 
     const TOTAL_DATA_FILES_KEY: &str = "total-data-files";
@@ -1358,7 +1358,9 @@ mod tests {
             vec![],
         );
 
-        let summary = producer.summary(&RewriteFilesOperation).unwrap();
+        let summary = producer
+            .summary(&ReplaceFilesOperation::<Rewrite>::new())
+            .unwrap();
         assert_eq!(summary.operation, Operation::Replace);
         let props = &summary.additional_properties;
 
@@ -1488,7 +1490,9 @@ mod tests {
             vec![],
         );
 
-        let summary = producer.summary(&RewriteFilesOperation).unwrap();
+        let summary = producer
+            .summary(&ReplaceFilesOperation::<Rewrite>::new())
+            .unwrap();
         let props = &summary.additional_properties;
 
         // Added delete-file accounting — absent before the fix.
@@ -1559,8 +1563,6 @@ mod tests {
     /// the accounting as it always has.
     #[tokio::test]
     async fn test_overwrite_summary_does_not_underflow_after_prior_truncate() {
-        use crate::transaction::overwrite_files::OverwriteFilesOperation;
-
         // Build a parent whose `total-*` are all zero — i.e. the prior
         // commit was a full-table overwrite that already drained the totals.
         // This is the precondition for the underflow on the next overwrite
@@ -1636,7 +1638,9 @@ mod tests {
         // allowed to report zeros across the board — that matches what the
         // JVM Iceberg reference produces for a no-op overwrite on an empty
         // (post-truncate) table.
-        let summary = producer.summary(&OverwriteFilesOperation).unwrap();
+        let summary = producer
+            .summary(&ReplaceFilesOperation::<Overwrite>::new())
+            .unwrap();
         assert_eq!(summary.operation, Operation::Overwrite);
         let props = &summary.additional_properties;
         assert_eq!(props.get(TOTAL_RECORDS_KEY).map(String::as_str), Some("0"));
