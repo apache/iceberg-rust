@@ -39,4 +39,10 @@ jobs:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       with:
         persist-credentials: false
-    - uses: apache/infrastructure-actions/allowlist-check@5d6d53e66c7f6f831d4fd0c8fd1a610054ed8a26  # zizmor: ignore[ref-version-mismatch] action does not support tag-based releases yet; pinned from main
+    - name: Setup mise
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+      with:
+        version: 2026.6.14
+        install_args: "python@3.12.13 uv@0.9.3"
+    - name: Check ASF allowlist
+      run: mise run check-asf-allowlist

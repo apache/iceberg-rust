@@ -64,7 +64,7 @@ When a pull request is under review, please avoid using force push as it makes i
 
 ### CI
 
-Currently, iceberg-rust uses GitHub Actions to run tests. The workflows are defined in `.github/workflows`.
+iceberg-rust uses GitHub Actions to orchestrate tests, but the repository checks themselves are mise tasks. The workflows in `.github/workflows` call the same commands contributors run locally. GitHub-only operations such as caching, artifact upload, deployment, and publishing remain workflow steps.
 
 ## Setup
 
@@ -120,8 +120,16 @@ Run all commands from the repository root. `mise tasks` lists every available ta
 | Task | Purpose |
 | --- | --- |
 | `mise run build` | Compile all workspace targets and features. |
-| `mise run check` | Run Rust formatting and clippy, TOML formatting, and dependency checks. |
+| `mise run lint` | Run the complete GitHub Actions lint job locally. |
+| `mise run check` | Run the lint job followed by clippy. |
+| `mise run check-standalone` | Check every workspace crate without workspace feature unification. |
+| `mise run build-no-default-features` | Build the core crate without default features. |
 | `mise run check-msrv` | Check the workspace with the minimum supported Rust version. |
+| `mise run check-public-api` | Compare the public API against the checked-in snapshots. |
+| `mise run check-audit` | Audit Rust dependencies against the RustSec advisory database. |
+| `mise run check-zizmor` | Run the GitHub Actions security checks locally. Set `GH_TOKEN` to enable online audits. |
+| `mise run check-asf-allowlist` | Check workflow action refs against the live ASF allowlist. |
+| `mise run check-codeql-actions` | Analyze workflows with CodeQL and write SARIF to `target/codeql/actions.sarif`. |
 | `mise run unit-test` | Run Rust unit and documentation tests. |
 | `mise run nextest` | Run the Rust test suite with cargo-nextest. |
 | `mise run test` | Start the integration-test services, run all tests, and tear the services down. |
@@ -139,11 +147,14 @@ mise run python:build
 mise run python:check-format
 mise run python:check-style
 mise run python:test
+mise run python:test-wheel
 ```
+
+`python:test-wheel` mirrors the native-wheel build, installation, and test sequence used by the Python CI matrix. Cross-compiled release wheels remain a release-workflow responsibility.
 
 ### Website
 
-Preview the documentation site locally with `mise run site`. Use `mise run site-build` for a non-serving build.
+Preview the documentation site locally with `mise run site`. Use `mise run site-build` to reproduce the complete CI artifact, including Rust API documentation.
 
 ### Troubleshooting mise
 

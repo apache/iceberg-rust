@@ -54,6 +54,7 @@ jobs:
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
+          install_args: ruff@0.15.20
       - name: Check format
         run: mise run python:check-format
       - name: Check style
@@ -64,13 +65,10 @@ jobs:
     strategy:
       max-parallel: 15
       matrix:
-        include:
-          - os: ubuntu-latest
-            python: python3.12
-          - os: macos-latest
-            python: python
-          - os: windows-latest
-            python: python
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -79,34 +77,14 @@ jobs:
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
-      - name: Verify shared Python library
-        run: mise run python:verify-libpython
-      # Linux maturin builds may run inside manylinux Docker, so host Rust caches only help Windows/macOS.
+          install_args: "rust@nightly-2026-03-05 python@3.12.13 uv@0.9.3"
       - name: Cache Rust artifacts
-        if: runner.os != 'Linux'
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: bindings-python
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
-        with:
-          working-directory: "bindings/python"
-          command: build
-          # manylinux containers have multiple Pythons, while host builds use mise's python shim.
-          args: --out dist -i ${{ matrix.python }}
-      - name: Sync dependencies
-        working-directory: "bindings/python"
-        shell: bash
-        run: |
-          uv sync --python 3.12 --no-managed-python --no-python-downloads --group dev --no-install-project
-      - name: Install built wheel
-        working-directory: "bindings/python"
-        shell: bash
-        run: |
-          uv pip install --no-build --reinstall --find-links dist/ pyiceberg-core
-      - name: Run tests
-        shell: bash
+      - name: Build, install, and test wheel
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_DATASET: ${{ secrets.HF_DATASET }}
-        run: mise run python:test
+        run: mise run python:test-wheel

@@ -27,4 +27,4 @@ Complete the root [contributor setup](../CONTRIBUTING.md#setup), then use mise f
 mise run site
 ```
 
-Run `mise run site-build` to build the site without starting a server.
+Run `mise run site-build` to build the same complete artifact as CI, including the Rust API documentation, without starting a server.

@@ -43,7 +43,10 @@ mise run python:build
 
 ```shell
 mise run python:test
+mise run python:test-wheel
 ```
+
+The first command tests the active development install. The second reproduces CI's native-wheel build, installs that wheel without a source fallback, and then runs the tests.
 
 ## Style checks
 

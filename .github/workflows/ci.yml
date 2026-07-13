@@ -55,27 +55,10 @@ jobs:
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
+          install_args: "rust@nightly-2026-03-05 taplo@0.9.3 cargo:cargo-machete@0.7.0"
 
-      - name: Check License Header
-        uses: apache/skywalking-eyes/header@61275cc80d0798a405cb070f7d3a8aaf7cf2c2c1 # v0.8.0
-
-      - name: Check toml format
-        run: mise run check-toml
-
-      - name: Cargo format
-        run: mise run check-fmt
-
-      - name: Check diff
-        run: git diff --exit-code
-
-      - name: Check Cargo.lock is up-to-date
-        run: cargo update --workspace --locked
-
-      - name: Cargo Machete
-        run: mise run cargo-machete
-
-      - name: Check typos
-        uses: crate-ci/typos@bee27e3a4fd1ea2111cf90ab89cd076c870fce14 # v1.48.0
+      - name: Run lint checks
+        run: mise run lint
 
   clippy:
     needs: lint
@@ -89,6 +72,7 @@ jobs:
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
+          install_args: "rust@nightly-2026-03-05 python@3.12.13"
 
       - name: Cargo clippy
         run: mise run check-clippy
@@ -115,6 +99,7 @@ jobs:
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
+          install_args: "rust@nightly-2026-03-05 python@3.12.13"
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -138,6 +123,7 @@ jobs:
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
+          install_args: "rust@nightly-2026-03-05 python@3.12.13 jq@1.8.2"
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -145,15 +131,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Check each crate standalone
-        shell: bash
-        run: |
-          set -euo pipefail
-          packages=$(cargo metadata --no-deps --format-version=1 | python -c \
-            'import json, sys; print("\n".join(package["name"] for package in json.load(sys.stdin)["packages"]))')
-          for pkg in $packages; do
-            echo "Checking $pkg..."
-            cargo check -p "$pkg" --all-targets
-          done
+        run: mise run check-standalone
 
   # Verifies the core iceberg crate compiles without default features, ensuring
   # optional functionality is properly gated behind feature flags.
@@ -179,6 +157,7 @@ jobs:
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
+          install_args: rust@nightly-2026-03-05
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -186,7 +165,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Build
-        run: cargo build -p iceberg --no-default-features
+        run: mise run build-no-default-features
 
   tests:
     needs: lint
@@ -197,10 +176,12 @@ jobs:
     strategy:
       max-parallel: 15
       matrix:
-        test-suite:
-          - default
-          - doc
-    name: Tests (${{ matrix.test-suite }})
+        include:
+          - name: default
+            mise_task: test
+          - name: doc
+            mise_task: doc-test
+    name: Tests (${{ matrix.name }})
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -210,40 +191,31 @@ jobs:
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
+          install_args: "rust@nightly-2026-03-05 python@3.12.13 cargo:cargo-nextest@0.9.138"
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          key: ${{ matrix.test-suite }}
+          key: ${{ matrix.name }}
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-
-      - name: Start Docker containers
-        if: matrix.test-suite == 'default'
-        run: mise run docker-up
 
       - name: Run tests
         shell: bash
         env:
+          MISE_TASK: ${{ matrix.mise_task }}
           # HuggingFace Hub integration tests self-skip when these are unset
           # (e.g. PRs from forks); see crates/storage/opendal/tests/file_io_hf_test.rs
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_BUCKET: ${{ secrets.HF_BUCKET }}
           HF_DATASET: ${{ secrets.HF_DATASET }}
-        run: |
-          if [ "${{ matrix.test-suite }}" = "default" ]; then
-            mise run nextest
-          else
-            mise run doc-test
-          fi
-
-      - name: Stop Docker containers
-        if: always() && matrix.test-suite == 'default'
-        run: mise run docker-down
+        run: mise run "$MISE_TASK"
 
   msrv:
     name: Verify MSRV
     needs: lint
     runs-on: ubuntu-latest
+    env:
+      MISE_RUST_VERSION: "1.94.0"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -252,5 +224,6 @@ jobs:
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
+          install_args: "rust@1.94.0 python@3.12.13"
       - name: Check MSRV
         run: mise run check-msrv

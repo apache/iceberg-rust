@@ -48,17 +48,11 @@ jobs:
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
+          cache: false
+          install_args: "rust@nightly-2026-03-05 python@3.12.13 mdbook@0.4.36"
 
-      - name: Build
+      - name: Build website and API docs
         run: mise run site-build
-
-      - name: Copy asf file
-        run: cp .asf.yaml ./website/book/.asf.yaml
-
-      - name: Build API docs
-        run: |
-          cargo doc --no-deps --workspace --all-features
-          cp -r target/doc ./website/book/api
 
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
