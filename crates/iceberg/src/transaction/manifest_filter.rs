@@ -47,7 +47,6 @@ impl ManifestFilterManager {
     /// `DataFile` covers both data and delete files, so the same entry point serves
     /// data-manifest and delete-manifest filtering. Removals are keyed by file path;
     /// recording the same path more than once keeps a single removal entry.
-    #[allow(unused)]
     pub(crate) fn delete_file(&mut self, file: DataFile) {
         self.deleted_files.insert(file.file_path().to_string());
     }
@@ -58,7 +57,6 @@ impl ManifestFilterManager {
     /// **v1 always rewrites**: every input manifest goes through the rewrite path
     /// unconditionally on every attempt — there is no cache lookup/store. The rewrite body
     /// is a placeholder (pass-through) for now; the filter seam is the normative part.
-    #[allow(unused)]
     pub(crate) async fn filter_manifests(
         &self,
         sp: &mut SnapshotProducer<'_>,
@@ -84,7 +82,6 @@ impl ManifestFilterManager {
     /// The real implementation will load the manifest, drop entries whose file path is in
     /// `deleted_files`, and re-emit the survivors through a producer-provided manifest
     /// writer. It is intentionally left as a pass-through in v1.
-    #[allow(unused)]
     async fn rewrite_placeholder(
         &self,
         _sp: &mut SnapshotProducer<'_>,

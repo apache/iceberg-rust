@@ -71,14 +71,17 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
 
     /// Write-time conflict validation against the refreshed base.
     ///
-    /// The default implementation is a no-op. Append (`FastAppendOperation`)
-    /// inherits this default; delete-class operations override it to compose the
-    /// stateless `validation::*` helpers. Called by
+    /// This is a required method: every operation states its validation policy
+    /// explicitly. Append (`FastAppendOperation`) implements it as a no-op (append
+    /// removes nothing, so it has no conflicts to detect); delete-class operations
+    /// implement it by composing the stateless `validation::*` helpers. Called by
     /// `MergingSnapshotProducer::commit` on every commit attempt against the
     /// freshly refreshed base, and is never cached.
-    async fn validate(&self, _base: &Table, _parent_snapshot_id: Option<i64>) -> Result<()> {
-        Ok(())
-    }
+    fn validate(
+        &self,
+        base: &Table,
+        parent_snapshot_id: Option<i64>,
+    ) -> impl Future<Output = Result<()>> + Send;
 
     /// Returns manifest entries that should be marked as deleted in the new snapshot.
     #[allow(unused)]

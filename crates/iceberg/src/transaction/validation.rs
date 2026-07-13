@@ -149,9 +149,8 @@ pub(crate) async fn validation_history(
 ///
 /// Returns [`ErrorKind::DataInvalid`] if new conflicting delete files are found for
 /// any of the data files.
-// Composed by delete-class operations' `validate` override, wired up in a later
-// task; kept `pub(crate)` for that consumer.
-#[allow(dead_code)]
+// Composed by delete-class operations' `validate` override (e.g.
+// `RewriteFilesOperation`).
 pub(crate) async fn validate_no_new_deletes_for_data_files(
     base: &Table,
     from_snapshot_id: Option<i64>,

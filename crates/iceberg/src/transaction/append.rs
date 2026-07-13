@@ -105,6 +105,12 @@ impl SnapshotProduceOperation for FastAppendOperation {
         Operation::Append
     }
 
+    /// Append removes nothing, so there is no write-time conflict to detect: this is
+    /// an explicit no-op.
+    async fn validate(&self, _base: &Table, _parent_snapshot_id: Option<i64>) -> Result<()> {
+        Ok(())
+    }
+
     async fn delete_entries(
         &self,
         _snapshot_produce: &SnapshotProducer<'_>,

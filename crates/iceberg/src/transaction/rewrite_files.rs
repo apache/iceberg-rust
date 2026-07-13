@@ -155,8 +155,6 @@ impl TransactionAction for RewriteFilesAction {
 /// It overrides `validate` (empty-delete precondition + conflicting-delete scan) and implements
 /// `existing_manifest` (errors when there is no current snapshot, otherwise runs the MSP filter
 /// managers over the carried-forward manifests).
-// Constructed via `build_operation`, which is wired into `commit` in task 8.3.
-#[allow(dead_code)]
 pub(crate) struct RewriteFilesOperation<'a> {
     msp: &'a MergingSnapshotProducer,
     starting_snapshot_id: Option<i64>,

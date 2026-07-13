@@ -96,7 +96,6 @@ impl MergingSnapshotProducer {
     /// All staging state starts empty and is populated during the build phase via the
     /// `&mut self` mutators. The `snapshot_id` is left unresolved (generated lazily on
     /// the first commit attempt).
-    #[allow(dead_code)]
     pub(crate) fn new(
         commit_uuid: Uuid,
         key_metadata: Option<Vec<u8>>,
@@ -121,7 +120,6 @@ impl MergingSnapshotProducer {
     /// iceberg-rust #1606). Mutates plain staging state with `&mut self`; only
     /// reachable in the BUILD phase, before `.apply(tx)` wraps the action in an `Arc`.
     /// Mirrors Java `MergingSnapshotProducer.add(...)`.
-    #[allow(unused)]
     pub(crate) fn add_data_file(&mut self, file: DataFile) {
         match file.content_type() {
             DataContentType::Data => self.added_data_files.push(file),
@@ -139,7 +137,6 @@ impl MergingSnapshotProducer {
     /// manifests (`delete_filter`). Recording here (during the `&mut self` build phase) is what
     /// lets `filter_existing_manifests` run against a shared `&self` borrow during commit,
     /// since [`ManifestFilterManager::delete_file`] needs `&mut self`.
-    #[allow(unused)]
     pub(crate) fn delete_data_file(&mut self, file: DataFile) {
         match file.content_type() {
             DataContentType::Data => {
@@ -155,7 +152,6 @@ impl MergingSnapshotProducer {
 
     /// MSP-owned config; the action's `set_data_sequence_number` threads through here.
     /// Mirrors Java `setNewDataFilesDataSequenceNumber`.
-    #[allow(unused)]
     pub(crate) fn set_data_sequence_number(&mut self, seq: i64) {
         self.data_sequence_number = Some(seq);
     }
@@ -163,19 +159,16 @@ impl MergingSnapshotProducer {
     /// Override the stable `commit_uuid`. The action's `set_commit_uuid` threads
     /// through here so the caller-supplied UUID replaces the one generated at
     /// construction. Runs in the BUILD phase (`&mut self`), before commit.
-    #[allow(unused)]
     pub(crate) fn set_commit_uuid(&mut self, commit_uuid: Uuid) {
         self.commit_uuid = commit_uuid;
     }
 
     /// MSP-owned config; the action's `set_key_metadata` threads through here.
-    #[allow(unused)]
     pub(crate) fn set_key_metadata(&mut self, key_metadata: Option<Vec<u8>>) {
         self.key_metadata = key_metadata;
     }
 
     /// MSP-owned config; the action's `set_snapshot_properties` threads through here.
-    #[allow(unused)]
     pub(crate) fn set_snapshot_properties(
         &mut self,
         snapshot_properties: HashMap<String, String>,
@@ -183,17 +176,14 @@ impl MergingSnapshotProducer {
         self.snapshot_properties = snapshot_properties;
     }
 
-    #[allow(unused)]
     pub(crate) fn data_sequence_number(&self) -> Option<i64> {
         self.data_sequence_number
     }
 
-    #[allow(unused)]
     pub(crate) fn deleted_data_files(&self) -> &[DataFile] {
         &self.deleted_data_files
     }
 
-    #[allow(unused)]
     pub(crate) fn deleted_delete_files(&self) -> &[DataFile] {
         &self.deleted_delete_files
     }
@@ -210,7 +200,6 @@ impl MergingSnapshotProducer {
     ///
     /// `base` is the refreshed base table (`sp.table`); it is threaded through to the filter
     /// managers for manifest IO.
-    #[allow(unused)]
     pub(crate) async fn filter_existing_manifests(
         &self,
         sp: &mut SnapshotProducer<'_>,
@@ -252,7 +241,6 @@ impl MergingSnapshotProducer {
     /// rather than hardcoded, so the action decides how the manifest set is
     /// post-processed. Append and today's delete-class actions pass
     /// `DefaultManifestProcess` (a no-op), but the seam stays open for merging.
-    #[allow(unused)]
     pub(crate) async fn commit<OP, MP>(
         &self,
         base: &Table,
