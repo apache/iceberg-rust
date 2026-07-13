@@ -83,7 +83,7 @@ impl MetadataLocation {
     /// Updates the metadata location with compression settings from the new metadata.
     pub fn with_new_metadata(&self, new_metadata: &TableMetadata) -> Self {
         Self {
-            table_location: self.table_location.clone(),
+            table_location: new_metadata.location.clone(),
             version: self.version,
             id: self.id,
             compression_codec: Self::compression_from_properties(new_metadata.properties()),
