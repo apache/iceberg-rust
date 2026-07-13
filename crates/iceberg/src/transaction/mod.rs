@@ -57,6 +57,7 @@ mod append;
 mod delete_aware;
 mod expire_snapshots;
 mod manifest_filter;
+mod merging_snapshot;
 mod rewrite_files;
 mod snapshot;
 mod sort_order;
@@ -65,6 +66,7 @@ mod update_properties;
 mod update_schema;
 mod update_statistics;
 mod upgrade_format_version;
+mod validation;
 
 use std::sync::Arc;
 use std::time::Duration;
