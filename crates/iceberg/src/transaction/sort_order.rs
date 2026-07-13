@@ -85,6 +85,11 @@ impl ReplaceSortOrderAction {
     ///
     /// Whether the transform is valid for the column's type is checked at commit time,
     /// once the table schema is available (mirroring Java's `SortOrder.Builder.build()`).
+    ///
+    /// Note: `Term` is currently a plain column reference. Once it becomes
+    /// transform-carrying (#2665), sort-order declaration is expected to converge on
+    /// Term-based `asc`/`desc` (as in Java's `SortOrderBuilder`), at which point the
+    /// `_with_transform` variants can be deprecated in its favor.
     pub fn asc_with_transform(
         self,
         name: &str,
@@ -99,6 +104,11 @@ impl ReplaceSortOrderAction {
     ///
     /// Whether the transform is valid for the column's type is checked at commit time,
     /// once the table schema is available (mirroring Java's `SortOrder.Builder.build()`).
+    ///
+    /// Note: `Term` is currently a plain column reference. Once it becomes
+    /// transform-carrying (#2665), sort-order declaration is expected to converge on
+    /// Term-based `asc`/`desc` (as in Java's `SortOrderBuilder`), at which point the
+    /// `_with_transform` variants can be deprecated in its favor.
     pub fn desc_with_transform(
         self,
         name: &str,
@@ -168,13 +178,17 @@ impl TransactionAction for ReplaceSortOrderAction {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use as_any::Downcast;
 
-    use crate::ErrorKind;
+    use crate::catalog::Catalog;
+    use crate::memory::tests::new_memory_catalog;
     use crate::spec::{NullOrder, SortDirection, Transform};
     use crate::transaction::sort_order::{PendingSortField, ReplaceSortOrderAction};
-    use crate::transaction::tests::make_v2_table;
+    use crate::transaction::tests::{make_v2_table, make_v3_minimal_table_in_catalog};
     use crate::transaction::{ApplyTransactionAction, Transaction, TransactionAction};
+    use crate::{ErrorKind, TableUpdate};
 
     #[test]
     fn test_replace_sort_order() {
@@ -242,10 +256,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_replace_sort_order_with_transform_commits() {
-        use std::sync::Arc;
-
-        use crate::TableUpdate;
-
         let table = make_v2_table();
         let action = Arc::new(ReplaceSortOrderAction::new().asc_with_transform(
             "x",
@@ -265,8 +275,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_replace_sort_order_rejects_incompatible_transform() {
-        use std::sync::Arc;
-
         let table = make_v2_table();
         // `x` is a `long` column; `year` only accepts date/timestamp types.
         let action = Arc::new(ReplaceSortOrderAction::new().asc_with_transform(
@@ -284,11 +292,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_sort_order_transform_survives_metadata_json_round_trip() {
-        use crate::catalog::Catalog;
-        use crate::memory::tests::new_memory_catalog;
-        use crate::spec::SortDirection;
-        use crate::transaction::tests::make_v3_minimal_table_in_catalog;
-
         // Commit a transform-based sort order through a real catalog: the memory
         // catalog serializes the updated table metadata to a metadata.json file
         // (`TableMetadata::write_to`), and `load_table` reads that file back and
