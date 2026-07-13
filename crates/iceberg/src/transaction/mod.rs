@@ -54,7 +54,6 @@ mod action;
 
 pub use action::*;
 mod append;
-mod delete_aware;
 mod expire_snapshots;
 mod manifest_filter;
 mod merging_snapshot;

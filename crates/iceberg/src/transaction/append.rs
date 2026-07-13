@@ -79,7 +79,6 @@ impl TransactionAction for FastAppendAction {
         let snapshot_producer = SnapshotProducer::builder()
             .table(table)
             .commit_uuid(self.commit_uuid.unwrap_or_else(Uuid::now_v7))
-            .key_metadata(self.key_metadata.clone())
             .snapshot_properties(self.snapshot_properties.clone())
             .added_data_files(self.added_data_files.clone())
             .build();

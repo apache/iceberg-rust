@@ -137,8 +137,6 @@ pub(crate) struct SnapshotProducer<'a> {
     snapshot_id: Option<i64>,
     commit_uuid: Uuid,
     #[builder(default)]
-    key_metadata: Option<Vec<u8>>,
-    #[builder(default)]
     snapshot_properties: HashMap<String, String>,
     #[builder(default)]
     added_data_files: Vec<DataFile>,
@@ -286,7 +284,6 @@ impl<'a> SnapshotProducer<'a> {
         let builder = ManifestWriterBuilder::new(
             output_file,
             Some(snapshot_id),
-            self.key_metadata.clone(),
             self.table.metadata().current_schema().clone(),
             self.table
                 .metadata()

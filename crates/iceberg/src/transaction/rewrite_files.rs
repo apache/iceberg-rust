@@ -65,7 +65,7 @@ impl RewriteFilesAction {
         Self {
             // A stable commit UUID is generated up front (like Java's `final commitUUID`);
             // `set_commit_uuid` can still override it during the build phase.
-            msp: MergingSnapshotProducer::new(Uuid::now_v7(), None, HashMap::default()),
+            msp: MergingSnapshotProducer::new(Uuid::now_v7(), HashMap::default()),
             starting_snapshot_id: None,
         }
     }
@@ -105,12 +105,6 @@ impl RewriteFilesAction {
     /// Set commit UUID for the snapshot. Threads through to the MSP.
     pub fn set_commit_uuid(mut self, commit_uuid: Uuid) -> Self {
         self.msp.set_commit_uuid(commit_uuid);
-        self
-    }
-
-    /// Set key metadata for manifest files. Threads through to the MSP.
-    pub fn set_key_metadata(mut self, key_metadata: Vec<u8>) -> Self {
-        self.msp.set_key_metadata(Some(key_metadata));
         self
     }
 

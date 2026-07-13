@@ -70,7 +70,6 @@ pub(crate) struct MergingSnapshotProducer {
     commit_uuid: Uuid,
 
     // ---- plain staging inputs (mutated with &mut during the BUILD phase) ----
-    key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
     added_delete_files: Vec<DataFile>,
@@ -96,14 +95,9 @@ impl MergingSnapshotProducer {
     /// All staging state starts empty and is populated during the build phase via the
     /// `&mut self` mutators. The `snapshot_id` is left unresolved (generated lazily on
     /// the first commit attempt).
-    pub(crate) fn new(
-        commit_uuid: Uuid,
-        key_metadata: Option<Vec<u8>>,
-        snapshot_properties: HashMap<String, String>,
-    ) -> Self {
+    pub(crate) fn new(commit_uuid: Uuid, snapshot_properties: HashMap<String, String>) -> Self {
         Self {
             commit_uuid,
-            key_metadata,
             snapshot_properties,
             added_data_files: Vec::new(),
             added_delete_files: Vec::new(),
@@ -161,11 +155,6 @@ impl MergingSnapshotProducer {
     /// construction. Runs in the BUILD phase (`&mut self`), before commit.
     pub(crate) fn set_commit_uuid(&mut self, commit_uuid: Uuid) {
         self.commit_uuid = commit_uuid;
-    }
-
-    /// MSP-owned config; the action's `set_key_metadata` threads through here.
-    pub(crate) fn set_key_metadata(&mut self, key_metadata: Option<Vec<u8>>) {
-        self.key_metadata = key_metadata;
     }
 
     /// MSP-owned config; the action's `set_snapshot_properties` threads through here.
@@ -276,7 +265,6 @@ impl MergingSnapshotProducer {
             .table(base)
             .snapshot_id(Some(snapshot_id))
             .commit_uuid(self.commit_uuid)
-            .key_metadata(self.key_metadata.clone())
             .snapshot_properties(self.snapshot_properties.clone())
             .added_data_files(self.added_data_files.clone())
             .build();
