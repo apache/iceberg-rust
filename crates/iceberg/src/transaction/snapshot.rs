@@ -866,6 +866,17 @@ partition_struct: {:?}, partition_type: {:?}",
         &self.target_branch
     }
 
+    /// Get the ID assigned to the snapshot this producer will emit.
+    ///
+    /// This is the ID of the *new* snapshot being proposed, not of any
+    /// existing snapshot in the table. Actions that store retry state
+    /// (e.g. `RewriteManifestsAction`) capture this so subsequent attempts
+    /// can reuse the same identity — critical when cached manifest files
+    /// stamped with `added_snapshot_id = this ID` are carried forward.
+    pub(crate) fn snapshot_id(&self) -> i64 {
+        self.snapshot_id
+    }
+
     /// Enable delete filter manager for this snapshot (lazy initialization)
     /// This will also populate the manager with files already marked for removal
     pub fn enable_delete_filter_manager(&mut self) {
