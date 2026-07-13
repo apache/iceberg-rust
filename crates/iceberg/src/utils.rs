@@ -255,31 +255,6 @@ use crate::spec::{Manifest, ManifestFile, ManifestList, ManifestStatus, Snapshot
 pub(crate) const DEFAULT_DELETE_CONCURRENCY_LIMIT: usize = 10;
 pub(crate) const DEFAULT_LOAD_CONCURRENCY_LIMIT: usize = 16;
 
-/// Concurrently loads manifest lists for the given snapshots.
-pub(crate) async fn load_manifest_lists(
-    file_io: &FileIO,
-    table_metadata: &TableMetadataRef,
-    snapshots: Vec<SnapshotRef>,
-    concurrency: usize,
-) -> Result<Vec<(SnapshotRef, ManifestList)>> {
-    let concurrency = concurrency.max(1);
-
-    stream::iter(snapshots)
-        .map(|snapshot| {
-            let file_io = file_io.clone();
-            let table_metadata = table_metadata.clone();
-            async move {
-                let manifest_list = snapshot
-                    .load_manifest_list(&file_io, &table_metadata)
-                    .await?;
-                Ok((snapshot, manifest_list))
-            }
-        })
-        .buffer_unordered(concurrency)
-        .try_collect()
-        .await
-}
-
 /// Streams the manifest lists for `snapshots`, invoking `f` on each loaded
 /// [`ManifestList`] and dropping it immediately afterwards.
 ///

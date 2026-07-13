@@ -29,7 +29,7 @@ use futures::stream::{self, StreamExt};
 
 use crate::Result;
 use crate::table::Table;
-use crate::utils::{load_manifest_lists, load_manifests};
+use crate::utils::{for_each_manifest, for_each_manifest_list};
 
 /// Default time offset for orphan file deletion threshold (1 day in milliseconds).
 const DEFAULT_OLDER_THAN_MS: i64 = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -210,36 +210,42 @@ impl RemoveOrphanFilesAction {
 
         let snapshots: Vec<_> = table_metadata.snapshots().cloned().collect();
 
-        // Load manifest lists concurrently using shared loader
-        let loaded_lists =
-            load_manifest_lists(file_io, &table_metadata, snapshots, self.load_concurrency).await?;
-
-        // Collect manifest list paths, manifest files, and deduplicate for loading
-        let mut unique_manifest_files = Vec::new();
-        for (snapshot, manifest_list) in loaded_lists {
-            // Record manifest list path as reachable
+        // Record manifest list paths as reachable (cheap — just strings).
+        for snapshot in &snapshots {
             let manifest_list_path = snapshot.manifest_list();
             if !manifest_list_path.is_empty() {
                 reachable.insert(manifest_list_path.to_string());
             }
+        }
 
-            for manifest_file in manifest_list.entries() {
-                // Only load each manifest once (reachable set handles deduplication)
-                if reachable.insert(manifest_file.manifest_path.clone()) {
-                    unique_manifest_files.push(manifest_file.clone());
+        let mut unique_manifest_files = Vec::new();
+        for_each_manifest_list(
+            file_io,
+            &table_metadata,
+            snapshots,
+            self.load_concurrency,
+            |manifest_list| {
+                for manifest_file in manifest_list.entries() {
+                    // Only load each manifest once (reachable set handles deduplication).
+                    if reachable.insert(manifest_file.manifest_path.clone()) {
+                        unique_manifest_files.push(manifest_file.clone());
+                    }
                 }
-            }
-        }
+            },
+        )
+        .await?;
 
-        // Load manifests concurrently using shared loader and collect content files
-        let loaded_manifests =
-            load_manifests(file_io, unique_manifest_files, self.load_concurrency).await?;
-
-        for (_, manifest) in loaded_manifests {
-            for entry in manifest.entries() {
-                reachable.insert(entry.data_file().file_path().to_string());
-            }
-        }
+        for_each_manifest(
+            file_io,
+            unique_manifest_files,
+            self.load_concurrency,
+            |_, manifest| {
+                for entry in manifest.entries() {
+                    reachable.insert(entry.data_file().file_path().to_string());
+                }
+            },
+        )
+        .await?;
 
         Ok(())
     }
