@@ -70,7 +70,7 @@ Currently, iceberg-rust uses GitHub Actions to run tests. The workflows are defi
 
 For small or first-time contributions, we recommend the dev container method. Prefer to set up the tools on your host? That's fine too.
 
-The project uses [mise](https://mise.en.dev/) to keep development tool versions and task definitions in one place. The pinned environment makes local and CI runs consistent, installs Rust, Python, protoc, and task-specific utilities automatically, and provides the shared `libpython` needed to compile the Python/DataFusion bindings.
+The project uses [mise](https://mise.en.dev/) to keep development tool versions and task definitions in one place. The pinned environment makes local and CI runs consistent, installs Rust, Python, and task-specific utilities automatically, and provides the shared `libpython` needed to compile the Python/DataFusion bindings.
 
 This does add mise as a bootstrap dependency, and the first installation requires network access and can take some time. The repository configuration must also be reviewed and trusted before mise will use it. mise does not install system applications such as Docker, Podman, or GPG.
 

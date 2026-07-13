@@ -29,7 +29,6 @@ precompiled_flavor = "install_only_stripped"
 "cargo:cargo-public-api" = { version = "0.51.0", depends = "rust" }
 jq = "1.8.2"
 mdbook = "0.4.36"
-protoc = "35.1"
 python = "3.12.13"
 ruff = "0.15.20"
 rust = [
