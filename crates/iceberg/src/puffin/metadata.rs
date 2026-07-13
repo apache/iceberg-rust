@@ -21,7 +21,7 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::compression::CompressionCodec;
-use crate::io::{FileRead, InputFile};
+use crate::io::FileRead;
 use crate::{Error, ErrorKind, Result};
 
 /// Human-readable identification of the application writing the file, along with its version.
@@ -277,21 +277,14 @@ impl FileMetadata {
     }
 
     /// Returns the file metadata about a Puffin file
-    pub(crate) async fn read(input_file: &InputFile) -> Result<FileMetadata> {
-        let file_read = input_file.reader().await?;
-
+    pub(crate) async fn read(file_read: &dyn FileRead, file_length: u64) -> Result<FileMetadata> {
         let first_four_bytes = file_read.read(0..FileMetadata::MAGIC_LENGTH.into()).await?;
         FileMetadata::check_magic(&first_four_bytes)?;
 
-        let input_file_length = input_file.metadata().await?.size;
         let footer_payload_length =
-            FileMetadata::read_footer_payload_length(file_read.as_ref(), input_file_length).await?;
-        let footer_bytes = FileMetadata::read_footer_bytes(
-            file_read.as_ref(),
-            input_file_length,
-            footer_payload_length,
-        )
-        .await?;
+            FileMetadata::read_footer_payload_length(file_read, file_length).await?;
+        let footer_bytes =
+            FileMetadata::read_footer_bytes(file_read, file_length, footer_payload_length).await?;
 
         let magic_length = FileMetadata::MAGIC_LENGTH as usize;
         // check first four bytes of footer
@@ -312,16 +305,14 @@ impl FileMetadata {
     /// read option.
     #[allow(dead_code)]
     pub(crate) async fn read_with_prefetch(
-        input_file: &InputFile,
+        file_read: &dyn FileRead,
+        file_length: u64,
         prefetch_hint: u8,
     ) -> Result<FileMetadata> {
         if prefetch_hint > 16 {
-            let input_file_length = input_file.metadata().await?.size;
-            let file_read = input_file.reader().await?;
-
             // Hint cannot be larger than input file
-            if prefetch_hint as u64 > input_file_length {
-                return FileMetadata::read(input_file).await;
+            if prefetch_hint as u64 > file_length {
+                return FileMetadata::read(file_read, file_length).await;
             }
 
             // Validate file header magic
@@ -329,8 +320,8 @@ impl FileMetadata {
             FileMetadata::check_magic(&first_four_bytes)?;
 
             // Read footer based on prefetch hint
-            let start = input_file_length - prefetch_hint as u64;
-            let end = input_file_length;
+            let start = file_length - prefetch_hint as u64;
+            let end = file_length;
             let footer_bytes = file_read.read(start..end).await?;
 
             let payload_length_start =
@@ -350,7 +341,7 @@ impl FileMetadata {
                 + FileMetadata::FOOTER_STRUCT_LENGTH as usize
                 + FileMetadata::MAGIC_LENGTH as usize;
             if footer_length > prefetch_hint as usize {
-                return FileMetadata::read(input_file).await;
+                return FileMetadata::read(file_read, file_length).await;
             }
 
             // Read footer bytes
@@ -369,7 +360,7 @@ impl FileMetadata {
             return FileMetadata::from_json_str(&footer_payload_str);
         }
 
-        FileMetadata::read(input_file).await
+        FileMetadata::read(file_read, file_length).await
     }
 
     #[inline]
@@ -392,7 +383,6 @@ mod tests {
     use bytes::Bytes;
     use tempfile::TempDir;
 
-    use crate::ErrorKind;
     use crate::io::{FileIO, InputFile};
     use crate::puffin::metadata::{BlobMetadata, CompressionCodec, FileMetadata};
     use crate::puffin::test_utils::{
@@ -401,8 +391,26 @@ mod tests {
         java_zstd_compressed_metric_input_file, uncompressed_metric_file_metadata,
         zstd_compressed_metric_file_metadata,
     };
+    use crate::{ErrorKind, Result};
 
     const INVALID_MAGIC_VALUE: [u8; 4] = [80, 70, 65, 0];
+
+    /// Reads file metadata from an [`InputFile`], resolving its reader and length.
+    async fn read_file_metadata(input_file: &InputFile) -> Result<FileMetadata> {
+        let file_read = input_file.reader().await?;
+        let file_length = input_file.metadata().await?.size;
+        FileMetadata::read(file_read.as_ref(), file_length).await
+    }
+
+    /// Reads file metadata with a prefetch hint from an [`InputFile`].
+    async fn read_file_metadata_with_prefetch(
+        input_file: &InputFile,
+        prefetch_hint: u8,
+    ) -> Result<FileMetadata> {
+        let file_read = input_file.reader().await?;
+        let file_length = input_file.metadata().await?.size;
+        FileMetadata::read_with_prefetch(file_read.as_ref(), file_length, prefetch_hint).await
+    }
 
     async fn input_file_with_bytes(temp_dir: &TempDir, slice: &[u8]) -> InputFile {
         let file_io = FileIO::new_with_fs();
@@ -448,7 +456,7 @@ mod tests {
         let input_file = input_file_with_bytes(&temp_dir, &bytes).await;
 
         assert_eq!(
-            FileMetadata::read(&input_file)
+            read_file_metadata(&input_file)
                 .await
                 .unwrap_err()
                 .to_string(),
@@ -471,7 +479,7 @@ mod tests {
         let input_file = input_file_with_bytes(&temp_dir, &bytes).await;
 
         assert_eq!(
-            FileMetadata::read(&input_file)
+            read_file_metadata(&input_file)
                 .await
                 .unwrap_err()
                 .to_string(),
@@ -494,7 +502,7 @@ mod tests {
         let input_file = input_file_with_bytes(&temp_dir, &bytes).await;
 
         assert_eq!(
-            FileMetadata::read(&input_file)
+            read_file_metadata(&input_file)
                 .await
                 .unwrap_err()
                 .to_string(),
@@ -519,7 +527,7 @@ mod tests {
         let input_file = input_file_with_bytes(&temp_dir, &bytes).await;
 
         assert_eq!(
-            FileMetadata::read(&input_file)
+            read_file_metadata(&input_file)
                 .await
                 .unwrap_err()
                 .to_string(),
@@ -544,7 +552,7 @@ mod tests {
         let input_file = input_file_with_bytes(&temp_dir, &bytes).await;
 
         assert_eq!(
-            FileMetadata::read(&input_file)
+            read_file_metadata(&input_file)
                 .await
                 .unwrap_err()
                 .to_string(),
@@ -567,7 +575,7 @@ mod tests {
         let input_file = input_file_with_bytes(&temp_dir, &bytes).await;
 
         assert_eq!(
-            FileMetadata::read(&input_file)
+            read_file_metadata(&input_file)
                 .await
                 .unwrap_err()
                 .to_string(),
@@ -590,7 +598,7 @@ mod tests {
         let input_file = input_file_with_bytes(&temp_dir, &bytes).await;
 
         assert_eq!(
-            FileMetadata::read(&input_file)
+            read_file_metadata(&input_file)
                 .await
                 .unwrap_err()
                 .to_string(),
@@ -616,7 +624,7 @@ mod tests {
         let input_file = input_file_with_bytes(&temp_dir, &bytes).await;
 
         assert_eq!(
-            FileMetadata::read(&input_file)
+            read_file_metadata(&input_file)
                 .await
                 .unwrap_err()
                 .to_string(),
@@ -639,7 +647,7 @@ mod tests {
         let input_file = input_file_with_bytes(&temp_dir, &bytes).await;
 
         assert_eq!(
-            FileMetadata::read(&input_file).await.unwrap(),
+            read_file_metadata(&input_file).await.unwrap(),
             FileMetadata {
                 blobs: vec![],
                 properties: HashMap::new(),
@@ -663,7 +671,7 @@ mod tests {
         .await;
 
         assert_eq!(
-            FileMetadata::read(&input_file).await.unwrap(),
+            read_file_metadata(&input_file).await.unwrap(),
             FileMetadata {
                 blobs: vec![],
                 properties: {
@@ -692,7 +700,7 @@ mod tests {
         .await;
 
         assert_eq!(
-            FileMetadata::read(&input_file).await.unwrap(),
+            read_file_metadata(&input_file).await.unwrap(),
             FileMetadata {
                 blobs: vec![],
                 properties: {
@@ -718,7 +726,7 @@ mod tests {
         .await;
 
         assert_eq!(
-            FileMetadata::read(&input_file)
+            read_file_metadata(&input_file)
                 .await
                 .unwrap_err()
                 .to_string(),
@@ -741,7 +749,7 @@ mod tests {
         .await;
 
         assert_eq!(
-            FileMetadata::read(&input_file)
+            read_file_metadata(&input_file)
                 .await
                 .unwrap_err()
                 .to_string(),
@@ -781,7 +789,7 @@ mod tests {
         .await;
 
         assert_eq!(
-            FileMetadata::read(&input_file).await.unwrap(),
+            read_file_metadata(&input_file).await.unwrap(),
             FileMetadata {
                 blobs: vec![
                     BlobMetadata {
@@ -835,7 +843,7 @@ mod tests {
         .await;
 
         assert_eq!(
-            FileMetadata::read(&input_file).await.unwrap(),
+            read_file_metadata(&input_file).await.unwrap(),
             FileMetadata {
                 blobs: vec![BlobMetadata {
                     r#type: "type-a".to_string(),
@@ -882,7 +890,7 @@ mod tests {
         .await;
 
         assert_eq!(
-            FileMetadata::read(&input_file)
+            read_file_metadata(&input_file)
                 .await
                 .unwrap_err()
                 .to_string(),
@@ -899,7 +907,7 @@ mod tests {
         let input_file = input_file_with_payload(&temp_dir, r#""blobs" = []"#).await;
 
         assert_eq!(
-            FileMetadata::read(&input_file)
+            read_file_metadata(&input_file)
                 .await
                 .unwrap_err()
                 .to_string(),
@@ -911,7 +919,7 @@ mod tests {
     async fn test_read_file_metadata_of_uncompressed_empty_file() {
         let input_file = java_empty_uncompressed_input_file();
 
-        let file_metadata = FileMetadata::read(&input_file).await.unwrap();
+        let file_metadata = read_file_metadata(&input_file).await.unwrap();
         assert_eq!(file_metadata, empty_footer_payload())
     }
 
@@ -919,7 +927,7 @@ mod tests {
     async fn test_read_file_metadata_of_uncompressed_metric_data() {
         let input_file = java_uncompressed_metric_input_file();
 
-        let file_metadata = FileMetadata::read(&input_file).await.unwrap();
+        let file_metadata = read_file_metadata(&input_file).await.unwrap();
         assert_eq!(file_metadata, uncompressed_metric_file_metadata())
     }
 
@@ -927,7 +935,7 @@ mod tests {
     async fn test_read_file_metadata_of_zstd_compressed_metric_data() {
         let input_file = java_zstd_compressed_metric_input_file();
 
-        let file_metadata = FileMetadata::read_with_prefetch(&input_file, 64)
+        let file_metadata = read_file_metadata_with_prefetch(&input_file, 64)
             .await
             .unwrap();
         assert_eq!(file_metadata, zstd_compressed_metric_file_metadata())
@@ -936,7 +944,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_file_metadata_of_empty_file_with_prefetching() {
         let input_file = java_empty_uncompressed_input_file();
-        let file_metadata = FileMetadata::read_with_prefetch(&input_file, 64)
+        let file_metadata = read_file_metadata_with_prefetch(&input_file, 64)
             .await
             .unwrap();
 
@@ -946,7 +954,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_file_metadata_of_uncompressed_metric_data_with_prefetching() {
         let input_file = java_uncompressed_metric_input_file();
-        let file_metadata = FileMetadata::read_with_prefetch(&input_file, 64)
+        let file_metadata = read_file_metadata_with_prefetch(&input_file, 64)
             .await
             .unwrap();
 
@@ -956,7 +964,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_file_metadata_of_zstd_compressed_metric_data_with_prefetching() {
         let input_file = java_zstd_compressed_metric_input_file();
-        let file_metadata = FileMetadata::read_with_prefetch(&input_file, 64)
+        let file_metadata = read_file_metadata_with_prefetch(&input_file, 64)
             .await
             .unwrap();
 
@@ -983,11 +991,11 @@ mod tests {
         let input_file = input_file_with_bytes(&temp_dir, &bytes).await;
 
         assert_eq!(
-            FileMetadata::read(&input_file).await.unwrap_err().kind(),
+            read_file_metadata(&input_file).await.unwrap_err().kind(),
             ErrorKind::DataInvalid,
         );
         assert_eq!(
-            FileMetadata::read_with_prefetch(&input_file, prefetch_hint)
+            read_file_metadata_with_prefetch(&input_file, prefetch_hint)
                 .await
                 .unwrap_err()
                 .kind(),
@@ -1018,7 +1026,7 @@ mod tests {
         let input_file = input_file_with_payload(&temp_dir, payload).await;
 
         // Reading metadata should succeed (lazy validation)
-        let result = FileMetadata::read(&input_file).await;
+        let result = read_file_metadata(&input_file).await;
         assert!(result.is_ok());
         let metadata = result.unwrap();
         assert_eq!(metadata.blobs.len(), 1);
