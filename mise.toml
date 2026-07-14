@@ -22,6 +22,7 @@ monorepo_root = true
 config_roots = ["bindings/python"]
 
 [vars]
+cargo_public_api_version = "0.51.0"
 rust_msrv = "1.94"
 
 [settings.python]
@@ -32,9 +33,6 @@ precompiled_flavor = "install_only_stripped"
 
 [tools]
 actionlint = "1.7.12"
-"cargo:cargo-machete" = { version = "0.7.0", depends = "rust" }
-"cargo:cargo-nextest" = { version = "0.9.138", depends = "rust" }
-"cargo:cargo-public-api" = { version = "0.51.0", depends = "rust" }
 go = "1.26.5"
 jq = "1.8.2"
 mdbook = "0.4.36"
@@ -87,6 +85,7 @@ run = "cargo update --workspace --locked"
 [tasks.cargo-machete]
 description = "Find unused Cargo dependencies"
 run = "cargo machete"
+tools."cargo:cargo-machete" = { version = "0.7.0", depends = "rust" }
 
 [tasks.check-typos]
 description = "Check spelling"
@@ -149,6 +148,7 @@ done < <(
     jq -r '.packages[] | select(.publish == null) | [.name, .manifest_path] | @tsv'
 )
 '''
+tools."cargo:cargo-public-api" = { version = "{{ vars.cargo_public_api_version }}", depends = "rust" }
 
 [tasks.check-public-api]
 description = "Check public API snapshots for publishable crates"
@@ -176,6 +176,7 @@ done < <(
 
 exit "$failed"
 '''
+tools."cargo:cargo-public-api" = { version = "{{ vars.cargo_public_api_version }}", depends = "rust" }
 
 [tasks.lint]
 description = "Run the checks from the CI lint job"
@@ -205,6 +206,7 @@ run = "cargo test --no-fail-fast --lib --all-features --workspace"
 [tasks.nextest]
 description = "Run all workspace tests with cargo-nextest"
 run = "cargo nextest run --all-targets --all-features --workspace"
+tools."cargo:cargo-nextest" = { version = "0.9.138", depends = "rust" }
 
 [tasks.test]
 description = "Run Docker-backed integration tests and always clean up"
