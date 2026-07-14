@@ -28,11 +28,10 @@ The repository uses [mise](https://mise.en.dev/) to install Python, uv, Rust, an
 ```shell
 cd bindings/python
 mise install
-mise run :verify-libpython
 mise run :install
 ```
 
-The managed Python includes the shared `libpython` required to compile the Python/DataFusion bindings. The install task makes uv use that interpreter and creates the binding's development environment.
+The pinned Python distribution flavor includes the shared `libpython` required to compile the Python/DataFusion bindings. The install task makes uv use that interpreter and creates the binding's development environment.
 
 ## Build
 

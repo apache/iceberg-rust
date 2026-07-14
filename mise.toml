@@ -46,7 +46,6 @@ taplo = "0.9.3"
 uv = "0.9.3"
 
 [tasks.build]
-depends = ["//bindings/python:verify-libpython"]
 description = "Build all workspace targets and features"
 run = "cargo build --all-targets --all-features --workspace"
 
@@ -66,7 +65,6 @@ description = "Check Rust formatting"
 run = "cargo fmt --all -- --check"
 
 [tasks.check-clippy]
-depends = ["//bindings/python:verify-libpython"]
 description = "Run Clippy for all workspace targets and features"
 run = "cargo clippy --all-targets --all-features --workspace -- -D warnings"
 
@@ -103,7 +101,6 @@ tools."cargo:cargo-audit" = "0.22.2"
 tools.rust = "{{ vars.rust_msrv }}"
 
 [tasks.check-standalone]
-depends = ["//bindings/python:verify-libpython"]
 description = "Check every workspace crate without feature unification"
 run = '''
 #!/usr/bin/env bash
@@ -119,7 +116,6 @@ done < <(
 '''
 
 [tasks.check-msrv]
-depends = ["//bindings/python:verify-libpython"]
 description = "Check the workspace with the minimum supported Rust version"
 run = '''
 #!/usr/bin/env bash
@@ -196,7 +192,6 @@ description = "Run formatting and Rust lint checks"
 run = [{ task = "lint" }, { task = "check-clippy" }]
 
 [tasks.doc-test]
-depends = ["//bindings/python:verify-libpython"]
 description = "Run workspace documentation tests"
 run = "cargo test --no-fail-fast --doc --all-features --workspace"
 
@@ -206,7 +201,6 @@ description = "Run workspace documentation and library tests"
 run = "cargo test --no-fail-fast --lib --all-features --workspace"
 
 [tasks.nextest]
-depends = ["//bindings/python:verify-libpython"]
 description = "Run all workspace tests with cargo-nextest"
 run = "cargo nextest run --all-targets --all-features --workspace"
 
@@ -242,7 +236,6 @@ dir = "website"
 run = "mdbook serve"
 
 [tasks.site-build]
-depends = ["//bindings/python:verify-libpython"]
 description = "Build the documentation website and Rust API docs"
 dir = "website"
 run = '''

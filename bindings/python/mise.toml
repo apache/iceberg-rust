@@ -15,17 +15,11 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[tasks.verify-libpython]
-description = "Verify that mise Python provides a shared libpython"
-run = "python ../../dev/verify_libpython.py"
-
 [tasks.build]
-depends = [":verify-libpython"]
 description = "Build and install the Python extension into its virtual environment"
 run = "uv run --no-sync maturin develop"
 
 [tasks.sync]
-depends = [":verify-libpython"]
 description = "Install Python development dependencies"
 run = '''uv sync --python "$(command -v python)" --no-managed-python --no-python-downloads --group dev --no-install-project'''
 
@@ -52,7 +46,6 @@ description = "Build, install, and test a native Python wheel"
 run = "uv run --no-sync pytest"
 
 [tasks.test]
-depends = [":verify-libpython"]
 description = "Run Python binding tests"
 run = "uv run --no-sync pytest"
 

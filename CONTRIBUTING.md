@@ -70,7 +70,7 @@ iceberg-rust uses GitHub Actions to orchestrate CI. Developer-facing build, lint
 
 For small or first-time contributions, we recommend the dev container method. Prefer to set up the tools on your host? That's fine too.
 
-The project uses [mise](https://mise.en.dev/) to keep development tool versions and task definitions in one place. The pinned environment makes local and CI runs consistent, installs Rust, Python, and task-specific utilities automatically, and provides the shared `libpython` needed to compile the Python/DataFusion bindings.
+The project uses [mise](https://mise.en.dev/) to keep development tool versions and task definitions in one place. The pinned environment makes local and CI runs consistent, installs Rust, Python, and task-specific utilities automatically, and selects a Python distribution flavor that provides the shared `libpython` needed to compile the Python/DataFusion bindings.
 
 This does add mise as a bootstrap dependency, and the first installation requires network access and can take some time. The repository configuration must also be reviewed and trusted before mise will use it. mise does not install system applications such as Docker, Podman, or GPG.
 
@@ -97,17 +97,9 @@ mise run build
 
 Shell activation is optional. `mise run ...` executes project tasks with the configured tools, and `mise exec -- cargo ...` can be used for ad hoc commands. Use `mise current` to inspect the selected versions.
 
-#### Verify Python and libpython
+#### Python toolchain
 
-Python is a workspace build dependency because the workspace contains the Python bindings and their DataFusion integration. The mise-managed Python is configured with a shared library so PyO3 can link against `libpython` on Linux, macOS, and Windows.
-
-Verify the selected interpreter and shared library before diagnosing a Cargo or linker failure:
-
-```shell
-mise run //bindings/python:verify-libpython
-```
-
-The Python tasks explicitly use this interpreter, so uv will not silently select or download a different Python.
+Python is a workspace build dependency because the workspace contains the Python bindings and their DataFusion integration. The mise-managed Python uses a pinned distribution flavor with the shared library PyO3 needs on Linux, macOS, and Windows. Python tasks explicitly pass the selected interpreter to uv, so uv will not silently select or download a different Python.
 
 #### Install Docker or Podman
 
@@ -157,7 +149,7 @@ Preview the documentation site locally with `mise run site`. Use `mise run site-
 
 - Run `mise doctor` to check the installation and `mise current` to confirm the tools selected for this repository.
 - If GitHub API rate limits interrupt installation, set `GITHUB_TOKEN` to a GitHub personal access token and retry `mise install`. Verification should remain enabled.
-- If `mise run //bindings/python:verify-libpython` reports a missing shared library, confirm that mise selected the configured Python, remove that mise-managed Python version with `mise uninstall python@3.12.13`, and run `mise install` again. Do not substitute a uv-managed or system interpreter.
+- If Cargo or PyO3 reports a missing `libpython`, confirm that `mise current python` selects the configured interpreter and reinstall it with `mise install --force python`. Do not substitute a uv-managed or system interpreter.
 
 ## Dependencies
 
