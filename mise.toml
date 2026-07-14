@@ -188,7 +188,9 @@ run = [
   { task = "check-toml" },
   { task = "check-fmt" },
   { task = "check-lockfile" },
-  { task = "cargo-machete" },
+  # Structured task references do not install the referenced task's local tools.
+  # Start a new mise run so cargo-machete is installed and activated first.
+  "mise run cargo-machete",
   { task = "check-typos" },
   { task = "check-actionlint" },
 ]
@@ -230,6 +232,7 @@ cleanup() {
 trap cleanup EXIT
 
 mise run docker-up
+# Run tool-bearing tasks through mise so their local tools are installed and activated.
 mise run nextest
 '''
 
