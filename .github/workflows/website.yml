@@ -49,7 +49,6 @@ jobs:
         with:
           version: 2026.6.14
           cache: false
-          install_args: "rust@nightly-2026-03-05 python@3.12.13 mdbook@0.4.36"
 
       - name: Build website and API docs
         run: mise run site-build

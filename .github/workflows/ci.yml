@@ -55,7 +55,6 @@ jobs:
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
-          install_args: "rust@nightly-2026-03-05 taplo@0.9.3 cargo:cargo-machete@0.7.0"
 
       - name: Run lint checks
         run: mise run lint
@@ -72,7 +71,6 @@ jobs:
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
-          install_args: "rust@nightly-2026-03-05 python@3.12.13"
 
       - name: Cargo clippy
         run: mise run check-clippy
@@ -99,7 +97,6 @@ jobs:
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
-          install_args: "rust@nightly-2026-03-05 python@3.12.13"
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -123,7 +120,6 @@ jobs:
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
-          install_args: "rust@nightly-2026-03-05 python@3.12.13 jq@1.8.2"
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -157,7 +153,6 @@ jobs:
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
-          install_args: rust@nightly-2026-03-05
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -191,7 +186,6 @@ jobs:
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
-          install_args: "rust@nightly-2026-03-05 python@3.12.13 cargo:cargo-nextest@0.9.138"
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -224,6 +218,5 @@ jobs:
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
-          install_args: "rust@1.94.0 python@3.12.13"
       - name: Check MSRV
         run: mise run check-msrv
