@@ -215,6 +215,28 @@ fn json_timestamptz() {
 }
 
 #[test]
+fn json_timestamp_ns() {
+    let record = r#""2017-11-16T22:31:08.123456789""#;
+
+    check_json_serde(
+        record,
+        Literal::Primitive(PrimitiveLiteral::Long(1510871468123456789)),
+        &Type::Primitive(PrimitiveType::TimestampNs),
+    );
+}
+
+#[test]
+fn json_timestamptz_ns() {
+    let record = r#""2017-11-16T22:31:08.123456789+00:00""#;
+
+    check_json_serde(
+        record,
+        Literal::Primitive(PrimitiveLiteral::Long(1510871468123456789)),
+        &Type::Primitive(PrimitiveType::TimestamptzNs),
+    );
+}
+
+#[test]
 fn json_string() {
     let record = r#""iceberg""#;
 
