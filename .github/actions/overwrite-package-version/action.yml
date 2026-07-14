@@ -25,6 +25,8 @@ runs:
   using: "composite"
   steps:
     - name: Install toml-cli
+      # Avoid `--locked` as its lock file is not recently updated,
+      # and its dependencies at the time rely on unstable nightly features since removed.
       run: cargo install toml-cli
       shell: bash
 

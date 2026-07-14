@@ -21,13 +21,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 
-use crate::spec::{MAIN_BRANCH, SnapshotReference, SnapshotRetention, TableMetadata};
+use crate::spec::{
+    MAIN_BRANCH, SnapshotReference, SnapshotRetention, TableMetadata, TableProperties,
+};
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
-
-/// Default number of most recent snapshots to retain per branch when none is specified.
-const DEFAULT_RETAIN_LAST: usize = 1;
 
 /// A transaction action that removes snapshots from table metadata.
 ///
@@ -38,14 +37,16 @@ const DEFAULT_RETAIN_LAST: usize = 1;
 /// Selection follows Java `RemoveSnapshots`:
 /// - Explicit ids ([`expire_snapshot_ids`](Self::expire_snapshot_ids)) and age-based expiry are
 ///   combined: a snapshot is expired if it is named explicitly *or* selected by age.
-/// - Age-based expiry uses [`expire_older_than_ms`](Self::expire_older_than_ms) as the cutoff, or a
-///   per-branch `max_snapshot_age_ms` for that branch. Without either, age expires nothing.
+/// - Age-based expiry always runs. The cutoff is [`expire_older_than_ms`](Self::expire_older_than_ms)
+///   when set, a per-branch `max_snapshot_age_ms` for that branch, otherwise
+///   `now - history.expire.max-snapshot-age-ms` (default 5 days), matching Java's constructor default.
 /// - Expiry is computed per branch along each branch's ancestry: each branch keeps its most recent
-///   [`retain_last`](Self::retain_last) snapshots (default 1, with a per-ref `min_snapshots_to_keep`
-///   overriding it) plus any ancestor newer than the cutoff, so a shared ancestor reachable from a
-///   retained branch is never expired.
+///   [`retain_last`](Self::retain_last) snapshots — defaulting to `history.expire.min-snapshots-to-keep`,
+///   with a per-ref `min_snapshots_to_keep` overriding both — plus any ancestor newer than the cutoff,
+///   so a shared ancestor reachable from a retained branch is never expired.
 /// - Refs are aged out first: a non-`main` branch or tag whose head is older than its
-///   `max_ref_age_ms` is removed, and snapshots only that ref retained then become expirable.
+///   `max_ref_age_ms` (defaulting to `history.expire.max-ref-age-ms`) is removed, and snapshots only
+///   that ref retained then become expirable.
 /// - Heads of retained refs (including the current snapshot) are never expired, and naming one
 ///   explicitly is an error, since
 ///   [`remove_snapshots`](crate::spec::TableMetadataBuilder::remove_snapshots) would otherwise
@@ -67,6 +68,11 @@ impl ExpireSnapshotsAction {
 
     /// Expire these snapshot ids in addition to any age-based selection.
     ///
+    /// Age-based expiry runs by default (see the type-level docs), so a call that only names ids
+    /// still expires snapshots older than `history.expire.max-snapshot-age-ms`. Pin
+    /// [`expire_older_than_ms`](Self::expire_older_than_ms) to a very old timestamp to expire by id
+    /// alone.
+    ///
     /// Ids accumulate across calls (like [`add_data_files`](crate::transaction::Transaction::fast_append)).
     /// An id that is still referenced by a branch or tag cannot be expired and causes
     /// [`commit`](TransactionAction::commit) to fail.
@@ -82,7 +88,7 @@ impl ExpireSnapshotsAction {
     }
 
     /// Keep at least the `retain_last` most recent snapshots of each branch when expiring by age
-    /// (defaults to 1, must be at least 1).
+    /// (defaults to the table's `history.expire.min-snapshots-to-keep`, must be at least 1).
     ///
     /// This only bounds the age cutoff; it does not protect snapshots named via
     /// [`expire_snapshot_ids`](Self::expire_snapshot_ids). Setting it to 0 makes
@@ -93,7 +99,7 @@ impl ExpireSnapshotsAction {
     }
 
     /// Resolves the snapshots and refs to remove, following Java `RemoveSnapshots.internalApply`.
-    fn plan(&self, table: &Table) -> Result<ExpirePlan> {
+    fn plan(&self, table: &Table, properties: &TableProperties) -> Result<ExpirePlan> {
         // Matches Java `RemoveSnapshots.retainLast`, which requires at least one snapshot.
         if self.retain_last == Some(0) {
             return Err(Error::new(
@@ -104,19 +110,23 @@ impl ExpireSnapshotsAction {
 
         let metadata = table.metadata();
         let now = Utc::now().timestamp_millis();
-        // TODO: default the cutoff to `now - history.expire.max-snapshot-age-ms` and `default_min`
-        // to `history.expire.min-snapshots-to-keep`. Until then, without an explicit cutoff or a
-        // per-ref `max_snapshot_age_ms` age-based expiry keeps every snapshot.
-        let default_cutoff = self.older_than_ms.unwrap_or(i64::MIN);
-        let default_min_to_keep = self.retain_last.unwrap_or(DEFAULT_RETAIN_LAST);
+        // When a knob is not set explicitly, fall back to the table's `history.expire.*` properties,
+        // matching Java `RemoveSnapshots`' constructor. With the default `max-snapshot-age-ms` (5
+        // days) the age path always runs, so even an explicit-id-only call applies the default cutoff.
+        let default_cutoff = self
+            .older_than_ms
+            .unwrap_or_else(|| now.saturating_sub(properties.max_snapshot_age_ms));
+        let default_min_to_keep = self.retain_last.unwrap_or(properties.min_snapshots_to_keep);
 
-        // Ref aging: `main` is always kept; any other ref whose head is older than its own
-        // `max_ref_age_ms` is dropped, like Java's `computeRetainedRefs`.
-        // TODO: age refs without their own window against `history.expire.max-ref-age-ms`.
+        // Ref aging: `main` is always kept; any other ref whose head is older than its
+        // `max_ref_age_ms` (defaulting to `history.expire.max-ref-age-ms`) is dropped, like Java's
+        // `computeRetainedRefs`.
         let mut removed_ref_names: Vec<String> = vec![];
         let mut retained_refs: Vec<&SnapshotReference> = vec![];
         for (ref_name, snapshot_ref) in &metadata.refs {
-            if ref_name == MAIN_BRANCH || !Self::ref_aged_out(metadata, snapshot_ref, now) {
+            if ref_name == MAIN_BRANCH
+                || !Self::ref_aged_out(metadata, snapshot_ref, now, properties.max_ref_age_ms)
+            {
                 retained_refs.push(snapshot_ref);
             } else {
                 removed_ref_names.push(ref_name.clone());
@@ -206,21 +216,23 @@ impl ExpireSnapshotsAction {
         })
     }
 
-    /// Whether a non-main ref should be dropped because its head is older than its own
-    /// `max_ref_age_ms`. Refs without a window are never aged out.
-    fn ref_aged_out(metadata: &TableMetadata, snapshot_ref: &SnapshotReference, now: i64) -> bool {
+    /// Whether a non-main ref should be dropped because its head is older than its `max_ref_age_ms`,
+    /// defaulting to `default_max_ref_age_ms` (`history.expire.max-ref-age-ms`) when the ref sets no
+    /// window of its own. The default `i64::MAX` effectively never ages a ref out.
+    fn ref_aged_out(
+        metadata: &TableMetadata,
+        snapshot_ref: &SnapshotReference,
+        now: i64,
+        default_max_ref_age_ms: i64,
+    ) -> bool {
         let max_ref_age_ms = match snapshot_ref.retention {
             SnapshotRetention::Branch { max_ref_age_ms, .. }
             | SnapshotRetention::Tag { max_ref_age_ms } => max_ref_age_ms,
-        };
-        match (
-            max_ref_age_ms,
-            metadata.snapshot_by_id(snapshot_ref.snapshot_id),
-        ) {
-            (Some(max_ref_age_ms), Some(snapshot)) => {
-                now.saturating_sub(snapshot.timestamp_ms()) > max_ref_age_ms
-            }
-            _ => false,
+        }
+        .unwrap_or(default_max_ref_age_ms);
+        match metadata.snapshot_by_id(snapshot_ref.snapshot_id) {
+            Some(snapshot) => now.saturating_sub(snapshot.timestamp_ms()) > max_ref_age_ms,
+            None => false,
         }
     }
 
@@ -287,16 +299,17 @@ struct ExpirePlan {
 impl TransactionAction for ExpireSnapshotsAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
         let metadata = table.metadata();
+        let properties = metadata.table_properties()?;
 
         // Expiring metadata defeats a user's explicit decision to disable GC (Java refuses too).
-        if !metadata.table_properties()?.gc_enabled {
+        if !properties.gc_enabled {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 "Cannot expire snapshots: gc.enabled is false",
             ));
         }
 
-        let plan = self.plan(table)?;
+        let plan = self.plan(table, &properties)?;
 
         if plan.ids_to_remove.is_empty() && plan.refs_to_remove.is_empty() {
             return Ok(ActionCommit::new(vec![], vec![]));
@@ -308,11 +321,31 @@ impl TransactionAction for ExpireSnapshotsAction {
             .into_iter()
             .map(|ref_name| TableUpdate::RemoveSnapshotRef { ref_name })
             .collect();
+
+        // Drop statistics metadata for expired snapshots.
+        // This only updates metadata; puffin files are cleaned up separately.
+        let mut stats_updates: Vec<TableUpdate> = vec![];
+        for &snapshot_id in &plan.ids_to_remove {
+            stats_updates.extend(
+                metadata
+                    .statistics_for_snapshot(snapshot_id)
+                    .is_some()
+                    .then_some(TableUpdate::RemoveStatistics { snapshot_id }),
+            );
+            stats_updates.extend(
+                metadata
+                    .partition_statistics_for_snapshot(snapshot_id)
+                    .is_some()
+                    .then_some(TableUpdate::RemovePartitionStatistics { snapshot_id }),
+            );
+        }
+
         if !plan.ids_to_remove.is_empty() {
             updates.push(TableUpdate::RemoveSnapshots {
                 snapshot_ids: plan.ids_to_remove,
             });
         }
+        updates.extend(stats_updates);
 
         // The ref assertion closes the race where a concurrent writer advances `main` between
         // selection and commit, which could orphan a snapshot whose parent we are about to remove.
@@ -336,7 +369,8 @@ mod tests {
     use chrono::Utc;
 
     use crate::spec::{
-        MAIN_BRANCH, Operation, Snapshot, SnapshotReference, SnapshotRetention, Summary,
+        MAIN_BRANCH, Operation, PartitionStatisticsFile, Snapshot, SnapshotReference,
+        SnapshotRetention, StatisticsFile, Summary,
     };
     use crate::table::Table;
     use crate::transaction::Transaction;
@@ -351,6 +385,9 @@ mod tests {
     const CURRENT_SNAPSHOT: i64 = 3055729675574597004;
     // Well after the minimal table's last-updated-ms, so synthetic snapshots pass timestamp checks.
     const TS: i64 = 1_700_000_000_000;
+    // A cutoff at the epoch makes age-based expiry a no-op (every snapshot is newer), isolating the
+    // explicit-id behavior under test now that the default cutoff (`now - 5 days`) always runs.
+    const NO_AGE_EXPIRY: i64 = 0;
 
     fn action() -> ExpireSnapshotsAction {
         ExpireSnapshotsAction::new()
@@ -431,8 +468,22 @@ mod tests {
 
     /// Builds a table from synthetic snapshots and refs on top of an empty base.
     fn table_with(snapshots: Vec<Snapshot>, refs: Vec<(&str, SnapshotReference)>) -> Table {
+        table_with_props(snapshots, refs, HashMap::new())
+    }
+
+    /// Like [`table_with`], but also seeds table properties (e.g. `history.expire.*` defaults).
+    fn table_with_props(
+        snapshots: Vec<Snapshot>,
+        refs: Vec<(&str, SnapshotReference)>,
+        properties: HashMap<String, String>,
+    ) -> Table {
         let base = make_v2_minimal_table();
-        let mut builder = base.metadata().clone().into_builder(None);
+        let mut builder = base
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .set_properties(properties)
+            .unwrap();
         for snapshot in snapshots {
             builder = builder.add_snapshot(snapshot).unwrap();
         }
@@ -442,10 +493,73 @@ mod tests {
         base.with_metadata(Arc::new(builder.build().unwrap().metadata))
     }
 
+    /// Like [`table_with`], but also attaches statistics and partition-statistics files. Reuses
+    /// [`table_with`] for the snapshot/ref wiring so the two can't drift, then layers stats on top.
+    fn table_with_stats(
+        snapshots: Vec<Snapshot>,
+        refs: Vec<(&str, SnapshotReference)>,
+        statistics: Vec<StatisticsFile>,
+        partition_statistics: Vec<PartitionStatisticsFile>,
+    ) -> Table {
+        let table = table_with(snapshots, refs);
+        let mut builder = table.metadata().clone().into_builder(None);
+        for stats in statistics {
+            builder = builder.set_statistics(stats);
+        }
+        for stats in partition_statistics {
+            builder = builder.set_partition_statistics(stats);
+        }
+        table.with_metadata(Arc::new(builder.build().unwrap().metadata))
+    }
+
+    fn stats_file(snapshot_id: i64) -> StatisticsFile {
+        StatisticsFile {
+            snapshot_id,
+            statistics_path: format!("/stats-{snapshot_id}.puffin"),
+            file_size_in_bytes: 1,
+            file_footer_size_in_bytes: 1,
+            key_metadata: None,
+            blob_metadata: vec![],
+        }
+    }
+
+    fn partition_stats_file(snapshot_id: i64) -> PartitionStatisticsFile {
+        PartitionStatisticsFile {
+            snapshot_id,
+            statistics_path: format!("/partition-stats-{snapshot_id}.puffin"),
+            file_size_in_bytes: 1,
+        }
+    }
+
+    fn removed_statistics(updates: &[TableUpdate]) -> Vec<i64> {
+        updates
+            .iter()
+            .filter_map(|update| match update {
+                TableUpdate::RemoveStatistics { snapshot_id } => Some(*snapshot_id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn removed_partition_statistics(updates: &[TableUpdate]) -> Vec<i64> {
+        updates
+            .iter()
+            .filter_map(|update| match update {
+                TableUpdate::RemovePartitionStatistics { snapshot_id } => Some(*snapshot_id),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[tokio::test]
     async fn test_expire_explicit_snapshot_id() {
         assert_eq!(
-            removed_ids(action().expire_snapshot_ids(vec![OLD_SNAPSHOT])).await,
+            removed_ids(
+                action()
+                    .expire_snapshot_ids(vec![OLD_SNAPSHOT])
+                    .expire_older_than_ms(NO_AGE_EXPIRY)
+            )
+            .await,
             vec![OLD_SNAPSHOT]
         );
     }
@@ -453,9 +567,13 @@ mod tests {
     #[tokio::test]
     async fn test_explicit_unknown_id_is_ignored() {
         assert!(
-            removed_ids(action().expire_snapshot_ids(vec![42]))
-                .await
-                .is_empty()
+            removed_ids(
+                action()
+                    .expire_snapshot_ids(vec![42])
+                    .expire_older_than_ms(NO_AGE_EXPIRY)
+            )
+            .await
+            .is_empty()
         );
     }
 
@@ -618,12 +736,13 @@ mod tests {
             vec![(MAIN_BRANCH, branch(3, None))],
         );
 
-        // Two separate calls both take effect.
+        // Two separate calls both take effect (age expiry pinned off to isolate accumulation).
         let removed = expired(
             &table,
             action()
                 .expire_snapshot_ids(vec![1])
-                .expire_snapshot_ids(vec![2]),
+                .expire_snapshot_ids(vec![2])
+                .expire_older_than_ms(NO_AGE_EXPIRY),
         )
         .await;
         assert_eq!(removed, vec![1, 2]);
@@ -866,5 +985,212 @@ mod tests {
         // ancestor 3.
         let removed = expired(&table, action()).await;
         assert_eq!(removed, vec![1]);
+    }
+
+    #[tokio::test]
+    async fn test_default_cutoff_expires_snapshots_older_than_max_age() {
+        let now = Utc::now().timestamp_millis();
+        let day_ms = 24 * 60 * 60 * 1000;
+        let table = table_with(
+            vec![
+                snapshot(1, None, 35, now - 10 * day_ms), // older than the default 5-day cutoff
+                snapshot(2, Some(1), 36, now - 1000),     // recent
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+        );
+
+        // No explicit cutoff: defaults to now - history.expire.max-snapshot-age-ms (5 days).
+        let removed = expired(&table, action()).await;
+        assert_eq!(removed, vec![1]);
+    }
+
+    #[tokio::test]
+    async fn test_min_snapshots_to_keep_property_is_the_default_floor() {
+        let table = table_with_props(
+            vec![
+                snapshot(1, None, 35, TS + 1),
+                snapshot(2, Some(1), 36, TS + 2),
+                snapshot(3, Some(2), 37, TS + 3),
+            ],
+            vec![(MAIN_BRANCH, branch(3, None))],
+            HashMap::from([(
+                "history.expire.min-snapshots-to-keep".to_string(),
+                "3".to_string(),
+            )]),
+        );
+
+        // The snapshots predate the default cutoff, but the table's min-snapshots-to-keep=3 keeps
+        // the whole chain.
+        let removed = expired(&table, action()).await;
+        assert!(removed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_max_snapshot_age_ms_property_sets_the_cutoff() {
+        let now = Utc::now().timestamp_millis();
+        let day_ms = 24 * 60 * 60 * 1000;
+        // Snapshot 1 is 2 days old: the built-in 5-day default would keep it, but the table's
+        // 1-day history.expire.max-snapshot-age-ms expires it. This pins the cutoff to the property
+        // value rather than the hardcoded default.
+        let table = table_with_props(
+            vec![
+                snapshot(1, None, 35, now - 2 * day_ms),
+                snapshot(2, Some(1), 36, now - 1000),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+            HashMap::from([(
+                "history.expire.max-snapshot-age-ms".to_string(),
+                day_ms.to_string(),
+            )]),
+        );
+
+        let removed = expired(&table, action()).await;
+        assert_eq!(removed, vec![1]);
+    }
+
+    #[tokio::test]
+    async fn test_max_ref_age_ms_property_ages_out_ref_without_its_own_window() {
+        let now = Utc::now().timestamp_millis();
+        let day_ms = 24 * 60 * 60 * 1000;
+        // `old-tag` sets no max_ref_age_ms of its own, so it ages against the table's
+        // history.expire.max-ref-age-ms (1 day); its head is 10 days old, so the tag is dropped.
+        // Set the tag before main so the builder's last-updated bookkeeping stays monotonic.
+        let table = table_with_props(
+            vec![
+                snapshot(1, None, 35, now - 10 * day_ms),
+                snapshot(2, None, 36, now - 1000),
+            ],
+            vec![("old-tag", tag(1, None)), (MAIN_BRANCH, branch(2, None))],
+            HashMap::from([(
+                "history.expire.max-ref-age-ms".to_string(),
+                day_ms.to_string(),
+            )]),
+        );
+
+        let updates = updates_of(&table, action()).await;
+        assert_eq!(removed_refs(&updates), vec!["old-tag".to_string()]);
+        // Once the tag is gone, snapshot 1 (unreferenced and well past the default cutoff) expires.
+        assert!(updates.iter().any(
+            |u| matches!(u, TableUpdate::RemoveSnapshots { snapshot_ids } if snapshot_ids == &[1])
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_expiring_snapshot_drops_its_statistics() {
+        // main: 1 -> 2, both carrying statistics. retain_last(1) keeps only the head (2).
+        let table = table_with_stats(
+            vec![
+                snapshot(1, None, 35, TS + 1),
+                snapshot(2, Some(1), 36, TS + 2),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+            vec![stats_file(1), stats_file(2)],
+            vec![partition_stats_file(1), partition_stats_file(2)],
+        );
+
+        let updates = updates_of(
+            &table,
+            action().retain_last(1).expire_older_than_ms(i64::MAX),
+        )
+        .await;
+
+        // Snapshot 1 expires, so its stats entries are dropped; the retained head 2 keeps its stats.
+        assert_eq!(removed_statistics(&updates), vec![1]);
+        assert_eq!(removed_partition_statistics(&updates), vec![1]);
+    }
+
+    #[tokio::test]
+    async fn test_expiring_snapshot_without_statistics_emits_no_removal() {
+        // Same expiry, but no statistics attached to any snapshot.
+        let table = table_with(
+            vec![
+                snapshot(1, None, 35, TS + 1),
+                snapshot(2, Some(1), 36, TS + 2),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+        );
+
+        let updates = updates_of(
+            &table,
+            action().retain_last(1).expire_older_than_ms(i64::MAX),
+        )
+        .await;
+
+        assert!(removed_statistics(&updates).is_empty());
+        assert!(removed_partition_statistics(&updates).is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_only_present_statistics_variant_is_removed() {
+        // Snapshot 1 has statistics but no partition statistics.
+        let table = table_with_stats(
+            vec![
+                snapshot(1, None, 35, TS + 1),
+                snapshot(2, Some(1), 36, TS + 2),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+            vec![stats_file(1)],
+            vec![],
+        );
+
+        let updates = updates_of(
+            &table,
+            action().retain_last(1).expire_older_than_ms(i64::MAX),
+        )
+        .await;
+
+        assert_eq!(removed_statistics(&updates), vec![1]);
+        assert!(removed_partition_statistics(&updates).is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_ref_aging_expiry_drops_statistics() {
+        let now = Utc::now().timestamp_millis();
+        let day_ms = 24 * 60 * 60 * 1000;
+        // Snapshot 1 is kept alive only by `old-tag`; once the tag ages out (1-day max-ref-age vs a
+        // 10-day-old head) snapshot 1 becomes expirable and its statistics go with it. This reaches
+        // the stats loop through the ref-aging branch of `plan()`, distinct from the retain/age path.
+        let table = table_with_stats(
+            vec![
+                snapshot(1, None, 35, now - 10 * day_ms),
+                snapshot(2, None, 36, now - 1000),
+            ],
+            vec![
+                ("old-tag", tag(1, Some(day_ms))),
+                (MAIN_BRANCH, branch(2, None)),
+            ],
+            vec![stats_file(1)],
+            vec![partition_stats_file(1)],
+        );
+
+        let updates = updates_of(&table, action().expire_older_than_ms(now - 5 * day_ms)).await;
+        assert_eq!(removed_refs(&updates), vec!["old-tag".to_string()]);
+        assert_eq!(removed_statistics(&updates), vec![1]);
+        assert_eq!(removed_partition_statistics(&updates), vec![1]);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_expired_snapshots_drop_their_statistics() {
+        // Chain 1 -> 2 -> 3 on main; retain_last(1) keeps only head 3, expiring 1 and 2, both
+        // carrying statistics.
+        let table = table_with_stats(
+            vec![
+                snapshot(1, None, 35, TS + 1),
+                snapshot(2, Some(1), 36, TS + 2),
+                snapshot(3, Some(2), 37, TS + 3),
+            ],
+            vec![(MAIN_BRANCH, branch(3, None))],
+            vec![stats_file(1), stats_file(2)],
+            vec![partition_stats_file(1), partition_stats_file(2)],
+        );
+
+        let updates = updates_of(
+            &table,
+            action().retain_last(1).expire_older_than_ms(i64::MAX),
+        )
+        .await;
+
+        assert_eq!(removed_statistics(&updates), vec![1, 2]);
+        assert_eq!(removed_partition_statistics(&updates), vec![1, 2]);
     }
 }
