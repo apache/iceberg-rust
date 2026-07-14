@@ -37,7 +37,7 @@ use parquet::schema::types::SchemaDescriptor;
 use crate::arrow::get_arrow_datum;
 use crate::error::Result;
 use crate::expr::visitors::bound_predicate_visitor::BoundPredicateVisitor;
-use crate::expr::{BoundPredicate, BoundReference};
+use crate::expr::{BoundPredicate, BoundTerm};
 use crate::spec::Datum;
 use crate::{Error, ErrorKind};
 
@@ -75,29 +75,29 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         Ok(())
     }
 
-    fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<()> {
+    fn is_null(&mut self, reference: &BoundTerm, _predicate: &BoundPredicate) -> Result<()> {
         self.field_ids.insert(reference.field().id);
         Ok(())
     }
 
-    fn not_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<()> {
+    fn not_null(&mut self, reference: &BoundTerm, _predicate: &BoundPredicate) -> Result<()> {
         self.field_ids.insert(reference.field().id);
         Ok(())
     }
 
-    fn is_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<()> {
+    fn is_nan(&mut self, reference: &BoundTerm, _predicate: &BoundPredicate) -> Result<()> {
         self.field_ids.insert(reference.field().id);
         Ok(())
     }
 
-    fn not_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<()> {
+    fn not_nan(&mut self, reference: &BoundTerm, _predicate: &BoundPredicate) -> Result<()> {
         self.field_ids.insert(reference.field().id);
         Ok(())
     }
 
     fn less_than(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
@@ -107,7 +107,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
 
     fn less_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
@@ -117,7 +117,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
 
     fn greater_than(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
@@ -127,7 +127,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
 
     fn greater_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
@@ -137,7 +137,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
 
     fn eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
@@ -147,7 +147,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
 
     fn not_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
@@ -157,7 +157,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
 
     fn starts_with(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
@@ -167,7 +167,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
 
     fn not_starts_with(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
@@ -177,7 +177,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
 
     fn r#in(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
@@ -187,7 +187,7 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
 
     fn not_in(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
@@ -210,8 +210,13 @@ impl PredicateConverter<'_> {
     /// When visiting a bound reference, we return index of the leaf column in the
     /// required column indices which is used to project the column in the record batch.
     /// Return None if the field id is not found in the column map, which is possible
-    /// due to schema evolution.
-    fn bound_reference(&mut self, reference: &BoundReference) -> Result<Option<usize>> {
+    /// due to schema evolution, or if the term is a transform (which cannot be pushed
+    /// down to the Arrow-level row filter).
+    fn bound_reference(&mut self, term: &BoundTerm) -> Result<Option<usize>> {
+        let BoundTerm::Reference(reference) = term else {
+            return Ok(None);
+        };
+
         // The leaf column's index in Parquet schema.
         if let Some(column_idx) = self.column_map.get(&reference.field().id) {
             if self.parquet_schema.get_column_root(*column_idx).is_group() {
@@ -244,7 +249,7 @@ impl PredicateConverter<'_> {
     }
 
     /// Build an Arrow predicate that always returns true.
-    fn build_always_true(&self) -> Result<Box<PredicateResult>> {
+    pub(super) fn build_always_true(&self) -> Result<Box<PredicateResult>> {
         Ok(Box::new(|batch| {
             Ok(BooleanArray::from(vec![true; batch.num_rows()]))
         }))
@@ -255,6 +260,24 @@ impl PredicateConverter<'_> {
         Ok(Box::new(|batch| {
             Ok(BooleanArray::from(vec![false; batch.num_rows()]))
         }))
+    }
+
+    /// Build an `OptionalPredicateResult` wrapping an always-true Arrow predicate.
+    fn build_optional_always_true(&self) -> Result<OptionalPredicateResult> {
+        Ok(Some(self.build_always_true()?))
+    }
+
+    /// Build an `OptionalPredicateResult` wrapping an always-false Arrow predicate.
+    fn build_optional_always_false(&self) -> Result<OptionalPredicateResult> {
+        Ok(Some(self.build_always_false()?))
+    }
+
+    /// Terms involving a transform cannot be evaluated against raw Arrow columns at
+    /// the record-batch level (the transform would need to be applied to the column
+    /// values first), so we decline to push such predicates down and instead let all
+    /// rows through, relying on other filtering stages (e.g. metrics evaluators).
+    fn should_skip_term(term: &BoundTerm) -> bool {
+        matches!(term, BoundTerm::Transform(_))
     }
 }
 
@@ -306,287 +329,359 @@ fn compute_is_nan(array: &ArrayRef) -> std::result::Result<BooleanArray, ArrowEr
 pub(super) type PredicateResult =
     dyn FnMut(RecordBatch) -> std::result::Result<BooleanArray, ArrowError> + Send + 'static;
 
-impl BoundPredicateVisitor for PredicateConverter<'_> {
-    type T = Box<PredicateResult>;
+/// The result of converting a bound predicate to an Arrow-level row filter closure.
+///
+/// `None` means the predicate (or a sub-part of it) could not be pushed down to the
+/// Arrow-level filter — for example because it involves a transform term, whose
+/// evaluation against raw column values would be incorrect. In that case, the caller
+/// should fall back to letting all rows through at this stage and rely on other
+/// filtering layers (metrics evaluators, etc.) for correctness.
+pub(super) type OptionalPredicateResult = Option<Box<PredicateResult>>;
 
-    fn always_true(&mut self) -> Result<Box<PredicateResult>> {
-        self.build_always_true()
+impl BoundPredicateVisitor for PredicateConverter<'_> {
+    type T = OptionalPredicateResult;
+
+    fn always_true(&mut self) -> Result<OptionalPredicateResult> {
+        self.build_optional_always_true()
     }
 
-    fn always_false(&mut self) -> Result<Box<PredicateResult>> {
-        self.build_always_false()
+    fn always_false(&mut self) -> Result<OptionalPredicateResult> {
+        self.build_optional_always_false()
     }
 
     fn and(
         &mut self,
-        mut lhs: Box<PredicateResult>,
-        mut rhs: Box<PredicateResult>,
-    ) -> Result<Box<PredicateResult>> {
-        Ok(Box::new(move |batch| {
-            let left = lhs(batch.clone())?;
-            let right = rhs(batch)?;
-            and_kleene(&left, &right)
-        }))
+        lhs: OptionalPredicateResult,
+        rhs: OptionalPredicateResult,
+    ) -> Result<OptionalPredicateResult> {
+        match (lhs, rhs) {
+            (Some(mut lhs), Some(mut rhs)) => Ok(Some(Box::new(move |batch| {
+                let left = lhs(batch.clone())?;
+                let right = rhs(batch)?;
+                and_kleene(&left, &right)
+            }))),
+            // AND(p, unknown) is unknown — returning Some(p) would keep rows that may
+            // fail the skipped transform side. Match `or` and decline to push down.
+            (Some(_), None) | (None, Some(_)) | (None, None) => Ok(None),
+        }
     }
 
     fn or(
         &mut self,
-        mut lhs: Box<PredicateResult>,
-        mut rhs: Box<PredicateResult>,
-    ) -> Result<Box<PredicateResult>> {
-        Ok(Box::new(move |batch| {
-            let left = lhs(batch.clone())?;
-            let right = rhs(batch)?;
-            or_kleene(&left, &right)
-        }))
+        lhs: OptionalPredicateResult,
+        rhs: OptionalPredicateResult,
+    ) -> Result<OptionalPredicateResult> {
+        match (lhs, rhs) {
+            (Some(mut lhs), Some(mut rhs)) => Ok(Some(Box::new(move |batch| {
+                let left = lhs(batch.clone())?;
+                let right = rhs(batch)?;
+                or_kleene(&left, &right)
+            }))),
+            (Some(_), None) | (None, Some(_)) | (None, None) => Ok(None),
+        }
     }
 
-    fn not(&mut self, mut inner: Box<PredicateResult>) -> Result<Box<PredicateResult>> {
-        Ok(Box::new(move |batch| {
-            let pred_ret = inner(batch)?;
-            not(&pred_ret)
-        }))
+    fn not(&mut self, inner: OptionalPredicateResult) -> Result<OptionalPredicateResult> {
+        match inner {
+            Some(mut inner) => Ok(Some(Box::new(move |batch| {
+                let pred_ret = inner(batch)?;
+                not(&pred_ret)
+            }))),
+            None => Ok(None),
+        }
     }
 
     fn is_null(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _predicate: &BoundPredicate,
-    ) -> Result<Box<PredicateResult>> {
+    ) -> Result<OptionalPredicateResult> {
+        if Self::should_skip_term(reference) {
+            return Ok(None);
+        }
+
         if let Some(idx) = self.bound_reference(reference)? {
-            Ok(Box::new(move |batch| {
+            Ok(Some(Box::new(move |batch| {
                 let column = project_column(&batch, idx)?;
                 is_null(&column)
-            }))
+            })))
         } else {
             // A missing column, treating it as null.
-            self.build_always_true()
+            self.build_optional_always_true()
         }
     }
 
     fn not_null(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _predicate: &BoundPredicate,
-    ) -> Result<Box<PredicateResult>> {
+    ) -> Result<OptionalPredicateResult> {
+        if Self::should_skip_term(reference) {
+            return Ok(None);
+        }
+
         if let Some(idx) = self.bound_reference(reference)? {
-            Ok(Box::new(move |batch| {
+            Ok(Some(Box::new(move |batch| {
                 let column = project_column(&batch, idx)?;
                 is_not_null(&column)
-            }))
+            })))
         } else {
             // A missing column, treating it as null.
-            self.build_always_false()
+            self.build_optional_always_false()
         }
     }
 
     fn is_nan(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _predicate: &BoundPredicate,
-    ) -> Result<Box<PredicateResult>> {
+    ) -> Result<OptionalPredicateResult> {
+        if Self::should_skip_term(reference) {
+            return Ok(None);
+        }
+
         if let Some(idx) = self.bound_reference(reference)? {
-            Ok(Box::new(move |batch| {
+            Ok(Some(Box::new(move |batch| {
                 let column = project_column(&batch, idx)?;
                 compute_is_nan(&column)
-            }))
+            })))
         } else {
             // A missing column, treating it as null.
-            self.build_always_false()
+            self.build_optional_always_false()
         }
     }
 
     fn not_nan(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _predicate: &BoundPredicate,
-    ) -> Result<Box<PredicateResult>> {
+    ) -> Result<OptionalPredicateResult> {
+        if Self::should_skip_term(reference) {
+            return Ok(None);
+        }
+
         if let Some(idx) = self.bound_reference(reference)? {
-            Ok(Box::new(move |batch| {
+            Ok(Some(Box::new(move |batch| {
                 let column = project_column(&batch, idx)?;
                 let is_nan = compute_is_nan(&column)?;
                 not(&is_nan)
-            }))
+            })))
         } else {
             // A missing column, treating it as null.
-            self.build_always_true()
+            self.build_optional_always_true()
         }
     }
 
     fn less_than(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Box<PredicateResult>> {
+    ) -> Result<OptionalPredicateResult> {
+        if Self::should_skip_term(reference) {
+            return Ok(None);
+        }
+
         if let Some(idx) = self.bound_reference(reference)? {
             let literal = get_arrow_datum(literal)?;
 
-            Ok(Box::new(move |batch| {
+            Ok(Some(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 lt(&left, literal.as_ref())
-            }))
+            })))
         } else {
             // A missing column, treating it as null.
-            self.build_always_true()
+            self.build_optional_always_true()
         }
     }
 
     fn less_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Box<PredicateResult>> {
+    ) -> Result<OptionalPredicateResult> {
+        if Self::should_skip_term(reference) {
+            return Ok(None);
+        }
+
         if let Some(idx) = self.bound_reference(reference)? {
             let literal = get_arrow_datum(literal)?;
 
-            Ok(Box::new(move |batch| {
+            Ok(Some(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 lt_eq(&left, literal.as_ref())
-            }))
+            })))
         } else {
             // A missing column, treating it as null.
-            self.build_always_true()
+            self.build_optional_always_true()
         }
     }
 
     fn greater_than(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Box<PredicateResult>> {
+    ) -> Result<OptionalPredicateResult> {
+        if Self::should_skip_term(reference) {
+            return Ok(None);
+        }
+
         if let Some(idx) = self.bound_reference(reference)? {
             let literal = get_arrow_datum(literal)?;
 
-            Ok(Box::new(move |batch| {
+            Ok(Some(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 gt(&left, literal.as_ref())
-            }))
+            })))
         } else {
             // A missing column, treating it as null.
-            self.build_always_false()
+            self.build_optional_always_false()
         }
     }
 
     fn greater_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Box<PredicateResult>> {
+    ) -> Result<OptionalPredicateResult> {
+        if Self::should_skip_term(reference) {
+            return Ok(None);
+        }
+
         if let Some(idx) = self.bound_reference(reference)? {
             let literal = get_arrow_datum(literal)?;
 
-            Ok(Box::new(move |batch| {
+            Ok(Some(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 gt_eq(&left, literal.as_ref())
-            }))
+            })))
         } else {
             // A missing column, treating it as null.
-            self.build_always_false()
+            self.build_optional_always_false()
         }
     }
 
     fn eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Box<PredicateResult>> {
+    ) -> Result<OptionalPredicateResult> {
+        if Self::should_skip_term(reference) {
+            return Ok(None);
+        }
+
         if let Some(idx) = self.bound_reference(reference)? {
             let literal = get_arrow_datum(literal)?;
 
-            Ok(Box::new(move |batch| {
+            Ok(Some(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 eq(&left, literal.as_ref())
-            }))
+            })))
         } else {
             // A missing column, treating it as null.
-            self.build_always_false()
+            self.build_optional_always_false()
         }
     }
 
     fn not_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Box<PredicateResult>> {
+    ) -> Result<OptionalPredicateResult> {
+        if Self::should_skip_term(reference) {
+            return Ok(None);
+        }
+
         if let Some(idx) = self.bound_reference(reference)? {
             let literal = get_arrow_datum(literal)?;
 
-            Ok(Box::new(move |batch| {
+            Ok(Some(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 neq(&left, literal.as_ref())
-            }))
+            })))
         } else {
             // A missing column, treating it as null.
-            self.build_always_false()
+            self.build_optional_always_false()
         }
     }
 
     fn starts_with(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Box<PredicateResult>> {
+    ) -> Result<OptionalPredicateResult> {
+        if Self::should_skip_term(reference) {
+            return Ok(None);
+        }
+
         if let Some(idx) = self.bound_reference(reference)? {
             let literal = get_arrow_datum(literal)?;
 
-            Ok(Box::new(move |batch| {
+            Ok(Some(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 starts_with(&left, literal.as_ref())
-            }))
+            })))
         } else {
             // A missing column, treating it as null.
-            self.build_always_false()
+            self.build_optional_always_false()
         }
     }
 
     fn not_starts_with(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
-    ) -> Result<Box<PredicateResult>> {
+    ) -> Result<OptionalPredicateResult> {
+        if Self::should_skip_term(reference) {
+            return Ok(None);
+        }
+
         if let Some(idx) = self.bound_reference(reference)? {
             let literal = get_arrow_datum(literal)?;
 
-            Ok(Box::new(move |batch| {
+            Ok(Some(Box::new(move |batch| {
                 let left = project_column(&batch, idx)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 // update here if arrow ever adds a native not_starts_with
                 not(&starts_with(&left, literal.as_ref())?)
-            }))
+            })))
         } else {
             // A missing column, treating it as null.
-            self.build_always_true()
+            self.build_optional_always_true()
         }
     }
 
     fn r#in(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
-    ) -> Result<Box<PredicateResult>> {
+    ) -> Result<OptionalPredicateResult> {
+        if Self::should_skip_term(reference) {
+            return Ok(None);
+        }
+
         if let Some(idx) = self.bound_reference(reference)? {
             let literals: Vec<_> = literals
                 .iter()
                 .map(|lit| get_arrow_datum(lit).unwrap())
                 .collect();
 
-            Ok(Box::new(move |batch| {
+            Ok(Some(Box::new(move |batch| {
                 // update this if arrow ever adds a native is_in kernel
                 let left = project_column(&batch, idx)?;
 
@@ -597,26 +692,30 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
                 }
 
                 Ok(acc)
-            }))
+            })))
         } else {
             // A missing column, treating it as null.
-            self.build_always_false()
+            self.build_optional_always_false()
         }
     }
 
     fn not_in(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
-    ) -> Result<Box<PredicateResult>> {
+    ) -> Result<OptionalPredicateResult> {
+        if Self::should_skip_term(reference) {
+            return Ok(None);
+        }
+
         if let Some(idx) = self.bound_reference(reference)? {
             let literals: Vec<_> = literals
                 .iter()
                 .map(|lit| get_arrow_datum(lit).unwrap())
                 .collect();
 
-            Ok(Box::new(move |batch| {
+            Ok(Some(Box::new(move |batch| {
                 // update this if arrow ever adds a native not_in kernel
                 let left = project_column(&batch, idx)?;
                 let mut acc = BooleanArray::from(vec![true; batch.num_rows()]);
@@ -626,10 +725,10 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
                 }
 
                 Ok(acc)
-            }))
+            })))
         } else {
             // A missing column, treating it as null.
-            self.build_always_true()
+            self.build_optional_always_true()
         }
     }
 }
@@ -768,7 +867,7 @@ mod tests {
             column_indices: &column_indices,
         };
 
-        let mut predicate_fn = visit(&mut converter, &bound).unwrap();
+        let mut predicate_fn = visit(&mut converter, &bound).unwrap().unwrap();
         predicate_fn(batch).unwrap()
     }
 

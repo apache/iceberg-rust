@@ -25,7 +25,8 @@ use parquet::file::statistics::Statistics;
 
 use crate::arrow::{get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum};
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
-use crate::expr::{BoundPredicate, BoundReference};
+use crate::expr::visitors::transform_bound::{bounds_preserve_order, transform_bound};
+use crate::expr::{BoundPredicate, BoundTerm};
 use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType, Schema};
 use crate::{Error, ErrorKind, Result};
 
@@ -153,7 +154,7 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
 
     fn visit_inequality(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         cmp_fn: fn(&Datum, &Datum) -> bool,
         use_lower_bound: bool,
@@ -170,6 +171,10 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
             return ROW_GROUP_MIGHT_MATCH;
         }
 
+        if !bounds_preserve_order(reference) {
+            return ROW_GROUP_MIGHT_MATCH;
+        }
+
         let bound = if use_lower_bound {
             self.min_value(field_id)
         } else {
@@ -177,6 +182,10 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
         }?;
 
         if let Some(bound) = bound {
+            let Some(bound) = transform_bound(reference, &bound)? else {
+                return ROW_GROUP_MIGHT_MATCH;
+            };
+
             if cmp_fn(&bound, datum) {
                 return ROW_GROUP_MIGHT_MATCH;
             }
@@ -211,7 +220,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         Ok(!inner)
     }
 
-    fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
+    fn is_null(&mut self, reference: &BoundTerm, _predicate: &BoundPredicate) -> Result<bool> {
         let field_id = reference.field().id;
 
         match self.null_count(field_id) {
@@ -221,11 +230,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         }
     }
 
-    fn not_null(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> Result<bool> {
+    fn not_null(&mut self, reference: &BoundTerm, _predicate: &BoundPredicate) -> Result<bool> {
         let field_id = reference.field().id;
 
         if self.contains_nulls_only(field_id) {
@@ -235,23 +240,19 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         ROW_GROUP_MIGHT_MATCH
     }
 
-    fn is_nan(&mut self, _reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
+    fn is_nan(&mut self, _reference: &BoundTerm, _predicate: &BoundPredicate) -> Result<bool> {
         // NaN counts not in ColumnChunkMetadata Statistics
         ROW_GROUP_MIGHT_MATCH
     }
 
-    fn not_nan(
-        &mut self,
-        _reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> Result<bool> {
+    fn not_nan(&mut self, _reference: &BoundTerm, _predicate: &BoundPredicate) -> Result<bool> {
         // NaN counts not in ColumnChunkMetadata Statistics
         ROW_GROUP_MIGHT_MATCH
     }
 
     fn less_than(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -260,7 +261,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
 
     fn less_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -269,7 +270,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
 
     fn greater_than(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -278,7 +279,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
 
     fn greater_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -287,7 +288,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
 
     fn eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -297,7 +298,15 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             return ROW_GROUP_CANT_MATCH;
         }
 
+        if !bounds_preserve_order(reference) {
+            return ROW_GROUP_MIGHT_MATCH;
+        }
+
         if let Some(lower_bound) = self.min_value(field_id)? {
+            let Some(lower_bound) = transform_bound(reference, &lower_bound)? else {
+                return ROW_GROUP_MIGHT_MATCH;
+            };
+
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
@@ -308,6 +317,10 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         }
 
         if let Some(upper_bound) = self.max_value(field_id)? {
+            let Some(upper_bound) = transform_bound(reference, &upper_bound)? else {
+                return ROW_GROUP_MIGHT_MATCH;
+            };
+
             if upper_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
@@ -322,7 +335,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
 
     fn not_eq(
         &mut self,
-        _reference: &BoundReference,
+        _reference: &BoundTerm,
         _datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -334,7 +347,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
 
     fn starts_with(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -351,7 +364,15 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             ));
         };
 
+        if !bounds_preserve_order(reference) {
+            return ROW_GROUP_MIGHT_MATCH;
+        }
+
         if let Some(lower_bound) = self.min_value(field_id)? {
+            let Some(lower_bound) = transform_bound(reference, &lower_bound)? else {
+                return ROW_GROUP_MIGHT_MATCH;
+            };
+
             let PrimitiveLiteral::String(lower_bound) = lower_bound.literal() else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
@@ -370,6 +391,10 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         }
 
         if let Some(upper_bound) = self.max_value(field_id)? {
+            let Some(upper_bound) = transform_bound(reference, &upper_bound)? else {
+                return ROW_GROUP_MIGHT_MATCH;
+            };
+
             let PrimitiveLiteral::String(upper_bound) = upper_bound.literal() else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
@@ -392,7 +417,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
 
     fn not_starts_with(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -412,7 +437,15 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             ));
         };
 
+        if !bounds_preserve_order(reference) {
+            return ROW_GROUP_MIGHT_MATCH;
+        }
+
         let Some(lower_bound) = self.min_value(field_id)? else {
+            return ROW_GROUP_MIGHT_MATCH;
+        };
+
+        let Some(lower_bound) = transform_bound(reference, &lower_bound)? else {
             return ROW_GROUP_MIGHT_MATCH;
         };
 
@@ -434,6 +467,10 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             // lower bound matches the prefix
 
             let Some(upper_bound) = self.max_value(field_id)? else {
+                return ROW_GROUP_MIGHT_MATCH;
+            };
+
+            let Some(upper_bound) = transform_bound(reference, &upper_bound)? else {
                 return ROW_GROUP_MIGHT_MATCH;
             };
 
@@ -461,7 +498,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
 
     fn r#in(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -476,11 +513,19 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             return ROW_GROUP_MIGHT_MATCH;
         }
 
+        if !bounds_preserve_order(reference) {
+            return ROW_GROUP_MIGHT_MATCH;
+        }
+
         if let Some(lower_bound) = self.min_value(field_id)? {
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
                 return ROW_GROUP_MIGHT_MATCH;
             }
+
+            let Some(lower_bound) = transform_bound(reference, &lower_bound)? else {
+                return ROW_GROUP_MIGHT_MATCH;
+            };
 
             if !literals.iter().any(|datum| datum.ge(&lower_bound)) {
                 // if all values are less than lower bound, rows cannot match.
@@ -494,6 +539,10 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
                 return ROW_GROUP_MIGHT_MATCH;
             }
 
+            let Some(upper_bound) = transform_bound(reference, &upper_bound)? else {
+                return ROW_GROUP_MIGHT_MATCH;
+            };
+
             if !literals.iter().any(|datum| datum.le(&upper_bound)) {
                 // if all values are greater than upper bound, rows cannot match.
                 return ROW_GROUP_CANT_MATCH;
@@ -505,7 +554,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
 
     fn not_in(
         &mut self,
-        _reference: &BoundReference,
+        _reference: &BoundTerm,
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {

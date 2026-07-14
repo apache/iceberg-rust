@@ -109,6 +109,11 @@ impl BoundTerm {
         self.reference().accessor()
     }
 
+    /// Returns the underlying field of the reference.
+    pub fn field(&self) -> &NestedField {
+        self.reference().field()
+    }
+
     /// Returns the result type of this term.
     pub fn result_type(&self) -> Result<Type> {
         match self {

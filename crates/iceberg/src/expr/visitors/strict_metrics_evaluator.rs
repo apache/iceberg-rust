@@ -18,7 +18,8 @@
 use fnv::FnvHashSet;
 
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
-use crate::expr::{BoundPredicate, BoundReference};
+use crate::expr::visitors::transform_bound::bounds_preserve_order;
+use crate::expr::{BoundPredicate, BoundTerm};
 use crate::spec::{DataFile, Datum};
 use crate::{Error, ErrorKind, Result};
 
@@ -112,7 +113,7 @@ impl<'a> StrictMetricsEvaluator<'a> {
 
     fn visit_inequality(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         cmp_fn: fn(&Datum, &Datum) -> bool,
         use_lower_bound: bool,
@@ -120,6 +121,10 @@ impl<'a> StrictMetricsEvaluator<'a> {
         let field_id = reference.field().id;
 
         if self.may_contain_null(field_id) || self.may_contain_nan(field_id) {
+            return ROWS_MIGHT_NOT_MATCH;
+        }
+
+        if !bounds_preserve_order(reference) {
             return ROWS_MIGHT_NOT_MATCH;
         }
 
@@ -167,7 +172,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
 
     fn is_null(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field_id = reference.field().id;
@@ -181,7 +186,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
 
     fn not_null(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field_id = reference.field().id;
@@ -198,7 +203,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
 
     fn is_nan(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field_id = reference.field().id;
@@ -214,7 +219,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
 
     fn not_nan(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field_id = reference.field().id;
@@ -234,7 +239,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
 
     fn less_than(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
@@ -243,7 +248,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
 
     fn less_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
@@ -252,7 +257,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
 
     fn greater_than(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
@@ -269,7 +274,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
 
     fn greater_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
@@ -278,13 +283,17 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
 
     fn eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field_id = reference.field().id;
 
         if self.may_contain_null(field_id) || self.may_contain_nan(field_id) {
+            return ROWS_MIGHT_NOT_MATCH;
+        }
+
+        if !bounds_preserve_order(reference) {
             return ROWS_MIGHT_NOT_MATCH;
         }
 
@@ -304,7 +313,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
 
     fn not_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
@@ -312,6 +321,10 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
 
         if self.contains_nulls_only(field_id) || self.contains_nans_only(field_id) {
             return ROWS_MUST_MATCH;
+        }
+
+        if !bounds_preserve_order(reference) {
+            return ROWS_MIGHT_NOT_MATCH;
         }
 
         if let Some(lower) = self.lower_bound(field_id) {
@@ -337,7 +350,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
 
     fn starts_with(
         &mut self,
-        _reference: &BoundReference,
+        _reference: &BoundTerm,
         _datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
@@ -346,7 +359,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
 
     fn not_starts_with(
         &mut self,
-        _reference: &BoundReference,
+        _reference: &BoundTerm,
         _datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
@@ -355,13 +368,17 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
 
     fn r#in(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
         let field_id = reference.field().id;
 
         if self.may_contain_null(field_id) || self.may_contain_nan(field_id) {
+            return ROWS_MIGHT_NOT_MATCH;
+        }
+
+        if !bounds_preserve_order(reference) {
             return ROWS_MIGHT_NOT_MATCH;
         }
 
@@ -379,7 +396,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
 
     fn not_in(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
@@ -387,6 +404,10 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
 
         if self.contains_nulls_only(field_id) || self.contains_nans_only(field_id) {
             return ROWS_MUST_MATCH;
+        }
+
+        if !bounds_preserve_order(reference) {
+            return ROWS_MIGHT_NOT_MATCH;
         }
 
         let mut filtered_literals = literals.clone();

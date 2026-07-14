@@ -148,6 +148,15 @@ spark.sql("""
         (202501, TIMESTAMP '2025-01-01 00:00:00Z')
 """)
 
+#  Create an unpartitioned table
+spark.sql("CREATE OR REPLACE TABLE rest.default.test_transform_truncate_filter (id bigint, label string) USING iceberg PARTITIONED BY (identity(id))")
+spark.sql("""
+    INSERT INTO rest.default.test_transform_truncate_filter VALUES
+        (10, 'aaa'),
+        (20, 'bbb'),
+        (30, 'ccc')
+""")
+
 #  Create a table with various types
 spark.sql("""
 CREATE OR REPLACE TABLE rest.default.types_test USING ICEBERG AS 

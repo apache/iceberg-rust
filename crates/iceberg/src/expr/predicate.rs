@@ -343,59 +343,6 @@ pub enum Predicate {
     Set(SetExpression<Term>),
 }
 
-impl Predicate {
-    pub(crate) fn filter_transform(&self) -> Result<Predicate> {
-        self.clone().rewrite_not().filter_transform_inner()
-    }
-
-    fn filter_transform_inner(self) -> Result<Predicate> {
-        match self {
-            Predicate::And(expr) => {
-                let [left, right] = expr.inputs;
-                let left = (*left).filter_transform_inner()?;
-                if matches!(&left, &Predicate::AlwaysFalse) {
-                    return Ok(Predicate::AlwaysFalse);
-                }
-                Ok(left.and((*right).filter_transform_inner()?))
-            }
-            Predicate::Or(expr) => {
-                let [left, right] = expr.inputs;
-                let left = (*left).filter_transform_inner()?;
-                if matches!(&left, &Predicate::AlwaysTrue) {
-                    return Ok(Predicate::AlwaysTrue);
-                }
-                Ok(left.or((*right).filter_transform_inner()?))
-            }
-            Predicate::Not(expr) => {
-                let [inner] = expr.inputs;
-                (*inner).negate().filter_transform_inner()
-            }
-            Predicate::Unary(expr) => {
-                if expr.term().is_transform() {
-                    Ok(Predicate::AlwaysTrue)
-                } else {
-                    Ok(Predicate::Unary(expr))
-                }
-            }
-            Predicate::Binary(expr) => {
-                if expr.term().is_transform() {
-                    Ok(Predicate::AlwaysTrue)
-                } else {
-                    Ok(Predicate::Binary(expr))
-                }
-            }
-            Predicate::Set(expr) => {
-                if expr.term().is_transform() {
-                    Ok(Predicate::AlwaysTrue)
-                } else {
-                    Ok(Predicate::Set(expr))
-                }
-            }
-            other => Ok(other),
-        }
-    }
-}
-
 impl Bind for Predicate {
     type Bound = BoundPredicate;
 
@@ -446,28 +393,22 @@ impl Bind for Predicate {
 
                 match &bound_expr.op {
                     &PredicateOperator::IsNull => {
-                        if bound_expr.term.reference().field().required {
+                        if bound_expr.term.field().required {
                             return Ok(BoundPredicate::AlwaysFalse);
                         }
                     }
                     &PredicateOperator::NotNull => {
-                        if bound_expr.term.reference().field().required {
+                        if bound_expr.term.field().required {
                             return Ok(BoundPredicate::AlwaysTrue);
                         }
                     }
                     &PredicateOperator::IsNan | &PredicateOperator::NotNan => {
-                        if !bound_expr
-                            .term
-                            .reference()
-                            .field()
-                            .field_type
-                            .is_floating_type()
-                        {
+                        if !bound_expr.term.field().field_type.is_floating_type() {
                             return Err(Error::new(
                                 ErrorKind::DataInvalid,
                                 format!(
                                     "Expecting floating point type, but found {}",
-                                    bound_expr.term.reference().field().field_type
+                                    bound_expr.term.field().field_type
                                 ),
                             ));
                         }

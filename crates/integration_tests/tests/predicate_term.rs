@@ -17,10 +17,11 @@
 
 //! Integration tests for predicate evaluation with Reference and Transform terms.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow_array::{Int64Array, RecordBatch};
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use iceberg::expr::{Predicate, Reference, TransformTerm};
 use iceberg::spec::Datum;
 use iceberg::{Catalog, CatalogBuilder, TableIdent};
@@ -105,4 +106,44 @@ async fn test_year_transform_predicate_prunes_partitions() {
     .await;
 
     assert_eq!(actual, vec![202406, 202412]);
+}
+
+#[tokio::test]
+async fn test_truncate_transform_predicate() {
+    let table = load_table("test_transform_truncate_filter").await;
+
+    let scan = table.scan().build().unwrap();
+    let mut tasks = scan.plan_files().await.unwrap();
+    let mut paths = HashSet::new();
+    while let Some(task) = tasks.next().await {
+        let task = task.unwrap();
+        paths.insert(task.data_file_path.to_string());
+    }
+    assert_eq!(paths.len(), 3);
+
+    let scan = table
+        .scan()
+        .with_filter(TransformTerm::truncate("id", 20).equal_to(Datum::int(0)))
+        .build()
+        .unwrap();
+    let mut tasks = scan.plan_files().await.unwrap();
+    let mut paths = HashSet::new();
+    while let Some(task) = tasks.next().await {
+        let task = task.unwrap();
+        paths.insert(task.data_file_path.to_string());
+    }
+    assert_eq!(paths.len(), 1,);
+
+    let scan = table
+        .scan()
+        .with_filter(TransformTerm::truncate("id", 20).equal_to(Datum::int(20)))
+        .build()
+        .unwrap();
+    let mut tasks = scan.plan_files().await.unwrap();
+    let mut paths = HashSet::new();
+    while let Some(task) = tasks.next().await {
+        let task = task.unwrap();
+        paths.insert(task.data_file_path.to_string());
+    }
+    assert_eq!(paths.len(), 2,);
 }

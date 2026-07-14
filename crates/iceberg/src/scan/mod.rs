@@ -276,8 +276,7 @@ impl<'a> TableScanBuilder<'a> {
         }
 
         let snapshot_bound_predicate = if let Some(ref predicates) = self.filter {
-            // TODO: reserve transform predicates for snapshot bound predicate(used in file-level pruning and FileScanTask-level filtering)
-            Some(predicates.filter_transform()?.bind(schema.clone(), true)?)
+            Some(predicates.bind(schema.clone(), true)?)
         } else {
             None
         };

@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use fnv::FnvHashSet;
 
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
-use crate::expr::{BoundPredicate, BoundReference, Predicate};
+use crate::expr::{BoundPredicate, BoundTerm, Predicate};
 use crate::spec::{Datum, PartitionField, PartitionSpecRef};
 use crate::{Error, ErrorKind};
 
@@ -65,7 +65,7 @@ impl StrictProjection {
 
     fn get_parts(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         predicate: &BoundPredicate,
     ) -> Result<Predicate, Error> {
         let field_id = reference.field().id;
@@ -125,7 +125,7 @@ impl BoundPredicateVisitor for StrictProjection {
 
     fn is_null(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
         self.get_parts(reference, predicate)
@@ -133,7 +133,7 @@ impl BoundPredicateVisitor for StrictProjection {
 
     fn not_null(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
         self.get_parts(reference, predicate)
@@ -141,7 +141,7 @@ impl BoundPredicateVisitor for StrictProjection {
 
     fn is_nan(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
         self.get_parts(reference, predicate)
@@ -149,7 +149,7 @@ impl BoundPredicateVisitor for StrictProjection {
 
     fn not_nan(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
         self.get_parts(reference, predicate)
@@ -157,7 +157,7 @@ impl BoundPredicateVisitor for StrictProjection {
 
     fn less_than(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
@@ -166,7 +166,7 @@ impl BoundPredicateVisitor for StrictProjection {
 
     fn less_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
@@ -175,7 +175,7 @@ impl BoundPredicateVisitor for StrictProjection {
 
     fn greater_than(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
@@ -184,7 +184,7 @@ impl BoundPredicateVisitor for StrictProjection {
 
     fn greater_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
@@ -193,7 +193,7 @@ impl BoundPredicateVisitor for StrictProjection {
 
     fn eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
@@ -202,7 +202,7 @@ impl BoundPredicateVisitor for StrictProjection {
 
     fn not_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
@@ -211,7 +211,7 @@ impl BoundPredicateVisitor for StrictProjection {
 
     fn starts_with(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
@@ -220,7 +220,7 @@ impl BoundPredicateVisitor for StrictProjection {
 
     fn not_starts_with(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
@@ -229,7 +229,7 @@ impl BoundPredicateVisitor for StrictProjection {
 
     fn r#in(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literals: &FnvHashSet<Datum>,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
@@ -238,7 +238,7 @@ impl BoundPredicateVisitor for StrictProjection {
 
     fn not_in(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _literals: &FnvHashSet<Datum>,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {

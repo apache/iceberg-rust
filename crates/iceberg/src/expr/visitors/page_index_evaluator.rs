@@ -27,7 +27,7 @@ use parquet::file::page_index::column_index::ColumnIndexMetaData;
 use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
-use crate::expr::{BoundPredicate, BoundReference};
+use crate::expr::{BoundPredicate, BoundTerm};
 use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType, Schema};
 use crate::{Error, ErrorKind, Result};
 
@@ -381,11 +381,17 @@ impl<'a> PageIndexEvaluator<'a> {
 
     fn visit_inequality(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         cmp_fn: fn(&Datum, &Datum) -> bool,
         use_lower_bound: bool,
     ) -> Result<RowSelection> {
+        if matches!(reference, BoundTerm::Transform(_)) {
+            // Non-order-preserving transforms (e.g. Bucket) cannot use page-level
+            // bounds safely. Bail out and select all rows.
+            return self.select_all_rows();
+        }
+
         let field_id = reference.field().id;
 
         self.calc_row_selection(
@@ -445,7 +451,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn is_null(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
         let field_id = reference.field().id;
@@ -459,7 +465,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn not_null(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
         let field_id = reference.field().id;
@@ -473,7 +479,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn is_nan(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
         // NaN counts not present in ColumnChunkMetadata Statistics.
@@ -487,7 +493,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn not_nan(
         &mut self,
-        _reference: &BoundReference,
+        _reference: &BoundTerm,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
         // NaN counts not present in ColumnChunkMetadata Statistics
@@ -496,7 +502,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn less_than(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
@@ -505,7 +511,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn less_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
@@ -514,7 +520,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn greater_than(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
@@ -523,7 +529,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn greater_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
@@ -532,10 +538,14 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
+        if matches!(reference, BoundTerm::Transform(_)) {
+            return self.select_all_rows();
+        }
+
         let field_id = reference.field().id;
 
         self.calc_row_selection(
@@ -565,7 +575,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn not_eq(
         &mut self,
-        _reference: &BoundReference,
+        _reference: &BoundTerm,
         _datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
@@ -577,10 +587,14 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn starts_with(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
+        if matches!(reference, BoundTerm::Transform(_)) {
+            return self.select_all_rows();
+        }
+
         let field_id = reference.field().id;
 
         let PrimitiveLiteral::String(datum) = datum.literal() else {
@@ -643,10 +657,14 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn not_starts_with(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
+        if matches!(reference, BoundTerm::Transform(_)) {
+            return self.select_all_rows();
+        }
+
         let field_id = reference.field().id;
 
         // notStartsWith will match unless all values must start with the prefix.
@@ -718,7 +736,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn r#in(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
@@ -728,6 +746,11 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
             // skip evaluating the predicate if the number of values is too big
             return self.select_all_rows();
         }
+
+        if matches!(reference, BoundTerm::Transform(_)) {
+            return self.select_all_rows();
+        }
+
         self.calc_row_selection(
             field_id,
             |min, max, nulls| {
@@ -741,17 +764,18 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
                             .iter()
                             .all(|datum| datum.lt(&min) || datum.gt(&max)) =>
                     {
-                        // if all values are outside the bounds, no rows can match
+                        // if all values are outside the bounds, rows cannot match.
                         return Ok(false);
                     }
                     (Some(min), _) if !literals.iter().any(|datum| datum.ge(&min)) => {
-                        // if no values are within the min bound, no rows can match
+                        // if none of the values are greater than the min bound, rows cant match
                         return Ok(false);
                     }
                     (_, Some(max)) if !literals.iter().any(|datum| datum.le(&max)) => {
-                        // if no values are within the max bound, no rows can match
+                        // if all values are greater than upper bound, rows cannot match.
                         return Ok(false);
                     }
+
                     _ => {}
                 }
 
@@ -763,7 +787,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn not_in(
         &mut self,
-        _reference: &BoundReference,
+        _reference: &BoundTerm,
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {

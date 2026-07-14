@@ -18,7 +18,7 @@
 use fnv::FnvHashSet;
 
 use super::bound_predicate_visitor::{BoundPredicateVisitor, visit};
-use crate::expr::{BoundPredicate, BoundReference};
+use crate::expr::{BoundPredicate, BoundTerm};
 use crate::spec::{DataFile, Datum, PrimitiveLiteral, Struct};
 use crate::{Error, ErrorKind, Result};
 
@@ -92,32 +92,28 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         ))
     }
 
-    fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
+    fn is_null(&mut self, reference: &BoundTerm, _predicate: &BoundPredicate) -> Result<bool> {
         match reference.accessor().get(self.partition)? {
             Some(_) => Ok(false),
             None => Ok(true),
         }
     }
 
-    fn not_null(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> Result<bool> {
+    fn not_null(&mut self, reference: &BoundTerm, _predicate: &BoundPredicate) -> Result<bool> {
         match reference.accessor().get(self.partition)? {
             Some(_) => Ok(true),
             None => Ok(false),
         }
     }
 
-    fn is_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
+    fn is_nan(&mut self, reference: &BoundTerm, _predicate: &BoundPredicate) -> Result<bool> {
         match reference.accessor().get(self.partition)? {
             Some(datum) => Ok(datum.is_nan()),
             None => Ok(false),
         }
     }
 
-    fn not_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
+    fn not_nan(&mut self, reference: &BoundTerm, _predicate: &BoundPredicate) -> Result<bool> {
         match reference.accessor().get(self.partition)? {
             Some(datum) => Ok(!datum.is_nan()),
             None => Ok(true),
@@ -126,7 +122,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn less_than(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -138,7 +134,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn less_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -150,7 +146,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn greater_than(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -162,7 +158,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn greater_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -174,7 +170,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -186,7 +182,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn not_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -198,7 +194,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn starts_with(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -214,7 +210,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn not_starts_with(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -223,7 +219,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn r#in(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -235,7 +231,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn not_in(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
