@@ -31,6 +31,9 @@ rust_msrv = "1.94"
 compile = false
 precompiled_flavor = "install_only_stripped"
 
+# Cargo-installed tools are declared on the tasks that use them, not globally.
+# Otherwise mise-action installs them in unrelated jobs (for example, Python CI),
+# increasing setup time and exposing every job to crates.io rate limits.
 [tools]
 actionlint = "1.7.12"
 go = "1.26.5"
