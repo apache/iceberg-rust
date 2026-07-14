@@ -23,12 +23,13 @@ This project is used to build an Iceberg-rust powered core for [PyIceberg](https
 
 ## Setup
 
-The repository uses [mise](https://mise.en.dev/) to install Python, uv, Rust, and the other development tools. Follow the root [contributor setup](../../CONTRIBUTING.md#setup), then run these commands from the repository root:
+The repository uses [mise](https://mise.en.dev/) to install Python, uv, Rust, and the other development tools. Follow the root [contributor setup](../../CONTRIBUTING.md#setup), then run these commands from this directory:
 
 ```shell
+cd bindings/python
 mise install
-mise run python:verify-libpython
-mise run python:install
+mise run :verify-libpython
+mise run :install
 ```
 
 The managed Python includes the shared `libpython` required to compile the Python/DataFusion bindings. The install task makes uv use that interpreter and creates the binding's development environment.
@@ -36,14 +37,14 @@ The managed Python includes the shared `libpython` required to compile the Pytho
 ## Build
 
 ```shell
-mise run python:build
+mise run :build
 ```
 
 ## Test
 
 ```shell
-mise run python:test
-mise run python:test-wheel
+mise run :test
+mise run :test-wheel
 ```
 
 The first command tests the active development install. The second reproduces CI's native-wheel build, installs that wheel without a source fallback, and then runs the tests.
@@ -51,6 +52,6 @@ The first command tests the active development install. The second reproduces CI
 ## Style checks
 
 ```shell
-mise run python:check-format
-mise run python:check-style
+mise run :check-format
+mise run :check-style
 ```

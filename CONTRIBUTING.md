@@ -86,7 +86,7 @@ The fastest way is:
 
 #### Install mise and project tools
 
-Install mise 2026.6.14 or newer by following the [official installation guide](https://mise.en.dev/getting-started.html). Clone the repository, change to its root directory, and review `mise.toml` before trusting it. Then install the pinned tools:
+Install mise 2026.6.14 or newer by following the [official installation guide](https://mise.en.dev/getting-started.html). Clone the repository, change to its root directory, and review the root and relevant subproject `mise.toml` files before trusting them. Trusting the monorepo root also trusts its listed subprojects. Then install the pinned tools:
 
 ```bash
 mise trust
@@ -104,7 +104,7 @@ Python is a workspace build dependency because the workspace contains the Python
 Verify the selected interpreter and shared library before diagnosing a Cargo or linker failure:
 
 ```shell
-mise run python:verify-libpython
+mise run //bindings/python:verify-libpython
 ```
 
 The Python tasks explicitly use this interpreter, so uv will not silently select or download a different Python.
@@ -115,7 +115,7 @@ iceberg-rust uses containers to set up services for integration tests. Install D
 
 ## Build
 
-Run all commands from the repository root. `mise tasks` lists every available task.
+Run all commands from the repository root. `mise tasks --all` lists tasks from the root and its subprojects.
 
 | Task | Purpose |
 | --- | --- |
@@ -136,18 +136,18 @@ Run all commands from the repository root. `mise tasks` lists every available ta
 
 ### Python bindings
 
-The Python tasks run in `bindings/python` while sharing the repository's managed tool versions:
+The Python tasks are defined in `bindings/python/mise.toml` and share the repository's managed tool versions. From the repository root, run:
 
 ```shell
-mise run python:install
-mise run python:build
-mise run python:check-format
-mise run python:check-style
-mise run python:test
-mise run python:test-wheel
+mise run //bindings/python:install
+mise run //bindings/python:build
+mise run //bindings/python:check-format
+mise run //bindings/python:check-style
+mise run //bindings/python:test
+mise run //bindings/python:test-wheel
 ```
 
-`python:test-wheel` mirrors the native-wheel build, installation, and test sequence used by the Python CI matrix. Cross-compiled release wheels remain a release-workflow responsibility.
+Inside `bindings/python`, the shorter form is `mise run :test`, `mise run :test-wheel`, and so on. The `test-wheel` task mirrors the native-wheel build, installation, and test sequence used by the Python CI matrix. Cross-compiled release wheels remain a release-workflow responsibility.
 
 ### Website
 
@@ -157,7 +157,7 @@ Preview the documentation site locally with `mise run site`. Use `mise run site-
 
 - Run `mise doctor` to check the installation and `mise current` to confirm the tools selected for this repository.
 - If GitHub API rate limits interrupt installation, set `GITHUB_TOKEN` to a GitHub personal access token and retry `mise install`. Verification should remain enabled.
-- If `mise run python:verify-libpython` reports a missing shared library, confirm that mise selected the configured Python, remove that mise-managed Python version with `mise uninstall python@3.12.13`, and run `mise install` again. Do not substitute a uv-managed or system interpreter.
+- If `mise run //bindings/python:verify-libpython` reports a missing shared library, confirm that mise selected the configured Python, remove that mise-managed Python version with `mise uninstall python@3.12.13`, and run `mise install` again. Do not substitute a uv-managed or system interpreter.
 
 ## Dependencies
 

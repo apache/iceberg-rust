@@ -56,9 +56,11 @@ jobs:
           version: 2026.6.14
           install_args: ruff@0.15.20
       - name: Check format
-        run: mise run python:check-format
+        working-directory: bindings/python
+        run: mise run :check-format
       - name: Check style
-        run: mise run python:check-style
+        working-directory: bindings/python
+        run: mise run :check-style
 
   test:
     runs-on: ${{ matrix.os }}
@@ -84,7 +86,8 @@ jobs:
           key: bindings-python
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Build, install, and test wheel
+        working-directory: bindings/python
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_DATASET: ${{ secrets.HF_DATASET }}
-        run: mise run python:test-wheel
+        run: mise run :test-wheel

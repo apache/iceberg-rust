@@ -108,7 +108,7 @@ The features that Iceberg Rust currently supports can be found [here](https://ic
 
 ## Development
 
-Development tools and tasks are managed with [mise](https://mise.en.dev/). After installing mise, review the repository's [`mise.toml`](mise.toml), then run:
+Development tools and tasks are managed with [mise](https://mise.en.dev/). After installing mise, review the repository's root [`mise.toml`](mise.toml) and the Python subproject's [`mise.toml`](bindings/python/mise.toml). Trusting the monorepo root also trusts its listed subprojects. Then run:
 
 ```shell
 mise trust

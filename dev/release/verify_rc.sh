@@ -440,8 +440,8 @@ test_python_distribution() {
     cd "${ARCHIVE_BASE_NAME}"
     mise trust --yes mise.toml
     mise install
-    mise run python:install
-    mise run python:test
+    mise run //bindings/python:install
+    mise run //bindings/python:test
   )
 }
 

@@ -16,6 +16,10 @@
 # under the License.
 
 min_version = "2026.6.14"
+monorepo_root = true
+
+[monorepo]
+config_roots = ["bindings/python"]
 
 [settings.python]
 # Python is also a build dependency: the DataFusion bindings need libpython.
@@ -39,7 +43,7 @@ taplo = "0.9.3"
 uv = "0.9.3"
 
 [tasks.build]
-depends = ["python:verify-libpython"]
+depends = ["//bindings/python:verify-libpython"]
 description = "Build all workspace targets and features"
 run = "cargo build --all-targets --all-features --workspace"
 
@@ -59,7 +63,7 @@ description = "Check Rust formatting"
 run = "cargo fmt --all -- --check"
 
 [tasks.check-clippy]
-depends = ["python:verify-libpython"]
+depends = ["//bindings/python:verify-libpython"]
 description = "Run Clippy for all workspace targets and features"
 run = "cargo clippy --all-targets --all-features --workspace -- -D warnings"
 
@@ -95,7 +99,7 @@ run = "cargo audit"
 tools."cargo:cargo-audit" = "0.22.2"
 
 [tasks.check-standalone]
-depends = ["python:verify-libpython"]
+depends = ["//bindings/python:verify-libpython"]
 description = "Check every workspace crate without feature unification"
 run = '''
 #!/usr/bin/env bash
@@ -111,7 +115,7 @@ done < <(
 '''
 
 [tasks.check-msrv]
-depends = ["python:verify-libpython"]
+depends = ["//bindings/python:verify-libpython"]
 description = "Check the workspace with the minimum supported Rust version"
 run = "cargo +1.94.0 check --workspace"
 
@@ -175,7 +179,7 @@ description = "Run formatting and Rust lint checks"
 run = [{ task = "lint" }, { task = "check-clippy" }]
 
 [tasks.doc-test]
-depends = ["python:verify-libpython"]
+depends = ["//bindings/python:verify-libpython"]
 description = "Run workspace documentation tests"
 run = "cargo test --no-fail-fast --doc --all-features --workspace"
 
@@ -185,7 +189,7 @@ description = "Run workspace documentation and library tests"
 run = "cargo test --no-fail-fast --lib --all-features --workspace"
 
 [tasks.nextest]
-depends = ["python:verify-libpython"]
+depends = ["//bindings/python:verify-libpython"]
 description = "Run all workspace tests with cargo-nextest"
 run = "cargo nextest run --all-targets --all-features --workspace"
 
@@ -221,7 +225,7 @@ dir = "website"
 run = "mdbook serve"
 
 [tasks.site-build]
-depends = ["python:verify-libpython"]
+depends = ["//bindings/python:verify-libpython"]
 description = "Build the documentation website and Rust API docs"
 dir = "website"
 run = '''
@@ -247,60 +251,3 @@ run = "docker compose -f dev/docker-compose.yaml down -v --remove-orphans --time
 description = "Follow integration-test service logs"
 raw = true
 run = "docker compose -f dev/docker-compose.yaml logs -f"
-
-[tasks."python:verify-libpython"]
-description = "Verify that mise Python provides a shared libpython"
-run = "python dev/verify_libpython.py"
-
-[tasks."python:build"]
-depends = ["python:verify-libpython"]
-description = "Build and install the Python extension into its virtual environment"
-dir = "bindings/python"
-run = "uv run --no-sync maturin develop"
-
-[tasks."python:sync"]
-depends = ["python:verify-libpython"]
-description = "Install Python development dependencies"
-dir = "bindings/python"
-run = "uv sync --python 3.12 --no-managed-python --no-python-downloads --group dev --no-install-project"
-
-[tasks."python:install"]
-description = "Install Python development dependencies and rebuild the extension"
-run = [{ task = "python:sync" }, { task = "python:build" }]
-
-[tasks."python:build-wheel"]
-depends = ["python:sync"]
-description = "Build a native Python wheel for local testing"
-dir = "bindings/python"
-run = [
-  '''python -c "import shutil; shutil.rmtree('dist', ignore_errors=True)"''',
-  "uv run --no-sync maturin build --out dist -i python",
-]
-
-[tasks."python:install-wheel"]
-depends = ["python:build-wheel"]
-description = "Install the locally built Python wheel"
-dir = "bindings/python"
-run = "uv pip install --no-build --reinstall --find-links dist/ pyiceberg-core"
-
-[tasks."python:test-wheel"]
-depends = ["python:install-wheel"]
-description = "Build, install, and test a native Python wheel"
-dir = "bindings/python"
-run = "uv run --no-sync pytest"
-
-[tasks."python:test"]
-depends = ["python:verify-libpython"]
-description = "Run Python binding tests"
-dir = "bindings/python"
-run = "uv run --no-sync pytest"
-
-[tasks."python:check-format"]
-description = "Check Python formatting"
-dir = "bindings/python"
-run = "ruff format --check ."
-
-[tasks."python:check-style"]
-description = "Check Python style"
-dir = "bindings/python"
-run = "ruff check ."

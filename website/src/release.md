@@ -429,7 +429,7 @@ After downloading them, here are the instructions on how to verify them.
   ```bash
   tar -xzf apache-iceberg-rust-*.tar.gz
   cd apache-iceberg-rust-*/
-  # Review mise.toml before trusting the release candidate.
+  # Review mise.toml and bindings/python/mise.toml before trusting the release candidate.
   mise trust
   mise install
   mise run build
@@ -439,8 +439,8 @@ After downloading them, here are the instructions on how to verify them.
 - Verify pyiceberg-core build and tests:
 
   ```bash
-  mise run python:install
-  mise run python:test
+  mise run //bindings/python:install
+  mise run //bindings/python:test
   ```
 
 - Verify license headers:
