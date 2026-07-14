@@ -48,8 +48,6 @@ jobs:
   security_audit:
     runs-on: ubuntu-latest
     if: github.repository == 'apache/iceberg-rust'
-    env:
-      MISE_RUST_VERSION: "1.94.0"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:

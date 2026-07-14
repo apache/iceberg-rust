@@ -21,6 +21,9 @@ monorepo_root = true
 [monorepo]
 config_roots = ["bindings/python"]
 
+[vars]
+rust_msrv = "1.94"
+
 [settings.python]
 # Python is also a build dependency: the DataFusion bindings need libpython.
 # Refuse to fall back to a locally compiled interpreter with a different layout.
@@ -37,7 +40,7 @@ python = "3.12.13"
 ruff = "0.15.20"
 rust = [
   { version = "nightly-2026-03-05", components = "rustfmt,clippy" },
-  { version = "1.94.0" },
+  { version = "{{ vars.rust_msrv }}" },
 ]
 taplo = "0.9.3"
 uv = "0.9.3"
@@ -97,6 +100,7 @@ tools.actionlint = "1.7.12"
 description = "Audit Rust dependencies for known vulnerabilities"
 run = "cargo audit"
 tools."cargo:cargo-audit" = "0.22.2"
+tools.rust = "{{ vars.rust_msrv }}"
 
 [tasks.check-standalone]
 depends = ["//bindings/python:verify-libpython"]
@@ -121,15 +125,16 @@ run = '''
 #!/usr/bin/env bash
 set -euo pipefail
 
-msrv=$(awk -F'"' '/^rust-version[[:space:]]*=/ { print $2; exit }' Cargo.toml)
-if [[ -z "$msrv" ]]; then
-  echo "ERROR: rust-version is not defined in Cargo.toml" >&2
+manifest_msrv=$(awk -F'"' '/^rust-version[[:space:]]*=/ { print $2; exit }' Cargo.toml)
+configured_msrv="{{ vars.rust_msrv }}"
+if [[ "$manifest_msrv" != "$configured_msrv" ]]; then
+  echo "ERROR: Cargo.toml rust-version ($manifest_msrv) does not match mise rust_msrv ($configured_msrv)" >&2
   exit 1
 fi
 
-toolchain=$(mise latest "rust@$msrv")
-mise exec "rust@$toolchain" -- cargo check --workspace
+cargo check --workspace
 '''
+tools.rust = "{{ vars.rust_msrv }}"
 
 [tasks.generate-public-api]
 description = "Regenerate public API snapshots for publishable crates"

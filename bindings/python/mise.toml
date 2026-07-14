@@ -27,7 +27,7 @@ run = "uv run --no-sync maturin develop"
 [tasks.sync]
 depends = [":verify-libpython"]
 description = "Install Python development dependencies"
-run = "uv sync --python 3.12 --no-managed-python --no-python-downloads --group dev --no-install-project"
+run = '''uv sync --python "$(command -v python)" --no-managed-python --no-python-downloads --group dev --no-install-project'''
 
 [tasks.install]
 description = "Install Python development dependencies and rebuild the extension"
@@ -63,3 +63,18 @@ run = "ruff format --check ."
 [tasks.check-style]
 description = "Check Python style"
 run = "ruff check ."
+
+[tasks.release-tool-versions]
+description = "Print Rust and Python selectors for release builds"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_config=../../mise.toml
+rust_version=$(mise config get --file "$root_config" vars.rust_msrv)
+python_version=$(mise config get --file "$root_config" tools.python)
+python_minor=${python_version%.*}
+
+printf 'rust=%s\n' "$rust_version"
+printf 'python=%s\n' "python$python_minor"
+'''
