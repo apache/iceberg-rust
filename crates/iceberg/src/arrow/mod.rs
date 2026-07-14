@@ -46,36 +46,4 @@ pub mod record_batch_partition_splitter;
 pub use record_batch_partition_splitter::*;
 
 #[cfg(test)]
-pub(crate) mod test_utils {
-    use std::fs::File;
-
-    use arrow_array::RecordBatch;
-    use parquet::arrow::ArrowWriter;
-    use parquet::basic::Compression;
-    use parquet::encryption::encrypt::FileEncryptionProperties;
-    use parquet::file::properties::WriterProperties;
-
-    /// Writes `batch` to `path` as a Parquet file encrypted with `key` and `aad_prefix`.
-    pub(crate) fn write_encrypted_parquet(
-        path: &str,
-        batch: &RecordBatch,
-        key: &[u8],
-        aad_prefix: Option<&[u8]>,
-    ) {
-        let mut builder = FileEncryptionProperties::builder(key.to_vec());
-        if let Some(aad) = aad_prefix {
-            builder = builder.with_aad_prefix(aad.to_vec());
-        }
-        let encryption_properties = builder.build().unwrap();
-
-        let props = WriterProperties::builder()
-            .set_compression(Compression::SNAPPY)
-            .with_file_encryption_properties(encryption_properties)
-            .build();
-
-        let file = File::create(path).unwrap();
-        let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
-        writer.write(batch).expect("Writing batch");
-        writer.close().unwrap();
-    }
-}
+pub(crate) mod test_utils;
