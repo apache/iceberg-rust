@@ -24,7 +24,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [v0.10.0] - 2026-07-07
+## [v0.10.0] - 2026-07-14
 
 ### Breaking Changes
 
@@ -288,6 +288,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * Fix zizmor pin by @blackmwk in https://github.com/apache/iceberg-rust/pull/2762
 * feat(encryption) [8/N] Read encrypted manifest file by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2586
 * Reject negative positional delete positions by @fallintoplace in https://github.com/apache/iceberg-rust/pull/2631
+* chore: Update changelog for 0.10.0 by @dannycjones in https://github.com/apache/iceberg-rust/pull/2782
+* chore(refactor): rename SnapshotProducer::manifest_file to produce_manifest_file_list by @dannycjones in https://github.com/apache/iceberg-rust/pull/2596
+* chore(deps): Bump DataFusion to 54.0.0 by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2648
+* fix(reader): keep rows with a null equality-delete column value by @mbutrovich in https://github.com/apache/iceberg-rust/pull/2781
+* feat(catalog-rest): parse server-advertised endpoints from GET /v1/config by @huan233usc in https://github.com/apache/iceberg-rust/pull/2692
+* fix(spec): support float/double conversion in Datum::to() by @mbutrovich in https://github.com/apache/iceberg-rust/pull/2783
+* feat(encryption): [11/N] KMS factory trait and catalog wiring by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2650
+* ci: fix the cargo-public-api double install by @abnobdoss in https://github.com/apache/iceberg-rust/pull/2793
+* ci: drop unnecessary protoc installs by @abnobdoss in https://github.com/apache/iceberg-rust/pull/2805
+* Infra: Group github/codeql-action bumps into a single dependabot PR by @ebyhr in https://github.com/apache/iceberg-rust/pull/2800
+* chore(deps): Bump rand from 0.9.4 to 0.10.2 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2818
+* chore(deps): Bump reqwest from 0.12.28 to 0.13.4 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2810
+* chore(deps): Bump taiki-e/install-action from 2.82.2 to 2.82.9 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2816
+* chore(deps): Bump astral-sh/setup-uv from 8.2.0 to 8.3.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2817
+* chore(deps-dev): Bump huggingface-hub from 1.21.0 to 1.22.0 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2806
+* chore(deps): Bump crate-ci/typos from 1.47.2 to 1.48.0 by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2809
+* chore(deps): Bump the codeql-action group with 2 updates by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2808
+* fix(arrow): error on required field absent from data file with no default by @mbutrovich in https://github.com/apache/iceberg-rust/pull/2797
+* chore(deps-dev): Bump datafusion from 52.3.0 to 54.0.0 in /bindings/python by @dependabot[bot] in https://github.com/apache/iceberg-rust/pull/2807
+* docs: improve ancestors_between docs to make behaviour more clear by @xanderbailey in https://github.com/apache/iceberg-rust/pull/2796
+* Include license and notice files in iceberg-storage-opendal crate by @ankane in https://github.com/apache/iceberg-rust/pull/2823
+* fix(license): Add missing LICENSE and NOTICE symlinks for iceberg-cache-moka and iceberg-catalog-loader by @dannycjones in https://github.com/apache/iceberg-rust/pull/2828
 
 ## [v0.9.0] - 2026-03-10
 
