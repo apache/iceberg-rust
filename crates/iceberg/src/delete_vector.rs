@@ -38,7 +38,7 @@ pub(crate) const DELETION_VECTOR_PROPERTY_CARDINALITY: &str = "cardinality";
 pub(crate) const DELETION_VECTOR_PROPERTY_REFERENCED_DATA_FILE: &str = "referenced-data-file";
 
 /// A set of deleted row positions backed by a `RoaringTreemap`.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct DeleteVector {
     inner: RoaringTreemap,
 }
@@ -296,6 +296,12 @@ impl DeleteVectorIterator<'_> {
 
 impl BitOrAssign for DeleteVector {
     fn bitor_assign(&mut self, other: Self) {
+        self.inner.bitor_assign(other.inner);
+    }
+}
+
+impl BitOrAssign<&DeleteVector> for DeleteVector {
+    fn bitor_assign(&mut self, other: &DeleteVector) {
         self.inner.bitor_assign(&other.inner);
     }
 }
