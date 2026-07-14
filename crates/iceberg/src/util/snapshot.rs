@@ -59,6 +59,11 @@ pub fn ancestors_of(
 }
 
 /// Iterate starting from `latest_snapshot_id` (inclusive) to `oldest_snapshot_id` (exclusive).
+///
+/// Note: if `oldest_snapshot_id` is `Some(id)` but `id` is not actually an
+/// ancestor of `latest_snapshot_id`, the walk is never stopped and this yields
+/// *all* ancestors of `latest_snapshot_id` down to the root. Callers that treat
+/// `oldest_snapshot_id` as a lower bound must validate the lineage themselves.
 pub fn ancestors_between(
     table_metadata: &TableMetadataRef,
     latest_snapshot_id: i64,
