@@ -46,15 +46,17 @@ use crate::{Error, ErrorKind};
 /// Returns true for operations whose snapshots may introduce delete files that
 /// could conflict with a concurrent rewrite: `Overwrite` / `Delete` => `true`;
 /// `Append` / `Replace` => `false`.
-// Consumed by delete-class operations (e.g. `RewriteFilesOperation`) wired up in a
-// later task; kept `pub(crate)` for that consumer.
-#[allow(dead_code)]
+///
+/// Used as the operation predicate passed to [`validation_history`] by
+/// [`validate_no_new_deletes_for_data_files`]; it is the single source of truth for
+/// "which snapshots may have added conflicting deletes", replacing the old
+/// `VALIDATE_ADDED_DELETE_FILES_OPERATIONS` static set.
 pub(crate) fn may_add_conflicting_deletes(operation: Operation) -> bool {
     matches!(operation, Operation::Overwrite | Operation::Delete)
 }
 
 /// Collect the manifests and snapshot ids added between two points in history,
-/// filtered by operation set and manifest content type.
+/// filtered by an operation predicate and manifest content type.
 ///
 /// Ported from #2590: walks [`ancestors_between`]`(to, from)`, asserts last-ancestor
 /// consistency (the oldest walked snapshot's parent must equal `from_snapshot_id`),
@@ -66,7 +68,8 @@ pub(crate) fn may_add_conflicting_deletes(operation: Operation) -> bool {
 /// * `from_snapshot_id` - The starting snapshot ID (exclusive), or `None` to start
 ///   from the beginning of history.
 /// * `to_snapshot_id` - The ending snapshot ID (inclusive).
-/// * `matching_operations` - Set of operations to match when collecting snapshots.
+/// * `matching_operations` - Predicate selecting which snapshot operations to match
+///   (e.g. [`may_add_conflicting_deletes`]).
 /// * `content_type` - The content type of manifests to collect.
 ///
 /// # Errors
@@ -77,7 +80,7 @@ pub(crate) async fn validation_history(
     base: &Table,
     from_snapshot_id: Option<i64>,
     to_snapshot_id: i64,
-    matching_operations: &HashSet<Operation>,
+    matching_operations: impl Fn(Operation) -> bool,
     content_type: ManifestContentType,
 ) -> Result<(Vec<ManifestFile>, HashSet<i64>)> {
     let mut manifests: Vec<ManifestFile> = vec![];
@@ -92,7 +95,7 @@ pub(crate) async fn validation_history(
 
         // Find all snapshots with the matching operations
         // and their manifest files with the matching content type
-        if matching_operations.contains(&current_snapshot.summary().operation) {
+        if matching_operations(current_snapshot.summary().operation.clone()) {
             new_snapshots.insert(current_snapshot.snapshot_id());
 
             let manifest_list = base.manifest_list_reader(&current_snapshot).load().await?;
@@ -168,18 +171,15 @@ pub(crate) async fn validate_no_new_deletes_for_data_files(
         return Ok(());
     }
 
-    // Operations whose snapshots may add delete files. These are exactly the
-    // operations for which `may_add_conflicting_deletes` returns true; this set is
-    // the replacement for the old `VALIDATE_ADDED_DELETE_FILES_OPERATIONS` static.
-    let matching_operations: HashSet<Operation> =
-        HashSet::from([Operation::Overwrite, Operation::Delete]);
-
-    // Get matching delete files that have been added since the from_snapshot_id
+    // Get matching delete files that have been added since the from_snapshot_id.
+    // `may_add_conflicting_deletes` is the single source of truth for which snapshot
+    // operations may have introduced conflicting deletes (replacing the old
+    // `VALIDATE_ADDED_DELETE_FILES_OPERATIONS` static set).
     let (delete_manifests, _) = validation_history(
         base,
         from_snapshot_id,
         to_snapshot_id,
-        &matching_operations,
+        may_add_conflicting_deletes,
         ManifestContentType::Deletes,
     )
     .await?;
