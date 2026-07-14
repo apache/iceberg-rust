@@ -89,63 +89,10 @@ description = "Check GitHub Actions workflow syntax"
 run = "actionlint"
 tools.actionlint = "1.7.12"
 
-[tasks.check-zizmor]
-description = "Check GitHub Actions security with zizmor"
-run = "zizmor --persona=regular -- ."
-tools.zizmor = "1.26.1"
-
-[tasks.check-asf-allowlist]
-description = "Check GitHub Actions refs against the ASF allowlist"
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-
-tmp_dir=$(mktemp -d)
-trap 'rm -rf "$tmp_dir"' EXIT
-
-python - "$tmp_dir/approved_patterns.yml" <<'PY'
-from urllib.request import urlretrieve
-import sys
-
-urlretrieve(
-    "https://raw.githubusercontent.com/apache/infrastructure-actions/main/approved_patterns.yml",
-    sys.argv[1],
-)
-PY
-
-uv run --no-project --with ruyaml==0.91.0 \
-  python dev/check_asf_allowlist.py "$tmp_dir/approved_patterns.yml"
-'''
-
 [tasks.check-audit]
 description = "Audit Rust dependencies for known vulnerabilities"
 run = "cargo audit"
 tools."cargo:cargo-audit" = "0.22.2"
-
-[tasks.check-codeql-actions]
-description = "Analyze GitHub Actions workflows with CodeQL"
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-
-output=${CODEQL_SARIF:-target/codeql/actions.sarif}
-tmp_dir=$(mktemp -d)
-trap 'rm -rf "$tmp_dir"' EXIT
-
-codeql pack download codeql/actions-queries@0.6.29
-codeql database create "$tmp_dir/actions" \
-  --language=actions \
-  --source-root=.
-mkdir -p "$(dirname "$output")"
-codeql database analyze "$tmp_dir/actions" \
-  --format=sarif-latest \
-  --sarif-category=actions \
-  --output="$output" \
-  codeql/actions-queries@0.6.29
-
-echo "CodeQL SARIF written to $output"
-'''
-tools.codeql = "2.25.6"
 
 [tasks.check-standalone]
 depends = ["python:verify-libpython"]
@@ -341,77 +288,6 @@ depends = ["python:install-wheel"]
 description = "Build, install, and test a native Python wheel"
 dir = "bindings/python"
 run = "uv run --no-sync pytest"
-
-[tasks."python:verify-wheel"]
-description = "Verify a built Python wheel installs without a source fallback"
-dir = "bindings/python"
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-
-venv=$(mktemp -d)
-trap 'rm -rf "$venv"' EXIT
-uv venv --python 3.12 --no-managed-python --no-python-downloads "$venv"
-uv pip install --python "$venv" \
-  --no-build --reinstall --find-links dist/ pyiceberg-core
-'''
-
-[tasks."python:set-package-version"]
-description = "Set an explicit PEP 440 version in pyproject.toml"
-dir = "bindings/python"
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-
-version=${1:?Usage: mise run python:set-package-version VERSION}
-python ../../dev/set_python_package_version.py pyproject.toml "$version"
-'''
-
-[tasks."python:validate-release-tag"]
-description = "Validate a Python release tag against the workspace version"
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-
-release_tag=${1:?Usage: mise run python:validate-release-tag TAG}
-echo "Validating release tag: $release_tag"
-
-if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
-  echo "Invalid release tag format: $release_tag" >&2
-  echo "Expected v<major>.<minor>.<patch> or v<major>.<minor>.<patch>-rc.<number>" >&2
-  exit 1
-fi
-
-cargo_version=${release_tag#v}
-base_version=${cargo_version%-rc.*}
-workspace_version=$(
-  cargo metadata --format-version 1 --no-deps -q |
-    jq -r '.packages[0].version'
-)
-
-if [[ "$base_version" != "$workspace_version" ]]; then
-  echo "Release tag base version $base_version does not match workspace version $workspace_version" >&2
-  exit 1
-fi
-
-if [[ "$release_tag" =~ -rc\.[0-9]+$ ]]; then
-  is_rc=true
-  pep440_version=$(sed 's/-rc\.\([0-9]*\)/rc\1/' <<<"$cargo_version")
-else
-  is_rc=false
-  pep440_version=$cargo_version
-fi
-
-echo "Cargo version: $cargo_version"
-echo "PEP 440 version: $pep440_version"
-echo "Release candidate: $is_rc"
-
-if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-  echo "cargo-version=$cargo_version" >> "$GITHUB_OUTPUT"
-  echo "pep440-version=$pep440_version" >> "$GITHUB_OUTPUT"
-  echo "is-rc=$is_rc" >> "$GITHUB_OUTPUT"
-fi
-'''
 
 [tasks."python:test"]
 depends = ["python:verify-libpython"]

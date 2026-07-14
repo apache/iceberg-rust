@@ -39,19 +39,10 @@ jobs:
   sdist:
     needs: set-version
     runs-on: ubuntu-latest
-    env:
-      MISE_RUST_VERSION: "1.94.0"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-
-      - name: Setup mise
-        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
-        with:
-          version: 2026.6.14
-          cache: false
-          install_args: "rust@1.94.0 python@3.12.13 jq@1.8.2"
 
       - name: Compute dev version
         id: version
@@ -62,11 +53,9 @@ jobs:
           CURRENT=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[0].version')
           echo "pep440=${CURRENT}.dev${TIMESTAMP}" >> $GITHUB_OUTPUT
 
-      - name: Set development package version
-        shell: bash
-        env:
-          PEP440_VERSION: ${{ steps.version.outputs.pep440 }}
-        run: mise run python:set-package-version "$PEP440_VERSION"
+      - uses: ./.github/actions/overwrite-package-version
+        with:
+          version: ${{ steps.version.outputs.pep440 }}
 
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -83,8 +72,6 @@ jobs:
   wheels:
     needs: set-version
     runs-on: "${{ matrix.os }}"
-    env:
-      MISE_RUST_VERSION: "1.94.0"
     strategy:
       max-parallel: 15
       matrix:
@@ -103,13 +90,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup mise
-        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
-        with:
-          version: 2026.6.14
-          cache: false
-          install_args: "rust@1.94.0 python@3.12.13 uv@0.9.3 jq@1.8.2"
-
       - name: Compute dev version
         id: version
         shell: bash
@@ -119,15 +99,15 @@ jobs:
           CURRENT=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[0].version')
           echo "pep440=${CURRENT}.dev${TIMESTAMP}" >> $GITHUB_OUTPUT
 
-      - name: Set development package version
-        shell: bash
-        env:
-          PEP440_VERSION: ${{ steps.version.outputs.pep440 }}
-        run: mise run python:set-package-version "$PEP440_VERSION"
+      - uses: ./.github/actions/overwrite-package-version
+        with:
+          version: ${{ steps.version.outputs.pep440 }}
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: 3.12
 
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
-        env:
-          RUSTUP_TOOLCHAIN: "1.94.0"
         with:
           rust-toolchain: "1.94.0"
           target: ${{ matrix.target }}
@@ -136,12 +116,20 @@ jobs:
           command: build
           args: --release -o dist -i python3.12 # Explicitly set interpreter; manylinux containers have multiple Pythons and maturin may pick an older one
 
+      - uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
+        with:
+          version: "0.9.3"
+          enable-cache: true
+
       # Verify the wheel is abi3-compatible and installable without building from source.
       # Skipped for cross-compiled targets since they share the same maturin config;
       # if abi3 is broken, the native target build will catch it.
       - name: Verify wheel installs with no build fallback
         if: matrix.target != 'aarch64' && matrix.target != 'armv7l'
-        run: mise run python:verify-wheel
+        working-directory: "bindings/python"
+        shell: bash
+        run: |
+          uv pip install --no-build --reinstall --system --find-links dist/ pyiceberg-core
 
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

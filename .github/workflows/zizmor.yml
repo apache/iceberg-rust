@@ -38,13 +38,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup mise
-        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
-        with:
-          version: 2026.6.14
-          install: false
-
       - name: Run zizmor 🌈
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: mise run check-zizmor
+        uses: zizmorcore/zizmor-action@192e21d79ab29983730a13d1382995c2307fbcaa # v0.5.7
+        with:
+          advanced-security: false

@@ -64,7 +64,7 @@ When a pull request is under review, please avoid using force push as it makes i
 
 ### CI
 
-iceberg-rust uses GitHub Actions to orchestrate tests, but the repository checks themselves are mise tasks. The workflows in `.github/workflows` call the same commands contributors run locally. GitHub-only operations such as caching, artifact upload, deployment, and publishing remain workflow steps.
+iceberg-rust uses GitHub Actions to orchestrate CI. Developer-facing build, lint, and test checks use the same mise tasks contributors run locally, while GitHub-only security analysis, artifact handling, deployment, and publishing remain workflow actions.
 
 ## Setup
 
@@ -127,9 +127,6 @@ Run all commands from the repository root. `mise tasks` lists every available ta
 | `mise run check-msrv` | Check the workspace with the minimum supported Rust version. |
 | `mise run check-public-api` | Compare the public API against the checked-in snapshots. |
 | `mise run check-audit` | Audit Rust dependencies against the RustSec advisory database. |
-| `mise run check-zizmor` | Run the GitHub Actions security checks locally. Set `GH_TOKEN` to enable online audits. |
-| `mise run check-asf-allowlist` | Check workflow action refs against the live ASF allowlist. |
-| `mise run check-codeql-actions` | Analyze workflows with CodeQL and write SARIF to `target/codeql/actions.sarif`. |
 | `mise run unit-test` | Run Rust unit and documentation tests. |
 | `mise run nextest` | Run the Rust test suite with cargo-nextest. |
 | `mise run test` | Start the integration-test services, run all tests, and tear the services down. |
