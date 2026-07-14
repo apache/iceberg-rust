@@ -62,7 +62,7 @@ jobs:
           TIMESTAMP: ${{ needs.set-version.outputs.timestamp }}
         run: |
           CURRENT=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[0].version')
-          echo "pep440=${CURRENT}.dev${TIMESTAMP}" >> $GITHUB_OUTPUT
+          echo "pep440=${CURRENT}.dev${TIMESTAMP}" >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/overwrite-package-version
         with:
@@ -120,7 +120,7 @@ jobs:
           TIMESTAMP: ${{ needs.set-version.outputs.timestamp }}
         run: |
           CURRENT=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[0].version')
-          echo "pep440=${CURRENT}.dev${TIMESTAMP}" >> $GITHUB_OUTPUT
+          echo "pep440=${CURRENT}.dev${TIMESTAMP}" >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/overwrite-package-version
         with:

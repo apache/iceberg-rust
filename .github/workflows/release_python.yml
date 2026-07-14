@@ -126,7 +126,7 @@ jobs:
           CARGO_VERSION: ${{ needs.validate-release-tag.outputs.cargo-version }}
         run: |
           # Convert semver RC (0.9.0-rc.1) to PEP 440 (0.9.0rc1)
-          echo "pep440=$(echo "$CARGO_VERSION" | sed 's/-rc\.\([0-9]*\)/rc\1/')" >> "$GITHUB_OUTPUT"
+          echo "pep440=${CARGO_VERSION/-rc./rc}" >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/overwrite-package-version
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
@@ -185,7 +185,7 @@ jobs:
           CARGO_VERSION: ${{ needs.validate-release-tag.outputs.cargo-version }}
         run: |
           # Convert semver RC (0.9.0-rc.1) to PEP 440 (0.9.0rc1)
-          echo "pep440=$(echo "$CARGO_VERSION" | sed 's/-rc\.\([0-9]*\)/rc\1/')" >> "$GITHUB_OUTPUT"
+          echo "pep440=${CARGO_VERSION/-rc./rc}" >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/overwrite-package-version
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
