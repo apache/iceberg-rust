@@ -398,6 +398,7 @@ pub iceberg::expr::BoundTerm::Reference(iceberg::expr::BoundReference)
 pub iceberg::expr::BoundTerm::Transform(iceberg::expr::BoundTransformTerm)
 impl iceberg::expr::BoundTerm
 pub fn iceberg::expr::BoundTerm::accessor(&self) -> &iceberg::expr::accessor::StructAccessor
+pub fn iceberg::expr::BoundTerm::field(&self) -> &iceberg::spec::NestedField
 pub fn iceberg::expr::BoundTerm::reference(&self) -> &iceberg::expr::BoundReference
 pub fn iceberg::expr::BoundTerm::result_type(&self) -> iceberg::Result<iceberg::spec::Type>
 impl core::clone::Clone for iceberg::expr::BoundTerm
@@ -1815,6 +1816,10 @@ impl core::marker::StructuralPartialEq for iceberg::spec::Transform
 impl core::str::traits::FromStr for iceberg::spec::Transform
 pub type iceberg::spec::Transform::Err = iceberg::Error
 pub fn iceberg::spec::Transform::from_str(s: &str) -> iceberg::Result<Self>
+impl iceberg::transform::TransformFunction for iceberg::spec::Transform
+pub fn iceberg::spec::Transform::transform(&self, input: arrow_array::array::ArrayRef) -> iceberg::Result<arrow_array::array::ArrayRef>
+pub fn iceberg::spec::Transform::transform_literal(&self, input: &iceberg::spec::Datum) -> iceberg::Result<core::option::Option<iceberg::spec::Datum>>
+pub fn iceberg::spec::Transform::transform_literal_result(&self, input: &iceberg::spec::Datum) -> iceberg::Result<iceberg::spec::Datum>
 impl serde_core::ser::Serialize for iceberg::spec::Transform
 pub fn iceberg::spec::Transform::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::Transform
@@ -3239,6 +3244,10 @@ pub trait iceberg::transform::TransformFunction: core::marker::Send + core::mark
 pub fn iceberg::transform::TransformFunction::transform(&self, input: arrow_array::array::ArrayRef) -> iceberg::Result<arrow_array::array::ArrayRef>
 pub fn iceberg::transform::TransformFunction::transform_literal(&self, input: &iceberg::spec::Datum) -> iceberg::Result<core::option::Option<iceberg::spec::Datum>>
 pub fn iceberg::transform::TransformFunction::transform_literal_result(&self, input: &iceberg::spec::Datum) -> iceberg::Result<iceberg::spec::Datum>
+impl iceberg::transform::TransformFunction for iceberg::spec::Transform
+pub fn iceberg::spec::Transform::transform(&self, input: arrow_array::array::ArrayRef) -> iceberg::Result<arrow_array::array::ArrayRef>
+pub fn iceberg::spec::Transform::transform_literal(&self, input: &iceberg::spec::Datum) -> iceberg::Result<core::option::Option<iceberg::spec::Datum>>
+pub fn iceberg::spec::Transform::transform_literal_result(&self, input: &iceberg::spec::Datum) -> iceberg::Result<iceberg::spec::Datum>
 pub fn iceberg::transform::create_transform_function(transform: &iceberg::spec::Transform) -> iceberg::Result<iceberg::transform::BoxedTransformFunction>
 pub type iceberg::transform::BoxedTransformFunction = alloc::boxed::Box<dyn iceberg::transform::TransformFunction>
 pub mod iceberg::util
