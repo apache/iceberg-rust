@@ -61,8 +61,8 @@ struct MergingCache {
 ///
 /// Owned by the action as a field; therefore lives across all retries. It delegates
 /// all shared write mechanics to a per-attempt `SnapshotProducer` (see task 6.2 for
-/// `commit`). It owns file staging — actions forward `add_data_file` /
-/// `delete_data_file` into it (mirroring Java `MergingSnapshotProducer.add(DataFile)`
+/// `commit`). It owns file staging — actions forward `add_file` /
+/// `delete_file` into it (mirroring Java `MergingSnapshotProducer.add(DataFile)`
 /// / `delete(...)`).
 pub(crate) struct MergingSnapshotProducer {
     // ---- plain, immutable identity (set once at construction) ----
@@ -114,7 +114,7 @@ impl MergingSnapshotProducer {
     /// iceberg-rust #1606). Mutates plain staging state with `&mut self`; only
     /// reachable in the BUILD phase, before `.apply(tx)` wraps the action in an `Arc`.
     /// Mirrors Java `MergingSnapshotProducer.add(...)`.
-    pub(crate) fn add_data_file(&mut self, file: DataFile) {
+    pub(crate) fn add_file(&mut self, file: DataFile) {
         match file.content_type() {
             DataContentType::Data => self.added_data_files.push(file),
             _ => self.added_delete_files.push(file),
@@ -131,7 +131,7 @@ impl MergingSnapshotProducer {
     /// manifests (`delete_filter`). Recording here (during the `&mut self` build phase) is what
     /// lets `filter_existing_manifests` run against a shared `&self` borrow during commit,
     /// since [`ManifestFilterManager::delete_file`] needs `&mut self`.
-    pub(crate) fn delete_data_file(&mut self, file: DataFile) {
+    pub(crate) fn delete_file(&mut self, file: DataFile) {
         match file.content_type() {
             DataContentType::Data => {
                 self.data_filter.delete_file(file.clone());
@@ -183,7 +183,7 @@ impl MergingSnapshotProducer {
     /// manifests are partitioned by content type: **data** manifests go through `data_filter`
     /// (which drops removed data files) and **delete** manifests go through `delete_filter`
     /// (which drops removed delete files). The filter managers were already populated with the
-    /// removed files during the build phase (see [`delete_data_file`](Self::delete_data_file)),
+    /// removed files during the build phase (see [`delete_file`](Self::delete_file)),
     /// so this only needs a shared `&self` borrow — [`ManifestFilterManager::filter_manifests`]
     /// itself takes `&self`.
     ///

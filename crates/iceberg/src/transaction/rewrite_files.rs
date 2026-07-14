@@ -72,9 +72,9 @@ impl RewriteFilesAction {
 
     /// Add files produced by the rewrite. Forwarded into the MSP, which routes each file to
     /// the data vs delete bucket by its content type (as in `#1606`).
-    pub fn add_data_files(mut self, files: impl IntoIterator<Item = DataFile>) -> Result<Self> {
+    pub fn add_files(mut self, files: impl IntoIterator<Item = DataFile>) -> Result<Self> {
         for f in files {
-            self.msp.add_data_file(f);
+            self.msp.add_file(f);
         }
         Ok(self)
     }
@@ -83,7 +83,7 @@ impl RewriteFilesAction {
     /// the data vs delete bucket by its content type (as in `#1606`).
     pub fn delete_files(mut self, files: impl IntoIterator<Item = DataFile>) -> Result<Self> {
         for f in files {
-            self.msp.delete_data_file(f);
+            self.msp.delete_file(f);
         }
         Ok(self)
     }
