@@ -117,7 +117,19 @@ done < <(
 [tasks.check-msrv]
 depends = ["//bindings/python:verify-libpython"]
 description = "Check the workspace with the minimum supported Rust version"
-run = "cargo +1.94.0 check --workspace"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+msrv=$(awk -F'"' '/^rust-version[[:space:]]*=/ { print $2; exit }' Cargo.toml)
+if [[ -z "$msrv" ]]; then
+  echo "ERROR: rust-version is not defined in Cargo.toml" >&2
+  exit 1
+fi
+
+toolchain=$(mise latest "rust@$msrv")
+mise exec "rust@$toolchain" -- cargo check --workspace
+'''
 
 [tasks.generate-public-api]
 description = "Regenerate public API snapshots for publishable crates"

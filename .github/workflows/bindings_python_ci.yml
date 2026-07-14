@@ -56,10 +56,10 @@ jobs:
           version: 2026.6.14
       - name: Check format
         working-directory: bindings/python
-        run: mise run :check-format
+        run: mise run check-format
       - name: Check style
         working-directory: bindings/python
-        run: mise run :check-style
+        run: mise run check-style
 
   test:
     runs-on: ${{ matrix.os }}
@@ -88,4 +88,4 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_DATASET: ${{ secrets.HF_DATASET }}
-        run: mise run :test-wheel
+        run: mise run test-wheel
