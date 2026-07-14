@@ -158,10 +158,7 @@ impl MergingSnapshotProducer {
     }
 
     /// MSP-owned config; the action's `set_snapshot_properties` threads through here.
-    pub(crate) fn set_snapshot_properties(
-        &mut self,
-        snapshot_properties: HashMap<String, String>,
-    ) {
+    pub(crate) fn set_snapshot_properties(&mut self, snapshot_properties: HashMap<String, String>) {
         self.snapshot_properties = snapshot_properties;
     }
 

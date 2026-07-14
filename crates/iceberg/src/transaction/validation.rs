@@ -194,8 +194,7 @@ pub(crate) async fn validate_no_new_deletes_for_data_files(
     // populating before we query it below. Holding the sender past this point would
     // deadlock.
     let delete_file_index = {
-        let (delete_file_index, mut delete_file_tx) =
-            DeleteFileIndex::new(base.runtime().clone());
+        let (delete_file_index, mut delete_file_tx) = DeleteFileIndex::new(base.runtime().clone());
         let manifests = try_join_all(
             delete_manifests
                 .iter()

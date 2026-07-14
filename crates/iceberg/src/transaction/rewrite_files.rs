@@ -28,8 +28,7 @@ use crate::transaction::merging_snapshot::MergingSnapshotProducer;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
 };
-use crate::transaction::validation;
-use crate::transaction::{ActionCommit, TransactionAction};
+use crate::transaction::{ActionCommit, TransactionAction, validation};
 use crate::{Error, ErrorKind};
 
 /// A transaction action that rewrites a set of existing files with a new, equivalent set
