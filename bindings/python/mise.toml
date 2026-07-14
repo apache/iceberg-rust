@@ -21,7 +21,8 @@ run = "uv run --no-sync maturin develop"
 
 [tasks.sync]
 description = "Install Python development dependencies"
-run = '''uv sync --python "$(command -v python)" --no-managed-python --no-python-downloads --group dev --no-install-project'''
+env.UV_PYTHON = "{{ tools.python.path }}"
+run = "uv sync --no-managed-python --no-python-downloads --group dev --no-install-project"
 
 [tasks.install]
 description = "Install Python development dependencies and rebuild the extension"

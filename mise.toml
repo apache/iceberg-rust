@@ -31,9 +31,11 @@ compile = false
 precompiled_flavor = "install_only_stripped"
 
 [tools]
+actionlint = "1.7.12"
 "cargo:cargo-machete" = { version = "0.7.0", depends = "rust" }
 "cargo:cargo-nextest" = { version = "0.9.138", depends = "rust" }
 "cargo:cargo-public-api" = { version = "0.51.0", depends = "rust" }
+go = "1.26.5"
 jq = "1.8.2"
 mdbook = "0.4.36"
 python = "3.12.13"
@@ -43,6 +45,7 @@ rust = [
   { version = "{{ vars.rust_msrv }}" },
 ]
 taplo = "0.9.3"
+typos = "1.48.0"
 uv = "0.9.3"
 
 [tasks.build]
@@ -56,9 +59,6 @@ run = "cargo build -p iceberg --no-default-features"
 [tasks.check-license]
 description = "Check Apache license headers"
 run = "go run github.com/apache/skywalking-eyes/cmd/license-eye@v0.8.0 -v info -c .licenserc.yaml header check"
-
-[tasks.check-license.tools]
-go = "1.26.5"
 
 [tasks.check-fmt]
 description = "Check Rust formatting"
@@ -87,12 +87,10 @@ run = "cargo machete"
 [tasks.check-typos]
 description = "Check spelling"
 run = "typos"
-tools.typos = "1.48.0"
 
 [tasks.check-actionlint]
 description = "Check GitHub Actions workflow syntax"
 run = "actionlint"
-tools.actionlint = "1.7.12"
 
 [tasks.check-audit]
 description = "Audit Rust dependencies for known vulnerabilities"
