@@ -113,22 +113,6 @@ impl IndexByParquetPathName {
     pub fn get(&self, name: &str) -> Option<&i32> {
         self.name_to_id.get(name)
     }
-
-    fn insert_current_path(&mut self) -> Result<()> {
-        let full_name = self.field_names.iter().map(String::as_str).join(".");
-        let field_id = self.field_id;
-        if let Some(existing_field_id) = self.name_to_id.get(full_name.as_str()) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid schema: multiple fields for name {full_name}: {field_id} and {existing_field_id}"
-                ),
-            ));
-        } else {
-            self.name_to_id.insert(full_name, field_id);
-        }
-        Ok(())
-    }
 }
 
 impl Default for IndexByParquetPathName {
@@ -207,11 +191,27 @@ impl SchemaVisitor for IndexByParquetPathName {
     }
 
     fn primitive(&mut self, _p: &PrimitiveType) -> Result<Self::T> {
-        self.insert_current_path()
+        let full_name = self.field_names.iter().map(String::as_str).join(".");
+        let field_id = self.field_id;
+        if let Some(existing_field_id) = self.name_to_id.get(full_name.as_str()) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid schema: multiple fields for name {full_name}: {field_id} and {existing_field_id}"
+                ),
+            ));
+        } else {
+            self.name_to_id.insert(full_name, field_id);
+        }
+
+        Ok(())
     }
 
     fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
-        self.insert_current_path()
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Writing variant columns to Parquet is not supported yet",
+        ))
     }
 }
 
@@ -795,21 +795,18 @@ mod tests {
     }
 
     #[test]
-    fn test_index_by_parquet_path_variant() {
-        // A variant is a leaf, so it is indexed by its column name like a primitive.
+    fn test_index_by_parquet_path_variant_is_unsupported() {
+        // Writing variant columns to Parquet is not supported yet; indexing a schema that
+        // contains one must error rather than silently mis-map columns.
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
+                NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
             ])
             .build()
             .unwrap();
         let mut visitor = IndexByParquetPathName::new();
-        visit_schema(&schema, &mut visitor).unwrap();
-        assert_eq!(
-            visitor.name_to_id,
-            HashMap::from([("id".to_string(), 1), ("v".to_string(), 2)])
-        );
+        let err = visit_schema(&schema, &mut visitor).unwrap_err();
+        assert_eq!(err.kind(), crate::ErrorKind::FeatureUnsupported, "{err}");
     }
 
     #[tokio::test]

@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow_schema::{DataType, Field, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ProjectionMask};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
@@ -81,111 +81,12 @@ impl ArrowReader {
                 Self::include_leaf_field_id(&map_type.key_field, field_ids);
                 Self::include_leaf_field_id(&map_type.value_field, field_ids);
             }
-            // Variant is a leaf type for Parquet projection purposes (like a primitive).
+            // Variant projection is rejected earlier (in `get_arrow_projection_mask`); this
+            // arm only keeps the match exhaustive. Treat it as a leaf, like a primitive.
             Type::Variant(_) => {
                 field_ids.push(field.id);
             }
         }
-    }
-
-    /// Recursive DFS over an Arrow `Fields` tree whose leaf numbering matches
-    /// `arrow_schema::Fields::filter_leaves`. For every leaf sitting inside a
-    /// variant column, stores `leaf_idx → variant_field_id` in `out`. A
-    /// "variant column" is any Arrow field whose embedded Parquet field id
-    /// resolves to `Type::Variant` in the Iceberg schema — including variants
-    /// nested inside a struct, list, or map.
-    fn collect_variant_leaves(
-        fields: &arrow_schema::Fields,
-        leaf_idx: &mut usize,
-        variant_parent: Option<i32>,
-        iceberg_schema: &Schema,
-        leaf_field_id_set: &HashSet<i32>,
-        out: &mut HashMap<usize, i32>,
-    ) -> Result<()> {
-        for field in fields {
-            Self::collect_variant_leaves_in_field(
-                field,
-                leaf_idx,
-                variant_parent,
-                iceberg_schema,
-                leaf_field_id_set,
-                out,
-            )?;
-        }
-        Ok(())
-    }
-
-    fn collect_variant_leaves_in_field(
-        field: &FieldRef,
-        leaf_idx: &mut usize,
-        variant_parent: Option<i32>,
-        iceberg_schema: &Schema,
-        leaf_field_id_set: &HashSet<i32>,
-        out: &mut HashMap<usize, i32>,
-    ) -> Result<()> {
-        // Once we are inside a variant, stay inside; otherwise check
-        // whether this Arrow field IS a variant column.
-        let entering_variant = variant_parent.is_none();
-        let effective_variant = variant_parent.or_else(|| {
-            let fid = field
-                .metadata()
-                .get(PARQUET_FIELD_ID_META_KEY)
-                .and_then(|s| i32::from_str(s).ok())?;
-            if !leaf_field_id_set.contains(&fid) {
-                return None;
-            }
-            let iceberg_field = iceberg_schema.field_by_id(fid)?;
-            matches!(iceberg_field.field_type.as_ref(), Type::Variant(_)).then_some(fid)
-        });
-
-        // Reject shredded variants: a `typed_value` sub-field means the payload is
-        // shredded, which we can't reconstruct yet. Projecting only metadata/value
-        // would silently drop it, so fail loudly instead.
-        if entering_variant
-            && effective_variant.is_some()
-            && let DataType::Struct(sub) = field.data_type()
-            && sub.iter().any(|f| f.name() == "typed_value")
-        {
-            return Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "Reading shredded variant columns is not supported yet: found a \
-                 `typed_value` sub-field. Only unshredded variants (metadata + value) \
-                 can be read.",
-            ));
-        }
-
-        match field.data_type() {
-            DataType::Struct(sub) => {
-                Self::collect_variant_leaves(
-                    sub,
-                    leaf_idx,
-                    effective_variant,
-                    iceberg_schema,
-                    leaf_field_id_set,
-                    out,
-                )?;
-            }
-            DataType::List(inner)
-            | DataType::LargeList(inner)
-            | DataType::FixedSizeList(inner, _)
-            | DataType::Map(inner, _) => {
-                Self::collect_variant_leaves_in_field(
-                    inner,
-                    leaf_idx,
-                    effective_variant,
-                    iceberg_schema,
-                    leaf_field_id_set,
-                    out,
-                )?;
-            }
-            _ => {
-                if let Some(vid) = effective_variant {
-                    out.insert(*leaf_idx, vid);
-                }
-                *leaf_idx += 1;
-            }
-        }
-        Ok(())
     }
 
     pub(super) fn get_arrow_projection_mask(
@@ -223,6 +124,19 @@ impl ArrowReader {
             return Ok(ProjectionMask::all());
         }
 
+        // Reading variant columns is not supported yet (see #2188 follow-ups): reject any
+        // projection that touches a variant, rather than returning a partial/incorrect batch.
+        for field_id in field_ids {
+            if let Some(field) = iceberg_schema_of_task.field_by_id(*field_id)
+                && type_contains_variant(&field.field_type)
+            {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Reading variant columns is not supported yet",
+                ));
+            }
+        }
+
         if use_fallback {
             // Position-based projection necessary because file lacks embedded field IDs
             Self::get_arrow_projection_mask_fallback(field_ids, parquet_schema)
@@ -257,38 +171,10 @@ impl ArrowReader {
         arrow_schema: &ArrowSchemaRef,
         type_promotion_is_valid: fn(Option<&PrimitiveType>, Option<&PrimitiveType>) -> bool,
     ) -> Result<ProjectionMask> {
-        // Maps field_id → leaf column indices. Vec because variant contributes two
-        // leaves (metadata + value) under a single field ID.
-        let mut column_map: HashMap<i32, Vec<usize>> = HashMap::new();
+        let mut column_map = HashMap::new();
         let fields = arrow_schema.fields();
         // HashSet for O(1) membership checks instead of O(n) slice scans.
         let leaf_field_id_set: HashSet<i32> = leaf_field_ids.iter().copied().collect();
-
-        // Variant fields are an Iceberg leaf type but a Parquet GROUP.  Their
-        // sub-fields (metadata, value, and any shredded children) carry no
-        // embedded field IDs — only the parent group has the field ID.
-        // `filter_leaves` therefore never finds them via the standard field-ID
-        // scan below.
-        //
-        // Java's PruneColumns.variant() returns the variant group unchanged, so
-        // every leaf beneath it is projected as part of the variant column.  We
-        // replicate that here with a recursive DFS over the Arrow schema whose
-        // leaf-numbering matches `Fields::filter_leaves`.  For each Arrow leaf
-        // index that sits inside any variant (top-level OR nested inside a
-        // struct/list/map), we record the enclosing variant's field id.
-        let variant_leaves: HashMap<usize, i32> = {
-            let mut out = HashMap::new();
-            let mut leaf_idx: usize = 0;
-            Self::collect_variant_leaves(
-                fields,
-                &mut leaf_idx,
-                None,
-                iceberg_schema_of_task,
-                &leaf_field_id_set,
-                &mut out,
-            )?;
-            out
-        };
 
         // Pre-project only the fields that have been selected, possibly avoiding converting
         // some Arrow types that are not yet supported.
@@ -308,14 +194,6 @@ impl ArrowReader {
         let iceberg_schema = arrow_schema_to_schema(&projected_arrow_schema)?;
 
         fields.filter_leaves(|idx, field| {
-            // Variant sub-fields: parent group carries the field ID, not the leaf.
-            // Skip type-promotion check — Type::Variant is not a primitive type
-            // (matches Java's PruneColumns.variant() which returns the group unchanged).
-            if let Some(&variant_field_id) = variant_leaves.get(&idx) {
-                column_map.entry(variant_field_id).or_default().push(idx);
-                return true;
-            }
-
             let Some(field_id) = projected_fields.get(field).cloned() else {
                 return false;
             };
@@ -337,7 +215,7 @@ impl ArrowReader {
                 return false;
             }
 
-            column_map.entry(field_id).or_default().push(idx);
+            column_map.insert(field_id, idx);
             true
         });
 
@@ -345,8 +223,8 @@ impl ArrowReader {
         // We only project existing columns; RecordBatchTransformer adds default/NULL values.
         let mut indices = vec![];
         for field_id in leaf_field_ids {
-            if let Some(col_indices) = column_map.get(field_id) {
-                indices.extend_from_slice(col_indices);
+            if let Some(col_idx) = column_map.get(field_id) {
+                indices.push(*col_idx);
             }
         }
 
@@ -384,6 +262,23 @@ impl ArrowReader {
         } else {
             Ok(ProjectionMask::roots(parquet_schema, root_indices))
         }
+    }
+}
+
+/// Whether `field_type` is, or transitively contains, a variant type.
+fn type_contains_variant(field_type: &Type) -> bool {
+    match field_type {
+        Type::Variant(_) => true,
+        Type::Struct(s) => s
+            .fields()
+            .iter()
+            .any(|f| type_contains_variant(&f.field_type)),
+        Type::List(l) => type_contains_variant(&l.element_field.field_type),
+        Type::Map(m) => {
+            type_contains_variant(&m.key_field.field_type)
+                || type_contains_variant(&m.value_field.field_type)
+        }
+        Type::Primitive(_) => false,
     }
 }
 
@@ -704,282 +599,59 @@ message schema {
         assert_eq!(mask, ProjectionMask::leaves(&parquet_schema, vec![0]));
     }
 
-    /// Variant fields are an Iceberg leaf type but a Parquet GROUP whose sub-fields carry
-    /// no embedded field IDs.  The projection mask must include both metadata and value
-    /// leaves when the variant field ID is requested, and must not drop the variant when
-    /// it is projected alongside ordinary primitive columns.
     #[test]
-    fn test_arrow_projection_mask_variant() {
-        // Iceberg schema: c1 (String, id=1) + v (Variant, id=2)
+    fn test_arrow_projection_mask_variant_is_unsupported() {
+        // Reading variant columns is not supported yet: projecting one (top-level or
+        // nested) must fail loudly rather than return a partial/incorrect batch.
         let schema = Arc::new(
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::required(1, "c1", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::required(2, "v", Type::Variant(VariantType)).into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-
-        // Arrow schema: c1 with field ID 1; v as Struct(metadata: Binary, value: Binary)
-        // with field ID 2 on the struct but NO field IDs on the sub-fields — that is the
-        // Parquet variant wire format.
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("c1", DataType::Utf8, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "1".to_string(),
-            )])),
-            Field::new(
-                "v",
-                DataType::Struct(arrow_schema::Fields::from(vec![
-                    Arc::new(Field::new("metadata", DataType::Binary, false)),
-                    Arc::new(Field::new("value", DataType::Binary, false)),
-                ])),
-                false,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "2".to_string(),
-            )])),
-        ]));
-
-        // Parquet message: c1 is leaf 0; variant sub-fields metadata=leaf 1, value=leaf 2.
-        // No field IDs on sub-leaves — matching the real Iceberg/Spark-written variant format.
-        let message_type = "
-message schema {
-  required binary c1 (STRING) = 1;
-  required group v = 2 {
-    required binary metadata;
-    required binary value;
-  }
-}
-";
-        let parquet_type = parse_message_type(message_type).expect("should parse schema");
-        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
-
-        // Both fields: all three leaves must be included.
-        let mask = ArrowReader::get_arrow_projection_mask(
-            &[1, 2],
-            &schema,
-            &parquet_schema,
-            &arrow_schema,
-            false,
-        )
-        .expect("projection mask for c1 + v");
-        assert_eq!(mask, ProjectionMask::leaves(&parquet_schema, vec![0, 1, 2]));
-
-        // Variant only: leaves 1 (metadata) and 2 (value) must be included.
-        let mask_variant_only = ArrowReader::get_arrow_projection_mask(
-            &[2],
-            &schema,
-            &parquet_schema,
-            &arrow_schema,
-            false,
-        )
-        .expect("projection mask for v only");
-        assert_eq!(
-            mask_variant_only,
-            ProjectionMask::leaves(&parquet_schema, vec![1, 2]),
-        );
-
-        // Primitive only: leaf 0 (c1) must be included; variant NOT included.
-        let mask_primitive_only = ArrowReader::get_arrow_projection_mask(
-            &[1],
-            &schema,
-            &parquet_schema,
-            &arrow_schema,
-            false,
-        )
-        .expect("projection mask for c1 only");
-        assert_eq!(
-            mask_primitive_only,
-            ProjectionMask::leaves(&parquet_schema, vec![0]),
-        );
-    }
-
-    /// A shredded variant (with `typed_value`) must be rejected, not silently dropped.
-    #[test]
-    fn test_arrow_projection_mask_variant_shredded_is_rejected() {
-        // Iceberg schema: c1 (String, id=1) + v (Variant, id=2)
-        let schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
-                    NestedField::required(1, "c1", Type::Primitive(PrimitiveType::String)).into(),
-                    NestedField::required(2, "v", Type::Variant(VariantType)).into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-
-        // Arrow schema: v is a SHREDDED variant — Struct(metadata, value, typed_value),
-        // field ID 2 on the struct, no field IDs on the sub-fields.
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("c1", DataType::Utf8, false).with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "1".to_string(),
-            )])),
-            Field::new(
-                "v",
-                DataType::Struct(arrow_schema::Fields::from(vec![
-                    Arc::new(Field::new("metadata", DataType::Binary, false)),
-                    Arc::new(Field::new("value", DataType::Binary, true)),
-                    Arc::new(Field::new("typed_value", DataType::Int64, true)),
-                ])),
-                false,
-            )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "2".to_string(),
-            )])),
-        ]));
-
-        let message_type = "
-message schema {
-  required binary c1 (STRING) = 1;
-  required group v = 2 {
-    required binary metadata;
-    optional binary value;
-    optional int64 typed_value;
-  }
-}
-";
-        let parquet_type = parse_message_type(message_type).expect("should parse schema");
-        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
-
-        let err = ArrowReader::get_arrow_projection_mask(
-            &[1, 2],
-            &schema,
-            &parquet_schema,
-            &arrow_schema,
-            false,
-        )
-        .expect_err("shredded variant must be rejected");
-        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
-        assert!(
-            err.message().contains("shredded variant"),
-            "unexpected error message: {err}"
-        );
-    }
-
-    /// variant nested inside a struct must also have its sub-leaves
-    /// included in the projection mask.
-    #[test]
-    fn test_arrow_projection_mask_variant_nested_in_struct() {
-        // Iceberg schema: parent struct (id=1) containing c2 String (id=2) and
-        // v Variant (id=3).
-        let schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
                     NestedField::required(
-                        1,
-                        "parent",
-                        Type::Struct(crate::spec::StructType::new(vec![
-                            NestedField::required(2, "c2", Type::Primitive(PrimitiveType::String))
-                                .into(),
-                            NestedField::required(3, "v", Type::Variant(VariantType)).into(),
+                        3,
+                        "s",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(4, "vv", Type::Variant(VariantType)).into(),
                         ])),
+                    )
+                    .into(),
+                    NestedField::required(
+                        5,
+                        "m",
+                        Type::Map(crate::spec::MapType::required(
+                            6,
+                            Type::Primitive(PrimitiveType::String),
+                            7,
+                            Type::Variant(VariantType),
+                        )),
                     )
                     .into(),
                 ])
                 .build()
                 .unwrap(),
         );
+        // The parquet/arrow schemas are irrelevant: the variant is rejected before they
+        // are consulted, so an empty descriptor is enough to drive the code path.
+        let parquet_schema = SchemaDescriptor::new(Arc::new(
+            parse_message_type("message schema { optional int32 id = 1; }").unwrap(),
+        ));
+        let arrow_schema = Arc::new(ArrowSchema::empty());
 
-        // Arrow: parent struct (id=1) → [c2 (id=2), v struct(metadata,value) (id=3)].
-        // Variant sub-fields intentionally without field IDs.
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new(
-                "parent",
-                DataType::Struct(arrow_schema::Fields::from(vec![
-                    Arc::new(
-                        Field::new("c2", DataType::Utf8, false).with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "2".to_string(),
-                        )])),
-                    ),
-                    Arc::new(
-                        Field::new(
-                            "v",
-                            DataType::Struct(arrow_schema::Fields::from(vec![
-                                Arc::new(Field::new("metadata", DataType::Binary, false)),
-                                Arc::new(Field::new("value", DataType::Binary, false)),
-                            ])),
-                            false,
-                        )
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "3".to_string(),
-                        )])),
-                    ),
-                ])),
+        // 2 = top-level variant, 3 = struct containing a variant, 4 = the nested variant,
+        // 5 = map<string, variant>, plus a mix with a non-variant sibling.
+        for projected in [vec![2], vec![3], vec![4], vec![5], vec![1, 2]] {
+            let err = ArrowReader::get_arrow_projection_mask(
+                &projected,
+                &schema,
+                &parquet_schema,
+                &arrow_schema,
                 false,
             )
-            .with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "1".to_string(),
-            )])),
-        ]));
-
-        // Parquet: parent.c2 = leaf 0; parent.v.metadata = leaf 1; parent.v.value = leaf 2.
-        let message_type = "
-message schema {
-  required group parent = 1 {
-    required binary c2 (STRING) = 2;
-    required group v = 3 {
-      required binary metadata;
-      required binary value;
-    }
-  }
-}
-";
-        let parquet_type = parse_message_type(message_type).expect("should parse schema");
-        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
-
-        // Projecting the nested variant must include both of its leaves.
-        let mask_variant = ArrowReader::get_arrow_projection_mask(
-            &[3],
-            &schema,
-            &parquet_schema,
-            &arrow_schema,
-            false,
-        )
-        .expect("projection mask for nested variant");
-        assert_eq!(
-            mask_variant,
-            ProjectionMask::leaves(&parquet_schema, vec![1, 2]),
-            "variant nested in a struct was dropped from projection"
-        );
-
-        // Projecting the sibling primitive must not include variant leaves.
-        let mask_primitive = ArrowReader::get_arrow_projection_mask(
-            &[2],
-            &schema,
-            &parquet_schema,
-            &arrow_schema,
-            false,
-        )
-        .expect("projection mask for nested primitive");
-        assert_eq!(
-            mask_primitive,
-            ProjectionMask::leaves(&parquet_schema, vec![0]),
-        );
-
-        // Projecting both must include all three leaves.
-        let mask_both = ArrowReader::get_arrow_projection_mask(
-            &[2, 3],
-            &schema,
-            &parquet_schema,
-            &arrow_schema,
-            false,
-        )
-        .expect("projection mask for nested primitive + variant");
-        assert_eq!(
-            mask_both,
-            ProjectionMask::leaves(&parquet_schema, vec![0, 1, 2]),
-        );
+            .expect_err("variant projection must be rejected");
+            assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+        }
     }
 
     /// Test schema evolution: reading old Parquet file (with only column 'a')
@@ -2344,251 +2016,5 @@ message schema {
             })
             .collect();
         assert_eq!(ids, vec![2, 3]);
-    }
-
-    // ---------------------------------------------------------------------
-    // Variant read tests (synthetic Parquet).
-    //
-    // These exercise the full reader path — projection mask + decode — against
-    // the unshredded Parquet variant layout (a `group { metadata; value }` whose
-    // leaves carry no field id, only the group does). They replace the former
-    // Spark-seeded integration tests in `crates/integration_tests`.
-    // ---------------------------------------------------------------------
-
-    fn field_id_meta(id: i32) -> HashMap<String, String> {
-        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string())])
-    }
-
-    /// Arrow `Struct(metadata: Binary, value: Binary)` — the variant physical layout.
-    fn variant_arrow_fields() -> arrow_schema::Fields {
-        arrow_schema::Fields::from(vec![
-            Field::new("metadata", DataType::Binary, false),
-            Field::new("value", DataType::Binary, false),
-        ])
-    }
-
-    // Known variant bytes the reader must round-trip unchanged. `metadata` is a
-    // fixed empty-variant header; `value` is distinct per row so an assertion catches
-    // dropped or reordered rows, not just the struct shape.
-    const VARIANT_METADATA: [&[u8]; 3] = [b"\x01", b"\x01", b"\x01"];
-    const VARIANT_VALUE: [&[u8]; 3] = [b"\x0a", b"\x0b", b"\x0c"];
-
-    /// Builds the 3-row variant `StructArray` for [`VARIANT_METADATA`]/[`VARIANT_VALUE`].
-    fn variant_struct_array() -> ArrayRef {
-        use arrow_array::{BinaryArray, StructArray};
-        let metadata = Arc::new(BinaryArray::from(VARIANT_METADATA.to_vec())) as ArrayRef;
-        let value = Arc::new(BinaryArray::from(VARIANT_VALUE.to_vec())) as ArrayRef;
-        Arc::new(StructArray::new(
-            variant_arrow_fields(),
-            vec![metadata, value],
-            None,
-        )) as ArrayRef
-    }
-
-    /// Asserts `col` is `Struct(metadata: Binary, value: Binary)` AND that its bytes
-    /// round-tripped exactly as written (shape + content + order).
-    fn assert_variant_data(col: &ArrayRef) {
-        let s = col.as_struct();
-        assert_eq!(
-            s.fields().len(),
-            2,
-            "variant must have exactly metadata + value, got {:?}",
-            s.fields()
-        );
-        let metadata = s
-            .column_by_name("metadata")
-            .expect("missing 'metadata'")
-            .as_binary::<i32>();
-        let value = s
-            .column_by_name("value")
-            .expect("missing 'value'")
-            .as_binary::<i32>();
-        assert_eq!(
-            metadata.iter().collect::<Vec<_>>(),
-            VARIANT_METADATA
-                .iter()
-                .copied()
-                .map(Some)
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            value.iter().collect::<Vec<_>>(),
-            VARIANT_VALUE.iter().copied().map(Some).collect::<Vec<_>>()
-        );
-    }
-
-    fn write_parquet(arrow_schema: Arc<ArrowSchema>, columns: Vec<ArrayRef>, dir: &str) -> String {
-        let batch = RecordBatch::try_new(arrow_schema.clone(), columns).unwrap();
-        let path = format!("{dir}/variant.parquet");
-        let props = WriterProperties::builder()
-            .set_compression(Compression::SNAPPY)
-            .build();
-        let mut writer =
-            ArrowWriter::try_new(File::create(&path).unwrap(), arrow_schema, Some(props)).unwrap();
-        writer.write(&batch).expect("writing batch");
-        writer.close().unwrap();
-        path
-    }
-
-    /// Asserts the `id` column holds exactly `[1, 2, 3]`.
-    fn assert_id_values(col: &ArrayRef) {
-        let ids = col.as_primitive::<arrow_array::types::Int32Type>();
-        assert_eq!(ids.values(), &[1, 2, 3]);
-    }
-
-    async fn read(
-        schema: Arc<Schema>,
-        path: &str,
-        project_field_ids: Vec<i32>,
-    ) -> Vec<RecordBatch> {
-        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
-        let tasks = Box::pin(futures::stream::iter(
-            vec![Ok(FileScanTask {
-                file_size_in_bytes: std::fs::metadata(path).unwrap().len(),
-                start: 0,
-                length: 0,
-                record_count: None,
-                data_file_path: path.to_string(),
-                data_file_format: DataFileFormat::Parquet,
-                schema,
-                project_field_ids,
-                predicate: None,
-                deletes: vec![],
-                partition: None,
-                partition_spec: None,
-                name_mapping: None,
-                case_sensitive: false,
-            })]
-            .into_iter(),
-        )) as FileScanTaskStream;
-        reader
-            .read(tasks)
-            .unwrap()
-            .stream()
-            .try_collect::<Vec<RecordBatch>>()
-            .await
-            .unwrap()
-    }
-
-    /// `id` (int, field-id 1) + `v` (variant, field-id 2). 3 rows.
-    fn write_top_level_variant(dir: &str) -> Arc<Schema> {
-        use arrow_array::Int32Array;
-        let schema = Arc::new(
-            Schema::builder()
-                .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("id", DataType::Int32, false).with_metadata(field_id_meta(1)),
-            Field::new("v", DataType::Struct(variant_arrow_fields()), false)
-                .with_metadata(field_id_meta(2)),
-        ]));
-        let id = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
-        write_parquet(arrow_schema, vec![id, variant_struct_array()], dir);
-        schema
-    }
-
-    #[tokio::test]
-    async fn test_read_variant_full_scan() {
-        let tmp = TempDir::new().unwrap();
-        let dir = tmp.path().to_str().unwrap();
-        let schema = write_top_level_variant(dir);
-
-        let batches = read(schema, &format!("{dir}/variant.parquet"), vec![1, 2]).await;
-        assert_eq!(batches.len(), 1);
-        let batch = &batches[0];
-        assert_eq!(batch.num_rows(), 3);
-        assert_id_values(batch.column_by_name("id").expect("'id' column dropped"));
-        assert_variant_data(batch.column_by_name("v").expect("variant column dropped"));
-    }
-
-    #[tokio::test]
-    async fn test_read_variant_only() {
-        let tmp = TempDir::new().unwrap();
-        let dir = tmp.path().to_str().unwrap();
-        let schema = write_top_level_variant(dir);
-
-        let batches = read(schema, &format!("{dir}/variant.parquet"), vec![2]).await;
-        assert_eq!(batches[0].num_rows(), 3);
-        assert_variant_data(
-            batches[0]
-                .column_by_name("v")
-                .expect("variant-only projection dropped 'v'"),
-        );
-        assert!(batches[0].column_by_name("id").is_none());
-    }
-
-    #[tokio::test]
-    async fn test_read_variant_sibling_only_excludes_variant() {
-        let tmp = TempDir::new().unwrap();
-        let dir = tmp.path().to_str().unwrap();
-        let schema = write_top_level_variant(dir);
-
-        let batches = read(schema, &format!("{dir}/variant.parquet"), vec![1]).await;
-        assert_eq!(batches[0].num_rows(), 3);
-        assert_id_values(
-            batches[0]
-                .column_by_name("id")
-                .expect("'id' column dropped"),
-        );
-        assert!(
-            batches[0].column_by_name("v").is_none(),
-            "variant leaked into an id-only projection"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_read_variant_nested_in_struct() {
-        use arrow_array::{Int32Array, StructArray};
-        let tmp = TempDir::new().unwrap();
-        let dir = tmp.path().to_str().unwrap();
-
-        // id (int, 1) + nested struct (2) { payload variant (3) }.
-        let schema = Arc::new(
-            Schema::builder()
-                .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::optional(
-                        2,
-                        "nested",
-                        Type::Struct(StructType::new(vec![
-                            NestedField::optional(3, "payload", Type::Variant(VariantType)).into(),
-                        ])),
-                    )
-                    .into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-        let payload_field = Field::new("payload", DataType::Struct(variant_arrow_fields()), false)
-            .with_metadata(field_id_meta(3));
-        let nested_fields = arrow_schema::Fields::from(vec![payload_field]);
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("id", DataType::Int32, false).with_metadata(field_id_meta(1)),
-            Field::new("nested", DataType::Struct(nested_fields.clone()), false)
-                .with_metadata(field_id_meta(2)),
-        ]));
-        let id = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
-        let nested = Arc::new(StructArray::new(
-            nested_fields,
-            vec![variant_struct_array()],
-            None,
-        )) as ArrayRef;
-        let path = write_parquet(arrow_schema, vec![id, nested], dir);
-
-        // Projecting the struct keeps the inner variant's sub-leaves intact.
-        let batches = read(schema, &path, vec![2]).await;
-        assert_eq!(batches[0].num_rows(), 3);
-        let payload = batches[0]
-            .column_by_name("nested")
-            .expect("nested struct dropped")
-            .as_struct()
-            .column_by_name("payload")
-            .expect("nested.payload variant dropped");
-        assert_variant_data(payload);
     }
 }

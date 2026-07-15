@@ -26,7 +26,10 @@ use arrow_array::{
     FixedSizeBinaryArray, Float32Array, Float64Array, Int32Array, Int64Array, Scalar, StringArray,
     TimestampMicrosecondArray, TimestampNanosecondArray,
 };
-use arrow_schema::{DataType, Field, FieldRef, Fields, Schema as ArrowSchema, TimeUnit};
+use arrow_schema::extension::ExtensionType;
+use arrow_schema::{
+    ArrowError, DataType, Field, FieldRef, Fields, Schema as ArrowSchema, TimeUnit,
+};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::statistics::Statistics;
 use uuid::Uuid;
@@ -43,6 +46,59 @@ use crate::{Error, ErrorKind};
 pub const DEFAULT_MAP_FIELD_NAME: &str = "key_value";
 /// UTC time zone for Arrow timestamp type.
 pub const UTC_TIME_ZONE: &str = "+00:00";
+
+/// The canonical Arrow [`arrow.parquet.variant`] extension type.
+///
+/// Iceberg stores a Variant as a `Struct { metadata: Binary, value: Binary }`. Attaching this
+/// extension type to the enclosing field marks that struct as a single logical Variant value,
+/// so Arrow consumers treat it as a Variant rather than an anonymous struct. It carries no
+/// metadata.
+///
+/// [`arrow.parquet.variant`]: https://arrow.apache.org/docs/format/CanonicalExtensions.html#parquet-variant
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct VariantExtensionType;
+
+impl ExtensionType for VariantExtensionType {
+    const NAME: &'static str = "arrow.parquet.variant";
+
+    type Metadata = ();
+
+    fn metadata(&self) -> &Self::Metadata {
+        &()
+    }
+
+    fn serialize_metadata(&self) -> Option<String> {
+        None
+    }
+
+    fn deserialize_metadata(
+        metadata: Option<&str>,
+    ) -> std::result::Result<Self::Metadata, ArrowError> {
+        match metadata {
+            None | Some("") => Ok(()),
+            Some(other) => Err(ArrowError::InvalidArgumentError(format!(
+                "arrow.parquet.variant extension type takes no metadata, got {other:?}"
+            ))),
+        }
+    }
+
+    fn supports_data_type(&self, data_type: &DataType) -> std::result::Result<(), ArrowError> {
+        match data_type {
+            DataType::Struct(_) => Ok(()),
+            other => Err(ArrowError::InvalidArgumentError(format!(
+                "arrow.parquet.variant extension type requires a Struct storage type, got {other}"
+            ))),
+        }
+    }
+
+    fn try_new(
+        data_type: &DataType,
+        _metadata: Self::Metadata,
+    ) -> std::result::Result<Self, ArrowError> {
+        Self.supports_data_type(data_type)?;
+        Ok(Self)
+    }
+}
 
 /// A post order arrow schema visitor.
 ///
@@ -532,9 +588,16 @@ impl SchemaVisitor for ToArrowSchemaConverter {
         } else {
             HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), field.id.to_string())])
         };
-        Ok(ArrowSchemaOrFieldOrType::Field(
-            Field::new(field.name.clone(), ty, !field.required).with_metadata(metadata),
-        ))
+        let arrow_field =
+            Field::new(field.name.clone(), ty, !field.required).with_metadata(metadata);
+        // A variant column's storage is a struct; tag the field with the canonical
+        // `arrow.parquet.variant` extension type so consumers read it as a Variant, not a struct.
+        let arrow_field = if field.field_type.is_variant() {
+            arrow_field.with_extension_type(VariantExtensionType)
+        } else {
+            arrow_field
+        };
+        Ok(ArrowSchemaOrFieldOrType::Field(arrow_field))
     }
 
     fn r#struct(
@@ -557,25 +620,13 @@ impl SchemaVisitor for ToArrowSchemaConverter {
         list: &crate::spec::ListType,
         value: ArrowSchemaOrFieldOrType,
     ) -> crate::Result<Self::T> {
+        // `field` already carries the element's field id, doc, and — for a variant element —
+        // the arrow.parquet.variant extension type. Don't overwrite its metadata here (doing so
+        // would drop the extension type for `list<variant>`).
         let field = match self.field(&list.element_field, value)? {
             ArrowSchemaOrFieldOrType::Field(field) => field,
             _ => unreachable!(),
         };
-        let meta = if let Some(doc) = &list.element_field.doc {
-            HashMap::from([
-                (
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    list.element_field.id.to_string(),
-                ),
-                (ARROW_FIELD_DOC_KEY.to_string(), doc.clone()),
-            ])
-        } else {
-            HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                list.element_field.id.to_string(),
-            )])
-        };
-        let field = field.with_metadata(meta);
         Ok(ArrowSchemaOrFieldOrType::Type(DataType::List(Arc::new(
             field,
         ))))
@@ -694,10 +745,13 @@ impl SchemaVisitor for ToArrowSchemaConverter {
     }
 
     fn variant(&mut self, _v: &VariantType) -> crate::Result<ArrowSchemaOrFieldOrType> {
-        // Variant is stored as a struct with two required binary fields (no field IDs on sub-fields).
+        // Variant is stored as a struct of two binary sub-fields (no field IDs on sub-fields).
         // Uses Binary (not LargeBinary) matching the Parquet BINARY primitive directly.
+        // `metadata` is always present; `value` is nullable, since in a shredded variant the
+        // value may be absent. The enclosing field carries the `arrow.parquet.variant` extension type
+        // (attached in `field`).
         let metadata_field = Field::new("metadata", DataType::Binary, false);
-        let value_field = Field::new("value", DataType::Binary, false);
+        let value_field = Field::new("value", DataType::Binary, true);
         Ok(ArrowSchemaOrFieldOrType::Type(DataType::Struct(
             vec![metadata_field, value_field].into(),
         )))
@@ -1715,15 +1769,21 @@ mod tests {
             simple_field("map", map, false, "16"),
             simple_field("struct", r#struct, false, "17"),
             simple_field("uuid", DataType::FixedSizeBinary(16), false, "30"),
-            simple_field(
+            Field::new(
                 "v",
                 DataType::Struct(Fields::from(vec![
                     Field::new("metadata", DataType::Binary, false),
-                    Field::new("value", DataType::Binary, false),
+                    Field::new("value", DataType::Binary, true),
                 ])),
                 true,
-                "31",
-            ),
+            )
+            .with_metadata(HashMap::from([
+                (PARQUET_FIELD_ID_META_KEY.to_string(), "31".to_string()),
+                (
+                    arrow_schema::extension::EXTENSION_TYPE_NAME_KEY.to_string(),
+                    "arrow.parquet.variant".to_string(),
+                ),
+            ])),
         ])
     }
 
@@ -1932,16 +1992,92 @@ mod tests {
 
     #[test]
     fn test_variant_type_to_arrow_type() {
-        // Variant maps to a struct of two required binary fields {metadata, value},
-        // with no field ids on the sub-fields, matching the Parquet BINARY layout.
+        // Variant maps to a struct with a required `metadata` and a nullable `value` binary
+        // field, with no field ids on the sub-fields, matching the Parquet BINARY layout.
         let arrow_type = type_to_arrow_type(&Type::Variant(VariantType)).unwrap();
         assert_eq!(
             arrow_type,
             DataType::Struct(Fields::from(vec![
                 Field::new("metadata", DataType::Binary, false),
-                Field::new("value", DataType::Binary, false),
+                Field::new("value", DataType::Binary, true),
             ]))
         );
+    }
+
+    #[test]
+    fn test_variant_field_carries_arrow_extension_type() {
+        // Converting a schema with a variant column tags the column's field with the
+        // canonical `arrow.parquet.variant` extension type (the struct storage stays as-is).
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let arrow_schema = schema_to_arrow_schema(&schema).unwrap();
+        let field = arrow_schema.field_with_name("v").unwrap();
+
+        assert_eq!(field.extension_type_name(), Some("arrow.parquet.variant"));
+        // Attaching the extension type must not clobber the Iceberg field id.
+        assert_eq!(
+            field.metadata().get(PARQUET_FIELD_ID_META_KEY),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            field.data_type(),
+            &DataType::Struct(Fields::from(vec![
+                Field::new("metadata", DataType::Binary, false),
+                Field::new("value", DataType::Binary, true),
+            ]))
+        );
+    }
+
+    #[test]
+    fn test_variant_nested_in_list_and_map_carries_arrow_extension_type() {
+        // A variant nested in a list element or map value keeps the arrow.parquet.variant
+        // extension type. Regression guard: the list converter must not overwrite the
+        // element field's metadata (which would drop the extension type).
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(
+                    1,
+                    "l",
+                    Type::List(ListType::new(
+                        NestedField::optional(2, "element", Type::Variant(VariantType)).into(),
+                    )),
+                )
+                .into(),
+                NestedField::optional(
+                    3,
+                    "m",
+                    Type::Map(MapType::new(
+                        NestedField::map_key_element(4, Type::Primitive(PrimitiveType::String))
+                            .into(),
+                        NestedField::map_value_element(5, Type::Variant(VariantType), false).into(),
+                    )),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let arrow_schema = schema_to_arrow_schema(&schema).unwrap();
+
+        let DataType::List(element) = arrow_schema.field_with_name("l").unwrap().data_type() else {
+            panic!("expected a list");
+        };
+        assert_eq!(element.extension_type_name(), Some("arrow.parquet.variant"));
+
+        let DataType::Map(entries, _) = arrow_schema.field_with_name("m").unwrap().data_type()
+        else {
+            panic!("expected a map");
+        };
+        let DataType::Struct(kv) = entries.data_type() else {
+            panic!("expected a key_value struct");
+        };
+        let value = kv.iter().find(|f| f.name() == "value").unwrap();
+        assert_eq!(value.extension_type_name(), Some("arrow.parquet.variant"));
     }
 
     #[test]
