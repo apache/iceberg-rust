@@ -254,13 +254,12 @@ impl FileScanTaskReader {
             .project_field_ids()
             .contains(&RESERVED_FIELD_ID_SPEC_ID)
         {
-            if task.partition_spec.is_none() {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Partition spec is missing",
-                ));
-            }
-            let spec_id_datum = Datum::int(task.partition_spec.clone().unwrap().spec_id());
+            let partition_spec = task
+                .partition_spec
+                .as_ref()
+                .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Partition spec is missing"))?;
+
+            let spec_id_datum = Datum::int(partition_spec.spec_id());
             record_batch_transformer_builder = record_batch_transformer_builder
                 .with_constant(RESERVED_FIELD_ID_SPEC_ID, spec_id_datum);
         }
