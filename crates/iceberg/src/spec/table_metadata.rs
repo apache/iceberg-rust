@@ -377,18 +377,18 @@ impl TableMetadata {
     ///
     /// Honors the `write.metadata.path` table property when set, otherwise defaults
     /// to the `metadata` directory under the table location.
-    pub fn metadata_location_root(&self) -> String {
+    pub fn metadata_location_root(&self) -> Result<String> {
         self.metadata_location_root_with_base(self.location())
     }
 
     /// Like [`Self::metadata_location_root`], but uses an explicit table location as
     /// the base for the default `<location>/metadata` when `write.metadata.path` is not
     /// configured.
-    pub(crate) fn metadata_location_root_with_base(&self, base: &str) -> String {
-        self.properties
-            .get(TableProperties::PROPERTY_WRITE_METADATA_PATH)
-            .map(|location| location.trim_end_matches('/').to_string())
-            .unwrap_or_else(|| Self::default_metadata_dir(base))
+    pub(crate) fn metadata_location_root_with_base(&self, base: &str) -> Result<String> {
+        Ok(self
+            .table_properties()?
+            .write_metadata_path
+            .unwrap_or_else(|| Self::default_metadata_dir(base)))
     }
 
     /// Returns the metadata compression codec from table properties.
@@ -4317,7 +4317,7 @@ mod tests {
         let metadata = get_test_table_metadata("TableMetadataV2Valid.json");
         assert_eq!(metadata.location(), "s3://bucket/test/location");
         assert_eq!(
-            metadata.metadata_location_root(),
+            metadata.metadata_location_root().unwrap(),
             "s3://bucket/test/location/metadata"
         );
     }
@@ -4335,7 +4335,7 @@ mod tests {
             .unwrap()
             .metadata;
         assert_eq!(
-            metadata.metadata_location_root(),
+            metadata.metadata_location_root().unwrap(),
             "s3://other-bucket/custom-meta"
         );
     }
@@ -4354,7 +4354,7 @@ mod tests {
             .unwrap()
             .metadata;
         assert_eq!(
-            metadata.metadata_location_root(),
+            metadata.metadata_location_root().unwrap(),
             "s3://other-bucket/custom-meta"
         );
     }

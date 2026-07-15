@@ -2609,7 +2609,7 @@ pub fn iceberg::spec::TableMetadata::last_updated_ms(&self) -> i64
 pub fn iceberg::spec::TableMetadata::last_updated_timestamp(&self) -> iceberg::Result<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
 pub fn iceberg::spec::TableMetadata::location(&self) -> &str
 pub fn iceberg::spec::TableMetadata::metadata_compression_codec(&self) -> iceberg::Result<iceberg::compression::CompressionCodec>
-pub fn iceberg::spec::TableMetadata::metadata_location_root(&self) -> alloc::string::String
+pub fn iceberg::spec::TableMetadata::metadata_location_root(&self) -> iceberg::Result<alloc::string::String>
 pub fn iceberg::spec::TableMetadata::metadata_log(&self) -> &[iceberg::spec::MetadataLog]
 pub fn iceberg::spec::TableMetadata::next_row_id(&self) -> u64
 pub fn iceberg::spec::TableMetadata::next_sequence_number(&self) -> i64
@@ -2713,6 +2713,7 @@ pub iceberg::spec::TableProperties::metadata_compression_codec: iceberg::compres
 pub iceberg::spec::TableProperties::min_snapshots_to_keep: usize
 pub iceberg::spec::TableProperties::write_datafusion_fanout_enabled: bool
 pub iceberg::spec::TableProperties::write_format_default: alloc::string::String
+pub iceberg::spec::TableProperties::write_metadata_path: core::option::Option<alloc::string::String>
 pub iceberg::spec::TableProperties::write_target_file_size_bytes: usize
 impl iceberg::spec::TableProperties
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS: &str

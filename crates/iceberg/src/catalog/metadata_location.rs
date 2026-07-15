@@ -67,8 +67,12 @@ impl MetadataLocation {
     /// The metadata directory honors the `write.metadata.path` table property when set,
     /// otherwise defaults to the `metadata` subdirectory of `table_location`.
     pub fn new_with_metadata(table_location: impl ToString, metadata: &TableMetadata) -> Self {
+        let table_location = table_location.to_string();
+        let metadata_dir = metadata
+            .metadata_location_root_with_base(&table_location)
+            .unwrap_or_else(|_| TableMetadata::default_metadata_dir(&table_location));
         Self {
-            metadata_dir: metadata.metadata_location_root_with_base(&table_location.to_string()),
+            metadata_dir,
             version: 0,
             id: Uuid::new_v4(),
             compression_codec: Self::compression_from_properties(metadata.properties()),

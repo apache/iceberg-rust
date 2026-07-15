@@ -112,6 +112,9 @@ pub struct TableProperties {
     pub write_format_default: String,
     /// The target file size for files.
     pub write_target_file_size_bytes: usize,
+    /// Base directory for metadata files (manifests, manifest lists), with any
+    /// trailing slash trimmed. `None` if `write.metadata.path` is not set.
+    pub write_metadata_path: Option<String>,
     /// Compression codec for metadata files (JSON)
     pub metadata_compression_codec: CompressionCodec,
     /// Whether to use `FanoutWriter` for partitioned tables.
@@ -332,6 +335,9 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             )?,
+            write_metadata_path: props
+                .get(TableProperties::PROPERTY_WRITE_METADATA_PATH)
+                .map(|path| path.trim_end_matches('/').to_string()),
             metadata_compression_codec: parse_metadata_file_compression(props)?,
             write_datafusion_fanout_enabled: parse_property(
                 props,
@@ -462,6 +468,24 @@ mod tests {
         assert_eq!(table_properties.max_snapshot_age_ms, 1234);
         assert_eq!(table_properties.min_snapshots_to_keep, 7);
         assert_eq!(table_properties.max_ref_age_ms, 5678);
+    }
+
+    #[test]
+    fn test_table_properties_write_metadata_path() {
+        // Test unset
+        let table_properties = TableProperties::try_from(&HashMap::new()).unwrap();
+        assert_eq!(table_properties.write_metadata_path, None);
+
+        // Test trimmed of any trailing slash
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
+            "s3://other-bucket/custom-meta/".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(
+            table_properties.write_metadata_path.as_deref(),
+            Some("s3://other-bucket/custom-meta")
+        );
     }
 
     #[test]
