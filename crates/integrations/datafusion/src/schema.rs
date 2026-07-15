@@ -201,8 +201,6 @@ impl SchemaProvider for IcebergSchemaProvider {
                     .await
                     .map_err(to_datafusion_error)?;
 
-                // Create a new table provider using the catalog reference,
-                // carrying the config so it stays distributable.
                 let table_provider = IcebergTableProvider::try_new(
                     catalog.clone(),
                     config.clone(),
@@ -391,7 +389,6 @@ mod tests {
             .unwrap()
             .expect("table provider");
         let iceberg = provider
-            .as_any()
             .downcast_ref::<IcebergTableProvider>()
             .expect("IcebergTableProvider");
         assert!(
@@ -410,7 +407,6 @@ mod tests {
             .unwrap()
             .expect("table provider");
         let iceberg = provider
-            .as_any()
             .downcast_ref::<IcebergTableProvider>()
             .expect("IcebergTableProvider");
         assert!(iceberg.config().is_none());

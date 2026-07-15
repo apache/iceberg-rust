@@ -184,7 +184,6 @@ impl TableProvider for IcebergTableProvider {
             .await
             .map_err(to_datafusion_error)?;
 
-        // Create scan with fresh metadata, honoring a pinned snapshot if set.
         Ok(Arc::new(
             IcebergTableScan::new(
                 table,
@@ -786,7 +785,7 @@ mod tests {
         use datafusion::physical_plan::empty::EmptyExec;
 
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
-        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+        let provider = IcebergTableProvider::try_new(catalog, None, namespace, table_name)
             .await
             .unwrap();
         let ctx = SessionContext::new();
@@ -1008,7 +1007,6 @@ mod tests {
         let state = ctx.state();
         let scan_plan = pinned.scan(&state, None, &[], None).await.unwrap();
         let iceberg_scan = scan_plan
-            .as_any()
             .downcast_ref::<IcebergTableScan>()
             .expect("Expected IcebergTableScan");
         assert_eq!(
