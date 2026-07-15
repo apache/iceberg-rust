@@ -549,6 +549,20 @@ impl RecordBatchTransformer {
                     // Rule #2 (name mapping) was already applied in reader.rs if needed.
                     // If field_id is still not found, the column doesn't exist in the Parquet file.
                     // Fall through to rule #3 (initial_default) or rule #4 (null).
+                    //
+                    // Per the spec's "Default values", null is only a valid default for an
+                    // optional field. A required field that is absent with no initial-default
+                    // therefore has no valid value and must error, rather than producing a null
+                    // column that violates the field's required constraint. This matches
+                    // Iceberg-Java's Parquet readers (BaseParquetReaders / SparkParquetReaders),
+                    // which raise "Missing required field: <name>".
+                    if iceberg_field.initial_default.is_none() && iceberg_field.required {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("Missing required field: {}", iceberg_field.name),
+                        ));
+                    }
+
                     let default_value = iceberg_field.initial_default.as_ref().and_then(|lit| {
                         if let Literal::Primitive(prim) = lit {
                             Some(prim.clone())
@@ -842,6 +856,47 @@ mod test {
         assert!(date_column.is_null(0));
         assert!(date_column.is_null(1));
         assert!(date_column.is_null(2));
+    }
+
+    #[test]
+    fn schema_evolution_required_field_absent_without_default_errors() {
+        // Per the spec's "Default values", null is only a valid default for an optional field, so
+        // a required field that is absent from the data file with no initial-default has no valid
+        // value and must error. Matches Iceberg-Java's Parquet readers, which raise
+        // "Missing required field: <name>".
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "missing_str", Type::Primitive(PrimitiveType::String))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let projected_iceberg_field_ids = [1, 2];
+
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_iceberg_field_ids)
+                .build();
+
+        let file_schema = Arc::new(ArrowSchema::new(vec![simple_field(
+            "id",
+            DataType::Int32,
+            false,
+            "1",
+        )]));
+        let file_batch =
+            RecordBatch::try_new(file_schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
+                .unwrap();
+
+        let err = transformer.process_record_batch(file_batch).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Missing required field: missing_str"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
