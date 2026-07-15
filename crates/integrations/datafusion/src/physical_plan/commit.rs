@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
@@ -127,10 +126,6 @@ impl DisplayAs for IcebergCommitExec {
 impl ExecutionPlan for IcebergCommitExec {
     fn name(&self) -> &str {
         "IcebergCommitExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -329,10 +324,6 @@ mod tests {
     impl ExecutionPlan for MockWriteExec {
         fn name(&self) -> &str {
             "MockWriteExec"
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
 
         fn schema(&self) -> Arc<ArrowSchema> {
