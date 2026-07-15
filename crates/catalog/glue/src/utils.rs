@@ -243,134 +243,12 @@ macro_rules! with_catalog_id {
 
 #[cfg(test)]
 mod tests {
-    use aws_sdk_glue::config::ProvideCredentials;
     use aws_sdk_glue::types::Column;
     use iceberg::spec::{NestedField, PrimitiveType, Schema, TableMetadataBuilder, Type};
     use iceberg::{MetadataLocation, Namespace, Result, TableCreation};
-    use iceberg_aws::create_sdk_config;
 
     use super::*;
     use crate::schema::{ICEBERG_FIELD_CURRENT, ICEBERG_FIELD_ID, ICEBERG_FIELD_OPTIONAL};
-
-    // ── STS / assume-role tests ──────────────────────────────────────────────
-
-    /// Verify that supplying a role ARN causes `create_sdk_config` to install a
-    /// credentials provider (the `AssumeRoleProvider`) in the returned config.
-    /// We do NOT actually call STS here – the provider is wired up but lazy.
-    #[tokio::test]
-    async fn test_config_with_assume_role_arn() {
-        let properties = HashMap::from([
-            (AWS_ACCESS_KEY_ID.to_string(), "test-access-key".to_string()),
-            (
-                AWS_SECRET_ACCESS_KEY.to_string(),
-                "test-secret-key".to_string(),
-            ),
-            (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
-            (
-                AWS_ASSUME_ROLE_ARN.to_string(),
-                "arn:aws:iam::123456789012:role/MyRole".to_string(),
-            ),
-        ]);
-
-        let sdk_config = create_sdk_config(&properties, None).await;
-
-        // A credentials provider must be present – it wraps the AssumeRoleProvider.
-        assert!(
-            sdk_config.credentials_provider().is_some(),
-            "expected a credentials provider to be installed when assume-role ARN is set"
-        );
-        assert_eq!(sdk_config.region().map(|r| r.as_ref()), Some("us-east-1"));
-    }
-
-    /// When a custom session name is provided it should be used instead of the
-    /// default `"iceberg-glue-catalog"`.  We verify config construction does not
-    /// panic and that the provider is still present.
-    #[tokio::test]
-    async fn test_config_assume_role_with_custom_session_name() {
-        let properties = HashMap::from([
-            (AWS_ACCESS_KEY_ID.to_string(), "test-access-key".to_string()),
-            (
-                AWS_SECRET_ACCESS_KEY.to_string(),
-                "test-secret-key".to_string(),
-            ),
-            (AWS_REGION_NAME.to_string(), "eu-west-1".to_string()),
-            (
-                AWS_ASSUME_ROLE_ARN.to_string(),
-                "arn:aws:iam::123456789012:role/MyRole".to_string(),
-            ),
-            (
-                AWS_ASSUME_ROLE_SESSION_NAME.to_string(),
-                "my-custom-session".to_string(),
-            ),
-        ]);
-
-        let sdk_config = create_sdk_config(&properties, None).await;
-
-        assert!(sdk_config.credentials_provider().is_some());
-        assert_eq!(sdk_config.region().map(|r| r.as_ref()), Some("eu-west-1"));
-    }
-
-    /// All three optional fields (session name + external ID + endpoint) should
-    /// be wired without panicking.
-    #[tokio::test]
-    async fn test_config_assume_role_with_all_optional_fields() {
-        let endpoint = "http://localhost:4566";
-        let properties = HashMap::from([
-            (AWS_ACCESS_KEY_ID.to_string(), "test-access-key".to_string()),
-            (
-                AWS_SECRET_ACCESS_KEY.to_string(),
-                "test-secret-key".to_string(),
-            ),
-            (AWS_REGION_NAME.to_string(), "us-west-2".to_string()),
-            (
-                AWS_ASSUME_ROLE_ARN.to_string(),
-                "arn:aws:iam::123456789012:role/MyRole".to_string(),
-            ),
-            (
-                AWS_ASSUME_ROLE_SESSION_NAME.to_string(),
-                "my-session".to_string(),
-            ),
-            (
-                AWS_ASSUME_ROLE_EXTERNAL_ID.to_string(),
-                "my-external-id".to_string(),
-            ),
-        ]);
-
-        let sdk_config = create_sdk_config(&properties, Some(&endpoint.to_string())).await;
-
-        assert!(sdk_config.credentials_provider().is_some());
-        assert_eq!(sdk_config.region().map(|r| r.as_ref()), Some("us-west-2"));
-        // Endpoint should be propagated through from the final config rebuild.
-        assert_eq!(sdk_config.endpoint_url(), Some(endpoint));
-    }
-
-    /// Without a role ARN the existing static-credential path must still work
-    /// exactly as before (regression guard).
-    #[tokio::test]
-    async fn test_config_without_assume_role_unchanged() {
-        let properties = HashMap::from([
-            (AWS_ACCESS_KEY_ID.to_string(), "my-access-id".to_string()),
-            (
-                AWS_SECRET_ACCESS_KEY.to_string(),
-                "my-secret-key".to_string(),
-            ),
-            (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
-        ]);
-
-        let sdk_config = create_sdk_config(&properties, None).await;
-
-        let region = sdk_config.region().unwrap().as_ref();
-        let credentials = sdk_config
-            .credentials_provider()
-            .unwrap()
-            .provide_credentials()
-            .await
-            .unwrap();
-
-        assert_eq!(region, "us-east-1");
-        assert_eq!(credentials.access_key_id(), "my-access-id");
-        assert_eq!(credentials.secret_access_key(), "my-secret-key");
-    }
 
     fn create_metadata(schema: Schema) -> Result<TableMetadata> {
         let table_creation = TableCreation::builder()
@@ -570,46 +448,5 @@ mod tests {
         assert!(valid.is_ok());
         assert!(empty.is_err());
         assert!(hierarchical.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_config_with_custom_endpoint() {
-        let properties = HashMap::new();
-        let endpoint_url = "http://custom_url:5001";
-
-        let sdk_config = create_sdk_config(&properties, Some(&endpoint_url.to_string())).await;
-
-        let result = sdk_config.endpoint_url().unwrap();
-
-        assert_eq!(result, endpoint_url);
-    }
-
-    #[tokio::test]
-    async fn test_config_with_properties() {
-        let properties = HashMap::from([
-            (AWS_PROFILE_NAME.to_string(), "my_profile".to_string()),
-            (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
-            (AWS_ACCESS_KEY_ID.to_string(), "my-access-id".to_string()),
-            (
-                AWS_SECRET_ACCESS_KEY.to_string(),
-                "my-secret-key".to_string(),
-            ),
-            (AWS_SESSION_TOKEN.to_string(), "my-token".to_string()),
-        ]);
-
-        let sdk_config = create_sdk_config(&properties, None).await;
-
-        let region = sdk_config.region().unwrap().as_ref();
-        let credentials = sdk_config
-            .credentials_provider()
-            .unwrap()
-            .provide_credentials()
-            .await
-            .unwrap();
-
-        assert_eq!("us-east-1", region);
-        assert_eq!("my-access-id", credentials.access_key_id());
-        assert_eq!("my-secret-key", credentials.secret_access_key());
-        assert_eq!("my-token", credentials.session_token().unwrap());
     }
 }

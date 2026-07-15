@@ -25,6 +25,7 @@ use async_trait::async_trait;
 use aws_sdk_glue::operation::create_table::CreateTableError;
 use aws_sdk_glue::operation::update_table::UpdateTableError;
 use aws_sdk_glue::types::TableInput;
+use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
@@ -32,8 +33,11 @@ use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
     Runtime, TableCommit, TableCreation, TableIdent,
 };
-use iceberg_aws::{create_sdk_config, map_aws_to_s3_properties};
-use iceberg_storage_opendal::OpenDalStorageFactory;
+use iceberg_aws::{
+    AWS_ASSUME_ROLE_ARN, AwsSdkCredentialProvider, create_sdk_config, has_explicit_s3_credentials,
+    map_aws_to_s3_properties, remove_assume_role_properties,
+};
+use iceberg_storage_opendal::{CustomAwsCredentialLoader, OpenDalStorageFactory};
 
 use crate::error::{from_aws_build_error, from_aws_sdk_error};
 use crate::utils::{
@@ -48,12 +52,14 @@ pub const GLUE_CATALOG_PROP_URI: &str = "uri";
 pub const GLUE_CATALOG_PROP_CATALOG_ID: &str = "catalog_id";
 /// Glue catalog warehouse location
 pub const GLUE_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
+const DEFAULT_ASSUME_ROLE_SESSION_NAME: &str = "iceberg-glue-catalog";
 
 /// Builder for [`GlueCatalog`].
 #[derive(Debug)]
 pub struct GlueCatalogBuilder {
     config: GlueCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
 }
 
@@ -68,6 +74,7 @@ impl Default for GlueCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
+            kms_client_factory: None,
             runtime: None,
         }
     }
@@ -78,6 +85,11 @@ impl CatalogBuilder for GlueCatalogBuilder {
 
     fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
         self.storage_factory = Some(storage_factory);
+        self
+    }
+
+    fn with_kms_client_factory(mut self, kms_client_factory: Arc<dyn KmsClientFactory>) -> Self {
+        self.kms_client_factory = Some(kms_client_factory);
         self
     }
 
@@ -136,7 +148,11 @@ impl CatalogBuilder for GlueCatalogBuilder {
                 Some(rt) => rt,
                 None => Runtime::try_current()?,
             };
-            GlueCatalog::new(self.config, self.storage_factory, runtime).await
+            let kms_client = match self.kms_client_factory {
+                Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
+                None => None,
+            };
+            GlueCatalog::new(self.config, self.storage_factory, runtime, kms_client).await
         }
     }
 }
@@ -159,6 +175,7 @@ pub struct GlueCatalog {
     client: GlueClient,
     file_io: FileIO,
     runtime: Runtime,
+    kms_client: Option<Arc<dyn KeyManagementClient>>,
 }
 
 impl Debug for GlueCatalog {
@@ -175,16 +192,38 @@ impl GlueCatalog {
         config: GlueCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
+        kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
-        let sdk_config = create_sdk_config(&config.props, config.uri.as_ref()).await;
-        let file_io_props = map_aws_to_s3_properties(&config.props, config.uri.as_ref());
+        let sdk_config = create_sdk_config(
+            &config.props,
+            config.uri.as_deref(),
+            DEFAULT_ASSUME_ROLE_SESSION_NAME,
+        )
+        .await;
+        let mut file_io_props = map_aws_to_s3_properties(
+            &config.props,
+            config.uri.as_deref(),
+            DEFAULT_ASSUME_ROLE_SESSION_NAME,
+        );
 
         let client = aws_sdk_glue::Client::new(&sdk_config);
 
         // Use provided factory or default to OpenDalStorageFactory::S3
         let factory = storage_factory.unwrap_or_else(|| {
+            let customized_credential_load = if config.props.contains_key(AWS_ASSUME_ROLE_ARN)
+                && !has_explicit_s3_credentials(&config.props)
+            {
+                let provider = AwsSdkCredentialProvider::from_sdk_config(&sdk_config)
+                    .map(CustomAwsCredentialLoader::new);
+                if provider.is_some() {
+                    remove_assume_role_properties(&mut file_io_props);
+                }
+                provider
+            } else {
+                None
+            };
             Arc::new(OpenDalStorageFactory::S3 {
-                customized_credential_load: None,
+                customized_credential_load,
             })
         });
         let file_io = FileIOBuilder::new(factory)
@@ -196,6 +235,7 @@ impl GlueCatalog {
             client: GlueClient(client),
             file_io,
             runtime,
+            kms_client,
         })
     }
     /// Get the catalogs `FileIO`
@@ -246,7 +286,7 @@ impl GlueCatalog {
 
         let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
 
-        let table = Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.file_io())
             .metadata_location(metadata_location)
             .metadata(metadata)
@@ -254,8 +294,11 @@ impl GlueCatalog {
                 NamespaceIdent::new(db_name),
                 table_name.to_owned(),
             ))
-            .runtime(self.runtime.clone())
-            .build()?;
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        let table = builder.build()?;
 
         Ok((table, version_id))
     }
@@ -606,13 +649,16 @@ impl Catalog for GlueCatalog {
 
         builder.send().await.map_err(from_aws_sdk_error)?;
 
-        Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.file_io())
             .metadata_location(metadata_location_str)
             .metadata(metadata)
             .identifier(TableIdent::new(NamespaceIdent::new(db_name), table_name))
-            .runtime(self.runtime.clone())
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
     }
 
     /// Loads a table from the Glue Catalog and constructs a `Table` object
@@ -836,13 +882,16 @@ impl Catalog for GlueCatalog {
             .with_source(anyhow!("aws sdk error: {error:?}"))
         })?;
 
-        Ok(Table::builder()
+        let mut builder = Table::builder()
             .identifier(table_ident.clone())
             .metadata_location(metadata_location)
             .metadata(metadata)
             .file_io(self.file_io())
-            .runtime(self.runtime.clone())
-            .build()?)
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        Ok(builder.build()?)
     }
 
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {
@@ -905,5 +954,48 @@ impl Catalog for GlueCatalog {
         })?;
 
         Ok(staged_table)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iceberg::encryption::kms::MemoryKmsClientFactory;
+    use iceberg::io::{S3_ACCESS_KEY_ID, S3_REGION, S3_SECRET_ACCESS_KEY};
+
+    use super::*;
+    use crate::{AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY};
+
+    #[tokio::test]
+    async fn builder_preserves_configured_kms_factory() {
+        let properties = HashMap::from([
+            (
+                GLUE_CATALOG_PROP_URI.to_string(),
+                "http://localhost:1".to_string(),
+            ),
+            (
+                GLUE_CATALOG_PROP_WAREHOUSE.to_string(),
+                "s3://warehouse".to_string(),
+            ),
+            (AWS_ACCESS_KEY_ID.to_string(), "aws-access-key".to_string()),
+            (
+                AWS_SECRET_ACCESS_KEY.to_string(),
+                "aws-secret-key".to_string(),
+            ),
+            (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
+            (S3_ACCESS_KEY_ID.to_string(), "s3-access-key".to_string()),
+            (
+                S3_SECRET_ACCESS_KEY.to_string(),
+                "s3-secret-key".to_string(),
+            ),
+            (S3_REGION.to_string(), "us-east-1".to_string()),
+        ]);
+
+        let catalog = GlueCatalogBuilder::default()
+            .with_kms_client_factory(Arc::new(MemoryKmsClientFactory::new()))
+            .load("glue", properties)
+            .await
+            .unwrap();
+
+        assert!(catalog.kms_client.is_some());
     }
 }

@@ -30,5 +30,13 @@ repository = { workspace = true }
 
 [dependencies]
 aws-config = { workspace = true }
+aws-credential-types = { workspace = true }
 aws-sdk-sts = { workspace = true }
 iceberg = { workspace = true }
+reqsign-aws-v4 = { workspace = true }
+reqsign-core = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+mockito = { workspace = true }
+tokio = { workspace = true, features = ["macros"] }

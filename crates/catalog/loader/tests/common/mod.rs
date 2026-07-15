@@ -31,8 +31,7 @@ use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
 use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation};
 use iceberg_catalog_glue::{
-    AWS_ACCESS_KEY_ID, AWS_ASSUME_ROLE_ARN, AWS_ASSUME_ROLE_EXTERNAL_ID,
-    AWS_ASSUME_ROLE_SESSION_NAME, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, GLUE_CATALOG_PROP_URI,
+    AWS_ACCESS_KEY_ID, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, GLUE_CATALOG_PROP_URI,
     GLUE_CATALOG_PROP_WAREHOUSE, GlueCatalog, GlueCatalogBuilder,
 };
 use iceberg_catalog_hms::{
@@ -259,60 +258,6 @@ async fn glue_catalog() -> GlueCatalog {
 
     GlueCatalogBuilder::default()
         .load("glue", glue_props)
-        .await
-        .unwrap()
-}
-
-/// Build a [`GlueCatalog`] that authenticates via STS AssumeRole.
-///
-/// Requires the following environment variables to be set:
-/// - `GLUE_ENDPOINT` / `MINIO_ENDPOINT` (set by the test harness)
-/// - `GLUE_ASSUME_ROLE_ARN` – the IAM role ARN to assume
-///
-/// Optionally:
-/// - `GLUE_ASSUME_ROLE_EXTERNAL_ID` – cross-account external ID
-/// - `GLUE_ASSUME_ROLE_SESSION_NAME` – STS session name (default: `"iceberg-glue-catalog"`)
-///
-/// This function is intended to be called from `#[ignore]` integration tests
-/// that require real AWS credentials and a live Glue endpoint.
-#[allow(dead_code)]
-pub async fn glue_catalog_assume_role() -> GlueCatalog {
-    let glue_endpoint = get_glue_endpoint();
-    let minio_endpoint = get_minio_endpoint();
-
-    let role_arn = std::env::var("GLUE_ASSUME_ROLE_ARN")
-        .expect("GLUE_ASSUME_ROLE_ARN must be set for assume-role integration tests");
-
-    let mut props = HashMap::from([
-        (GLUE_CATALOG_PROP_URI.to_string(), glue_endpoint),
-        (
-            GLUE_CATALOG_PROP_WAREHOUSE.to_string(),
-            "s3a://warehouse/hive".to_string(),
-        ),
-        // Base credentials used to call STS AssumeRole.
-        (AWS_ACCESS_KEY_ID.to_string(), "my_access_id".to_string()),
-        (
-            AWS_SECRET_ACCESS_KEY.to_string(),
-            "my_secret_key".to_string(),
-        ),
-        (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
-        // STS assume-role configuration.
-        (AWS_ASSUME_ROLE_ARN.to_string(), role_arn),
-        // S3 / MinIO endpoint for file I/O.
-        (S3_ENDPOINT.to_string(), minio_endpoint),
-        (S3_PATH_STYLE_ACCESS.to_string(), "true".to_string()),
-        (S3_REGION.to_string(), "us-east-1".to_string()),
-    ]);
-
-    if let Ok(external_id) = std::env::var("GLUE_ASSUME_ROLE_EXTERNAL_ID") {
-        props.insert(AWS_ASSUME_ROLE_EXTERNAL_ID.to_string(), external_id);
-    }
-    if let Ok(session_name) = std::env::var("GLUE_ASSUME_ROLE_SESSION_NAME") {
-        props.insert(AWS_ASSUME_ROLE_SESSION_NAME.to_string(), session_name);
-    }
-
-    GlueCatalogBuilder::default()
-        .load("glue-assume-role", props)
         .await
         .unwrap()
 }

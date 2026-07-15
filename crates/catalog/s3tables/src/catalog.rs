@@ -27,6 +27,7 @@ use aws_sdk_s3tables::operation::get_table::{GetTableError, GetTableOutput};
 use aws_sdk_s3tables::operation::list_tables::ListTablesOutput;
 use aws_sdk_s3tables::operation::update_table_metadata_location::UpdateTableMetadataLocationError;
 use aws_sdk_s3tables::types::OpenTableFormat;
+use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
@@ -34,13 +35,21 @@ use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
     Runtime, TableCommit, TableCreation, TableIdent,
 };
-use iceberg_aws::{create_sdk_config, map_aws_to_s3_properties};
-use iceberg_storage_opendal::OpenDalStorageFactory;
+use iceberg_aws::{
+    AWS_ASSUME_ROLE_ARN, AwsSdkCredentialProvider, create_sdk_config, has_explicit_s3_credentials,
+    map_aws_to_s3_properties, remove_assume_role_properties,
+};
+use iceberg_storage_opendal::{CustomAwsCredentialLoader, OpenDalStorageFactory};
 
 /// S3Tables table bucket ARN property
 pub const S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN: &str = "table_bucket_arn";
 /// S3Tables endpoint URL property
 pub const S3TABLES_CATALOG_PROP_ENDPOINT_URL: &str = "endpoint_url";
+const DEFAULT_ASSUME_ROLE_SESSION_NAME: &str = "iceberg-s3tables-catalog";
+
+fn file_io_properties(properties: &HashMap<String, String>) -> HashMap<String, String> {
+    map_aws_to_s3_properties(properties, None, DEFAULT_ASSUME_ROLE_SESSION_NAME)
+}
 
 /// S3Tables catalog configuration.
 #[derive(Debug)]
@@ -70,6 +79,7 @@ struct S3TablesCatalogConfig {
 pub struct S3TablesCatalogBuilder {
     config: S3TablesCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
 }
 
@@ -85,6 +95,7 @@ impl Default for S3TablesCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
+            kms_client_factory: None,
             runtime: None,
         }
     }
@@ -130,6 +141,11 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
 
     fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
         self.storage_factory = Some(storage_factory);
+        self
+    }
+
+    fn with_kms_client_factory(mut self, kms_client_factory: Arc<dyn KmsClientFactory>) -> Self {
+        self.kms_client_factory = Some(kms_client_factory);
         self
     }
 
@@ -182,7 +198,11 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
                     Some(rt) => rt,
                     None => Runtime::try_current()?,
                 };
-                S3TablesCatalog::new(self.config, self.storage_factory, runtime).await
+                let kms_client = match self.kms_client_factory {
+                    Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
+                    None => None,
+                };
+                S3TablesCatalog::new(self.config, self.storage_factory, runtime, kms_client).await
             }
         }
     }
@@ -195,6 +215,7 @@ pub struct S3TablesCatalog {
     s3tables_client: aws_sdk_s3tables::Client,
     file_io: FileIO,
     runtime: Runtime,
+    kms_client: Option<Arc<dyn KeyManagementClient>>,
 }
 
 impl S3TablesCatalog {
@@ -203,22 +224,42 @@ impl S3TablesCatalog {
         config: S3TablesCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
+        kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
+        let aws_config = create_sdk_config(
+            &config.props,
+            config.endpoint_url.as_deref(),
+            DEFAULT_ASSUME_ROLE_SESSION_NAME,
+        )
+        .await;
         let s3tables_client = if let Some(client) = config.client.clone() {
             client
         } else {
-            let aws_config = create_sdk_config(&config.props, config.endpoint_url.as_ref()).await;
             aws_sdk_s3tables::Client::new(&aws_config)
         };
 
+        // The S3Tables endpoint is a control-plane endpoint, not an S3 object
+        // storage endpoint. FileIO only honors an explicit `s3.endpoint`.
+        let mut file_io_props = file_io_properties(&config.props);
+
         // Use provided factory or default to OpenDalStorageFactory::S3
         let factory = storage_factory.unwrap_or_else(|| {
+            let customized_credential_load = if config.props.contains_key(AWS_ASSUME_ROLE_ARN)
+                && !has_explicit_s3_credentials(&config.props)
+            {
+                let provider = AwsSdkCredentialProvider::from_sdk_config(&aws_config)
+                    .map(CustomAwsCredentialLoader::new);
+                if provider.is_some() {
+                    remove_assume_role_properties(&mut file_io_props);
+                }
+                provider
+            } else {
+                None
+            };
             Arc::new(OpenDalStorageFactory::S3 {
-                customized_credential_load: None,
+                customized_credential_load,
             })
         });
-
-        let file_io_props = map_aws_to_s3_properties(&config.props, config.endpoint_url.as_ref());
 
         let file_io = FileIOBuilder::new(factory)
             .with_props(file_io_props)
@@ -229,6 +270,7 @@ impl S3TablesCatalog {
             s3tables_client,
             file_io,
             runtime,
+            kms_client,
         })
     }
 
@@ -272,13 +314,16 @@ impl S3TablesCatalog {
         })?;
         let metadata = TableMetadata::read_from(&self.file_io, metadata_location).await?;
 
-        let table = Table::builder()
+        let mut builder = Table::builder()
             .identifier(table_ident.clone())
             .metadata(metadata)
             .metadata_location(metadata_location)
             .file_io(self.file_io.clone())
-            .runtime(self.runtime.clone())
-            .build()?;
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        let table = builder.build()?;
         Ok((table, resp.version_token))
     }
 }
@@ -571,13 +616,16 @@ impl Catalog for S3TablesCatalog {
             .await
             .map_err(from_aws_sdk_error)?;
 
-        let table = Table::builder()
+        let mut builder = Table::builder()
             .identifier(table_ident)
             .metadata_location(metadata_location_str)
             .metadata(metadata)
             .file_io(self.file_io.clone())
-            .runtime(self.runtime.clone())
-            .build()?;
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        let table = builder.build()?;
         Ok(table)
     }
 
@@ -761,7 +809,7 @@ mod tests {
         };
 
         Ok(Some(
-            S3TablesCatalog::new(config, None, Runtime::current()).await?,
+            S3TablesCatalog::new(config, None, Runtime::current(), None).await?,
         ))
     }
 
@@ -1000,9 +1048,39 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[test]
+    fn test_file_io_endpoint_is_only_set_by_s3_property() {
+        let control_plane_endpoint = "http://s3tables.example";
+        let storage_endpoint = "http://s3.example";
+        let properties = HashMap::from([
+            (
+                S3TABLES_CATALOG_PROP_ENDPOINT_URL.to_string(),
+                control_plane_endpoint.to_string(),
+            ),
+            (
+                iceberg::io::S3_ENDPOINT.to_string(),
+                storage_endpoint.to_string(),
+            ),
+        ]);
+
+        let mapped = file_io_properties(&properties);
+
+        assert_eq!(
+            mapped.get(iceberg::io::S3_ENDPOINT).map(String::as_str),
+            Some(storage_endpoint)
+        );
+
+        let mapped_without_s3_endpoint = file_io_properties(&HashMap::from([(
+            S3TABLES_CATALOG_PROP_ENDPOINT_URL.to_string(),
+            control_plane_endpoint.to_string(),
+        )]));
+        assert!(!mapped_without_s3_endpoint.contains_key(iceberg::io::S3_ENDPOINT));
+    }
+
     #[tokio::test]
     async fn test_builder_with_client_ok() {
-        let sdk_config = create_sdk_config(&HashMap::new(), None).await;
+        let sdk_config =
+            create_sdk_config(&HashMap::new(), None, DEFAULT_ASSUME_ROLE_SESSION_NAME).await;
         let client = aws_sdk_s3tables::Client::new(&sdk_config);
 
         let builder = S3TablesCatalogBuilder::default().with_client(client);

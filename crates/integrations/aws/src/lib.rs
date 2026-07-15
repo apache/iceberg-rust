@@ -17,9 +17,12 @@
 
 //! AWS Integration for Apache Iceberg.
 
-pub mod config;
+mod config;
 
-pub use config::{create_sdk_config, map_aws_to_s3_properties};
+pub use config::{
+    AwsSdkCredentialProvider, create_sdk_config, has_explicit_s3_credentials,
+    map_aws_to_s3_properties, remove_assume_role_properties,
+};
 
 /// Property aws profile name
 pub const AWS_PROFILE_NAME: &str = "profile_name";

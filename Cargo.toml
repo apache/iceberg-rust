@@ -58,6 +58,7 @@ arrow-string = "58"
 as-any = "0.3.2"
 async-trait = "0.1.89"
 aws-config = "1.8.7"
+aws-credential-types = "1.2"
 aws-sdk-glue = { version = "1.85", default-features = false, features = [
   "default-https-client",
   "rt-tokio",
@@ -78,10 +79,10 @@ cfg-if = "1"
 chrono = "0.4.41"
 clap = { version = "4.5.48", features = ["derive", "cargo"] }
 dashmap = "6"
-datafusion = "53.1.0"
-datafusion-cli = "53.0.0"
-datafusion-ffi = "53.0.0"
-datafusion-sqllogictest = "53.0.0"
+datafusion = "54.0.0"
+datafusion-cli = "54.0.0"
+datafusion-ffi = "54.0.0"
+datafusion-sqllogictest = "54.0.0"
 derive_builder = "0.20"
 dirs = "6"
 enum-ordinalize = "4.3.0"
@@ -97,7 +98,7 @@ fnv = "1.0.7"
 fs-err = "3.1.0"
 futures = "0.3"
 hive_metastore = "0.2.0"
-home = "=0.5.11"
+home = "0.5.12"
 http = "1.2"
 iceberg = { version = "0.10.0", path = "./crates/iceberg" }
 iceberg-aws = { version = "0.10.0", path = "./crates/integrations/aws" }
@@ -129,6 +130,8 @@ pretty_assertions = "1.4"
 pyo3 = "0.28"
 rand = "0.9.3"
 regex = "1.11.3"
+reqsign-aws-v4 = "3.0.0"
+reqsign-core = "3.0.0"
 reqwest = { version = "0.12.12", default-features = false, features = ["json"] }
 roaring = { version = "0.11" }
 rstest = "0.26"
