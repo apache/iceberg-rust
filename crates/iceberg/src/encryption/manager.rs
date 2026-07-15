@@ -153,7 +153,7 @@ impl EncryptionManager {
     pub fn encrypt(&self, raw_output: OutputFile) -> EncryptedOutputFile {
         let dek = SecureKey::generate(self.key_size);
         let aad_prefix = Self::generate_aad_prefix();
-        let metadata = StandardKeyMetadata::new(dek.as_bytes()).with_aad_prefix(&aad_prefix);
+        let metadata = StandardKeyMetadata::from_secure_key(dek).with_aad_prefix(&aad_prefix);
         EncryptedOutputFile::new(raw_output, metadata)
     }
 
@@ -460,7 +460,9 @@ mod tests {
     }
 
     fn sample_key_metadata() -> StandardKeyMetadata {
-        StandardKeyMetadata::new(b"0123456789abcdef").with_aad_prefix(b"test-aad-prefix!")
+        StandardKeyMetadata::new(b"0123456789abcdef")
+            .unwrap()
+            .with_aad_prefix(b"test-aad-prefix!")
     }
 
     #[tokio::test]

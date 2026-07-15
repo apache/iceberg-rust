@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
-use super::crypto::{AesGcmCipher, SecureKey};
+use super::crypto::AesGcmCipher;
 use super::key_metadata::StandardKeyMetadata;
 use super::stream::{AesGcmFileRead, AesGcmFileWrite};
 use crate::Result;
@@ -165,7 +165,7 @@ impl std::fmt::Debug for EncryptedOutputFile {
 }
 
 fn build_cipher(metadata: &StandardKeyMetadata) -> Result<Arc<AesGcmCipher>> {
-    let key = SecureKey::new(metadata.encryption_key().as_bytes())?;
+    let key = metadata.encryption_key().clone();
     Ok(Arc::new(AesGcmCipher::new(key)))
 }
 
@@ -175,7 +175,9 @@ mod tests {
     use crate::io::FileIO;
 
     fn key_metadata() -> StandardKeyMetadata {
-        StandardKeyMetadata::new(b"0123456789abcdef").with_aad_prefix(b"test-aad-prefix!")
+        StandardKeyMetadata::new(b"0123456789abcdef")
+            .unwrap()
+            .with_aad_prefix(b"test-aad-prefix!")
     }
 
     #[tokio::test]

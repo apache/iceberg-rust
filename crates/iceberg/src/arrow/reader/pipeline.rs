@@ -733,6 +733,7 @@ mod tests {
         write_encrypted_parquet(&file_path, &batch, encryption_key, Some(aad_prefix));
 
         let key_metadata = crate::encryption::StandardKeyMetadata::new(encryption_key)
+            .unwrap()
             .with_aad_prefix(aad_prefix)
             .encode()
             .unwrap();
@@ -863,6 +864,7 @@ mod tests {
         write_encrypted_parquet(&file_path, &batch, encryption_key, None);
 
         let wrong_key_metadata = crate::encryption::StandardKeyMetadata::new(wrong_key)
+            .unwrap()
             .encode()
             .unwrap();
 

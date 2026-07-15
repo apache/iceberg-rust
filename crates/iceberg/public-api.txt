@@ -313,9 +313,17 @@ pub fn iceberg::encryption::SecureKey::as_bytes(&self) -> &[u8]
 pub fn iceberg::encryption::SecureKey::generate(key_size: iceberg::encryption::AesKeySize) -> Self
 pub fn iceberg::encryption::SecureKey::key_size(&self) -> iceberg::encryption::AesKeySize
 pub fn iceberg::encryption::SecureKey::new(key: &[u8]) -> iceberg::Result<Self>
+impl core::clone::Clone for iceberg::encryption::SecureKey
+pub fn iceberg::encryption::SecureKey::clone(&self) -> iceberg::encryption::SecureKey
+impl core::cmp::Eq for iceberg::encryption::SecureKey
+impl core::cmp::PartialEq for iceberg::encryption::SecureKey
+pub fn iceberg::encryption::SecureKey::eq(&self, other: &iceberg::encryption::SecureKey) -> bool
 impl core::convert::TryFrom<iceberg::encryption::SensitiveBytes> for iceberg::encryption::SecureKey
 pub type iceberg::encryption::SecureKey::Error = iceberg::Error
 pub fn iceberg::encryption::SecureKey::try_from(key: iceberg::encryption::SensitiveBytes) -> iceberg::Result<Self>
+impl core::fmt::Debug for iceberg::encryption::SecureKey
+pub fn iceberg::encryption::SecureKey::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::encryption::SecureKey
 pub struct iceberg::encryption::SensitiveBytes(_)
 impl iceberg::encryption::SensitiveBytes
 pub fn iceberg::encryption::SensitiveBytes::as_bytes(&self) -> &[u8]
@@ -340,9 +348,10 @@ impl iceberg::encryption::StandardKeyMetadata
 pub fn iceberg::encryption::StandardKeyMetadata::aad_prefix(&self) -> core::option::Option<&[u8]>
 pub fn iceberg::encryption::StandardKeyMetadata::decode(bytes: &[u8]) -> iceberg::Result<Self>
 pub fn iceberg::encryption::StandardKeyMetadata::encode(&self) -> iceberg::Result<alloc::boxed::Box<[u8]>>
-pub fn iceberg::encryption::StandardKeyMetadata::encryption_key(&self) -> &iceberg::encryption::SensitiveBytes
+pub fn iceberg::encryption::StandardKeyMetadata::encryption_key(&self) -> &iceberg::encryption::SecureKey
 pub fn iceberg::encryption::StandardKeyMetadata::file_length(&self) -> core::option::Option<u64>
-pub fn iceberg::encryption::StandardKeyMetadata::new(encryption_key: &[u8]) -> Self
+pub fn iceberg::encryption::StandardKeyMetadata::from_secure_key(encryption_key: iceberg::encryption::SecureKey) -> Self
+pub fn iceberg::encryption::StandardKeyMetadata::new(encryption_key: &[u8]) -> iceberg::Result<Self>
 pub fn iceberg::encryption::StandardKeyMetadata::with_aad_prefix(self, aad_prefix: &[u8]) -> Self
 pub fn iceberg::encryption::StandardKeyMetadata::with_file_length(self, length: u64) -> Self
 impl core::clone::Clone for iceberg::encryption::StandardKeyMetadata
