@@ -66,7 +66,7 @@ Install the release tooling used by the local scripts:
 - `cargo-deny`
 - `docker`
 - `gpg`
-- `mise` 2026.6.14 or newer
+- `mise` 2026.7.5 or newer
 - `svn`
 
 The local release helpers are under `dev/release/`. They log every step before it runs and after it succeeds. If a step fails, the script prints the failed step and stops.

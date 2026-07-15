@@ -128,7 +128,7 @@ The full test suite also requires Docker or Podman. See the [Contributing Guide]
 
 ## Supported Rust Version
 
-Iceberg Rust keeps a rolling MSRV (minimum supported Rust version), currently Rust 1.94. The MSRV is updated when we release iceberg-rust and is at least three months behind the latest Rust release.
+Iceberg Rust keeps a rolling MSRV (minimum supported Rust version). The MSRV is updated when we release iceberg-rust and is at least three months behind the latest Rust release.
 
 Development, formatting, and linting use the nightly toolchain pinned in `mise.toml`; this does not affect downstream users. Run `mise run check-msrv` to validate the workspace with its declared MSRV.
 

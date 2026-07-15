@@ -86,7 +86,7 @@ The fastest way is:
 
 #### Install mise and project tools
 
-Install mise 2026.6.14 or newer by following the [official installation guide](https://mise.en.dev/getting-started.html). Clone the repository, change to its root directory, and review the root and relevant subproject `mise.toml` files before trusting them. Trusting the monorepo root also trusts its listed subprojects. Then install the pinned tools:
+Install mise 2026.7.5 or newer by following the [official installation guide](https://mise.en.dev/getting-started.html). Clone the repository, change to its root directory, and review the root and relevant subproject `mise.toml` files before trusting them. Trusting the monorepo root also trusts its listed subprojects. Then install the pinned tools:
 
 ```bash
 mise trust
