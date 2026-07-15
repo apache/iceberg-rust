@@ -86,12 +86,10 @@ impl IcebergCommitExec {
         self
     }
 
-    /// Returns the serializable catalog/storage config, if any.
     pub fn catalog_config(&self) -> Option<&crate::IcebergCatalogConfig> {
         self.catalog_config.as_ref()
     }
 
-    /// Returns the table this node commits to.
     pub fn table(&self) -> &Table {
         &self.table
     }
