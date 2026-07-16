@@ -601,6 +601,10 @@ impl Literal {
                     ))
                 }
             }
+            Type::Variant(_) => Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Variant type is not supported for single-value JSON serialization",
+            )),
         }
     }
 
