@@ -195,6 +195,20 @@ pub fn iceberg::encryption::kms::MemoryKeyManagementClient::generate_key<'life0,
 pub fn iceberg::encryption::kms::MemoryKeyManagementClient::supports_key_generation(&self) -> bool
 pub fn iceberg::encryption::kms::MemoryKeyManagementClient::unwrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, wrapped_key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::encryption::SensitiveBytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn iceberg::encryption::kms::MemoryKeyManagementClient::wrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::vec::Vec<u8>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub struct iceberg::encryption::kms::MemoryKmsClientFactory
+impl iceberg::encryption::kms::MemoryKmsClientFactory
+pub fn iceberg::encryption::kms::MemoryKmsClientFactory::add_master_key(&self, key_id: impl core::convert::Into<alloc::string::String>) -> iceberg::Result<()>
+pub fn iceberg::encryption::kms::MemoryKmsClientFactory::add_master_key_bytes(&self, key_id: impl core::convert::Into<alloc::string::String>, key_bytes: iceberg::encryption::SensitiveBytes) -> iceberg::Result<()>
+pub fn iceberg::encryption::kms::MemoryKmsClientFactory::new() -> Self
+pub fn iceberg::encryption::kms::MemoryKmsClientFactory::with_master_key_size(master_key_size: iceberg::encryption::AesKeySize) -> Self
+impl core::clone::Clone for iceberg::encryption::kms::MemoryKmsClientFactory
+pub fn iceberg::encryption::kms::MemoryKmsClientFactory::clone(&self) -> iceberg::encryption::kms::MemoryKmsClientFactory
+impl core::default::Default for iceberg::encryption::kms::MemoryKmsClientFactory
+pub fn iceberg::encryption::kms::MemoryKmsClientFactory::default() -> iceberg::encryption::kms::MemoryKmsClientFactory
+impl core::fmt::Debug for iceberg::encryption::kms::MemoryKmsClientFactory
+pub fn iceberg::encryption::kms::MemoryKmsClientFactory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::encryption::kms::KmsClientFactory for iceberg::encryption::kms::MemoryKmsClientFactory
+pub fn iceberg::encryption::kms::MemoryKmsClientFactory::create_kms_client<'life0, 'life1, 'async_trait>(&'life0 self, _properties: &'life1 std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::sync::Arc<dyn iceberg::encryption::KeyManagementClient>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub trait iceberg::encryption::kms::KeyManagementClient: core::marker::Send + core::marker::Sync + core::fmt::Debug
 pub fn iceberg::encryption::kms::KeyManagementClient::generate_key<'life0, 'life1, 'async_trait>(&'life0 self, wrapping_key_id: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::encryption::GeneratedKey>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::encryption::kms::KeyManagementClient::supports_key_generation(&self) -> bool
@@ -210,6 +224,10 @@ pub fn T::generate_key<'life0, 'life1, 'async_trait>(&'life0 self, wrapping_key_
 pub fn T::supports_key_generation(&self) -> bool
 pub fn T::unwrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, wrapped_key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::encryption::SensitiveBytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn T::wrap_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, key: &'life1 [u8], wrapping_key_id: &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::vec::Vec<u8>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub trait iceberg::encryption::kms::KmsClientFactory: core::fmt::Debug + core::marker::Send + core::marker::Sync
+pub fn iceberg::encryption::kms::KmsClientFactory::create_kms_client<'life0, 'life1, 'async_trait>(&'life0 self, properties: &'life1 std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::sync::Arc<dyn iceberg::encryption::KeyManagementClient>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl iceberg::encryption::kms::KmsClientFactory for iceberg::encryption::kms::MemoryKmsClientFactory
+pub fn iceberg::encryption::kms::MemoryKmsClientFactory::create_kms_client<'life0, 'life1, 'async_trait>(&'life0 self, _properties: &'life1 std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::sync::Arc<dyn iceberg::encryption::KeyManagementClient>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub enum iceberg::encryption::AesKeySize
 pub iceberg::encryption::AesKeySize::Bits128 = 128
 pub iceberg::encryption::AesKeySize::Bits192 = 192
@@ -1075,6 +1093,7 @@ pub fn iceberg::memory::MemoryCatalogBuilder::fmt(&self, f: &mut core::fmt::Form
 impl iceberg::CatalogBuilder for iceberg::memory::MemoryCatalogBuilder
 pub type iceberg::memory::MemoryCatalogBuilder::C = iceberg::memory::MemoryCatalog
 pub fn iceberg::memory::MemoryCatalogBuilder::load(self, name: impl core::convert::Into<alloc::string::String>, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> impl core::future::future::Future<Output = iceberg::Result<Self::C>> + core::marker::Send
+pub fn iceberg::memory::MemoryCatalogBuilder::with_kms_client_factory(self, kms_client_factory: alloc::sync::Arc<dyn iceberg::encryption::kms::KmsClientFactory>) -> Self
 pub fn iceberg::memory::MemoryCatalogBuilder::with_runtime(self, runtime: iceberg::Runtime) -> Self
 pub fn iceberg::memory::MemoryCatalogBuilder::with_storage_factory(self, storage_factory: alloc::sync::Arc<dyn iceberg::io::StorageFactory>) -> Self
 pub const iceberg::memory::MEMORY_CATALOG_WAREHOUSE: &str
@@ -1225,6 +1244,7 @@ pub iceberg::scan::FileScanTask::data_file_format: iceberg::spec::DataFileFormat
 pub iceberg::scan::FileScanTask::data_file_path: alloc::string::String
 pub iceberg::scan::FileScanTask::deletes: alloc::vec::Vec<iceberg::scan::FileScanTaskDeleteFile>
 pub iceberg::scan::FileScanTask::file_size_in_bytes: u64
+pub iceberg::scan::FileScanTask::key_metadata: core::option::Option<alloc::boxed::Box<[u8]>>
 pub iceberg::scan::FileScanTask::length: u64
 pub iceberg::scan::FileScanTask::name_mapping: core::option::Option<alloc::sync::Arc<iceberg::spec::NameMapping>>
 pub iceberg::scan::FileScanTask::partition: core::option::Option<iceberg::spec::Struct>
@@ -1248,7 +1268,7 @@ impl core::fmt::Debug for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::scan::FileScanTask
 impl iceberg::scan::FileScanTask
-pub fn iceberg::scan::FileScanTask::builder() -> FileScanTaskBuilder<((), (), (), (), (), (), (), (), (), (), (), (), (), ())>
+pub fn iceberg::scan::FileScanTask::builder() -> FileScanTaskBuilder<((), (), (), (), (), (), (), (), (), (), (), (), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::scan::FileScanTask
@@ -1258,6 +1278,7 @@ pub iceberg::scan::FileScanTaskDeleteFile::equality_ids: core::option::Option<al
 pub iceberg::scan::FileScanTaskDeleteFile::file_path: alloc::string::String
 pub iceberg::scan::FileScanTaskDeleteFile::file_size_in_bytes: u64
 pub iceberg::scan::FileScanTaskDeleteFile::file_type: iceberg::spec::DataContentType
+pub iceberg::scan::FileScanTaskDeleteFile::key_metadata: core::option::Option<alloc::boxed::Box<[u8]>>
 pub iceberg::scan::FileScanTaskDeleteFile::partition_spec_id: i32
 impl core::clone::Clone for iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::clone(&self) -> iceberg::scan::FileScanTaskDeleteFile
@@ -1267,7 +1288,7 @@ impl core::fmt::Debug for iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::scan::FileScanTaskDeleteFile
 impl iceberg::scan::FileScanTaskDeleteFile
-pub fn iceberg::scan::FileScanTaskDeleteFile::builder() -> FileScanTaskDeleteFileBuilder<((), (), (), (), ())>
+pub fn iceberg::scan::FileScanTaskDeleteFile::builder() -> FileScanTaskDeleteFileBuilder<((), (), (), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::scan::FileScanTaskDeleteFile
@@ -3685,11 +3706,13 @@ pub fn iceberg::memory::MemoryCatalog::update_table<'life0, 'async_trait>(&'life
 pub trait iceberg::CatalogBuilder: core::default::Default + core::fmt::Debug + core::marker::Send + core::marker::Sync
 pub type iceberg::CatalogBuilder::C: iceberg::Catalog
 pub fn iceberg::CatalogBuilder::load(self, name: impl core::convert::Into<alloc::string::String>, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> impl core::future::future::Future<Output = iceberg::Result<Self::C>> + core::marker::Send
+pub fn iceberg::CatalogBuilder::with_kms_client_factory(self, kms_client_factory: alloc::sync::Arc<dyn iceberg::encryption::kms::KmsClientFactory>) -> Self
 pub fn iceberg::CatalogBuilder::with_runtime(self, runtime: iceberg::Runtime) -> Self
 pub fn iceberg::CatalogBuilder::with_storage_factory(self, storage_factory: alloc::sync::Arc<dyn iceberg::io::StorageFactory>) -> Self
 impl iceberg::CatalogBuilder for iceberg::memory::MemoryCatalogBuilder
 pub type iceberg::memory::MemoryCatalogBuilder::C = iceberg::memory::MemoryCatalog
 pub fn iceberg::memory::MemoryCatalogBuilder::load(self, name: impl core::convert::Into<alloc::string::String>, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> impl core::future::future::Future<Output = iceberg::Result<Self::C>> + core::marker::Send
+pub fn iceberg::memory::MemoryCatalogBuilder::with_kms_client_factory(self, kms_client_factory: alloc::sync::Arc<dyn iceberg::encryption::kms::KmsClientFactory>) -> Self
 pub fn iceberg::memory::MemoryCatalogBuilder::with_runtime(self, runtime: iceberg::Runtime) -> Self
 pub fn iceberg::memory::MemoryCatalogBuilder::with_storage_factory(self, storage_factory: alloc::sync::Arc<dyn iceberg::io::StorageFactory>) -> Self
 pub async fn iceberg::drop_table_data(table_info: &iceberg::table::Table) -> iceberg::Result<()>

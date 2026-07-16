@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::vec;
@@ -120,10 +119,6 @@ impl IcebergTableScan {
 impl ExecutionPlan for IcebergTableScan {
     fn name(&self) -> &str {
         "IcebergTableScan"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan + 'static>> {
