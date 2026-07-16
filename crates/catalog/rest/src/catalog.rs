@@ -525,7 +525,7 @@ impl RestCatalog {
 }
 
 /// All requests and expected responses are derived from the REST catalog API spec:
-/// https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml
+/// <https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml>
 #[async_trait]
 impl Catalog for RestCatalog {
     async fn list_namespaces(

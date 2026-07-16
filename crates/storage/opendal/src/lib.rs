@@ -18,8 +18,8 @@
 //! OpenDAL-based storage implementation for Apache Iceberg.
 //!
 //! This crate provides [`OpenDalStorage`] and [`OpenDalStorageFactory`],
-//! which implement the [`Storage`](iceberg::io::Storage) and
-//! [`StorageFactory`](iceberg::io::StorageFactory) traits from the `iceberg` crate
+//! which implement the [`Storage`] and
+//! [`StorageFactory`] traits from the `iceberg` crate
 //! using [OpenDAL](https://opendal.apache.org/) as the backend.
 
 mod utils;
