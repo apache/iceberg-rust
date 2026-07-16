@@ -318,6 +318,29 @@ struct RestContext {
     endpoints: HashSet<Endpoint>,
 }
 
+impl RestContext {
+    async fn init(config: &RestCatalogConfig) -> Result<Self> {
+        let client = HttpClient::new(config)?;
+
+        let catalog_config = RestSessionCatalog::load_config(&client, config).await?;
+        // Use the advertised endpoints as-is, falling back to
+        // `DEFAULT_ENDPOINTS` when absent or empty.
+        let endpoints = match &catalog_config.endpoints {
+            Some(advertised) if !advertised.is_empty() => advertised.iter().cloned().collect(),
+            _ => crate::endpoint::DEFAULT_ENDPOINTS.clone(),
+        };
+        let config = config.clone().merge_with_config(catalog_config);
+
+        let client = client.update_with(&config)?;
+
+        Ok(RestContext {
+            config,
+            client,
+            endpoints,
+        })
+    }
+}
+
 /// Rest catalog implementation.
 #[derive(Debug)]
 pub struct RestCatalog {
@@ -588,27 +611,7 @@ impl RestSessionCatalog {
     /// Gets the [`RestContext`] from the catalog.
     async fn context(&self) -> Result<&RestContext> {
         self.ctx
-            .get_or_try_init(|| async {
-                let client = HttpClient::new(&self.user_config)?;
-                let catalog_config =
-                    RestSessionCatalog::load_config(&client, &self.user_config).await?;
-                // Use the advertised endpoints as-is, falling back to
-                // `DEFAULT_ENDPOINTS` when absent or empty.
-                let endpoints = match &catalog_config.endpoints {
-                    Some(advertised) if !advertised.is_empty() => {
-                        advertised.iter().cloned().collect()
-                    }
-                    _ => crate::endpoint::DEFAULT_ENDPOINTS.clone(),
-                };
-                let config = self.user_config.clone().merge_with_config(catalog_config);
-                let client = client.update_with(&config)?;
-
-                Ok(RestContext {
-                    config,
-                    client,
-                    endpoints,
-                })
-            })
+            .get_or_try_init(async || RestContext::init(&self.user_config).await)
             .await
     }
 
