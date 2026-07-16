@@ -318,6 +318,8 @@ pub fn iceberg::encryption::SecureKey::clone(&self) -> iceberg::encryption::Secu
 impl core::cmp::Eq for iceberg::encryption::SecureKey
 impl core::cmp::PartialEq for iceberg::encryption::SecureKey
 pub fn iceberg::encryption::SecureKey::eq(&self, other: &iceberg::encryption::SecureKey) -> bool
+impl core::convert::From<iceberg::encryption::SecureKey> for iceberg::encryption::StandardKeyMetadata
+pub fn iceberg::encryption::StandardKeyMetadata::from(encryption_key: iceberg::encryption::SecureKey) -> Self
 impl core::convert::TryFrom<iceberg::encryption::SensitiveBytes> for iceberg::encryption::SecureKey
 pub type iceberg::encryption::SecureKey::Error = iceberg::Error
 pub fn iceberg::encryption::SecureKey::try_from(key: iceberg::encryption::SensitiveBytes) -> iceberg::Result<Self>
@@ -350,8 +352,7 @@ pub fn iceberg::encryption::StandardKeyMetadata::decode(bytes: &[u8]) -> iceberg
 pub fn iceberg::encryption::StandardKeyMetadata::encode(&self) -> iceberg::Result<alloc::boxed::Box<[u8]>>
 pub fn iceberg::encryption::StandardKeyMetadata::encryption_key(&self) -> &iceberg::encryption::SecureKey
 pub fn iceberg::encryption::StandardKeyMetadata::file_length(&self) -> core::option::Option<u64>
-pub fn iceberg::encryption::StandardKeyMetadata::from_secure_key(encryption_key: iceberg::encryption::SecureKey) -> Self
-pub fn iceberg::encryption::StandardKeyMetadata::new(encryption_key: &[u8]) -> iceberg::Result<Self>
+pub fn iceberg::encryption::StandardKeyMetadata::try_new(encryption_key: &[u8]) -> iceberg::Result<Self>
 pub fn iceberg::encryption::StandardKeyMetadata::with_aad_prefix(self, aad_prefix: &[u8]) -> Self
 pub fn iceberg::encryption::StandardKeyMetadata::with_file_length(self, length: u64) -> Self
 impl core::clone::Clone for iceberg::encryption::StandardKeyMetadata
@@ -359,6 +360,8 @@ pub fn iceberg::encryption::StandardKeyMetadata::clone(&self) -> iceberg::encryp
 impl core::cmp::Eq for iceberg::encryption::StandardKeyMetadata
 impl core::cmp::PartialEq for iceberg::encryption::StandardKeyMetadata
 pub fn iceberg::encryption::StandardKeyMetadata::eq(&self, other: &iceberg::encryption::StandardKeyMetadata) -> bool
+impl core::convert::From<iceberg::encryption::SecureKey> for iceberg::encryption::StandardKeyMetadata
+pub fn iceberg::encryption::StandardKeyMetadata::from(encryption_key: iceberg::encryption::SecureKey) -> Self
 impl core::fmt::Debug for iceberg::encryption::StandardKeyMetadata
 pub fn iceberg::encryption::StandardKeyMetadata::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::encryption::StandardKeyMetadata

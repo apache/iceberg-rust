@@ -55,17 +55,8 @@ impl fmt::Debug for StandardKeyMetadata {
 
 impl StandardKeyMetadata {
     /// Creates a new `StandardKeyMetadata` from raw key bytes.
-    pub fn new(encryption_key: &[u8]) -> Result<Self> {
-        Ok(Self::from_secure_key(SecureKey::new(encryption_key)?))
-    }
-
-    /// Creates a new `StandardKeyMetadata` from an already-validated key.
-    pub fn from_secure_key(encryption_key: SecureKey) -> Self {
-        Self {
-            encryption_key,
-            aad_prefix: None,
-            file_length: None,
-        }
+    pub fn try_new(encryption_key: &[u8]) -> Result<Self> {
+        Ok(Self::from(SecureKey::new(encryption_key)?))
     }
 
     /// Adds an AAD prefix.
@@ -103,6 +94,17 @@ impl StandardKeyMetadata {
     /// Decodes from Java-compatible format.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         _serde::StandardKeyMetadataV1::decode(bytes).and_then(Self::try_from)
+    }
+}
+
+impl From<SecureKey> for StandardKeyMetadata {
+    /// Creates a `StandardKeyMetadata` from an already-validated key.
+    fn from(encryption_key: SecureKey) -> Self {
+        Self {
+            encryption_key,
+            aad_prefix: None,
+            file_length: None,
+        }
     }
 }
 
@@ -247,7 +249,9 @@ mod tests {
         let key = b"0123456789012345";
         let aad = b"1234567890123456";
 
-        let metadata = StandardKeyMetadata::new(key).unwrap().with_aad_prefix(aad);
+        let metadata = StandardKeyMetadata::try_new(key)
+            .unwrap()
+            .with_aad_prefix(aad);
         let serialized = metadata.encode().unwrap();
         let parsed = StandardKeyMetadata::decode(&serialized).unwrap();
 
@@ -262,7 +266,7 @@ mod tests {
         let aad = b"1234567890123456";
 
         let file_length = 100_000;
-        let metadata = StandardKeyMetadata::new(key)
+        let metadata = StandardKeyMetadata::try_new(key)
             .unwrap()
             .with_aad_prefix(aad)
             .with_file_length(file_length);
@@ -292,7 +296,7 @@ mod tests {
     #[test]
     fn test_roundtrip_without_aad() {
         let key = b"0123456789012345";
-        let metadata = StandardKeyMetadata::new(key).unwrap();
+        let metadata = StandardKeyMetadata::try_new(key).unwrap();
         let serialized = metadata.encode().unwrap();
         let parsed = StandardKeyMetadata::decode(&serialized).unwrap();
 
@@ -304,13 +308,13 @@ mod tests {
     fn test_new_rejects_invalid_key_length() {
         // 24-byte (AES-192) and 32-byte (AES-256) keys are accepted.
         for len in [16usize, 24, 32] {
-            assert!(StandardKeyMetadata::new(&vec![0u8; len]).is_ok());
+            assert!(StandardKeyMetadata::try_new(&vec![0u8; len]).is_ok());
         }
 
         // Invalid lengths are rejected at construction, so an invalid
         // `StandardKeyMetadata` can never exist.
         for len in [0usize, 4, 15, 20, 33] {
-            assert!(StandardKeyMetadata::new(&vec![0u8; len]).is_err());
+            assert!(StandardKeyMetadata::try_new(&vec![0u8; len]).is_err());
         }
     }
 

@@ -175,7 +175,7 @@ mod tests {
     use crate::io::FileIO;
 
     fn key_metadata() -> StandardKeyMetadata {
-        StandardKeyMetadata::new(b"0123456789abcdef")
+        StandardKeyMetadata::try_new(b"0123456789abcdef")
             .unwrap()
             .with_aad_prefix(b"test-aad-prefix!")
     }

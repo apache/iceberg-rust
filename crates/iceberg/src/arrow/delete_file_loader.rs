@@ -203,7 +203,7 @@ mod tests {
         let del_path = format!("{table_location}/encrypted-pos-del.parquet");
         write_encrypted_parquet(&del_path, &batch, encryption_key, Some(aad_prefix));
 
-        let key_metadata = StandardKeyMetadata::new(encryption_key)
+        let key_metadata = StandardKeyMetadata::try_new(encryption_key)
             .unwrap()
             .with_aad_prefix(aad_prefix)
             .encode()
@@ -283,7 +283,7 @@ mod tests {
         let del_path = format!("{table_location}/encrypted-eq-del.parquet");
         write_encrypted_parquet(&del_path, &batch, encryption_key, Some(aad_prefix));
 
-        let key_metadata = StandardKeyMetadata::new(encryption_key)
+        let key_metadata = StandardKeyMetadata::try_new(encryption_key)
             .unwrap()
             .with_aad_prefix(aad_prefix)
             .encode()
