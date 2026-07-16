@@ -37,7 +37,9 @@ use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics, ScanResult};
 use crate::error::Result;
 use crate::io::{FileIO, FileMetadata, FileRead};
-use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, is_metadata_field};
+use crate::metadata_columns::{
+    RESERVED_FIELD_ID_FILE, RESERVED_FIELD_ID_SPEC_ID, is_metadata_field,
+};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::Datum;
 use crate::{Error, ErrorKind};
@@ -246,6 +248,20 @@ impl FileScanTaskReader {
             let file_datum = Datum::string(task.data_file_path.clone());
             record_batch_transformer_builder =
                 record_batch_transformer_builder.with_constant(RESERVED_FIELD_ID_FILE, file_datum);
+        }
+
+        if task
+            .project_field_ids()
+            .contains(&RESERVED_FIELD_ID_SPEC_ID)
+        {
+            let partition_spec = task
+                .partition_spec
+                .as_ref()
+                .ok_or_else(|| Error::new(ErrorKind::Unexpected, "Partition spec is missing"))?;
+
+            let spec_id_datum = Datum::int(partition_spec.spec_id());
+            record_batch_transformer_builder = record_batch_transformer_builder
+                .with_constant(RESERVED_FIELD_ID_SPEC_ID, spec_id_datum);
         }
 
         if let (Some(partition_spec), Some(partition_data)) =
