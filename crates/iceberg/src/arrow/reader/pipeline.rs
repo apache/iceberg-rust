@@ -39,7 +39,7 @@ use crate::error::Result;
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::metadata_columns::{RESERVED_FIELD_ID_FILE, is_metadata_field};
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
-use crate::spec::Datum;
+use crate::spec::{DataFileFormat, Datum};
 use crate::{Error, ErrorKind};
 
 impl ArrowReader {
@@ -104,6 +104,26 @@ struct FileScanTaskReader {
 
 impl FileScanTaskReader {
     async fn process(self, task: FileScanTask) -> Result<ArrowRecordBatchStream> {
+        match task.data_file_format {
+            DataFileFormat::Parquet => self.process_parquet(task).await,
+            DataFileFormat::Vortex => {
+                super::vortex::read_vortex_task(
+                    task,
+                    &self.file_io,
+                    self.batch_size,
+                    &self.delete_file_loader,
+                    self.scan_metrics.bytes_read_counter().clone(),
+                )
+                .await
+            }
+            format => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!("Unsupported data file format: {format}"),
+            )),
+        }
+    }
+
+    async fn process_parquet(self, task: FileScanTask) -> Result<ArrowRecordBatchStream> {
         let should_load_page_index =
             (self.row_selection_enabled && task.predicate.is_some()) || !task.deletes.is_empty();
         let mut parquet_read_options = self.parquet_read_options;

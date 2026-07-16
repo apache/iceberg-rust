@@ -1368,6 +1368,7 @@ pub iceberg::spec::DataFileFormat::Avro
 pub iceberg::spec::DataFileFormat::Orc
 pub iceberg::spec::DataFileFormat::Parquet
 pub iceberg::spec::DataFileFormat::Puffin
+pub iceberg::spec::DataFileFormat::Vortex
 impl core::clone::Clone for iceberg::spec::DataFileFormat
 pub fn iceberg::spec::DataFileFormat::clone(&self) -> iceberg::spec::DataFileFormat
 impl core::cmp::Eq for iceberg::spec::DataFileFormat
@@ -3235,18 +3236,42 @@ pub fn iceberg::writer::file_writer::ParquetWriterBuilder::fmt(&self, f: &mut co
 impl iceberg::writer::file_writer::FileWriterBuilder for iceberg::writer::file_writer::ParquetWriterBuilder
 pub type iceberg::writer::file_writer::ParquetWriterBuilder::R = iceberg::writer::file_writer::ParquetWriter
 pub async fn iceberg::writer::file_writer::ParquetWriterBuilder::build(&self, output_file: iceberg::io::OutputFile) -> iceberg::Result<Self::R>
+pub struct iceberg::writer::file_writer::VortexWriter
+impl iceberg::writer::CurrentFileStatus for iceberg::writer::file_writer::VortexWriter
+pub fn iceberg::writer::file_writer::VortexWriter::current_file_path(&self) -> alloc::string::String
+pub fn iceberg::writer::file_writer::VortexWriter::current_row_num(&self) -> usize
+pub fn iceberg::writer::file_writer::VortexWriter::current_written_size(&self) -> usize
+impl iceberg::writer::file_writer::FileWriter for iceberg::writer::file_writer::VortexWriter
+pub async fn iceberg::writer::file_writer::VortexWriter::close(self) -> iceberg::Result<alloc::vec::Vec<iceberg::spec::DataFileBuilder>>
+pub async fn iceberg::writer::file_writer::VortexWriter::write(&mut self, batch: &arrow_array::record_batch::RecordBatch) -> iceberg::Result<()>
+pub struct iceberg::writer::file_writer::VortexWriterBuilder
+impl iceberg::writer::file_writer::VortexWriterBuilder
+pub fn iceberg::writer::file_writer::VortexWriterBuilder::new(schema: iceberg::spec::SchemaRef, session: vortex_session::session::VortexSession) -> Self
+impl core::clone::Clone for iceberg::writer::file_writer::VortexWriterBuilder
+pub fn iceberg::writer::file_writer::VortexWriterBuilder::clone(&self) -> iceberg::writer::file_writer::VortexWriterBuilder
+impl core::fmt::Debug for iceberg::writer::file_writer::VortexWriterBuilder
+pub fn iceberg::writer::file_writer::VortexWriterBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::writer::file_writer::FileWriterBuilder for iceberg::writer::file_writer::VortexWriterBuilder
+pub type iceberg::writer::file_writer::VortexWriterBuilder::R = iceberg::writer::file_writer::VortexWriter
+pub async fn iceberg::writer::file_writer::VortexWriterBuilder::build(&self, output_file: iceberg::io::OutputFile) -> iceberg::Result<Self::R>
 pub trait iceberg::writer::file_writer::FileWriter<O>: core::marker::Send + iceberg::writer::CurrentFileStatus + 'static
 pub fn iceberg::writer::file_writer::FileWriter::close(self) -> impl core::future::future::Future<Output = iceberg::Result<O>> + core::marker::Send
 pub fn iceberg::writer::file_writer::FileWriter::write(&mut self, batch: &arrow_array::record_batch::RecordBatch) -> impl core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send
 impl iceberg::writer::file_writer::FileWriter for iceberg::writer::file_writer::ParquetWriter
 pub async fn iceberg::writer::file_writer::ParquetWriter::close(self) -> iceberg::Result<alloc::vec::Vec<iceberg::spec::DataFileBuilder>>
 pub async fn iceberg::writer::file_writer::ParquetWriter::write(&mut self, batch: &arrow_array::record_batch::RecordBatch) -> iceberg::Result<()>
+impl iceberg::writer::file_writer::FileWriter for iceberg::writer::file_writer::VortexWriter
+pub async fn iceberg::writer::file_writer::VortexWriter::close(self) -> iceberg::Result<alloc::vec::Vec<iceberg::spec::DataFileBuilder>>
+pub async fn iceberg::writer::file_writer::VortexWriter::write(&mut self, batch: &arrow_array::record_batch::RecordBatch) -> iceberg::Result<()>
 pub trait iceberg::writer::file_writer::FileWriterBuilder<O>: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
 pub type iceberg::writer::file_writer::FileWriterBuilder::R: iceberg::writer::file_writer::FileWriter<O>
 pub fn iceberg::writer::file_writer::FileWriterBuilder::build(&self, output_file: iceberg::io::OutputFile) -> impl core::future::future::Future<Output = iceberg::Result<Self::R>> + core::marker::Send
 impl iceberg::writer::file_writer::FileWriterBuilder for iceberg::writer::file_writer::ParquetWriterBuilder
 pub type iceberg::writer::file_writer::ParquetWriterBuilder::R = iceberg::writer::file_writer::ParquetWriter
 pub async fn iceberg::writer::file_writer::ParquetWriterBuilder::build(&self, output_file: iceberg::io::OutputFile) -> iceberg::Result<Self::R>
+impl iceberg::writer::file_writer::FileWriterBuilder for iceberg::writer::file_writer::VortexWriterBuilder
+pub type iceberg::writer::file_writer::VortexWriterBuilder::R = iceberg::writer::file_writer::VortexWriter
+pub async fn iceberg::writer::file_writer::VortexWriterBuilder::build(&self, output_file: iceberg::io::OutputFile) -> iceberg::Result<Self::R>
 pub mod iceberg::writer::partitioning
 pub mod iceberg::writer::partitioning::clustered_writer
 pub struct iceberg::writer::partitioning::clustered_writer::ClusteredWriter<B, I, O> where B: iceberg::writer::IcebergWriterBuilder<I, O>, O: core::iter::traits::collect::IntoIterator + core::iter::traits::collect::FromIterator<<O as core::iter::traits::collect::IntoIterator>::Item>, <O as core::iter::traits::collect::IntoIterator>::Item: core::clone::Clone
@@ -3285,6 +3310,10 @@ impl iceberg::writer::CurrentFileStatus for iceberg::writer::file_writer::Parque
 pub fn iceberg::writer::file_writer::ParquetWriter::current_file_path(&self) -> alloc::string::String
 pub fn iceberg::writer::file_writer::ParquetWriter::current_row_num(&self) -> usize
 pub fn iceberg::writer::file_writer::ParquetWriter::current_written_size(&self) -> usize
+impl iceberg::writer::CurrentFileStatus for iceberg::writer::file_writer::VortexWriter
+pub fn iceberg::writer::file_writer::VortexWriter::current_file_path(&self) -> alloc::string::String
+pub fn iceberg::writer::file_writer::VortexWriter::current_row_num(&self) -> usize
+pub fn iceberg::writer::file_writer::VortexWriter::current_written_size(&self) -> usize
 impl<B, L, F> iceberg::writer::CurrentFileStatus for iceberg::writer::base_writer::data_file_writer::DataFileWriter<B, L, F> where B: iceberg::writer::file_writer::FileWriterBuilder, L: iceberg::writer::file_writer::location_generator::LocationGenerator, F: iceberg::writer::file_writer::location_generator::FileNameGenerator
 pub fn iceberg::writer::base_writer::data_file_writer::DataFileWriter<B, L, F>::current_file_path(&self) -> alloc::string::String
 pub fn iceberg::writer::base_writer::data_file_writer::DataFileWriter<B, L, F>::current_row_num(&self) -> usize
