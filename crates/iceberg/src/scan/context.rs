@@ -142,6 +142,7 @@ impl ManifestEntryContext {
             .with_partition_spec(self.partition_spec.clone())
             .with_name_mapping(self.name_mapping)
             .with_case_sensitive(self.case_sensitive)
+            .with_key_metadata(self.manifest_entry.data_file.key_metadata().map(Box::from))
             .build())
     }
 }
