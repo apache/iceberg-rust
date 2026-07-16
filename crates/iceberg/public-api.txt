@@ -1244,6 +1244,7 @@ pub iceberg::scan::FileScanTask::data_file_format: iceberg::spec::DataFileFormat
 pub iceberg::scan::FileScanTask::data_file_path: alloc::string::String
 pub iceberg::scan::FileScanTask::deletes: alloc::vec::Vec<iceberg::scan::FileScanTaskDeleteFile>
 pub iceberg::scan::FileScanTask::file_size_in_bytes: u64
+pub iceberg::scan::FileScanTask::key_metadata: core::option::Option<alloc::boxed::Box<[u8]>>
 pub iceberg::scan::FileScanTask::length: u64
 pub iceberg::scan::FileScanTask::name_mapping: core::option::Option<alloc::sync::Arc<iceberg::spec::NameMapping>>
 pub iceberg::scan::FileScanTask::partition: core::option::Option<iceberg::spec::Struct>
@@ -1267,7 +1268,7 @@ impl core::fmt::Debug for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::scan::FileScanTask
 impl iceberg::scan::FileScanTask
-pub fn iceberg::scan::FileScanTask::builder() -> FileScanTaskBuilder<((), (), (), (), (), (), (), (), (), (), (), (), (), ())>
+pub fn iceberg::scan::FileScanTask::builder() -> FileScanTaskBuilder<((), (), (), (), (), (), (), (), (), (), (), (), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::scan::FileScanTask
@@ -1277,6 +1278,7 @@ pub iceberg::scan::FileScanTaskDeleteFile::equality_ids: core::option::Option<al
 pub iceberg::scan::FileScanTaskDeleteFile::file_path: alloc::string::String
 pub iceberg::scan::FileScanTaskDeleteFile::file_size_in_bytes: u64
 pub iceberg::scan::FileScanTaskDeleteFile::file_type: iceberg::spec::DataContentType
+pub iceberg::scan::FileScanTaskDeleteFile::key_metadata: core::option::Option<alloc::boxed::Box<[u8]>>
 pub iceberg::scan::FileScanTaskDeleteFile::partition_spec_id: i32
 impl core::clone::Clone for iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::clone(&self) -> iceberg::scan::FileScanTaskDeleteFile
@@ -1286,7 +1288,7 @@ impl core::fmt::Debug for iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::scan::FileScanTaskDeleteFile
 impl iceberg::scan::FileScanTaskDeleteFile
-pub fn iceberg::scan::FileScanTaskDeleteFile::builder() -> FileScanTaskDeleteFileBuilder<((), (), (), (), ())>
+pub fn iceberg::scan::FileScanTaskDeleteFile::builder() -> FileScanTaskDeleteFileBuilder<((), (), (), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::scan::FileScanTaskDeleteFile
@@ -1702,6 +1704,7 @@ pub iceberg::spec::Type::List(iceberg::spec::ListType)
 pub iceberg::spec::Type::Map(iceberg::spec::MapType)
 pub iceberg::spec::Type::Primitive(iceberg::spec::PrimitiveType)
 pub iceberg::spec::Type::Struct(iceberg::spec::StructType)
+pub iceberg::spec::Type::Variant(iceberg::spec::VariantType)
 impl iceberg::spec::Type
 pub fn iceberg::spec::Type::as_primitive_type(&self) -> core::option::Option<&iceberg::spec::PrimitiveType>
 pub fn iceberg::spec::Type::decimal(precision: u32, scale: u32) -> iceberg::Result<Self>
@@ -1711,6 +1714,7 @@ pub fn iceberg::spec::Type::is_floating_type(&self) -> bool
 pub fn iceberg::spec::Type::is_nested(&self) -> bool
 pub fn iceberg::spec::Type::is_primitive(&self) -> bool
 pub fn iceberg::spec::Type::is_struct(&self) -> bool
+pub fn iceberg::spec::Type::is_variant(&self) -> bool
 pub fn iceberg::spec::Type::to_struct_type(self) -> core::option::Option<iceberg::spec::StructType>
 impl core::clone::Clone for iceberg::spec::Type
 pub fn iceberg::spec::Type::clone(&self) -> iceberg::spec::Type
@@ -1725,6 +1729,8 @@ impl core::convert::From<iceberg::spec::PrimitiveType> for iceberg::spec::Type
 pub fn iceberg::spec::Type::from(value: iceberg::spec::PrimitiveType) -> Self
 impl core::convert::From<iceberg::spec::StructType> for iceberg::spec::Type
 pub fn iceberg::spec::Type::from(value: iceberg::spec::StructType) -> Self
+impl core::convert::From<iceberg::spec::VariantType> for iceberg::spec::Type
+pub fn iceberg::spec::Type::from(_: iceberg::spec::VariantType) -> Self
 impl core::fmt::Debug for iceberg::spec::Type
 pub fn iceberg::spec::Type::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for iceberg::spec::Type
@@ -2322,6 +2328,8 @@ impl iceberg::spec::Schema
 pub fn iceberg::spec::Schema::accessor_by_field_id(&self, field_id: i32) -> core::option::Option<alloc::sync::Arc<iceberg::expr::accessor::StructAccessor>>
 pub fn iceberg::spec::Schema::as_struct(&self) -> &iceberg::spec::StructType
 pub fn iceberg::spec::Schema::builder() -> iceberg::spec::SchemaBuilder
+pub fn iceberg::spec::Schema::calc_min_compatible_format(&self) -> iceberg::spec::FormatVersion
+pub fn iceberg::spec::Schema::check_format_compatibility(&self, format_version: iceberg::spec::FormatVersion) -> iceberg::Result<()>
 pub fn iceberg::spec::Schema::field_by_alias(&self, alias: &str) -> core::option::Option<&iceberg::spec::NestedFieldRef>
 pub fn iceberg::spec::Schema::field_by_id(&self, field_id: i32) -> core::option::Option<&iceberg::spec::NestedFieldRef>
 pub fn iceberg::spec::Schema::field_by_name(&self, field_name: &str) -> core::option::Option<&iceberg::spec::NestedFieldRef>
@@ -2842,6 +2850,26 @@ impl core::default::Default for iceberg::spec::UnboundPartitionSpecBuilder
 pub fn iceberg::spec::UnboundPartitionSpecBuilder::default() -> iceberg::spec::UnboundPartitionSpecBuilder
 impl core::fmt::Debug for iceberg::spec::UnboundPartitionSpecBuilder
 pub fn iceberg::spec::UnboundPartitionSpecBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct iceberg::spec::VariantType
+impl core::clone::Clone for iceberg::spec::VariantType
+pub fn iceberg::spec::VariantType::clone(&self) -> iceberg::spec::VariantType
+impl core::cmp::Eq for iceberg::spec::VariantType
+impl core::cmp::PartialEq for iceberg::spec::VariantType
+pub fn iceberg::spec::VariantType::eq(&self, other: &iceberg::spec::VariantType) -> bool
+impl core::convert::From<iceberg::spec::VariantType> for iceberg::spec::Type
+pub fn iceberg::spec::Type::from(_: iceberg::spec::VariantType) -> Self
+impl core::fmt::Debug for iceberg::spec::VariantType
+pub fn iceberg::spec::VariantType::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for iceberg::spec::VariantType
+pub fn iceberg::spec::VariantType::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for iceberg::spec::VariantType
+pub fn iceberg::spec::VariantType::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for iceberg::spec::VariantType
+impl core::marker::StructuralPartialEq for iceberg::spec::VariantType
+impl serde_core::ser::Serialize for iceberg::spec::VariantType
+pub fn iceberg::spec::VariantType::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::VariantType
+pub fn iceberg::spec::VariantType::deserialize<D>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
 pub struct iceberg::spec::ViewMetadata
 impl iceberg::spec::ViewMetadata
 pub fn iceberg::spec::ViewMetadata::current_schema(&self) -> &iceberg::spec::SchemaRef
@@ -2996,6 +3024,7 @@ pub fn iceberg::spec::SchemaVisitor::map(&mut self, map: &iceberg::spec::MapType
 pub fn iceberg::spec::SchemaVisitor::primitive(&mut self, p: &iceberg::spec::PrimitiveType) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::SchemaVisitor::schema(&mut self, schema: &iceberg::spec::Schema, value: Self::T) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::SchemaVisitor::struct(&mut self, struct: &iceberg::spec::StructType, results: alloc::vec::Vec<Self::T>) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::SchemaVisitor::variant(&mut self, v: &iceberg::spec::VariantType) -> iceberg::Result<Self::T>
 pub trait iceberg::spec::SchemaWithPartnerVisitor<P>
 pub type iceberg::spec::SchemaWithPartnerVisitor::T
 pub fn iceberg::spec::SchemaWithPartnerVisitor::after_list_element(&mut self, _field: &iceberg::spec::NestedFieldRef, _partner: &P) -> iceberg::Result<()>
@@ -3012,6 +3041,7 @@ pub fn iceberg::spec::SchemaWithPartnerVisitor::map(&mut self, map: &iceberg::sp
 pub fn iceberg::spec::SchemaWithPartnerVisitor::primitive(&mut self, p: &iceberg::spec::PrimitiveType, partner: &P) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::SchemaWithPartnerVisitor::schema(&mut self, schema: &iceberg::spec::Schema, partner: &P, value: Self::T) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::SchemaWithPartnerVisitor::struct(&mut self, struct: &iceberg::spec::StructType, partner: &P, results: alloc::vec::Vec<Self::T>) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::SchemaWithPartnerVisitor::variant(&mut self, v: &iceberg::spec::VariantType, partner: &P) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::deserialize_data_file_from_json(json: &str, partition_spec_id: i32, partition_type: &iceberg::spec::StructType, schema: &iceberg::spec::Schema) -> iceberg::Result<iceberg::spec::DataFile>
 pub fn iceberg::spec::prune_columns(schema: &iceberg::spec::Schema, selected: impl core::iter::traits::collect::IntoIterator<Item = i32>, select_full_types: bool) -> iceberg::Result<iceberg::spec::Type>
 pub fn iceberg::spec::read_data_files_from_avro<R: std::io::Read>(reader: &mut R, schema: &iceberg::spec::Schema, partition_spec_id: i32, partition_type: &iceberg::spec::StructType, version: iceberg::spec::FormatVersion) -> iceberg::Result<alloc::vec::Vec<iceberg::spec::DataFile>>

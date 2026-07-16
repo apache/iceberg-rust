@@ -1148,6 +1148,7 @@ mod tests {
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+            key_metadata: None,
         };
 
         let stream = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -1240,11 +1241,13 @@ mod tests {
                 partition_spec_id: 0,
                 equality_ids: None,
                 file_size_in_bytes: std::fs::metadata(&pos_del_path).unwrap().len(),
+                key_metadata: None,
             }],
             partition: None,
             partition_spec: None,
             name_mapping: None,
             case_sensitive: false,
+            key_metadata: None,
         };
 
         let stream_sub2 =

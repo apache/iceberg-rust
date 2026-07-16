@@ -34,7 +34,7 @@ use crate::runtime::Runtime;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
 use crate::spec::{
     DataContentType, Datum, ListType, MapType, NestedField, NestedFieldRef, PartnerAccessor,
-    PrimitiveType, Schema, SchemaRef, SchemaWithPartnerVisitor, StructType, Type,
+    PrimitiveType, Schema, SchemaRef, SchemaWithPartnerVisitor, StructType, Type, VariantType,
     visit_schema_with_partner,
 };
 use crate::{Error, ErrorKind, Result};
@@ -251,7 +251,11 @@ impl CachingDeleteFileLoader {
                     PosDelLoadAction::Load => Ok(DeleteFileContext::PosDels {
                         file_path: task.file_path.clone(),
                         stream: basic_delete_file_loader
-                            .parquet_to_batch_stream(&task.file_path, task.file_size_in_bytes)
+                            .parquet_to_batch_stream(
+                                &task.file_path,
+                                task.file_size_in_bytes,
+                                task.key_metadata.as_deref(),
+                            )
                             .await?,
                     }),
                 }
@@ -270,7 +274,11 @@ impl CachingDeleteFileLoader {
                 let equality_ids_vec = task.equality_ids.clone().unwrap();
                 let evolved_stream = BasicDeleteFileLoader::evolve_schema(
                     basic_delete_file_loader
-                        .parquet_to_batch_stream(&task.file_path, task.file_size_in_bytes)
+                        .parquet_to_batch_stream(
+                            &task.file_path,
+                            task.file_size_in_bytes,
+                            task.key_metadata.as_deref(),
+                        )
                         .await?,
                     schema,
                     &equality_ids_vec,
@@ -556,6 +564,10 @@ impl SchemaWithPartnerVisitor<ArrayRef> for EqDelColumnProcessor<'_> {
     fn primitive(&mut self, _primitive: &PrimitiveType, _partner: &ArrayRef) -> Result<()> {
         Ok(())
     }
+
+    fn variant(&mut self, _v: &VariantType, _partner: &ArrayRef) -> Result<()> {
+        Ok(())
+    }
 }
 
 struct EqDelRecordBatchPartnerAccessor;
@@ -647,6 +659,7 @@ mod tests {
             .parquet_to_batch_stream(
                 &eq_delete_file_path,
                 std::fs::metadata(&eq_delete_file_path).unwrap().len(),
+                None,
             )
             .await
             .expect("could not get batch stream");
@@ -977,6 +990,7 @@ mod tests {
             .parquet_to_batch_stream(
                 &delete_file_path,
                 std::fs::metadata(&delete_file_path).unwrap().len(),
+                None,
             )
             .await
             .unwrap();
@@ -1158,7 +1172,7 @@ mod tests {
         let basic_delete_file_loader =
             BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new());
         let record_batch_stream = basic_delete_file_loader
-            .parquet_to_batch_stream(&path, std::fs::metadata(&path).unwrap().len())
+            .parquet_to_batch_stream(&path, std::fs::metadata(&path).unwrap().len(), None)
             .await
             .expect("could not get batch stream");
 
