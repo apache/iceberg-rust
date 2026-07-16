@@ -24,6 +24,7 @@ arrayvec@0.7.6		X								X
 arrow@58.3.0		X														
 arrow-arith@58.3.0		X														
 arrow-array@58.3.0		X								X						
+arrow-avro@58.3.0		X														
 arrow-buffer@58.3.0		X														
 arrow-cast@58.3.0		X														
 arrow-csv@58.3.0		X														
@@ -113,6 +114,8 @@ core-foundation@0.10.1		X								X
 core-foundation-sys@0.8.7		X								X						
 cpufeatures@0.2.17		X								X						
 cpufeatures@0.3.0		X								X						
+crc@3.4.0		X								X						
+crc-catalog@2.5.0		X								X						
 crc32fast@1.5.0		X								X						
 crossbeam-channel@0.5.15		X								X						
 crossbeam-epoch@0.9.18		X								X						
@@ -131,39 +134,39 @@ darling_core@0.23.0										X
 darling_macro@0.20.11										X						
 darling_macro@0.23.0										X						
 dashmap@6.2.1										X						
-datafusion@53.1.0		X														
-datafusion-catalog@53.1.0		X														
-datafusion-catalog-listing@53.1.0		X														
-datafusion-cli@53.1.0		X														
-datafusion-common@53.1.0		X														
-datafusion-common-runtime@53.1.0		X														
-datafusion-datasource@53.1.0		X														
-datafusion-datasource-arrow@53.1.0		X														
-datafusion-datasource-avro@53.1.0		X														
-datafusion-datasource-csv@53.1.0		X														
-datafusion-datasource-json@53.1.0		X														
-datafusion-datasource-parquet@53.1.0		X														
-datafusion-doc@53.1.0		X														
-datafusion-execution@53.1.0		X														
-datafusion-expr@53.1.0		X														
-datafusion-expr-common@53.1.0		X														
-datafusion-functions@53.1.0		X														
-datafusion-functions-aggregate@53.1.0		X														
-datafusion-functions-aggregate-common@53.1.0		X														
-datafusion-functions-nested@53.1.0		X														
-datafusion-functions-table@53.1.0		X														
-datafusion-functions-window@53.1.0		X														
-datafusion-functions-window-common@53.1.0		X														
-datafusion-macros@53.1.0		X														
-datafusion-optimizer@53.1.0		X														
-datafusion-physical-expr@53.1.0		X														
-datafusion-physical-expr-adapter@53.1.0		X														
-datafusion-physical-expr-common@53.1.0		X														
-datafusion-physical-optimizer@53.1.0		X														
-datafusion-physical-plan@53.1.0		X														
-datafusion-pruning@53.1.0		X														
-datafusion-session@53.1.0		X														
-datafusion-sql@53.1.0		X														
+datafusion@54.0.0		X														
+datafusion-catalog@54.0.0		X														
+datafusion-catalog-listing@54.0.0		X														
+datafusion-cli@54.0.0		X														
+datafusion-common@54.0.0		X														
+datafusion-common-runtime@54.0.0		X														
+datafusion-datasource@54.0.0		X														
+datafusion-datasource-arrow@54.0.0		X														
+datafusion-datasource-avro@54.0.0		X														
+datafusion-datasource-csv@54.0.0		X														
+datafusion-datasource-json@54.0.0		X														
+datafusion-datasource-parquet@54.0.0		X														
+datafusion-doc@54.0.0		X														
+datafusion-execution@54.0.0		X														
+datafusion-expr@54.0.0		X														
+datafusion-expr-common@54.0.0		X														
+datafusion-functions@54.0.0		X														
+datafusion-functions-aggregate@54.0.0		X														
+datafusion-functions-aggregate-common@54.0.0		X														
+datafusion-functions-nested@54.0.0		X														
+datafusion-functions-table@54.0.0		X														
+datafusion-functions-window@54.0.0		X														
+datafusion-functions-window-common@54.0.0		X														
+datafusion-macros@54.0.0		X														
+datafusion-optimizer@54.0.0		X														
+datafusion-physical-expr@54.0.0		X														
+datafusion-physical-expr-adapter@54.0.0		X														
+datafusion-physical-expr-common@54.0.0		X														
+datafusion-physical-optimizer@54.0.0		X														
+datafusion-physical-plan@54.0.0		X														
+datafusion-pruning@54.0.0		X														
+datafusion-session@54.0.0		X														
+datafusion-sql@54.0.0		X														
 deranged@0.5.8		X								X						
 derive_builder@0.20.2		X								X						
 derive_builder_core@0.20.2		X								X						
@@ -176,7 +179,7 @@ displaydoc@0.2.6		X								X
 dissimilar@1.0.11		X														
 dunce@1.0.5		X					X				X					
 either@1.16.0		X								X						
-endian-type@0.1.2										X						
+endian-type@0.2.0										X						
 env_filter@1.0.1		X								X						
 env_logger@0.11.10		X								X						
 equivalent@1.0.2		X								X						
@@ -188,7 +191,6 @@ event-listener-strategy@0.5.4		X								X
 expect-test@1.5.1		X								X						
 fastnum@0.7.5		X								X						
 fastrand@2.4.1		X								X						
-fd-lock@4.0.4		X								X						
 find-msvc-tools@0.1.9		X								X						
 fixedbitset@0.5.7		X								X						
 flatbuffers@25.12.19		X														
@@ -219,12 +221,11 @@ h2@0.4.15										X
 half@2.7.1		X								X						
 hashbrown@0.14.5		X								X						
 hashbrown@0.15.5		X								X						
-hashbrown@0.16.1		X								X						
 hashbrown@0.17.1		X								X						
 heck@0.5.0		X								X						
 hex@0.4.3		X								X						
 hmac@0.13.0		X								X						
-home@0.5.11		X								X						
+home@0.5.12		X								X						
 http@0.2.12		X								X						
 http@1.4.2		X								X						
 http-body@0.4.6										X						
@@ -286,6 +287,7 @@ lock_api@0.4.14		X								X
 log@0.4.32		X								X						
 lz4_flex@0.13.1										X						
 md-5@0.10.6		X								X						
+md-5@0.11.0		X								X						
 memchr@2.8.2										X				X		
 mimalloc@0.1.52										X						
 miniz_oxide@0.8.9		X								X					X	
@@ -293,7 +295,7 @@ mio@1.2.1										X
 moka@0.12.15		X								X						
 murmur3@0.5.2		X								X						
 nibble_vec@0.1.0										X						
-nix@0.30.1										X						
+nix@0.31.3										X						
 nu-ansi-term@0.50.3										X						
 num-bigint@0.4.6		X								X						
 num-complex@0.4.6		X								X						
@@ -319,6 +321,8 @@ percent-encoding@2.3.2		X								X
 petgraph@0.8.3		X								X						
 phf@0.12.1										X						
 phf_shared@0.12.1										X						
+pin-project@1.1.13		X								X						
+pin-project-internal@1.1.13		X								X						
 pin-project-lite@0.2.17		X								X						
 pin-utils@0.1.0		X								X						
 pkg-config@0.3.33		X								X						
@@ -336,7 +340,7 @@ quick-xml@0.39.4										X
 quote@1.0.45		X								X						
 r-efi@5.3.0		X							X	X						
 r-efi@6.0.0		X							X	X						
-radix_trie@0.2.1										X						
+radix_trie@0.3.0										X						
 rand@0.10.1		X								X						
 rand@0.9.4		X								X						
 rand_chacha@0.9.0		X								X						
@@ -361,7 +365,7 @@ rustls-native-certs@0.8.4		X						X		X
 rustls-pki-types@1.14.1		X								X						
 rustls-webpki@0.103.13								X								
 rustversion@1.0.22		X								X						
-rustyline@17.0.2										X						
+rustyline@18.0.1										X						
 ryu@1.0.23		X				X										
 same-file@1.0.6										X				X		
 schannel@0.1.29										X						
@@ -382,7 +386,6 @@ serde_urlencoded@0.7.1		X								X
 serde_with@3.21.0		X								X						
 serde_with_macros@3.21.0		X								X						
 sha1@0.10.6		X								X						
-sha2@0.10.9		X								X						
 sha2@0.11.0		X								X						
 sharded-slab@0.1.7										X						
 shlex@2.0.1		X								X						
@@ -394,13 +397,14 @@ slab@0.4.12										X
 smallvec@1.15.2		X								X						
 snap@1.1.1					X											
 socket2@0.6.4		X								X						
-sqlparser@0.61.0		X														
+sqlparser@0.62.0		X														
 sqlparser_derive@0.5.0		X														
 stable_deref_trait@1.2.1		X								X						
 stacker@0.1.24		X								X						
 strsim@0.11.1										X						
 strum@0.27.2										X						
 strum_macros@0.27.2										X						
+strum_macros@0.28.0										X						
 subtle@2.6.1					X											
 syn@2.0.118		X								X						
 sync_wrapper@1.0.2		X														
@@ -474,27 +478,16 @@ windows-link@0.2.1		X								X
 windows-result@0.4.1		X								X						
 windows-strings@0.5.1		X								X						
 windows-sys@0.52.0		X								X						
-windows-sys@0.59.0		X								X						
-windows-sys@0.60.2		X								X						
 windows-sys@0.61.2		X								X						
 windows-targets@0.52.6		X								X						
-windows-targets@0.53.5		X								X						
 windows_aarch64_gnullvm@0.52.6		X								X						
-windows_aarch64_gnullvm@0.53.1		X								X						
 windows_aarch64_msvc@0.52.6		X								X						
-windows_aarch64_msvc@0.53.1		X								X						
 windows_i686_gnu@0.52.6		X								X						
-windows_i686_gnu@0.53.1		X								X						
 windows_i686_gnullvm@0.52.6		X								X						
-windows_i686_gnullvm@0.53.1		X								X						
 windows_i686_msvc@0.52.6		X								X						
-windows_i686_msvc@0.53.1		X								X						
 windows_x86_64_gnu@0.52.6		X								X						
-windows_x86_64_gnu@0.53.1		X								X						
 windows_x86_64_gnullvm@0.52.6		X								X						
-windows_x86_64_gnullvm@0.53.1		X								X						
 windows_x86_64_msvc@0.52.6		X								X						
-windows_x86_64_msvc@0.53.1		X								X						
 winnow@0.7.15										X						
 wit-bindgen@0.51.0		X	X							X						
 wit-bindgen@0.57.1		X	X							X						

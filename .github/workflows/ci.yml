@@ -44,32 +44,27 @@ permissions:
   contents: read
 
 jobs:
-  check:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      max-parallel: 15
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
+  lint:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
 
+      - name: Install lint tools
+        # Keep versions in sync with the local install targets in Makefile.
+        uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2.82.9
+        with:
+          tool: taplo@0.9.3,cargo-machete@0.7.0
+
       - name: Check License Header
         uses: apache/skywalking-eyes/header@61275cc80d0798a405cb070f7d3a8aaf7cf2c2c1 # v0.8.0
 
       - name: Check toml format
-        run: make check-toml
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        run: taplo fmt --check
 
       - name: Cargo format
         run: make check-fmt
@@ -80,13 +75,28 @@ jobs:
       - name: Check Cargo.lock is up-to-date
         run: cargo update --workspace --locked
 
+      - name: Cargo Machete
+        run: cargo machete
+
+      - name: Check typos
+        uses: crate-ci/typos@bee27e3a4fd1ea2111cf90ab89cd076c870fce14 # v1.48.0
+
+  clippy:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+
       - name: Cargo clippy
         run: make check-clippy
 
-      - name: Cargo Machete
-        run: make cargo-machete
-
   build:
+    needs: lint
     runs-on: ${{ matrix.os }}
     env:
       CARGO_INCREMENTAL: "0"
@@ -99,7 +109,7 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
@@ -110,11 +120,6 @@ jobs:
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build
         run: make build
@@ -122,9 +127,10 @@ jobs:
   # Checks each crate individually to catch missing feature declarations that
   # are otherwise masked by Cargo's feature unification across the workspace.
   check_standalone:
+    needs: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
@@ -135,11 +141,6 @@ jobs:
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check each crate standalone
         run: |
@@ -151,6 +152,7 @@ jobs:
   # Verifies the core iceberg crate compiles without default features, ensuring
   # optional functionality is properly gated behind feature flags.
   build_with_no_default_features:
+    needs: lint
     runs-on: ${{ matrix.os }}
     env:
       CARGO_INCREMENTAL: "0"
@@ -163,7 +165,7 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
@@ -179,6 +181,7 @@ jobs:
         run: cargo build -p iceberg --no-default-features
 
   tests:
+    needs: lint
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: "0"
@@ -191,17 +194,12 @@ jobs:
           - { name: "doc", args: "--doc --all-features --workspace" }
     name: Tests (${{ matrix.test-suite.name }})
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -211,7 +209,7 @@ jobs:
 
       - name: Install cargo-nextest
         if: matrix.test-suite.name == 'default'
-        uses: taiki-e/install-action@56545b37b57562edd73171cb6c62cc509db4c34e # v2.81.7
+        uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2.82.9
         with:
           tool: cargo-nextest
 
@@ -240,15 +238,12 @@ jobs:
 
   msrv:
     name: Verify MSRV
+    needs: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - name: Install protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Get MSRV
         id: get-msrv
         uses: ./.github/actions/get-msrv

@@ -9,11 +9,6 @@ alloc-no-stdlib@2.0.4					X
 alloc-stdlib@0.2.4					X											
 allocator-api2@0.2.21		X									X					
 android_system_properties@0.1.5		X									X					
-anstream@1.0.0		X									X					
-anstyle@1.0.14		X									X					
-anstyle-parse@1.0.0		X									X					
-anstyle-query@1.1.5		X									X					
-anstyle-wincon@3.0.11		X									X					
 anyhow@1.0.102		X									X					
 apache-avro@0.21.0		X														
 ar_archive_writer@0.5.2			X													
@@ -72,7 +67,7 @@ aws-types@1.3.16		X
 axum@0.8.9											X					
 axum-core@0.5.6											X					
 backon@1.6.0		X														
-ballista-core@53.0.0		X														
+ballista-core@54.0.0		X														
 base64@0.22.1		X									X					
 base64-simd@0.8.0											X					
 base64ct@1.8.3		X									X					
@@ -104,13 +99,8 @@ chacha20@0.10.0		X									X
 chrono@0.4.45		X									X					
 chrono-tz@0.10.4		X									X					
 cipher@0.4.4		X									X					
-clap@4.6.1		X									X					
-clap_builder@4.6.0		X									X					
-clap_derive@4.6.1		X									X					
-clap_lex@1.1.0		X									X					
 cmake@0.1.58		X									X					
 cmov@0.5.4		X									X					
-colorchoice@1.0.5		X									X					
 combine@4.6.7											X					
 comfy-table@7.2.2											X					
 compression-codecs@0.4.38		X									X					
@@ -148,39 +138,39 @@ darling_core@0.23.0											X
 darling_macro@0.20.11											X					
 darling_macro@0.23.0											X					
 dashmap@6.2.1											X					
-datafusion@53.1.0		X														
-datafusion-catalog@53.1.0		X														
-datafusion-catalog-listing@53.1.0		X														
-datafusion-common@53.1.0		X														
-datafusion-common-runtime@53.1.0		X														
-datafusion-datasource@53.1.0		X														
-datafusion-datasource-arrow@53.1.0		X														
-datafusion-datasource-csv@53.1.0		X														
-datafusion-datasource-json@53.1.0		X														
-datafusion-datasource-parquet@53.1.0		X														
-datafusion-doc@53.1.0		X														
-datafusion-execution@53.1.0		X														
-datafusion-expr@53.1.0		X														
-datafusion-expr-common@53.1.0		X														
-datafusion-functions@53.1.0		X														
-datafusion-functions-aggregate@53.1.0		X														
-datafusion-functions-aggregate-common@53.1.0		X														
-datafusion-functions-nested@53.1.0		X														
-datafusion-functions-table@53.1.0		X														
-datafusion-functions-window@53.1.0		X														
-datafusion-functions-window-common@53.1.0		X														
-datafusion-macros@53.1.0		X														
-datafusion-optimizer@53.1.0		X														
-datafusion-physical-expr@53.1.0		X														
-datafusion-physical-expr-adapter@53.1.0		X														
-datafusion-physical-expr-common@53.1.0		X														
-datafusion-physical-optimizer@53.1.0		X														
-datafusion-physical-plan@53.1.0		X														
-datafusion-proto@53.1.0		X														
-datafusion-proto-common@53.1.0		X														
-datafusion-pruning@53.1.0		X														
-datafusion-session@53.1.0		X														
-datafusion-sql@53.1.0		X														
+datafusion@54.0.0		X														
+datafusion-catalog@54.0.0		X														
+datafusion-catalog-listing@54.0.0		X														
+datafusion-common@54.0.0		X														
+datafusion-common-runtime@54.0.0		X														
+datafusion-datasource@54.0.0		X														
+datafusion-datasource-arrow@54.0.0		X														
+datafusion-datasource-csv@54.0.0		X														
+datafusion-datasource-json@54.0.0		X														
+datafusion-datasource-parquet@54.0.0		X														
+datafusion-doc@54.0.0		X														
+datafusion-execution@54.0.0		X														
+datafusion-expr@54.0.0		X														
+datafusion-expr-common@54.0.0		X														
+datafusion-functions@54.0.0		X														
+datafusion-functions-aggregate@54.0.0		X														
+datafusion-functions-aggregate-common@54.0.0		X														
+datafusion-functions-nested@54.0.0		X														
+datafusion-functions-table@54.0.0		X														
+datafusion-functions-window@54.0.0		X														
+datafusion-functions-window-common@54.0.0		X														
+datafusion-macros@54.0.0		X														
+datafusion-optimizer@54.0.0		X														
+datafusion-physical-expr@54.0.0		X														
+datafusion-physical-expr-adapter@54.0.0		X														
+datafusion-physical-expr-common@54.0.0		X														
+datafusion-physical-optimizer@54.0.0		X														
+datafusion-physical-plan@54.0.0		X														
+datafusion-proto@54.0.0		X														
+datafusion-proto-common@54.0.0		X														
+datafusion-pruning@54.0.0		X														
+datafusion-session@54.0.0		X														
+datafusion-sql@54.0.0		X														
 der@0.7.10		X									X					
 deranged@0.5.8		X									X					
 derive_builder@0.20.2		X									X					
@@ -233,7 +223,6 @@ h2@0.4.15											X
 half@2.7.1		X									X					
 hashbrown@0.14.5		X									X					
 hashbrown@0.15.5		X									X					
-hashbrown@0.16.1		X									X					
 hashbrown@0.17.1		X									X					
 hashlink@0.10.0		X									X					
 heck@0.5.0		X									X					
@@ -283,9 +272,9 @@ integer-encoding@3.0.4											X
 integer-encoding@4.1.0											X					
 inventory@0.3.24		X									X					
 ipnet@2.12.0		X									X					
-is_terminal_polyfill@1.70.2		X									X					
 itertools@0.13.0		X									X					
 itertools@0.14.0		X									X					
+itertools@0.15.0		X									X					
 itoa@1.0.18		X									X					
 jiff@0.2.28											X			X		
 jiff-tzdb@0.1.6											X			X		
@@ -318,9 +307,7 @@ litemap@0.8.2													X
 lock_api@0.4.14		X									X					
 log@0.4.32		X									X					
 lz4_flex@0.13.1											X					
-matchers@0.2.0											X					
 matchit@0.8.4					X						X					
-md-5@0.10.6		X									X					
 md-5@0.11.0		X									X					
 mea@0.6.4		X														
 memchr@2.8.2											X			X		
@@ -349,7 +336,6 @@ num_enum_derive@0.7.6		X			X						X
 object@0.37.3		X									X					
 object_store@0.13.2		X									X					
 once_cell@1.21.4		X									X					
-once_cell_polyfill@1.70.2		X									X					
 opaque-debug@0.3.1		X									X					
 opendal@0.57.0		X														
 opendal-core@0.57.0		X														
@@ -485,7 +471,7 @@ sonic-rs@0.3.17		X
 sonic-simd@0.1.4		X														
 spin@0.9.8											X					
 spki@0.7.3		X									X					
-sqlparser@0.61.0		X														
+sqlparser@0.62.0		X														
 sqlparser_derive@0.5.0		X														
 sqlx@0.8.6		X									X					
 sqlx-core@0.8.6		X									X					
@@ -549,7 +535,6 @@ untrusted@0.9.0									X
 url@2.5.8		X									X					
 urlencoding@2.1.3											X					
 utf8_iter@1.0.4		X									X					
-utf8parse@0.2.2		X									X					
 uuid@1.23.3		X									X					
 vcpkg@0.2.15		X									X					
 version_check@0.9.5		X									X					
@@ -566,7 +551,6 @@ wasm-bindgen-futures@0.4.75		X									X
 wasm-bindgen-macro@0.2.125		X									X					
 wasm-bindgen-macro-support@0.2.125		X									X					
 wasm-bindgen-shared@0.2.125		X									X					
-wasm-streams@0.4.2		X									X					
 wasm-streams@0.5.0		X									X					
 web-sys@0.3.102		X									X					
 web-time@1.1.0		X									X					

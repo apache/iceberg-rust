@@ -161,7 +161,7 @@ impl LogicalExtensionCodec for IcebergLogicalCodec {
         node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
-        if let Some(provider) = node.as_any().downcast_ref::<IcebergTableProvider>() {
+        if let Some(provider) = node.downcast_ref::<IcebergTableProvider>() {
             let config = provider.config().ok_or_else(|| {
                 DataFusionError::Internal(
                     "IcebergTableProvider has no IcebergCatalogConfig and cannot be \
@@ -178,7 +178,7 @@ impl LogicalExtensionCodec for IcebergLogicalCodec {
             };
             return encode_blob(buf, &wire);
         }
-        if let Some(provider) = node.as_any().downcast_ref::<IcebergMetadataTableProvider>() {
+        if let Some(provider) = node.downcast_ref::<IcebergMetadataTableProvider>() {
             let config = provider.catalog_config().ok_or_else(|| {
                 DataFusionError::Internal(
                     "IcebergMetadataTableProvider has no IcebergCatalogConfig and cannot be \
@@ -355,6 +355,6 @@ mod tests {
         let decoded = codec
             .try_decode_table_provider(&buf, &table_ref, schema, &ctx.task_ctx())
             .expect("decode");
-        assert!(decoded.as_any().downcast_ref::<EmptyTable>().is_some());
+        assert!(decoded.downcast_ref::<EmptyTable>().is_some());
     }
 }

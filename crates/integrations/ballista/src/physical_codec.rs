@@ -235,7 +235,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
         node: Arc<dyn ExecutionPlan>,
         buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
-        if let Some(scan) = node.as_any().downcast_ref::<IcebergTableScan>() {
+        if let Some(scan) = node.downcast_ref::<IcebergTableScan>() {
             let config = scan
                 .catalog_config()
                 .ok_or_else(|| missing_config_err("IcebergTableScan"))?;
@@ -259,7 +259,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
             return encode_blob(buf, &node);
         }
 
-        if let Some(write) = node.as_any().downcast_ref::<IcebergWriteExec>() {
+        if let Some(write) = node.downcast_ref::<IcebergWriteExec>() {
             let config = write
                 .catalog_config()
                 .ok_or_else(|| missing_config_err("IcebergWriteExec"))?;
@@ -270,7 +270,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
             return encode_blob(buf, &node);
         }
 
-        if let Some(commit) = node.as_any().downcast_ref::<IcebergCommitExec>() {
+        if let Some(commit) = node.downcast_ref::<IcebergCommitExec>() {
             let config = commit
                 .catalog_config()
                 .ok_or_else(|| missing_config_err("IcebergCommitExec"))?;
@@ -281,7 +281,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
             return encode_blob(buf, &node);
         }
 
-        if let Some(meta) = node.as_any().downcast_ref::<IcebergMetadataScan>() {
+        if let Some(meta) = node.downcast_ref::<IcebergMetadataScan>() {
             let provider = meta.provider();
             let config = provider
                 .catalog_config()
@@ -305,7 +305,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
     ) -> Result<(), DataFusionError> {
         // The partition-value expression a partitioned write injects holds a
         // live calculator; serialize the spec + schema it can be rebuilt from.
-        if let Some(expr) = node.as_any().downcast_ref::<PartitionExpr>() {
+        if let Some(expr) = node.downcast_ref::<PartitionExpr>() {
             let wire = PartitionExprWire {
                 partition_spec: expr.partition_spec().as_ref().clone(),
                 schema: expr.table_schema().as_ref().clone(),
@@ -528,7 +528,7 @@ mod tests {
         )]));
         let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
         let shuffle = ShuffleWriterExec::try_new(
-            "job-1".to_string(),
+            "job-1".to_string().into(),
             7,
             input.clone(),
             "/tmp/work".to_string(),
@@ -548,10 +548,9 @@ mod tests {
             .try_decode(&buf, &[input], &ctx.task_ctx())
             .expect("decode delegated node");
         let decoded = decoded
-            .as_any()
             .downcast_ref::<ShuffleWriterExec>()
             .expect("decoded plan should be a ShuffleWriterExec");
-        assert_eq!(decoded.job_id(), "job-1");
+        assert_eq!(decoded.job_id().as_str(), "job-1");
         assert_eq!(decoded.stage_id(), 7);
     }
 }

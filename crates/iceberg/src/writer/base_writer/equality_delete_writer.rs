@@ -17,6 +17,7 @@
 
 //! This module provide `EqualityDeleteWriter`.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
@@ -26,7 +27,7 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::record_batch_projector::RecordBatchProjector;
 use crate::arrow::schema_to_arrow_schema;
-use crate::spec::{DataFile, PartitionKey, SchemaRef};
+use crate::spec::{DataFile, PartitionKey, Schema, SchemaRef};
 use crate::writer::file_writer::FileWriterBuilder;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
 use crate::writer::file_writer::rolling_writer::{RollingFileWriter, RollingFileWriterBuilder};
@@ -68,17 +69,56 @@ pub struct EqualityDeleteWriterConfig {
     projector: RecordBatchProjector,
 }
 
+/// Validates equality delete field ids before constructing the writer config.
+///
+/// In addition to rejecting an empty id list, this check also rejects duplicate
+/// ids and ids that do not exist in the table schema. These two checks are
+/// intentionally stricter than the current Java reference implementation, which
+/// only guards against null/empty lists; catching duplicates and missing ids
+/// here produces clearer errors and avoids generating meaningless delete files.
+fn validate_equality_ids(equality_ids: &[i32], original_schema: &Schema) -> Result<()> {
+    if equality_ids.is_empty() {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            "Equality delete field ids must not be empty.",
+        ));
+    }
+
+    let mut seen = HashSet::with_capacity(equality_ids.len());
+    for id in equality_ids {
+        if !seen.insert(*id) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Duplicate equality delete field id: {id}"),
+            )
+            .with_context("field_id", id.to_string()));
+        }
+
+        if original_schema.field_by_id(*id).is_none() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid equality delete field id: {id}"),
+            )
+            .with_context("field_id", id.to_string()));
+        }
+    }
+
+    Ok(())
+}
+
 impl EqualityDeleteWriterConfig {
-    /// Create a new `DataFileWriterConfig` with equality ids.
+    /// Create a new `EqualityDeleteWriterConfig` with equality ids.
     pub fn new(equality_ids: Vec<i32>, original_schema: SchemaRef) -> Result<Self> {
+        validate_equality_ids(&equality_ids, &original_schema)?;
+
         let original_arrow_schema = Arc::new(schema_to_arrow_schema(&original_schema)?);
         let projector = RecordBatchProjector::new(
             original_arrow_schema,
             &equality_ids,
-            // The following rule comes from https://iceberg.apache.org/spec/#identifier-field-ids
-            // and https://iceberg.apache.org/spec/#equality-delete-files
-            // - The identifier field ids must be used for primitive types.
-            // - The identifier field ids must not be used for floating point types or nullable fields.
+            // Equality delete fields follow identifier-field type restrictions,
+            // except optional columns and columns nested under optional structs are allowed.
+            // Project only primitive, non-floating fields; RecordBatchProjector's traversal
+            // keeps fields under maps and lists unreachable.
             |field| {
                 // Only primitive type is allowed to be used for identifier field ids
                 if field.data_type().is_nested()
@@ -212,6 +252,7 @@ mod test {
     use tempfile::TempDir;
     use uuid::Uuid;
 
+    use crate::ErrorKind;
     use crate::arrow::{arrow_schema_to_schema, schema_to_arrow_schema};
     use crate::io::FileIO;
     use crate::spec::{
@@ -456,6 +497,60 @@ mod test {
         )
         .await;
         Ok(())
+    }
+
+    fn equality_id_validation_schema() -> Arc<Schema> {
+        Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn test_equality_delete_rejects_empty_equality_ids() {
+        let err =
+            EqualityDeleteWriterConfig::new(vec![], equality_id_validation_schema()).unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string()
+                .contains("Equality delete field ids must not be empty."),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_equality_delete_rejects_duplicate_equality_ids() {
+        let err = EqualityDeleteWriterConfig::new(vec![1, 1], equality_id_validation_schema())
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string()
+                .contains("Duplicate equality delete field id: 1"),
+            "{err}"
+        );
+        assert!(err.to_string().contains("field_id: 1"), "{err}");
+    }
+
+    #[test]
+    fn test_equality_delete_rejects_missing_equality_id() {
+        let err =
+            EqualityDeleteWriterConfig::new(vec![99], equality_id_validation_schema()).unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string()
+                .contains("Invalid equality delete field id: 99"),
+            "{err}"
+        );
+        assert!(err.to_string().contains("field_id: 99"), "{err}");
     }
 
     #[tokio::test]

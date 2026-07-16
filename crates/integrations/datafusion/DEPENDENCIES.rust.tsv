@@ -44,6 +44,7 @@ bitflags@2.13.0		X								X
 blake2@0.10.6		X								X					
 blake3@1.8.5		X	X				X								
 block-buffer@0.10.4		X								X					
+block-buffer@0.12.1		X								X					
 bnum@0.12.1		X								X					
 bon@3.9.3		X								X					
 bon-macros@3.9.3		X								X					
@@ -64,6 +65,7 @@ comfy-table@7.2.2										X
 compression-codecs@0.4.38		X								X					
 compression-core@0.4.32		X								X					
 concurrent-queue@2.5.0		X								X					
+const-oid@0.10.2		X								X					
 const-random@0.1.18		X								X					
 const-random-macro@0.1.16		X								X					
 constant_time_eq@0.4.2		X					X				X				
@@ -76,6 +78,7 @@ crossbeam-epoch@0.9.18		X								X
 crossbeam-utils@0.8.21		X								X					
 crunchy@0.2.4										X					
 crypto-common@0.1.7		X								X					
+crypto-common@0.2.2		X								X					
 csv@1.4.0										X			X		
 csv-core@0.1.13										X			X		
 ctr@0.9.2		X								X					
@@ -86,41 +89,42 @@ darling_core@0.23.0										X
 darling_macro@0.20.11										X					
 darling_macro@0.23.0										X					
 dashmap@6.2.1										X					
-datafusion@53.1.0		X													
-datafusion-catalog@53.1.0		X													
-datafusion-catalog-listing@53.1.0		X													
-datafusion-common@53.1.0		X													
-datafusion-common-runtime@53.1.0		X													
-datafusion-datasource@53.1.0		X													
-datafusion-datasource-arrow@53.1.0		X													
-datafusion-datasource-csv@53.1.0		X													
-datafusion-datasource-json@53.1.0		X													
-datafusion-datasource-parquet@53.1.0		X													
-datafusion-doc@53.1.0		X													
-datafusion-execution@53.1.0		X													
-datafusion-expr@53.1.0		X													
-datafusion-expr-common@53.1.0		X													
-datafusion-functions@53.1.0		X													
-datafusion-functions-aggregate@53.1.0		X													
-datafusion-functions-aggregate-common@53.1.0		X													
-datafusion-functions-nested@53.1.0		X													
-datafusion-functions-table@53.1.0		X													
-datafusion-functions-window@53.1.0		X													
-datafusion-functions-window-common@53.1.0		X													
-datafusion-macros@53.1.0		X													
-datafusion-optimizer@53.1.0		X													
-datafusion-physical-expr@53.1.0		X													
-datafusion-physical-expr-adapter@53.1.0		X													
-datafusion-physical-expr-common@53.1.0		X													
-datafusion-physical-optimizer@53.1.0		X													
-datafusion-physical-plan@53.1.0		X													
-datafusion-pruning@53.1.0		X													
-datafusion-session@53.1.0		X													
-datafusion-sql@53.1.0		X													
+datafusion@54.0.0		X													
+datafusion-catalog@54.0.0		X													
+datafusion-catalog-listing@54.0.0		X													
+datafusion-common@54.0.0		X													
+datafusion-common-runtime@54.0.0		X													
+datafusion-datasource@54.0.0		X													
+datafusion-datasource-arrow@54.0.0		X													
+datafusion-datasource-csv@54.0.0		X													
+datafusion-datasource-json@54.0.0		X													
+datafusion-datasource-parquet@54.0.0		X													
+datafusion-doc@54.0.0		X													
+datafusion-execution@54.0.0		X													
+datafusion-expr@54.0.0		X													
+datafusion-expr-common@54.0.0		X													
+datafusion-functions@54.0.0		X													
+datafusion-functions-aggregate@54.0.0		X													
+datafusion-functions-aggregate-common@54.0.0		X													
+datafusion-functions-nested@54.0.0		X													
+datafusion-functions-table@54.0.0		X													
+datafusion-functions-window@54.0.0		X													
+datafusion-functions-window-common@54.0.0		X													
+datafusion-macros@54.0.0		X													
+datafusion-optimizer@54.0.0		X													
+datafusion-physical-expr@54.0.0		X													
+datafusion-physical-expr-adapter@54.0.0		X													
+datafusion-physical-expr-common@54.0.0		X													
+datafusion-physical-optimizer@54.0.0		X													
+datafusion-physical-plan@54.0.0		X													
+datafusion-pruning@54.0.0		X													
+datafusion-session@54.0.0		X													
+datafusion-sql@54.0.0		X													
 derive_builder@0.20.2		X								X					
 derive_builder_core@0.20.2		X								X					
 derive_builder_macro@0.20.2		X								X					
 digest@0.10.7		X								X					
+digest@0.11.3		X								X					
 displaydoc@0.2.6		X								X					
 dissimilar@1.0.11		X													
 either@1.16.0		X								X					
@@ -159,7 +163,6 @@ gloo-timers@0.3.0		X								X
 half@2.7.1		X								X					
 hashbrown@0.14.5		X								X					
 hashbrown@0.15.5		X								X					
-hashbrown@0.16.1		X								X					
 hashbrown@0.17.1		X								X					
 heck@0.5.0		X								X					
 hex@0.4.3		X								X					
@@ -168,6 +171,7 @@ http-body@1.0.1										X
 http-body-util@0.1.3										X					
 httparse@1.10.1		X								X					
 humantime@2.3.0		X								X					
+hybrid-array@0.4.12		X								X					
 hyper@1.10.1										X					
 hyper-util@0.1.20										X					
 iana-time-zone@0.1.65		X								X					
@@ -212,7 +216,7 @@ litemap@0.8.2												X
 lock_api@0.4.14		X								X					
 log@0.4.32		X								X					
 lz4_flex@0.13.1										X					
-md-5@0.10.6		X								X					
+md-5@0.11.0		X								X					
 memchr@2.8.2										X			X		
 miniz_oxide@0.8.9		X								X				X	
 mio@1.2.1										X					
@@ -238,6 +242,8 @@ percent-encoding@2.3.2		X								X
 petgraph@0.8.3		X								X					
 phf@0.12.1										X					
 phf_shared@0.12.1										X					
+pin-project@1.1.13		X								X					
+pin-project-internal@1.1.13		X								X					
 pin-project-lite@0.2.17		X								X					
 pkg-config@0.3.33		X								X					
 polyval@0.6.2		X								X					
@@ -283,7 +289,7 @@ serde_repr@0.1.20		X								X
 serde_urlencoded@0.7.1		X								X					
 serde_with@3.21.0		X								X					
 serde_with_macros@3.21.0		X								X					
-sha2@0.10.9		X								X					
+sha2@0.11.0		X								X					
 sharded-slab@0.1.7										X					
 shlex@2.0.1		X								X					
 simd-adler32@0.3.9										X					
@@ -293,7 +299,7 @@ slab@0.4.12										X
 smallvec@1.15.2		X								X					
 snap@1.1.1					X										
 socket2@0.6.4		X								X					
-sqlparser@0.61.0		X													
+sqlparser@0.62.0		X													
 sqlparser_derive@0.5.0		X													
 stable_deref_trait@1.2.1		X								X					
 stacker@0.1.24		X								X					

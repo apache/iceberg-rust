@@ -98,7 +98,7 @@ This issue is used to track tasks of the iceberg rust ${iceberg_version} release
 #### GitHub Side
 
 - [ ] Draft GitHub release
-- [ ] Bump version in project and update changelog
+- [ ] Bump version in project, update dependencies list, and update changelog
 - [ ] Create and push release candidate tag
 
 #### ASF Side
@@ -133,17 +133,39 @@ The following steps should be followed once the release is ready to begin.
 - Generate the release note by clicking the `Generate release notes` button.
 - Save the draft.
 
-### Update crate versions and changelog
+### Update crate versions, dependencies list, and changelog
+
+The following changes can be made in one pull request.
+
+#### Bump crate versions
 
 Bump all components' version in the project to the new Iceberg Rust version.
 This version is the final version, not the release candidate version.
 
 - Rust core and Python binding: bump version in root `Cargo.toml` under `[workspace.package]`.
 
+#### Update CHANGELOG.md
+
 Use the content of the draft GitHub release to update `CHANGELOG.md`.
 Since drafting a GitHub release requires `content: write` GitHub permissions, this step must be owned by a committer.
 
-Open a pull request with both the changes to the crate versions and the associated changelog for the new versions.
+#### Update dependency lists
+
+Run the following command to update the dependencies list of every package:
+
+```shell
+dev/release/dependencies.sh generate
+```
+
+Run the following command to verify the licenses meet the project's policy.
+
+```shell
+dev/release/dependencies.sh check
+```
+
+#### Open pull request
+
+Open a pull request with all three changes.
 
 ### Create release candidate tag and artifacts
 
