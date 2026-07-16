@@ -1147,6 +1147,7 @@ mod tests {
             partition: None,
             partition_spec: None,
             name_mapping: None,
+            unified_partition_type: None,
             case_sensitive: false,
             key_metadata: None,
         };
@@ -1246,6 +1247,7 @@ mod tests {
             partition: None,
             partition_spec: None,
             name_mapping: None,
+            unified_partition_type: None,
             case_sensitive: false,
             key_metadata: None,
         };

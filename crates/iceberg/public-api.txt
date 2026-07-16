@@ -1151,6 +1151,8 @@ pub fn iceberg::metadata_columns::partition_field(partition_fields: alloc::vec::
 pub fn iceberg::metadata_columns::pos_field() -> &'static iceberg::spec::NestedFieldRef
 pub fn iceberg::metadata_columns::row_id_field() -> &'static iceberg::spec::NestedFieldRef
 pub fn iceberg::metadata_columns::spec_id_field() -> &'static iceberg::spec::NestedFieldRef
+pub mod iceberg::partitioning
+pub fn iceberg::partitioning::compute_unified_partition_type<'a>(partition_specs: impl core::iter::traits::iterator::Iterator<Item = &'a iceberg::spec::PartitionSpec>, schema: &iceberg::spec::Schema) -> iceberg::Result<iceberg::spec::StructType>
 pub mod iceberg::puffin
 pub enum iceberg::puffin::CompressionCodec
 pub iceberg::puffin::CompressionCodec::Gzip(u8)
@@ -1267,6 +1269,7 @@ pub iceberg::scan::FileScanTask::project_field_ids: alloc::vec::Vec<i32>
 pub iceberg::scan::FileScanTask::record_count: core::option::Option<u64>
 pub iceberg::scan::FileScanTask::schema: iceberg::spec::SchemaRef
 pub iceberg::scan::FileScanTask::start: u64
+pub iceberg::scan::FileScanTask::unified_partition_type: core::option::Option<alloc::sync::Arc<iceberg::spec::StructType>>
 impl iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::data_file_path(&self) -> &str
 pub fn iceberg::scan::FileScanTask::predicate(&self) -> core::option::Option<&iceberg::expr::BoundPredicate>

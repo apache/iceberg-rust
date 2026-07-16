@@ -37,7 +37,10 @@ use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
-use crate::metadata_columns::{get_metadata_field_id, is_metadata_column_name};
+use crate::metadata_columns::{
+    RESERVED_FIELD_ID_PARTITION, get_metadata_field_id, is_metadata_column_name,
+};
+use crate::partitioning::compute_unified_partition_type;
 use crate::runtime::Runtime;
 use crate::spec::{DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, SnapshotRef};
 use crate::table::Table;
@@ -300,6 +303,20 @@ impl<'a> TableScanBuilder<'a> {
             .transpose()?
             .map(Arc::new);
 
+        // Compute unified partition type if _partition is projected
+        let unified_partition_type = if field_ids.contains(&RESERVED_FIELD_ID_PARTITION) {
+            let upt = compute_unified_partition_type(
+                self.table
+                    .metadata()
+                    .partition_specs_iter()
+                    .map(|s| s.as_ref()),
+                &schema,
+            )?;
+            Some(Arc::new(upt))
+        } else {
+            None
+        };
+
         let plan_context = PlanContext {
             snapshot,
             table_metadata: self.table.metadata_ref(),
@@ -313,6 +330,7 @@ impl<'a> TableScanBuilder<'a> {
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
+            unified_partition_type,
         };
 
         Ok(TableScan {
