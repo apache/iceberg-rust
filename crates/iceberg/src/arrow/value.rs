@@ -841,6 +841,9 @@ pub(crate) fn create_primitive_array_repeated(
             let vals: Vec<Option<i32>> = vec![None; num_rows];
             Arc::new(Date32Array::from(vals))
         }
+        (DataType::Int64, Some(PrimitiveLiteral::Int(value))) => {
+            Arc::new(Int64Array::from(vec![i64::from(*value); num_rows]))
+        }
         (DataType::Int64, Some(PrimitiveLiteral::Long(value))) => {
             Arc::new(Int64Array::from(vec![*value; num_rows]))
         }
@@ -976,7 +979,7 @@ pub(crate) fn create_primitive_array_repeated(
         (dt, _) => {
             return Err(Error::new(
                 ErrorKind::Unexpected,
-                format!("unexpected target column type {dt}"),
+                format!("unexpected target column type {dt}, prim_lit {prim_lit:?}"),
             ));
         }
     })

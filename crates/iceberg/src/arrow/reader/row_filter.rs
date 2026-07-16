@@ -35,7 +35,6 @@ use crate::expr::visitors::bound_predicate_visitor::visit;
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
 use crate::spec::Schema;
-use crate::{Error, ErrorKind};
 
 impl ArrowReader {
     pub(super) fn get_row_filter(
@@ -90,32 +89,38 @@ impl ArrowReader {
         Ok(results)
     }
 
+    /// Computes a [`RowSelection`] by evaluating the filter predicate against
+    /// the Parquet page index (column index + offset index).
+    ///
+    /// Returns `Ok(None)` when the Parquet file lacks column or offset index
+    /// metadata (common with older files written before page indexes became
+    /// standard). In that case page-level pruning is simply skipped; row-group
+    /// filtering and the Arrow row filter still apply the predicate.
+    ///
+    /// `Ok(Some(empty))` case means that all rows were filtered by the predicate - returning zero rows
     pub(super) fn get_row_selection_for_filter_predicate(
         predicate: &BoundPredicate,
         parquet_metadata: &Arc<ParquetMetaData>,
         selected_row_groups: &Option<Vec<usize>>,
         field_id_map: &HashMap<i32, usize>,
         snapshot_schema: &Schema,
-    ) -> Result<RowSelection> {
+    ) -> Result<Option<RowSelection>> {
         let Some(column_index) = parquet_metadata.column_index() else {
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                "Parquet file metadata does not contain a column index",
-            ));
+            tracing::debug!("ColumnIndex was absent while reading this file");
+            return Ok(None);
         };
 
         let Some(offset_index) = parquet_metadata.offset_index() else {
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                "Parquet file metadata does not contain an offset index",
-            ));
+            tracing::debug!("OffsetIndex was absent while reading this file");
+            return Ok(None);
         };
 
         // If all row groups were filtered out, return an empty RowSelection (select no rows)
+        //
         if let Some(selected_row_groups) = selected_row_groups
             && selected_row_groups.is_empty()
         {
-            return Ok(RowSelection::from(Vec::new()));
+            return Ok(Some(RowSelection::from(Vec::new())));
         }
 
         let mut selected_row_groups_idx = 0;
@@ -155,7 +160,9 @@ impl ArrowReader {
             }
         }
 
-        Ok(results.into_iter().flatten().collect::<Vec<_>>().into())
+        Ok(Some(
+            results.into_iter().flatten().collect::<Vec<_>>().into(),
+        ))
     }
 
     /// Filters row groups by byte range to support Iceberg's file splitting.
@@ -209,20 +216,27 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
-    use arrow_array::{ArrayRef, LargeStringArray, RecordBatch, StringArray};
+    use arrow_array::{
+        ArrayRef, Int32Array, Int64Array, LargeStringArray, RecordBatch, StringArray,
+    };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use futures::TryStreamExt;
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
-    use parquet::file::properties::WriterProperties;
+    use parquet::file::metadata::{FileMetaData, ParquetMetaData, ParquetMetaDataBuilder};
+    use parquet::file::properties::{EnabledStatistics, WriterProperties};
+    use parquet::schema::parser::parse_message_type;
+    use parquet::schema::types::SchemaDescriptor;
     use tempfile::TempDir;
 
     use crate::Runtime;
     use crate::arrow::{ArrowReader, ArrowReaderBuilder};
-    use crate::expr::{Bind, Predicate, Reference};
+    use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
     use crate::io::FileIO;
-    use crate::scan::{FileScanTask, FileScanTaskStream};
-    use crate::spec::{DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
+    use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
+    use crate::spec::{
+        DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
+    };
 
     async fn test_perform_read(
         predicate: Predicate,
@@ -230,8 +244,8 @@ mod tests {
         table_location: String,
         reader: ArrowReader,
     ) -> Vec<Option<String>> {
-        let tasks = Box::pin(futures::stream::iter(
-            vec![Ok(FileScanTask::builder()
+        let tasks = {
+            let task = FileScanTask::builder()
                 .with_file_size_in_bytes(
                     std::fs::metadata(format!("{table_location}/1.parquet"))
                         .unwrap()
@@ -245,9 +259,9 @@ mod tests {
                 .with_project_field_ids(vec![1])
                 .with_predicate(Some(predicate.bind(schema, true).unwrap()))
                 .with_case_sensitive(false)
-                .build())]
-            .into_iter(),
-        )) as FileScanTaskStream;
+                .build();
+            Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream
+        };
 
         let result = reader
             .read(tasks)
@@ -823,6 +837,446 @@ mod tests {
             per_split[1],
             (100..300).collect::<Vec<i32>>(),
             "upper split, starting at rg1's midpoint, must read rg1 and rg2"
+        );
+    }
+
+    fn int_schema() -> SchemaRef {
+        Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![Arc::new(NestedField::required(
+                    1,
+                    "x",
+                    Type::Primitive(PrimitiveType::Int),
+                ))])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    fn simple_predicate(schema: SchemaRef) -> BoundPredicate {
+        Reference::new("x")
+            .greater_than(crate::spec::Datum::int(0))
+            .bind(schema.clone(), false)
+            .unwrap()
+    }
+
+    fn field_id_map() -> HashMap<i32, usize> {
+        let mut m = HashMap::new();
+        m.insert(1_i32, 0_usize);
+        m
+    }
+
+    fn metadata_no_page_indexes() -> Arc<ParquetMetaData> {
+        let msg_type = parse_message_type("message schema { REQUIRED INT32 x; }").unwrap();
+        let schema_desc = Arc::new(SchemaDescriptor::new(Arc::new(msg_type)));
+        let file_meta = FileMetaData::new(2, 0, None, None, schema_desc.clone(), None);
+        Arc::new(ParquetMetaDataBuilder::new(file_meta).build())
+    }
+
+    fn metadata_column_index_only() -> Arc<ParquetMetaData> {
+        let msg_type = parse_message_type("message schema { REQUIRED INT32 x; }").unwrap();
+        let schema_desc = Arc::new(SchemaDescriptor::new(Arc::new(msg_type)));
+        let file_meta = FileMetaData::new(2, 0, None, None, schema_desc, None);
+        Arc::new(
+            ParquetMetaDataBuilder::new(file_meta)
+                .set_column_index(Some(vec![]))
+                .build(),
+        )
+    }
+
+    fn metadata_with_both_indexes() -> Arc<ParquetMetaData> {
+        let msg_type = parse_message_type("message schema { REQUIRED INT32 x; }").unwrap();
+        let schema_desc = Arc::new(SchemaDescriptor::new(Arc::new(msg_type)));
+        let file_meta = FileMetaData::new(2, 0, None, None, schema_desc, None);
+        Arc::new(
+            ParquetMetaDataBuilder::new(file_meta)
+                .set_column_index(Some(vec![]))
+                .set_offset_index(Some(vec![]))
+                .build(),
+        )
+    }
+
+    /// Testing suite regarding: https://github.com/apache/iceberg-rust/issues/2452
+    /// Testing when: both indices are absent, some present, both present
+    #[test]
+    fn test_absent_column_index_returns_ok_none() {
+        let schema = int_schema();
+        let predicate = simple_predicate(schema.clone());
+        let metadata = metadata_no_page_indexes();
+        let field_id_map = field_id_map();
+
+        let result = ArrowReader::get_row_selection_for_filter_predicate(
+            &predicate,
+            &metadata,
+            &None,
+            &field_id_map,
+            schema.as_ref(),
+        );
+
+        assert!(
+            result.is_ok(),
+            "expected Ok(_), got Err: {:?}",
+            result.unwrap_err()
+        );
+        assert!(
+            result.unwrap().is_none(),
+            "expected Ok(None) when column index is absent"
+        );
+    }
+
+    #[test]
+    fn test_absent_offset_index_returns_ok_none() {
+        let schema = int_schema();
+        let predicate = simple_predicate(schema.clone());
+        let metadata = metadata_column_index_only();
+        let field_id_map = field_id_map();
+
+        let result = ArrowReader::get_row_selection_for_filter_predicate(
+            &predicate,
+            &metadata,
+            &None,
+            &field_id_map,
+            schema.as_ref(),
+        );
+
+        assert!(
+            result.is_ok(),
+            "expected Ok(_), got Err: {:?}",
+            result.unwrap_err()
+        );
+        assert!(
+            result.unwrap().is_none(),
+            "expected Ok(None) when offset index is absent"
+        );
+    }
+
+    #[test]
+    fn test_absent_column_index_with_selected_row_groups_returns_ok_none() {
+        let schema = int_schema();
+        let predicate = simple_predicate(schema.clone());
+        let metadata = metadata_no_page_indexes();
+        let field_id_map = field_id_map();
+        let selected = Some(vec![0usize, 1]);
+
+        let result = ArrowReader::get_row_selection_for_filter_predicate(
+            &predicate,
+            &metadata,
+            &selected,
+            &field_id_map,
+            schema.as_ref(),
+        );
+
+        assert!(result.is_ok());
+        assert!(
+            result.unwrap().is_none(),
+            "absent column index must short-circuit before selected_row_groups is inspected"
+        );
+    }
+
+    #[test]
+    fn test_absent_offset_index_with_selected_row_groups_returns_ok_none() {
+        let schema = int_schema();
+        let predicate = simple_predicate(schema.clone());
+        let metadata = metadata_column_index_only();
+        let field_id_map = field_id_map();
+        let selected = Some(vec![0usize]);
+
+        let result = ArrowReader::get_row_selection_for_filter_predicate(
+            &predicate,
+            &metadata,
+            &selected,
+            &field_id_map,
+            schema.as_ref(),
+        );
+
+        assert!(result.is_ok());
+        assert!(
+            result.unwrap().is_none(),
+            "absent offset index must short-circuit before selected_row_groups is inspected"
+        );
+    }
+
+    #[test]
+    fn test_absent_column_index_with_empty_selected_row_groups_returns_ok_none() {
+        let schema = int_schema();
+        let predicate = simple_predicate(schema.clone());
+        let metadata = metadata_no_page_indexes();
+        let field_id_map = field_id_map();
+        let selected: Option<Vec<usize>> = Some(vec![]);
+
+        let result = ArrowReader::get_row_selection_for_filter_predicate(
+            &predicate,
+            &metadata,
+            &selected,
+            &field_id_map,
+            schema.as_ref(),
+        );
+
+        assert!(result.is_ok());
+        assert!(
+            result.unwrap().is_none(),
+            "column index check must fire before the empty-selected-row-groups branch"
+        );
+    }
+
+    #[test]
+    fn test_both_indexes_present_empty_selected_row_groups_returns_ok_some_empty() {
+        let schema = int_schema();
+        let predicate = simple_predicate(schema.clone());
+        let metadata = metadata_with_both_indexes();
+        let field_id_map = field_id_map();
+        let selected: Option<Vec<usize>> = Some(vec![]);
+
+        let result = ArrowReader::get_row_selection_for_filter_predicate(
+            &predicate,
+            &metadata,
+            &selected,
+            &field_id_map,
+            schema.as_ref(),
+        );
+
+        assert!(
+            result.is_ok(),
+            "expected Ok(_), got Err: {:?}",
+            result.unwrap_err()
+        );
+
+        let row_selection = result.unwrap().expect(
+            "expected Ok(Some(_)) when both indexes are present and all row groups are filtered",
+        );
+
+        assert_eq!(
+            row_selection.row_count(),
+            0,
+            "RowSelection must be empty (zero rows selected) when selected_row_groups is empty"
+        );
+    }
+
+    /// Full-suite regression test for issue: https://github.com/apache/iceberg-rust/issues/2452
+    #[tokio::test]
+    async fn test_scan_without_page_indexes_does_not_error() {
+        // Building schema (both iceberg and arrow for RecordBatch)
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = format!("{}/data.parquet", tmp_dir.path().to_str().unwrap());
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            // Disabling page statistics
+            .set_statistics_enabled(EnabledStatistics::None)
+            .build();
+
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef,
+            Arc::new(StringArray::from(vec![
+                Some("alice"),
+                Some("bob"),
+                None,
+                Some("dana"),
+                Some("eve"),
+            ])) as ArrayRef,
+        ])
+        .unwrap();
+
+        let file = std::fs::File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // Truly exercising a file without column/offset index
+        {
+            use parquet::file::reader::{FileReader, SerializedFileReader};
+            let f = std::fs::File::open(&file_path).unwrap();
+            let rdr = SerializedFileReader::new(f).unwrap();
+            assert!(
+                rdr.metadata().column_index().is_none(),
+                "test fixture must produce a file without a column index"
+            );
+            assert!(
+                rdr.metadata().offset_index().is_none(),
+                "test fixture must a product a file without offset index"
+            )
+        }
+
+        // Predicate: id > 2
+        let predicate = Reference::new("id")
+            .greater_than(Datum::int(2))
+            .bind(iceberg_schema.clone(), false)
+            .unwrap();
+
+        let file_io = FileIO::new_with_fs();
+        let reader = ArrowReaderBuilder::new(file_io.clone(), Runtime::current())
+            // Enabling row selection ()
+            .with_row_selection_enabled(true)
+            .build();
+
+        let file_size = std::fs::metadata(&file_path).unwrap().len();
+        let task = FileScanTask {
+            file_size_in_bytes: file_size,
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path: file_path.clone(),
+            data_file_format: DataFileFormat::Parquet,
+            schema: iceberg_schema.clone(),
+            project_field_ids: vec![1, 2],
+            predicate: Some(predicate),
+            deletes: vec![],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: false,
+            key_metadata: None,
+        };
+
+        let stream = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = reader
+            .read(stream)
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let ids: Vec<i32> = batches
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect();
+
+        assert_eq!(
+            ids,
+            vec![3, 4, 5],
+            "predicate must still be enforced via Arrow row filter even without page indexes"
+        );
+
+        // Absent index + position delete field present
+        let pos_del_path = format!("{}/pos-del.parquet", tmp_dir.path().to_str().unwrap());
+
+        // Build the position delete Arrow schema (standard Iceberg layout).
+        let pos_del_arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("file_path", DataType::Utf8, false),
+            Field::new("pos", DataType::Int64, false),
+        ]));
+
+        let pos_del_batch = RecordBatch::try_new(pos_del_arrow_schema.clone(), vec![
+            // Both deletions reference the same data file
+            Arc::new(StringArray::from(vec![
+                file_path.as_str(),
+                file_path.as_str(),
+            ])) as ArrayRef,
+            // Delete by index - index-0 (`1` in test case) and index-2 (`3` in test case)
+            Arc::new(Int64Array::from(vec![0i64, 2i64])) as ArrayRef,
+        ])
+        .unwrap();
+
+        // Write position delete file also without indices
+        let pos_del_props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .set_statistics_enabled(EnabledStatistics::None)
+            .build();
+
+        let pos_del_file = std::fs::File::create(&pos_del_path).unwrap();
+        let mut pos_del_writer = ArrowWriter::try_new(
+            pos_del_file,
+            pos_del_arrow_schema.clone(),
+            Some(pos_del_props),
+        )
+        .unwrap();
+        pos_del_writer.write(&pos_del_batch).unwrap();
+        pos_del_writer.close().unwrap();
+
+        // Predicate: id > 1 (note that `3` was also removed by position delete)
+        let predicate_sub2 = Reference::new("id")
+            .greater_than(Datum::int(1))
+            .bind(iceberg_schema.clone(), false)
+            .unwrap();
+
+        let reader_sub2 = ArrowReaderBuilder::new(file_io.clone(), Runtime::current())
+            .with_row_selection_enabled(true)
+            .build();
+
+        let task_sub2 = FileScanTask {
+            file_size_in_bytes: file_size,
+            start: 0,
+            length: 0,
+            record_count: None,
+            data_file_path: file_path.clone(),
+            data_file_format: DataFileFormat::Parquet,
+            schema: iceberg_schema.clone(),
+            project_field_ids: vec![1, 2],
+            predicate: Some(predicate_sub2),
+            deletes: vec![FileScanTaskDeleteFile {
+                file_path: pos_del_path.clone(),
+                file_type: DataContentType::PositionDeletes,
+                partition_spec_id: 0,
+                equality_ids: None,
+                file_size_in_bytes: std::fs::metadata(&pos_del_path).unwrap().len(),
+                key_metadata: None,
+            }],
+            partition: None,
+            partition_spec: None,
+            name_mapping: None,
+            case_sensitive: false,
+            key_metadata: None,
+        };
+
+        let stream_sub2 =
+            Box::pin(futures::stream::iter(vec![Ok(task_sub2)])) as FileScanTaskStream;
+        let batches_sub2: Vec<RecordBatch> = reader_sub2
+            .read(stream_sub2)
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let ids_sub2: Vec<i32> = batches_sub2
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect();
+
+        assert_eq!(
+            ids_sub2,
+            vec![2, 4, 5],
+            "positional deletes must be applied correctly even when page indexes are absent"
         );
     }
 }

@@ -29,8 +29,8 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 
 use super::decimal_utils::{
-    Decimal, decimal_from_i128_with_scale, decimal_from_str_exact, decimal_mantissa, decimal_scale,
-    i128_from_be_bytes, i128_to_be_bytes_min,
+    Decimal, decimal_from_i128_with_scale, decimal_from_str_exact, decimal_mantissa,
+    decimal_precision, decimal_scale, i128_from_be_bytes, i128_to_be_bytes_min,
 };
 use super::literal::Literal;
 use super::primitive::PrimitiveLiteral;
@@ -1053,24 +1053,7 @@ impl Datum {
         let scale = decimal_scale(&value);
         let mantissa = decimal_mantissa(&value);
 
-        let available_bytes = Type::decimal_required_bytes(precision)? as usize;
-        let actual_bytes = i128_to_be_bytes_min(mantissa);
-        if actual_bytes.len() > available_bytes {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Decimal value {value} is too large for precision {precision}"),
-            ));
-        }
-
-        let r#type = Type::decimal(precision, scale)?;
-        if let Type::Primitive(p) = r#type {
-            Ok(Self {
-                r#type: p,
-                literal: PrimitiveLiteral::Int128(mantissa),
-            })
-        } else {
-            unreachable!("Decimal type must be primitive.")
-        }
+        Self::decimal_from_mantissa(mantissa, precision, scale)
     }
 
     fn i64_to_i32<T: Into<i64> + PartialOrd<i64>>(val: T) -> Datum {
@@ -1103,10 +1086,40 @@ impl Datum {
         }
     }
 
+    fn f64_to_f32(val: f64) -> Datum {
+        if val > f32::MAX as f64 {
+            Datum::new(PrimitiveType::Float, PrimitiveLiteral::AboveMax)
+        } else if val < (f32::MIN as f64) {
+            Datum::new(PrimitiveType::Float, PrimitiveLiteral::BelowMin)
+        } else {
+            Datum::float(val as f32)
+        }
+    }
+
     fn string_to_i128<S: AsRef<str>>(s: S) -> Result<i128> {
         s.as_ref().parse::<i128>().map_err(|e| {
             Error::new(ErrorKind::DataInvalid, "Can't parse string to i128.").with_source(e)
         })
+    }
+
+    fn decimal_from_mantissa(mantissa: i128, precision: u32, scale: u32) -> Result<Self> {
+        let r#type = Type::decimal(precision, scale)?;
+        if decimal_precision(mantissa) > precision {
+            let value = decimal_from_i128_with_scale(mantissa, scale);
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Decimal value {value} is too large for precision {precision}"),
+            ));
+        }
+
+        if let Type::Primitive(p) = r#type {
+            Ok(Self {
+                r#type: p,
+                literal: PrimitiveLiteral::Int128(mantissa),
+            })
+        } else {
+            unreachable!("Decimal type must be primitive.")
+        }
     }
 
     /// Convert the datum to `target_type`.
@@ -1120,6 +1133,12 @@ impl Datum {
                     (PrimitiveLiteral::Long(val), _, PrimitiveType::Int) => {
                         Ok(Datum::i64_to_i32(*val))
                     }
+                    (PrimitiveLiteral::Double(val), _, PrimitiveType::Float) => {
+                        Ok(Datum::f64_to_f32(val.0))
+                    }
+                    (PrimitiveLiteral::Float(val), _, PrimitiveType::Double) => {
+                        Ok(Datum::double(val.0 as f64))
+                    }
                     (PrimitiveLiteral::Long(val), _, PrimitiveType::Timestamp) => {
                         Ok(Datum::timestamp_micros(*val))
                     }
@@ -1130,7 +1149,37 @@ impl Datum {
                     (PrimitiveLiteral::Int128(val), _, PrimitiveType::Long) => {
                         Ok(Datum::i128_to_i64(*val))
                     }
-
+                    (
+                        PrimitiveLiteral::Int128(val),
+                        PrimitiveType::Decimal {
+                            scale: self_scale, ..
+                        },
+                        PrimitiveType::Decimal {
+                            precision,
+                            scale: target_scale,
+                        },
+                    ) if self_scale == target_scale => {
+                        Datum::decimal_from_mantissa(*val, *precision, *target_scale)
+                    }
+                    // Java's DecimalLiteral.to() is a no-op for decimal targets, even when scales
+                    // differ. We intentionally do not mirror that here: the same mantissa with a
+                    // different scale represents a different value, so scale conversion needs
+                    // explicit rescaling.
+                    (
+                        PrimitiveLiteral::Int128(_),
+                        PrimitiveType::Decimal {
+                            scale: self_scale, ..
+                        },
+                        PrimitiveType::Decimal {
+                            scale: target_scale,
+                            ..
+                        },
+                    ) => Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Decimal scale conversion is not supported: source scale {self_scale}, target scale {target_scale}"
+                        ),
+                    )),
                     (PrimitiveLiteral::String(val), _, PrimitiveType::Boolean) => {
                         Datum::bool_from_str(val)
                     }

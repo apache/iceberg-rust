@@ -33,8 +33,11 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     environment: publish
+    permissions:
+      contents: read
+      id-token: write  # Required for crates.io trusted publishing
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
@@ -47,13 +50,16 @@ jobs:
         with:
           rust-version: ${{ steps.get-msrv.outputs.msrv }}
 
+      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+        id: auth
+
       - name: Publish crates
         # Only publish if it's a tag and the tag is not a pre-release
         if: ${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-') }}
-        run: cargo publish --workspace --all-features # zizmor: ignore[use-trusted-publishing] -- https://github.com/apache/iceberg-rust/issues/1539
+        run: cargo publish --workspace --all-features
         shell: bash
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   # Trigger Python release after crate publishing completes.
   # Only runs for tag pushes; for manual Python releases, use workflow_dispatch on release_python.yml directly.

@@ -573,7 +573,7 @@ impl Literal {
                     {
                         Ok(Some(Literal::Map(Map::from_iter(
                             keys.into_iter()
-                                .zip(values.into_iter())
+                                .zip(values)
                                 .map(|(key, value)| {
                                     Ok((
                                         Literal::try_from_json(key, &map.key_field.field_type)
