@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains the writer for data file format supported by iceberg: parquet, orc.
+//! This module contains the writer for data file format supported by iceberg: parquet, orc, vortex.
 
 use arrow_array::RecordBatch;
 use futures::Future;
@@ -26,6 +26,8 @@ use crate::spec::DataFileBuilder;
 
 mod parquet_writer;
 pub use parquet_writer::{ParquetWriter, ParquetWriterBuilder};
+mod vortex_writer;
+pub use vortex_writer::{VortexWriter, VortexWriterBuilder};
 
 use crate::io::OutputFile;
 
