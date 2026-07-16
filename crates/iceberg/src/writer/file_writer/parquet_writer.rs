@@ -832,7 +832,7 @@ mod tests {
     #[test]
     fn test_index_by_parquet_path_variant_is_unsupported() {
         // Writing variant columns to Parquet is not supported yet; indexing a schema that
-        // contains one must error rather than silently mis-map columns.
+        // contains one must error rather than silently miss-map columns.
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
