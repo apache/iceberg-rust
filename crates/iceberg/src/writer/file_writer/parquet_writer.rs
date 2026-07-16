@@ -40,7 +40,7 @@ use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
     NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
-    StructType, TableMetadata, TableProperties, Type, visit_schema,
+    StructType, TableMetadata, TableProperties, Type, VariantType, visit_schema,
 };
 use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
@@ -240,6 +240,13 @@ impl SchemaVisitor for IndexByParquetPathName {
         }
 
         Ok(())
+    }
+
+    fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Writing variant columns to Parquet is not supported yet",
+        ))
     }
 }
 
@@ -820,6 +827,21 @@ mod tests {
         let mut visitor = IndexByParquetPathName::new();
         visit_schema(&nested_schema_for_test(), &mut visitor).unwrap();
         assert_eq!(visitor.name_to_id, expect);
+    }
+
+    #[test]
+    fn test_index_by_parquet_path_variant_is_unsupported() {
+        // Writing variant columns to Parquet is not supported yet; indexing a schema that
+        // contains one must error rather than silently miss-map columns.
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+            ])
+            .build()
+            .unwrap();
+        let mut visitor = IndexByParquetPathName::new();
+        let err = visit_schema(&schema, &mut visitor).unwrap_err();
+        assert_eq!(err.kind(), crate::ErrorKind::FeatureUnsupported, "{err}");
     }
 
     #[tokio::test]

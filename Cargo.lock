@@ -167,7 +167,7 @@ dependencies = [
  "miniz_oxide",
  "num-bigint",
  "quad-rand",
- "rand 0.9.4",
+ "rand 0.9.5",
  "regex-lite",
  "serde",
  "serde_bytes",
@@ -301,7 +301,7 @@ dependencies = [
  "flate2",
  "indexmap 2.14.0",
  "liblzma",
- "rand 0.9.4",
+ "rand 0.9.5",
  "serde",
  "serde_json",
  "snap",
@@ -1697,7 +1697,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -2329,7 +2329,7 @@ dependencies = [
  "log",
  "object_store",
  "parking_lot",
- "rand 0.9.4",
+ "rand 0.9.5",
  "tokio",
  "tokio-util",
  "url",
@@ -2480,7 +2480,7 @@ dependencies = [
  "object_store",
  "parking_lot",
  "parquet",
- "rand 0.9.4",
+ "rand 0.9.5",
  "tempfile",
  "url",
 ]
@@ -2579,7 +2579,7 @@ dependencies = [
  "md-5 0.11.0",
  "memchr",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.9.5",
  "regex",
  "sha2 0.11.0",
  "uuid",
@@ -2913,7 +2913,7 @@ dependencies = [
  "log",
  "num-traits",
  "percent-encoding",
- "rand 0.9.4",
+ "rand 0.9.5",
  "serde_json",
  "sha1 0.11.0",
  "sha2 0.11.0",
@@ -4071,7 +4071,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -4142,7 +4142,7 @@ dependencies = [
  "ordered-float 4.6.0",
  "parquet",
  "pretty_assertions",
- "rand 0.9.4",
+ "rand 0.9.5",
  "regex",
  "reqwest 0.12.28",
  "roaring",
@@ -5227,7 +5227,7 @@ dependencies = [
  "hyper-util",
  "log",
  "pin-project-lite",
- "rand 0.9.4",
+ "rand 0.9.5",
  "regex",
  "serde_json",
  "serde_urlencoded",
@@ -6452,7 +6452,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -6491,7 +6491,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -6556,9 +6556,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.9.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44c5af06bb1b7d3216d91932aed5265164bf384dc89cd6ba05cf59a35f5f76ea"
+checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
 dependencies = [
  "rand_chacha 0.9.0",
  "rand_core 0.9.5",
@@ -7092,7 +7092,7 @@ version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
 dependencies = [
- "rand 0.9.4",
+ "rand 0.9.5",
 ]
 
 [[package]]
@@ -8652,7 +8652,7 @@ version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ea3136b675547379c4bd395ca6b938e5ad3c3d20fad76e7fe85f9e0d011419c"
 dependencies = [
- "rand 0.9.4",
+ "rand 0.9.5",
 ]
 
 [[package]]
@@ -8861,7 +8861,7 @@ dependencies = [
  "nix 0.29.0",
  "once_cell",
  "pin-project",
- "rand 0.9.4",
+ "rand 0.9.5",
  "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
@@ -9729,7 +9729,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

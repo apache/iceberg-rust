@@ -30,7 +30,7 @@ use uuid::Uuid;
 use super::get_field_id_from_metadata;
 use crate::spec::{
     ListType, Literal, Map, MapType, NestedField, PartnerAccessor, PrimitiveLiteral, PrimitiveType,
-    SchemaWithPartnerVisitor, Struct, StructType, Type, visit_struct_with_partner,
+    SchemaWithPartnerVisitor, Struct, StructType, Type, VariantType, visit_struct_with_partner,
     visit_type_with_partner,
 };
 use crate::{Error, ErrorKind, Result};
@@ -425,6 +425,13 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                 }
             }
         }
+    }
+
+    fn variant(&mut self, _v: &VariantType, _partner: &ArrayRef) -> Result<Vec<Option<Literal>>> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Converting variant Arrow array to Iceberg literal is not supported yet",
+        ))
     }
 }
 
@@ -834,6 +841,9 @@ pub(crate) fn create_primitive_array_repeated(
             let vals: Vec<Option<i32>> = vec![None; num_rows];
             Arc::new(Date32Array::from(vals))
         }
+        (DataType::Int64, Some(PrimitiveLiteral::Int(value))) => {
+            Arc::new(Int64Array::from(vec![i64::from(*value); num_rows]))
+        }
         (DataType::Int64, Some(PrimitiveLiteral::Long(value))) => {
             Arc::new(Int64Array::from(vec![*value; num_rows]))
         }
@@ -969,7 +979,7 @@ pub(crate) fn create_primitive_array_repeated(
         (dt, _) => {
             return Err(Error::new(
                 ErrorKind::Unexpected,
-                format!("unexpected target column type {dt}"),
+                format!("unexpected target column type {dt}, prim_lit {prim_lit:?}"),
             ));
         }
     })
@@ -1319,6 +1329,43 @@ mod test {
         let iceberg_struct_type = StructType::new(vec![]);
         let result = arrow_struct_to_literal(&struct_array, &iceberg_struct_type).unwrap();
         assert_eq!(result, vec![None; 0]);
+    }
+
+    #[test]
+    fn test_arrow_variant_to_literal_is_unsupported() {
+        // Converting a variant Arrow array back to an Iceberg literal is not implemented;
+        // the visitor must reject it rather than silently decode it incorrectly.
+        let variant_child = Arc::new(StructArray::from(vec![
+            (
+                Arc::new(Field::new("metadata", DataType::Binary, false)),
+                Arc::new(BinaryArray::from(vec![Some(b"m".as_ref())])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("value", DataType::Binary, false)),
+                Arc::new(BinaryArray::from(vec![Some(b"v".as_ref())])) as ArrayRef,
+            ),
+        ])) as ArrayRef;
+
+        let struct_array = Arc::new(StructArray::from(vec![(
+            Arc::new(
+                Field::new("v", variant_child.data_type().clone(), false).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+                ),
+            ),
+            variant_child,
+        )])) as ArrayRef;
+
+        let ty = StructType::new(vec![
+            NestedField::required(1, "v", Type::Variant(VariantType)).into(),
+        ]);
+
+        let err = arrow_struct_to_literal(&struct_array, &ty).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(
+            err.to_string()
+                .contains("Converting variant Arrow array to Iceberg literal is not supported yet"),
+            "{err}"
+        );
     }
 
     #[test]

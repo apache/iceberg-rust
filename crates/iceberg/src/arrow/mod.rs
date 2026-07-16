@@ -46,3 +46,6 @@ pub use partition_value_calculator::*;
 /// Record batch partition splitter for partitioned tables
 pub mod record_batch_partition_splitter;
 pub use record_batch_partition_splitter::*;
+
+#[cfg(test)]
+pub(crate) mod test_utils;

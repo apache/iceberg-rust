@@ -359,49 +359,29 @@ impl RecordBatchTransformer {
         let fields: Result<Vec<_>> = projected_iceberg_field_ids
             .iter()
             .map(|field_id| {
-                // Check if this is a constant field
-                if constant_fields.contains_key(field_id) {
-                    // For metadata/virtual fields (like _file), get name from metadata_columns
-                    // For partition fields, get name from schema (they exist in schema)
-                    if let Ok(iceberg_field) = get_metadata_field(*field_id) {
-                        // This is a metadata/virtual field - convert Iceberg field to Arrow
-                        let datum = constant_fields.get(field_id).ok_or(Error::new(
-                            ErrorKind::Unexpected,
-                            "constant field not found",
-                        ))?;
-                        let arrow_type = datum_to_arrow_type_with_ree(datum);
-                        let arrow_field =
-                            Field::new(&iceberg_field.name, arrow_type, !iceberg_field.required)
-                                .with_metadata(HashMap::from([(
-                                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                                    iceberg_field.id.to_string(),
-                                )]));
-                        Ok(Arc::new(arrow_field))
-                    } else {
-                        // This is a partition constant field (exists in schema but uses constant value)
-                        let field = &field_id_to_mapped_schema_map
-                            .get(field_id)
-                            .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
-                            .0;
-                        let datum = constant_fields.get(field_id).ok_or(Error::new(
-                            ErrorKind::Unexpected,
-                            "constant field not found",
-                        ))?;
-                        let arrow_type = datum_to_arrow_type_with_ree(datum);
-                        // Use the type from constant_fields (REE for constants)
-                        let constant_field =
-                            Field::new(field.name(), arrow_type, field.is_nullable())
-                                .with_metadata(field.metadata().clone());
-                        Ok(Arc::new(constant_field))
-                    }
-                } else {
-                    // Regular field - use schema as-is
-                    Ok(field_id_to_mapped_schema_map
-                        .get(field_id)
-                        .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
-                        .0
-                        .clone())
+                // Metadata/virtual fields (like _file, _spec_id) don't exist in the table
+                // schema, so build their Arrow field from the metadata column definition and
+                // the pre-computed constant's type.
+                if let Some(datum) = constant_fields.get(field_id)
+                    && let Ok(iceberg_field) = get_metadata_field(*field_id)
+                {
+                    let arrow_type = datum_to_arrow_type_with_ree(datum);
+                    let arrow_field =
+                        Field::new(&iceberg_field.name, arrow_type, !iceberg_field.required)
+                            .with_metadata(HashMap::from([(
+                                PARQUET_FIELD_ID_META_KEY.to_string(),
+                                iceberg_field.id.to_string(),
+                            )]));
+                    return Ok(Arc::new(arrow_field));
                 }
+
+                // Regular fields and identity-partitioned constant fields both exist in the
+                // table schema, so use the mapped Arrow field as-is.
+                Ok(field_id_to_mapped_schema_map
+                    .get(field_id)
+                    .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
+                    .0
+                    .clone())
             })
             .collect();
 
@@ -481,16 +461,39 @@ impl RecordBatchTransformer {
         projected_iceberg_field_ids
             .iter()
             .map(|field_id| {
-                // Check if this is a constant field (metadata/virtual or identity-partitioned)
-                // Constant fields always use their pre-computed constant values, regardless of whether
-                // they exist in the Parquet file. This is per Iceberg spec rule #1: partition metadata
-                // is authoritative and should be preferred over file data.
+                // Check if this is a constant field (metadata/virtual or identity-partitioned).
+                //
+                // Metadata/virtual fields (like _file, _spec_id) never exist in the data file,
+                // so they always use their pre-computed constant value.
+                //
+                // For identity-partitioned fields, the Iceberg spec's "Column Projection" rules
+                // only apply to "field ids which are not present in a data file". When the column
+                // IS present in the Parquet file, it must be read from the file; the partition
+                // metadata constant is only a fallback for when the column is absent (e.g. add_files).
                 if let Some(datum) = constant_fields.get(field_id) {
-                    let arrow_type = datum_to_arrow_type_with_ree(datum);
-                    return Ok(ColumnSource::Add {
-                        value: Some(datum.literal().clone()),
-                        target_type: arrow_type,
-                    });
+                    let is_metadata_field = get_metadata_field(*field_id).is_ok();
+                    let present_in_file = field_id_to_source_schema_map.contains_key(field_id);
+
+                    if is_metadata_field || !present_in_file {
+                        let arrow_type = if is_metadata_field {
+                            datum_to_arrow_type_with_ree(datum)
+                        } else {
+                            field_id_to_mapped_schema_map
+                                .get(field_id)
+                                .ok_or(Error::new(
+                                    ErrorKind::Unexpected,
+                                    "could not find field in schema",
+                                ))?
+                                .0
+                                .data_type()
+                                .clone()
+                        };
+
+                        return Ok(ColumnSource::Add {
+                            value: Some(datum.literal().clone()),
+                            target_type: arrow_type,
+                        });
+                    }
                 }
 
                 let (target_field, _) =
@@ -549,6 +552,20 @@ impl RecordBatchTransformer {
                     // Rule #2 (name mapping) was already applied in reader.rs if needed.
                     // If field_id is still not found, the column doesn't exist in the Parquet file.
                     // Fall through to rule #3 (initial_default) or rule #4 (null).
+                    //
+                    // Per the spec's "Default values", null is only a valid default for an
+                    // optional field. A required field that is absent with no initial-default
+                    // therefore has no valid value and must error, rather than producing a null
+                    // column that violates the field's required constraint. This matches
+                    // Iceberg-Java's Parquet readers (BaseParquetReaders / SparkParquetReaders),
+                    // which raise "Missing required field: <name>".
+                    if iceberg_field.initial_default.is_none() && iceberg_field.required {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("Missing required field: {}", iceberg_field.name),
+                        ));
+                    }
+
                     let default_value = iceberg_field.initial_default.as_ref().and_then(|lit| {
                         if let Literal::Primitive(prim) = lit {
                             Some(prim.clone())
@@ -842,6 +859,47 @@ mod test {
         assert!(date_column.is_null(0));
         assert!(date_column.is_null(1));
         assert!(date_column.is_null(2));
+    }
+
+    #[test]
+    fn schema_evolution_required_field_absent_without_default_errors() {
+        // Per the spec's "Default values", null is only a valid default for an optional field, so
+        // a required field that is absent from the data file with no initial-default has no valid
+        // value and must error. Matches Iceberg-Java's Parquet readers, which raise
+        // "Missing required field: <name>".
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "missing_str", Type::Primitive(PrimitiveType::String))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let projected_iceberg_field_ids = [1, 2];
+
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_iceberg_field_ids)
+                .build();
+
+        let file_schema = Arc::new(ArrowSchema::new(vec![simple_field(
+            "id",
+            DataType::Int32,
+            false,
+            "1",
+        )]));
+        let file_batch =
+            RecordBatch::try_new(file_schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
+                .unwrap();
+
+        let err = transformer.process_record_batch(file_batch).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Missing required field: missing_str"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

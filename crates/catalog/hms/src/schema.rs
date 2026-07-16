@@ -16,7 +16,7 @@
 // under the License.
 
 use hive_metastore::FieldSchema;
-use iceberg::spec::{PrimitiveType, Schema, SchemaVisitor, visit_schema};
+use iceberg::spec::{PrimitiveType, Schema, SchemaVisitor, VariantType, visit_schema};
 use iceberg::{Error, ErrorKind, Result};
 
 type HiveSchema = Vec<FieldSchema>;
@@ -138,6 +138,12 @@ impl SchemaVisitor for HiveSchemaBuilder {
         };
 
         Ok(hive_type)
+    }
+
+    fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
+        // Match iceberg-java's HiveSchemaUtil, which maps VARIANT to "unknown"
+        // (apache/iceberg#15964).
+        Ok("unknown".to_string())
     }
 }
 
@@ -451,6 +457,38 @@ mod tests {
                 comment: None,
             },
         ];
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_schema_with_variant() -> Result<()> {
+        // VARIANT maps to Hive "unknown", matching iceberg-java's HiveSchemaUtil
+        // (apache/iceberg#15964).
+        let record = r#"{
+            "type": "struct",
+            "schema-id": 1,
+            "fields": [
+                {
+                    "id": 1,
+                    "name": "v",
+                    "required": true,
+                    "type": "variant"
+                }
+            ]
+        }"#;
+
+        let schema = serde_json::from_str::<Schema>(record)?;
+
+        let result = HiveSchemaBuilder::from_iceberg(&schema)?.build();
+
+        let expected = vec![FieldSchema {
+            name: Some("v".into()),
+            r#type: Some("unknown".into()),
+            comment: None,
+        }];
 
         assert_eq!(result, expected);
 
