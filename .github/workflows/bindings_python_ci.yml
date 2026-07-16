@@ -86,12 +86,18 @@ jobs:
       - name: Setup Rust toolchain
         if: runner.os != 'Linux'
         uses: ./.github/actions/setup-builder
+      - name: Get runner image id
+        if: runner.os != 'Linux'
+        id: image
+        shell: bash
+        run: echo "id=${ImageOS:?}" >> "$GITHUB_OUTPUT"
       - name: Cache Rust artifacts
         if: runner.os != 'Linux'
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          key: bindings-python
+          key: bindings-python-${{ steps.image.outputs.id }}-${{ hashFiles('.github/workflows/bindings_python_ci.yml', 'bindings/python/pyproject.toml', 'Cargo.toml') }}
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          add-rust-environment-hash-key: 'false'
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           working-directory: "bindings/python"

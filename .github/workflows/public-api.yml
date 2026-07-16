@@ -43,10 +43,17 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
 
+      - name: Get runner image id
+        id: image
+        shell: bash
+        run: echo "id=${ImageOS:?}" >> "$GITHUB_OUTPUT"
+
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
+          key: ${{ steps.image.outputs.id }}-${{ hashFiles('.github/workflows/public-api.yml', 'Makefile', 'Cargo.toml') }}
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          add-rust-environment-hash-key: 'false'
 
       - name: Check public API
         run: make check-public-api

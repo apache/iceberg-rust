@@ -92,6 +92,18 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
 
+      - name: Get runner image id
+        id: image
+        shell: bash
+        run: echo "id=${ImageOS:?}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Rust artifacts
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: ${{ steps.image.outputs.id }}-${{ hashFiles('.github/workflows/ci.yml', 'Makefile', 'Cargo.toml') }}
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          add-rust-environment-hash-key: 'false'
+
       - name: Cargo clippy
         run: make check-clippy
 
@@ -116,10 +128,19 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
 
+      # The built-in environment hash includes the preinstalled stable
+      # toolchain, which varies across concurrent image builds.
+      - name: Get runner image id
+        id: image
+        shell: bash
+        run: echo "id=${ImageOS:?}" >> "$GITHUB_OUTPUT"
+
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
+          key: ${{ steps.image.outputs.id }}-${{ hashFiles('.github/workflows/ci.yml', 'Makefile', 'Cargo.toml') }}
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          add-rust-environment-hash-key: 'false'
 
       - name: Build
         run: make build
@@ -137,10 +158,17 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
 
+      - name: Get runner image id
+        id: image
+        shell: bash
+        run: echo "id=${ImageOS:?}" >> "$GITHUB_OUTPUT"
+
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
+          key: ${{ steps.image.outputs.id }}-${{ hashFiles('.github/workflows/ci.yml', 'Makefile', 'Cargo.toml') }}
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          add-rust-environment-hash-key: 'false'
 
       - name: Check each crate standalone
         run: |
@@ -172,10 +200,17 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
 
+      - name: Get runner image id
+        id: image
+        shell: bash
+        run: echo "id=${ImageOS:?}" >> "$GITHUB_OUTPUT"
+
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
+          key: ${{ steps.image.outputs.id }}-${{ hashFiles('.github/workflows/ci.yml', 'Makefile', 'Cargo.toml') }}
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          add-rust-environment-hash-key: 'false'
 
       - name: Build
         run: cargo build -p iceberg --no-default-features
@@ -201,11 +236,17 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
 
+      - name: Get runner image id
+        id: image
+        shell: bash
+        run: echo "id=${ImageOS:?}" >> "$GITHUB_OUTPUT"
+
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          key: ${{ matrix.test-suite.name }}
+          key: ${{ matrix.test-suite.name }}-${{ steps.image.outputs.id }}-${{ hashFiles('.github/workflows/ci.yml', 'Makefile', 'Cargo.toml') }}
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          add-rust-environment-hash-key: 'false'
 
       - name: Install cargo-nextest
         if: matrix.test-suite.name == 'default'
@@ -253,5 +294,15 @@ jobs:
           rust-version: ${{ steps.get-msrv.outputs.msrv }}
       - name: Setup Nightly Rust toolchain
         uses: ./.github/actions/setup-builder
+      - name: Get runner image id
+        id: image
+        shell: bash
+        run: echo "id=${ImageOS:?}" >> "$GITHUB_OUTPUT"
+      - name: Cache Rust artifacts
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: msrv-${{ steps.get-msrv.outputs.msrv }}-${{ steps.image.outputs.id }}-${{ hashFiles('.github/workflows/ci.yml', 'Makefile', 'Cargo.toml') }}
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          add-rust-environment-hash-key: 'false'
       - name: Check MSRV
         run: make check-msrv
