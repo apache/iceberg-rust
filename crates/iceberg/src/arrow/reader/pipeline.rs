@@ -34,6 +34,7 @@ use super::{
     ArrowFileReader, ArrowReader, ParquetReadOptions, add_fallback_field_ids_to_arrow_schema,
     apply_name_mapping_to_arrow_schema,
 };
+use crate::arrow::build_partition_column_constant;
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
 use crate::arrow::int96::coerce_int96_timestamps;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
@@ -42,11 +43,11 @@ use crate::encryption::StandardKeyMetadata;
 use crate::error::Result;
 use crate::io::{FileIO, FileMetadata, FileRead};
 use crate::metadata_columns::{
-    RESERVED_COL_NAME_POS, RESERVED_FIELD_ID_FILE, RESERVED_FIELD_ID_POS,
-    RESERVED_FIELD_ID_SPEC_ID, is_metadata_field,
+    RESERVED_COL_NAME_POS, RESERVED_FIELD_ID_FILE, RESERVED_FIELD_ID_PARTITION,
+    RESERVED_FIELD_ID_POS, RESERVED_FIELD_ID_SPEC_ID, is_metadata_field,
 };
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
-use crate::spec::Datum;
+use crate::spec::{Datum, PartitionSpec, Struct};
 use crate::{Error, ErrorKind};
 
 impl ArrowReader {
@@ -309,6 +310,24 @@ impl FileScanTaskReader {
         if project_pos {
             record_batch_transformer_builder =
                 record_batch_transformer_builder.with_virtual_field(RESERVED_FIELD_ID_POS);
+        }
+
+        // Add the _partition metadata struct column if it's in the projected fields.
+        // Computed lazily here at read time from the unified partition type + task's spec + data.
+        if task
+            .project_field_ids()
+            .contains(&RESERVED_FIELD_ID_PARTITION)
+            && let Some(unified_type) = &task.unified_partition_type
+        {
+            let (spec, partition_data) = match (&task.partition_spec, &task.partition) {
+                (Some(spec), Some(data)) => (spec.clone(), data.clone()),
+                // Unpartitioned table or missing spec: build_partition_column_constant
+                // handles the empty unified_type case with an early return.
+                _ => (Arc::new(PartitionSpec::unpartition_spec()), Struct::empty()),
+            };
+            let constant = build_partition_column_constant(unified_type, &spec, &partition_data)?;
+            record_batch_transformer_builder =
+                record_batch_transformer_builder.with_partition_column_precomputed(constant);
         }
 
         let mut record_batch_transformer = record_batch_transformer_builder.build();
