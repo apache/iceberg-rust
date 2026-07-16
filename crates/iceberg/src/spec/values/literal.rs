@@ -493,6 +493,33 @@ impl Literal {
                         )),
                     ))))
                 }
+                (PrimitiveType::TimestampNs, JsonValue::String(s)) => {
+                    let ndt = NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f")?;
+                    let nanos = timestamp::datetime_to_nanoseconds(&ndt).ok_or_else(|| {
+                        Error::new(
+                            crate::ErrorKind::DataInvalid,
+                            format!(
+                                "Timestamp is outside the representable nanosecond range: {ndt}"
+                            ),
+                        )
+                    })?;
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Long(nanos))))
+                }
+                (PrimitiveType::TimestamptzNs, JsonValue::String(s)) => {
+                    let dt = Utc.from_utc_datetime(&NaiveDateTime::parse_from_str(
+                        &s,
+                        "%Y-%m-%dT%H:%M:%S%.f+00:00",
+                    )?);
+                    let nanos = timestamptz::datetimetz_to_nanoseconds(&dt).ok_or_else(|| {
+                        Error::new(
+                            crate::ErrorKind::DataInvalid,
+                            format!(
+                                "Timestamptz is outside the representable nanosecond range: {dt}"
+                            ),
+                        )
+                    })?;
+                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Long(nanos))))
+                }
                 (PrimitiveType::String, JsonValue::String(s)) => {
                     Ok(Some(Literal::Primitive(PrimitiveLiteral::String(s))))
                 }
@@ -601,6 +628,10 @@ impl Literal {
                     ))
                 }
             }
+            Type::Variant(_) => Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Variant type is not supported for single-value JSON serialization",
+            )),
         }
     }
 

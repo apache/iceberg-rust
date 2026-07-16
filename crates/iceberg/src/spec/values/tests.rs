@@ -215,6 +215,53 @@ fn json_timestamptz() {
 }
 
 #[test]
+fn json_timestamp_ns() {
+    let record = r#""2017-11-16T22:31:08.123456789""#;
+
+    check_json_serde(
+        record,
+        Literal::Primitive(PrimitiveLiteral::Long(1510871468123456789)),
+        &Type::Primitive(PrimitiveType::TimestampNs),
+    );
+}
+
+#[test]
+fn json_timestamptz_ns() {
+    let record = r#""2017-11-16T22:31:08.123456789+00:00""#;
+
+    check_json_serde(
+        record,
+        Literal::Primitive(PrimitiveLiteral::Long(1510871468123456789)),
+        &Type::Primitive(PrimitiveType::TimestamptzNs),
+    );
+}
+
+#[test]
+fn json_timestamptz_ns_rejects_non_utc_offset() {
+    // Per the spec, timestamptz_ns single-value serialization must use offset "+00:00"; Java's
+    // SingleValueParser enforces the same (DateTimeUtil.isUTCTimestamptz). A non-UTC offset is not a
+    // valid encoding and must be rejected, not silently re-based to UTC.
+    let record = serde_json::Value::String("2017-11-16T22:31:08.123456789+05:00".to_string());
+    let result = Literal::try_from_json(record, &Type::Primitive(PrimitiveType::TimestamptzNs));
+    assert!(
+        result.is_err(),
+        "non-UTC offset must be rejected for timestamptz_ns, got {result:?}"
+    );
+}
+
+#[test]
+fn json_timestamptz_rejects_non_utc_offset() {
+    // Micros-precision counterpart, mirroring Java's TestSingleValueParser.testInvalidTimestamptz:
+    // the offset must be "+00:00", so a non-UTC offset is rejected.
+    let record = serde_json::Value::String("2017-11-16T22:31:08.123456+05:00".to_string());
+    let result = Literal::try_from_json(record, &Type::Primitive(PrimitiveType::Timestamptz));
+    assert!(
+        result.is_err(),
+        "non-UTC offset must be rejected for timestamptz, got {result:?}"
+    );
+}
+
+#[test]
 fn json_string() {
     let record = r#""iceberg""#;
 
