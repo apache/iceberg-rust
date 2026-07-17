@@ -625,8 +625,9 @@ pub mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
+    use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch,
+        Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, RunArray,
         StringArray,
     };
     use futures::{TryStreamExt, stream};
@@ -641,7 +642,7 @@ pub mod tests {
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::{FileIO, OutputFile};
-    use crate::metadata_columns::RESERVED_COL_NAME_FILE;
+    use crate::metadata_columns::{RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_SPEC_ID};
     use crate::scan::FileScanTask;
     use crate::spec::{
         DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, DataFileBuilder, DataFileFormat, Datum,
@@ -820,6 +821,40 @@ pub mod tests {
             }
         }
 
+        pub fn new_with_partition_evolution() -> Self {
+            let table = Self::new().table;
+            let table_location = table.metadata().location.clone();
+
+            let manifest_list1_location =
+                format!("{}/metadata/manifests_list_1.avro", table_location);
+            let manifest_list2_location =
+                format!("{}/metadata/manifests_list_2.avro", table_location);
+            let manifest_list3_location =
+                format!("{}/metadata/manifests_list_3.avro", table_location);
+            let table_metadata1_location = format!("{}/metadata/v1.json", table_location);
+
+            let new_table_metadata = {
+                let template_json_str = fs::read_to_string(format!(
+                    "{}/testdata/example_table_metadata_v2_partition_evolution.json",
+                    env!("CARGO_MANIFEST_DIR")
+                ))
+                .unwrap();
+                let metadata_json = render_template(&template_json_str, context! {
+                    table_location => &table_location,
+                    manifest_list_1_location => &manifest_list1_location,
+                    manifest_list_2_location => &manifest_list2_location,
+                    manifest_list_3_location => &manifest_list3_location,
+                    table_metadata_1_location => &table_metadata1_location,
+                });
+                Arc::new(serde_json::from_str::<TableMetadata>(&metadata_json).unwrap())
+            };
+
+            Self {
+                table_location,
+                table: table.with_metadata(new_table_metadata),
+            }
+        }
+
         fn next_manifest_file(&self) -> OutputFile {
             self.table
                 .file_io()
@@ -936,10 +971,127 @@ pub mod tests {
             manifest_list_write.close().await.unwrap();
         }
 
+        pub async fn setup_manifest_files_with_partition_evolution(&mut self) {
+            let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+            let parent_snapshot = current_snapshot
+                .parent_snapshot(self.table.metadata())
+                .unwrap();
+            let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+            let current_partition_spec = self.table.metadata().default_partition_spec();
+
+            // Write the data files first, then use the file size in the manifest entries
+            let parquet_file_size = self.write_parquet_data_files();
+
+            let mut writer = ManifestWriterBuilder::new(
+                self.next_manifest_file(),
+                Some(current_snapshot.snapshot_id()),
+                current_schema.clone(),
+                current_partition_spec.as_ref().clone(),
+            )
+            .build_v2_data();
+            writer
+                .add_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(1)
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/1.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(parquet_file_size)
+                                .record_count(1)
+                                .partition(Struct::from_iter([
+                                    Some(Literal::long(100)),
+                                    Some(Literal::string("apa")),
+                                    Some(Literal::int(27)),
+                                ]))
+                                .key_metadata(None)
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            writer
+                .add_delete_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Deleted)
+                        .snapshot_id(parent_snapshot.snapshot_id())
+                        .sequence_number(parent_snapshot.sequence_number())
+                        .file_sequence_number(parent_snapshot.sequence_number())
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(1)
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/2.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(parquet_file_size)
+                                .record_count(1)
+                                .partition(Struct::from_iter([
+                                    Some(Literal::long(200)),
+                                    Some(Literal::string("ice")),
+                                    Some(Literal::int(5)),
+                                ]))
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            writer
+                .add_existing_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Existing)
+                        .snapshot_id(parent_snapshot.snapshot_id())
+                        .sequence_number(parent_snapshot.sequence_number())
+                        .file_sequence_number(parent_snapshot.sequence_number())
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(1)
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/3.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(parquet_file_size)
+                                .record_count(1)
+                                .partition(Struct::from_iter([
+                                    Some(Literal::long(300)),
+                                    Some(Literal::string("apa")),
+                                    Some(Literal::int(19)),
+                                ]))
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+            let data_file_manifest = writer.write_manifest_file().await.unwrap();
+
+            // Write to manifest list
+            let manifest_list_writer = self
+                .table
+                .file_io()
+                .new_output(current_snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap();
+            let mut manifest_list_write = ManifestListWriter::v2(
+                manifest_list_writer,
+                current_snapshot.snapshot_id(),
+                current_snapshot.parent_snapshot_id(),
+                current_snapshot.sequence_number(),
+            );
+            manifest_list_write
+                .add_manifests(vec![data_file_manifest].into_iter())
+                .unwrap();
+            manifest_list_write.close().await.unwrap();
+        }
+
         /// Writes identical Parquet data files (1.parquet, 2.parquet, 3.parquet)
         /// and returns the file size in bytes.
         fn write_parquet_data_files(&self) -> u64 {
-            std::fs::create_dir_all(&self.table_location).unwrap();
+            fs::create_dir_all(&self.table_location).unwrap();
 
             let schema = {
                 let fields = vec![
@@ -1053,7 +1205,7 @@ pub mod tests {
                 writer.close().unwrap();
             }
 
-            std::fs::metadata(format!("{}/1.parquet", &self.table_location))
+            fs::metadata(format!("{}/1.parquet", &self.table_location))
                 .unwrap()
                 .len()
         }
@@ -2021,8 +2173,6 @@ pub mod tests {
 
     #[tokio::test]
     async fn test_select_with_file_column() {
-        use arrow_array::cast::AsArray;
-
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
@@ -2066,7 +2216,7 @@ pub mod tests {
         // Decode the RunArray to verify it contains the file path
         let run_array = file_col
             .as_any()
-            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
+            .downcast_ref::<RunArray<Int32Type>>()
             .expect("_file column should be a RunArray");
 
         let values = run_array.values();
@@ -2167,7 +2317,7 @@ pub mod tests {
             let file_col = batch.column_by_name(RESERVED_COL_NAME_FILE).unwrap();
             let run_array = file_col
                 .as_any()
-                .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
+                .downcast_ref::<RunArray<Int32Type>>()
                 .expect("_file column should be a RunArray");
 
             let values = run_array.values();
@@ -2364,5 +2514,170 @@ pub mod tests {
 
         // Assert it finished (didn't timeout)
         assert!(result.is_ok(), "Scan timed out - deadlock detected");
+    }
+
+    #[tokio::test]
+    async fn test_select_with_spec_id_column() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Select regular columns plus the _spec_id column
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_SPEC_ID, "z"])
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        // Verify we have 3 columns: x, _spec_id, and z
+        assert_eq!(batches[0].num_columns(), 3);
+
+        // Verify the x column exists and has correct data
+        let col1 = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col1.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
+
+        // Verify the _spec_id column exists
+        let spec_id_col = batches[0].column_by_name(RESERVED_COL_NAME_SPEC_ID);
+        assert!(
+            spec_id_col.is_some(),
+            "_spec_id column should be present in the batch"
+        );
+
+        // Verify the _spec_id data type
+        let spec_id_col = spec_id_col.unwrap();
+        assert!(
+            matches!(
+                spec_id_col.data_type(),
+                arrow_schema::DataType::RunEndEncoded(_, _)
+            ),
+            "_spec_id column should use RunEndEncoded type"
+        );
+
+        // Decode the RunArray to verify it contains the spec id
+        let run_array = spec_id_col
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .expect("_spec_id column should be a RunArray");
+
+        let values = run_array.values();
+        let int_values = values.as_primitive::<Int32Type>();
+        assert_eq!(int_values.len(), 1, "Should have a single _spec_id");
+
+        let spec_id = int_values.value(0);
+        assert_eq!(spec_id, 0, "_spec_id should be 0, got: {spec_id}");
+
+        // Verify 'z' column exists
+        assert!(batches[0].column_by_name("z").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_select_with_spec_id_column_from_unpartitioned_table() {
+        let mut fixture = TableTestFixture::new_unpartitioned();
+        fixture.setup_unpartitioned_manifest_files().await;
+
+        // Select regular columns plus the _spec_id column
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_SPEC_ID])
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        // Verify we have 2 columns: x and _spec_id
+        assert_eq!(batches[0].num_columns(), 2);
+
+        // Verify the _spec_id column exists
+        let spec_id_col = batches[0].column_by_name(RESERVED_COL_NAME_SPEC_ID);
+        assert!(
+            spec_id_col.is_some(),
+            "_spec_id column should be present in the batch"
+        );
+
+        // Verify the _spec_id data type
+        let spec_id_col = spec_id_col.unwrap();
+        assert!(
+            matches!(
+                spec_id_col.data_type(),
+                arrow_schema::DataType::RunEndEncoded(_, _)
+            ),
+            "_spec_id column should use RunEndEncoded type"
+        );
+
+        // Decode the RunArray to verify it contains the spec id
+        let run_array = spec_id_col
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .expect("_spec_id column should be a RunArray");
+
+        let values = run_array.values();
+        let int_values = values.as_primitive::<Int32Type>();
+        assert_eq!(int_values.len(), 1, "Should have a single _spec_id");
+
+        let spec_id = int_values.value(0);
+        assert_eq!(spec_id, 0, "_spec_id should be 0, got: {spec_id}");
+    }
+
+    #[tokio::test]
+    async fn test_select_with_spec_id_column_with_partition_evolution() {
+        let mut fixture = TableTestFixture::new_with_partition_evolution();
+        fixture
+            .setup_manifest_files_with_partition_evolution()
+            .await;
+
+        // Select regular columns plus the _spec_id column
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_SPEC_ID, "z"])
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        // Verify the x column exists and has correct data
+        let col1 = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col1.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
+
+        // Verify the _spec_id column exists
+        let spec_id_col = batches[0].column_by_name(RESERVED_COL_NAME_SPEC_ID);
+        assert!(
+            spec_id_col.is_some(),
+            "_spec_id column should be present in the batch"
+        );
+
+        // Verify the _spec_id data type
+        let spec_id_col = spec_id_col.unwrap();
+        assert!(
+            matches!(
+                spec_id_col.data_type(),
+                arrow_schema::DataType::RunEndEncoded(_, _)
+            ),
+            "_spec_id column should use RunEndEncoded type"
+        );
+
+        // Decode the RunArray to verify it contains the spec id
+        let run_array = spec_id_col
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .expect("_spec_id column should be a RunArray");
+
+        let values = run_array.values();
+        let int_values = values.as_primitive::<Int32Type>();
+        assert_eq!(int_values.len(), 1, "Should have a single _spec_id");
+
+        let spec_id = int_values.value(0);
+        assert_eq!(spec_id, 2, "_spec_id should be 2, got: {spec_id}");
     }
 }

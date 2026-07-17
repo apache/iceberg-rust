@@ -47,3 +47,6 @@ itertools = { workspace = true }
 parquet = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
+
+[lints]
+workspace = true
