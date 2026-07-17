@@ -114,12 +114,13 @@ impl HttpClient {
         mut request: Request,
         session: &dyn AuthSession,
     ) -> Result<Response> {
-        // Authenticate first, then apply extra headers, so a configured
-        // `header.authorization` keeps overriding a token (unchanged behavior).
+        // Apply extra headers BEFORE authentication so a SigV4 session signs the
+        // final header set (Java parity). Deliberate change: auth now wins over a
+        // configured `header.authorization` instead of being clobbered by it.
+        request.headers_mut().extend(self.extra_headers.clone());
         session
             .authenticate(&mut HttpRequest::new(&mut request))
             .await?;
-        request.headers_mut().extend(self.extra_headers.clone());
         Ok(self.client.execute(request).await?)
     }
 

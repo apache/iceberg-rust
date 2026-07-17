@@ -167,7 +167,7 @@ dependencies = [
  "miniz_oxide",
  "num-bigint",
  "quad-rand",
- "rand 0.9.5",
+ "rand 0.9.4",
  "regex-lite",
  "serde",
  "serde_bytes",
@@ -295,7 +295,7 @@ dependencies = [
  "flate2",
  "indexmap 2.14.0",
  "liblzma",
- "rand 0.9.5",
+ "rand 0.9.4",
  "serde",
  "serde_json",
  "snap",
@@ -2098,7 +2098,7 @@ dependencies = [
  "log",
  "object_store",
  "parking_lot",
- "rand 0.9.5",
+ "rand 0.9.4",
  "tokio",
  "tokio-util",
  "url",
@@ -2249,7 +2249,7 @@ dependencies = [
  "object_store",
  "parking_lot",
  "parquet",
- "rand 0.9.5",
+ "rand 0.9.4",
  "tempfile",
  "url",
 ]
@@ -2348,7 +2348,7 @@ dependencies = [
  "md-5 0.11.0",
  "memchr",
  "num-traits",
- "rand 0.9.5",
+ "rand 0.9.4",
  "regex",
  "sha2 0.11.0",
  "uuid",
@@ -2682,7 +2682,7 @@ dependencies = [
  "log",
  "num-traits",
  "percent-encoding",
- "rand 0.9.5",
+ "rand 0.9.4",
  "serde_json",
  "sha1 0.11.0",
  "sha2 0.11.0",
@@ -3797,7 +3797,7 @@ dependencies = [
  "ordered-float 4.6.0",
  "parquet",
  "pretty_assertions",
- "rand 0.9.5",
+ "rand 0.9.4",
  "regex",
  "reqwest 0.12.28",
  "roaring",
@@ -3891,9 +3891,11 @@ name = "iceberg-catalog-rest"
 version = "0.10.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "futures",
+ "hmac 0.12.1",
  "http 1.4.2",
  "iceberg",
  "iceberg_test_utils",
@@ -3903,6 +3905,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tracing",
  "typed-builder",
@@ -4807,7 +4810,7 @@ dependencies = [
  "hyper-util",
  "log",
  "pin-project-lite",
- "rand 0.9.5",
+ "rand 0.9.4",
  "regex",
  "serde_json",
  "serde_urlencoded",
@@ -6045,9 +6048,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.9.5"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
+checksum = "44c5af06bb1b7d3216d91932aed5265164bf384dc89cd6ba05cf59a35f5f76ea"
 dependencies = [
  "rand_chacha 0.9.0",
  "rand_core 0.9.5",
@@ -6585,7 +6588,7 @@ version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
 dependencies = [
- "rand 0.9.5",
+ "rand 0.9.4",
 ]
 
 [[package]]
@@ -8099,7 +8102,7 @@ version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ea3136b675547379c4bd395ca6b938e5ad3c3d20fad76e7fe85f9e0d011419c"
 dependencies = [
- "rand 0.9.5",
+ "rand 0.9.4",
 ]
 
 [[package]]
@@ -8308,7 +8311,7 @@ dependencies = [
  "nix 0.29.0",
  "once_cell",
  "pin-project",
- "rand 0.9.5",
+ "rand 0.9.4",
  "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",

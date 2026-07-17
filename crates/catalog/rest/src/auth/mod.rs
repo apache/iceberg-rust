@@ -19,6 +19,7 @@
 //! `AuthManager`/`AuthSession` API.
 
 mod oauth2;
+mod sigv4;
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -29,11 +30,14 @@ use http::{HeaderMap, Method};
 use iceberg::Result;
 pub use oauth2::OAuth2Manager;
 use reqwest::{Client, Request};
+pub use sigv4::{AwsCredentials, PayloadHashMode, SigV4AuthManager, SigV4Signer};
 
 /// `rest.auth.type` value disabling authentication.
 pub const AUTH_TYPE_NONE: &str = "none";
 /// `rest.auth.type` value selecting OAuth2 token authentication.
 pub const AUTH_TYPE_OAUTH2: &str = "oauth2";
+/// `rest.auth.type` value selecting AWS SigV4 request signing.
+pub const AUTH_TYPE_SIGV4: &str = "sigv4";
 
 /// Creates the [`AuthSession`]s used to authenticate REST catalog requests.
 ///
@@ -116,6 +120,12 @@ impl<'a> HttpRequest<'a> {
                 None => HttpRequestBody::Streaming,
             },
         }
+    }
+
+    /// The wrapped request, for crate-internal consumers that need the concrete
+    /// client type (e.g. handing it to [`SigV4Signer::sign`]).
+    pub(crate) fn inner_mut(&mut self) -> &mut Request {
+        self.inner
     }
 }
 
