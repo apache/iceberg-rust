@@ -149,11 +149,12 @@ mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
+    use crate::encryption::kms::MemoryKeyManagementClient;
     use crate::io::FileIO;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, ManifestEntry,
         ManifestListWriter, ManifestStatus, ManifestWriterBuilder, SnapshotRef, Struct,
-        TableMetadata,
+        TableMetadata, TableProperties,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
@@ -399,6 +400,91 @@ mod tests {
                 .get("key")
                 .unwrap(),
             "val"
+        );
+    }
+
+    fn make_v3_encrypted_table() -> Table {
+        let json = fs::read_to_string(format!(
+            "{}/testdata/table_metadata/TableMetadataV3ValidMinimal.json",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let metadata = serde_json::from_str::<TableMetadata>(&json).unwrap();
+
+        // Turn on encryption via the master key id understood by the KMS below.
+        let mut props = HashMap::new();
+        props.insert(
+            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+            "master-1".to_string(),
+        );
+        let metadata = metadata
+            .into_builder(None)
+            .set_properties(props)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let kms = MemoryKeyManagementClient::new();
+        kms.add_master_key("master-1").unwrap();
+
+        Table::builder()
+            .metadata(metadata)
+            .metadata_location("memory:///table/metadata/v1.json")
+            .identifier(TableIdent::from_strs(["ns1", "enc"]).unwrap())
+            .file_io(FileIO::new_with_memory())
+            .kms_client(Arc::new(kms))
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_commit_with_encryption_adds_keys_and_records_snapshot_key_id() {
+        let table = make_v3_encrypted_table();
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/1.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(1))]))
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![data_file]);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let added_key_ids: Vec<String> = updates
+            .iter()
+            .filter_map(|u| match u {
+                TableUpdate::AddEncryptionKey { encryption_key } => {
+                    Some(encryption_key.key_id().to_string())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(added_key_ids.len(), 2, "got {updates:?}");
+
+        // Encryption keys are added before the snapshot, so it isn't updates[0] here.
+        let new_snapshot = updates
+            .iter()
+            .find_map(|u| match u {
+                TableUpdate::AddSnapshot { snapshot } => Some(snapshot),
+                _ => None,
+            })
+            .expect("commit should add a snapshot");
+
+        let snapshot_key_id = new_snapshot
+            .encryption_key_id()
+            .expect("encrypted snapshot should record its manifest-list key id");
+        assert!(
+            added_key_ids.iter().any(|id| id == snapshot_key_id),
+            "snapshot key id {snapshot_key_id} not in added keys {added_key_ids:?}"
         );
     }
 
