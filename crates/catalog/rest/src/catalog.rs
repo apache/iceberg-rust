@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
@@ -38,6 +38,7 @@ use reqwest::{Client, Method, StatusCode, Url};
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
+use crate::auth::{AUTH_TYPE_NONE, AUTH_TYPE_OAUTH2, AuthManager, NoopAuthManager, OAuth2Manager};
 use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
@@ -53,6 +54,8 @@ pub const REST_CATALOG_PROP_URI: &str = "uri";
 pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 /// Disable header redaction in error logs (defaults to false for security)
 pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-redaction";
+/// Authentication scheme: `none` or `oauth2` (default).
+pub const REST_CATALOG_PROP_AUTH_TYPE: &str = "rest.auth.type";
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -76,6 +79,8 @@ impl Default for RestCatalogBuilder {
                 warehouse: None,
                 props: HashMap::new(),
                 client: None,
+                default_client: Arc::new(OnceLock::new()),
+                auth_manager: None,
             },
             storage_factory: None,
             kms_client_factory: None,
@@ -160,6 +165,12 @@ impl RestCatalogBuilder {
         self.config.client = Some(client);
         self
     }
+
+    /// Injects a custom auth manager, overriding the `rest.auth.type` configuration.
+    pub fn with_auth_manager(mut self, auth_manager: Arc<dyn AuthManager>) -> Self {
+        self.config.auth_manager = Some(auth_manager);
+        self
+    }
 }
 
 /// Rest catalog configuration.
@@ -178,6 +189,15 @@ pub(crate) struct RestCatalogConfig {
 
     #[builder(default)]
     client: Option<Client>,
+
+    /// Lazily-created default HTTP client, shared through clones of this
+    /// config so OAuth and catalog traffic reuse one connection pool
+    /// (matching the single-client behavior before the AuthManager refactor).
+    #[builder(default)]
+    default_client: Arc<OnceLock<Client>>,
+
+    #[builder(default)]
+    auth_manager: Option<Arc<dyn AuthManager>>,
 }
 
 impl RestCatalogConfig {
@@ -194,11 +214,13 @@ impl RestCatalogConfig {
     }
 
     pub(crate) fn get_token_endpoint(&self) -> String {
-        if let Some(oauth2_uri) = self.props.get("oauth2-server-uri") {
-            oauth2_uri.to_string()
-        } else {
-            [&self.uri, PATH_V1, "oauth", "tokens"].join("/")
-        }
+        self.explicit_oauth2_server_uri()
+            .unwrap_or_else(|| default_token_endpoint(&self.uri))
+    }
+
+    /// The `oauth2-server-uri` property, only when explicitly configured.
+    pub(crate) fn explicit_oauth2_server_uri(&self) -> Option<String> {
+        self.props.get("oauth2-server-uri").cloned()
     }
 
     fn namespaces_endpoint(&self) -> String {
@@ -230,9 +252,13 @@ impl RestCatalogConfig {
         ])
     }
 
-    /// Get the client from the config.
-    pub(crate) fn client(&self) -> Option<Client> {
-        self.client.clone()
+    /// The HTTP client: the configured one, or a lazily-created default that
+    /// is shared across every user of this config (and its clones), so token
+    /// and catalog requests keep sharing one connection pool.
+    pub(crate) fn client(&self) -> Client {
+        self.client
+            .clone()
+            .unwrap_or_else(|| self.default_client.get_or_init(Client::default).clone())
     }
 
     /// Get the token from the config.
@@ -244,89 +270,32 @@ impl RestCatalogConfig {
 
     /// Get the credentials from the config. The client can use these credentials to fetch a new
     /// token.
-    ///
-    /// ## Output
-    ///
-    /// - `None`: No credential is set.
-    /// - `Some(None, client_secret)`: No client_id is set, use client_secret directly.
-    /// - `Some(Some(client_id), client_secret)`: Both client_id and client_secret are set.
     pub(crate) fn credential(&self) -> Option<(Option<String>, String)> {
-        let cred = self.props.get("credential")?;
-
-        match cred.split_once(':') {
-            Some((client_id, client_secret)) => {
-                Some((Some(client_id.to_string()), client_secret.to_string()))
-            }
-            None => Some((None, cred.to_string())),
-        }
+        credential_from_props(&self.props)
     }
 
-    /// Get the extra headers from config, which includes:
-    ///
-    /// - `content-type`
-    /// - `x-client-version`
-    /// - `user-agent`
-    /// - All headers specified by `header.xxx` in props.
+    /// Get the extra headers from config, see [`extra_headers_from_props`].
     pub(crate) fn extra_headers(&self) -> Result<HeaderMap> {
-        let mut headers = HeaderMap::from_iter([
-            (
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json"),
-            ),
-            (
-                HeaderName::from_static("x-client-version"),
-                HeaderValue::from_static(ICEBERG_REST_SPEC_VERSION),
-            ),
-            (
-                header::USER_AGENT,
-                HeaderValue::from_str(&format!("iceberg-rs/{CARGO_PKG_VERSION}")).unwrap(),
-            ),
-        ]);
-
-        for (key, value) in self
-            .props
-            .iter()
-            .filter_map(|(k, v)| k.strip_prefix("header.").map(|k| (k, v)))
-        {
-            headers.insert(
-                HeaderName::from_str(key).map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Invalid header name: {key}"),
-                    )
-                    .with_source(e)
-                })?,
-                HeaderValue::from_str(value).map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Invalid header value: {value}"),
-                    )
-                    .with_source(e)
-                })?,
-            );
-        }
-
-        Ok(headers)
+        extra_headers_from_props(&self.props)
     }
 
     /// Get the optional OAuth headers from the config.
     pub(crate) fn extra_oauth_params(&self) -> HashMap<String, String> {
-        let mut params = HashMap::new();
+        oauth_params_from_props(&self.props)
+    }
 
-        if let Some(scope) = self.props.get("scope") {
-            params.insert("scope".to_string(), scope.to_string());
-        } else {
-            params.insert("scope".to_string(), "catalog".to_string());
-        }
-
-        let optional_params = ["audience", "resource"];
-        for param_name in optional_params {
-            if let Some(value) = self.props.get(param_name) {
-                params.insert(param_name.to_string(), value.to_string());
-            }
-        }
-
-        params
+    /// The properties handed to [`AuthManager::catalog_session`], with the
+    /// resolved token endpoint made explicit.
+    pub(crate) fn auth_props(&self) -> HashMap<String, String> {
+        // `oauth2-server-uri` stays absent unless explicitly configured, so an
+        // injected manager keeps its own token endpoint instead of having a
+        // synthesized `<catalog>/v1/oauth/tokens` forced onto it (posting a
+        // client secret to the wrong host). The resolved catalog `uri` (which
+        // a `/v1/config` override may have changed) IS passed, so the built-in
+        // manager can recompute its default endpoint from it.
+        let mut props = self.props.clone();
+        props.insert(REST_CATALOG_PROP_URI.to_string(), self.uri.clone());
+        props
     }
 
     /// Check if header redaction is disabled in error logs.
@@ -340,6 +309,32 @@ impl RestCatalogConfig {
             .unwrap_or(false)
     }
 
+    /// The configured auth scheme: explicit `rest.auth.type` or the default
+    /// `oauth2` (which behaves as no auth when neither `token` nor
+    /// `credential` is set).
+    fn auth_type(&self) -> String {
+        self.props
+            .get(REST_CATALOG_PROP_AUTH_TYPE)
+            .cloned()
+            .unwrap_or_else(|| AUTH_TYPE_OAUTH2.to_string())
+    }
+
+    /// Resolves the auth manager: a `with_auth_manager` override wins,
+    /// otherwise one is built from the `rest.auth.type` configuration.
+    pub(crate) fn resolve_auth_manager(&self) -> Result<Arc<dyn AuthManager>> {
+        if let Some(auth_manager) = &self.auth_manager {
+            return Ok(auth_manager.clone());
+        }
+        match self.auth_type().as_str() {
+            AUTH_TYPE_NONE => Ok(Arc::new(NoopAuthManager)),
+            AUTH_TYPE_OAUTH2 => Ok(Arc::new(OAuth2Manager::from_config(self)?)),
+            other => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("unknown '{REST_CATALOG_PROP_AUTH_TYPE}': {other}"),
+            )),
+        }
+    }
+
     /// Merge the `RestCatalogConfig` with the a [`CatalogConfig`] (fetched from the REST server).
     pub(crate) fn merge_with_config(mut self, mut config: CatalogConfig) -> Self {
         if let Some(uri) = config.overrides.remove("uri") {
@@ -348,11 +343,118 @@ impl RestCatalogConfig {
 
         let mut props = config.defaults;
         props.extend(self.props);
+        // The client-side warehouse was moved off the props by the builder;
+        // restore it between defaults and overrides so managers receive the
+        // resolved value via `auth_props` with the standard precedence
+        // (server default < client < server override).
+        if let Some(warehouse) = &self.warehouse {
+            props.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), warehouse.clone());
+        }
         props.extend(config.overrides);
 
         self.props = props;
         self
     }
+}
+
+/// Parses the `credential` property.
+///
+/// ## Output
+///
+/// - `None`: No credential is set.
+/// - `Some(None, client_secret)`: No client_id is set, use client_secret directly.
+/// - `Some(Some(client_id), client_secret)`: Both client_id and client_secret are set.
+pub(crate) fn credential_from_props(
+    props: &HashMap<String, String>,
+) -> Option<(Option<String>, String)> {
+    let cred = props.get("credential")?;
+
+    match cred.split_once(':') {
+        Some((client_id, client_secret)) => {
+            Some((Some(client_id.to_string()), client_secret.to_string()))
+        }
+        None => Some((None, cred.to_string())),
+    }
+}
+
+/// The extra headers added to each request, which include:
+///
+/// - `content-type`
+/// - `x-client-version`
+/// - `user-agent`
+/// - All headers specified by `header.xxx` in props.
+pub(crate) fn extra_headers_from_props(props: &HashMap<String, String>) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::from_iter([
+        (
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        ),
+        (
+            HeaderName::from_static("x-client-version"),
+            HeaderValue::from_static(ICEBERG_REST_SPEC_VERSION),
+        ),
+        (
+            header::USER_AGENT,
+            HeaderValue::from_str(&format!("iceberg-rs/{CARGO_PKG_VERSION}")).unwrap(),
+        ),
+    ]);
+
+    headers.extend(explicit_headers_from_props(props)?);
+
+    Ok(headers)
+}
+
+/// The default OAuth2 token endpoint for a catalog `uri`.
+pub(crate) fn default_token_endpoint(uri: &str) -> String {
+    [uri, PATH_V1, "oauth", "tokens"].join("/")
+}
+
+/// Only the headers explicitly configured via `header.xxx` props (no defaults).
+pub(crate) fn explicit_headers_from_props(props: &HashMap<String, String>) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::new();
+    for (key, value) in props
+        .iter()
+        .filter_map(|(k, v)| k.strip_prefix("header.").map(|k| (k, v)))
+    {
+        headers.insert(
+            HeaderName::from_str(key).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid header name: {key}"),
+                )
+                .with_source(e)
+            })?,
+            HeaderValue::from_str(value).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid header value: {value}"),
+                )
+                .with_source(e)
+            })?,
+        );
+    }
+
+    Ok(headers)
+}
+
+/// The optional OAuth parameters added to each authentication request.
+pub(crate) fn oauth_params_from_props(props: &HashMap<String, String>) -> HashMap<String, String> {
+    let mut params = HashMap::new();
+
+    if let Some(scope) = props.get("scope") {
+        params.insert("scope".to_string(), scope.to_string());
+    } else {
+        params.insert("scope".to_string(), "catalog".to_string());
+    }
+
+    let optional_params = ["audience", "resource"];
+    for param_name in optional_params {
+        if let Some(value) = props.get(param_name) {
+            params.insert(param_name.to_string(), value.to_string());
+        }
+    }
+
+    params
 }
 
 #[derive(Debug)]
@@ -429,10 +531,10 @@ impl RestCatalog {
     async fn context(&self) -> Result<&RestContext> {
         self.ctx
             .get_or_try_init(|| async {
-                let client = HttpClient::new(&self.user_config)?;
+                let client = HttpClient::new(&self.user_config).await?;
                 let catalog_config = RestCatalog::load_config(&client, &self.user_config).await?;
                 let config = self.user_config.clone().merge_with_config(catalog_config);
-                let client = client.update_with(&config)?;
+                let client = client.update_with(&config).await?;
 
                 Ok(RestContext { config, client })
             })
@@ -510,7 +612,7 @@ impl RestCatalog {
     /// Invalidate the current token without generating a new one. On the next request, the client
     /// will attempt to generate a new token.
     pub async fn invalidate_token(&self) -> Result<()> {
-        self.context().await?.client.invalidate_token().await
+        self.context().await?.client.session().invalidate().await
     }
 
     /// Invalidate the current token and set a new one. Generates a new token before invalidating
@@ -520,7 +622,7 @@ impl RestCatalog {
     /// If credential is invalid, or the request fails, this method will return an error and leave
     /// the current token unchanged.
     pub async fn regenerate_token(&self) -> Result<()> {
-        self.context().await?.client.regenerate_token().await
+        self.context().await?.client.session().refresh().await
     }
 }
 
@@ -1312,9 +1414,18 @@ mod tests {
         let oauth_mock =
             create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 200)
                 .await;
+        // The next request re-exchanges the credential and sends the new token.
+        let ns_mock = server
+            .mock("GET", "/v1/namespaces")
+            .match_header("authorization", "Bearer ey000000000001")
+            .with_body(r#"{"namespaces": []}"#)
+            .create_async()
+            .await;
         catalog.invalidate_token().await.unwrap();
-        let token = catalog.context().await.unwrap().client.token().await;
+        catalog.list_namespaces(None).await.unwrap();
         oauth_mock.assert_async().await;
+        ns_mock.assert_async().await;
+        let token = catalog.context().await.unwrap().client.token().await;
         assert_eq!(token, Some("ey000000000001".to_string()));
     }
 
@@ -1346,8 +1457,10 @@ mod tests {
             create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 500)
                 .await;
         catalog.invalidate_token().await.unwrap();
-        let token = catalog.context().await.unwrap().client.token().await;
+        // The failed re-exchange surfaces as an error and no token is cached.
+        assert!(catalog.list_namespaces(None).await.is_err());
         oauth_mock.assert_async().await;
+        let token = catalog.context().await.unwrap().client.token().await;
         assert_eq!(token, None);
     }
 
@@ -1610,6 +1723,404 @@ mod tests {
 
         config_mock.assert_async().await;
         list_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_auth_type_none_disables_auth() {
+        // An explicit `rest.auth.type=none` wins over a configured token.
+        let props = HashMap::from([
+            (REST_CATALOG_PROP_AUTH_TYPE.to_string(), "none".to_string()),
+            ("token".to_string(), "some-oauth-token".to_string()),
+        ]);
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(props)
+            .build();
+
+        let session = config
+            .resolve_auth_manager()
+            .unwrap()
+            .init_session()
+            .await
+            .unwrap();
+        let mut req = Client::new()
+            .get("https://rest.example.com/v1/config")
+            .build()
+            .unwrap();
+        session
+            .authenticate(&mut crate::auth::AuthRequest::new(&mut req))
+            .await
+            .unwrap();
+        assert!(req.headers().get("authorization").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_header_prop_overrides_token_on_the_wire() {
+        // Pre-AuthManager behavior, preserved: extra headers are applied after
+        // authentication, so a user-configured `header.authorization` wins
+        // over a configured token.
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let list_ns_mock = server
+            .mock("GET", "/v1/namespaces")
+            .match_header("authorization", "Basic xyz")
+            .with_body(r#"{"namespaces": []}"#)
+            .create_async()
+            .await;
+
+        let props = HashMap::from([
+            ("token".to_string(), "some-oauth-token".to_string()),
+            ("header.authorization".to_string(), "Basic xyz".to_string()),
+        ]);
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+
+        catalog.list_namespaces(None).await.unwrap();
+        config_mock.assert_async().await;
+        list_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_builtin_oauth_endpoint_follows_uri_override() {
+        // When `/v1/config` overrides `uri` (and no explicit `oauth2-server-uri`
+        // is set), the built-in manager's default token endpoint must follow
+        // the merged URI: a refresh after the handshake posts to the new host.
+        let mut bootstrap = Server::new_async().await;
+        let mut overridden = Server::new_async().await;
+
+        let config_mock = bootstrap
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(format!(
+                r#"{{"overrides": {{"uri": "{}"}}, "defaults": {{}}}}"#,
+                overridden.url()
+            ))
+            .create_async()
+            .await;
+        // Handshake exchange still uses the bootstrap-derived default.
+        let bootstrap_oauth_mock =
+            create_oauth_mock_with_path(&mut bootstrap, "/v1/oauth/tokens", "tok-boot", 200).await;
+        // The refresh must follow the overridden URI.
+        let overridden_oauth_mock =
+            create_oauth_mock_with_path(&mut overridden, "/v1/oauth/tokens", "tok-new", 200).await;
+
+        let props = HashMap::from([("credential".to_string(), "client1:secret1".to_string())]);
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(bootstrap.url())
+                .props(props)
+                .build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+
+        catalog.context().await.unwrap();
+        catalog.regenerate_token().await.unwrap();
+
+        config_mock.assert_async().await;
+        bootstrap_oauth_mock.assert_async().await;
+        overridden_oauth_mock.assert_async().await;
+        let token = catalog.context().await.unwrap().client.token().await;
+        assert_eq!(token, Some("tok-new".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_injected_oauth_manager_keeps_endpoint_and_options() {
+        // An injected OAuth2Manager must keep its own token endpoint, extra
+        // headers and OAuth params across the config handshake: only explicit
+        // properties may override them, never synthesized defaults.
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        // The catalog-host default endpoint must never see the credential.
+        let default_endpoint_mock = server
+            .mock("POST", "/v1/oauth/tokens")
+            .expect(0)
+            .create_async()
+            .await;
+        // Both exchanges (handshake + regenerate) hit the injected endpoint,
+        // carrying the injected header and OAuth param.
+        let custom_endpoint_mock = server
+            .mock("POST", "/custom/oauth/tokens")
+            .match_header("x-tenant", "t1")
+            // The default catalog scope must survive alongside the injected
+            // audience (with_extra_oauth_params merges onto the defaults).
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("scope=catalog".to_string()),
+                mockito::Matcher::Regex("audience=aud-1".to_string()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"{
+                "access_token": "ey000000000000",
+                "token_type": "Bearer",
+                "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                "expires_in": 86400
+                }"#,
+            )
+            .expect(2)
+            .create_async()
+            .await;
+
+        let manager = OAuth2Manager::new(format!("{}/custom/oauth/tokens", server.url()))
+            .with_credential(Some("client1".to_string()), "secret1".to_string())
+            .with_extra_headers(HeaderMap::from_iter([(
+                HeaderName::from_static("x-tenant"),
+                HeaderValue::from_static("t1"),
+            )]))
+            .with_extra_oauth_params(HashMap::from([(
+                "audience".to_string(),
+                "aud-1".to_string(),
+            )]));
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .auth_manager(Some(Arc::new(manager)))
+                .build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+
+        // Handshake performs the first exchange; regenerate the second — both
+        // must use the injected endpoint/options.
+        catalog.context().await.unwrap();
+        catalog.regenerate_token().await.unwrap();
+
+        config_mock.assert_async().await;
+        custom_endpoint_mock.assert_async().await;
+        default_endpoint_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_catalog_session_receives_resolved_warehouse() {
+        use tokio::sync::Mutex as AsyncMutex;
+
+        use crate::auth::AuthSession;
+
+        // A custom manager must receive the resolved warehouse in the props
+        // handed to `catalog_session`, with the standard precedence:
+        // server default < client-side warehouse < server override.
+        #[derive(Debug)]
+        struct PlainSession;
+        #[async_trait]
+        impl AuthSession for PlainSession {
+            async fn authenticate(
+                &self,
+                _request: &mut crate::auth::AuthRequest<'_>,
+            ) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        #[derive(Debug)]
+        struct CapturingManager(Arc<AsyncMutex<Option<HashMap<String, String>>>>);
+        #[async_trait]
+        impl AuthManager for CapturingManager {
+            async fn init_session(&self) -> Result<Arc<dyn AuthSession>> {
+                Ok(Arc::new(PlainSession))
+            }
+            async fn catalog_session(
+                &self,
+                props: &HashMap<String, String>,
+            ) -> Result<Arc<dyn AuthSession>> {
+                *self.0.lock().await = Some(props.clone());
+                Ok(Arc::new(PlainSession))
+            }
+        }
+
+        // Client warehouse wins over a server default.
+        let mut server = Server::new_async().await;
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "warehouse".to_string(),
+                "client-wh".to_string(),
+            ))
+            .with_status(200)
+            .with_body(r#"{"defaults": {"warehouse": "default-wh"}, "overrides": {}}"#)
+            .create_async()
+            .await;
+        let captured = Arc::new(AsyncMutex::new(None));
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .warehouse("client-wh".to_string())
+                .auth_manager(Some(Arc::new(CapturingManager(captured.clone()))))
+                .build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+        catalog.context().await.unwrap();
+        config_mock.assert_async().await;
+        let props = captured.lock().await.clone().unwrap();
+        assert_eq!(
+            props.get("warehouse").map(String::as_str),
+            Some("client-wh")
+        );
+
+        // A server override wins over the client warehouse.
+        let mut server = Server::new_async().await;
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "warehouse".to_string(),
+                "client-wh".to_string(),
+            ))
+            .with_status(200)
+            .with_body(r#"{"defaults": {}, "overrides": {"warehouse": "override-wh"}}"#)
+            .create_async()
+            .await;
+        let captured = Arc::new(AsyncMutex::new(None));
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .warehouse("client-wh".to_string())
+                .auth_manager(Some(Arc::new(CapturingManager(captured.clone()))))
+                .build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+        catalog.context().await.unwrap();
+        config_mock.assert_async().await;
+        let props = captured.lock().await.clone().unwrap();
+        assert_eq!(
+            props.get("warehouse").map(String::as_str),
+            Some("override-wh")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_init_session_dropped_before_catalog_session() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::auth::AuthSession;
+
+        // A manager whose init session guards a one-shot resource (released on
+        // drop) must see it released before `catalog_session` is invoked.
+        #[derive(Debug)]
+        struct GuardSession(Arc<AtomicBool>);
+        impl Drop for GuardSession {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        #[async_trait]
+        impl AuthSession for GuardSession {
+            async fn authenticate(
+                &self,
+                _request: &mut crate::auth::AuthRequest<'_>,
+            ) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        #[derive(Debug)]
+        struct PlainSession;
+        #[async_trait]
+        impl AuthSession for PlainSession {
+            async fn authenticate(
+                &self,
+                _request: &mut crate::auth::AuthRequest<'_>,
+            ) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        #[derive(Debug)]
+        struct GuardManager(Arc<AtomicBool>);
+        #[async_trait]
+        impl AuthManager for GuardManager {
+            async fn init_session(&self) -> Result<Arc<dyn AuthSession>> {
+                Ok(Arc::new(GuardSession(self.0.clone())))
+            }
+            async fn catalog_session(
+                &self,
+                _props: &HashMap<String, String>,
+            ) -> Result<Arc<dyn AuthSession>> {
+                if !self.0.load(Ordering::SeqCst) {
+                    return Err(Error::new(
+                        ErrorKind::Unexpected,
+                        "init session must be dropped before catalog_session",
+                    ));
+                }
+                Ok(Arc::new(PlainSession))
+            }
+        }
+
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        let dropped = Arc::new(AtomicBool::new(false));
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .auth_manager(Some(Arc::new(GuardManager(dropped.clone()))))
+                .build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+
+        catalog.context().await.unwrap();
+        config_mock.assert_async().await;
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_unknown_auth_type_is_rejected() {
+        let props = HashMap::from([(
+            REST_CATALOG_PROP_AUTH_TYPE.to_string(),
+            "kerberos".to_string(),
+        )]);
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(props)
+            .build();
+
+        let err = config.resolve_auth_manager().unwrap_err();
+        assert!(err.message().contains(REST_CATALOG_PROP_AUTH_TYPE));
+    }
+
+    #[test]
+    fn test_with_auth_manager_overrides_config() {
+        // A custom auth manager takes precedence over `rest.auth.type`.
+        #[derive(Debug)]
+        struct StubAuthManager;
+        #[async_trait]
+        impl AuthManager for StubAuthManager {
+            async fn init_session(&self) -> Result<Arc<dyn crate::auth::AuthSession>> {
+                unimplemented!()
+            }
+            async fn catalog_session(
+                &self,
+                _props: &HashMap<String, String>,
+            ) -> Result<Arc<dyn crate::auth::AuthSession>> {
+                unimplemented!()
+            }
+        }
+
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(HashMap::from([(
+                REST_CATALOG_PROP_AUTH_TYPE.to_string(),
+                "kerberos".to_string(),
+            )]))
+            .auth_manager(Some(Arc::new(StubAuthManager)))
+            .build();
+
+        // The unknown auth type is never consulted.
+        assert!(config.resolve_auth_manager().is_ok());
     }
 
     #[tokio::test]
