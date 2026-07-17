@@ -18,6 +18,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+use futures::stream::{self, StreamExt};
 use uuid::Uuid;
 
 use super::snapshot::{DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer};
@@ -30,7 +31,7 @@ use crate::table::Table;
 use crate::transaction::{
     ActionCommit, MANIFEST_TARGET_SIZE_BYTES, MANIFEST_TARGET_SIZE_BYTES_DEFAULT, TransactionAction,
 };
-use crate::utils::{DEFAULT_LOAD_CONCURRENCY_LIMIT, try_for_each_manifest};
+use crate::utils::DEFAULT_LOAD_CONCURRENCY_LIMIT;
 use crate::{Error, ErrorKind};
 
 const KEPT_MANIFESTS_COUNT: &str = "manifests-kept";
@@ -251,12 +252,6 @@ impl RewriteManifestsAction {
         // BTreeMap gives deterministic ordering for the writers that are
         // still open when streaming finishes.
         let mut writers: BTreeMap<(String, i32), ManifestWriter> = BTreeMap::new();
-        // Writers that reached the target size mid-stream and were sealed.
-        // They are finalized after the streaming loop because
-        // `write_manifest_file` is async and the routing closure is sync.
-        // Their (unbounded) count is what makes a hot partition span
-        // multiple manifests instead of one.
-        let mut full_writers: Vec<ManifestWriter> = Vec::new();
 
         // Separate manifests into to-be-rewritten and everything else. We
         // don't need to track the "kept" set here — the outer commit()
@@ -282,66 +277,75 @@ impl RewriteManifestsAction {
         }
 
         let mut entry_count: usize = 0;
-
-        // Stream the manifests to rewrite, routing their entries into the
-        // writers and dropping each loaded manifest immediately instead of
-        // holding all of them in memory at once (a large rewrite batch would
-        // otherwise retain every loaded manifest for the whole loop).
-        // Writers are stateful, so the closure runs sequentially.
-        try_for_each_manifest(
-            table.file_io(),
-            manifests_to_rewrite,
-            DEFAULT_LOAD_CONCURRENCY_LIMIT,
-            |manifest_file, manifest| {
-                let spec_id = manifest_file.partition_spec_id;
-                for entry in manifest.entries() {
-                    if !entry.is_alive() {
-                        continue;
-                    }
-
-                    let key = cluster_func(entry.data_file());
-                    let writer_key = (key, spec_id);
-
-                    if !writers.contains_key(&writer_key) {
-                        let w = snapshot_producer
-                            .new_manifest_writer(ManifestContentType::Data, spec_id)?;
-                        writers.insert(writer_key.clone(), w);
-                    }
-                    let writer = writers
-                        .get_mut(&writer_key)
-                        .expect("writer was just inserted for this key");
-                    writer.add_existing_entry(entry.as_ref().clone())?;
-                    entry_count += 1;
-
-                    // Roll over once this manifest reaches the target size:
-                    // seal it now (deferred finalize) and let the next entry
-                    // for this key open a fresh writer.
-                    if writer.estimated_manifest_size() >= target_manifest_size_bytes {
-                        let sealed = writers
-                            .remove(&writer_key)
-                            .expect("writer present for this key");
-                        full_writers.push(sealed);
-                    }
-                }
-                Ok(())
-            },
-        )
-        .await?;
-
-        // Finalize sealed writers first, then the writers still open at the
-        // end. Manifest ordering is not required for correctness (existing
-        // entries keep their sequence numbers, and kept manifests are placed
-        // before new ones in the outer assembly for first_row_id assignment).
-        // Sealed-writer order follows stream completion (`buffer_unordered`);
-        // remaining writers follow BTreeMap key order.
         let mut new_manifests: Vec<ManifestFile> = Vec::new();
-        for writer in full_writers {
-            let manifest_file = writer.write_manifest_file().await?;
-            new_manifests.push(manifest_file);
+
+        // Stream the manifests to rewrite with bounded load concurrency,
+        // routing their entries into per-key writers and dropping each loaded
+        // input manifest immediately (never holding all inputs at once).
+        //
+        // Crucially, a writer that reaches the target size is serialized and
+        // dropped *here* — inside the async loop — rather than parked in a
+        // buffer until the stream finishes. The entries it holds are freed as
+        // soon as its manifest is written, so peak memory is bounded by the
+        // in-flight input manifests plus the still-open (below-target) writers
+        // (at most one per active cluster key) instead of by the total entry
+        // count. A large single-key rewrite previously buffered every output
+        // entry in memory at once and could OOM the process.
+        //
+        // The load stream can run concurrently, but entry routing is
+        // sequential (writers are stateful), so we consume the buffered
+        // manifests one at a time.
+        let mut load_stream = stream::iter(manifests_to_rewrite)
+            .map(|manifest_file| {
+                let file_io = table.file_io().clone();
+                async move {
+                    let manifest = manifest_file.load_manifest(&file_io).await?;
+                    Ok::<_, Error>((manifest_file, manifest))
+                }
+            })
+            .buffer_unordered(DEFAULT_LOAD_CONCURRENCY_LIMIT);
+
+        while let Some(loaded) = load_stream.next().await {
+            let (manifest_file, manifest) = loaded?;
+            let spec_id = manifest_file.partition_spec_id;
+            for entry in manifest.entries() {
+                if !entry.is_alive() {
+                    continue;
+                }
+
+                let key = cluster_func(entry.data_file());
+                let writer_key = (key, spec_id);
+
+                if !writers.contains_key(&writer_key) {
+                    let w = snapshot_producer
+                        .new_manifest_writer(ManifestContentType::Data, spec_id)?;
+                    writers.insert(writer_key.clone(), w);
+                }
+                let writer = writers
+                    .get_mut(&writer_key)
+                    .expect("writer was just inserted for this key");
+                writer.add_existing_entry(entry.as_ref().clone())?;
+                entry_count += 1;
+
+                // Roll over once this writer reaches the target size: seal and
+                // finalize it now, freeing its entries, and let the next entry
+                // for this key open a fresh writer.
+                if writer.estimated_manifest_size() >= target_manifest_size_bytes {
+                    let sealed = writers
+                        .remove(&writer_key)
+                        .expect("writer present for this key");
+                    new_manifests.push(sealed.write_manifest_file().await?);
+                }
+            }
         }
-        for (_key, writer) in writers {
-            let manifest_file = writer.write_manifest_file().await?;
-            new_manifests.push(manifest_file);
+
+        // Finalize the writers still open at the end (the partially-filled tail
+        // per cluster key). Manifest ordering is not required for correctness:
+        // existing entries keep their sequence numbers, and kept manifests are
+        // placed before new ones in the outer assembly for first_row_id
+        // assignment.
+        for (_key, writer) in std::mem::take(&mut writers) {
+            new_manifests.push(writer.write_manifest_file().await?);
         }
 
         Ok((new_manifests, rewritten_manifests, entry_count))
@@ -1135,6 +1139,74 @@ mod tests {
                 .map(|c| c.to_string())
                 .unwrap_or_default()
         })
+    }
+
+    /// A single hot cluster key with many entries and a small target size must
+    /// roll over into multiple output manifests, and no entry may be lost.
+    ///
+    /// This guards the incremental-flush rollover in `run_clustering_pass`,
+    /// which seals and writes each full writer mid-stream (freeing its entries)
+    /// rather than buffering every output entry until the end — the behavior
+    /// that bounds rewrite memory for large single-key (e.g. unpartitioned)
+    /// tables.
+    #[tokio::test]
+    async fn test_rewrite_manifests_rolls_over_and_preserves_count() {
+        let base = make_v2_memory_table();
+
+        // Eight files that all cluster to the same key ('a'), in one input
+        // manifest.
+        let files: Vec<DataFile> = (0..8)
+            .map(|i| data_file(&format!("a-{i}.parquet"), 1, 10))
+            .collect();
+        let m1 = write_data_manifest(
+            &base,
+            "memory:///test/location/metadata/m1.avro",
+            1,
+            1,
+            files,
+        )
+        .await;
+        let snapshot = write_manifest_list_snapshot(
+            &base,
+            "memory:///test/location/metadata/mlist-v1.avro",
+            1,
+            1,
+            vec![m1.clone()],
+        )
+        .await;
+        let table = table_at_snapshot(&base, snapshot);
+
+        // Tiny target so each writer seals after a couple of entries, forcing
+        // the single hot key to span multiple manifests.
+        let action = Arc::new(
+            RewriteManifestsAction::new()
+                .cluster_by(cluster_by_first_char())
+                .set_snapshot_properties(HashMap::from([(
+                    crate::transaction::MANIFEST_TARGET_SIZE_BYTES.to_string(),
+                    "200".to_string(),
+                )])),
+        );
+        Arc::clone(&action).commit(&table).await.unwrap();
+
+        let state = action.state.lock().unwrap();
+        assert!(
+            state.new_manifests.len() >= 2,
+            "a hot key over the target must roll over into multiple manifests, got {}",
+            state.new_manifests.len()
+        );
+        let total_files: u32 = state
+            .new_manifests
+            .iter()
+            .map(|m| m.added_files_count.unwrap_or(0) + m.existing_files_count.unwrap_or(0))
+            .sum();
+        assert_eq!(
+            total_files, 8,
+            "all 8 input files must be preserved across the split manifests"
+        );
+        assert_eq!(
+            state.entry_count, 8,
+            "every live entry must be processed exactly once"
+        );
     }
 
     /// Reuse path: after the first attempt writes new manifests, a concurrent
