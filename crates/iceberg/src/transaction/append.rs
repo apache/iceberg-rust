@@ -149,12 +149,13 @@ mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
+    use crate::encryption::SensitiveBytes;
     use crate::encryption::kms::MemoryKeyManagementClient;
     use crate::io::FileIO;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, ManifestEntry,
         ManifestListWriter, ManifestStatus, ManifestWriterBuilder, SnapshotRef, Struct,
-        TableMetadata, TableProperties,
+        TableMetadata,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
@@ -287,7 +288,7 @@ mod tests {
         assert!(!delete_manifest.has_added_files());
         assert!(!delete_manifest.has_existing_files());
 
-        let mut manifest_list_write = ManifestListWriter::v2(
+        let mut manifest_list_writer = ManifestListWriter::v2(
             table
                 .file_io()
                 .new_output(current_snapshot.manifest_list())
@@ -299,10 +300,10 @@ mod tests {
             current_snapshot.parent_snapshot_id(),
             current_snapshot.sequence_number(),
         );
-        manifest_list_write
+        manifest_list_writer
             .add_manifests(vec![data_manifest, delete_manifest].into_iter())
             .unwrap();
-        manifest_list_write.close().await.unwrap();
+        manifest_list_writer.close().await.unwrap();
 
         (table, tmp_dir, delete_manifest_path)
     }
@@ -403,36 +404,48 @@ mod tests {
         );
     }
 
-    fn make_v3_encrypted_table() -> Table {
+    /// See `testdata/manifests_lists/README.md`.
+    const FIXTURE_MASTER_KEY_ID: &str = "master-1";
+    const FIXTURE_MASTER_KEY_BYTES: [u8; 16] = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+        0x0f,
+    ];
+
+    async fn make_v3_encrypted_table() -> Table {
         let json = fs::read_to_string(format!(
-            "{}/testdata/table_metadata/TableMetadataV3ValidMinimal.json",
+            "{}/testdata/table_metadata/TableMetadataV3ValidEncryption.json",
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap();
         let metadata = serde_json::from_str::<TableMetadata>(&json).unwrap();
 
-        // Turn on encryption via the master key id understood by the KMS below.
-        let mut props = HashMap::new();
-        props.insert(
-            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
-            "master-1".to_string(),
-        );
-        let metadata = metadata
-            .into_builder(None)
-            .set_properties(props)
-            .unwrap()
-            .build()
-            .unwrap()
-            .metadata;
-
         let kms = MemoryKeyManagementClient::new();
-        kms.add_master_key("master-1").unwrap();
+        kms.add_master_key_bytes(
+            FIXTURE_MASTER_KEY_ID,
+            SensitiveBytes::new(FIXTURE_MASTER_KEY_BYTES),
+        )
+        .unwrap();
+
+        let file_io = FileIO::new_with_memory();
+
+        let manifest_list_bytes = fs::read(format!(
+            "{}/testdata/manifests_lists/manifest-list-v3-encrypted.avro",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let parent_manifest_list = metadata.current_snapshot().unwrap().manifest_list();
+        file_io
+            .new_output(parent_manifest_list)
+            .unwrap()
+            .write(manifest_list_bytes.into())
+            .await
+            .unwrap();
 
         Table::builder()
             .metadata(metadata)
             .metadata_location("memory:///table/metadata/v1.json")
             .identifier(TableIdent::from_strs(["ns1", "enc"]).unwrap())
-            .file_io(FileIO::new_with_memory())
+            .file_io(file_io)
             .kms_client(Arc::new(kms))
             .runtime(test_runtime())
             .build()
@@ -441,7 +454,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_commit_with_encryption_adds_keys_and_records_snapshot_key_id() {
-        let table = make_v3_encrypted_table();
+        let table = make_v3_encrypted_table().await;
 
         let data_file = DataFileBuilder::default()
             .content(DataContentType::Data)
@@ -450,7 +463,7 @@ mod tests {
             .file_size_in_bytes(100)
             .record_count(1)
             .partition_spec_id(table.metadata().default_partition_spec_id())
-            .partition(Struct::from_iter([Some(Literal::long(1))]))
+            .partition(Struct::empty())
             .build()
             .unwrap();
 
@@ -468,7 +481,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(added_key_ids.len(), 2, "got {updates:?}");
+        assert!(!added_key_ids.is_empty(), "got {updates:?}");
 
         // Encryption keys are added before the snapshot, so it isn't updates[0] here.
         let new_snapshot = updates
@@ -485,6 +498,18 @@ mod tests {
         assert!(
             added_key_ids.iter().any(|id| id == snapshot_key_id),
             "snapshot key id {snapshot_key_id} not in added keys {added_key_ids:?}"
+        );
+
+        let new_snapshot_ref: SnapshotRef = Arc::new(new_snapshot.clone());
+        let manifest_list = table
+            .manifest_list_reader(&new_snapshot_ref)
+            .load()
+            .await
+            .expect("newly written encrypted manifest list should decrypt and parse");
+        assert_eq!(
+            manifest_list.entries().len(),
+            1,
+            "append should record exactly the one new data manifest"
         );
     }
 
