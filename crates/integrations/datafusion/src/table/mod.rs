@@ -314,7 +314,7 @@ impl IcebergStaticTableProvider {
         from_snapshot_id: i64,
         to_snapshot_id: i64,
     ) -> Result<Self> {
-        let snapshot = table
+        table
             .metadata()
             .snapshot_by_id(to_snapshot_id)
             .ok_or_else(|| {
@@ -326,8 +326,9 @@ impl IcebergStaticTableProvider {
                     ),
                 )
             })?;
-        let table_schema = snapshot.schema(table.metadata())?;
-        let schema = Arc::new(schema_to_arrow_schema(&table_schema)?);
+        // Incremental scans project onto the current schema, so the reported
+        // schema must match it rather than the to-snapshot's schema.
+        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
         Ok(IcebergStaticTableProvider {
             table,
             schema,
@@ -353,7 +354,7 @@ impl IcebergStaticTableProvider {
         from_snapshot_id: i64,
         to_snapshot_id: i64,
     ) -> Result<Self> {
-        let snapshot = table
+        table
             .metadata()
             .snapshot_by_id(to_snapshot_id)
             .ok_or_else(|| {
@@ -365,8 +366,9 @@ impl IcebergStaticTableProvider {
                     ),
                 )
             })?;
-        let table_schema = snapshot.schema(table.metadata())?;
-        let schema = Arc::new(schema_to_arrow_schema(&table_schema)?);
+        // Incremental scans project onto the current schema, so the reported
+        // schema must match it rather than the to-snapshot's schema.
+        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
         Ok(IcebergStaticTableProvider {
             table,
             schema,
@@ -394,7 +396,7 @@ impl IcebergStaticTableProvider {
     /// let df = ctx.sql("SELECT * FROM new_data").await?;
     /// ```
     pub async fn try_new_appends_after(table: Table, from_snapshot_id: i64) -> Result<Self> {
-        let current_snapshot = table.metadata().current_snapshot().ok_or_else(|| {
+        table.metadata().current_snapshot().ok_or_else(|| {
             Error::new(
                 ErrorKind::DataInvalid,
                 format!(
@@ -403,8 +405,9 @@ impl IcebergStaticTableProvider {
                 ),
             )
         })?;
-        let table_schema = current_snapshot.schema(table.metadata())?;
-        let schema = Arc::new(schema_to_arrow_schema(&table_schema)?);
+        // Incremental scans project onto the current schema, so the reported
+        // schema must match it rather than the to-snapshot's schema.
+        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
         Ok(IcebergStaticTableProvider {
             table,
             schema,

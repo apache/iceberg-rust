@@ -261,8 +261,8 @@ impl<'a> IncrementalAppendScanBuilder<'a> {
         self
     }
 
-    /// Sets the concurrency limit for both manifest files and manifest
-    /// entries for this scan
+    /// Sets the concurrency limit for manifest files, manifest entries, and
+    /// data files for this scan
     pub fn with_concurrency_limit(mut self, limit: usize) -> Self {
         self.concurrency_limit_manifest_files = limit;
         self.concurrency_limit_manifest_entries = limit;
