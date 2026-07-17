@@ -23,6 +23,7 @@ mod context;
 use context::*;
 mod task;
 
+use std::future::Future;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
@@ -361,6 +362,25 @@ pub struct TableScan {
 impl TableScan {
     /// Returns a stream of [`FileScanTask`]s.
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
+        self.plan_data_files(|ctx| ctx.into_file_scan_task()).await
+    }
+
+    pub(crate) async fn plan_cow_rewrite_files(
+        &self,
+    ) -> Result<BoxStream<'static, Result<crate::cow_rewrite::CowRewriteFile>>> {
+        self.plan_data_files(|ctx| ctx.into_cow_rewrite_file())
+            .await
+    }
+
+    async fn plan_data_files<T, F, Fut>(
+        &self,
+        build_result: F,
+    ) -> Result<BoxStream<'static, Result<T>>>
+    where
+        T: Send + 'static,
+        F: Fn(ManifestEntryContext) -> Fut + Copy + Send + Sync + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+    {
         let Some(plan_context) = self.plan_context.as_ref() else {
             return Ok(Box::pin(futures::stream::empty()));
         };
@@ -374,8 +394,8 @@ impl TableScan {
         let (manifest_entry_delete_ctx_tx, manifest_entry_delete_ctx_rx) =
             channel(concurrency_limit_manifest_files);
 
-        // used to stream the results back to the caller
-        let (file_scan_task_tx, file_scan_task_rx) = channel(concurrency_limit_manifest_entries);
+        // used to stream the planned data file results back to the caller
+        let (planned_file_tx, planned_file_rx) = channel(concurrency_limit_manifest_entries);
 
         let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new(self.runtime.clone());
 
@@ -391,9 +411,9 @@ impl TableScan {
             manifest_entry_delete_ctx_tx,
         )?;
 
-        let mut channel_for_manifest_error = file_scan_task_tx.clone();
-        let mut channel_for_data_manifest_entry_error = file_scan_task_tx.clone();
-        let mut channel_for_delete_manifest_entry_error = file_scan_task_tx.clone();
+        let mut channel_for_manifest_error = planned_file_tx.clone();
+        let mut channel_for_data_manifest_entry_error = planned_file_tx.clone();
+        let mut channel_for_delete_manifest_entry_error = planned_file_tx.clone();
 
         let rt = self.runtime.clone();
 
@@ -450,7 +470,7 @@ impl TableScan {
             let rt_inner = rt.clone();
             rt.cpu().spawn(async move {
                 let result = manifest_entry_data_ctx_rx
-                    .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone())))
+                    .map(|me_ctx| Ok((me_ctx, planned_file_tx.clone())))
                     .try_for_each_concurrent(
                         concurrency_limit_manifest_entries,
                         |(manifest_entry_context, tx)| {
@@ -462,6 +482,7 @@ impl TableScan {
                                         Self::process_data_manifest_entry(
                                             manifest_entry_context,
                                             tx,
+                                            build_result,
                                         )
                                         .await
                                     })
@@ -477,7 +498,7 @@ impl TableScan {
             });
         }
 
-        Ok(file_scan_task_rx.boxed())
+        Ok(planned_file_rx.boxed())
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -508,10 +529,15 @@ impl TableScan {
         self.plan_context.as_ref().map(|x| &x.snapshot)
     }
 
-    async fn process_data_manifest_entry(
+    async fn process_data_manifest_entry<T, F, Fut>(
         manifest_entry_context: ManifestEntryContext,
-        mut file_scan_task_tx: Sender<Result<FileScanTask>>,
-    ) -> Result<()> {
+        mut planned_file_tx: Sender<Result<T>>,
+        build_result: F,
+    ) -> Result<()>
+    where
+        F: Fn(ManifestEntryContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+    {
         // skip processing this manifest entry if it has been marked as deleted
         if !manifest_entry_context.manifest_entry.is_alive() {
             return Ok(());
@@ -556,10 +582,10 @@ impl TableScan {
         }
 
         // congratulations! the manifest entry has made its way through the
-        // entire plan without getting filtered out. Create a corresponding
-        // FileScanTask and push it to the result stream
-        file_scan_task_tx
-            .send(Ok(manifest_entry_context.into_file_scan_task().await?))
+        // entire plan without getting filtered out. Build the planned file before
+        // sending so delete-file lookup preserves the original scan timing.
+        planned_file_tx
+            .send(Ok(build_result(manifest_entry_context).await?))
             .await?;
 
         Ok(())

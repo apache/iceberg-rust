@@ -170,6 +170,58 @@ impl serde_core::ser::Serialize for iceberg::compression::CompressionCodec
 pub fn iceberg::compression::CompressionCodec::serialize<S: serde_core::ser::Serializer>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::compression::CompressionCodec
 pub fn iceberg::compression::CompressionCodec::deserialize<D: serde_core::de::Deserializer<'de>>(deserializer: D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub mod iceberg::cow_rewrite
+pub struct iceberg::cow_rewrite::CowBatchRewrite
+pub iceberg::cow_rewrite::CowBatchRewrite::changed: bool
+pub iceberg::cow_rewrite::CowBatchRewrite::output: core::option::Option<arrow_array::record_batch::RecordBatch>
+pub struct iceberg::cow_rewrite::CowRewriteBuilder<'a>
+impl<'a> iceberg::cow_rewrite::CowRewriteBuilder<'a>
+pub fn iceberg::cow_rewrite::CowRewriteBuilder<'a>::new(table: &'a iceberg::table::Table) -> Self
+pub async fn iceberg::cow_rewrite::CowRewriteBuilder<'a>::rewrite(self) -> iceberg::Result<iceberg::cow_rewrite::CowRewriteResult>
+pub fn iceberg::cow_rewrite::CowRewriteBuilder<'a>::with_batch_size(self, batch_size: usize) -> Self
+pub fn iceberg::cow_rewrite::CowRewriteBuilder<'a>::with_case_sensitive(self, case_sensitive: bool) -> Self
+pub fn iceberg::cow_rewrite::CowRewriteBuilder<'a>::with_predicate(self, predicate: iceberg::expr::Predicate) -> Self
+pub fn iceberg::cow_rewrite::CowRewriteBuilder<'a>::with_rewriter(self, rewriter: alloc::sync::Arc<dyn iceberg::cow_rewrite::CowBatchRewriter>) -> Self
+pub fn iceberg::cow_rewrite::CowRewriteBuilder<'a>::with_snapshot_id(self, snapshot_id: i64) -> Self
+pub struct iceberg::cow_rewrite::CowRewriteFile
+impl iceberg::cow_rewrite::CowRewriteFile
+pub fn iceberg::cow_rewrite::CowRewriteFile::old_data_file(&self) -> &iceberg::spec::DataFile
+pub fn iceberg::cow_rewrite::CowRewriteFile::scan_task(&self) -> &iceberg::scan::FileScanTask
+impl core::clone::Clone for iceberg::cow_rewrite::CowRewriteFile
+pub fn iceberg::cow_rewrite::CowRewriteFile::clone(&self) -> iceberg::cow_rewrite::CowRewriteFile
+impl core::fmt::Debug for iceberg::cow_rewrite::CowRewriteFile
+pub fn iceberg::cow_rewrite::CowRewriteFile::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct iceberg::cow_rewrite::CowRewriteResult
+pub iceberg::cow_rewrite::CowRewriteResult::added_data_files: alloc::vec::Vec<iceberg::spec::DataFile>
+pub iceberg::cow_rewrite::CowRewriteResult::removed_data_files: alloc::vec::Vec<iceberg::spec::DataFile>
+pub iceberg::cow_rewrite::CowRewriteResult::stats: iceberg::cow_rewrite::CowRewriteStats
+pub iceberg::cow_rewrite::CowRewriteResult::unchanged_data_files: alloc::vec::Vec<iceberg::spec::DataFile>
+impl iceberg::cow_rewrite::CowRewriteResult
+pub fn iceberg::cow_rewrite::CowRewriteResult::has_changes(&self) -> bool
+impl core::default::Default for iceberg::cow_rewrite::CowRewriteResult
+pub fn iceberg::cow_rewrite::CowRewriteResult::default() -> iceberg::cow_rewrite::CowRewriteResult
+impl core::fmt::Debug for iceberg::cow_rewrite::CowRewriteResult
+pub fn iceberg::cow_rewrite::CowRewriteResult::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct iceberg::cow_rewrite::CowRewriteStats
+pub iceberg::cow_rewrite::CowRewriteStats::candidate_files: usize
+pub iceberg::cow_rewrite::CowRewriteStats::changed_batches: u64
+pub iceberg::cow_rewrite::CowRewriteStats::input_rows: u64
+pub iceberg::cow_rewrite::CowRewriteStats::output_rows: u64
+pub iceberg::cow_rewrite::CowRewriteStats::rewritten_files: usize
+pub iceberg::cow_rewrite::CowRewriteStats::unchanged_files: usize
+impl core::clone::Clone for iceberg::cow_rewrite::CowRewriteStats
+pub fn iceberg::cow_rewrite::CowRewriteStats::clone(&self) -> iceberg::cow_rewrite::CowRewriteStats
+impl core::cmp::Eq for iceberg::cow_rewrite::CowRewriteStats
+impl core::cmp::PartialEq for iceberg::cow_rewrite::CowRewriteStats
+pub fn iceberg::cow_rewrite::CowRewriteStats::eq(&self, other: &iceberg::cow_rewrite::CowRewriteStats) -> bool
+impl core::default::Default for iceberg::cow_rewrite::CowRewriteStats
+pub fn iceberg::cow_rewrite::CowRewriteStats::default() -> iceberg::cow_rewrite::CowRewriteStats
+impl core::fmt::Debug for iceberg::cow_rewrite::CowRewriteStats
+pub fn iceberg::cow_rewrite::CowRewriteStats::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for iceberg::cow_rewrite::CowRewriteStats
+impl core::marker::StructuralPartialEq for iceberg::cow_rewrite::CowRewriteStats
+pub trait iceberg::cow_rewrite::CowBatchRewriter: core::marker::Send + core::marker::Sync
+pub fn iceberg::cow_rewrite::CowBatchRewriter::rewrite_batch(&self, batch: arrow_array::record_batch::RecordBatch) -> iceberg::Result<iceberg::cow_rewrite::CowBatchRewrite>
 pub mod iceberg::encryption
 pub mod iceberg::encryption::kms
 pub struct iceberg::encryption::kms::GeneratedKey
