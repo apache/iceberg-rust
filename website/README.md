@@ -21,8 +21,10 @@
 
 ## Preview
 
-This will automatically install mdbook if needed.
+Complete the root [contributor setup](../CONTRIBUTING.md#setup), then use mise from the repository root to install the pinned mdBook version and start a local preview:
 
 ```shell
-make site
+mise run site
 ```
+
+Run `mise run site-build` to build the same complete artifact as CI, including the Rust API documentation, without starting a server.

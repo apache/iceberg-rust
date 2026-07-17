@@ -1,0 +1,277 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+min_version = "2026.7.5"
+monorepo_root = true
+
+[monorepo]
+config_roots = ["bindings/python"]
+
+[vars]
+cargo_binstall_version = "1.20.1"
+cargo_public_api_version = "0.51.0"
+rust_msrv = "1.94"
+
+[settings.python]
+# Python is also a build dependency: the DataFusion bindings need libpython.
+# Refuse to fall back to a locally compiled interpreter with a different layout.
+compile = false
+precompiled_flavor = "install_only_stripped"
+
+# Cargo CLI tools and cargo-binstall are declared on the tasks that use them, not globally.
+# Otherwise mise-action installs them in unrelated jobs (for example, Python CI),
+# increasing setup time and exposing every job to crates.io rate limits.
+[tools]
+actionlint = "1.7.12"
+go = "1.26.5"
+jq = "1.8.2"
+mdbook = "0.4.36"
+python = "3.12.13"
+ruff = "0.15.20"
+rust = [
+  { version = "nightly-2026-03-05", components = [
+    "rustfmt",
+    "clippy",
+  ] },
+  { version = "{{ vars.rust_msrv }}" },
+]
+shellcheck = "0.11.0"
+taplo = "0.9.3"
+typos = "1.48.0"
+uv = "0.9.3"
+
+[tasks.build]
+description = "Build all workspace targets and features"
+run = "cargo build --all-targets --all-features --workspace"
+
+[tasks.build-no-default-features]
+description = "Build the core iceberg crate without default features"
+run = "cargo build -p iceberg --no-default-features"
+
+[tasks.check-license]
+description = "Check Apache license headers"
+run = "go run github.com/apache/skywalking-eyes/cmd/license-eye@v0.8.0 -v info -c .licenserc.yaml header check"
+
+[tasks.check-fmt]
+description = "Check Rust formatting"
+run = "cargo fmt --all -- --check"
+
+[tasks.check-clippy]
+description = "Run Clippy for all workspace targets and features"
+run = "cargo clippy --all-targets --all-features --workspace -- -D warnings"
+
+[tasks.fix-toml]
+description = "Format TOML files"
+run = "taplo fmt"
+
+[tasks.check-toml]
+description = "Check TOML formatting"
+run = "taplo fmt --check"
+
+[tasks.check-lockfile]
+description = "Check that Cargo.lock is up to date"
+run = "cargo update --workspace --locked"
+
+[tasks.cargo-machete]
+description = "Find unused Cargo dependencies"
+run = "cargo machete"
+tools.cargo-binstall = "{{ vars.cargo_binstall_version }}"
+tools."cargo:cargo-machete" = { version = "0.7.0", depends = "rust" }
+
+[tasks.check-typos]
+description = "Check spelling"
+run = "typos"
+
+[tasks.check-actionlint]
+description = "Check GitHub Actions workflow syntax"
+run = "actionlint"
+
+[tasks.check-audit]
+description = "Audit Rust dependencies for known vulnerabilities"
+run = "cargo audit"
+tools.cargo-binstall = "{{ vars.cargo_binstall_version }}"
+tools."cargo:cargo-audit" = "0.22.2"
+tools.rust = "{{ vars.rust_msrv }}"
+
+[tasks.check-standalone]
+description = "Check every workspace crate without feature unification"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+while IFS= read -r package; do
+  echo "Checking $package..."
+  cargo check -p "$package" --all-targets
+done < <(
+  cargo metadata --no-deps --format-version 1 |
+    jq -r '.packages[].name'
+)
+'''
+
+[tasks.check-msrv]
+description = "Check the workspace with the minimum supported Rust version"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+manifest_msrv=$(awk -F'"' '/^rust-version[[:space:]]*=/ { print $2; exit }' Cargo.toml)
+configured_msrv="{{ vars.rust_msrv }}"
+if [[ "$manifest_msrv" != "$configured_msrv" ]]; then
+  echo "ERROR: Cargo.toml rust-version ($manifest_msrv) does not match mise rust_msrv ($configured_msrv)" >&2
+  exit 1
+fi
+
+cargo check --workspace
+'''
+tools.rust = "{{ vars.rust_msrv }}"
+
+[tasks.generate-public-api]
+description = "Regenerate public API snapshots for publishable crates"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+while IFS=$'\t' read -r crate manifest; do
+  crate_dir=$(dirname "$manifest")
+  echo "Generating public API for $crate..."
+  cargo public-api -p "$crate" --all-features -ss > "$crate_dir/public-api.txt"
+done < <(
+  cargo metadata --no-deps --format-version 1 |
+    jq -r '.packages[] | select(.publish == null) | [.name, .manifest_path] | @tsv'
+)
+'''
+tools."cargo:cargo-public-api" = { version = "{{ vars.cargo_public_api_version }}", depends = "rust" }
+
+[tasks.check-public-api]
+description = "Check public API snapshots for publishable crates"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+tmp_dir=$(mktemp -d)
+trap 'rm -rf "$tmp_dir"' EXIT
+failed=0
+
+while IFS=$'\t' read -r crate manifest; do
+  crate_dir=$(dirname "$manifest")
+  generated="$tmp_dir/$crate.txt"
+  echo "Checking public API for $crate..."
+  cargo public-api -p "$crate" --all-features -ss > "$generated"
+  if ! diff -u "$crate_dir/public-api.txt" "$generated"; then
+    echo "ERROR: Public API for $crate has changed. Run 'mise run generate-public-api' to update."
+    failed=1
+  fi
+done < <(
+  cargo metadata --no-deps --format-version 1 |
+    jq -r '.packages[] | select(.publish == null) | [.name, .manifest_path] | @tsv'
+)
+
+exit "$failed"
+'''
+tools."cargo:cargo-public-api" = { version = "{{ vars.cargo_public_api_version }}", depends = "rust" }
+
+[tasks.lint]
+description = "Run the checks from the CI lint job"
+run = [
+  { task = "check-license" },
+  { task = "check-toml" },
+  { task = "check-fmt" },
+  { task = "check-lockfile" },
+  # Structured task references do not install the referenced task's local tools.
+  # Start a new mise run so cargo-machete is installed and activated first.
+  "mise run cargo-machete",
+  { task = "check-typos" },
+  { task = "check-actionlint" },
+]
+
+[tasks.check]
+description = "Run formatting and Rust lint checks"
+run = [{ task = "lint" }, { task = "check-clippy" }]
+
+[tasks.doc-test]
+description = "Run workspace documentation tests"
+run = "cargo test --no-fail-fast --doc --all-features --workspace"
+
+[tasks.unit-test]
+depends = ["doc-test"]
+description = "Run workspace documentation and library tests"
+run = "cargo test --no-fail-fast --lib --all-features --workspace"
+
+[tasks.nextest]
+description = "Run all workspace tests with cargo-nextest"
+run = "cargo nextest run --all-targets --all-features --workspace"
+tools.cargo-binstall = "{{ vars.cargo_binstall_version }}"
+tools."cargo:cargo-nextest" = { version = "0.9.138", depends = "rust" }
+
+[tasks.test]
+description = "Run Docker-backed integration tests and always clean up"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+cleanup() {
+  task_status=$?
+  trap - EXIT
+  cleanup_status=0
+  mise run docker-down || cleanup_status=$?
+  if [ "$task_status" -ne 0 ]; then
+    exit "$task_status"
+  fi
+  exit "$cleanup_status"
+}
+trap cleanup EXIT
+
+mise run docker-up
+# Run tool-bearing tasks through mise so their local tools are installed and activated.
+mise run nextest
+'''
+
+[tasks.clean]
+description = "Remove Cargo build artifacts"
+run = "cargo clean"
+
+[tasks.site]
+description = "Serve the documentation website locally"
+dir = "website"
+run = "mdbook serve"
+
+[tasks.site-build]
+description = "Build the documentation website and Rust API docs"
+dir = "website"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+mdbook build
+cp ../.asf.yaml book/.asf.yaml
+cargo doc --manifest-path ../Cargo.toml --no-deps --workspace --all-features
+rm -rf book/api
+cp -R ../target/doc book/api
+'''
+
+[tasks.docker-up]
+description = "Start integration-test services"
+run = "docker compose -f dev/docker-compose.yaml up -d --build --wait"
+
+[tasks.docker-down]
+description = "Stop integration-test services and remove their volumes"
+run = "docker compose -f dev/docker-compose.yaml down -v --remove-orphans --timeout 0"
+
+[tasks.docker-logs]
+description = "Follow integration-test service logs"
+raw = true
+run = "docker compose -f dev/docker-compose.yaml logs -f"

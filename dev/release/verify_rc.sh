@@ -422,23 +422,26 @@ check_license_headers() {
 }
 
 test_source_distribution() {
-  require_command make
+  require_command mise
   (
     trap - ERR
     cd "${ARCHIVE_BASE_NAME}"
-    make build
-    make test
+    mise trust --yes mise.toml
+    mise install
+    mise run build
+    mise run test
   )
 }
 
 test_python_distribution() {
-  require_command make
-  require_command uv
+  require_command mise
   (
     trap - ERR
-    cd "${ARCHIVE_BASE_NAME}/bindings/python"
-    make install
-    make test
+    cd "${ARCHIVE_BASE_NAME}"
+    mise trust --yes mise.toml
+    mise install
+    mise run //bindings/python:install
+    mise run //bindings/python:test
   )
 }
 

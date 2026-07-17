@@ -1,10 +1,16 @@
 {
   "name": "Iceberg Rust",
   "image": "mcr.microsoft.com/devcontainers/rust:bullseye",
+  "features": {
+    "ghcr.io/devcontainers-extra/features/mise:1": {
+      "version": "2026.7.5"
+    }
+  },
   "customizations": {
     "vscode": {
       "extensions": [
-        "rust-lang.rust-analyzer"
+        "rust-lang.rust-analyzer",
+        "hverlin.mise-vscode"
       ],
       "settings": {
         "editor.formatOnSave": true,
@@ -13,5 +19,19 @@
         }
       }
     }
-  }
+  },
+  "mounts": [
+    {
+      "source": "iceberg-rust-mise-data",
+      "target": "/mnt/mise-data",
+      "type": "volume"
+    }
+  ],
+  "containerEnv": {
+    "MISE_DATA_DIR": "/mnt/mise-data"
+  },
+  "remoteEnv": {
+    "PATH": "${containerEnv:PATH}:/mnt/mise-data/shims"
+  },
+  "postCreateCommand": "sudo chown -R $(id -u):$(id -g) /mnt/mise-data && mise trust --yes mise.toml && mise install"
 }

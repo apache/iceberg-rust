@@ -1,0 +1,74 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+[tasks.build]
+description = "Build and install the Python extension into its virtual environment"
+run = "uv run --no-sync maturin develop"
+
+[tasks.sync]
+description = "Install Python development dependencies"
+env.UV_PYTHON = "{{ tools.python.path }}"
+run = "uv sync --no-managed-python --no-python-downloads --group dev --no-install-project"
+
+[tasks.install]
+description = "Install Python development dependencies and rebuild the extension"
+run = [{ task = ":sync" }, { task = ":build" }]
+
+[tasks.build-wheel]
+depends = [":sync"]
+description = "Build a native Python wheel for local testing"
+run = [
+  '''python -c "import shutil; shutil.rmtree('dist', ignore_errors=True)"''',
+  "uv run --no-sync maturin build --out dist -i python",
+]
+
+[tasks.install-wheel]
+depends = [":build-wheel"]
+description = "Install the locally built Python wheel"
+run = "uv pip install --no-build --reinstall --find-links dist/ pyiceberg-core"
+
+[tasks.test-wheel]
+depends = [":install-wheel"]
+description = "Build, install, and test a native Python wheel"
+run = "uv run --no-sync pytest"
+
+[tasks.test]
+description = "Run Python binding tests"
+run = "uv run --no-sync pytest"
+
+[tasks.check-format]
+description = "Check Python formatting"
+run = "ruff format --check ."
+
+[tasks.check-style]
+description = "Check Python style"
+run = "ruff check ."
+
+[tasks.release-tool-versions]
+description = "Print Rust and Python selectors for release builds"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_config=../../mise.toml
+rust_version=$(mise config get --file "$root_config" vars.rust_msrv)
+python_version=$(mise config get --file "$root_config" tools.python)
+python_minor=${python_version%.*}
+
+printf 'rust=%s\n' "$rust_version"
+printf 'python=%s\n' "python$python_minor"
+'''

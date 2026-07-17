@@ -61,21 +61,21 @@ jobs:
             exit 1
           fi
           echo "✅ Release tag format is valid: $RELEASE_TAG"
-          
+
           # Strip 'v' prefix for cargo version
           CARGO_VERSION="${RELEASE_TAG#v}"
           echo "Cargo version (without v prefix): $CARGO_VERSION"
-          
+
           # For manual triggers, validate that the tag matches the version in Cargo.toml
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             # Extract base version (without -rc.X suffix) for comparison with Cargo.toml
             BASE_VERSION="${CARGO_VERSION%-rc.*}"
             echo "Base version (for Cargo.toml comparison): $BASE_VERSION"
-            
+
             # Read workspace version via cargo metadata
             CARGO_TOML_VERSION=$(cargo metadata --format-version 1 --no-deps -q | jq -r '.packages[0].version')
             echo "Workspace version: $CARGO_TOML_VERSION"
-            
+
             if [ "$BASE_VERSION" != "$CARGO_TOML_VERSION" ]; then
               echo "❌ Version mismatch!"
               echo "   Release tag base version: $BASE_VERSION"
@@ -85,7 +85,7 @@ jobs:
             fi
             echo "✅ Version matches workspace Cargo.toml"
           fi
-          
+
           # Check if this is a release candidate
           if [[ "$RELEASE_TAG" =~ -rc\.[0-9]+$ ]]; then
             IS_RC="true"
@@ -94,10 +94,10 @@ jobs:
             IS_RC="false"
             echo "This is a stable release"
           fi
-          
+
           # Set outputs for other jobs to use
-          echo "cargo-version=$CARGO_VERSION" >> $GITHUB_OUTPUT
-          echo "is-rc=$IS_RC" >> $GITHUB_OUTPUT
+          echo "cargo-version=$CARGO_VERSION" >> "$GITHUB_OUTPUT"
+          echo "is-rc=$IS_RC" >> "$GITHUB_OUTPUT"
 
   sdist:
     runs-on: ubuntu-latest
@@ -107,6 +107,17 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          version: 2026.7.5
+
+      - name: Resolve release tool versions
+        id: tool_versions
+        working-directory: bindings/python
+        shell: bash
+        run: mise run --quiet release-tool-versions >> "$GITHUB_OUTPUT"
+
       - name: Compute RC version
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
         id: version
@@ -115,7 +126,7 @@ jobs:
           CARGO_VERSION: ${{ needs.validate-release-tag.outputs.cargo-version }}
         run: |
           # Convert semver RC (0.9.0-rc.1) to PEP 440 (0.9.0rc1)
-          echo "pep440=$(echo "$CARGO_VERSION" | sed 's/-rc\.\([0-9]*\)/rc\1/')" >> $GITHUB_OUTPUT
+          echo "pep440=${CARGO_VERSION/-rc./rc}" >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/overwrite-package-version
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
@@ -124,6 +135,7 @@ jobs:
 
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          rust-toolchain: ${{ steps.tool_versions.outputs.rust }}
           working-directory: "bindings/python"
           command: sdist
           args: -o dist
@@ -154,6 +166,17 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          version: 2026.7.5
+
+      - name: Resolve release tool versions
+        id: tool_versions
+        working-directory: bindings/python
+        shell: bash
+        run: mise run --quiet release-tool-versions >> "$GITHUB_OUTPUT"
+
       - name: Compute RC version
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
         id: version
@@ -162,35 +185,21 @@ jobs:
           CARGO_VERSION: ${{ needs.validate-release-tag.outputs.cargo-version }}
         run: |
           # Convert semver RC (0.9.0-rc.1) to PEP 440 (0.9.0rc1)
-          echo "pep440=$(echo "$CARGO_VERSION" | sed 's/-rc\.\([0-9]*\)/rc\1/')" >> $GITHUB_OUTPUT
+          echo "pep440=${CARGO_VERSION/-rc./rc}" >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/overwrite-package-version
         if: ${{ needs.validate-release-tag.outputs.is-rc == 'true' }}
         with:
           version: ${{ steps.version.outputs.pep440 }}
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: 3.12
-      - name: Get MSRV
-        id: get-msrv
-        uses: ./.github/actions/get-msrv
-
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ steps.get-msrv.outputs.msrv }}
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          rust-toolchain: ${{ steps.tool_versions.outputs.rust }}
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux || 'auto' }}
           working-directory: "bindings/python"
           command: build
-          args: --release -o dist -i python3.12 # Explicitly set interpreter; manylinux containers have multiple Pythons and maturin may pick an older one
-      - uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
-        with:
-          version: "0.9.3"
-          enable-cache: true
+          args: --release -o dist -i ${{ steps.tool_versions.outputs.python }} # Explicitly set interpreter; manylinux containers have multiple Pythons and maturin may pick an older one
       # Verify the wheel is abi3-compatible and installable without building from source.
       # Skipped for cross-compiled targets since they share the same maturin config;
       # if abi3 is broken, the native target build will catch it.

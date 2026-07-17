@@ -106,10 +106,31 @@ The Apache Iceberg Rust project is composed of the following components:
 
 The features that Iceberg Rust currently supports can be found [here](https://iceberg.apache.org/status/).
 
+## Development
+
+Development tools and tasks are managed with [mise](https://mise.en.dev/). After installing mise, review the repository's root [`mise.toml`](mise.toml) and the Python subproject's [`mise.toml`](bindings/python/mise.toml). Trusting the monorepo root also trusts its listed subprojects. Then run:
+
+```shell
+mise trust
+mise install
+mise run build
+```
+
+Common development commands include:
+
+```shell
+mise run check       # Run formatting, lint, and dependency checks
+mise run unit-test   # Run Rust unit and documentation tests
+mise run test        # Run all tests, including container-backed tests
+```
+
+The full test suite also requires Docker or Podman. See the [Contributing Guide](CONTRIBUTING.md) for complete setup instructions, Python binding tasks, and troubleshooting.
+
 ## Supported Rust Version
 
-Iceberg Rust is built and tested with stable rust, and will keep a rolling MSRV (minimum supported rust version).
-At least three months from latest rust release is supported. MSRV is updated when we release iceberg-rust.
+Iceberg Rust keeps a rolling MSRV (minimum supported Rust version). The MSRV is updated when we release iceberg-rust and is at least three months behind the latest Rust release.
+
+Development, formatting, and linting use the nightly toolchain pinned in `mise.toml`; this does not affect downstream users. Run `mise run check-msrv` to validate the workspace with its declared MSRV.
 
 Check the current MSRV on [crates.io](https://crates.io/crates/iceberg).
 

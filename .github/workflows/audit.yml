@@ -28,21 +28,21 @@ on:
     paths:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
+      - ".github/workflows/audit.yml"
+      - "mise.toml"
 
   pull_request:
     paths:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
       - ".github/workflows/audit.yml"
+      - "mise.toml"
 
   schedule:
     - cron: '0 0 * * *'
 
 permissions:
-  # All other permissions are set to none
   contents: read
-  checks: write
-  issues: write
 
 jobs:
   security_audit:
@@ -52,10 +52,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
-          rust-version: stable
-      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          version: 2026.7.5
+      - name: Audit dependencies
+        run: mise run check-audit

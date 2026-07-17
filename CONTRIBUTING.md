@@ -64,15 +64,19 @@ When a pull request is under review, please avoid using force push as it makes i
 
 ### CI
 
-Currently, iceberg-rust uses GitHub Actions to run tests. The workflows are defined in `.github/workflows`.
+iceberg-rust uses GitHub Actions to orchestrate CI. Developer-facing build, lint, and test checks use the same mise tasks contributors run locally, while GitHub-only security analysis, artifact handling, deployment, and publishing remain workflow actions.
 
 ## Setup
 
-For small or first-time contributions, we recommend the dev container method. Prefer to do it yourself? That's fine too!
+For small or first-time contributions, we recommend the dev container method. Prefer to set up the tools on your host? That's fine too.
+
+The project uses [mise](https://mise.en.dev/) to keep development tool versions and task definitions in one place. The pinned environment makes local and CI runs consistent, installs Rust, Python, and task-specific utilities automatically, and selects a Python distribution flavor that provides the shared `libpython` needed to compile the Python/DataFusion bindings.
+
+This does add mise as a bootstrap dependency, and the first installation requires network access and can take some time. The repository configuration must also be reviewed and trusted before mise will use it. mise does not install system applications such as Docker, Podman, or GPG.
 
 ### Using a dev container environment
 
-iceberg-rust provides a pre-configured [dev container](https://containers.dev/) that could be used in [Github Codespaces](https://github.com/features/codespaces), [VSCode](https://code.visualstudio.com/), [JetBrains](https://www.jetbrains.com/remote-development/gateway/), [JupyterLab](https://jupyterlab.readthedocs.io/en/stable/). Please pick up your favourite runtime environment.
+iceberg-rust provides a pre-configured [dev container](https://containers.dev/) that can be used in [GitHub Codespaces](https://github.com/features/codespaces), [VS Code](https://code.visualstudio.com/), [JetBrains](https://www.jetbrains.com/remote-development/gateway/), or [JupyterLab](https://jupyterlab.readthedocs.io/en/stable/). The container installs mise, trusts this repository's configuration, and installs the pinned development tools automatically.
 
 The fastest way is:
 
@@ -80,35 +84,72 @@ The fastest way is:
 
 ### Bring your own toolbox
 
-#### Install rust
+#### Install mise and project tools
 
-iceberg-rust is primarily a Rust project. To build iceberg-rust, you will need to set up Rust development first. We highly recommend using [rustup](https://rustup.rs/) for the setup process.
+Install mise 2026.7.5 or newer by following the [official installation guide](https://mise.en.dev/getting-started.html). Clone the repository, change to its root directory, and review the root and relevant subproject `mise.toml` files before trusting them. Trusting the monorepo root also trusts its listed subprojects. Then install the pinned tools:
 
-For Linux or MacOS, use the following command:
-
-```shell
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```bash
+mise trust
+mise doctor
+mise install
+mise run build
 ```
 
-For Windows, download `rustup-init.exe` from [here](https://win.rustup.rs/x86_64) instead.
+Shell activation is optional. `mise run ...` executes project tasks with the configured tools, and `mise exec -- cargo ...` can be used for ad hoc commands. Use `mise current` to inspect the selected versions.
 
-Rustup will read iceberg-rust's `rust-toolchain.toml` and set up everything else automatically. To ensure that everything works correctly, run `cargo version` under iceberg-rust's root directory:
+#### Python toolchain
 
-```shell
-$ cargo version
-cargo 1.69.0 (6e9a83356 2023-04-12)
-```
+Python is a workspace build dependency because the workspace contains the Python bindings and their DataFusion integration. The mise-managed Python uses a pinned distribution flavor with the shared library PyO3 needs on Linux, macOS, and Windows. Python tasks explicitly pass the selected interpreter to uv, so uv will not silently select or download a different Python.
 
 #### Install Docker or Podman
 
-Currently, iceberg-rust uses Docker to set up environment for integration tests. See [Container Runtimes](website/src/reference/container-runtimes.md) for setup instructions.
+iceberg-rust uses containers to set up services for integration tests. Install Docker or Podman separately and see [Container Runtimes](website/src/reference/container-runtimes.md) for setup instructions.
 
 ## Build
 
-* To compile the project: `make build`
-* To check code styles: `make check`
-* To run unit tests only: `make unit-test`
-* To run all tests: `make test`
+Run all commands from the repository root. `mise tasks --all` lists tasks from the root and its subprojects.
+
+| Task | Purpose |
+| --- | --- |
+| `mise run build` | Compile all workspace targets and features. |
+| `mise run lint` | Run the complete GitHub Actions lint job locally. |
+| `mise run check` | Run the lint job followed by clippy. |
+| `mise run check-standalone` | Check every workspace crate without workspace feature unification. |
+| `mise run build-no-default-features` | Build the core crate without default features. |
+| `mise run check-msrv` | Check the workspace with the minimum supported Rust version. |
+| `mise run check-public-api` | Compare the public API against the checked-in snapshots. |
+| `mise run check-audit` | Audit Rust dependencies against the RustSec advisory database. |
+| `mise run unit-test` | Run Rust unit and documentation tests. |
+| `mise run nextest` | Run the Rust test suite with cargo-nextest. |
+| `mise run test` | Start the integration-test services, run all tests, and tear the services down. |
+| `mise run docker-up` | Start the integration-test services without running tests. |
+| `mise run docker-down` | Stop and remove the integration-test services. |
+| `mise run docker-logs` | Follow logs from the integration-test services. |
+
+### Python bindings
+
+The Python tasks are defined in `bindings/python/mise.toml` and share the repository's managed tool versions. From the repository root, run:
+
+```shell
+mise run //bindings/python:install
+mise run //bindings/python:build
+mise run //bindings/python:check-format
+mise run //bindings/python:check-style
+mise run //bindings/python:test
+mise run //bindings/python:test-wheel
+```
+
+Inside `bindings/python`, the shorter form is `mise run :test`, `mise run :test-wheel`, and so on. The `test-wheel` task mirrors the native-wheel build, installation, and test sequence used by the Python CI matrix. Cross-compiled release wheels remain a release-workflow responsibility.
+
+### Website
+
+Preview the documentation site locally with `mise run site`. Use `mise run site-build` to reproduce the complete CI artifact, including Rust API documentation.
+
+### Troubleshooting mise
+
+- Run `mise doctor` to check the installation and `mise current` to confirm the tools selected for this repository.
+- If GitHub API rate limits interrupt installation, set `GITHUB_TOKEN` to a GitHub personal access token and retry `mise install`. Verification should remain enabled.
+- If Cargo or PyO3 reports a missing `libpython`, confirm that `mise current python` selects the configured interpreter and reinstall it with `mise install --force python`. Do not substitute a uv-managed or system interpreter.
 
 ## Dependencies
 

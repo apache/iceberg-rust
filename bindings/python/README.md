@@ -23,26 +23,34 @@ This project is used to build an Iceberg-rust powered core for [PyIceberg](https
 
 ## Setup
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/):
+The repository uses [mise](https://mise.en.dev/) to install Python, uv, Rust, and the other development tools. Follow the root [contributor setup](../../CONTRIBUTING.md#setup), then run these commands from this directory:
 
 ```shell
-pip install uv==0.9.3
+cd bindings/python
+mise install
+mise run :install
 ```
 
-Set up the development environment:
-
-```shell
-make install
-```
+The pinned Python distribution flavor includes the shared `libpython` required to compile the Python/DataFusion bindings. The install task makes uv use that interpreter and creates the binding's development environment.
 
 ## Build
 
 ```shell
-make build
+mise run :build
 ```
 
 ## Test
 
 ```shell
-make test
+mise run :test
+mise run :test-wheel
+```
+
+The first command tests the active development install. The second reproduces CI's native-wheel build, installs that wheel without a source fallback, and then runs the tests.
+
+## Style checks
+
+```shell
+mise run :check-format
+mise run :check-style
 ```

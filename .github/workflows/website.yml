@@ -24,6 +24,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/website.yml"
+      - "mise.toml"
       - "website/**"
 
 concurrency:
@@ -43,22 +44,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup mdBook
-        uses: peaceiris/actions-mdbook@ee69d230fe19748b7abf22df32acaa93833fad08 # v2.0.0
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
-          mdbook-version: "0.4.36"
+          version: 2026.7.5
+          cache: false
 
-      - name: Build
-        working-directory: website
-        run: mdbook build
-
-      - name: Copy asf file
-        run: cp .asf.yaml ./website/book/.asf.yaml
-
-      - name: Build API docs
-        run: |
-          cargo doc --no-deps --workspace --all-features
-          cp -r target/doc ./website/book/api
+      - name: Build website and API docs
+        run: mise run site-build
 
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0

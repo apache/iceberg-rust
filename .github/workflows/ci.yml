@@ -51,35 +51,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-
-      - name: Install lint tools
-        # Keep versions in sync with the local install targets in Makefile.
-        uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2.82.9
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
-          tool: taplo@0.9.3,cargo-machete@0.7.0
+          version: 2026.7.5
 
-      - name: Check License Header
-        uses: apache/skywalking-eyes/header@61275cc80d0798a405cb070f7d3a8aaf7cf2c2c1 # v0.8.0
-
-      - name: Check toml format
-        run: taplo fmt --check
-
-      - name: Cargo format
-        run: make check-fmt
-
-      - name: Check diff
-        run: git diff --exit-code
-
-      - name: Check Cargo.lock is up-to-date
-        run: cargo update --workspace --locked
-
-      - name: Cargo Machete
-        run: cargo machete
-
-      - name: Check typos
-        uses: crate-ci/typos@bee27e3a4fd1ea2111cf90ab89cd076c870fce14 # v1.48.0
+      - name: Run lint checks
+        run: mise run lint
 
   clippy:
     needs: lint
@@ -89,11 +67,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          version: 2026.7.5
 
       - name: Cargo clippy
-        run: make check-clippy
+        run: mise run check-clippy
 
   build:
     needs: lint
@@ -113,8 +93,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          version: 2026.7.5
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -122,7 +104,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Build
-        run: make build
+        run: mise run build
 
   # Checks each crate individually to catch missing feature declarations that
   # are otherwise masked by Cargo's feature unification across the workspace.
@@ -134,8 +116,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          version: 2026.7.5
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -143,11 +127,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Check each crate standalone
-        run: |
-          for pkg in $(cargo metadata --no-deps --format-version=1 | jq -r '.packages[].name'); do
-            echo "Checking $pkg..."
-            cargo check -p "$pkg" --all-targets || exit 1
-          done
+        run: mise run check-standalone
 
   # Verifies the core iceberg crate compiles without default features, ensuring
   # optional functionality is properly gated behind feature flags.
@@ -169,8 +149,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          version: 2026.7.5
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -178,7 +160,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Build
-        run: cargo build -p iceberg --no-default-features
+        run: mise run build-no-default-features
 
   tests:
     needs: lint
@@ -189,52 +171,38 @@ jobs:
     strategy:
       max-parallel: 15
       matrix:
-        test-suite:
-          - { name: "default", args: "--all-targets --all-features --workspace" }
-          - { name: "doc", args: "--doc --all-features --workspace" }
-    name: Tests (${{ matrix.test-suite.name }})
+        include:
+          - name: default
+            mise_task: test
+          - name: doc
+            mise_task: doc-test
+    name: Tests (${{ matrix.name }})
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          version: 2026.7.5
 
       - name: Cache Rust artifacts
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          key: ${{ matrix.test-suite.name }}
+          key: ${{ matrix.name }}
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-
-      - name: Install cargo-nextest
-        if: matrix.test-suite.name == 'default'
-        uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2.82.9
-        with:
-          tool: cargo-nextest
-
-      - name: Start Docker containers
-        if: matrix.test-suite.name == 'default'
-        run: make docker-up
 
       - name: Run tests
         shell: bash
         env:
+          MISE_TASK: ${{ matrix.mise_task }}
           # HuggingFace Hub integration tests self-skip when these are unset
           # (e.g. PRs from forks); see crates/storage/opendal/tests/file_io_hf_test.rs
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_BUCKET: ${{ secrets.HF_BUCKET }}
           HF_DATASET: ${{ secrets.HF_DATASET }}
-        run: |
-          if [ "${{ matrix.test-suite.name }}" = "default" ]; then
-            cargo nextest run ${{ matrix.test-suite.args }}
-          else
-            cargo test --no-fail-fast ${{ matrix.test-suite.args }}
-          fi
-
-      - name: Stop Docker containers
-        if: always() && matrix.test-suite.name == 'default'
-        run: make docker-down
+        run: mise run "$MISE_TASK"
 
   msrv:
     name: Verify MSRV
@@ -244,14 +212,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - name: Get MSRV
-        id: get-msrv
-        uses: ./.github/actions/get-msrv
-      - name: Setup MSRV Rust toolchain
-        uses: ./.github/actions/setup-builder
+      - name: Setup mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
-          rust-version: ${{ steps.get-msrv.outputs.msrv }}
-      - name: Setup Nightly Rust toolchain
-        uses: ./.github/actions/setup-builder
+          version: 2026.7.5
       - name: Check MSRV
-        run: make check-msrv
+        run: mise run check-msrv
