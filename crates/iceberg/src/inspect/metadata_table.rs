@@ -55,7 +55,7 @@ impl MetadataTableType {
 impl TryFrom<&str> for MetadataTableType {
     type Error = String;
 
-    fn try_from(value: &str) -> std::result::Result<Self, String> {
+    fn try_from(value: &str) -> Result<Self, String> {
         match value {
             "snapshots" => Ok(Self::Snapshots),
             "manifests" => Ok(Self::Manifests),

@@ -467,7 +467,7 @@ impl Catalog for SqlCatalog {
 
         if exists {
             return Err(Error::new(
-                iceberg::ErrorKind::NamespaceAlreadyExists,
+                ErrorKind::NamespaceAlreadyExists,
                 format!("Namespace {namespace:?} already exists"),
             ));
         }
@@ -670,7 +670,7 @@ impl Catalog for SqlCatalog {
             let tables = self.list_tables(namespace).await?;
             if !tables.is_empty() {
                 return Err(Error::new(
-                    iceberg::ErrorKind::Unexpected,
+                    ErrorKind::Unexpected,
                     format!(
                         "Namespace {:?} is not empty. {} tables exist.",
                         namespace,
@@ -1076,7 +1076,7 @@ mod tests {
         temp_dir.path().to_str().unwrap().to_string()
     }
 
-    fn to_set<T: std::cmp::Eq + Hash>(vec: Vec<T>) -> HashSet<T> {
+    fn to_set<T: Eq + Hash>(vec: Vec<T>) -> HashSet<T> {
         HashSet::from_iter(vec)
     }
 

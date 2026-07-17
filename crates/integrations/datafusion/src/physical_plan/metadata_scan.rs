@@ -73,21 +73,21 @@ impl ExecutionPlan for IcebergMetadataScan {
         &self.properties
     }
 
-    fn children(&self) -> Vec<&std::sync::Arc<dyn ExecutionPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
     }
 
     fn with_new_children(
-        self: std::sync::Arc<Self>,
-        _children: Vec<std::sync::Arc<dyn ExecutionPlan>>,
-    ) -> datafusion::error::Result<std::sync::Arc<dyn ExecutionPlan>> {
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
     }
 
     fn execute(
         &self,
         _partition: usize,
-        _context: std::sync::Arc<datafusion::execution::TaskContext>,
+        _context: Arc<datafusion::execution::TaskContext>,
     ) -> datafusion::error::Result<datafusion::execution::SendableRecordBatchStream> {
         let fut = self.provider.clone().scan();
         let stream = futures::stream::once(fut).try_flatten();

@@ -436,7 +436,7 @@ impl Literal {
                         number
                             .as_i64()
                             .ok_or(Error::new(
-                                crate::ErrorKind::DataInvalid,
+                                ErrorKind::DataInvalid,
                                 "Failed to convert json number to int",
                             ))?
                             .try_into()?,
@@ -444,19 +444,19 @@ impl Literal {
                 }
                 (PrimitiveType::Long, JsonValue::Number(number)) => Ok(Some(Literal::Primitive(
                     PrimitiveLiteral::Long(number.as_i64().ok_or(Error::new(
-                        crate::ErrorKind::DataInvalid,
+                        ErrorKind::DataInvalid,
                         "Failed to convert json number to long",
                     ))?),
                 ))),
                 (PrimitiveType::Float, JsonValue::Number(number)) => Ok(Some(Literal::Primitive(
                     PrimitiveLiteral::Float(OrderedFloat(number.as_f64().ok_or(Error::new(
-                        crate::ErrorKind::DataInvalid,
+                        ErrorKind::DataInvalid,
                         "Failed to convert json number to float",
                     ))? as f32)),
                 ))),
                 (PrimitiveType::Double, JsonValue::Number(number)) => Ok(Some(Literal::Primitive(
                     PrimitiveLiteral::Double(OrderedFloat(number.as_f64().ok_or(Error::new(
-                        crate::ErrorKind::DataInvalid,
+                        ErrorKind::DataInvalid,
                         "Failed to convert json number to double",
                     ))?)),
                 ))),
@@ -470,7 +470,7 @@ impl Literal {
                         number
                             .as_i64()
                             .ok_or(Error::new(
-                                crate::ErrorKind::DataInvalid,
+                                ErrorKind::DataInvalid,
                                 "Failed to convert json number to date (days since epoch)",
                             ))?
                             .try_into()?,
@@ -497,7 +497,7 @@ impl Literal {
                     let ndt = NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f")?;
                     let nanos = timestamp::datetime_to_nanoseconds(&ndt).ok_or_else(|| {
                         Error::new(
-                            crate::ErrorKind::DataInvalid,
+                            ErrorKind::DataInvalid,
                             format!(
                                 "Timestamp is outside the representable nanosecond range: {ndt}"
                             ),
@@ -512,7 +512,7 @@ impl Literal {
                     )?);
                     let nanos = timestamptz::datetimetz_to_nanoseconds(&dt).ok_or_else(|| {
                         Error::new(
-                            crate::ErrorKind::DataInvalid,
+                            ErrorKind::DataInvalid,
                             format!(
                                 "Timestamptz is outside the representable nanosecond range: {dt}"
                             ),
@@ -549,7 +549,7 @@ impl Literal {
                 }
                 (_, JsonValue::Null) => Ok(None),
                 (i, j) => Err(Error::new(
-                    crate::ErrorKind::DataInvalid,
+                    ErrorKind::DataInvalid,
                     format!("The json value {j} doesn't fit to the iceberg type {i}."),
                 )),
             },
@@ -571,7 +571,7 @@ impl Literal {
                     ))))
                 } else {
                     Err(Error::new(
-                        crate::ErrorKind::DataInvalid,
+                        ErrorKind::DataInvalid,
                         "The json value for a struct type must be an object.",
                     ))
                 }
@@ -588,7 +588,7 @@ impl Literal {
                     )))
                 } else {
                     Err(Error::new(
-                        crate::ErrorKind::DataInvalid,
+                        ErrorKind::DataInvalid,
                         "The json value for a list type must be an array.",
                     ))
                 }
@@ -617,13 +617,13 @@ impl Literal {
                         ))))
                     } else {
                         Err(Error::new(
-                            crate::ErrorKind::DataInvalid,
+                            ErrorKind::DataInvalid,
                             "The json value for a list type must be an array.",
                         ))
                     }
                 } else {
                     Err(Error::new(
-                        crate::ErrorKind::DataInvalid,
+                        ErrorKind::DataInvalid,
                         "The json value for a list type must be an array.",
                     ))
                 }

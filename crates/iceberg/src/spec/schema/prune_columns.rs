@@ -257,7 +257,7 @@ mod tests {
         let expected_type = Type::from(
             Schema::builder()
                 .with_fields(vec![
-                    NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(1, "foo", Primitive(PrimitiveType::String)).into(),
                 ])
                 .build()
                 .unwrap()
@@ -276,7 +276,7 @@ mod tests {
         let expected_type = Type::from(
             Schema::builder()
                 .with_fields(vec![
-                    NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(1, "foo", Primitive(PrimitiveType::String)).into(),
                 ])
                 .build()
                 .unwrap()
@@ -301,7 +301,7 @@ mod tests {
                         Type::List(ListType {
                             element_field: NestedField::list_element(
                                 5,
-                                Type::Primitive(PrimitiveType::String),
+                                Primitive(PrimitiveType::String),
                                 true,
                             )
                             .into(),
@@ -340,7 +340,7 @@ mod tests {
                         Type::List(ListType {
                             element_field: NestedField::list_element(
                                 5,
-                                Type::Primitive(PrimitiveType::String),
+                                Primitive(PrimitiveType::String),
                                 true,
                             )
                             .into(),
@@ -371,7 +371,7 @@ mod tests {
                         Type::Map(MapType {
                             key_field: NestedField::map_key_element(
                                 7,
-                                Type::Primitive(PrimitiveType::String),
+                                Primitive(PrimitiveType::String),
                             )
                             .into(),
                             value_field: NestedField::map_value_element(
@@ -379,12 +379,12 @@ mod tests {
                                 Type::Map(MapType {
                                     key_field: NestedField::map_key_element(
                                         9,
-                                        Type::Primitive(PrimitiveType::String),
+                                        Primitive(PrimitiveType::String),
                                     )
                                     .into(),
                                     value_field: NestedField::map_value_element(
                                         10,
-                                        Type::Primitive(PrimitiveType::Int),
+                                        Primitive(PrimitiveType::Int),
                                         true,
                                     )
                                     .into(),
@@ -427,7 +427,7 @@ mod tests {
                         Type::Map(MapType {
                             key_field: NestedField::map_key_element(
                                 7,
-                                Type::Primitive(PrimitiveType::String),
+                                Primitive(PrimitiveType::String),
                             )
                             .into(),
                             value_field: NestedField::map_value_element(
@@ -435,12 +435,12 @@ mod tests {
                                 Type::Map(MapType {
                                     key_field: NestedField::map_key_element(
                                         9,
-                                        Type::Primitive(PrimitiveType::String),
+                                        Primitive(PrimitiveType::String),
                                     )
                                     .into(),
                                     value_field: NestedField::map_value_element(
                                         10,
-                                        Type::Primitive(PrimitiveType::Int),
+                                        Primitive(PrimitiveType::Int),
                                         true,
                                     )
                                     .into(),
@@ -475,7 +475,7 @@ mod tests {
                         Type::Map(MapType {
                             key_field: NestedField::map_key_element(
                                 7,
-                                Type::Primitive(PrimitiveType::String),
+                                Primitive(PrimitiveType::String),
                             )
                             .into(),
                             value_field: NestedField::map_value_element(
@@ -483,12 +483,12 @@ mod tests {
                                 Type::Map(MapType {
                                     key_field: NestedField::map_key_element(
                                         9,
-                                        Type::Primitive(PrimitiveType::String),
+                                        Primitive(PrimitiveType::String),
                                     )
                                     .into(),
                                     value_field: NestedField::map_value_element(
                                         10,
-                                        Type::Primitive(PrimitiveType::Int),
+                                        Primitive(PrimitiveType::Int),
                                         true,
                                     )
                                     .into(),
@@ -521,12 +521,8 @@ mod tests {
                         15,
                         "person",
                         Type::Struct(StructType::new(vec![
-                            NestedField::optional(
-                                16,
-                                "name",
-                                Type::Primitive(PrimitiveType::String),
-                            )
-                            .into(),
+                            NestedField::optional(16, "name", Primitive(PrimitiveType::String))
+                                .into(),
                         ])),
                     )
                     .into(),
@@ -552,12 +548,8 @@ mod tests {
                         15,
                         "person",
                         Type::Struct(StructType::new(vec![
-                            NestedField::optional(
-                                16,
-                                "name",
-                                Type::Primitive(PrimitiveType::String),
-                            )
-                            .into(),
+                            NestedField::optional(16, "name", Primitive(PrimitiveType::String))
+                                .into(),
                         ])),
                     )
                     .into(),
@@ -633,11 +625,8 @@ mod tests {
                     6,
                     "id_to_person",
                     Type::Map(MapType {
-                        key_field: NestedField::map_key_element(
-                            7,
-                            Type::Primitive(PrimitiveType::Int),
-                        )
-                        .into(),
+                        key_field: NestedField::map_key_element(7, Primitive(PrimitiveType::Int))
+                            .into(),
                         value_field: NestedField::map_value_element(
                             8,
                             Type::Struct(StructType::new(vec![
@@ -664,7 +653,7 @@ mod tests {
                         Type::Map(MapType {
                             key_field: NestedField::map_key_element(
                                 7,
-                                Type::Primitive(PrimitiveType::Int),
+                                Primitive(PrimitiveType::Int),
                             )
                             .into(),
                             value_field: NestedField::map_value_element(
@@ -699,11 +688,8 @@ mod tests {
                     6,
                     "id_to_person",
                     Type::Map(MapType {
-                        key_field: NestedField::map_key_element(
-                            7,
-                            Type::Primitive(PrimitiveType::Int),
-                        )
-                        .into(),
+                        key_field: NestedField::map_key_element(7, Primitive(PrimitiveType::Int))
+                            .into(),
                         value_field: NestedField::map_value_element(
                             8,
                             Type::Struct(StructType::new(vec![
@@ -730,7 +716,7 @@ mod tests {
                         Type::Map(MapType {
                             key_field: NestedField::map_key_element(
                                 7,
-                                Type::Primitive(PrimitiveType::Int),
+                                Primitive(PrimitiveType::Int),
                             )
                             .into(),
                             value_field: NestedField::map_value_element(
@@ -771,7 +757,7 @@ mod tests {
         // foo (String, id=1) + v (Variant, id=2).
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(1, "foo", Primitive(PrimitiveType::String)).into(),
                 NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
             ])
             .build()
@@ -789,7 +775,7 @@ mod tests {
 
         // Selecting a sibling prunes the variant out.
         let only_foo = Type::Struct(StructType::new(vec![
-            NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::optional(1, "foo", Primitive(PrimitiveType::String)).into(),
         ]));
         let result = prune_columns(&schema, HashSet::from([1]), false).unwrap();
         assert_eq!(result, only_foo);

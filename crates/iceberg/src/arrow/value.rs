@@ -797,10 +797,10 @@ pub(crate) fn create_primitive_array_single_element(
                     }
                 })
                 .collect::<Result<Vec<_>>>()?;
-            Ok(Arc::new(arrow_array::StructArray::new(
+            Ok(Arc::new(StructArray::new(
                 fields.clone(),
                 null_arrays,
-                Some(arrow_buffer::NullBuffer::new_null(1)),
+                Some(NullBuffer::new_null(1)),
             )))
         }
         _ => Err(Error::new(
