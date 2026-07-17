@@ -98,27 +98,27 @@
 <a href=#98 id=98 data-nosnippet>98</a>
 <a href=#99 id=99 data-nosnippet>99</a>        <span class="kw">struct </span>DatumVisitor;
 <a href=#100 id=100 data-nosnippet>100</a>
-<a href=#101 id=101 data-nosnippet>101</a>        <span class="kw">impl</span>&lt;<span class="lifetime">'de</span>&gt; serde::de::Visitor&lt;<span class="lifetime">'de</span>&gt; <span class="kw">for </span>DatumVisitor {
+<a href=#101 id=101 data-nosnippet>101</a>        <span class="kw">impl</span>&lt;<span class="lifetime">'de</span>&gt; de::Visitor&lt;<span class="lifetime">'de</span>&gt; <span class="kw">for </span>DatumVisitor {
 <a href=#102 id=102 data-nosnippet>102</a>            <span class="kw">type </span>Value = Datum;
 <a href=#103 id=103 data-nosnippet>103</a>
-<a href=#104 id=104 data-nosnippet>104</a>            <span class="kw">fn </span>expecting(<span class="kw-2">&amp;</span><span class="self">self</span>, formatter: <span class="kw-2">&amp;mut </span>std::fmt::Formatter) -&gt; std::fmt::Result {
+<a href=#104 id=104 data-nosnippet>104</a>            <span class="kw">fn </span>expecting(<span class="kw-2">&amp;</span><span class="self">self</span>, formatter: <span class="kw-2">&amp;mut </span>Formatter) -&gt; std::fmt::Result {
 <a href=#105 id=105 data-nosnippet>105</a>                formatter.write_str(<span class="string">"struct Datum"</span>)
 <a href=#106 id=106 data-nosnippet>106</a>            }
 <a href=#107 id=107 data-nosnippet>107</a>
 <a href=#108 id=108 data-nosnippet>108</a>            <span class="kw">fn </span>visit_seq&lt;A&gt;(<span class="self">self</span>, <span class="kw-2">mut </span>seq: A) -&gt; std::result::Result&lt;<span class="self">Self</span>::Value, A::Error&gt;
-<a href=#109 id=109 data-nosnippet>109</a>            <span class="kw">where </span>A: serde::de::SeqAccess&lt;<span class="lifetime">'de</span>&gt; {
+<a href=#109 id=109 data-nosnippet>109</a>            <span class="kw">where </span>A: de::SeqAccess&lt;<span class="lifetime">'de</span>&gt; {
 <a href=#110 id=110 data-nosnippet>110</a>                <span class="kw">let </span>r#type = seq
 <a href=#111 id=111 data-nosnippet>111</a>                    .next_element::&lt;PrimitiveType&gt;()<span class="question-mark">?
-<a href=#112 id=112 data-nosnippet>112</a>                    </span>.ok_or_else(|| serde::de::Error::invalid_length(<span class="number">0</span>, <span class="kw-2">&amp;</span><span class="self">self</span>))<span class="question-mark">?</span>;
+<a href=#112 id=112 data-nosnippet>112</a>                    </span>.ok_or_else(|| de::Error::invalid_length(<span class="number">0</span>, <span class="kw-2">&amp;</span><span class="self">self</span>))<span class="question-mark">?</span>;
 <a href=#113 id=113 data-nosnippet>113</a>                <span class="kw">let </span>value = seq
 <a href=#114 id=114 data-nosnippet>114</a>                    .next_element::&lt;RawLiteral&gt;()<span class="question-mark">?
-<a href=#115 id=115 data-nosnippet>115</a>                    </span>.ok_or_else(|| serde::de::Error::invalid_length(<span class="number">1</span>, <span class="kw-2">&amp;</span><span class="self">self</span>))<span class="question-mark">?</span>;
+<a href=#115 id=115 data-nosnippet>115</a>                    </span>.ok_or_else(|| de::Error::invalid_length(<span class="number">1</span>, <span class="kw-2">&amp;</span><span class="self">self</span>))<span class="question-mark">?</span>;
 <a href=#116 id=116 data-nosnippet>116</a>                <span class="kw">let </span>Literal::Primitive(primitive) = value
 <a href=#117 id=117 data-nosnippet>117</a>                    .try_into(<span class="kw-2">&amp;</span>Type::Primitive(r#type.clone()))
-<a href=#118 id=118 data-nosnippet>118</a>                    .map_err(serde::de::Error::custom)<span class="question-mark">?
-<a href=#119 id=119 data-nosnippet>119</a>                    </span>.ok_or_else(|| serde::de::Error::custom(<span class="string">"None value"</span>))<span class="question-mark">?
+<a href=#118 id=118 data-nosnippet>118</a>                    .map_err(de::Error::custom)<span class="question-mark">?
+<a href=#119 id=119 data-nosnippet>119</a>                    </span>.ok_or_else(|| de::Error::custom(<span class="string">"None value"</span>))<span class="question-mark">?
 <a href=#120 id=120 data-nosnippet>120</a>                </span><span class="kw">else </span>{
-<a href=#121 id=121 data-nosnippet>121</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(serde::de::Error::custom(<span class="string">"Invalid value"</span>));
+<a href=#121 id=121 data-nosnippet>121</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(de::Error::custom(<span class="string">"Invalid value"</span>));
 <a href=#122 id=122 data-nosnippet>122</a>                };
 <a href=#123 id=123 data-nosnippet>123</a>
 <a href=#124 id=124 data-nosnippet>124</a>                <span class="prelude-val">Ok</span>(Datum::new(r#type, primitive))
@@ -145,17 +145,17 @@
 <a href=#145 id=145 data-nosnippet>145</a>                    }
 <a href=#146 id=146 data-nosnippet>146</a>                }
 <a href=#147 id=147 data-nosnippet>147</a>                <span class="kw">let </span><span class="prelude-val">Some</span>(r#type) = r#type <span class="kw">else </span>{
-<a href=#148 id=148 data-nosnippet>148</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(serde::de::Error::missing_field(<span class="string">"type"</span>));
+<a href=#148 id=148 data-nosnippet>148</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(de::Error::missing_field(<span class="string">"type"</span>));
 <a href=#149 id=149 data-nosnippet>149</a>                };
 <a href=#150 id=150 data-nosnippet>150</a>                <span class="kw">let </span><span class="prelude-val">Some</span>(raw_primitive) = raw_primitive <span class="kw">else </span>{
-<a href=#151 id=151 data-nosnippet>151</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(serde::de::Error::missing_field(<span class="string">"literal"</span>));
+<a href=#151 id=151 data-nosnippet>151</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(de::Error::missing_field(<span class="string">"literal"</span>));
 <a href=#152 id=152 data-nosnippet>152</a>                };
 <a href=#153 id=153 data-nosnippet>153</a>                <span class="kw">let </span>Literal::Primitive(primitive) = raw_primitive
 <a href=#154 id=154 data-nosnippet>154</a>                    .try_into(<span class="kw-2">&amp;</span>Type::Primitive(r#type.clone()))
-<a href=#155 id=155 data-nosnippet>155</a>                    .map_err(serde::de::Error::custom)<span class="question-mark">?
-<a href=#156 id=156 data-nosnippet>156</a>                    </span>.ok_or_else(|| serde::de::Error::custom(<span class="string">"None value"</span>))<span class="question-mark">?
+<a href=#155 id=155 data-nosnippet>155</a>                    .map_err(de::Error::custom)<span class="question-mark">?
+<a href=#156 id=156 data-nosnippet>156</a>                    </span>.ok_or_else(|| de::Error::custom(<span class="string">"None value"</span>))<span class="question-mark">?
 <a href=#157 id=157 data-nosnippet>157</a>                </span><span class="kw">else </span>{
-<a href=#158 id=158 data-nosnippet>158</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(serde::de::Error::custom(<span class="string">"Invalid value"</span>));
+<a href=#158 id=158 data-nosnippet>158</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(de::Error::custom(<span class="string">"Invalid value"</span>));
 <a href=#159 id=159 data-nosnippet>159</a>                };
 <a href=#160 id=160 data-nosnippet>160</a>                <span class="prelude-val">Ok</span>(Datum::new(r#type, primitive))
 <a href=#161 id=161 data-nosnippet>161</a>            }

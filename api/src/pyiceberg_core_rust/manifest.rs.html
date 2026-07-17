@@ -52,7 +52,7 @@
 <a href=#52 id=52 data-nosnippet>52</a>}
 <a href=#53 id=53 data-nosnippet>53</a>
 <a href=#54 id=54 data-nosnippet>54</a><span class="attr">#[pymethods]
-<a href=#55 id=55 data-nosnippet>55</a></span><span class="kw">impl </span><span class="kw">crate</span>::manifest::PyFieldSummary {
+<a href=#55 id=55 data-nosnippet>55</a></span><span class="kw">impl </span>PyFieldSummary {
 <a href=#56 id=56 data-nosnippet>56</a>    <span class="attr">#[getter]
 <a href=#57 id=57 data-nosnippet>57</a>    </span><span class="kw">fn </span>contains_null(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
 <a href=#58 id=58 data-nosnippet>58</a>        <span class="self">self</span>.inner.contains_null
@@ -80,7 +80,7 @@
 <a href=#80 id=80 data-nosnippet>80</a>}
 <a href=#81 id=81 data-nosnippet>81</a>
 <a href=#82 id=82 data-nosnippet>82</a><span class="attr">#[pymethods]
-<a href=#83 id=83 data-nosnippet>83</a></span><span class="kw">impl </span><span class="kw">crate</span>::manifest::PyManifestFile {
+<a href=#83 id=83 data-nosnippet>83</a></span><span class="kw">impl </span>PyManifestFile {
 <a href=#84 id=84 data-nosnippet>84</a>    <span class="attr">#[getter]
 <a href=#85 id=85 data-nosnippet>85</a>    </span><span class="kw">fn </span>manifest_path(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str {
 <a href=#86 id=86 data-nosnippet>86</a>        <span class="self">self</span>.inner.manifest_path.as_str()
@@ -208,7 +208,7 @@
 <a href=#208 id=208 data-nosnippet>208</a>}
 <a href=#209 id=209 data-nosnippet>209</a>
 <a href=#210 id=210 data-nosnippet>210</a><span class="attr">#[pymethods]
-<a href=#211 id=211 data-nosnippet>211</a></span><span class="kw">impl </span><span class="kw">crate</span>::manifest::PyManifestList {
+<a href=#211 id=211 data-nosnippet>211</a></span><span class="kw">impl </span>PyManifestList {
 <a href=#212 id=212 data-nosnippet>212</a>    <span class="kw">fn </span>entries(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;PyManifestFile&gt; {
 <a href=#213 id=213 data-nosnippet>213</a>        <span class="self">self</span>.inner
 <a href=#214 id=214 data-nosnippet>214</a>            .entries()

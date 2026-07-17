@@ -971,7 +971,7 @@
 <a href=#971 id=971 data-nosnippet>971</a>
 <a href=#972 id=972 data-nosnippet>972</a>    </span><span class="doccomment">/// Shared-buffer FileWrite for testing AesGcmFileWrite output.
 <a href=#973 id=973 data-nosnippet>973</a>    </span><span class="kw">struct </span>SharedMemoryWrite {
-<a href=#974 id=974 data-nosnippet>974</a>        buffer: std::sync::Arc&lt;std::sync::Mutex&lt;Vec&lt;u8&gt;&gt;&gt;,
+<a href=#974 id=974 data-nosnippet>974</a>        buffer: Arc&lt;std::sync::Mutex&lt;Vec&lt;u8&gt;&gt;&gt;,
 <a href=#975 id=975 data-nosnippet>975</a>    }
 <a href=#976 id=976 data-nosnippet>976</a>
 <a href=#977 id=977 data-nosnippet>977</a>    <span class="doccomment">/// FileWrite that fails after a configured number of successful writes.
@@ -1009,7 +1009,7 @@
 <a href=#1009 id=1009 data-nosnippet>1009</a>
 <a href=#1010 id=1010 data-nosnippet>1010</a>    <span class="doccomment">/// Helper: one-shot encrypt through AesGcmFileWrite, return encrypted bytes.
 <a href=#1011 id=1011 data-nosnippet>1011</a>    </span><span class="kw">async fn </span>write_through_ags1(plaintext: <span class="kw-2">&amp;</span>[u8], key: <span class="kw-2">&amp;</span>[u8], aad_prefix: <span class="kw-2">&amp;</span>[u8]) -&gt; Vec&lt;u8&gt; {
-<a href=#1012 id=1012 data-nosnippet>1012</a>        <span class="kw">let </span>buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+<a href=#1012 id=1012 data-nosnippet>1012</a>        <span class="kw">let </span>buffer = Arc::new(std::sync::Mutex::new(Vec::new()));
 <a href=#1013 id=1013 data-nosnippet>1013</a>        <span class="kw">let </span>inner: Box&lt;<span class="kw">dyn </span>FileWrite&gt; = Box::new(SharedMemoryWrite {
 <a href=#1014 id=1014 data-nosnippet>1014</a>            buffer: buffer.clone(),
 <a href=#1015 id=1015 data-nosnippet>1015</a>        });
@@ -1093,7 +1093,7 @@
 <a href=#1093 id=1093 data-nosnippet>1093</a>        <span class="kw">let </span>key = <span class="string">b"0123456789abcdef"</span>;
 <a href=#1094 id=1094 data-nosnippet>1094</a>        <span class="kw">let </span>aad_prefix = <span class="string">b"cross-block-aad!"</span>;
 <a href=#1095 id=1095 data-nosnippet>1095</a>
-<a href=#1096 id=1096 data-nosnippet>1096</a>        <span class="kw">let </span>buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+<a href=#1096 id=1096 data-nosnippet>1096</a>        <span class="kw">let </span>buffer = Arc::new(std::sync::Mutex::new(Vec::new()));
 <a href=#1097 id=1097 data-nosnippet>1097</a>        <span class="kw">let </span>inner: Box&lt;<span class="kw">dyn </span>FileWrite&gt; = Box::new(SharedMemoryWrite {
 <a href=#1098 id=1098 data-nosnippet>1098</a>            buffer: buffer.clone(),
 <a href=#1099 id=1099 data-nosnippet>1099</a>        });

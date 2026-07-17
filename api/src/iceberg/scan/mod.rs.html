@@ -1091,7 +1091,7 @@
 <a href=#1091 id=1091 data-nosnippet>1091</a>        <span class="doccomment">/// Writes identical Parquet data files (1.parquet, 2.parquet, 3.parquet)
 <a href=#1092 id=1092 data-nosnippet>1092</a>        /// and returns the file size in bytes.
 <a href=#1093 id=1093 data-nosnippet>1093</a>        </span><span class="kw">fn </span>write_parquet_data_files(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
-<a href=#1094 id=1094 data-nosnippet>1094</a>            std::fs::create_dir_all(<span class="kw-2">&amp;</span><span class="self">self</span>.table_location).unwrap();
+<a href=#1094 id=1094 data-nosnippet>1094</a>            fs::create_dir_all(<span class="kw-2">&amp;</span><span class="self">self</span>.table_location).unwrap();
 <a href=#1095 id=1095 data-nosnippet>1095</a>
 <a href=#1096 id=1096 data-nosnippet>1096</a>            <span class="kw">let </span>schema = {
 <a href=#1097 id=1097 data-nosnippet>1097</a>                <span class="kw">let </span>fields = <span class="macro">vec!</span>[
@@ -1205,7 +1205,7 @@
 <a href=#1205 id=1205 data-nosnippet>1205</a>                </span>writer.close().unwrap();
 <a href=#1206 id=1206 data-nosnippet>1206</a>            }
 <a href=#1207 id=1207 data-nosnippet>1207</a>
-<a href=#1208 id=1208 data-nosnippet>1208</a>            std::fs::metadata(<span class="macro">format!</span>(<span class="string">"{}/1.parquet"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.table_location))
+<a href=#1208 id=1208 data-nosnippet>1208</a>            fs::metadata(<span class="macro">format!</span>(<span class="string">"{}/1.parquet"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.table_location))
 <a href=#1209 id=1209 data-nosnippet>1209</a>                .unwrap()
 <a href=#1210 id=1210 data-nosnippet>1210</a>                .len()
 <a href=#1211 id=1211 data-nosnippet>1211</a>        }
@@ -2317,7 +2317,7 @@
 <a href=#2317 id=2317 data-nosnippet>2317</a>            <span class="kw">let </span>file_col = batch.column_by_name(RESERVED_COL_NAME_FILE).unwrap();
 <a href=#2318 id=2318 data-nosnippet>2318</a>            <span class="kw">let </span>run_array = file_col
 <a href=#2319 id=2319 data-nosnippet>2319</a>                .as_any()
-<a href=#2320 id=2320 data-nosnippet>2320</a>                .downcast_ref::&lt;arrow_array::RunArray&lt;arrow_array::types::Int32Type&gt;&gt;()
+<a href=#2320 id=2320 data-nosnippet>2320</a>                .downcast_ref::&lt;RunArray&lt;Int32Type&gt;&gt;()
 <a href=#2321 id=2321 data-nosnippet>2321</a>                .expect(<span class="string">"_file column should be a RunArray"</span>);
 <a href=#2322 id=2322 data-nosnippet>2322</a>
 <a href=#2323 id=2323 data-nosnippet>2323</a>            <span class="kw">let </span>values = run_array.values();

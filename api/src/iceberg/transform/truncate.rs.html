@@ -137,7 +137,7 @@
 <a href=#137 id=137 data-nosnippet>137</a>                );
 <a href=#138 id=138 data-nosnippet>138</a>                <span class="prelude-val">Ok</span>(Arc::new(res))
 <a href=#139 id=139 data-nosnippet>139</a>            }
-<a href=#140 id=140 data-nosnippet>140</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="kw">crate</span>::Error::new(
+<a href=#140 id=140 data-nosnippet>140</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
 <a href=#141 id=141 data-nosnippet>141</a>                <span class="kw">crate</span>::ErrorKind::FeatureUnsupported,
 <a href=#142 id=142 data-nosnippet>142</a>                <span class="macro">format!</span>(
 <a href=#143 id=143 data-nosnippet>143</a>                    <span class="string">"Unsupported data type for truncate transform: {:?}"</span>,
@@ -173,7 +173,7 @@
 <a href=#173 id=173 data-nosnippet>173</a>                <span class="kw">let </span>len = <span class="self">self</span>.width <span class="kw">as </span>usize;
 <a href=#174 id=174 data-nosnippet>174</a>                Datum::string(<span class="self">Self</span>::truncate_str(v, len).to_string())
 <a href=#175 id=175 data-nosnippet>175</a>            })),
-<a href=#176 id=176 data-nosnippet>176</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="kw">crate</span>::Error::new(
+<a href=#176 id=176 data-nosnippet>176</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
 <a href=#177 id=177 data-nosnippet>177</a>                <span class="kw">crate</span>::ErrorKind::FeatureUnsupported,
 <a href=#178 id=178 data-nosnippet>178</a>                <span class="macro">format!</span>(
 <a href=#179 id=179 data-nosnippet>179</a>                    <span class="string">"Unsupported data type for truncate transform: {:?}"</span>,
@@ -200,7 +200,7 @@
 <a href=#200 id=200 data-nosnippet>200</a>    };
 <a href=#201 id=201 data-nosnippet>201</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::Type::{Primitive, Struct};
 <a href=#202 id=202 data-nosnippet>202</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::decimal_utils::decimal_new;
-<a href=#203 id=203 data-nosnippet>203</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{Datum, NestedField, PrimitiveType, StructType, Transform, Type};
+<a href=#203 id=203 data-nosnippet>203</a>    <span class="kw">use </span><span class="kw">crate</span>::spec::{Datum, NestedField, PrimitiveType, StructType, Transform};
 <a href=#204 id=204 data-nosnippet>204</a>    <span class="kw">use </span><span class="kw">crate</span>::transform::TransformFunction;
 <a href=#205 id=205 data-nosnippet>205</a>    <span class="kw">use </span><span class="kw">crate</span>::transform::test::{TestProjectionFixture, TestTransformFixture};
 <a href=#206 id=206 data-nosnippet>206</a>
@@ -262,7 +262,7 @@
 <a href=#262 id=262 data-nosnippet>262</a>        <span class="kw">let </span>fixture = TestProjectionFixture::new(
 <a href=#263 id=263 data-nosnippet>263</a>            Transform::Truncate(<span class="number">5</span>),
 <a href=#264 id=264 data-nosnippet>264</a>            <span class="string">"name"</span>,
-<a href=#265 id=265 data-nosnippet>265</a>            NestedField::required(<span class="number">1</span>, <span class="string">"value"</span>, Type::Primitive(PrimitiveType::String)),
+<a href=#265 id=265 data-nosnippet>265</a>            NestedField::required(<span class="number">1</span>, <span class="string">"value"</span>, Primitive(PrimitiveType::String)),
 <a href=#266 id=266 data-nosnippet>266</a>        );
 <a href=#267 id=267 data-nosnippet>267</a>
 <a href=#268 id=268 data-nosnippet>268</a>        fixture.assert_projection(
@@ -296,7 +296,7 @@
 <a href=#296 id=296 data-nosnippet>296</a>        <span class="kw">let </span>fixture = TestProjectionFixture::new(
 <a href=#297 id=297 data-nosnippet>297</a>            Transform::Truncate(<span class="number">5</span>),
 <a href=#298 id=298 data-nosnippet>298</a>            <span class="string">"name"</span>,
-<a href=#299 id=299 data-nosnippet>299</a>            NestedField::required(<span class="number">1</span>, <span class="string">"value"</span>, Type::Primitive(PrimitiveType::String)),
+<a href=#299 id=299 data-nosnippet>299</a>            NestedField::required(<span class="number">1</span>, <span class="string">"value"</span>, Primitive(PrimitiveType::String)),
 <a href=#300 id=300 data-nosnippet>300</a>        );
 <a href=#301 id=301 data-nosnippet>301</a>
 <a href=#302 id=302 data-nosnippet>302</a>        fixture.assert_projection(
@@ -355,7 +355,7 @@
 <a href=#355 id=355 data-nosnippet>355</a>            NestedField::required(
 <a href=#356 id=356 data-nosnippet>356</a>                <span class="number">1</span>,
 <a href=#357 id=357 data-nosnippet>357</a>                <span class="string">"value"</span>,
-<a href=#358 id=358 data-nosnippet>358</a>                Type::Primitive(PrimitiveType::Decimal {
+<a href=#358 id=358 data-nosnippet>358</a>                Primitive(Decimal {
 <a href=#359 id=359 data-nosnippet>359</a>                    precision: <span class="number">9</span>,
 <a href=#360 id=360 data-nosnippet>360</a>                    scale: <span class="number">2</span>,
 <a href=#361 id=361 data-nosnippet>361</a>                }),
@@ -425,7 +425,7 @@
 <a href=#425 id=425 data-nosnippet>425</a>            NestedField::required(
 <a href=#426 id=426 data-nosnippet>426</a>                <span class="number">1</span>,
 <a href=#427 id=427 data-nosnippet>427</a>                <span class="string">"value"</span>,
-<a href=#428 id=428 data-nosnippet>428</a>                Type::Primitive(PrimitiveType::Decimal {
+<a href=#428 id=428 data-nosnippet>428</a>                Primitive(Decimal {
 <a href=#429 id=429 data-nosnippet>429</a>                    precision: <span class="number">9</span>,
 <a href=#430 id=430 data-nosnippet>430</a>                    scale: <span class="number">2</span>,
 <a href=#431 id=431 data-nosnippet>431</a>                }),
@@ -490,7 +490,7 @@
 <a href=#490 id=490 data-nosnippet>490</a>        <span class="kw">let </span>fixture = TestProjectionFixture::new(
 <a href=#491 id=491 data-nosnippet>491</a>            Transform::Truncate(<span class="number">10</span>),
 <a href=#492 id=492 data-nosnippet>492</a>            <span class="string">"name"</span>,
-<a href=#493 id=493 data-nosnippet>493</a>            NestedField::required(<span class="number">1</span>, <span class="string">"value"</span>, Type::Primitive(PrimitiveType::Long)),
+<a href=#493 id=493 data-nosnippet>493</a>            NestedField::required(<span class="number">1</span>, <span class="string">"value"</span>, Primitive(Long)),
 <a href=#494 id=494 data-nosnippet>494</a>        );
 <a href=#495 id=495 data-nosnippet>495</a>
 <a href=#496 id=496 data-nosnippet>496</a>        fixture.assert_projection(
@@ -545,7 +545,7 @@
 <a href=#545 id=545 data-nosnippet>545</a>        <span class="kw">let </span>fixture = TestProjectionFixture::new(
 <a href=#546 id=546 data-nosnippet>546</a>            Transform::Truncate(<span class="number">10</span>),
 <a href=#547 id=547 data-nosnippet>547</a>            <span class="string">"name"</span>,
-<a href=#548 id=548 data-nosnippet>548</a>            NestedField::required(<span class="number">1</span>, <span class="string">"value"</span>, Type::Primitive(PrimitiveType::Long)),
+<a href=#548 id=548 data-nosnippet>548</a>            NestedField::required(<span class="number">1</span>, <span class="string">"value"</span>, Primitive(Long)),
 <a href=#549 id=549 data-nosnippet>549</a>        );
 <a href=#550 id=550 data-nosnippet>550</a>
 <a href=#551 id=551 data-nosnippet>551</a>        fixture.assert_projection(
@@ -600,7 +600,7 @@
 <a href=#600 id=600 data-nosnippet>600</a>        <span class="kw">let </span>fixture = TestProjectionFixture::new(
 <a href=#601 id=601 data-nosnippet>601</a>            Transform::Truncate(<span class="number">10</span>),
 <a href=#602 id=602 data-nosnippet>602</a>            <span class="string">"name"</span>,
-<a href=#603 id=603 data-nosnippet>603</a>            NestedField::required(<span class="number">1</span>, <span class="string">"value"</span>, Type::Primitive(PrimitiveType::Int)),
+<a href=#603 id=603 data-nosnippet>603</a>            NestedField::required(<span class="number">1</span>, <span class="string">"value"</span>, Primitive(Int)),
 <a href=#604 id=604 data-nosnippet>604</a>        );
 <a href=#605 id=605 data-nosnippet>605</a>
 <a href=#606 id=606 data-nosnippet>606</a>        fixture.assert_projection(
@@ -655,7 +655,7 @@
 <a href=#655 id=655 data-nosnippet>655</a>        <span class="kw">let </span>fixture = TestProjectionFixture::new(
 <a href=#656 id=656 data-nosnippet>656</a>            Transform::Truncate(<span class="number">10</span>),
 <a href=#657 id=657 data-nosnippet>657</a>            <span class="string">"name"</span>,
-<a href=#658 id=658 data-nosnippet>658</a>            NestedField::required(<span class="number">1</span>, <span class="string">"value"</span>, Type::Primitive(PrimitiveType::Int)),
+<a href=#658 id=658 data-nosnippet>658</a>            NestedField::required(<span class="number">1</span>, <span class="string">"value"</span>, Primitive(Int)),
 <a href=#659 id=659 data-nosnippet>659</a>        );
 <a href=#660 id=660 data-nosnippet>660</a>
 <a href=#661 id=661 data-nosnippet>661</a>        fixture.assert_projection(

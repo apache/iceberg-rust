@@ -537,7 +537,7 @@
 <a href=#537 id=537 data-nosnippet>537</a>        <span class="kw">let </span>table = make_v3_minimal_table_in_catalog(<span class="kw-2">&amp;</span>catalog).<span class="kw">await</span>;
 <a href=#538 id=538 data-nosnippet>538</a>
 <a href=#539 id=539 data-nosnippet>539</a>        <span class="kw">let </span><span class="kw-2">mut </span>file_seq = <span class="number">0u32</span>;
-<a href=#540 id=540 data-nosnippet>540</a>        <span class="kw">let </span><span class="kw-2">mut </span>append_file = |table: <span class="kw-2">&amp;</span><span class="kw">crate</span>::table::Table, record_count: u64, file_size: u64| {
+<a href=#540 id=540 data-nosnippet>540</a>        <span class="kw">let </span><span class="kw-2">mut </span>append_file = |table: <span class="kw-2">&amp;</span>Table, record_count: u64, file_size: u64| {
 <a href=#541 id=541 data-nosnippet>541</a>            file_seq += <span class="number">1</span>;
 <a href=#542 id=542 data-nosnippet>542</a>            <span class="kw">let </span>file = DataFileBuilder::default()
 <a href=#543 id=543 data-nosnippet>543</a>                .content(DataContentType::Data)
@@ -607,7 +607,7 @@
 <a href=#607 id=607 data-nosnippet>607</a>            .identifier(TableIdent::from_strs([<span class="string">"ns1"</span>, <span class="string">"test1"</span>]).unwrap())
 <a href=#608 id=608 data-nosnippet>608</a>            .file_io(FileIO::new_with_memory())
 <a href=#609 id=609 data-nosnippet>609</a>            .kms_client(kms)
-<a href=#610 id=610 data-nosnippet>610</a>            .runtime(<span class="kw">crate</span>::test_utils::test_runtime())
+<a href=#610 id=610 data-nosnippet>610</a>            .runtime(test_runtime())
 <a href=#611 id=611 data-nosnippet>611</a>            .build()
 <a href=#612 id=612 data-nosnippet>612</a>            .unwrap();
 <a href=#613 id=613 data-nosnippet>613</a>

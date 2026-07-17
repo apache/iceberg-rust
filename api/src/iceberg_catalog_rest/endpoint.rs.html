@@ -65,7 +65,7 @@
 <a href=#65 id=65 data-nosnippet>65</a><span class="kw">impl </span>FromStr <span class="kw">for </span>Endpoint {
 <a href=#66 id=66 data-nosnippet>66</a>    <span class="kw">type </span><span class="prelude-val">Err </span>= Error;
 <a href=#67 id=67 data-nosnippet>67</a>
-<a href=#68 id=68 data-nosnippet>68</a>    <span class="kw">fn </span>from_str(s: <span class="kw-2">&amp;</span>str) -&gt; std::result::Result&lt;<span class="self">Self</span>, <span class="self">Self</span>::Err&gt; {
+<a href=#68 id=68 data-nosnippet>68</a>    <span class="kw">fn </span>from_str(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Err&gt; {
 <a href=#69 id=69 data-nosnippet>69</a>        <span class="comment">// The wire form is exactly `"&lt;method&gt; &lt;path&gt;"` separated by a single
 <a href=#70 id=70 data-nosnippet>70</a>        // space; paths never contain spaces, so require exactly two non-empty
 <a href=#71 id=71 data-nosnippet>71</a>        // parts and a valid HTTP method.
@@ -100,14 +100,14 @@
 <a href=#100 id=100 data-nosnippet>100</a>}
 <a href=#101 id=101 data-nosnippet>101</a>
 <a href=#102 id=102 data-nosnippet>102</a><span class="kw">impl </span>Serialize <span class="kw">for </span>Endpoint {
-<a href=#103 id=103 data-nosnippet>103</a>    <span class="kw">fn </span>serialize&lt;S&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, serializer: S) -&gt; std::result::Result&lt;S::Ok, S::Error&gt;
+<a href=#103 id=103 data-nosnippet>103</a>    <span class="kw">fn </span>serialize&lt;S&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, serializer: S) -&gt; <span class="prelude-ty">Result</span>&lt;S::Ok, S::Error&gt;
 <a href=#104 id=104 data-nosnippet>104</a>    <span class="kw">where </span>S: Serializer {
 <a href=#105 id=105 data-nosnippet>105</a>        serializer.collect_str(<span class="self">self</span>)
 <a href=#106 id=106 data-nosnippet>106</a>    }
 <a href=#107 id=107 data-nosnippet>107</a>}
 <a href=#108 id=108 data-nosnippet>108</a>
 <a href=#109 id=109 data-nosnippet>109</a><span class="kw">impl</span>&lt;<span class="lifetime">'de</span>&gt; Deserialize&lt;<span class="lifetime">'de</span>&gt; <span class="kw">for </span>Endpoint {
-<a href=#110 id=110 data-nosnippet>110</a>    <span class="kw">fn </span>deserialize&lt;D&gt;(deserializer: D) -&gt; std::result::Result&lt;<span class="self">Self</span>, D::Error&gt;
+<a href=#110 id=110 data-nosnippet>110</a>    <span class="kw">fn </span>deserialize&lt;D&gt;(deserializer: D) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, D::Error&gt;
 <a href=#111 id=111 data-nosnippet>111</a>    <span class="kw">where </span>D: Deserializer&lt;<span class="lifetime">'de</span>&gt; {
 <a href=#112 id=112 data-nosnippet>112</a>        <span class="kw">struct </span>EndpointVisitor;
 <a href=#113 id=113 data-nosnippet>113</a>
@@ -118,7 +118,7 @@
 <a href=#118 id=118 data-nosnippet>118</a>                f.write_str(<span class="string">r#"an endpoint string of the form "&lt;method&gt; &lt;path&gt;""#</span>)
 <a href=#119 id=119 data-nosnippet>119</a>            }
 <a href=#120 id=120 data-nosnippet>120</a>
-<a href=#121 id=121 data-nosnippet>121</a>            <span class="kw">fn </span>visit_str&lt;E&gt;(<span class="self">self</span>, v: <span class="kw-2">&amp;</span>str) -&gt; std::result::Result&lt;Endpoint, E&gt;
+<a href=#121 id=121 data-nosnippet>121</a>            <span class="kw">fn </span>visit_str&lt;E&gt;(<span class="self">self</span>, v: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Endpoint, E&gt;
 <a href=#122 id=122 data-nosnippet>122</a>            <span class="kw">where </span>E: DeError {
 <a href=#123 id=123 data-nosnippet>123</a>                Endpoint::from_str(v).map_err(E::custom)
 <a href=#124 id=124 data-nosnippet>124</a>            }

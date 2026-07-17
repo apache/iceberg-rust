@@ -18,8 +18,8 @@
 <a href=#18 id=18 data-nosnippet>18</a></span><span class="doccomment">//! OpenDAL-based storage implementation for Apache Iceberg.
 <a href=#19 id=19 data-nosnippet>19</a>//!
 <a href=#20 id=20 data-nosnippet>20</a>//! This crate provides [`OpenDalStorage`] and [`OpenDalStorageFactory`],
-<a href=#21 id=21 data-nosnippet>21</a>//! which implement the [`Storage`](iceberg::io::Storage) and
-<a href=#22 id=22 data-nosnippet>22</a>//! [`StorageFactory`](iceberg::io::StorageFactory) traits from the `iceberg` crate
+<a href=#21 id=21 data-nosnippet>21</a>//! which implement the [`Storage`](Storage) and
+<a href=#22 id=22 data-nosnippet>22</a>//! [`StorageFactory`](StorageFactory) traits from the `iceberg` crate
 <a href=#23 id=23 data-nosnippet>23</a>//! using [OpenDAL](https://opendal.apache.org/) as the backend.
 <a href=#24 id=24 data-nosnippet>24</a>
 <a href=#25 id=25 data-nosnippet>25</a></span><span class="kw">mod </span>utils;
@@ -117,7 +117,7 @@
 <a href=#117 id=117 data-nosnippet>117</a>    </span>S3 {
 <a href=#118 id=118 data-nosnippet>118</a>        <span class="doccomment">/// Custom AWS credential loader.
 <a href=#119 id=119 data-nosnippet>119</a>        </span><span class="attr">#[serde(skip)]
-<a href=#120 id=120 data-nosnippet>120</a>        </span>customized_credential_load: <span class="prelude-ty">Option</span>&lt;s3::CustomAwsCredentialLoader&gt;,
+<a href=#120 id=120 data-nosnippet>120</a>        </span>customized_credential_load: <span class="prelude-ty">Option</span>&lt;CustomAwsCredentialLoader&gt;,
 <a href=#121 id=121 data-nosnippet>121</a>    },
 <a href=#122 id=122 data-nosnippet>122</a>    <span class="doccomment">/// GCS storage factory.
 <a href=#123 id=123 data-nosnippet>123</a>    </span><span class="attr">#[cfg(feature = <span class="string">"opendal-gcs"</span>)]
@@ -209,7 +209,7 @@
 <a href=#209 id=209 data-nosnippet>209</a>        </span>config: Arc&lt;S3Config&gt;,
 <a href=#210 id=210 data-nosnippet>210</a>        <span class="doccomment">/// Custom AWS credential loader.
 <a href=#211 id=211 data-nosnippet>211</a>        </span><span class="attr">#[serde(skip)]
-<a href=#212 id=212 data-nosnippet>212</a>        </span>customized_credential_load: <span class="prelude-ty">Option</span>&lt;s3::CustomAwsCredentialLoader&gt;,
+<a href=#212 id=212 data-nosnippet>212</a>        </span>customized_credential_load: <span class="prelude-ty">Option</span>&lt;CustomAwsCredentialLoader&gt;,
 <a href=#213 id=213 data-nosnippet>213</a>    },
 <a href=#214 id=214 data-nosnippet>214</a>    <span class="doccomment">/// GCS storage variant.
 <a href=#215 id=215 data-nosnippet>215</a>    </span><span class="attr">#[cfg(feature = <span class="string">"opendal-gcs"</span>)]
@@ -462,7 +462,7 @@
 <a href=#462 id=462 data-nosnippet>462</a>            }
 <a href=#463 id=463 data-nosnippet>463</a>            <span class="attr">#[cfg(feature = <span class="string">"opendal-hf"</span>)]
 <a href=#464 id=464 data-nosnippet>464</a>            </span>OpenDalStorage::Hf { .. } =&gt; {
-<a href=#465 id=465 data-nosnippet>465</a>                <span class="kw">let </span>parsed = hf::HfUri::parse(path).ok_or_else(|| {
+<a href=#465 id=465 data-nosnippet>465</a>                <span class="kw">let </span>parsed = HfUri::parse(path).ok_or_else(|| {
 <a href=#466 id=466 data-nosnippet>466</a>                    Error::new(ErrorKind::DataInvalid, <span class="macro">format!</span>(<span class="string">"Invalid hf url: {path}"</span>))
 <a href=#467 id=467 data-nosnippet>467</a>                })<span class="question-mark">?</span>;
 <a href=#468 id=468 data-nosnippet>468</a>                <span class="prelude-val">Ok</span>(<span class="kw-2">&amp;</span>path[path.len() - parsed.path.len()..])

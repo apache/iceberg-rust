@@ -167,7 +167,7 @@
 <a href=#167 id=167 data-nosnippet>167</a>            <span class="number">0 </span>=&gt; <span class="prelude-val">Ok</span>(ManifestContentType::Data),
 <a href=#168 id=168 data-nosnippet>168</a>            <span class="number">1 </span>=&gt; <span class="prelude-val">Ok</span>(ManifestContentType::Deletes),
 <a href=#169 id=169 data-nosnippet>169</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(
-<a href=#170 id=170 data-nosnippet>170</a>                <span class="kw">crate</span>::ErrorKind::DataInvalid,
+<a href=#170 id=170 data-nosnippet>170</a>                ErrorKind::DataInvalid,
 <a href=#171 id=171 data-nosnippet>171</a>                <span class="macro">format!</span>(<span class="string">"Invalid manifest content type. Expected 0 or 1, got {value}"</span>),
 <a href=#172 id=172 data-nosnippet>172</a>            )),
 <a href=#173 id=173 data-nosnippet>173</a>        }

@@ -953,7 +953,7 @@
 <a href=#953 id=953 data-nosnippet>953</a>
 <a href=#954 id=954 data-nosnippet>954</a>    <span class="kw">impl </span>TryFrom&lt;TableMetadataV3&gt; <span class="kw">for </span>TableMetadata {
 <a href=#955 id=955 data-nosnippet>955</a>        <span class="kw">type </span>Error = Error;
-<a href=#956 id=956 data-nosnippet>956</a>        <span class="kw">fn </span>try_from(value: TableMetadataV3) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">self</span>::Error&gt; {
+<a href=#956 id=956 data-nosnippet>956</a>        <span class="kw">fn </span>try_from(value: TableMetadataV3) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, Error&gt; {
 <a href=#957 id=957 data-nosnippet>957</a>            <span class="kw">let </span>TableMetadataV3 {
 <a href=#958 id=958 data-nosnippet>958</a>                format_version: <span class="kw">_</span>,
 <a href=#959 id=959 data-nosnippet>959</a>                shared: value,
@@ -1071,7 +1071,7 @@
 <a href=#1071 id=1071 data-nosnippet>1071</a>
 <a href=#1072 id=1072 data-nosnippet>1072</a>    <span class="kw">impl </span>TryFrom&lt;TableMetadataV2&gt; <span class="kw">for </span>TableMetadata {
 <a href=#1073 id=1073 data-nosnippet>1073</a>        <span class="kw">type </span>Error = Error;
-<a href=#1074 id=1074 data-nosnippet>1074</a>        <span class="kw">fn </span>try_from(value: TableMetadataV2) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">self</span>::Error&gt; {
+<a href=#1074 id=1074 data-nosnippet>1074</a>        <span class="kw">fn </span>try_from(value: TableMetadataV2) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, Error&gt; {
 <a href=#1075 id=1075 data-nosnippet>1075</a>            <span class="kw">let </span>snapshots = value.snapshots;
 <a href=#1076 id=1076 data-nosnippet>1076</a>            <span class="kw">let </span>value = value.shared;
 <a href=#1077 id=1077 data-nosnippet>1077</a>            <span class="kw">let </span>current_snapshot_id = <span class="kw">if </span>value.current_snapshot_id == <span class="prelude-val">Some</span>(EMPTY_SNAPSHOT_ID) {
@@ -3644,7 +3644,7 @@
 <a href=#3644 id=3644 data-nosnippet>3644</a>        <span class="kw">let </span>compressed = CompressionCodec::gzip_default()
 <a href=#3645 id=3645 data-nosnippet>3645</a>            .compress(json.into_bytes())
 <a href=#3646 id=3646 data-nosnippet>3646</a>            .expect(<span class="string">"failed to compress metadata"</span>);
-<a href=#3647 id=3647 data-nosnippet>3647</a>        std::fs::write(<span class="kw-2">&amp;</span>metadata_location, <span class="kw-2">&amp;</span>compressed).expect(<span class="string">"failed to write metadata"</span>);
+<a href=#3647 id=3647 data-nosnippet>3647</a>        fs::write(<span class="kw-2">&amp;</span>metadata_location, <span class="kw-2">&amp;</span>compressed).expect(<span class="string">"failed to write metadata"</span>);
 <a href=#3648 id=3648 data-nosnippet>3648</a>
 <a href=#3649 id=3649 data-nosnippet>3649</a>        <span class="comment">// Read the metadata back
 <a href=#3650 id=3650 data-nosnippet>3650</a>        </span><span class="kw">let </span>file_io = FileIO::new_with_fs();
@@ -3712,7 +3712,7 @@
 <a href=#3712 id=3712 data-nosnippet>3712</a>        </span><span class="macro">assert!</span>(std::path::Path::new(<span class="kw-2">&amp;</span>metadata_location_str).exists());
 <a href=#3713 id=3713 data-nosnippet>3713</a>
 <a href=#3714 id=3714 data-nosnippet>3714</a>        <span class="comment">// Read the raw file and check it's gzip compressed
-<a href=#3715 id=3715 data-nosnippet>3715</a>        </span><span class="kw">let </span>raw_content = std::fs::read(<span class="kw-2">&amp;</span>metadata_location_str).unwrap();
+<a href=#3715 id=3715 data-nosnippet>3715</a>        </span><span class="kw">let </span>raw_content = fs::read(<span class="kw-2">&amp;</span>metadata_location_str).unwrap();
 <a href=#3716 id=3716 data-nosnippet>3716</a>        <span class="macro">assert!</span>(raw_content.len() &gt; <span class="number">2</span>);
 <a href=#3717 id=3717 data-nosnippet>3717</a>        <span class="macro">assert_eq!</span>(raw_content[<span class="number">0</span>], <span class="number">0x1F</span>); <span class="comment">// gzip magic number
 <a href=#3718 id=3718 data-nosnippet>3718</a>        </span><span class="macro">assert_eq!</span>(raw_content[<span class="number">1</span>], <span class="number">0x8B</span>); <span class="comment">// gzip magic number

@@ -397,7 +397,7 @@
 <a href=#397 id=397 data-nosnippet>397</a>
 <a href=#398 id=398 data-nosnippet>398</a>    <span class="doccomment">/// Helper to verify partition data files
 <a href=#399 id=399 data-nosnippet>399</a>    </span><span class="kw">fn </span>verify_partition_files(
-<a href=#400 id=400 data-nosnippet>400</a>        data_files: <span class="kw-2">&amp;</span>[iceberg::spec::DataFile],
+<a href=#400 id=400 data-nosnippet>400</a>        data_files: <span class="kw-2">&amp;</span>[DataFile],
 <a href=#401 id=401 data-nosnippet>401</a>        expected_total: u64,
 <a href=#402 id=402 data-nosnippet>402</a>    ) -&gt; HashMap&lt;String, u64&gt; {
 <a href=#403 id=403 data-nosnippet>403</a>        <span class="kw">let </span>total_records: u64 = data_files.iter().map(|f| f.record_count()).sum();

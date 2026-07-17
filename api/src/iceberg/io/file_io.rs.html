@@ -252,12 +252,12 @@
 <a href=#252 id=252 data-nosnippet>252</a>    <span class="doccomment">/// Read file content with given range.
 <a href=#253 id=253 data-nosnippet>253</a>    ///
 <a href=#254 id=254 data-nosnippet>254</a>    /// TODO: we can support reading non-contiguous bytes in the future.
-<a href=#255 id=255 data-nosnippet>255</a>    </span><span class="kw">async fn </span>read(<span class="kw-2">&amp;</span><span class="self">self</span>, range: Range&lt;u64&gt;) -&gt; <span class="kw">crate</span>::Result&lt;Bytes&gt;;
+<a href=#255 id=255 data-nosnippet>255</a>    </span><span class="kw">async fn </span>read(<span class="kw-2">&amp;</span><span class="self">self</span>, range: Range&lt;u64&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Bytes&gt;;
 <a href=#256 id=256 data-nosnippet>256</a>}
 <a href=#257 id=257 data-nosnippet>257</a>
 <a href=#258 id=258 data-nosnippet>258</a><span class="attr">#[async_trait::async_trait]
 <a href=#259 id=259 data-nosnippet>259</a></span><span class="kw">impl</span>&lt;T: AsRef&lt;<span class="kw">dyn </span>FileRead&gt; + Send + Sync + Unpin + <span class="lifetime">'static</span>&gt; FileRead <span class="kw">for </span>T {
-<a href=#260 id=260 data-nosnippet>260</a>    <span class="kw">async fn </span>read(<span class="kw-2">&amp;</span><span class="self">self</span>, range: Range&lt;u64&gt;) -&gt; <span class="kw">crate</span>::Result&lt;Bytes&gt; {
+<a href=#260 id=260 data-nosnippet>260</a>    <span class="kw">async fn </span>read(<span class="kw-2">&amp;</span><span class="self">self</span>, range: Range&lt;u64&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Bytes&gt; {
 <a href=#261 id=261 data-nosnippet>261</a>        <span class="self">self</span>.as_ref().read(range).<span class="kw">await
 <a href=#262 id=262 data-nosnippet>262</a>    </span>}
 <a href=#263 id=263 data-nosnippet>263</a>}
@@ -282,26 +282,26 @@
 <a href=#282 id=282 data-nosnippet>282</a>    }
 <a href=#283 id=283 data-nosnippet>283</a>
 <a href=#284 id=284 data-nosnippet>284</a>    <span class="doccomment">/// Check if file exists.
-<a href=#285 id=285 data-nosnippet>285</a>    </span><span class="kw">pub async fn </span>exists(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">crate</span>::Result&lt;bool&gt; {
+<a href=#285 id=285 data-nosnippet>285</a>    </span><span class="kw">pub async fn </span>exists(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
 <a href=#286 id=286 data-nosnippet>286</a>        <span class="self">self</span>.storage.exists(<span class="kw-2">&amp;</span><span class="self">self</span>.path).<span class="kw">await
 <a href=#287 id=287 data-nosnippet>287</a>    </span>}
 <a href=#288 id=288 data-nosnippet>288</a>
 <a href=#289 id=289 data-nosnippet>289</a>    <span class="doccomment">/// Fetch and returns metadata of file.
-<a href=#290 id=290 data-nosnippet>290</a>    </span><span class="kw">pub async fn </span>metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">crate</span>::Result&lt;FileMetadata&gt; {
+<a href=#290 id=290 data-nosnippet>290</a>    </span><span class="kw">pub async fn </span>metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;FileMetadata&gt; {
 <a href=#291 id=291 data-nosnippet>291</a>        <span class="self">self</span>.storage.metadata(<span class="kw-2">&amp;</span><span class="self">self</span>.path).<span class="kw">await
 <a href=#292 id=292 data-nosnippet>292</a>    </span>}
 <a href=#293 id=293 data-nosnippet>293</a>
 <a href=#294 id=294 data-nosnippet>294</a>    <span class="doccomment">/// Read and returns whole content of file.
 <a href=#295 id=295 data-nosnippet>295</a>    ///
 <a href=#296 id=296 data-nosnippet>296</a>    /// For continuous reading, use [`Self::reader`] instead.
-<a href=#297 id=297 data-nosnippet>297</a>    </span><span class="kw">pub async fn </span>read(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">crate</span>::Result&lt;Bytes&gt; {
+<a href=#297 id=297 data-nosnippet>297</a>    </span><span class="kw">pub async fn </span>read(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Bytes&gt; {
 <a href=#298 id=298 data-nosnippet>298</a>        <span class="self">self</span>.storage.read(<span class="kw-2">&amp;</span><span class="self">self</span>.path).<span class="kw">await
 <a href=#299 id=299 data-nosnippet>299</a>    </span>}
 <a href=#300 id=300 data-nosnippet>300</a>
 <a href=#301 id=301 data-nosnippet>301</a>    <span class="doccomment">/// Creates [`FileRead`] for continuous reading.
 <a href=#302 id=302 data-nosnippet>302</a>    ///
 <a href=#303 id=303 data-nosnippet>303</a>    /// For one-time reading, use [`Self::read`] instead.
-<a href=#304 id=304 data-nosnippet>304</a>    </span><span class="kw">pub async fn </span>reader(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">crate</span>::Result&lt;Box&lt;<span class="kw">dyn </span>FileRead&gt;&gt; {
+<a href=#304 id=304 data-nosnippet>304</a>    </span><span class="kw">pub async fn </span>reader(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>FileRead&gt;&gt; {
 <a href=#305 id=305 data-nosnippet>305</a>        <span class="self">self</span>.storage.reader(<span class="kw-2">&amp;</span><span class="self">self</span>.path).<span class="kw">await
 <a href=#306 id=306 data-nosnippet>306</a>    </span>}
 <a href=#307 id=307 data-nosnippet>307</a>}
@@ -317,12 +317,12 @@
 <a href=#317 id=317 data-nosnippet>317</a>    <span class="doccomment">/// Write bytes to file.
 <a href=#318 id=318 data-nosnippet>318</a>    ///
 <a href=#319 id=319 data-nosnippet>319</a>    /// TODO: we can support writing non-contiguous bytes in the future.
-<a href=#320 id=320 data-nosnippet>320</a>    </span><span class="kw">async fn </span>write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, bs: Bytes) -&gt; <span class="kw">crate</span>::Result&lt;()&gt;;
+<a href=#320 id=320 data-nosnippet>320</a>    </span><span class="kw">async fn </span>write(<span class="kw-2">&amp;mut </span><span class="self">self</span>, bs: Bytes) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt;;
 <a href=#321 id=321 data-nosnippet>321</a>
 <a href=#322 id=322 data-nosnippet>322</a>    <span class="doccomment">/// Close file.
 <a href=#323 id=323 data-nosnippet>323</a>    ///
 <a href=#324 id=324 data-nosnippet>324</a>    /// Calling close on closed file will generate an error.
-<a href=#325 id=325 data-nosnippet>325</a>    </span><span class="kw">async fn </span>close(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw">crate</span>::Result&lt;()&gt;;
+<a href=#325 id=325 data-nosnippet>325</a>    </span><span class="kw">async fn </span>close(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt;;
 <a href=#326 id=326 data-nosnippet>326</a>}
 <a href=#327 id=327 data-nosnippet>327</a>
 <a href=#328 id=328 data-nosnippet>328</a><span class="doccomment">/// Output file is used for writing to files..
@@ -370,7 +370,7 @@
 <a href=#370 id=370 data-nosnippet>370</a>    ///
 <a href=#371 id=371 data-nosnippet>371</a>    /// Calling `write` will overwrite the file if it exists.
 <a href=#372 id=372 data-nosnippet>372</a>    /// For continuous writing, use [`Self::writer`].
-<a href=#373 id=373 data-nosnippet>373</a>    </span><span class="kw">pub async fn </span>write(<span class="kw-2">&amp;</span><span class="self">self</span>, bs: Bytes) -&gt; <span class="kw">crate</span>::Result&lt;()&gt; {
+<a href=#373 id=373 data-nosnippet>373</a>    </span><span class="kw">pub async fn </span>write(<span class="kw-2">&amp;</span><span class="self">self</span>, bs: Bytes) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#374 id=374 data-nosnippet>374</a>        <span class="self">self</span>.storage.write(<span class="kw-2">&amp;</span><span class="self">self</span>.path, bs).<span class="kw">await
 <a href=#375 id=375 data-nosnippet>375</a>    </span>}
 <a href=#376 id=376 data-nosnippet>376</a>
@@ -379,7 +379,7 @@
 <a href=#379 id=379 data-nosnippet>379</a>    /// # Notes
 <a href=#380 id=380 data-nosnippet>380</a>    ///
 <a href=#381 id=381 data-nosnippet>381</a>    /// For one-time writing, use [`Self::write`] instead.
-<a href=#382 id=382 data-nosnippet>382</a>    </span><span class="kw">pub async fn </span>writer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">crate</span>::Result&lt;Box&lt;<span class="kw">dyn </span>FileWrite&gt;&gt; {
+<a href=#382 id=382 data-nosnippet>382</a>    </span><span class="kw">pub async fn </span>writer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>FileWrite&gt;&gt; {
 <a href=#383 id=383 data-nosnippet>383</a>        <span class="self">self</span>.storage.writer(<span class="kw-2">&amp;</span><span class="self">self</span>.path).<span class="kw">await
 <a href=#384 id=384 data-nosnippet>384</a>    </span>}
 <a href=#385 id=385 data-nosnippet>385</a>}

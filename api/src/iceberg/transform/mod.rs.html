@@ -64,8 +64,8 @@
 <a href=#64 id=64 data-nosnippet>64</a>        Transform::Hour =&gt; <span class="prelude-val">Ok</span>(Box::new(temporal::Hour {})),
 <a href=#65 id=65 data-nosnippet>65</a>        Transform::Bucket(mod_n) =&gt; <span class="prelude-val">Ok</span>(Box::new(bucket::Bucket::new(<span class="kw-2">*</span>mod_n))),
 <a href=#66 id=66 data-nosnippet>66</a>        Transform::Truncate(width) =&gt; <span class="prelude-val">Ok</span>(Box::new(truncate::Truncate::new(<span class="kw-2">*</span>width))),
-<a href=#67 id=67 data-nosnippet>67</a>        Transform::Unknown =&gt; <span class="prelude-val">Err</span>(<span class="kw">crate</span>::error::Error::new(
-<a href=#68 id=68 data-nosnippet>68</a>            <span class="kw">crate</span>::ErrorKind::FeatureUnsupported,
+<a href=#67 id=67 data-nosnippet>67</a>        Transform::Unknown =&gt; <span class="prelude-val">Err</span>(Error::new(
+<a href=#68 id=68 data-nosnippet>68</a>            ErrorKind::FeatureUnsupported,
 <a href=#69 id=69 data-nosnippet>69</a>            <span class="string">"Transform Unknown is not implemented"</span>,
 <a href=#70 id=70 data-nosnippet>70</a>        )),
 <a href=#71 id=71 data-nosnippet>71</a>    }

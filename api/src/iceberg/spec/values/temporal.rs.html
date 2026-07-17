@@ -32,7 +32,7 @@
 <a href=#32 id=32 data-nosnippet>32</a>
 <a href=#33 id=33 data-nosnippet>33</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>days_to_date(days: i32) -&gt; NaiveDate {
 <a href=#34 id=34 data-nosnippet>34</a>        <span class="comment">// This shouldn't fail until the year 262000
-<a href=#35 id=35 data-nosnippet>35</a>        </span>(chrono::DateTime::UNIX_EPOCH + TimeDelta::try_days(days <span class="kw">as </span>i64).unwrap())
+<a href=#35 id=35 data-nosnippet>35</a>        </span>(DateTime::UNIX_EPOCH + TimeDelta::try_days(days <span class="kw">as </span>i64).unwrap())
 <a href=#36 id=36 data-nosnippet>36</a>            .naive_utc()
 <a href=#37 id=37 data-nosnippet>37</a>            .date()
 <a href=#38 id=38 data-nosnippet>38</a>    }

@@ -797,10 +797,10 @@
 <a href=#797 id=797 data-nosnippet>797</a>                    }
 <a href=#798 id=798 data-nosnippet>798</a>                })
 <a href=#799 id=799 data-nosnippet>799</a>                .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
-<a href=#800 id=800 data-nosnippet>800</a>            <span class="prelude-val">Ok</span>(Arc::new(arrow_array::StructArray::new(
+<a href=#800 id=800 data-nosnippet>800</a>            <span class="prelude-val">Ok</span>(Arc::new(StructArray::new(
 <a href=#801 id=801 data-nosnippet>801</a>                fields.clone(),
 <a href=#802 id=802 data-nosnippet>802</a>                null_arrays,
-<a href=#803 id=803 data-nosnippet>803</a>                <span class="prelude-val">Some</span>(arrow_buffer::NullBuffer::new_null(<span class="number">1</span>)),
+<a href=#803 id=803 data-nosnippet>803</a>                <span class="prelude-val">Some</span>(NullBuffer::new_null(<span class="number">1</span>)),
 <a href=#804 id=804 data-nosnippet>804</a>            )))
 <a href=#805 id=805 data-nosnippet>805</a>        }
 <a href=#806 id=806 data-nosnippet>806</a>        <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::new(

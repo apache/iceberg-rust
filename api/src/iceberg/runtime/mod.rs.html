@@ -39,7 +39,7 @@
 <a href=#39 id=39 data-nosnippet>39</a><span class="kw">impl</span>&lt;T&gt; Unpin <span class="kw">for </span>JoinHandle&lt;T&gt; {}
 <a href=#40 id=40 data-nosnippet>40</a>
 <a href=#41 id=41 data-nosnippet>41</a><span class="kw">impl</span>&lt;T: Send + <span class="lifetime">'static</span>&gt; Future <span class="kw">for </span>JoinHandle&lt;T&gt; {
-<a href=#42 id=42 data-nosnippet>42</a>    <span class="kw">type </span>Output = <span class="kw">crate</span>::Result&lt;T&gt;;
+<a href=#42 id=42 data-nosnippet>42</a>    <span class="kw">type </span>Output = <span class="prelude-ty">Result</span>&lt;T&gt;;
 <a href=#43 id=43 data-nosnippet>43</a>
 <a href=#44 id=44 data-nosnippet>44</a>    <span class="kw">fn </span>poll(<span class="self">self</span>: Pin&lt;<span class="kw-2">&amp;mut </span><span class="self">Self</span>&gt;, cx: <span class="kw-2">&amp;mut </span>Context&lt;<span class="lifetime">'_</span>&gt;) -&gt; Poll&lt;<span class="self">Self</span>::Output&gt; {
 <a href=#45 id=45 data-nosnippet>45</a>        Pin::new(<span class="kw-2">&amp;mut </span><span class="self">self</span>.get_mut().<span class="number">0</span>).poll(cx).map(|r| {

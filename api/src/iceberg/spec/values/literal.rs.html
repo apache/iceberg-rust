@@ -436,7 +436,7 @@
 <a href=#436 id=436 data-nosnippet>436</a>                        number
 <a href=#437 id=437 data-nosnippet>437</a>                            .as_i64()
 <a href=#438 id=438 data-nosnippet>438</a>                            .ok_or(Error::new(
-<a href=#439 id=439 data-nosnippet>439</a>                                <span class="kw">crate</span>::ErrorKind::DataInvalid,
+<a href=#439 id=439 data-nosnippet>439</a>                                ErrorKind::DataInvalid,
 <a href=#440 id=440 data-nosnippet>440</a>                                <span class="string">"Failed to convert json number to int"</span>,
 <a href=#441 id=441 data-nosnippet>441</a>                            ))<span class="question-mark">?
 <a href=#442 id=442 data-nosnippet>442</a>                            </span>.try_into()<span class="question-mark">?</span>,
@@ -444,19 +444,19 @@
 <a href=#444 id=444 data-nosnippet>444</a>                }
 <a href=#445 id=445 data-nosnippet>445</a>                (PrimitiveType::Long, JsonValue::Number(number)) =&gt; <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Literal::Primitive(
 <a href=#446 id=446 data-nosnippet>446</a>                    PrimitiveLiteral::Long(number.as_i64().ok_or(Error::new(
-<a href=#447 id=447 data-nosnippet>447</a>                        <span class="kw">crate</span>::ErrorKind::DataInvalid,
+<a href=#447 id=447 data-nosnippet>447</a>                        ErrorKind::DataInvalid,
 <a href=#448 id=448 data-nosnippet>448</a>                        <span class="string">"Failed to convert json number to long"</span>,
 <a href=#449 id=449 data-nosnippet>449</a>                    ))<span class="question-mark">?</span>),
 <a href=#450 id=450 data-nosnippet>450</a>                ))),
 <a href=#451 id=451 data-nosnippet>451</a>                (PrimitiveType::Float, JsonValue::Number(number)) =&gt; <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Literal::Primitive(
 <a href=#452 id=452 data-nosnippet>452</a>                    PrimitiveLiteral::Float(OrderedFloat(number.as_f64().ok_or(Error::new(
-<a href=#453 id=453 data-nosnippet>453</a>                        <span class="kw">crate</span>::ErrorKind::DataInvalid,
+<a href=#453 id=453 data-nosnippet>453</a>                        ErrorKind::DataInvalid,
 <a href=#454 id=454 data-nosnippet>454</a>                        <span class="string">"Failed to convert json number to float"</span>,
 <a href=#455 id=455 data-nosnippet>455</a>                    ))<span class="question-mark">? </span><span class="kw">as </span>f32)),
 <a href=#456 id=456 data-nosnippet>456</a>                ))),
 <a href=#457 id=457 data-nosnippet>457</a>                (PrimitiveType::Double, JsonValue::Number(number)) =&gt; <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Literal::Primitive(
 <a href=#458 id=458 data-nosnippet>458</a>                    PrimitiveLiteral::Double(OrderedFloat(number.as_f64().ok_or(Error::new(
-<a href=#459 id=459 data-nosnippet>459</a>                        <span class="kw">crate</span>::ErrorKind::DataInvalid,
+<a href=#459 id=459 data-nosnippet>459</a>                        ErrorKind::DataInvalid,
 <a href=#460 id=460 data-nosnippet>460</a>                        <span class="string">"Failed to convert json number to double"</span>,
 <a href=#461 id=461 data-nosnippet>461</a>                    ))<span class="question-mark">?</span>)),
 <a href=#462 id=462 data-nosnippet>462</a>                ))),
@@ -470,7 +470,7 @@
 <a href=#470 id=470 data-nosnippet>470</a>                        number
 <a href=#471 id=471 data-nosnippet>471</a>                            .as_i64()
 <a href=#472 id=472 data-nosnippet>472</a>                            .ok_or(Error::new(
-<a href=#473 id=473 data-nosnippet>473</a>                                <span class="kw">crate</span>::ErrorKind::DataInvalid,
+<a href=#473 id=473 data-nosnippet>473</a>                                ErrorKind::DataInvalid,
 <a href=#474 id=474 data-nosnippet>474</a>                                <span class="string">"Failed to convert json number to date (days since epoch)"</span>,
 <a href=#475 id=475 data-nosnippet>475</a>                            ))<span class="question-mark">?
 <a href=#476 id=476 data-nosnippet>476</a>                            </span>.try_into()<span class="question-mark">?</span>,
@@ -497,7 +497,7 @@
 <a href=#497 id=497 data-nosnippet>497</a>                    <span class="kw">let </span>ndt = NaiveDateTime::parse_from_str(<span class="kw-2">&amp;</span>s, <span class="string">"%Y-%m-%dT%H:%M:%S%.f"</span>)<span class="question-mark">?</span>;
 <a href=#498 id=498 data-nosnippet>498</a>                    <span class="kw">let </span>nanos = timestamp::datetime_to_nanoseconds(<span class="kw-2">&amp;</span>ndt).ok_or_else(|| {
 <a href=#499 id=499 data-nosnippet>499</a>                        Error::new(
-<a href=#500 id=500 data-nosnippet>500</a>                            <span class="kw">crate</span>::ErrorKind::DataInvalid,
+<a href=#500 id=500 data-nosnippet>500</a>                            ErrorKind::DataInvalid,
 <a href=#501 id=501 data-nosnippet>501</a>                            <span class="macro">format!</span>(
 <a href=#502 id=502 data-nosnippet>502</a>                                <span class="string">"Timestamp is outside the representable nanosecond range: {ndt}"
 <a href=#503 id=503 data-nosnippet>503</a>                            </span>),
@@ -512,7 +512,7 @@
 <a href=#512 id=512 data-nosnippet>512</a>                    )<span class="question-mark">?</span>);
 <a href=#513 id=513 data-nosnippet>513</a>                    <span class="kw">let </span>nanos = timestamptz::datetimetz_to_nanoseconds(<span class="kw-2">&amp;</span>dt).ok_or_else(|| {
 <a href=#514 id=514 data-nosnippet>514</a>                        Error::new(
-<a href=#515 id=515 data-nosnippet>515</a>                            <span class="kw">crate</span>::ErrorKind::DataInvalid,
+<a href=#515 id=515 data-nosnippet>515</a>                            ErrorKind::DataInvalid,
 <a href=#516 id=516 data-nosnippet>516</a>                            <span class="macro">format!</span>(
 <a href=#517 id=517 data-nosnippet>517</a>                                <span class="string">"Timestamptz is outside the representable nanosecond range: {dt}"
 <a href=#518 id=518 data-nosnippet>518</a>                            </span>),
@@ -549,7 +549,7 @@
 <a href=#549 id=549 data-nosnippet>549</a>                }
 <a href=#550 id=550 data-nosnippet>550</a>                (<span class="kw">_</span>, JsonValue::Null) =&gt; <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>),
 <a href=#551 id=551 data-nosnippet>551</a>                (i, j) =&gt; <span class="prelude-val">Err</span>(Error::new(
-<a href=#552 id=552 data-nosnippet>552</a>                    <span class="kw">crate</span>::ErrorKind::DataInvalid,
+<a href=#552 id=552 data-nosnippet>552</a>                    ErrorKind::DataInvalid,
 <a href=#553 id=553 data-nosnippet>553</a>                    <span class="macro">format!</span>(<span class="string">"The json value {j} doesn't fit to the iceberg type {i}."</span>),
 <a href=#554 id=554 data-nosnippet>554</a>                )),
 <a href=#555 id=555 data-nosnippet>555</a>            },
@@ -571,7 +571,7 @@
 <a href=#571 id=571 data-nosnippet>571</a>                    ))))
 <a href=#572 id=572 data-nosnippet>572</a>                } <span class="kw">else </span>{
 <a href=#573 id=573 data-nosnippet>573</a>                    <span class="prelude-val">Err</span>(Error::new(
-<a href=#574 id=574 data-nosnippet>574</a>                        <span class="kw">crate</span>::ErrorKind::DataInvalid,
+<a href=#574 id=574 data-nosnippet>574</a>                        ErrorKind::DataInvalid,
 <a href=#575 id=575 data-nosnippet>575</a>                        <span class="string">"The json value for a struct type must be an object."</span>,
 <a href=#576 id=576 data-nosnippet>576</a>                    ))
 <a href=#577 id=577 data-nosnippet>577</a>                }
@@ -588,7 +588,7 @@
 <a href=#588 id=588 data-nosnippet>588</a>                    )))
 <a href=#589 id=589 data-nosnippet>589</a>                } <span class="kw">else </span>{
 <a href=#590 id=590 data-nosnippet>590</a>                    <span class="prelude-val">Err</span>(Error::new(
-<a href=#591 id=591 data-nosnippet>591</a>                        <span class="kw">crate</span>::ErrorKind::DataInvalid,
+<a href=#591 id=591 data-nosnippet>591</a>                        ErrorKind::DataInvalid,
 <a href=#592 id=592 data-nosnippet>592</a>                        <span class="string">"The json value for a list type must be an array."</span>,
 <a href=#593 id=593 data-nosnippet>593</a>                    ))
 <a href=#594 id=594 data-nosnippet>594</a>                }
@@ -617,13 +617,13 @@
 <a href=#617 id=617 data-nosnippet>617</a>                        ))))
 <a href=#618 id=618 data-nosnippet>618</a>                    } <span class="kw">else </span>{
 <a href=#619 id=619 data-nosnippet>619</a>                        <span class="prelude-val">Err</span>(Error::new(
-<a href=#620 id=620 data-nosnippet>620</a>                            <span class="kw">crate</span>::ErrorKind::DataInvalid,
+<a href=#620 id=620 data-nosnippet>620</a>                            ErrorKind::DataInvalid,
 <a href=#621 id=621 data-nosnippet>621</a>                            <span class="string">"The json value for a list type must be an array."</span>,
 <a href=#622 id=622 data-nosnippet>622</a>                        ))
 <a href=#623 id=623 data-nosnippet>623</a>                    }
 <a href=#624 id=624 data-nosnippet>624</a>                } <span class="kw">else </span>{
 <a href=#625 id=625 data-nosnippet>625</a>                    <span class="prelude-val">Err</span>(Error::new(
-<a href=#626 id=626 data-nosnippet>626</a>                        <span class="kw">crate</span>::ErrorKind::DataInvalid,
+<a href=#626 id=626 data-nosnippet>626</a>                        ErrorKind::DataInvalid,
 <a href=#627 id=627 data-nosnippet>627</a>                        <span class="string">"The json value for a list type must be an array."</span>,
 <a href=#628 id=628 data-nosnippet>628</a>                    ))
 <a href=#629 id=629 data-nosnippet>629</a>                }

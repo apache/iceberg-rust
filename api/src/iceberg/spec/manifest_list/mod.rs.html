@@ -152,7 +152,7 @@
 <a href=#152 id=152 data-nosnippet>152</a>        <span class="kw">let </span>bs = fs::read(full_path).expect(<span class="string">"read_file must succeed"</span>);
 <a href=#153 id=153 data-nosnippet>153</a>
 <a href=#154 id=154 data-nosnippet>154</a>        <span class="kw">let </span>parsed_manifest_list =
-<a href=#155 id=155 data-nosnippet>155</a>            ManifestList::parse_with_version(<span class="kw-2">&amp;</span>bs, <span class="kw">crate</span>::spec::FormatVersion::V1).unwrap();
+<a href=#155 id=155 data-nosnippet>155</a>            ManifestList::parse_with_version(<span class="kw-2">&amp;</span>bs, FormatVersion::V1).unwrap();
 <a href=#156 id=156 data-nosnippet>156</a>
 <a href=#157 id=157 data-nosnippet>157</a>        <span class="macro">assert_eq!</span>(manifest_list, parsed_manifest_list);
 <a href=#158 id=158 data-nosnippet>158</a>    }
@@ -230,7 +230,7 @@
 <a href=#230 id=230 data-nosnippet>230</a>        <span class="kw">let </span>bs = fs::read(full_path).expect(<span class="string">"read_file must succeed"</span>);
 <a href=#231 id=231 data-nosnippet>231</a>
 <a href=#232 id=232 data-nosnippet>232</a>        <span class="kw">let </span>parsed_manifest_list =
-<a href=#233 id=233 data-nosnippet>233</a>            ManifestList::parse_with_version(<span class="kw-2">&amp;</span>bs, <span class="kw">crate</span>::spec::FormatVersion::V2).unwrap();
+<a href=#233 id=233 data-nosnippet>233</a>            ManifestList::parse_with_version(<span class="kw-2">&amp;</span>bs, FormatVersion::V2).unwrap();
 <a href=#234 id=234 data-nosnippet>234</a>
 <a href=#235 id=235 data-nosnippet>235</a>        <span class="macro">assert_eq!</span>(manifest_list, parsed_manifest_list);
 <a href=#236 id=236 data-nosnippet>236</a>    }
@@ -270,7 +270,7 @@
 <a href=#270 id=270 data-nosnippet>270</a>        <span class="kw">let </span>bs = writer.into_inner().unwrap();
 <a href=#271 id=271 data-nosnippet>271</a>
 <a href=#272 id=272 data-nosnippet>272</a>        <span class="kw">let </span>parsed_manifest_list =
-<a href=#273 id=273 data-nosnippet>273</a>            ManifestList::parse_with_version(<span class="kw-2">&amp;</span>bs, <span class="kw">crate</span>::spec::FormatVersion::V2).unwrap();
+<a href=#273 id=273 data-nosnippet>273</a>            ManifestList::parse_with_version(<span class="kw-2">&amp;</span>bs, FormatVersion::V2).unwrap();
 <a href=#274 id=274 data-nosnippet>274</a>
 <a href=#275 id=275 data-nosnippet>275</a>        <span class="macro">assert_eq!</span>(manifest_list, parsed_manifest_list);
 <a href=#276 id=276 data-nosnippet>276</a>    }
@@ -349,7 +349,7 @@
 <a href=#349 id=349 data-nosnippet>349</a>        <span class="kw">let </span>bs = fs::read(full_path).expect(<span class="string">"read_file must succeed"</span>);
 <a href=#350 id=350 data-nosnippet>350</a>
 <a href=#351 id=351 data-nosnippet>351</a>        <span class="kw">let </span>parsed_manifest_list =
-<a href=#352 id=352 data-nosnippet>352</a>            ManifestList::parse_with_version(<span class="kw-2">&amp;</span>bs, <span class="kw">crate</span>::spec::FormatVersion::V3).unwrap();
+<a href=#352 id=352 data-nosnippet>352</a>            ManifestList::parse_with_version(<span class="kw-2">&amp;</span>bs, FormatVersion::V3).unwrap();
 <a href=#353 id=353 data-nosnippet>353</a>
 <a href=#354 id=354 data-nosnippet>354</a>        <span class="macro">assert_eq!</span>(manifest_list, parsed_manifest_list);
 <a href=#355 id=355 data-nosnippet>355</a>    }
