@@ -61,7 +61,10 @@ impl ArrowReader {
         // After collecting required leaf column indices used in the predicate,
         // creates the projection mask for the Arrow predicates.
         let projection_mask = ProjectionMask::leaves(parquet_schema, column_indices.clone());
-        let predicate_func = visit(&mut converter, predicates)?;
+        let predicate_func = match visit(&mut converter, predicates)? {
+            Some(predicate_func) => predicate_func,
+            None => converter.build_always_true()?,
+        };
         let arrow_predicate = ArrowPredicateFn::new(projection_mask, predicate_func);
         Ok(RowFilter::new(vec![Box::new(arrow_predicate)]))
     }

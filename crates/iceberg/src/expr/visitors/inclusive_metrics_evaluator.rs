@@ -18,7 +18,8 @@
 use fnv::FnvHashSet;
 
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
-use crate::expr::{BoundPredicate, BoundReference};
+use crate::expr::visitors::transform_bound::{bounds_preserve_order, transform_bound};
+use crate::expr::{BoundPredicate, BoundTerm};
 use crate::spec::{DataFile, Datum, PrimitiveLiteral};
 use crate::{Error, ErrorKind};
 
@@ -96,12 +97,12 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
 
     fn visit_inequality(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         cmp_fn: fn(&Datum, &Datum) -> bool,
         use_lower_bound: bool,
     ) -> crate::Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = term.field().id;
 
         if self.contains_nulls_only(field_id) || self.contains_nans_only(field_id) {
             return ROWS_CANNOT_MATCH;
@@ -113,6 +114,10 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
             return ROWS_MIGHT_MATCH;
         }
 
+        if !bounds_preserve_order(term) {
+            return ROWS_MIGHT_MATCH;
+        }
+
         let bound = if use_lower_bound {
             self.lower_bound(field_id)
         } else {
@@ -120,7 +125,12 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
         };
 
         if let Some(bound) = bound {
-            if cmp_fn(bound, datum) {
+            let bound = match transform_bound(term, bound) {
+                Ok(Some(b)) => b,
+                _ => return ROWS_MIGHT_MATCH,
+            };
+
+            if cmp_fn(&bound, datum) {
                 return ROWS_MIGHT_MATCH;
             }
 
@@ -154,12 +164,8 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         Ok(!inner)
     }
 
-    fn is_null(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        let field_id = reference.field().id;
+    fn is_null(&mut self, term: &BoundTerm, _predicate: &BoundPredicate) -> crate::Result<bool> {
+        let field_id = term.field().id;
 
         match self.null_count(field_id) {
             Some(&0) => ROWS_CANNOT_MATCH,
@@ -168,12 +174,8 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
     }
 
-    fn not_null(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        let field_id = reference.field().id;
+    fn not_null(&mut self, term: &BoundTerm, _predicate: &BoundPredicate) -> crate::Result<bool> {
+        let field_id = term.field().id;
 
         if self.contains_nulls_only(field_id) {
             return ROWS_CANNOT_MATCH;
@@ -182,12 +184,8 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         ROWS_MIGHT_MATCH
     }
 
-    fn is_nan(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        let field_id = reference.field().id;
+    fn is_nan(&mut self, term: &BoundTerm, _predicate: &BoundPredicate) -> crate::Result<bool> {
+        let field_id = term.field().id;
 
         match self.nan_count(field_id) {
             Some(&0) => ROWS_CANNOT_MATCH,
@@ -196,12 +194,8 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
     }
 
-    fn not_nan(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
-        let field_id = reference.field().id;
+    fn not_nan(&mut self, term: &BoundTerm, _predicate: &BoundPredicate) -> crate::Result<bool> {
+        let field_id = term.field().id;
 
         if self.contains_nans_only(field_id) {
             return ROWS_CANNOT_MATCH;
@@ -212,53 +206,61 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
 
     fn less_than(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        self.visit_inequality(reference, datum, PartialOrd::lt, true)
+        self.visit_inequality(term, datum, PartialOrd::lt, true)
     }
 
     fn less_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        self.visit_inequality(reference, datum, PartialOrd::le, true)
+        self.visit_inequality(term, datum, PartialOrd::le, true)
     }
 
     fn greater_than(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        self.visit_inequality(reference, datum, PartialOrd::gt, false)
+        self.visit_inequality(term, datum, PartialOrd::gt, false)
     }
 
     fn greater_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        self.visit_inequality(reference, datum, PartialOrd::ge, false)
+        self.visit_inequality(term, datum, PartialOrd::ge, false)
     }
 
     fn eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = term.field().id;
 
         if self.contains_nulls_only(field_id) || self.contains_nans_only(field_id) {
             return ROWS_CANNOT_MATCH;
         }
 
+        if !bounds_preserve_order(term) {
+            return ROWS_MIGHT_MATCH;
+        }
+
         if let Some(lower_bound) = self.lower_bound(field_id) {
+            let Some(lower_bound) = transform_bound(term, lower_bound)? else {
+                return ROWS_MIGHT_MATCH;
+            };
+
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
@@ -269,6 +271,10 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
 
         if let Some(upper_bound) = self.upper_bound(field_id) {
+            let Some(upper_bound) = transform_bound(term, upper_bound)? else {
+                return ROWS_MIGHT_MATCH;
+            };
+
             if upper_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
@@ -283,7 +289,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
 
     fn not_eq(
         &mut self,
-        _reference: &BoundReference,
+        _term: &BoundTerm,
         _datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
@@ -295,11 +301,11 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
 
     fn starts_with(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = term.field().id;
 
         if self.contains_nulls_only(field_id) {
             return ROWS_CANNOT_MATCH;
@@ -312,7 +318,15 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
             ));
         };
 
+        if !bounds_preserve_order(term) {
+            return ROWS_MIGHT_MATCH;
+        }
+
         if let Some(lower_bound) = self.lower_bound(field_id) {
+            let Some(lower_bound) = transform_bound(term, lower_bound)? else {
+                return ROWS_MIGHT_MATCH;
+            };
+
             let PrimitiveLiteral::String(lower_bound) = lower_bound.literal() else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
@@ -331,6 +345,10 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
 
         if let Some(upper_bound) = self.upper_bound(field_id) {
+            let Some(upper_bound) = transform_bound(term, upper_bound)? else {
+                return ROWS_MIGHT_MATCH;
+            };
+
             let PrimitiveLiteral::String(upper_bound) = upper_bound.literal() else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
@@ -353,11 +371,11 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
 
     fn not_starts_with(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = term.field().id;
 
         if self.may_contain_null(field_id) {
             return ROWS_MIGHT_MATCH;
@@ -373,7 +391,15 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
             ));
         };
 
+        if !bounds_preserve_order(term) {
+            return ROWS_MIGHT_MATCH;
+        }
+
         let Some(lower_bound) = self.lower_bound(field_id) else {
+            return ROWS_MIGHT_MATCH;
+        };
+
+        let Some(lower_bound) = transform_bound(term, lower_bound)? else {
             return ROWS_MIGHT_MATCH;
         };
 
@@ -395,6 +421,10 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
             // lower bound matches the prefix
 
             let Some(upper_bound) = self.upper_bound(field_id) else {
+                return ROWS_MIGHT_MATCH;
+            };
+
+            let Some(upper_bound) = transform_bound(term, upper_bound)? else {
                 return ROWS_MIGHT_MATCH;
             };
 
@@ -422,11 +452,11 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
 
     fn r#in(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = term.field().id;
 
         if self.contains_nulls_only(field_id) || self.contains_nans_only(field_id) {
             return ROWS_CANNOT_MATCH;
@@ -437,13 +467,20 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
             return ROWS_MIGHT_MATCH;
         }
 
+        if !bounds_preserve_order(term) {
+            return ROWS_MIGHT_MATCH;
+        }
+
         if let Some(lower_bound) = self.lower_bound(field_id) {
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
                 return ROWS_MIGHT_MATCH;
             }
 
-            if !literals.iter().any(|datum| datum.ge(lower_bound)) {
+            let Some(lower_bound) = transform_bound(term, lower_bound)? else {
+                return ROWS_MIGHT_MATCH;
+            };
+            if !literals.iter().any(|datum| datum.ge(&lower_bound)) {
                 // if all values are less than lower bound, rows cannot match.
                 return ROWS_CANNOT_MATCH;
             }
@@ -455,7 +492,10 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
                 return ROWS_MIGHT_MATCH;
             }
 
-            if !literals.iter().any(|datum| datum.le(upper_bound)) {
+            let Some(upper_bound) = transform_bound(term, upper_bound)? else {
+                return ROWS_MIGHT_MATCH;
+            };
+            if !literals.iter().any(|datum| datum.le(&upper_bound)) {
                 // if all values are greater than upper bound, rows cannot match.
                 return ROWS_CANNOT_MATCH;
             }
@@ -466,7 +506,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
 
     fn not_in(
         &mut self,
-        _reference: &BoundReference,
+        _term: &BoundTerm,
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> crate::Result<bool> {
@@ -855,12 +895,12 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             LessThan,
-            Reference::new("id"),
+            Reference::new("id").into(),
             Datum::int(INT_MIN_VALUE - 25),
         ))
         .and(Predicate::Binary(BinaryExpression::new(
             GreaterThanOrEq,
-            Reference::new("id"),
+            Reference::new("id").into(),
             Datum::int(INT_MIN_VALUE - 30),
         )));
 
@@ -873,12 +913,12 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             LessThan,
-            Reference::new("id"),
+            Reference::new("id").into(),
             Datum::int(INT_MIN_VALUE - 25),
         ))
         .and(Predicate::Binary(BinaryExpression::new(
             GreaterThanOrEq,
-            Reference::new("id"),
+            Reference::new("id").into(),
             Datum::int(INT_MAX_VALUE + 1),
         )));
 
@@ -891,12 +931,12 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             GreaterThan,
-            Reference::new("id"),
+            Reference::new("id").into(),
             Datum::int(INT_MIN_VALUE - 25),
         ))
         .and(Predicate::Binary(BinaryExpression::new(
             LessThanOrEq,
-            Reference::new("id"),
+            Reference::new("id").into(),
             Datum::int(INT_MIN_VALUE),
         )));
 
@@ -912,12 +952,12 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             LessThan,
-            Reference::new("id"),
+            Reference::new("id").into(),
             Datum::int(INT_MIN_VALUE - 25),
         ))
         .or(Predicate::Binary(BinaryExpression::new(
             GreaterThanOrEq,
-            Reference::new("id"),
+            Reference::new("id").into(),
             Datum::int(INT_MIN_VALUE - 30),
         )));
 
@@ -930,12 +970,12 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             LessThan,
-            Reference::new("id"),
+            Reference::new("id").into(),
             Datum::int(INT_MIN_VALUE - 25),
         ))
         .or(Predicate::Binary(BinaryExpression::new(
             GreaterThanOrEq,
-            Reference::new("id"),
+            Reference::new("id").into(),
             Datum::int(INT_MAX_VALUE + 1),
         )));
 
@@ -1675,25 +1715,37 @@ mod test {
 
     fn not_null(reference: &str) -> BoundPredicate {
         let schema = create_test_schema();
-        let filter = Predicate::Unary(UnaryExpression::new(NotNull, Reference::new(reference)));
+        let filter = Predicate::Unary(UnaryExpression::new(
+            NotNull,
+            Reference::new(reference).into(),
+        ));
         filter.bind(schema.clone(), true).unwrap()
     }
 
     fn is_null(reference: &str) -> BoundPredicate {
         let schema = create_test_schema();
-        let filter = Predicate::Unary(UnaryExpression::new(IsNull, Reference::new(reference)));
+        let filter = Predicate::Unary(UnaryExpression::new(
+            IsNull,
+            Reference::new(reference).into(),
+        ));
         filter.bind(schema.clone(), true).unwrap()
     }
 
     fn not_nan(reference: &str) -> BoundPredicate {
         let schema = create_test_schema();
-        let filter = Predicate::Unary(UnaryExpression::new(NotNan, Reference::new(reference)));
+        let filter = Predicate::Unary(UnaryExpression::new(
+            NotNan,
+            Reference::new(reference).into(),
+        ));
         filter.bind(schema.clone(), true).unwrap()
     }
 
     fn is_nan(reference: &str) -> BoundPredicate {
         let schema = create_test_schema();
-        let filter = Predicate::Unary(UnaryExpression::new(IsNan, Reference::new(reference)));
+        let filter = Predicate::Unary(UnaryExpression::new(
+            IsNan,
+            Reference::new(reference).into(),
+        ));
         filter.bind(schema.clone(), true).unwrap()
     }
 
@@ -1701,7 +1753,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             LessThan,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             Datum::string(str_literal),
         ));
         filter.bind(schema.clone(), true).unwrap()
@@ -1711,7 +1763,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             LessThanOrEq,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             Datum::string(str_literal),
         ));
         filter.bind(schema.clone(), true).unwrap()
@@ -1721,7 +1773,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             GreaterThan,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             Datum::string(str_literal),
         ));
         filter.bind(schema.clone(), true).unwrap()
@@ -1731,7 +1783,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             GreaterThanOrEq,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             Datum::string(str_literal),
         ));
         filter.bind(schema.clone(), true).unwrap()
@@ -1741,7 +1793,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             Eq,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             Datum::string(str_literal),
         ));
         filter.bind(schema.clone(), true).unwrap()
@@ -1751,7 +1803,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             LessThan,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             Datum::int(int_literal),
         ));
         filter.bind(schema.clone(), true).unwrap()
@@ -1761,7 +1813,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             LessThan,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             Datum::int(int_literal),
         ))
         .not();
@@ -1772,7 +1824,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             LessThanOrEq,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             Datum::int(int_literal),
         ));
         filter.bind(schema.clone(), true).unwrap()
@@ -1782,7 +1834,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             GreaterThan,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             Datum::int(int_literal),
         ));
         filter.bind(schema.clone(), true).unwrap()
@@ -1792,7 +1844,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             GreaterThan,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             Datum::int(int_literal),
         ))
         .not();
@@ -1803,7 +1855,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             GreaterThanOrEq,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             Datum::int(int_literal),
         ));
         filter.bind(schema.clone(), true).unwrap()
@@ -1813,7 +1865,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             Eq,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             Datum::int(int_literal),
         ));
         filter.bind(schema.clone(), true).unwrap()
@@ -1823,7 +1875,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             Eq,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             Datum::int(int_literal),
         ))
         .not();
@@ -1834,7 +1886,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             NotEq,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             Datum::int(int_literal),
         ));
         filter.bind(schema.clone(), true).unwrap()
@@ -1844,7 +1896,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             StartsWith,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             Datum::string(str_literal),
         ));
         filter.bind(schema.clone(), true).unwrap()
@@ -1854,7 +1906,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Binary(BinaryExpression::new(
             NotStartsWith,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             Datum::string(str_literal),
         ));
         filter.bind(schema.clone(), true).unwrap()
@@ -1864,7 +1916,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Set(SetExpression::new(
             In,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             FnvHashSet::from_iter(int_literals.iter().map(|&lit| Datum::int(lit))),
         ));
         filter.bind(schema.clone(), true).unwrap()
@@ -1874,7 +1926,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Set(SetExpression::new(
             In,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             FnvHashSet::from_iter(str_literals.iter().map(Datum::string)),
         ));
         filter.bind(schema.clone(), true).unwrap()
@@ -1884,7 +1936,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Set(SetExpression::new(
             NotIn,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             FnvHashSet::from_iter(int_literals.iter().map(|&lit| Datum::int(lit))),
         ));
         filter.bind(schema.clone(), true).unwrap()
@@ -1894,7 +1946,7 @@ mod test {
         let schema = create_test_schema();
         let filter = Predicate::Set(SetExpression::new(
             NotIn,
-            Reference::new(reference),
+            Reference::new(reference).into(),
             FnvHashSet::from_iter(str_literals.iter().map(Datum::string)),
         ));
         filter.bind(schema.clone(), true).unwrap()

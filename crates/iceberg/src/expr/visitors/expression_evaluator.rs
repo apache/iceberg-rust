@@ -18,7 +18,7 @@
 use fnv::FnvHashSet;
 
 use super::bound_predicate_visitor::{BoundPredicateVisitor, visit};
-use crate::expr::{BoundPredicate, BoundReference};
+use crate::expr::{BoundPredicate, BoundTerm};
 use crate::spec::{DataFile, Datum, PrimitiveLiteral, Struct};
 use crate::{Error, ErrorKind, Result};
 
@@ -92,32 +92,28 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         ))
     }
 
-    fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
+    fn is_null(&mut self, reference: &BoundTerm, _predicate: &BoundPredicate) -> Result<bool> {
         match reference.accessor().get(self.partition)? {
             Some(_) => Ok(false),
             None => Ok(true),
         }
     }
 
-    fn not_null(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> Result<bool> {
+    fn not_null(&mut self, reference: &BoundTerm, _predicate: &BoundPredicate) -> Result<bool> {
         match reference.accessor().get(self.partition)? {
             Some(_) => Ok(true),
             None => Ok(false),
         }
     }
 
-    fn is_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
+    fn is_nan(&mut self, reference: &BoundTerm, _predicate: &BoundPredicate) -> Result<bool> {
         match reference.accessor().get(self.partition)? {
             Some(datum) => Ok(datum.is_nan()),
             None => Ok(false),
         }
     }
 
-    fn not_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
+    fn not_nan(&mut self, reference: &BoundTerm, _predicate: &BoundPredicate) -> Result<bool> {
         match reference.accessor().get(self.partition)? {
             Some(datum) => Ok(!datum.is_nan()),
             None => Ok(true),
@@ -126,7 +122,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn less_than(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -138,7 +134,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn less_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -150,7 +146,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn greater_than(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -162,7 +158,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn greater_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -174,7 +170,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -186,7 +182,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn not_eq(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -198,7 +194,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn starts_with(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -214,7 +210,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn not_starts_with(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -223,7 +219,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn r#in(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -235,7 +231,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
 
     fn not_in(
         &mut self,
-        reference: &BoundReference,
+        reference: &BoundTerm,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -392,12 +388,12 @@ mod tests {
 
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::LessThan,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::float(1.0),
         ))
         .or(Predicate::Binary(BinaryExpression::new(
             PredicateOperator::GreaterThanOrEq,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::float(0.4),
         )))
         .bind(schema.clone(), case_sensitive)?;
@@ -421,12 +417,12 @@ mod tests {
 
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::LessThan,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::float(1.1),
         ))
         .and(Predicate::Binary(BinaryExpression::new(
             PredicateOperator::GreaterThanOrEq,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::float(0.4),
         )))
         .bind(schema.clone(), case_sensitive)?;
@@ -450,7 +446,7 @@ mod tests {
 
         let predicate = Predicate::Set(SetExpression::new(
             PredicateOperator::NotIn,
-            Reference::new("a"),
+            Reference::new("a").into(),
             FnvHashSet::from_iter([Datum::float(0.9), Datum::float(1.2), Datum::float(2.4)]),
         ))
         .bind(schema.clone(), case_sensitive)?;
@@ -474,7 +470,7 @@ mod tests {
 
         let predicate = Predicate::Set(SetExpression::new(
             PredicateOperator::In,
-            Reference::new("a"),
+            Reference::new("a").into(),
             FnvHashSet::from_iter([Datum::float(1.0), Datum::float(1.2), Datum::float(2.4)]),
         ))
         .bind(schema.clone(), case_sensitive)?;
@@ -498,7 +494,7 @@ mod tests {
 
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::NotStartsWith,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::string("not"),
         ))
         .bind(schema.clone(), case_sensitive)?;
@@ -522,7 +518,7 @@ mod tests {
 
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::StartsWith,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::string("test"),
         ))
         .bind(schema.clone(), case_sensitive)?;
@@ -546,7 +542,7 @@ mod tests {
 
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::NotEq,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::float(0.9),
         ))
         .bind(schema.clone(), case_sensitive)?;
@@ -570,7 +566,7 @@ mod tests {
 
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::Eq,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::float(1.0),
         ))
         .bind(schema.clone(), case_sensitive)?;
@@ -594,7 +590,7 @@ mod tests {
 
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::GreaterThanOrEq,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::float(1.0),
         ))
         .bind(schema.clone(), case_sensitive)?;
@@ -618,7 +614,7 @@ mod tests {
 
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::GreaterThan,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::float(0.9),
         ))
         .bind(schema.clone(), case_sensitive)?;
@@ -642,7 +638,7 @@ mod tests {
 
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::LessThanOrEq,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::float(1.0),
         ))
         .bind(schema.clone(), case_sensitive)?;
@@ -666,7 +662,7 @@ mod tests {
 
         let predicate = Predicate::Binary(BinaryExpression::new(
             PredicateOperator::LessThan,
-            Reference::new("a"),
+            Reference::new("a").into(),
             Datum::float(1.1),
         ))
         .bind(schema.clone(), case_sensitive)?;
@@ -689,7 +685,7 @@ mod tests {
         let (partition_spec, schema) = create_partition_spec(PrimitiveType::Float)?;
         let predicate = Predicate::Unary(UnaryExpression::new(
             PredicateOperator::NotNan,
-            Reference::new("a"),
+            Reference::new("a").into(),
         ))
         .bind(schema.clone(), case_sensitive)?;
 
@@ -711,7 +707,7 @@ mod tests {
         let (partition_spec, schema) = create_partition_spec(PrimitiveType::Float)?;
         let predicate = Predicate::Unary(UnaryExpression::new(
             PredicateOperator::IsNan,
-            Reference::new("a"),
+            Reference::new("a").into(),
         ))
         .bind(schema.clone(), case_sensitive)?;
 
@@ -733,7 +729,7 @@ mod tests {
         let (partition_spec, schema) = create_partition_spec(PrimitiveType::Float)?;
         let predicate = Predicate::Unary(UnaryExpression::new(
             PredicateOperator::NotNull,
-            Reference::new("a"),
+            Reference::new("a").into(),
         ))
         .bind(schema.clone(), case_sensitive)?;
 
@@ -755,7 +751,7 @@ mod tests {
         let (partition_spec, schema) = create_partition_spec(PrimitiveType::Float)?;
         let predicate = Predicate::Unary(UnaryExpression::new(
             PredicateOperator::IsNull,
-            Reference::new("a"),
+            Reference::new("a").into(),
         ))
         .bind(schema.clone(), case_sensitive)?;
 

@@ -29,7 +29,7 @@ use super::{Datum, PrimitiveLiteral};
 use crate::ErrorKind;
 use crate::error::{Error, Result};
 use crate::expr::{
-    BinaryExpression, BoundPredicate, BoundReference, Predicate, PredicateOperator, Reference,
+    BinaryExpression, BoundPredicate, BoundTerm, Predicate, PredicateOperator, Reference,
     SetExpression, UnaryExpression,
 };
 use crate::spec::Literal;
@@ -342,12 +342,12 @@ impl Transform {
                 BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
                 BoundPredicate::Binary(expr) => Ok(Some(Predicate::Binary(BinaryExpression::new(
                     expr.op(),
-                    Reference::new(name),
+                    Reference::new(name).into(),
                     expr.literal().to_owned(),
                 )))),
                 BoundPredicate::Set(expr) => Ok(Some(Predicate::Set(SetExpression::new(
                     expr.op(),
-                    Reference::new(name),
+                    Reference::new(name).into(),
                     expr.literals().to_owned(),
                 )))),
                 _ => Ok(None),
@@ -366,7 +366,11 @@ impl Transform {
                 BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
                 BoundPredicate::Binary(expr) => {
                     if matches!(
-                        expr.term().field().field_type.as_primitive_type(),
+                        expr.term()
+                            .reference()
+                            .field()
+                            .field_type
+                            .as_primitive_type(),
                         Some(&PrimitiveType::Int)
                             | Some(&PrimitiveType::Long)
                             | Some(&PrimitiveType::Decimal { .. })
@@ -389,12 +393,12 @@ impl Transform {
                         match len.cmp(&(*width as usize)) {
                             Ordering::Less => Ok(Some(Predicate::Binary(BinaryExpression::new(
                                 PredicateOperator::StartsWith,
-                                Reference::new(name),
+                                Reference::new(name).into(),
                                 expr.literal().to_owned(),
                             )))),
                             Ordering::Equal => Ok(Some(Predicate::Binary(BinaryExpression::new(
                                 PredicateOperator::Eq,
-                                Reference::new(name),
+                                Reference::new(name).into(),
                                 expr.literal().to_owned(),
                             )))),
                             Ordering::Greater => Ok(None),
@@ -416,18 +420,18 @@ impl Transform {
                         match len.cmp(&(*width as usize)) {
                             Ordering::Less => Ok(Some(Predicate::Binary(BinaryExpression::new(
                                 PredicateOperator::NotStartsWith,
-                                Reference::new(name),
+                                Reference::new(name).into(),
                                 expr.literal().to_owned(),
                             )))),
                             Ordering::Equal => Ok(Some(Predicate::Binary(BinaryExpression::new(
                                 PredicateOperator::NotEq,
-                                Reference::new(name),
+                                Reference::new(name).into(),
                                 expr.literal().to_owned(),
                             )))),
                             Ordering::Greater => {
                                 Ok(Some(Predicate::Binary(BinaryExpression::new(
                                     expr.op(),
-                                    Reference::new(name),
+                                    Reference::new(name).into(),
                                     func.transform_literal_result(expr.literal())?,
                                 ))))
                             }
@@ -472,48 +476,190 @@ impl Transform {
 
         match self {
             Transform::Identity => match predicate {
-                BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
-                BoundPredicate::Binary(expr) => Ok(Some(Predicate::Binary(BinaryExpression::new(
-                    expr.op(),
-                    Reference::new(name),
-                    expr.literal().to_owned(),
-                )))),
-                BoundPredicate::Set(expr) => Ok(Some(Predicate::Set(SetExpression::new(
-                    expr.op(),
-                    Reference::new(name),
-                    expr.literals().to_owned(),
-                )))),
+                BoundPredicate::Unary(expr) => match expr.term() {
+                    BoundTerm::Transform(t) => {
+                        if t.transform() == self {
+                            Ok(Some(Predicate::Unary(UnaryExpression::new(
+                                expr.op(),
+                                Reference::new(name).into(),
+                            ))))
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                    _ => Self::project_unary(expr.op(), name),
+                },
+                BoundPredicate::Binary(expr) => match expr.term() {
+                    BoundTerm::Transform(t) => {
+                        if t.transform() == self {
+                            Ok(Some(Predicate::Binary(BinaryExpression::new(
+                                expr.op(),
+                                Reference::new(name).into(),
+                                expr.literal().to_owned(),
+                            ))))
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                    _ => Ok(Some(Predicate::Binary(BinaryExpression::new(
+                        expr.op(),
+                        Reference::new(name).into(),
+                        expr.literal().to_owned(),
+                    )))),
+                },
+                BoundPredicate::Set(expr) => match expr.term() {
+                    BoundTerm::Transform(t) => {
+                        if t.transform() == self {
+                            Ok(Some(Predicate::Set(SetExpression::new(
+                                expr.op(),
+                                Reference::new(name).into(),
+                                expr.literals().to_owned(),
+                            ))))
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                    _ => Ok(Some(Predicate::Set(SetExpression::new(
+                        expr.op(),
+                        Reference::new(name).into(),
+                        expr.literals().to_owned(),
+                    )))),
+                },
                 _ => Ok(None),
             },
             Transform::Bucket(_) => match predicate {
-                BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
-                BoundPredicate::Binary(expr) => {
-                    self.project_binary_expr(name, PredicateOperator::Eq, expr, &func)
-                }
-                BoundPredicate::Set(expr) => {
-                    self.project_set_expr(expr, PredicateOperator::In, name, &func)
-                }
+                BoundPredicate::Unary(expr) => match expr.term() {
+                    BoundTerm::Transform(t) => {
+                        if t.transform() == self {
+                            Ok(Some(Predicate::Unary(UnaryExpression::new(
+                                expr.op(),
+                                Reference::new(name).into(),
+                            ))))
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                    _ => Self::project_unary(expr.op(), name),
+                },
+                BoundPredicate::Binary(expr) => match expr.term() {
+                    BoundTerm::Transform(t) => {
+                        if t.transform() == self {
+                            Ok(Some(Predicate::Binary(BinaryExpression::new(
+                                expr.op(),
+                                Reference::new(name).into(),
+                                expr.literal().clone(),
+                            ))))
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                    _ => self.project_binary_expr(name, PredicateOperator::Eq, expr, &func),
+                },
+                BoundPredicate::Set(expr) => match expr.term() {
+                    BoundTerm::Transform(t) => {
+                        if t.transform() == self {
+                            Ok(Some(Predicate::Set(SetExpression::new(
+                                expr.op(),
+                                Reference::new(name).into(),
+                                expr.literals().clone(),
+                            ))))
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                    _ => self.project_set_expr(expr, PredicateOperator::In, name, &func),
+                },
                 _ => Ok(None),
             },
             Transform::Truncate(width) => match predicate {
-                BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
-                BoundPredicate::Binary(expr) => {
-                    self.project_binary_with_adjusted_boundary(name, expr, &func, Some(*width))
-                }
-                BoundPredicate::Set(expr) => {
-                    self.project_set_expr(expr, PredicateOperator::In, name, &func)
-                }
+                BoundPredicate::Unary(expr) => match expr.term() {
+                    BoundTerm::Transform(t) => {
+                        if t.transform() == self {
+                            Ok(Some(Predicate::Unary(UnaryExpression::new(
+                                expr.op(),
+                                Reference::new(name).into(),
+                            ))))
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                    _ => Self::project_unary(expr.op(), name),
+                },
+                BoundPredicate::Binary(expr) => match expr.term() {
+                    BoundTerm::Transform(t) => {
+                        if t.transform() == self {
+                            Ok(Some(Predicate::Binary(BinaryExpression::new(
+                                expr.op(),
+                                Reference::new(name).into(),
+                                expr.literal().clone(),
+                            ))))
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                    _ => {
+                        self.project_binary_with_adjusted_boundary(name, expr, &func, Some(*width))
+                    }
+                },
+                BoundPredicate::Set(expr) => match expr.term() {
+                    BoundTerm::Transform(t) => {
+                        if t.transform() == self {
+                            Ok(Some(Predicate::Set(SetExpression::new(
+                                expr.op(),
+                                Reference::new(name).into(),
+                                expr.literals().clone(),
+                            ))))
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                    _ => self.project_set_expr(expr, PredicateOperator::In, name, &func),
+                },
                 _ => Ok(None),
             },
             Transform::Year | Transform::Month | Transform::Day | Transform::Hour => {
                 match predicate {
-                    BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
-                    BoundPredicate::Binary(expr) => {
-                        self.project_binary_with_adjusted_boundary(name, expr, &func, None)
-                    }
-                    BoundPredicate::Set(expr) => {
-                        self.project_set_expr(expr, PredicateOperator::In, name, &func)
-                    }
+                    BoundPredicate::Unary(expr) => match expr.term() {
+                        BoundTerm::Transform(t) => {
+                            if t.transform() == self {
+                                Ok(Some(Predicate::Unary(UnaryExpression::new(
+                                    expr.op(),
+                                    Reference::new(name).into(),
+                                ))))
+                            } else {
+                                Ok(None)
+                            }
+                        }
+                        _ => Self::project_unary(expr.op(), name),
+                    },
+                    BoundPredicate::Binary(expr) => match expr.term() {
+                        BoundTerm::Transform(t) => {
+                            if t.transform() == self {
+                                Ok(Some(Predicate::Binary(BinaryExpression::new(
+                                    expr.op(),
+                                    Reference::new(name).into(),
+                                    expr.literal().clone(),
+                                ))))
+                            } else {
+                                Ok(None)
+                            }
+                        }
+                        _ => self.project_binary_with_adjusted_boundary(name, expr, &func, None),
+                    },
+                    BoundPredicate::Set(expr) => match expr.term() {
+                        BoundTerm::Transform(t) => {
+                            if t.transform() == self {
+                                Ok(Some(Predicate::Set(SetExpression::new(
+                                    expr.op(),
+                                    Reference::new(name).into(),
+                                    expr.literals().clone(),
+                                ))))
+                            } else {
+                                Ok(None)
+                            }
+                        }
+                        _ => self.project_set_expr(expr, PredicateOperator::In, name, &func),
+                    },
                     _ => Ok(None),
                 }
             }
@@ -531,7 +677,7 @@ impl Transform {
     fn project_unary(op: PredicateOperator, name: &str) -> Result<Option<Predicate>> {
         Ok(Some(Predicate::Unary(UnaryExpression::new(
             op,
-            Reference::new(name),
+            Reference::new(name).into(),
         ))))
     }
 
@@ -545,7 +691,7 @@ impl Transform {
         &self,
         name: &str,
         op: PredicateOperator,
-        expr: &BinaryExpression<BoundReference>,
+        expr: &BinaryExpression<BoundTerm>,
         func: &BoxedTransformFunction,
     ) -> Result<Option<Predicate>> {
         if expr.op() != op || !self.can_transform(expr.literal()) {
@@ -554,7 +700,7 @@ impl Transform {
 
         Ok(Some(Predicate::Binary(BinaryExpression::new(
             expr.op(),
-            Reference::new(name),
+            Reference::new(name).into(),
             func.transform_literal_result(expr.literal())?,
         ))))
     }
@@ -570,7 +716,7 @@ impl Transform {
     fn project_binary_with_adjusted_boundary(
         &self,
         name: &str,
-        expr: &BinaryExpression<BoundReference>,
+        expr: &BinaryExpression<BoundTerm>,
         func: &BoxedTransformFunction,
         width: Option<u32>,
     ) -> Result<Option<Predicate>> {
@@ -593,15 +739,15 @@ impl Transform {
                 let predicate = match adjusted_projection {
                     None => Predicate::Binary(BinaryExpression::new(
                         op,
-                        Reference::new(name),
+                        Reference::new(name).into(),
                         transformed_projection,
                     )),
                     Some(AdjustedProjection::Single(d)) => {
-                        Predicate::Binary(BinaryExpression::new(op, Reference::new(name), d))
+                        Predicate::Binary(BinaryExpression::new(op, Reference::new(name).into(), d))
                     }
                     Some(AdjustedProjection::Set(d)) => Predicate::Set(SetExpression::new(
                         PredicateOperator::In,
-                        Reference::new(name),
+                        Reference::new(name).into(),
                         d,
                     )),
                 };
@@ -616,7 +762,7 @@ impl Transform {
     /// applying a transformation to each literal in the set.
     fn project_set_expr(
         &self,
-        expr: &SetExpression<BoundReference>,
+        expr: &SetExpression<BoundTerm>,
         op: PredicateOperator,
         name: &str,
         func: &BoxedTransformFunction,
@@ -641,7 +787,7 @@ impl Transform {
 
         Ok(Some(Predicate::Set(SetExpression::new(
             expr.op(),
-            Reference::new(name),
+            Reference::new(name).into(),
             new_set,
         ))))
     }
@@ -897,7 +1043,7 @@ impl Transform {
     fn truncate_number_strict(
         &self,
         name: &str,
-        expr: &BinaryExpression<BoundReference>,
+        expr: &BinaryExpression<BoundTerm>,
         func: &BoxedTransformFunction,
     ) -> Result<Option<Predicate>> {
         let boundary = expr.literal();
@@ -922,27 +1068,27 @@ impl Transform {
         let predicate = match expr.op() {
             PredicateOperator::LessThan => Some(Predicate::Binary(BinaryExpression::new(
                 PredicateOperator::LessThan,
-                Reference::new(name),
+                Reference::new(name).into(),
                 func.transform_literal_result(boundary)?,
             ))),
             PredicateOperator::LessThanOrEq => Some(Predicate::Binary(BinaryExpression::new(
                 PredicateOperator::LessThan,
-                Reference::new(name),
+                Reference::new(name).into(),
                 func.transform_literal_result(&Self::try_increment_number(boundary)?)?,
             ))),
             PredicateOperator::GreaterThan => Some(Predicate::Binary(BinaryExpression::new(
                 PredicateOperator::GreaterThan,
-                Reference::new(name),
+                Reference::new(name).into(),
                 func.transform_literal_result(boundary)?,
             ))),
             PredicateOperator::GreaterThanOrEq => Some(Predicate::Binary(BinaryExpression::new(
                 PredicateOperator::GreaterThan,
-                Reference::new(name),
+                Reference::new(name).into(),
                 func.transform_literal_result(&Self::try_decrement_number(boundary)?)?,
             ))),
             PredicateOperator::NotEq => Some(Predicate::Binary(BinaryExpression::new(
                 PredicateOperator::NotEq,
-                Reference::new(name),
+                Reference::new(name).into(),
                 func.transform_literal_result(boundary)?,
             ))),
             _ => None,
@@ -954,7 +1100,7 @@ impl Transform {
     fn truncate_array_strict(
         &self,
         name: &str,
-        expr: &BinaryExpression<BoundReference>,
+        expr: &BinaryExpression<BoundTerm>,
         func: &BoxedTransformFunction,
     ) -> Result<Option<Predicate>> {
         let boundary = expr.literal();
@@ -963,20 +1109,20 @@ impl Transform {
             PredicateOperator::LessThan | PredicateOperator::LessThanOrEq => {
                 Ok(Some(Predicate::Binary(BinaryExpression::new(
                     PredicateOperator::LessThan,
-                    Reference::new(name),
+                    Reference::new(name).into(),
                     func.transform_literal_result(boundary)?,
                 ))))
             }
             PredicateOperator::GreaterThan | PredicateOperator::GreaterThanOrEq => {
                 Ok(Some(Predicate::Binary(BinaryExpression::new(
                     PredicateOperator::GreaterThan,
-                    Reference::new(name),
+                    Reference::new(name).into(),
                     func.transform_literal_result(boundary)?,
                 ))))
             }
             PredicateOperator::NotEq => Ok(Some(Predicate::Binary(BinaryExpression::new(
                 PredicateOperator::NotEq,
-                Reference::new(name),
+                Reference::new(name).into(),
                 func.transform_literal_result(boundary)?,
             )))),
             _ => Ok(None),

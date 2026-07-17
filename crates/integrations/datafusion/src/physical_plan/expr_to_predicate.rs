@@ -57,7 +57,7 @@ fn convert_filter_to_predicate(expr: &Expr) -> Option<Predicate> {
             // Convert it to: column = true
             Some(Predicate::Binary(BinaryExpression::new(
                 PredicateOperator::Eq,
-                column,
+                column.into(),
                 Datum::bool(true),
             )))
         }
@@ -90,7 +90,7 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
                     // NOT of a bare boolean column: NOT col => col = false
                     TransformedResult::Predicate(Predicate::Binary(BinaryExpression::new(
                         PredicateOperator::Eq,
-                        column,
+                        column.into(),
                         Datum::bool(false),
                     )))
                 }
@@ -125,7 +125,7 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
             let p = to_iceberg_predicate(expr);
             match p {
                 TransformedResult::Column(r) => TransformedResult::Predicate(Predicate::Unary(
-                    UnaryExpression::new(PredicateOperator::IsNull, r),
+                    UnaryExpression::new(PredicateOperator::IsNull, r.into()),
                 )),
                 _ => TransformedResult::NotTransformed,
             }
@@ -134,7 +134,7 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
             let p = to_iceberg_predicate(expr);
             match p {
                 TransformedResult::Column(r) => TransformedResult::Predicate(Predicate::Unary(
-                    UnaryExpression::new(PredicateOperator::NotNull, r),
+                    UnaryExpression::new(PredicateOperator::NotNull, r.into()),
                 )),
                 _ => TransformedResult::NotTransformed,
             }
@@ -392,7 +392,7 @@ fn to_iceberg_binary_predicate(
         }
         _ => return TransformedResult::NotTransformed,
     };
-    TransformedResult::Predicate(Predicate::Binary(BinaryExpression::new(op, r, d)))
+    TransformedResult::Predicate(Predicate::Binary(BinaryExpression::new(op, r.into(), d)))
 }
 
 fn reverse_predicate_operator(op: PredicateOperator) -> PredicateOperator {

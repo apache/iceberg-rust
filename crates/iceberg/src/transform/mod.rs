@@ -71,11 +71,24 @@ pub fn create_transform_function(transform: &Transform) -> Result<BoxedTransform
     }
 }
 
+impl TransformFunction for Transform {
+    fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
+        create_transform_function(self)?.transform(input)
+    }
+
+    fn transform_literal(&self, input: &Datum) -> Result<Option<Datum>> {
+        create_transform_function(self)?.transform_literal(input)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::collections::HashSet;
     use std::sync::Arc;
 
+    use arrow_array::{ArrayRef, Int32Array};
+
+    use super::TransformFunction;
     use crate::Result;
     use crate::expr::accessor::StructAccessor;
     use crate::expr::{
@@ -114,7 +127,8 @@ mod test {
                     self.name.clone(),
                     self.field.clone(),
                     Arc::new(StructAccessor::new(1, PrimitiveType::Boolean)),
-                ),
+                )
+                .into(),
                 literal,
             ))
         }
@@ -129,7 +143,8 @@ mod test {
                     self.name.clone(),
                     self.field.clone(),
                     Arc::new(StructAccessor::new(1, PrimitiveType::Boolean)),
-                ),
+                )
+                .into(),
                 HashSet::from_iter(literals),
             ))
         }
@@ -156,6 +171,25 @@ mod test {
         pub preserves_order: bool,
         pub satisfies_order_of: Vec<(Transform, bool)>,
         pub trans_types: Vec<(Type, Option<Type>)>,
+    }
+
+    #[test]
+    fn transform_delegates_to_transform_function() -> Result<()> {
+        let transform = Transform::Truncate(10);
+        let input: ArrayRef = Arc::new(Int32Array::from(vec![Some(5), None, Some(15)]));
+
+        let output = transform.transform(input.clone())?;
+        let expected: ArrayRef = Arc::new(Int32Array::from(vec![Some(0), None, Some(10)]));
+        assert_eq!(
+            output.as_any().downcast_ref::<Int32Array>(),
+            expected.as_any().downcast_ref::<Int32Array>(),
+            "truncate(10) on array [5, null, 15]"
+        );
+
+        let literal = transform.transform_literal(&Datum::int(1))?;
+        assert_eq!(literal, Some(Datum::int(0)), "truncate(10) on literal 1");
+
+        Ok(())
     }
 
     impl TestTransformFixture {
