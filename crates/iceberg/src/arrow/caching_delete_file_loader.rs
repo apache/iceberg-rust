@@ -796,7 +796,7 @@ mod tests {
 
     /// Create a simple field with metadata.
     fn simple_field(name: &str, ty: DataType, nullable: bool, value: &str) -> Field {
-        arrow_schema::Field::new(name, ty, nullable).with_metadata(HashMap::from([(
+        Field::new(name, ty, nullable).with_metadata(HashMap::from([(
             PARQUET_FIELD_ID_META_KEY.to_string(),
             value.to_string(),
         )]))
@@ -833,15 +833,18 @@ mod tests {
             ]));
 
             let fields = vec![
-                Field::new("y", arrow_schema::DataType::Int64, true).with_metadata(HashMap::from(
-                    [(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())],
-                )),
-                Field::new("z", arrow_schema::DataType::Int64, true).with_metadata(HashMap::from(
-                    [(PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string())],
-                )),
-                Field::new("a", arrow_schema::DataType::Utf8, true).with_metadata(HashMap::from([
-                    (PARQUET_FIELD_ID_META_KEY.to_string(), "4".to_string()),
-                ])),
+                Field::new("y", DataType::Int64, true).with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "2".to_string(),
+                )])),
+                Field::new("z", DataType::Int64, true).with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "3".to_string(),
+                )])),
+                Field::new("a", DataType::Utf8, true).with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "4".to_string(),
+                )])),
                 simple_field("s", struct_field, false, "5"),
                 simple_field("b", DataType::Binary, true, "8"),
             ];
@@ -939,18 +942,8 @@ mod tests {
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    crate::spec::NestedField::required(
-                        1,
-                        "id",
-                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Int),
-                    )
-                    .into(),
-                    crate::spec::NestedField::required(
-                        2,
-                        "data",
-                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::String),
-                    )
-                    .into(),
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "data", Type::Primitive(PrimitiveType::String)).into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1039,18 +1032,8 @@ mod tests {
         let data_file_schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    crate::spec::NestedField::optional(
-                        2,
-                        "y",
-                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long),
-                    )
-                    .into(),
-                    crate::spec::NestedField::optional(
-                        3,
-                        "z",
-                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long),
-                    )
-                    .into(),
+                    NestedField::optional(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(3, "z", Type::Primitive(PrimitiveType::Long)).into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1151,7 +1134,7 @@ mod tests {
         let col_y = Arc::new(Int64Array::from(col_y_vals)) as ArrayRef;
 
         let schema = Arc::new(arrow_schema::Schema::new(vec![
-            Field::new("y", arrow_schema::DataType::Int64, false).with_metadata(HashMap::from([(
+            Field::new("y", DataType::Int64, false).with_metadata(HashMap::from([(
                 PARQUET_FIELD_ID_META_KEY.to_string(),
                 "2".to_string(),
             )])),

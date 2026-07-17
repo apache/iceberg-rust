@@ -167,7 +167,7 @@ impl TryFrom<i32> for ManifestContentType {
             0 => Ok(ManifestContentType::Data),
             1 => Ok(ManifestContentType::Deletes),
             _ => Err(Error::new(
-                crate::ErrorKind::DataInvalid,
+                ErrorKind::DataInvalid,
                 format!("Invalid manifest content type. Expected 0 or 1, got {value}"),
             )),
         }

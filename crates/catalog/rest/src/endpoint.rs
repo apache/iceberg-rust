@@ -65,7 +65,7 @@ impl Endpoint {
 impl FromStr for Endpoint {
     type Err = Error;
 
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         // The wire form is exactly `"<method> <path>"` separated by a single
         // space; paths never contain spaces, so require exactly two non-empty
         // parts and a valid HTTP method.
@@ -100,14 +100,14 @@ impl Display for Endpoint {
 }
 
 impl Serialize for Endpoint {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where S: Serializer {
         serializer.collect_str(self)
     }
 }
 
 impl<'de> Deserialize<'de> for Endpoint {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where D: Deserializer<'de> {
         struct EndpointVisitor;
 
@@ -118,7 +118,7 @@ impl<'de> Deserialize<'de> for Endpoint {
                 f.write_str(r#"an endpoint string of the form "<method> <path>""#)
             }
 
-            fn visit_str<E>(self, v: &str) -> std::result::Result<Endpoint, E>
+            fn visit_str<E>(self, v: &str) -> Result<Endpoint, E>
             where E: DeError {
                 Endpoint::from_str(v).map_err(E::custom)
             }

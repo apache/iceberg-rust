@@ -971,7 +971,7 @@ mod tests {
 
     /// Shared-buffer FileWrite for testing AesGcmFileWrite output.
     struct SharedMemoryWrite {
-        buffer: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+        buffer: Arc<std::sync::Mutex<Vec<u8>>>,
     }
 
     /// FileWrite that fails after a configured number of successful writes.
@@ -1009,7 +1009,7 @@ mod tests {
 
     /// Helper: one-shot encrypt through AesGcmFileWrite, return encrypted bytes.
     async fn write_through_ags1(plaintext: &[u8], key: &[u8], aad_prefix: &[u8]) -> Vec<u8> {
-        let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let buffer = Arc::new(std::sync::Mutex::new(Vec::new()));
         let inner: Box<dyn FileWrite> = Box::new(SharedMemoryWrite {
             buffer: buffer.clone(),
         });
@@ -1093,7 +1093,7 @@ mod tests {
         let key = b"0123456789abcdef";
         let aad_prefix = b"cross-block-aad!";
 
-        let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let buffer = Arc::new(std::sync::Mutex::new(Vec::new()));
         let inner: Box<dyn FileWrite> = Box::new(SharedMemoryWrite {
             buffer: buffer.clone(),
         });

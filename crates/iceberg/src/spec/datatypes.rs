@@ -26,7 +26,7 @@ use std::sync::{Arc, OnceLock};
 
 use ::serde::de::{MapAccess, Visitor};
 use serde::de::{Error, IntoDeserializer};
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
 
 use super::values::Literal;
@@ -453,21 +453,21 @@ impl<'de> Deserialize<'de> for StructType {
                         Field::Type => {
                             let type_val: String = map.next_value()?;
                             if type_val != "struct" {
-                                return Err(serde::de::Error::custom(format!(
+                                return Err(Error::custom(format!(
                                     "expected type 'struct', got '{type_val}'"
                                 )));
                             }
                         }
                         Field::Fields => {
                             if fields.is_some() {
-                                return Err(serde::de::Error::duplicate_field("fields"));
+                                return Err(Error::duplicate_field("fields"));
                             }
                             fields = Some(map.next_value()?);
                         }
                     }
                 }
                 let fields: Vec<NestedFieldRef> =
-                    fields.ok_or_else(|| de::Error::missing_field("fields"))?;
+                    fields.ok_or_else(|| Error::missing_field("fields"))?;
 
                 Ok(StructType::new(fields))
             }
@@ -818,7 +818,7 @@ pub(super) mod _serde {
                     element_required: list.element_field.required,
                     element: Cow::Borrowed(&list.element_field.field_type),
                 },
-                Type::Map(map) => SerdeType::Map {
+                Map(map) => SerdeType::Map {
                     r#type: "map".to_string(),
                     key_id: map.key_field.id,
                     key: Cow::Borrowed(&map.key_field.field_type),

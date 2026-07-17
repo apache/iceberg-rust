@@ -303,7 +303,7 @@ pub(crate) fn avro_decimal_schema(precision: usize, scale: usize) -> Result<Avro
             name: Name::new(&format!("decimal_{precision}_{scale}")).unwrap(),
             aliases: None,
             doc: None,
-            size: crate::spec::Type::decimal_required_bytes(precision as u32)? as usize,
+            size: Type::decimal_required_bytes(precision as u32)? as usize,
             attributes: Default::default(),
             default: None,
         })),
@@ -1233,6 +1233,6 @@ mod tests {
             .build()
             .unwrap();
         let err = schema_to_avro_schema("t", &schema).unwrap_err();
-        assert_eq!(err.kind(), crate::ErrorKind::FeatureUnsupported, "{err}");
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
     }
 }

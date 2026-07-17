@@ -32,7 +32,7 @@ pub(crate) mod date {
 
     pub(crate) fn days_to_date(days: i32) -> NaiveDate {
         // This shouldn't fail until the year 262000
-        (chrono::DateTime::UNIX_EPOCH + TimeDelta::try_days(days as i64).unwrap())
+        (DateTime::UNIX_EPOCH + TimeDelta::try_days(days as i64).unwrap())
             .naive_utc()
             .date()
     }
