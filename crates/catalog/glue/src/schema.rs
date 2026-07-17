@@ -79,11 +79,7 @@ impl GlueSchemaBuilder {
 impl SchemaVisitor for GlueSchemaBuilder {
     type T = String;
 
-    fn schema(
-        &mut self,
-        _schema: &iceberg::spec::Schema,
-        value: Self::T,
-    ) -> iceberg::Result<String> {
+    fn schema(&mut self, _schema: &iceberg::spec::Schema, value: Self::T) -> Result<String> {
         Ok(value)
     }
 
@@ -96,7 +92,7 @@ impl SchemaVisitor for GlueSchemaBuilder {
         &mut self,
         r#_struct: &iceberg::spec::StructType,
         results: Vec<String>,
-    ) -> iceberg::Result<String> {
+    ) -> Result<String> {
         Ok(format!("struct<{}>", results.join(", ")))
     }
 
@@ -105,11 +101,7 @@ impl SchemaVisitor for GlueSchemaBuilder {
         Ok(())
     }
 
-    fn field(
-        &mut self,
-        field: &iceberg::spec::NestedFieldRef,
-        value: String,
-    ) -> iceberg::Result<String> {
+    fn field(&mut self, field: &iceberg::spec::NestedFieldRef, value: String) -> Result<String> {
         if self.is_inside_struct() {
             return Ok(format!("{}:{}", field.name, &value));
         }
@@ -142,7 +134,7 @@ impl SchemaVisitor for GlueSchemaBuilder {
         Ok(value)
     }
 
-    fn list(&mut self, _list: &iceberg::spec::ListType, value: String) -> iceberg::Result<String> {
+    fn list(&mut self, _list: &iceberg::spec::ListType, value: String) -> Result<String> {
         Ok(format!("array<{value}>"))
     }
 
@@ -151,11 +143,11 @@ impl SchemaVisitor for GlueSchemaBuilder {
         _map: &iceberg::spec::MapType,
         key_value: String,
         value: String,
-    ) -> iceberg::Result<String> {
+    ) -> Result<String> {
         Ok(format!("map<{key_value},{value}>"))
     }
 
-    fn primitive(&mut self, p: &iceberg::spec::PrimitiveType) -> iceberg::Result<Self::T> {
+    fn primitive(&mut self, p: &PrimitiveType) -> Result<Self::T> {
         let glue_type = match p {
             PrimitiveType::Boolean => "boolean".to_string(),
             PrimitiveType::Int => "int".to_string(),
