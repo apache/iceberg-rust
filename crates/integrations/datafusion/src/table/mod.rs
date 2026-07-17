@@ -790,8 +790,7 @@ mod tests {
         let mut properties = HashMap::new();
         if let Some(enabled) = fanout_enabled {
             properties.insert(
-                iceberg::spec::TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED
-                    .to_string(),
+                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED.to_string(),
                 enabled.to_string(),
             );
         }

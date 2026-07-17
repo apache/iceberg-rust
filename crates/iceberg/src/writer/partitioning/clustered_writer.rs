@@ -186,10 +186,9 @@ mod tests {
 
         // Create partition spec and key
         let partition_spec = crate::spec::PartitionSpec::builder(schema.clone()).build()?;
-        let partition_value =
-            crate::spec::Struct::from_iter([Some(crate::spec::Literal::string("US"))]);
+        let partition_value = Struct::from_iter([Some(crate::spec::Literal::string("US"))]);
         let partition_key =
-            crate::spec::PartitionKey::new(partition_spec, schema.clone(), partition_value.clone());
+            PartitionKey::new(partition_spec, schema.clone(), partition_value.clone());
 
         // Create writer builder
         let parquet_writer_builder =
@@ -285,25 +284,22 @@ mod tests {
         let partition_spec = crate::spec::PartitionSpec::builder(schema.clone()).build()?;
 
         // Create partition keys for different regions (in sorted order)
-        let partition_value_asia =
-            crate::spec::Struct::from_iter([Some(crate::spec::Literal::string("ASIA"))]);
-        let partition_key_asia = crate::spec::PartitionKey::new(
+        let partition_value_asia = Struct::from_iter([Some(crate::spec::Literal::string("ASIA"))]);
+        let partition_key_asia = PartitionKey::new(
             partition_spec.clone(),
             schema.clone(),
             partition_value_asia.clone(),
         );
 
-        let partition_value_eu =
-            crate::spec::Struct::from_iter([Some(crate::spec::Literal::string("EU"))]);
-        let partition_key_eu = crate::spec::PartitionKey::new(
+        let partition_value_eu = Struct::from_iter([Some(crate::spec::Literal::string("EU"))]);
+        let partition_key_eu = PartitionKey::new(
             partition_spec.clone(),
             schema.clone(),
             partition_value_eu.clone(),
         );
 
-        let partition_value_us =
-            crate::spec::Struct::from_iter([Some(crate::spec::Literal::string("US"))]);
-        let partition_key_us = crate::spec::PartitionKey::new(
+        let partition_value_us = Struct::from_iter([Some(crate::spec::Literal::string("US"))]);
+        let partition_key_us = PartitionKey::new(
             partition_spec.clone(),
             schema.clone(),
             partition_value_us.clone(),
@@ -378,7 +374,7 @@ mod tests {
         );
 
         // Verify that we have files for each partition
-        let mut partitions_found = std::collections::HashSet::new();
+        let mut partitions_found = HashSet::new();
         for data_file in &data_files {
             partitions_found.insert(data_file.partition.clone());
         }
@@ -426,17 +422,15 @@ mod tests {
         let partition_spec = crate::spec::PartitionSpec::builder(schema.clone()).build()?;
 
         // Create partition keys for different regions
-        let partition_value_us =
-            crate::spec::Struct::from_iter([Some(crate::spec::Literal::string("US"))]);
-        let partition_key_us = crate::spec::PartitionKey::new(
+        let partition_value_us = Struct::from_iter([Some(crate::spec::Literal::string("US"))]);
+        let partition_key_us = PartitionKey::new(
             partition_spec.clone(),
             schema.clone(),
             partition_value_us.clone(),
         );
 
-        let partition_value_eu =
-            crate::spec::Struct::from_iter([Some(crate::spec::Literal::string("EU"))]);
-        let partition_key_eu = crate::spec::PartitionKey::new(
+        let partition_value_eu = Struct::from_iter([Some(crate::spec::Literal::string("EU"))]);
+        let partition_key_eu = PartitionKey::new(
             partition_spec.clone(),
             schema.clone(),
             partition_value_eu.clone(),

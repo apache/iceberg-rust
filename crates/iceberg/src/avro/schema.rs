@@ -28,7 +28,7 @@ use serde_json::{Number, Value};
 
 use crate::spec::{
     ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema, SchemaVisitor,
-    StructType, Type, visit_schema,
+    StructType, Type, VariantType, visit_schema,
 };
 use crate::{Error, ErrorKind, Result, ensure_data_valid};
 
@@ -243,6 +243,13 @@ impl SchemaVisitor for SchemaToAvroSchema {
         };
         Ok(Either::Left(avro_schema))
     }
+
+    fn variant(&mut self, _v: &VariantType) -> Result<AvroSchemaOrField> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Converting a variant type to an Avro schema is not supported yet",
+        ))
+    }
 }
 
 /// Converting iceberg schema to avro schema.
@@ -296,7 +303,7 @@ pub(crate) fn avro_decimal_schema(precision: usize, scale: usize) -> Result<Avro
             name: Name::new(&format!("decimal_{precision}_{scale}")).unwrap(),
             aliases: None,
             doc: None,
-            size: crate::spec::Type::decimal_required_bytes(precision as u32)? as usize,
+            size: Type::decimal_required_bytes(precision as u32)? as usize,
             attributes: Default::default(),
             default: None,
         })),
@@ -614,7 +621,9 @@ mod tests {
 
     use super::*;
     use crate::avro::schema::AvroSchemaToSchema;
-    use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type};
+    use crate::spec::{
+        ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type, VariantType,
+    };
 
     fn read_test_data_file_to_avro_schema(filename: &str) -> AvroSchema {
         let input = read_to_string(format!(
@@ -1211,5 +1220,19 @@ mod tests {
             iceberg_type,
             converter.primitive(&avro_schema).unwrap().unwrap()
         );
+    }
+
+    #[test]
+    fn test_variant_to_avro_schema_is_unsupported() {
+        // Converting a variant to an Avro schema is not supported yet; it must error rather
+        // than emit an incorrect schema.
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+            ])
+            .build()
+            .unwrap();
+        let err = schema_to_avro_schema("t", &schema).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
     }
 }

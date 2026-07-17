@@ -40,6 +40,9 @@ repository = "https://github.com/apache/iceberg-rust"
 # Check the MSRV policy in README.md before changing this
 rust-version = "1.94"
 
+[workspace.lints.rust]
+unused_qualifications = "deny"
+
 [workspace.dependencies]
 aes = { version = "0.8", features = ["zeroize"] }
 aes-gcm = "0.10"

@@ -28,7 +28,7 @@ use crate::Result;
 use crate::arrow::{ArrowArrayAccessor, FieldMatchMode};
 use crate::spec::{
     ListType, MapType, NestedFieldRef, PrimitiveType, Schema, SchemaRef, SchemaWithPartnerVisitor,
-    StructType, visit_struct_with_partner,
+    StructType, VariantType, visit_struct_with_partner,
 };
 
 macro_rules! cast_and_update_cnt_map {
@@ -119,6 +119,10 @@ impl SchemaWithPartnerVisitor<ArrayRef> for NanValueCountVisitor {
     }
 
     fn primitive(&mut self, _p: &PrimitiveType, _col: &ArrayRef) -> Result<Self::T> {
+        Ok(())
+    }
+
+    fn variant(&mut self, _v: &VariantType, _col: &ArrayRef) -> Result<Self::T> {
         Ok(())
     }
 
