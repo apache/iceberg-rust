@@ -615,11 +615,7 @@ impl SchemaVisitor for ToArrowSchemaConverter {
         Ok(ArrowSchemaOrFieldOrType::Type(DataType::Struct(fields)))
     }
 
-    fn list(
-        &mut self,
-        list: &ListType,
-        value: ArrowSchemaOrFieldOrType,
-    ) -> Result<Self::T> {
+    fn list(&mut self, list: &ListType, value: ArrowSchemaOrFieldOrType) -> Result<Self::T> {
         // `field` already carries the element's field id, doc, and — for a variant element —
         // the arrow.parquet.variant extension type. Don't overwrite its metadata here (doing so
         // would drop the extension type for `list<variant>`).

@@ -1327,8 +1327,7 @@ mod tests {
     fn test_builder_disallows_variant_source() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int))
-                    .into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
                 NestedField::optional(2, "v", Type::Variant(crate::spec::VariantType)).into(),
             ])
             .build()

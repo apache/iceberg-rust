@@ -527,7 +527,7 @@ mod tests {
 
     use bimap::BiHashMap;
 
-    use crate::spec::datatypes::Type::{List, Map, Primitive, Struct};
+    use crate::spec::datatypes::Type::{List, Map, Primitive, Struct, Variant};
     use crate::spec::datatypes::{
         ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType,
     };
@@ -545,7 +545,7 @@ mod tests {
 
         // Variant type requires v3.
         let variant = schema_with(vec![
-            NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+            NestedField::optional(1, "v", Variant(VariantType)).into(),
         ]);
         assert!(
             variant
@@ -560,7 +560,7 @@ mod tests {
 
         // A non-null initial default requires v3, even for a v1-compatible type.
         let with_default = schema_with(vec![
-            NestedField::optional(1, "a", Type::Primitive(PrimitiveType::Int))
+            NestedField::optional(1, "a", Primitive(PrimitiveType::Int))
                 .with_initial_default(Literal::Primitive(PrimitiveLiteral::Int(1)))
                 .into(),
         ]);
@@ -579,7 +579,7 @@ mod tests {
 
         // No default is fine at any version (an absent/null default never trips).
         let no_default = schema_with(vec![
-            NestedField::optional(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(1, "a", Primitive(PrimitiveType::Int)).into(),
         ]);
         assert!(
             no_default
@@ -592,8 +592,8 @@ mod tests {
             NestedField::required(
                 1,
                 "s",
-                Type::Struct(StructType::new(vec![
-                    NestedField::optional(2, "inner", Type::Primitive(PrimitiveType::Long))
+                Struct(StructType::new(vec![
+                    NestedField::optional(2, "inner", Primitive(PrimitiveType::Long))
                         .with_initial_default(Literal::Primitive(PrimitiveLiteral::Long(7)))
                         .into(),
                 ])),
@@ -610,8 +610,8 @@ mod tests {
             NestedField::required(
                 1,
                 "container",
-                Type::Struct(StructType::new(vec![
-                    NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
+                Struct(StructType::new(vec![
+                    NestedField::optional(2, "v", Variant(VariantType)).into(),
                 ])),
             )
             .into(),
@@ -636,14 +636,14 @@ mod tests {
 
         // All v1-compatible types → V1.
         let v1 = schema_with(vec![
-            NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
-            NestedField::optional(2, "b", Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::required(1, "a", Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(2, "b", Primitive(PrimitiveType::String)).into(),
         ]);
         assert_eq!(v1.calc_min_compatible_format(), FormatVersion::V1);
 
         // A top-level variant → V3.
         let variant = schema_with(vec![
-            NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+            NestedField::optional(1, "v", Variant(VariantType)).into(),
         ]);
         assert_eq!(variant.calc_min_compatible_format(), FormatVersion::V3);
 
@@ -652,15 +652,15 @@ mod tests {
             NestedField::required(
                 1,
                 "s",
-                Type::Struct(StructType::new(vec![
+                Struct(StructType::new(vec![
                     NestedField::optional(
                         2,
                         "l",
-                        Type::List(ListType::new(
+                        List(ListType::new(
                             NestedField::required(
                                 3,
                                 "element",
-                                Type::Primitive(PrimitiveType::TimestampNs),
+                                Primitive(PrimitiveType::TimestampNs),
                             )
                             .into(),
                         )),
@@ -682,11 +682,11 @@ mod tests {
         // with the type problem before the initial-default problem for field 2.
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(3, "c", Type::Variant(VariantType)).into(),
-                NestedField::optional(2, "b", Type::Primitive(PrimitiveType::TimestampNs))
+                NestedField::optional(3, "c", Variant(VariantType)).into(),
+                NestedField::optional(2, "b", Primitive(PrimitiveType::TimestampNs))
                     .with_initial_default(Literal::Primitive(PrimitiveLiteral::Long(0)))
                     .into(),
-                NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(1, "a", Primitive(PrimitiveType::Int)).into(),
             ])
             .build()
             .unwrap();
