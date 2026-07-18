@@ -63,6 +63,28 @@ static MAX_CONNECTIONS: u32 = 10; // Default the SQL pool to 10 connections if n
 static IDLE_TIMEOUT: u64 = 10; // Default the maximum idle timeout per connection to 10s before it is closed
 static TEST_BEFORE_ACQUIRE: bool = true; // Default the health-check of each connection to enabled prior to returning
 
+fn parse_pool_property<T>(
+    props: &HashMap<String, String>,
+    property: &'static str,
+    default: T,
+) -> Result<T>
+where
+    T: FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
+{
+    props.get(property).map_or(Ok(default), |value| {
+        value.parse().map_err(|error| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                "Failed to parse SQL catalog pool property",
+            )
+            .with_context("property", property)
+            .with_context("value", value)
+            .with_source(error)
+        })
+    })
+}
+
 /// Builder for [`SqlCatalog`]
 #[derive(Debug)]
 pub struct SqlCatalogBuilder {
@@ -278,21 +300,14 @@ impl SqlCatalog {
             .build();
 
         install_default_drivers();
-        let max_connections: u32 = config
-            .props
-            .get("pool.max-connections")
-            .map(|v| v.parse().unwrap())
-            .unwrap_or(MAX_CONNECTIONS);
-        let idle_timeout: u64 = config
-            .props
-            .get("pool.idle-timeout")
-            .map(|v| v.parse().unwrap())
-            .unwrap_or(IDLE_TIMEOUT);
-        let test_before_acquire: bool = config
-            .props
-            .get("pool.test-before-acquire")
-            .map(|v| v.parse().unwrap())
-            .unwrap_or(TEST_BEFORE_ACQUIRE);
+        let max_connections =
+            parse_pool_property(&config.props, "pool.max-connections", MAX_CONNECTIONS)?;
+        let idle_timeout = parse_pool_property(&config.props, "pool.idle-timeout", IDLE_TIMEOUT)?;
+        let test_before_acquire = parse_pool_property(
+            &config.props,
+            "pool.test-before-acquire",
+            TEST_BEFORE_ACQUIRE,
+        )?;
 
         let pool = AnyPoolOptions::new()
             .max_connections(max_connections)
@@ -1057,7 +1072,9 @@ mod tests {
     use iceberg::io::LocalFsStorageFactory;
     use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
     use iceberg::table::Table;
-    use iceberg::{Catalog, CatalogBuilder, Namespace, NamespaceIdent, TableCreation, TableIdent};
+    use iceberg::{
+        Catalog, CatalogBuilder, ErrorKind, Namespace, NamespaceIdent, TableCreation, TableIdent,
+    };
     use itertools::Itertools;
     use regex::Regex;
     use sqlx::migrate::MigrateDatabase;
@@ -1437,6 +1454,26 @@ mod tests {
             .await;
 
         assert!(catalog.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_builder_props_invalid_pool_property_fails() {
+        for property in [
+            "pool.max-connections",
+            "pool.idle-timeout",
+            "pool.test-before-acquire",
+        ] {
+            let error = SqlCatalogBuilder::default()
+                .with_storage_factory(Arc::new(LocalFsStorageFactory))
+                .prop(property, "invalid")
+                .load("iceberg", HashMap::new())
+                .await
+                .unwrap_err();
+
+            assert_eq!(error.kind(), ErrorKind::DataInvalid);
+            assert!(error.to_string().contains(property));
+            assert!(error.to_string().contains("invalid"));
+        }
     }
 
     #[tokio::test]
