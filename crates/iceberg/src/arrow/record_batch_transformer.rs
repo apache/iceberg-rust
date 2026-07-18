@@ -59,11 +59,11 @@ fn constants_map(
     for (pos, field) in partition_spec.fields().iter().enumerate() {
         // Only identity transforms should use constant values from partition metadata
         if matches!(field.transform, Transform::Identity) {
-            // Get the field from schema to extract its type
-            let iceberg_field = schema.field_by_id(field.source_id).ok_or(Error::new(
-                ErrorKind::Unexpected,
-                format!("Field {} not found in schema", field.source_id),
-            ))?;
+            // The source column may have been dropped from the schema after the spec was
+            // created. It cannot be projected in that case, so no constant is needed.
+            let Some(iceberg_field) = schema.field_by_id(field.source_id) else {
+                continue;
+            };
 
             // Ensure the field type is primitive
             let prim_type = match &*iceberg_field.field_type {
