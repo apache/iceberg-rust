@@ -235,9 +235,6 @@ impl TableProperties {
     /// When unset, metadata files default to the `metadata` directory under the table
     /// location.
     pub const PROPERTY_WRITE_METADATA_PATH: &str = "write.metadata.path";
-    /// Default subdirectory (under the table location) for metadata files when
-    /// [`Self::PROPERTY_WRITE_METADATA_PATH`] is not configured.
-    pub const PROPERTY_WRITE_METADATA_PATH_DEFAULT_DIR: &str = "metadata";
 
     /// Compression codec for metadata files (JSON)
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";

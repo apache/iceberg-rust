@@ -240,7 +240,7 @@ impl<'a> SnapshotProducer<'a> {
     fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
         let new_manifest_path = format!(
             "{}/{}-m{}.{}",
-            self.table.metadata().metadata_location_root()?,
+            self.table.metadata().metadata_location()?,
             self.commit_uuid,
             self.manifest_counter.next().unwrap(),
             DataFileFormat::Avro
@@ -420,7 +420,7 @@ impl<'a> SnapshotProducer<'a> {
     fn generate_manifest_list_file_path(&self, attempt: i64) -> Result<String> {
         Ok(format!(
             "{}/snap-{}-{}-{}.{}",
-            self.table.metadata().metadata_location_root()?,
+            self.table.metadata().metadata_location()?,
             self.snapshot_id,
             attempt,
             self.commit_uuid,

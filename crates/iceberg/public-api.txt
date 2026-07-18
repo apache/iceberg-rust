@@ -2591,7 +2591,6 @@ pub fn iceberg::spec::TableMetadata::current_schema(&self) -> &iceberg::spec::Sc
 pub fn iceberg::spec::TableMetadata::current_schema_id(&self) -> iceberg::spec::SchemaId
 pub fn iceberg::spec::TableMetadata::current_snapshot(&self) -> core::option::Option<&iceberg::spec::SnapshotRef>
 pub fn iceberg::spec::TableMetadata::current_snapshot_id(&self) -> core::option::Option<i64>
-pub fn iceberg::spec::TableMetadata::default_metadata_dir(table_location: &str) -> alloc::string::String
 pub fn iceberg::spec::TableMetadata::default_partition_spec(&self) -> &iceberg::spec::PartitionSpecRef
 pub fn iceberg::spec::TableMetadata::default_partition_spec_id(&self) -> i32
 pub fn iceberg::spec::TableMetadata::default_partition_type(&self) -> &iceberg::spec::StructType
@@ -2609,7 +2608,7 @@ pub fn iceberg::spec::TableMetadata::last_updated_ms(&self) -> i64
 pub fn iceberg::spec::TableMetadata::last_updated_timestamp(&self) -> iceberg::Result<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
 pub fn iceberg::spec::TableMetadata::location(&self) -> &str
 pub fn iceberg::spec::TableMetadata::metadata_compression_codec(&self) -> iceberg::Result<iceberg::compression::CompressionCodec>
-pub fn iceberg::spec::TableMetadata::metadata_location_root(&self) -> iceberg::Result<alloc::string::String>
+pub fn iceberg::spec::TableMetadata::metadata_location(&self) -> iceberg::Result<alloc::string::String>
 pub fn iceberg::spec::TableMetadata::metadata_log(&self) -> &[iceberg::spec::MetadataLog]
 pub fn iceberg::spec::TableMetadata::next_row_id(&self) -> u64
 pub fn iceberg::spec::TableMetadata::next_sequence_number(&self) -> i64
@@ -2762,7 +2761,6 @@ pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAUL
 pub const iceberg::spec::TableProperties::PROPERTY_SNAPSHOT_COUNT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_UUID: &str
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_METADATA_PATH: &str
-pub const iceberg::spec::TableProperties::PROPERTY_WRITE_METADATA_PATH_DEFAULT_DIR: &str
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT: u64
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str
@@ -3510,7 +3508,6 @@ pub struct iceberg::MetadataLocation
 impl iceberg::MetadataLocation
 pub fn iceberg::MetadataLocation::compression_codec(&self) -> iceberg::compression::CompressionCodec
 pub fn iceberg::MetadataLocation::new_with_metadata(table_location: impl alloc::string::ToString, metadata: &iceberg::spec::TableMetadata) -> Self
-pub fn iceberg::MetadataLocation::new_with_table_location(table_location: impl alloc::string::ToString) -> Self
 pub fn iceberg::MetadataLocation::with_new_metadata(&self, new_metadata: &iceberg::spec::TableMetadata) -> Self
 pub fn iceberg::MetadataLocation::with_next_version(&self) -> Self
 impl core::clone::Clone for iceberg::MetadataLocation

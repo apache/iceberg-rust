@@ -25,6 +25,10 @@ use crate::compression::CompressionCodec;
 use crate::spec::{TableMetadata, parse_metadata_file_compression};
 use crate::{Error, ErrorKind, Result};
 
+/// Default folder name for metadata files under the table location, used when the
+/// `write.metadata.path` table property is not set.
+pub(crate) const METADATA_FOLDER_NAME: &str = "metadata";
+
 /// Helper for parsing a location of the format: `<metadata-dir>/<version>-<uuid>.metadata.json`
 /// or with compression: `<metadata-dir>/<version>-<uuid>.gz.metadata.json`
 ///
@@ -32,7 +36,7 @@ use crate::{Error, ErrorKind, Result};
 /// it defaults to the `<location>/metadata` when the property is not set.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MetadataLocation {
-    metadata_dir: String,
+    location: String,
     version: i32,
     id: Uuid,
     compression_codec: CompressionCodec,
@@ -45,21 +49,6 @@ impl MetadataLocation {
         parse_metadata_file_compression(properties).unwrap_or(CompressionCodec::None)
     }
 
-    /// Creates a completely new metadata location starting at version 0.
-    /// Only used for creating a new table. For updates, see `next_version`.
-    #[deprecated(
-        since = "0.8.0",
-        note = "Use new_with_metadata instead to properly handle compression settings"
-    )]
-    pub fn new_with_table_location(table_location: impl ToString) -> Self {
-        Self {
-            metadata_dir: TableMetadata::default_metadata_dir(&table_location.to_string()),
-            version: 0,
-            id: Uuid::new_v4(),
-            compression_codec: CompressionCodec::None,
-        }
-    }
-
     /// Creates a completely new metadata location starting at version 0,
     /// with compression settings from the table metadata.
     /// Only used for creating a new table. For updates, see `next_version`.
@@ -68,11 +57,13 @@ impl MetadataLocation {
     /// otherwise defaults to the `metadata` subdirectory of `table_location`.
     pub fn new_with_metadata(table_location: impl ToString, metadata: &TableMetadata) -> Self {
         let table_location = table_location.to_string();
-        let metadata_dir = metadata
-            .metadata_location_root_with_base(&table_location)
-            .unwrap_or_else(|_| TableMetadata::default_metadata_dir(&table_location));
+        let location = metadata
+            .table_properties()
+            .ok()
+            .and_then(|props| props.write_metadata_path)
+            .unwrap_or_else(|| format!("{table_location}/{METADATA_FOLDER_NAME}"));
         Self {
-            metadata_dir,
+            location,
             version: 0,
             id: Uuid::new_v4(),
             compression_codec: Self::compression_from_properties(metadata.properties()),
@@ -83,7 +74,7 @@ impl MetadataLocation {
     /// Increments the version number and generates a new UUID.
     pub fn with_next_version(&self) -> Self {
         Self {
-            metadata_dir: self.metadata_dir.clone(),
+            location: self.location.clone(),
             version: self.version + 1,
             id: Uuid::new_v4(),
             compression_codec: self.compression_codec,
@@ -93,7 +84,7 @@ impl MetadataLocation {
     /// Updates the metadata location with compression settings from the new metadata.
     pub fn with_new_metadata(&self, new_metadata: &TableMetadata) -> Self {
         Self {
-            metadata_dir: self.metadata_dir.clone(),
+            location: self.location.clone(),
             version: self.version,
             id: self.id,
             compression_codec: Self::compression_from_properties(new_metadata.properties()),
@@ -141,7 +132,7 @@ impl Display for MetadataLocation {
         write!(
             f,
             "{}/{:0>5}-{}{}.metadata.json",
-            self.metadata_dir, self.version, self.id, suffix
+            self.location, self.version, self.id, suffix
         )
     }
 }
@@ -150,7 +141,7 @@ impl FromStr for MetadataLocation {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        let (metadata_dir, file_name) = s.rsplit_once('/').ok_or(Error::new(
+        let (location, file_name) = s.rsplit_once('/').ok_or(Error::new(
             ErrorKind::Unexpected,
             format!("Invalid metadata location: {s}"),
         ))?;
@@ -158,7 +149,7 @@ impl FromStr for MetadataLocation {
         let (version, id, compression_codec) = Self::parse_file_name(file_name)?;
 
         Ok(MetadataLocation {
-            metadata_dir: metadata_dir.to_string(),
+            location: location.to_string(),
             version,
             id,
             compression_codec,
@@ -198,7 +189,7 @@ mod test {
             (
                 "/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
                 Ok(MetadataLocation {
-                    metadata_dir: "/metadata".to_string(),
+                    location: "/metadata".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
                     compression_codec: CompressionCodec::None,
@@ -208,7 +199,7 @@ mod test {
             (
                 "/abc/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
                 Ok(MetadataLocation {
-                    metadata_dir: "/abc/metadata".to_string(),
+                    location: "/abc/metadata".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
                     compression_codec: CompressionCodec::None,
@@ -218,7 +209,7 @@ mod test {
             (
                 "/abc/def/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
                 Ok(MetadataLocation {
-                    metadata_dir: "/abc/def/metadata".to_string(),
+                    location: "/abc/def/metadata".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
                     compression_codec: CompressionCodec::None,
@@ -228,7 +219,7 @@ mod test {
             (
                 "https://127.0.0.1/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
                 Ok(MetadataLocation {
-                    metadata_dir: "https://127.0.0.1/metadata".to_string(),
+                    location: "https://127.0.0.1/metadata".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
                     compression_codec: CompressionCodec::None,
@@ -238,7 +229,7 @@ mod test {
             (
                 "/abc/metadata/1234567-81056704-ce5b-41c4-bb83-eb6408081af6.metadata.json",
                 Ok(MetadataLocation {
-                    metadata_dir: "/abc/metadata".to_string(),
+                    location: "/abc/metadata".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("81056704-ce5b-41c4-bb83-eb6408081af6").unwrap(),
                     compression_codec: CompressionCodec::None,
@@ -248,7 +239,7 @@ mod test {
             (
                 "/abc/metadata/00000-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
                 Ok(MetadataLocation {
-                    metadata_dir: "/abc/metadata".to_string(),
+                    location: "/abc/metadata".to_string(),
                     version: 0,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
                     compression_codec: CompressionCodec::None,
@@ -258,7 +249,7 @@ mod test {
             (
                 "/abc/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.gz.metadata.json",
                 Ok(MetadataLocation {
-                    metadata_dir: "/abc/metadata".to_string(),
+                    location: "/abc/metadata".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
                     compression_codec: CompressionCodec::gzip_default(),
@@ -283,7 +274,7 @@ mod test {
             (
                 "/wrongsubdir/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
                 Ok(MetadataLocation {
-                    metadata_dir: "/wrongsubdir".to_string(),
+                    location: "/wrongsubdir".to_string(),
                     version: 1234567,
                     id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
                     compression_codec: CompressionCodec::None,
@@ -326,7 +317,7 @@ mod test {
             let next = MetadataLocation::from_str(&input.to_string())
                 .unwrap()
                 .with_next_version();
-            assert_eq!(next.metadata_dir, input.metadata_dir);
+            assert_eq!(next.location, input.location);
             assert_eq!(next.version, input.version + 1);
             assert_ne!(next.id, input.id);
         }

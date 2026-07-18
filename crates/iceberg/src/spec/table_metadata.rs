@@ -37,7 +37,7 @@ use super::{
     SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
     TableProperties, parse_metadata_file_compression,
 };
-use crate::catalog::MetadataLocation;
+use crate::catalog::{METADATA_FOLDER_NAME, MetadataLocation};
 use crate::compression::CompressionCodec;
 use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
@@ -364,31 +364,15 @@ impl TableMetadata {
         &self.properties
     }
 
-    /// Returns the default metadata directory for a table location: the `metadata`
-    /// subdirectory under `table_location`. Used when `write.metadata.path` is not set.
-    pub fn default_metadata_dir(table_location: &str) -> String {
-        format!(
-            "{table_location}/{}",
-            TableProperties::PROPERTY_WRITE_METADATA_PATH_DEFAULT_DIR
-        )
-    }
-
-    /// Returns the base location for metadata files.
+    /// Returns the base location for metadata files (manifests, manifest lists).
     ///
     /// Honors the `write.metadata.path` table property when set, otherwise defaults
-    /// to the `metadata` directory under the table location.
-    pub fn metadata_location_root(&self) -> Result<String> {
-        self.metadata_location_root_with_base(self.location())
-    }
-
-    /// Like [`Self::metadata_location_root`], but uses an explicit table location as
-    /// the base for the default `<location>/metadata` when `write.metadata.path` is not
-    /// configured.
-    pub(crate) fn metadata_location_root_with_base(&self, base: &str) -> Result<String> {
+    /// to the `metadata` subdirectory under the table location.
+    pub fn metadata_location(&self) -> Result<String> {
         Ok(self
             .table_properties()?
             .write_metadata_path
-            .unwrap_or_else(|| Self::default_metadata_dir(base)))
+            .unwrap_or_else(|| format!("{}/{}", self.location(), METADATA_FOLDER_NAME)))
     }
 
     /// Returns the metadata compression codec from table properties.
@@ -4312,18 +4296,18 @@ mod tests {
     }
 
     #[test]
-    fn test_metadata_location_root_default() {
+    fn test_metadata_location_default() {
         // Verify metadata files go to `<location>/metadata` when `write.metadata.path` is not set
         let metadata = get_test_table_metadata("TableMetadataV2Valid.json");
         assert_eq!(metadata.location(), "s3://bucket/test/location");
         assert_eq!(
-            metadata.metadata_location_root().unwrap(),
+            metadata.metadata_location().unwrap(),
             "s3://bucket/test/location/metadata"
         );
     }
 
     #[test]
-    fn test_metadata_location_root_honors_write_metadata_path() {
+    fn test_metadata_location_honors_write_metadata_path() {
         let metadata = get_test_table_metadata("TableMetadataV2Valid.json")
             .into_builder(None)
             .set_properties(HashMap::from([(
@@ -4335,13 +4319,13 @@ mod tests {
             .unwrap()
             .metadata;
         assert_eq!(
-            metadata.metadata_location_root().unwrap(),
+            metadata.metadata_location().unwrap(),
             "s3://other-bucket/custom-meta"
         );
     }
 
     #[test]
-    fn test_metadata_location_root_trims_trailing_slash() {
+    fn test_metadata_location_trims_trailing_slash() {
         // A configured path with a trailing slash must not yield a doubled separator
         let metadata = get_test_table_metadata("TableMetadataV2Valid.json")
             .into_builder(None)
@@ -4354,7 +4338,7 @@ mod tests {
             .unwrap()
             .metadata;
         assert_eq!(
-            metadata.metadata_location_root().unwrap(),
+            metadata.metadata_location().unwrap(),
             "s3://other-bucket/custom-meta"
         );
     }
