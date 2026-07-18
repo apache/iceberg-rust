@@ -385,7 +385,7 @@ mod tests {
             .unwrap();
 
         // With config: the table provider carries it (and is therefore distributable).
-        let config = crate::IcebergCatalogConfig::new("memory", "memory", HashMap::new());
+        let config = IcebergCatalogConfig::new("memory", "memory", HashMap::new());
         let with_config =
             IcebergSchemaProvider::try_new(catalog.clone(), Some(config), namespace.clone())
                 .await
