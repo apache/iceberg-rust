@@ -274,7 +274,7 @@ async fn test_table_projection() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_table_predict_pushdown() -> Result<()> {
+async fn test_table_predicate_pushdown() -> Result<()> {
     let iceberg_catalog = get_iceberg_catalog().await;
     let namespace = NamespaceIdent::new("ns".to_string());
     set_test_namespace(&iceberg_catalog, &namespace).await?;
@@ -315,6 +315,34 @@ async fn test_table_predict_pushdown() -> Result<()> {
     // the first row is logical_plan, the second row is physical_plan
     let expected = "predicate:[(foo > 1) OR (bar IS NULL)]";
     assert!(s.value(1).trim().contains(expected));
+    assert!(
+        s.value(1).contains("FilterExec"),
+        "partially converted filters must be re-applied: {}",
+        s.value(1)
+    );
+
+    let records = ctx
+        .sql("select * from catalog.ns.t1 where foo > 1 and bar is null")
+        .await
+        .unwrap()
+        .explain(false, false)
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let physical_plan = records[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap()
+        .value(1);
+
+    assert!(physical_plan.contains("predicate:[(foo > 1) AND (bar IS NULL)]"));
+    assert!(
+        !physical_plan.contains("FilterExec"),
+        "exact filters should not be re-applied: {physical_plan}"
+    );
+
     Ok(())
 }
 
