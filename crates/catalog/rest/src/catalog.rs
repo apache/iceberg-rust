@@ -41,7 +41,7 @@ use typed_builder::TypedBuilder;
 use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
-use crate::endpoint::Endpoint;
+use crate::endpoint::{Endpoint, V1_NAMESPACE_EXISTS, V1_TABLE_EXISTS};
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
     CreateTableRequest, ListNamespaceResponse, ListTablesResponse, LoadTableResult,
@@ -463,8 +463,7 @@ impl RestCatalog {
 
     /// Issue a `HEAD` request to `url` and interpret it as an existence check:
     /// `2xx` means it exists, `404` means it doesn't.
-    async fn check_exists_via_head(&self, url: String) -> Result<bool> {
-        let context = self.context().await?;
+    async fn check_exists_via_head(&self, context: &RestContext, url: String) -> Result<bool> {
         let request = context.client.request(Method::HEAD, url).build()?;
         let http_response = context.client.query_catalog(request).await?;
 
@@ -688,13 +687,13 @@ impl Catalog for RestCatalog {
     }
 
     async fn namespace_exists(&self, ns: &NamespaceIdent) -> Result<bool> {
-        let head_endpoint = Endpoint::new(Method::HEAD, "/v1/{prefix}/namespaces/{namespace}");
+        let context = self.context().await?;
 
         // Prefer a cheap HEAD when the server advertises it; otherwise fall back
         // to loading the namespace (GET) and treating a missing namespace as
         // `false`, so this still works against servers that don't advertise the
         // HEAD route.
-        if !self.supports_endpoint(&head_endpoint).await? {
+        if !context.endpoints.contains(&*V1_NAMESPACE_EXISTS) {
             return match self.get_namespace(ns).await {
                 Ok(_) => Ok(true),
                 Err(e) if e.kind() == ErrorKind::NamespaceNotFound => Ok(false),
@@ -702,8 +701,8 @@ impl Catalog for RestCatalog {
             };
         }
 
-        let url = self.context().await?.config.namespace_endpoint(ns);
-        self.check_exists_via_head(url).await
+        self.check_exists_via_head(context, context.config.namespace_endpoint(ns))
+            .await
     }
 
     async fn update_namespace(
@@ -947,15 +946,12 @@ impl Catalog for RestCatalog {
 
     /// Check if a table exists in the catalog.
     async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
-        let head_endpoint = Endpoint::new(
-            Method::HEAD,
-            "/v1/{prefix}/namespaces/{namespace}/tables/{table}",
-        );
+        let context = self.context().await?;
 
         // Prefer a cheap HEAD when the server advertises it; otherwise fall back
         // to loading the table (GET) and treating a missing table as `false`, so
         // this still works against servers that don't advertise the HEAD route.
-        if !self.supports_endpoint(&head_endpoint).await? {
+        if !context.endpoints.contains(&*V1_TABLE_EXISTS) {
             return match self.load_table(table).await {
                 Ok(_) => Ok(true),
                 Err(e) if e.kind() == ErrorKind::TableNotFound => Ok(false),
@@ -963,8 +959,8 @@ impl Catalog for RestCatalog {
             };
         }
 
-        let url = self.context().await?.config.table_endpoint(table);
-        self.check_exists_via_head(url).await
+        self.check_exists_via_head(context, context.config.table_endpoint(table))
+            .await
     }
 
     /// Rename a table in the catalog.

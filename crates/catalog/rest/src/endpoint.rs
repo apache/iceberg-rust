@@ -142,50 +142,62 @@ impl<'de> Deserialize<'de> for Endpoint {
     }
 }
 
+/// Declares named [`Endpoint`] constants for routes the client may negotiate.
+macro_rules! endpoints {
+    ($($name:ident => $method:ident $path:literal),+ $(,)?) => {
+        $(
+            pub(crate) static $name: LazyLock<Endpoint> =
+                LazyLock::new(|| Endpoint::new(Method::$method, $path));
+        )+
+    };
+}
+
+endpoints! {
+    V1_LIST_NAMESPACES => GET "/v1/{prefix}/namespaces",
+    V1_CREATE_NAMESPACE => POST "/v1/{prefix}/namespaces",
+    V1_LOAD_NAMESPACE => GET "/v1/{prefix}/namespaces/{namespace}",
+    V1_DELETE_NAMESPACE => DELETE "/v1/{prefix}/namespaces/{namespace}",
+    V1_UPDATE_NAMESPACE => POST "/v1/{prefix}/namespaces/{namespace}/properties",
+    V1_NAMESPACE_EXISTS => HEAD "/v1/{prefix}/namespaces/{namespace}",
+    V1_LIST_TABLES => GET "/v1/{prefix}/namespaces/{namespace}/tables",
+    V1_CREATE_TABLE => POST "/v1/{prefix}/namespaces/{namespace}/tables",
+    V1_LOAD_TABLE => GET "/v1/{prefix}/namespaces/{namespace}/tables/{table}",
+    V1_UPDATE_TABLE => POST "/v1/{prefix}/namespaces/{namespace}/tables/{table}",
+    V1_DELETE_TABLE => DELETE "/v1/{prefix}/namespaces/{namespace}/tables/{table}",
+    V1_TABLE_EXISTS => HEAD "/v1/{prefix}/namespaces/{namespace}/tables/{table}",
+    V1_RENAME_TABLE => POST "/v1/{prefix}/tables/rename",
+    V1_REGISTER_TABLE => POST "/v1/{prefix}/namespaces/{namespace}/register",
+    V1_REPORT_METRICS => POST "/v1/{prefix}/namespaces/{namespace}/tables/{table}/metrics",
+    V1_COMMIT_TRANSACTION => POST "/v1/{prefix}/transactions/commit",
+}
+
 /// The standard v1 endpoints assumed to be supported when a server's
 /// `GET /v1/config` response omits the `endpoints` field or sends an empty list
 /// (the two are treated alike). These are the minimum a server is expected to
 /// support; a server that advertises a non-empty list is taken at its word
 /// instead.
+///
+/// Note: existence-check `HEAD` routes are intentionally omitted — servers that
+/// do not advertise them are expected to fall back to `GET` load paths.
 pub(crate) static DEFAULT_ENDPOINTS: LazyLock<HashSet<Endpoint>> = LazyLock::new(|| {
     [
-        (Method::GET, "/v1/{prefix}/namespaces"),  // list namespaces
-        (Method::POST, "/v1/{prefix}/namespaces"), // create namespace
-        (Method::GET, "/v1/{prefix}/namespaces/{namespace}"), // load namespace
-        (Method::DELETE, "/v1/{prefix}/namespaces/{namespace}"), // drop namespace
-        // update namespace properties
-        (
-            Method::POST,
-            "/v1/{prefix}/namespaces/{namespace}/properties",
-        ),
-        (Method::GET, "/v1/{prefix}/namespaces/{namespace}/tables"), // list tables
-        (Method::POST, "/v1/{prefix}/namespaces/{namespace}/tables"), // create table
-        // load table
-        (
-            Method::GET,
-            "/v1/{prefix}/namespaces/{namespace}/tables/{table}",
-        ),
-        // update table
-        (
-            Method::POST,
-            "/v1/{prefix}/namespaces/{namespace}/tables/{table}",
-        ),
-        // drop table
-        (
-            Method::DELETE,
-            "/v1/{prefix}/namespaces/{namespace}/tables/{table}",
-        ),
-        (Method::POST, "/v1/{prefix}/tables/rename"), // rename table
-        (Method::POST, "/v1/{prefix}/namespaces/{namespace}/register"), // register table
-        // report metrics
-        (
-            Method::POST,
-            "/v1/{prefix}/namespaces/{namespace}/tables/{table}/metrics",
-        ),
-        (Method::POST, "/v1/{prefix}/transactions/commit"), // commit transaction
+        &*V1_LIST_NAMESPACES,
+        &*V1_CREATE_NAMESPACE,
+        &*V1_LOAD_NAMESPACE,
+        &*V1_DELETE_NAMESPACE,
+        &*V1_UPDATE_NAMESPACE,
+        &*V1_LIST_TABLES,
+        &*V1_CREATE_TABLE,
+        &*V1_LOAD_TABLE,
+        &*V1_UPDATE_TABLE,
+        &*V1_DELETE_TABLE,
+        &*V1_RENAME_TABLE,
+        &*V1_REGISTER_TABLE,
+        &*V1_REPORT_METRICS,
+        &*V1_COMMIT_TRANSACTION,
     ]
     .into_iter()
-    .map(|(method, path)| Endpoint::new(method, path))
+    .cloned()
     .collect()
 });
 
