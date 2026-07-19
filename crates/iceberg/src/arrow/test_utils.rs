@@ -19,7 +19,9 @@ use std::fs::File;
 
 use arrow_array::RecordBatch;
 use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::basic::Compression;
+use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::file::properties::WriterProperties;
 
@@ -45,4 +47,27 @@ pub(crate) fn write_encrypted_parquet(
     let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
     writer.write(batch).expect("Writing batch");
     writer.close().unwrap();
+}
+
+/// Reads the Parquet file at `path` encrypted with `key` and `aad_prefix`, returning
+/// all record batches.
+pub(crate) fn read_encrypted_parquet(
+    path: &str,
+    key: &[u8],
+    aad_prefix: Option<&[u8]>,
+) -> Vec<RecordBatch> {
+    let mut builder = FileDecryptionProperties::builder(key.to_vec());
+    if let Some(aad) = aad_prefix {
+        builder = builder.with_aad_prefix(aad.to_vec());
+    }
+    let options =
+        ArrowReaderOptions::new().with_file_decryption_properties(builder.build().unwrap());
+
+    let file = File::open(path).unwrap();
+    ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
+        .unwrap()
+        .build()
+        .unwrap()
+        .map(|b| b.unwrap())
+        .collect()
 }

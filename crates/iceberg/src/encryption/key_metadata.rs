@@ -20,7 +20,10 @@
 
 use std::fmt;
 
-use super::SecureKey;
+use aes_gcm::aead::OsRng;
+use aes_gcm::aead::rand_core::RngCore;
+
+use super::{AesKeySize, SecureKey};
 use crate::{Error, ErrorKind, Result};
 
 /// Standard key metadata for Iceberg table encryption.
@@ -106,6 +109,22 @@ impl From<SecureKey> for StandardKeyMetadata {
             file_length: None,
         }
     }
+}
+
+/// AAD prefix length in bytes.
+const AAD_PREFIX_LENGTH: usize = 16;
+
+/// Generate a [`StandardKeyMetadata`] with a fresh random DEK and AAD prefix,
+/// sized to `key_size`.
+pub(crate) fn generate_standard_key_metadata(key_size: AesKeySize) -> StandardKeyMetadata {
+    let dek = SecureKey::generate(key_size);
+    StandardKeyMetadata::from(dek).with_aad_prefix(&generate_aad_prefix())
+}
+
+fn generate_aad_prefix() -> Box<[u8]> {
+    let mut prefix = vec![0u8; AAD_PREFIX_LENGTH];
+    OsRng.fill_bytes(&mut prefix);
+    prefix.into_boxed_slice()
 }
 
 mod _serde {

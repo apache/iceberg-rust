@@ -28,8 +28,6 @@ use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use aes_gcm::aead::OsRng;
-use aes_gcm::aead::rand_core::RngCore;
 use chrono::Utc;
 use moka::future::Cache;
 use uuid::Uuid;
@@ -38,7 +36,7 @@ const MILLIS_IN_DAY: i64 = 24 * 60 * 60 * 1000;
 
 use super::crypto::{AesGcmCipher, AesKeySize, SecureKey, SensitiveBytes};
 use super::io::EncryptedOutputFile;
-use super::key_metadata::StandardKeyMetadata;
+use super::key_metadata::{StandardKeyMetadata, generate_standard_key_metadata};
 use super::kms::KeyManagementClient;
 use crate::io::OutputFile;
 use crate::spec::{EncryptedKey, FormatVersion, TableMetadataRef};
@@ -53,10 +51,6 @@ const DEFAULT_KEK_LIFESPAN_DAYS: i64 = 730;
 
 /// Default cache TTL for unwrapped KEKs.
 const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(3600);
-
-/// Default AAD prefix length in bytes.
-/// Matches Java's `TableProperties.ENCRYPTION_AAD_LENGTH_DEFAULT`.
-const AAD_PREFIX_LENGTH: usize = 16;
 
 /// File-level encryption manager using two-layer envelope encryption.
 ///
@@ -151,10 +145,7 @@ impl EncryptionManager {
     /// Returns an [`EncryptedOutputFile`] that transparently encrypts on
     /// write, along with key metadata for later decryption.
     pub fn encrypt(&self, raw_output: OutputFile) -> EncryptedOutputFile {
-        let dek = SecureKey::generate(self.key_size);
-        let aad_prefix = Self::generate_aad_prefix();
-        let metadata = StandardKeyMetadata::from(dek).with_aad_prefix(&aad_prefix);
-        EncryptedOutputFile::new(raw_output, metadata)
+        EncryptedOutputFile::new(raw_output, generate_standard_key_metadata(self.key_size))
     }
 
     /// Wrap a manifest list key metadata with a KEK for storage in table metadata.
@@ -395,13 +386,6 @@ impl EncryptionManager {
                     ),
                 )
             })
-    }
-
-    /// Generate a random AAD prefix for file encryption.
-    fn generate_aad_prefix() -> Box<[u8]> {
-        let mut prefix = vec![0u8; AAD_PREFIX_LENGTH];
-        OsRng.fill_bytes(&mut prefix);
-        prefix.into_boxed_slice()
     }
 
     /// Wrap a DEK with a KEK using local AES-GCM.
