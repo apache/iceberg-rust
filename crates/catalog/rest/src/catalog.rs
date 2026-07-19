@@ -687,13 +687,11 @@ impl Catalog for RestCatalog {
     }
 
     async fn namespace_exists(&self, ns: &NamespaceIdent) -> Result<bool> {
-        let context = self.context().await?;
-
         // Prefer a cheap HEAD when the server advertises it; otherwise fall back
         // to loading the namespace (GET) and treating a missing namespace as
         // `false`, so this still works against servers that don't advertise the
         // HEAD route.
-        if !context.endpoints.contains(&*V1_NAMESPACE_EXISTS) {
+        if !self.supports_endpoint(&V1_NAMESPACE_EXISTS).await? {
             return match self.get_namespace(ns).await {
                 Ok(_) => Ok(true),
                 Err(e) if e.kind() == ErrorKind::NamespaceNotFound => Ok(false),
@@ -701,6 +699,7 @@ impl Catalog for RestCatalog {
             };
         }
 
+        let context = self.context().await?;
         self.check_exists_via_head(context, context.config.namespace_endpoint(ns))
             .await
     }
@@ -946,12 +945,10 @@ impl Catalog for RestCatalog {
 
     /// Check if a table exists in the catalog.
     async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
-        let context = self.context().await?;
-
         // Prefer a cheap HEAD when the server advertises it; otherwise fall back
         // to loading the table (GET) and treating a missing table as `false`, so
         // this still works against servers that don't advertise the HEAD route.
-        if !context.endpoints.contains(&*V1_TABLE_EXISTS) {
+        if !self.supports_endpoint(&V1_TABLE_EXISTS).await? {
             return match self.load_table(table).await {
                 Ok(_) => Ok(true),
                 Err(e) if e.kind() == ErrorKind::TableNotFound => Ok(false),
@@ -959,6 +956,7 @@ impl Catalog for RestCatalog {
             };
         }
 
+        let context = self.context().await?;
         self.check_exists_via_head(context, context.config.table_endpoint(table))
             .await
     }
