@@ -521,7 +521,6 @@ impl RecordBatchTransformer {
                     .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
                     .0
                     .clone())
-                }
             })
             .collect();
 
