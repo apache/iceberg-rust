@@ -122,6 +122,7 @@ pub fn iceberg::arrow::ArrowSchemaVisitor::map(&mut self, map: &arrow_schema::da
 pub fn iceberg::arrow::ArrowSchemaVisitor::primitive(&mut self, p: &arrow_schema::datatype::DataType) -> iceberg::Result<Self::T>
 pub fn iceberg::arrow::ArrowSchemaVisitor::schema(&mut self, schema: &arrow_schema::schema::Schema, values: alloc::vec::Vec<Self::T>) -> iceberg::Result<Self::U>
 pub fn iceberg::arrow::ArrowSchemaVisitor::struct(&mut self, fields: &arrow_schema::fields::Fields, results: alloc::vec::Vec<Self::T>) -> iceberg::Result<Self::T>
+pub fn iceberg::arrow::ArrowSchemaVisitor::variant(&mut self, field: &arrow_schema::field::FieldRef) -> iceberg::Result<Self::T> where Self: core::marker::Sized
 pub fn iceberg::arrow::arrow_primitive_to_literal(primitive_array: &arrow_array::array::ArrayRef, ty: &iceberg::spec::Type) -> iceberg::Result<alloc::vec::Vec<core::option::Option<iceberg::spec::Literal>>>
 pub fn iceberg::arrow::arrow_schema_to_schema(schema: &arrow_schema::schema::Schema) -> iceberg::Result<iceberg::spec::Schema>
 pub fn iceberg::arrow::arrow_schema_to_schema_auto_assign_ids(schema: &arrow_schema::schema::Schema) -> iceberg::Result<iceberg::spec::Schema>
