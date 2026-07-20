@@ -52,7 +52,7 @@ use crate::error::to_datafusion_error;
 use crate::physical_plan::commit::IcebergCommitExec;
 use crate::physical_plan::project::project_with_partition;
 use crate::physical_plan::repartition::repartition;
-use crate::physical_plan::scan::IcebergTableScan;
+use crate::physical_plan::scan::{IcebergTableScan, ScanRange};
 use crate::physical_plan::sort::sort_by_partition;
 use crate::physical_plan::write::IcebergWriteExec;
 
@@ -134,7 +134,7 @@ impl TableProvider for IcebergTableProvider {
         // Create scan with fresh metadata (always use current snapshot)
         Ok(Arc::new(IcebergTableScan::new(
             table,
-            None, // Always use current snapshot for catalog-backed provider
+            ScanRange::Latest,
             self.schema.clone(),
             projection,
             filters,
@@ -240,7 +240,7 @@ impl TableProvider for IcebergTableProvider {
 ///
 /// This provider holds a cached table instance and does not refresh metadata or support
 /// write operations. Use this for consistent analytical queries, time-travel scenarios,
-/// or when you want to avoid catalog overhead.
+/// incremental reads, or when you want to avoid catalog overhead.
 ///
 /// For catalog-backed tables with write support and automatic refresh, use
 /// [`IcebergTableProvider`] instead.
@@ -248,10 +248,10 @@ impl TableProvider for IcebergTableProvider {
 pub struct IcebergStaticTableProvider {
     /// The static table instance (never refreshed)
     table: Table,
-    /// Optional snapshot ID for this static view
-    snapshot_id: Option<i64>,
     /// A reference-counted arrow `Schema`
     schema: ArrowSchemaRef,
+    /// Which snapshot(s) to scan
+    scan_range: ScanRange,
 }
 
 impl IcebergStaticTableProvider {
@@ -262,8 +262,8 @@ impl IcebergStaticTableProvider {
         let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
         Ok(IcebergStaticTableProvider {
             table,
-            snapshot_id: None,
             schema,
+            scan_range: ScanRange::Latest,
         })
     }
 
@@ -288,8 +288,134 @@ impl IcebergStaticTableProvider {
         let schema = Arc::new(schema_to_arrow_schema(&table_schema)?);
         Ok(IcebergStaticTableProvider {
             table,
-            snapshot_id: Some(snapshot_id),
             schema,
+            scan_range: ScanRange::PointInTime(snapshot_id),
+        })
+    }
+
+    /// Creates a provider for incremental scanning between two snapshots.
+    ///
+    /// Returns only data files that were added in snapshots between `from_snapshot_id`
+    /// (exclusive) and `to_snapshot_id` (inclusive). Only APPEND operations are supported.
+    ///
+    /// # Arguments
+    /// * `table` - The table to scan
+    /// * `from_snapshot_id` - Starting snapshot (exclusive - changes after this are included)
+    /// * `to_snapshot_id` - Ending snapshot (inclusive)
+    ///
+    /// # Example
+    /// ```ignore
+    /// let provider = IcebergStaticTableProvider::try_new_incremental(table, 100, 200).await?;
+    /// ctx.register_table("changes", Arc::new(provider))?;
+    /// let df = ctx.sql("SELECT * FROM changes").await?;
+    /// ```
+    pub async fn try_new_incremental(
+        table: Table,
+        from_snapshot_id: i64,
+        to_snapshot_id: i64,
+    ) -> Result<Self> {
+        table
+            .metadata()
+            .snapshot_by_id(to_snapshot_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "to_snapshot id {to_snapshot_id} not found in table {}",
+                        table.identifier().name()
+                    ),
+                )
+            })?;
+        // Incremental scans project onto the current schema, so the reported
+        // schema must match it rather than the to-snapshot's schema.
+        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
+        Ok(IcebergStaticTableProvider {
+            table,
+            schema,
+            scan_range: ScanRange::Incremental {
+                from: from_snapshot_id,
+                to: Some(to_snapshot_id),
+                from_inclusive: false,
+            },
+        })
+    }
+
+    /// Creates a provider for incremental scanning between two snapshots (inclusive).
+    ///
+    /// Returns only data files that were added in snapshots between `from_snapshot_id`
+    /// (inclusive) and `to_snapshot_id` (inclusive). Only APPEND operations are supported.
+    ///
+    /// # Arguments
+    /// * `table` - The table to scan
+    /// * `from_snapshot_id` - Starting snapshot (inclusive - changes from this snapshot are included)
+    /// * `to_snapshot_id` - Ending snapshot (inclusive)
+    pub async fn try_new_incremental_inclusive(
+        table: Table,
+        from_snapshot_id: i64,
+        to_snapshot_id: i64,
+    ) -> Result<Self> {
+        table
+            .metadata()
+            .snapshot_by_id(to_snapshot_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "to_snapshot id {to_snapshot_id} not found in table {}",
+                        table.identifier().name()
+                    ),
+                )
+            })?;
+        // Incremental scans project onto the current schema, so the reported
+        // schema must match it rather than the to-snapshot's schema.
+        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
+        Ok(IcebergStaticTableProvider {
+            table,
+            schema,
+            scan_range: ScanRange::Incremental {
+                from: from_snapshot_id,
+                to: Some(to_snapshot_id),
+                from_inclusive: true,
+            },
+        })
+    }
+
+    /// Creates a provider for scanning all appends after a snapshot up to the current snapshot.
+    ///
+    /// Returns only data files that were added in snapshots after `from_snapshot_id`
+    /// up to and including the current snapshot. Only APPEND operations are supported.
+    ///
+    /// # Arguments
+    /// * `table` - The table to scan
+    /// * `from_snapshot_id` - Starting snapshot (exclusive - changes after this are included)
+    ///
+    /// # Example
+    /// ```ignore
+    /// let provider = IcebergStaticTableProvider::try_new_appends_after(table, 100).await?;
+    /// ctx.register_table("new_data", Arc::new(provider))?;
+    /// let df = ctx.sql("SELECT * FROM new_data").await?;
+    /// ```
+    pub async fn try_new_appends_after(table: Table, from_snapshot_id: i64) -> Result<Self> {
+        table.metadata().current_snapshot().ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "table {} has no current snapshot",
+                    table.identifier().name()
+                ),
+            )
+        })?;
+        // Incremental scans project onto the current schema, so the reported
+        // schema must match it rather than the to-snapshot's schema.
+        let schema = Arc::new(schema_to_arrow_schema(table.metadata().current_schema())?);
+        Ok(IcebergStaticTableProvider {
+            table,
+            schema,
+            scan_range: ScanRange::Incremental {
+                from: from_snapshot_id,
+                to: None,
+                from_inclusive: false,
+            },
         })
     }
 }
@@ -314,7 +440,7 @@ impl TableProvider for IcebergStaticTableProvider {
         // Use cached table (no refresh)
         Ok(Arc::new(IcebergTableScan::new(
             self.table.clone(),
-            self.snapshot_id,
+            self.scan_range.clone(),
             self.schema.clone(),
             projection,
             filters,
@@ -893,5 +1019,123 @@ mod tests {
             None,
             "Limit should be None when not specified"
         );
+    }
+
+    // Tests for incremental scan providers
+
+    #[tokio::test]
+    async fn test_static_provider_incremental_creates_scan() {
+        use datafusion::datasource::TableProvider;
+
+        let table = get_test_table_from_metadata_file().await;
+        let snapshots: Vec<_> = table.metadata().snapshots().collect();
+
+        assert!(snapshots.len() >= 2);
+        let from_id = snapshots[0].snapshot_id();
+        let to_id = snapshots[snapshots.len() - 1].snapshot_id();
+
+        let provider =
+            IcebergStaticTableProvider::try_new_incremental(table.clone(), from_id, to_id)
+                .await
+                .unwrap();
+
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+
+        let scan_plan = provider.scan(&state, None, &[], None).await.unwrap();
+        let iceberg_scan = scan_plan
+            .downcast_ref::<IcebergTableScan>()
+            .expect("Expected IcebergTableScan");
+
+        assert!(matches!(
+            iceberg_scan.scan_range(),
+            ScanRange::Incremental {
+                from,
+                to: Some(to),
+                from_inclusive: false
+            } if *from == from_id && *to == to_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_static_provider_incremental_inclusive() {
+        use datafusion::datasource::TableProvider;
+
+        let table = get_test_table_from_metadata_file().await;
+        let snapshots: Vec<_> = table.metadata().snapshots().collect();
+
+        assert!(snapshots.len() >= 2);
+        let from_id = snapshots[0].snapshot_id();
+        let to_id = snapshots[snapshots.len() - 1].snapshot_id();
+
+        let provider = IcebergStaticTableProvider::try_new_incremental_inclusive(
+            table.clone(),
+            from_id,
+            to_id,
+        )
+        .await
+        .unwrap();
+
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+
+        let scan_plan = provider.scan(&state, None, &[], None).await.unwrap();
+        let iceberg_scan = scan_plan
+            .downcast_ref::<IcebergTableScan>()
+            .expect("Expected IcebergTableScan");
+
+        assert!(matches!(
+            iceberg_scan.scan_range(),
+            ScanRange::Incremental {
+                from,
+                to: Some(to),
+                from_inclusive: true
+            } if *from == from_id && *to == to_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_static_provider_appends_after() {
+        use datafusion::datasource::TableProvider;
+
+        let table = get_test_table_from_metadata_file().await;
+        let snapshots: Vec<_> = table.metadata().snapshots().collect();
+
+        assert!(!snapshots.is_empty());
+        let from_id = snapshots[0].snapshot_id();
+
+        let provider = IcebergStaticTableProvider::try_new_appends_after(table.clone(), from_id)
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+
+        let scan_plan = provider.scan(&state, None, &[], None).await.unwrap();
+        let iceberg_scan = scan_plan
+            .downcast_ref::<IcebergTableScan>()
+            .expect("Expected IcebergTableScan");
+
+        assert!(matches!(
+            iceberg_scan.scan_range(),
+            ScanRange::Incremental {
+                from,
+                to: None,
+                from_inclusive: false
+            } if *from == from_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_static_provider_incremental_invalid_snapshot() {
+        let table = get_test_table_from_metadata_file().await;
+
+        // Test with invalid to_snapshot_id
+        let result =
+            IcebergStaticTableProvider::try_new_incremental(table.clone(), 1, 999999999).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("not found"));
     }
 }

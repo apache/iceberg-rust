@@ -33,6 +33,14 @@ use crate::spec::{
 };
 use crate::{Error, ErrorKind, Result};
 
+/// Filter applied to each [`ManifestFile`] before fetching it.
+/// Returns `true` to include the manifest, `false` to skip it.
+pub(crate) type ManifestFileFilter = Arc<dyn Fn(&ManifestFile) -> bool + Send + Sync>;
+
+/// Filter applied to each manifest entry after loading a manifest.
+/// Returns `true` to include the entry, `false` to skip it.
+pub(crate) type ManifestEntryFilter = Arc<dyn Fn(&ManifestEntryRef) -> bool + Send + Sync>;
+
 /// Wraps a [`ManifestFile`] alongside the objects that are needed
 /// to process it in a thread-safe manner
 pub(crate) struct ManifestFileContext {
@@ -48,6 +56,7 @@ pub(crate) struct ManifestFileContext {
     delete_file_index: DeleteFileIndex,
     name_mapping: Option<Arc<NameMapping>>,
     case_sensitive: bool,
+    entry_filter: Option<ManifestEntryFilter>,
     partition_spec: Option<PartitionSpecRef>,
 }
 
@@ -82,12 +91,19 @@ impl ManifestFileContext {
             delete_file_index,
             name_mapping,
             case_sensitive,
+            entry_filter,
             partition_spec,
         } = self;
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
 
         for manifest_entry in manifest.entries() {
+            if let Some(ref filter) = entry_filter
+                && !filter(manifest_entry)
+            {
+                continue;
+            }
+
             let manifest_entry_context = ManifestEntryContext {
                 // TODO: refactor to avoid the expensive ManifestEntry clone
                 manifest_entry: manifest_entry.clone(),
@@ -149,7 +165,6 @@ impl ManifestEntryContext {
 
 /// PlanContext wraps a [`SnapshotRef`] alongside all the other
 /// objects that are required to perform a scan file plan.
-#[derive(Debug)]
 pub(crate) struct PlanContext {
     pub snapshot: SnapshotRef,
 
@@ -165,6 +180,25 @@ pub(crate) struct PlanContext {
     pub partition_filter_cache: Arc<PartitionFilterCache>,
     pub manifest_evaluator_cache: Arc<ManifestEvaluatorCache>,
     pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
+    pub manifest_file_filter: Option<ManifestFileFilter>,
+    pub manifest_entry_filter: Option<ManifestEntryFilter>,
+}
+
+impl std::fmt::Debug for PlanContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlanContext")
+            .field("snapshot", &self.snapshot)
+            .field("case_sensitive", &self.case_sensitive)
+            .field(
+                "manifest_file_filter",
+                &self.manifest_file_filter.as_ref().map(|_| "..."),
+            )
+            .field(
+                "manifest_entry_filter",
+                &self.manifest_entry_filter.as_ref().map(|_| "..."),
+            )
+            .finish_non_exhaustive()
+    }
 }
 
 impl PlanContext {
@@ -218,6 +252,12 @@ impl PlanContext {
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
         for manifest_file in manifest_files {
+            if let Some(ref filter) = self.manifest_file_filter
+                && !filter(manifest_file)
+            {
+                continue;
+            }
+
             let tx = if manifest_file.content == ManifestContentType::Deletes {
                 delete_file_tx.clone()
             } else {
@@ -288,6 +328,7 @@ impl PlanContext {
             delete_file_index,
             name_mapping: self.name_mapping.clone(),
             case_sensitive: self.case_sensitive,
+            entry_filter: self.manifest_entry_filter.clone(),
             partition_spec: self
                 .table_metadata
                 .partition_spec_by_id(manifest_file.partition_spec_id)

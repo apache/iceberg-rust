@@ -21,6 +21,7 @@ mod cache;
 use cache::*;
 mod context;
 use context::*;
+mod incremental;
 mod task;
 
 use std::sync::Arc;
@@ -29,6 +30,7 @@ use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Sender, channel};
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
+pub use incremental::IncrementalAppendScanBuilder;
 pub use task::*;
 
 use crate::arrow::ArrowReaderBuilder;
@@ -39,13 +41,159 @@ use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
 use crate::metadata_columns::{get_metadata_field_id, is_metadata_column_name};
 use crate::runtime::Runtime;
-use crate::spec::{DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, SnapshotRef};
+use crate::spec::{
+    DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, SchemaRef, SnapshotRef,
+};
 use crate::table::Table;
 use crate::util::available_parallelism;
 use crate::{Error, ErrorKind, Result};
 
 /// A stream of arrow [`RecordBatch`]es.
 pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
+
+/// Shared configuration extracted from scan builders, used by both
+/// [`TableScanBuilder`] and [`IncrementalAppendScanBuilder`].
+pub(crate) struct ScanConfig<'a> {
+    table: &'a Table,
+    column_names: Option<Vec<String>>,
+    batch_size: Option<usize>,
+    case_sensitive: bool,
+    filter: Option<Predicate>,
+    concurrency_limit_data_files: usize,
+    concurrency_limit_manifest_entries: usize,
+    concurrency_limit_manifest_files: usize,
+    row_group_filtering_enabled: bool,
+    row_selection_enabled: bool,
+    /// Schema to project the scan onto. When `None`, the schema attached to
+    /// `snapshot` is used (the correct behavior for time-travel scans). An
+    /// incremental scan sets this to the table's current schema so that rows
+    /// written under an older schema in the range are projected onto the
+    /// current schema (newer columns become `NULL`), matching the Java and
+    /// PyIceberg implementations.
+    schema_override: Option<SchemaRef>,
+}
+
+/// Shared build logic: validates columns, resolves field IDs, binds predicates,
+/// and constructs [`PlanContext`] + [`TableScan`].
+pub(crate) fn build_table_scan(
+    config: ScanConfig<'_>,
+    snapshot: SnapshotRef,
+    manifest_file_filter: Option<ManifestFileFilter>,
+    manifest_entry_filter: Option<ManifestEntryFilter>,
+) -> Result<TableScan> {
+    let schema = match config.schema_override.clone() {
+        Some(schema) => schema,
+        None => snapshot.schema(config.table.metadata())?,
+    };
+
+    // Check that all column names exist in the schema (skip reserved columns).
+    if let Some(column_names) = config.column_names.as_ref() {
+        for column_name in column_names {
+            if is_metadata_column_name(column_name) {
+                continue;
+            }
+            if schema.field_by_name(column_name).is_none() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Column {column_name} not found in table. Schema: {schema}"),
+                ));
+            }
+        }
+    }
+
+    let mut field_ids = vec![];
+    let column_names = config.column_names.clone().unwrap_or_else(|| {
+        schema
+            .as_struct()
+            .fields()
+            .iter()
+            .map(|f| f.name.clone())
+            .collect()
+    });
+
+    for column_name in column_names.iter() {
+        if is_metadata_column_name(column_name) {
+            field_ids.push(get_metadata_field_id(column_name)?);
+            continue;
+        }
+
+        let field_id = schema.field_id_by_name(column_name).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Column {column_name} not found in table. Schema: {schema}"),
+            )
+        })?;
+
+        schema
+            .as_struct()
+            .field_by_id(field_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!(
+                        "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
+                    ),
+                )
+            })?;
+
+        field_ids.push(field_id);
+    }
+
+    let snapshot_bound_predicate = if let Some(ref predicates) = config.filter {
+        Some(predicates.bind(schema.clone(), true)?)
+    } else {
+        None
+    };
+
+    let name_mapping = config
+        .table
+        .metadata()
+        .properties()
+        .get(DEFAULT_SCHEMA_NAME_MAPPING)
+        .map(|raw| {
+            serde_json::from_str::<NameMapping>(raw).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Failed to parse table property {DEFAULT_SCHEMA_NAME_MAPPING} as a NameMapping"
+                    ),
+                )
+                .with_source(e)
+            })
+        })
+        .transpose()?
+        .map(Arc::new);
+
+    let plan_context = PlanContext {
+        snapshot,
+        table_metadata: config.table.metadata_ref(),
+        snapshot_schema: schema,
+        case_sensitive: config.case_sensitive,
+        predicate: config.filter.map(Arc::new),
+        snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
+        object_cache: config.table.object_cache(),
+        field_ids: Arc::new(field_ids),
+        name_mapping,
+        partition_filter_cache: Arc::new(PartitionFilterCache::new()),
+        manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
+        expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
+        manifest_file_filter,
+        manifest_entry_filter,
+    };
+
+    Ok(TableScan {
+        batch_size: config.batch_size,
+        column_names: config.column_names,
+        file_io: config.table.file_io().clone(),
+        plan_context: Some(plan_context),
+        concurrency_limit_data_files: config.concurrency_limit_data_files,
+        concurrency_limit_manifest_entries: config.concurrency_limit_manifest_entries,
+        concurrency_limit_manifest_files: config.concurrency_limit_manifest_files,
+        row_group_filtering_enabled: config.row_group_filtering_enabled,
+        row_selection_enabled: config.row_selection_enabled,
+        runtime: config.table.runtime().clone(),
+    })
+}
 
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
@@ -200,7 +348,7 @@ impl<'a> TableScanBuilder<'a> {
                 })?
                 .clone(),
             None => {
-                let Some(current_snapshot_id) = self.table.metadata().current_snapshot() else {
+                let Some(current_snapshot) = self.table.metadata().current_snapshot() else {
                     return Ok(TableScan {
                         batch_size: self.batch_size,
                         column_names: self.column_names,
@@ -214,119 +362,28 @@ impl<'a> TableScanBuilder<'a> {
                         runtime: self.table.runtime().clone(),
                     });
                 };
-                current_snapshot_id.clone()
+                current_snapshot.clone()
             }
         };
 
-        let schema = snapshot.schema(self.table.metadata())?;
-
-        // Check that all column names exist in the schema (skip reserved columns).
-        if let Some(column_names) = self.column_names.as_ref() {
-            for column_name in column_names {
-                // Skip reserved columns that don't exist in the schema
-                if is_metadata_column_name(column_name) {
-                    continue;
-                }
-                if schema.field_by_name(column_name).is_none() {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Column {column_name} not found in table. Schema: {schema}"),
-                    ));
-                }
-            }
-        }
-
-        let mut field_ids = vec![];
-        let column_names = self.column_names.clone().unwrap_or_else(|| {
-            schema
-                .as_struct()
-                .fields()
-                .iter()
-                .map(|f| f.name.clone())
-                .collect()
-        });
-
-        for column_name in column_names.iter() {
-            // Handle metadata columns (like "_file")
-            if is_metadata_column_name(column_name) {
-                field_ids.push(get_metadata_field_id(column_name)?);
-                continue;
-            }
-
-            let field_id = schema.field_id_by_name(column_name).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Column {column_name} not found in table. Schema: {schema}"),
-                )
-            })?;
-
-            schema
-                .as_struct()
-                .field_by_id(field_id)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::FeatureUnsupported,
-                        format!(
-                        "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
-                    ),
-                )
-            })?;
-
-            field_ids.push(field_id);
-        }
-
-        let snapshot_bound_predicate = if let Some(ref predicates) = self.filter {
-            Some(predicates.bind(schema.clone(), true)?)
-        } else {
-            None
-        };
-
-        let name_mapping = self
-            .table
-            .metadata()
-            .properties()
-            .get(DEFAULT_SCHEMA_NAME_MAPPING)
-            .map(|raw| {
-                serde_json::from_str::<NameMapping>(raw).map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Failed to parse table property {DEFAULT_SCHEMA_NAME_MAPPING} as a NameMapping"
-                        ),
-                    )
-                    .with_source(e)
-                })
-            })
-            .transpose()?
-            .map(Arc::new);
-
-        let plan_context = PlanContext {
+        build_table_scan(
+            ScanConfig {
+                table: self.table,
+                column_names: self.column_names,
+                batch_size: self.batch_size,
+                case_sensitive: self.case_sensitive,
+                filter: self.filter,
+                concurrency_limit_data_files: self.concurrency_limit_data_files,
+                concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
+                concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
+                row_group_filtering_enabled: self.row_group_filtering_enabled,
+                row_selection_enabled: self.row_selection_enabled,
+                schema_override: None,
+            },
             snapshot,
-            table_metadata: self.table.metadata_ref(),
-            snapshot_schema: schema,
-            case_sensitive: self.case_sensitive,
-            predicate: self.filter.map(Arc::new),
-            snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
-            object_cache: self.table.object_cache(),
-            field_ids: Arc::new(field_ids),
-            name_mapping,
-            partition_filter_cache: Arc::new(PartitionFilterCache::new()),
-            manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
-            expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
-        };
-
-        Ok(TableScan {
-            batch_size: self.batch_size,
-            column_names: self.column_names,
-            file_io: self.table.file_io().clone(),
-            plan_context: Some(plan_context),
-            concurrency_limit_data_files: self.concurrency_limit_data_files,
-            concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
-            concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
-            row_group_filtering_enabled: self.row_group_filtering_enabled,
-            row_selection_enabled: self.row_selection_enabled,
-            runtime: self.table.runtime().clone(),
-        })
+            None,
+            None,
+        )
     }
 }
 
@@ -646,8 +703,9 @@ pub mod tests {
     use crate::scan::FileScanTask;
     use crate::spec::{
         DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, DataFileBuilder, DataFileFormat, Datum,
-        Literal, ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder,
-        NestedField, PartitionSpec, PrimitiveType, Schema, Struct, StructType, TableMetadata, Type,
+        Literal, ManifestEntry, ManifestFile, ManifestListWriter, ManifestStatus,
+        ManifestWriterBuilder, NestedField, PartitionSpec, PrimitiveType, Schema, Struct,
+        StructType, TableMetadata, Type,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
@@ -742,22 +800,72 @@ pub mod tests {
         }
 
         /// Creates a fixture with 5 snapshots chained as:
-        ///   S1 (root) -> S2 -> S3 -> S4 -> S5 (current)
-        /// Useful for testing snapshot history traversal.
+        ///   S1 (append) -> S2 (append) -> S3 (append) -> S4 (overwrite) -> S5 (append, current)
+        /// Useful for testing snapshot history traversal and incremental scans
+        /// with non-append operations in the chain.
         pub fn new_with_deep_history() -> Self {
+            Self::new_from_deep_history_metadata("example_table_metadata_v2_deep_history.json")
+        }
+
+        /// Like [`Self::new_with_deep_history`] but every snapshot references
+        /// the older single-column schema (`schema-id` 0) while the table's
+        /// `current-schema-id` stays at the three-column schema (`schema-id`
+        /// 1). This models a table whose schema evolved *after* the snapshots
+        /// in an incremental range were written, so we can assert that an
+        /// incremental scan projects onto the current schema.
+        pub fn new_with_deep_history_stale_schema() -> Self {
+            let fixture = Self::new_from_deep_history_metadata(
+                "example_table_metadata_v2_deep_history_stale_schema.json",
+            );
+
+            // Sanity check: current schema (3 cols) differs from the schema the
+            // snapshots reference (1 col), otherwise the test would be vacuous.
+            assert_eq!(fixture.table.metadata().current_schema_id(), 1);
+            fixture
+        }
+
+        /// Like [`Self::new_with_deep_history`] but the S4 snapshot is a
+        /// `replace` (the operation a compaction / `rewrite_data_files`
+        /// commits) rather than an `overwrite`. Used to prove that an
+        /// incremental append scan skips compaction output and never
+        /// double-counts the appended rows against their rewritten copies.
+        pub fn new_with_deep_history_compaction() -> Self {
+            Self::new_from_deep_history_metadata(
+                "example_table_metadata_v2_deep_history_compaction.json",
+            )
+        }
+
+        /// Builds a deep-history fixture from the named templated metadata file
+        /// in `testdata`. The five snapshot manifest-list paths are rendered to
+        /// point at this fixture's temp directory.
+        fn new_from_deep_history_metadata(metadata_file: &str) -> Self {
             let tmp_dir = TempDir::new().unwrap();
             let table_location = tmp_dir.path().join("table1");
             let table_metadata1_location = table_location.join("metadata/v1.json");
 
+            let manifest_list_s1 = table_location.join("metadata/snap-3051729675574597004.avro");
+            let manifest_list_s2 = table_location.join("metadata/snap-3055729675574597004.avro");
+            let manifest_list_s3 = table_location.join("metadata/snap-3056729675574597004.avro");
+            let manifest_list_s4 = table_location.join("metadata/snap-3057729675574597004.avro");
+            let manifest_list_s5 = table_location.join("metadata/snap-3059729675574597004.avro");
+
             let file_io = FileIO::new_with_fs();
 
             let table_metadata = {
-                let json_str = fs::read_to_string(format!(
-                    "{}/testdata/example_table_metadata_v2_deep_history.json",
+                let template_json_str = fs::read_to_string(format!(
+                    "{}/testdata/{metadata_file}",
                     env!("CARGO_MANIFEST_DIR")
                 ))
                 .unwrap();
-                serde_json::from_str::<TableMetadata>(&json_str).unwrap()
+                let metadata_json = render_template(&template_json_str, context! {
+                    table_location => &table_location,
+                    manifest_list_s1_location => &manifest_list_s1,
+                    manifest_list_s2_location => &manifest_list_s2,
+                    manifest_list_s3_location => &manifest_list_s3,
+                    manifest_list_s4_location => &manifest_list_s4,
+                    manifest_list_s5_location => &manifest_list_s5,
+                });
+                serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
             };
 
             let table = Table::builder()
@@ -969,6 +1077,151 @@ pub mod tests {
                 .add_manifests(vec![data_file_manifest].into_iter())
                 .unwrap();
             manifest_list_write.close().await.unwrap();
+        }
+
+        /// Sets up manifest files for the deep history fixture.
+        ///
+        /// Creates one data file per snapshot (s1.parquet through s5.parquet),
+        /// each with a manifest and manifest list. Manifest lists are cumulative
+        /// (each snapshot's list includes all prior manifests), matching real
+        /// Iceberg behavior. The incremental scan should skip s4.parquet
+        /// (added in the overwrite snapshot S4).
+        pub async fn setup_manifest_files_deep_history(&mut self) {
+            let parquet_file_size = self.write_parquet_data_files_deep_history();
+            let partition_spec = self.table.metadata().default_partition_spec();
+
+            // Snapshot chain: S1 -> S2 -> S3 -> S4 (overwrite) -> S5
+            let snapshot_ids: Vec<i64> = vec![
+                3051729675574597004,
+                3055729675574597004,
+                3056729675574597004,
+                3057729675574597004,
+                3059729675574597004,
+            ];
+
+            // Accumulate manifests across snapshots (each manifest list is cumulative)
+            let mut all_manifests: Vec<ManifestFile> = Vec::new();
+
+            for (i, &snap_id) in snapshot_ids.iter().enumerate() {
+                let snapshot = self
+                    .table
+                    .metadata()
+                    .snapshot_by_id(snap_id)
+                    .unwrap()
+                    .clone();
+                let schema = snapshot.schema(self.table.metadata()).unwrap();
+
+                let file_name = format!("s{}.parquet", i + 1);
+                let partition_value = (i + 1) as i64 * 100;
+
+                let mut writer = ManifestWriterBuilder::new(
+                    self.next_manifest_file(),
+                    Some(snap_id),
+                    schema,
+                    partition_spec.as_ref().clone(),
+                )
+                .build_v2_data();
+
+                writer
+                    .add_entry(
+                        ManifestEntry::builder()
+                            .status(ManifestStatus::Added)
+                            .data_file(
+                                DataFileBuilder::default()
+                                    .partition_spec_id(0)
+                                    .content(DataContentType::Data)
+                                    .file_path(format!("{}/{}", &self.table_location, file_name))
+                                    .file_format(DataFileFormat::Parquet)
+                                    .file_size_in_bytes(parquet_file_size)
+                                    .record_count(1)
+                                    .partition(Struct::from_iter([Some(Literal::long(
+                                        partition_value,
+                                    ))]))
+                                    .key_metadata(None)
+                                    .build()
+                                    .unwrap(),
+                            )
+                            .build(),
+                    )
+                    .unwrap();
+
+                let mut data_file_manifest = writer.write_manifest_file().await.unwrap();
+                // Assign sequence numbers so the manifest can be included in
+                // later snapshots' cumulative manifest lists without triggering
+                // the "unassigned sequence number" validation.
+                data_file_manifest.sequence_number = snapshot.sequence_number();
+                data_file_manifest.min_sequence_number = snapshot.sequence_number();
+                all_manifests.push(data_file_manifest);
+
+                // Write cumulative manifest list for this snapshot
+                let manifest_list_writer = self
+                    .table
+                    .file_io()
+                    .new_output(snapshot.manifest_list())
+                    .unwrap()
+                    .writer()
+                    .await
+                    .unwrap();
+                let mut manifest_list_write = ManifestListWriter::v2(
+                    manifest_list_writer,
+                    snap_id,
+                    snapshot.parent_snapshot_id(),
+                    snapshot.sequence_number(),
+                );
+                manifest_list_write
+                    .add_manifests(all_manifests.clone().into_iter())
+                    .unwrap();
+                manifest_list_write.close().await.unwrap();
+            }
+        }
+
+        /// Writes parquet data files for the deep history fixture (3-column schema: x, y, z).
+        fn write_parquet_data_files_deep_history(&self) -> u64 {
+            fs::create_dir_all(&self.table_location).unwrap();
+
+            let schema = {
+                let fields = vec![
+                    arrow_schema::Field::new("x", arrow_schema::DataType::Int64, false)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "1".to_string(),
+                        )])),
+                    arrow_schema::Field::new("y", arrow_schema::DataType::Int64, false)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "2".to_string(),
+                        )])),
+                    arrow_schema::Field::new("z", arrow_schema::DataType::Int64, false)
+                        .with_metadata(HashMap::from([(
+                            PARQUET_FIELD_ID_META_KEY.to_string(),
+                            "3".to_string(),
+                        )])),
+                ];
+                Arc::new(arrow_schema::Schema::new(fields))
+            };
+
+            let col1 = Arc::new(Int64Array::from_iter_values(vec![1; 10])) as ArrayRef;
+            let col2 = Arc::new(Int64Array::from_iter_values(vec![2; 10])) as ArrayRef;
+            let col3 = Arc::new(Int64Array::from_iter_values(vec![3; 10])) as ArrayRef;
+
+            let batch = RecordBatch::try_new(schema.clone(), vec![col1, col2, col3]).unwrap();
+
+            let props = WriterProperties::builder()
+                .set_compression(Compression::SNAPPY)
+                .build();
+
+            for i in 1..=5 {
+                let file =
+                    File::create(format!("{}/s{}.parquet", &self.table_location, i)).unwrap();
+                let mut writer =
+                    ArrowWriter::try_new(file, batch.schema(), Some(props.clone())).unwrap();
+                writer.write(&batch).expect("Writing batch");
+                writer.close().unwrap();
+            }
+
+            fs::metadata(format!("{}/s1.parquet", &self.table_location))
+                .unwrap()
+                .len()
         }
 
         pub async fn setup_manifest_files_with_partition_evolution(&mut self) {

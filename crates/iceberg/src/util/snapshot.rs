@@ -52,7 +52,9 @@ pub fn ancestors_of(
 /// Note: if `oldest_snapshot_id` is `Some(id)` but `id` is not actually an
 /// ancestor of `latest_snapshot_id`, the walk is never stopped and this yields
 /// *all* ancestors of `latest_snapshot_id` down to the root. Callers that treat
-/// `oldest_snapshot_id` as a lower bound must validate the lineage themselves.
+/// `oldest_snapshot_id` as a lower bound must validate the lineage themselves
+/// (e.g. `AppendSnapshotSet::build` checks that the walk actually connects to
+/// `from_snapshot_id`).
 pub fn ancestors_between(
     table_metadata: &TableMetadataRef,
     latest_snapshot_id: i64,
