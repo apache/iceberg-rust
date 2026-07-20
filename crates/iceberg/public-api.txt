@@ -1547,6 +1547,8 @@ impl core::default::Default for iceberg::spec::Operation
 pub fn iceberg::spec::Operation::default() -> iceberg::spec::Operation
 impl core::fmt::Debug for iceberg::spec::Operation
 pub fn iceberg::spec::Operation::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for iceberg::spec::Operation
+pub fn iceberg::spec::Operation::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
 impl core::marker::StructuralPartialEq for iceberg::spec::Operation
 impl serde_core::ser::Serialize for iceberg::spec::Operation
 pub fn iceberg::spec::Operation::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
