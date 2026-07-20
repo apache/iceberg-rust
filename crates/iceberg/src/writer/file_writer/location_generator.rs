@@ -270,10 +270,52 @@ pub(crate) mod test {
         assert_eq!(location, "/base/path/id=42/name=alice/data-00000.parquet");
 
         // Create a table metadata for DefaultLocationGenerator
-        let table_metadata = TableMetadata {
+        let table_metadata = table_metadata_with("s3://data.db/table", HashMap::new());
+
+        // Test with DefaultLocationGenerator
+        let default_location_gen = DefaultLocationGenerator::new(&table_metadata).unwrap();
+        let location = default_location_gen.generate_location(Some(&partition_key), file_name);
+        assert_eq!(
+            location,
+            "s3://data.db/table/data/id=42/name=alice/data-00000.parquet"
+        );
+    }
+
+    #[test]
+    fn test_location_generate_with_special_characters_partitionq() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "data#1", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .add_partition_field("data#1", "data#1", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+        let partition_data = Struct::from_iter([Some(Literal::string("val#1"))]);
+        let partition_key = PartitionKey::new(partition_spec, schema, partition_data);
+
+        let table_metadata = table_metadata_with("s3://data.db/table", HashMap::new());
+        let location_gen = DefaultLocationGenerator::new(&table_metadata).unwrap();
+        let location = location_gen.generate_location(Some(&partition_key), "test.parquet");
+
+        assert_eq!(
+            location,
+            "s3://data.db/table/data/data%231=val%231/test.parquet"
+        );
+    }
+
+    /// Build a minimal `TableMetadata` for location generator tests.
+    fn table_metadata_with(location: &str, properties: HashMap<String, String>) -> TableMetadata {
+        TableMetadata {
             format_version: FormatVersion::V2,
             table_uuid: Uuid::parse_str("fb072c92-a02b-11e9-ae9c-1bb7bc9eca94").unwrap(),
-            location: "s3://data.db/table".to_string(),
+            location: location.to_string(),
             last_updated_ms: 1515100955770,
             last_column_id: 2,
             schemas: HashMap::new(),
@@ -287,7 +329,7 @@ pub(crate) mod test {
             snapshots: HashMap::default(),
             current_snapshot_id: None,
             last_sequence_number: 1,
-            properties: HashMap::new(),
+            properties,
             snapshot_log: Vec::new(),
             metadata_log: vec![],
             refs: HashMap::new(),
@@ -295,14 +337,6 @@ pub(crate) mod test {
             partition_statistics: HashMap::new(),
             encryption_keys: HashMap::new(),
             next_row_id: 0,
-        };
-
-        // Test with DefaultLocationGenerator
-        let default_location_gen = DefaultLocationGenerator::new(&table_metadata).unwrap();
-        let location = default_location_gen.generate_location(Some(&partition_key), file_name);
-        assert_eq!(
-            location,
-            "s3://data.db/table/data/id=42/name=alice/data-00000.parquet"
-        );
+        }
     }
 }

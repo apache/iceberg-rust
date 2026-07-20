@@ -168,10 +168,14 @@ impl PartitionSpec {
                 let value = data[i].as_ref();
                 format!(
                     "{}={}",
-                    field.name,
-                    field
-                        .transform
-                        .to_human_string(&field_types[i].field_type, value)
+                    urlencoding::encode(field.name.as_str()).into_owned(),
+                    urlencoding::encode(
+                        field
+                            .transform
+                            .to_human_string(&field_types[i].field_type, value)
+                            .as_str()
+                    )
+                    .into_owned()
                 )
             })
             .join("/")
@@ -1748,6 +1752,40 @@ mod tests {
         assert_eq!(
             spec.partition_to_path(&data, schema.into()),
             "id=42/name=alice/ts_hour=1000/empty_void=null"
+        );
+    }
+
+    #[test]
+    fn test_partition_with_special_characters_to_path() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "€", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "timestamp", Type::Primitive(PrimitiveType::Timestamp))
+                    .into(),
+                NestedField::required(3, "∑", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let spec = PartitionSpec::builder(schema.clone())
+            .add_partition_field("€", "€", Transform::Identity)
+            .unwrap()
+            .add_partition_field("timestamp", "ts_hour", Transform::Hour)
+            .unwrap()
+            .add_partition_field("∑", "∑", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let data = Struct::from_iter([
+            Some(Literal::string("alice@&^")),
+            Some(Literal::int(1000)),
+            Some(Literal::string("empty^^")),
+        ]);
+
+        assert_eq!(
+            spec.partition_to_path(&data, schema.into()),
+            "%E2%82%AC=alice%40%26%5E/ts_hour=1000/%E2%88%91=empty%5E%5E"
         );
     }
 }
