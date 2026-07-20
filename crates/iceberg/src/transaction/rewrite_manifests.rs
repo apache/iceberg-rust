@@ -322,7 +322,6 @@ fn new_manifest_writer(
     let builder = ManifestWriterBuilder::new(
         output,
         Some(snapshot_id),
-        None,
         metadata.current_schema().clone(),
         metadata.default_partition_spec().as_ref().clone(),
     );
