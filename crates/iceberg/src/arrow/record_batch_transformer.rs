@@ -431,18 +431,20 @@ impl RecordBatchTransformer {
         }
     }
 
-    /// Compares the source and target schemas
-    /// Determines if they have changed in any meaningful way:
-    ///  * If they have different numbers of fields, then we need to modify
-    ///    the incoming RecordBatch schema AND columns
-    ///  * If they have the same number of fields, but some of them differ in
-    ///    either data type or nullability, then we need to modify the
-    ///    incoming RecordBatch schema AND columns
-    ///  * If the schemas differ only in the column names, then we need
-    ///    to modify the RecordBatch schema BUT we can keep the
-    ///    original column data unmodified
-    ///  * If the schemas are identical (or differ only in inconsequential
-    ///    ways) then we can pass through the original RecordBatch unmodified
+    /// Compares the source and target schemas to decide how much work the
+    /// transform must do. The checks are applied in this order:
+    ///  1. If the schemas have different numbers of fields, they are
+    ///     `Different`: we must rebuild both the schema AND the columns.
+    ///  2. If every field matches positionally in name, data type, and
+    ///     nullability, they are `Equivalent`: the original RecordBatch can be
+    ///     passed through unmodified.
+    ///  3. If they contain the same set of fields but in a different order
+    ///     (detected via set-equality, since field names are unique), they are
+    ///     `Different`: the columns must be rebuilt in the target order.
+    ///  4. Otherwise, the fields align positionally: if any differs in data
+    ///     type or nullability the schemas are `Different` (rebuild schema AND
+    ///     columns); if they differ only in names, it is `NameChangesOnly` and
+    ///     we can relabel the schema BUT keep the original column data.
     fn compare_schemas(
         source_schema: &ArrowSchemaRef,
         target_schema: &ArrowSchemaRef,
@@ -1854,5 +1856,79 @@ mod test {
 
         assert_eq!(pos_col.len(), 3);
         assert_eq!(pos_col.values(), &[0, 1, 2]);
+    }
+
+    /// field 1 and RESERVED_FIELD_ID_POS are of identical type
+    /// swapping their projection order should not lead to [`SchemaComparison::NameChangesOnly`]
+    #[test]
+    fn reorder_pos_column_with_columns_of_identical_type() {
+        use crate::metadata_columns::RESERVED_FIELD_ID_POS;
+
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "id_long", Type::Primitive(PrimitiveType::Long))
+                        .into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let parquet_schema = Arc::new(ArrowSchema::new(vec![
+            simple_field("id_long", DataType::Int64, false, "1"),
+            simple_field("name", DataType::Utf8, true, "2"),
+            simple_field(
+                "_pos",
+                DataType::Int64,
+                false,
+                &RESERVED_FIELD_ID_POS.to_string(),
+            ),
+        ]));
+
+        let projected_field_ids = [RESERVED_FIELD_ID_POS, 2, 1];
+
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
+                .with_virtual_field(RESERVED_FIELD_ID_POS)
+                .build();
+
+        let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
+            Arc::new(Int64Array::from(vec![100, 200, 300])),
+            Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            Arc::new(Int64Array::from(vec![0, 1, 2])),
+        ])
+        .unwrap();
+
+        let result = transformer.process_record_batch(parquet_batch).unwrap();
+
+        assert_eq!(result.num_columns(), 3);
+        assert_eq!(result.num_rows(), 3);
+
+        let pos_col = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(pos_col.values(), &[0, 1, 2]);
+
+        let name_col = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(name_col.value(0), "a");
+        assert_eq!(name_col.value(1), "b");
+        assert_eq!(name_col.value(2), "c");
+
+        let id_col = result
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+
+        assert_eq!(id_col.len(), 3);
+        assert_eq!(id_col.values(), &[100, 200, 300]);
     }
 }
