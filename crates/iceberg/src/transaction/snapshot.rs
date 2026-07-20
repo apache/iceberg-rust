@@ -21,6 +21,7 @@ use std::ops::RangeFrom;
 
 use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
+use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -68,6 +69,20 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
     /// which is stored in the snapshot metadata for tracking and auditing purposes.
     fn operation(&self) -> Operation;
 
+    /// Write-time conflict validation against the refreshed base.
+    ///
+    /// This is a required method: every operation states its validation policy
+    /// explicitly. Append (`FastAppendOperation`) implements it as a no-op (append
+    /// removes nothing, so it has no conflicts to detect); delete-class operations
+    /// implement it by composing the stateless `validation::*` helpers. Called by
+    /// `MergingSnapshotProducer::commit` on every commit attempt against the
+    /// freshly refreshed base, and is never cached.
+    fn validate(
+        &self,
+        base: &Table,
+        parent_snapshot_id: Option<i64>,
+    ) -> impl Future<Output = Result<()>> + Send;
+
     /// Returns manifest entries that should be marked as deleted in the new snapshot.
     #[allow(unused)]
     fn delete_entries(
@@ -85,7 +100,7 @@ pub(crate) trait SnapshotProduceOperation: Send + Sync {
     /// - **Delete operations**: May exclude manifests for partitions being deleted
     fn existing_manifest(
         &self,
-        snapshot_produce: &SnapshotProducer<'_>,
+        snapshot_produce: &mut SnapshotProducer<'_>,
     ) -> impl Future<Output = Result<Vec<ManifestFile>>> + Send;
 }
 
@@ -109,32 +124,45 @@ pub(crate) trait ManifestProcess: Send + Sync {
     ) -> Vec<ManifestFile>;
 }
 
+#[derive(TypedBuilder)]
 pub(crate) struct SnapshotProducer<'a> {
     pub(crate) table: &'a Table,
-    snapshot_id: i64,
+    /// The snapshot id for the new snapshot.
+    ///
+    /// `None` (the default) auto-generates a unique id via
+    /// [`SnapshotProducer::generate_unique_snapshot_id`] at use/commit time,
+    /// exactly as the old `new()` behavior. `Some(id)` pins the caller-provided
+    /// id (used by `MergingSnapshotProducer` to keep a stable id across retries).
+    #[builder(default)]
+    snapshot_id: Option<i64>,
     commit_uuid: Uuid,
+    #[builder(default)]
     snapshot_properties: HashMap<String, String>,
+    #[builder(default)]
     added_data_files: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
+    #[builder(default = 0..)]
     manifest_counter: RangeFrom<u64>,
 }
 
 impl<'a> SnapshotProducer<'a> {
-    pub(crate) fn new(
-        table: &'a Table,
-        commit_uuid: Uuid,
-        snapshot_properties: HashMap<String, String>,
-        added_data_files: Vec<DataFile>,
-    ) -> Self {
-        Self {
-            table,
-            snapshot_id: Self::generate_unique_snapshot_id(table),
-            commit_uuid,
-            snapshot_properties,
-            added_data_files,
-            manifest_counter: (0..),
+    /// Resolve the (optional) snapshot id into a concrete id.
+    ///
+    /// If the id was pinned by the caller (`Some(id)`), it is returned as-is.
+    /// Otherwise a unique id is generated via
+    /// [`Self::generate_unique_snapshot_id`] and cached on the producer so that
+    /// every subsequent read (manifest writer, manifest-list path, snapshot
+    /// build) observes the same id. This preserves the old `new()` behavior of
+    /// generating an id up front while allowing the id to be injected.
+    fn resolve_snapshot_id(&mut self) -> i64 {
+        if let Some(snapshot_id) = self.snapshot_id {
+            snapshot_id
+        } else {
+            let snapshot_id = Self::generate_unique_snapshot_id(self.table);
+            self.snapshot_id = Some(snapshot_id);
+            snapshot_id
         }
     }
 
@@ -217,7 +245,7 @@ impl<'a> SnapshotProducer<'a> {
         Ok(())
     }
 
-    fn generate_unique_snapshot_id(table: &Table) -> i64 {
+    pub(crate) fn generate_unique_snapshot_id(table: &Table) -> i64 {
         let generate_random_id = || -> i64 {
             let (lhs, rhs) = Uuid::new_v4().as_u64_pair();
             let snapshot_id = (lhs ^ rhs) as i64;
@@ -239,7 +267,11 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_id
     }
 
-    fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
+    pub(crate) fn new_manifest_writer(
+        &mut self,
+        content: ManifestContentType,
+    ) -> Result<ManifestWriter> {
+        let snapshot_id = self.resolve_snapshot_id();
         let new_manifest_path = format!(
             "{}/{}/{}-m{}.{}",
             self.table.metadata().location(),
@@ -251,7 +283,7 @@ impl<'a> SnapshotProducer<'a> {
         let output_file = self.table.file_io().new_output(new_manifest_path)?;
         let builder = ManifestWriterBuilder::new(
             output_file,
-            Some(self.snapshot_id),
+            Some(snapshot_id),
             self.table.metadata().current_schema().clone(),
             self.table
                 .metadata()
@@ -313,7 +345,7 @@ impl<'a> SnapshotProducer<'a> {
             ));
         }
 
-        let snapshot_id = self.snapshot_id;
+        let snapshot_id = self.resolve_snapshot_id();
         let format_version = self.table.metadata().format_version();
         let manifest_entries = added_data_files.into_iter().map(|data_file| {
             let builder = ManifestEntry::builder()
@@ -422,12 +454,12 @@ impl<'a> SnapshotProducer<'a> {
         )
     }
 
-    fn generate_manifest_list_file_path(&self, attempt: i64) -> String {
+    fn generate_manifest_list_file_path(&self, snapshot_id: i64, attempt: i64) -> String {
         format!(
             "{}/{}/snap-{}-{}-{}.{}",
             self.table.metadata().location(),
             META_ROOT_PATH,
-            self.snapshot_id,
+            snapshot_id,
             attempt,
             self.commit_uuid,
             DataFileFormat::Avro
@@ -440,7 +472,11 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_produce_operation: OP,
         process: MP,
     ) -> Result<ActionCommit> {
-        let manifest_list_path = self.generate_manifest_list_file_path(0);
+        // Resolve the snapshot id once up front (generating a unique one if it
+        // was not pinned by the caller) so every downstream read observes the
+        // same id.
+        let snapshot_id = self.resolve_snapshot_id();
+        let manifest_list_path = self.generate_manifest_list_file_path(snapshot_id, 0);
         let next_seq_num = self.table.metadata().next_sequence_number();
         let first_row_id = self.table.metadata().next_row_id();
         let writer = self
@@ -452,18 +488,18 @@ impl<'a> SnapshotProducer<'a> {
         let mut manifest_list_writer = match self.table.metadata().format_version() {
             FormatVersion::V1 => ManifestListWriter::v1(
                 writer,
-                self.snapshot_id,
+                snapshot_id,
                 self.table.metadata().current_snapshot_id(),
             ),
             FormatVersion::V2 => ManifestListWriter::v2(
                 writer,
-                self.snapshot_id,
+                snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
             ),
             FormatVersion::V3 => ManifestListWriter::v3(
                 writer,
-                self.snapshot_id,
+                snapshot_id,
                 self.table.metadata().current_snapshot_id(),
                 next_seq_num,
                 Some(first_row_id),
@@ -488,7 +524,7 @@ impl<'a> SnapshotProducer<'a> {
         let commit_ts = chrono::Utc::now().timestamp_millis();
         let new_snapshot = Snapshot::builder()
             .with_manifest_list(manifest_list_path)
-            .with_snapshot_id(self.snapshot_id)
+            .with_snapshot_id(snapshot_id)
             .with_parent_snapshot_id(self.table.metadata().current_snapshot_id())
             .with_sequence_number(next_seq_num)
             .with_summary(summary)
@@ -511,7 +547,7 @@ impl<'a> SnapshotProducer<'a> {
             TableUpdate::SetSnapshotRef {
                 ref_name: MAIN_BRANCH.to_string(),
                 reference: SnapshotReference::new(
-                    self.snapshot_id,
+                    snapshot_id,
                     SnapshotRetention::branch(None, None, None),
                 ),
             },

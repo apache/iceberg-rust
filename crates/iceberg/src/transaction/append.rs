@@ -76,12 +76,12 @@ impl FastAppendAction {
 #[async_trait]
 impl TransactionAction for FastAppendAction {
     async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
-        let snapshot_producer = SnapshotProducer::new(
-            table,
-            self.commit_uuid.unwrap_or_else(Uuid::now_v7),
-            self.snapshot_properties.clone(),
-            self.added_data_files.clone(),
-        );
+        let snapshot_producer = SnapshotProducer::builder()
+            .table(table)
+            .commit_uuid(self.commit_uuid.unwrap_or_else(Uuid::now_v7))
+            .snapshot_properties(self.snapshot_properties.clone())
+            .added_data_files(self.added_data_files.clone())
+            .build();
 
         // validate added files
         snapshot_producer.validate_added_data_files()?;
@@ -104,6 +104,12 @@ impl SnapshotProduceOperation for FastAppendOperation {
         Operation::Append
     }
 
+    /// Append removes nothing, so there is no write-time conflict to detect: this is
+    /// an explicit no-op.
+    async fn validate(&self, _base: &Table, _parent_snapshot_id: Option<i64>) -> Result<()> {
+        Ok(())
+    }
+
     async fn delete_entries(
         &self,
         _snapshot_produce: &SnapshotProducer<'_>,
@@ -113,7 +119,7 @@ impl SnapshotProduceOperation for FastAppendOperation {
 
     async fn existing_manifest(
         &self,
-        snapshot_produce: &SnapshotProducer<'_>,
+        snapshot_produce: &mut SnapshotProducer<'_>,
     ) -> Result<Vec<ManifestFile>> {
         let Some(snapshot) = snapshot_produce.table.metadata().current_snapshot() else {
             return Ok(vec![]);
