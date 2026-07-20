@@ -362,7 +362,7 @@ mod tests {
             .build()?
             .metadata;
         let metadata_location =
-            MetadataLocation::new_with_metadata(location.clone(), &metadata).to_string();
+            MetadataLocation::try_new_with_metadata(location.clone(), &metadata)?.to_string();
 
         let result = convert_to_hive_table(
             db_name.clone(),

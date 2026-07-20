@@ -615,7 +615,8 @@ impl Catalog for GlueCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
-        let metadata_location = MetadataLocation::new_with_metadata(location.clone(), &metadata);
+        let metadata_location =
+            MetadataLocation::try_new_with_metadata(location.clone(), &metadata)?;
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 

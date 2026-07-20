@@ -403,7 +403,7 @@ impl TableCommit {
 
         let new_metadata_location = MetadataLocation::from_str(current_metadata_location)?
             .with_next_version()
-            .with_new_metadata(&new_metadata)
+            .try_with_new_metadata(&new_metadata)?
             .to_string();
 
         Ok(table
@@ -2442,12 +2442,13 @@ mod tests {
             "v2"
         );
 
-        // metadata version should be bumped
+        // metadata version should be bumped, and the metadata directory should be
+        // re-derived from the updated table location
         assert!(
             updated_table
                 .metadata_location()
                 .unwrap()
-                .starts_with("s3://bucket/test/location/metadata/00001-")
+                .starts_with("s3://bucket/test/new_location/data/metadata/00001-")
         );
 
         assert_eq!(

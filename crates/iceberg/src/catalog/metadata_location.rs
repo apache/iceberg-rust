@@ -55,19 +55,21 @@ impl MetadataLocation {
     ///
     /// The metadata directory honors the `write.metadata.path` table property when set,
     /// otherwise defaults to the `metadata` subdirectory of `table_location`.
-    pub fn new_with_metadata(table_location: impl ToString, metadata: &TableMetadata) -> Self {
+    pub fn try_new_with_metadata(
+        table_location: impl ToString,
+        metadata: &TableMetadata,
+    ) -> Result<Self> {
         let table_location = table_location.to_string();
         let location = metadata
-            .table_properties()
-            .ok()
-            .and_then(|props| props.write_metadata_path)
+            .table_properties()?
+            .write_metadata_path
             .unwrap_or_else(|| format!("{table_location}/{METADATA_FOLDER_NAME}"));
-        Self {
+        Ok(Self {
             location,
             version: 0,
             id: Uuid::new_v4(),
             compression_codec: Self::compression_from_properties(metadata.properties()),
-        }
+        })
     }
 
     /// Creates a new metadata location for an updated metadata file.
@@ -81,14 +83,15 @@ impl MetadataLocation {
         }
     }
 
-    /// Updates the metadata location with compression settings from the new metadata.
-    pub fn with_new_metadata(&self, new_metadata: &TableMetadata) -> Self {
-        Self {
-            location: self.location.clone(),
+    /// Updates the metadata location with the metadata directory
+    /// and compression settings from the new metadata.
+    pub fn try_with_new_metadata(&self, new_metadata: &TableMetadata) -> Result<Self> {
+        Ok(Self {
+            location: new_metadata.metadata_location()?,
             version: self.version,
             id: self.id,
             compression_codec: Self::compression_from_properties(new_metadata.properties()),
-        }
+        })
     }
 
     /// Returns the compression codec used for this metadata location.
@@ -165,7 +168,7 @@ mod test {
     use uuid::Uuid;
 
     use crate::compression::CompressionCodec;
-    use crate::spec::{Schema, TableMetadata, TableMetadataBuilder};
+    use crate::spec::{Schema, TableMetadata, TableMetadataBuilder, TableProperties};
     use crate::{MetadataLocation, TableCreation};
 
     fn create_test_metadata(properties: HashMap<String, String>) -> TableMetadata {
@@ -306,7 +309,7 @@ mod test {
     fn test_metadata_location_with_next_version() {
         let metadata = create_test_metadata(HashMap::new());
         let test_cases = vec![
-            MetadataLocation::new_with_metadata("/abc", &metadata),
+            MetadataLocation::try_new_with_metadata("/abc", &metadata).unwrap(),
             MetadataLocation::from_str(
                 "/abc/def/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
             )
@@ -370,7 +373,7 @@ mod test {
             "gzip".to_string(),
         );
         let metadata_gzip = create_test_metadata(props_gzip);
-        let updated_gzip = location.with_new_metadata(&metadata_gzip);
+        let updated_gzip = location.try_with_new_metadata(&metadata_gzip).unwrap();
         assert_eq!(
             updated_gzip.compression_codec,
             CompressionCodec::gzip_default()
@@ -384,7 +387,7 @@ mod test {
         // Update back to no compression
         let props_none = HashMap::new();
         let metadata_none = create_test_metadata(props_none);
-        let updated_none = updated_gzip.with_new_metadata(&metadata_none);
+        let updated_none = updated_gzip.try_with_new_metadata(&metadata_none).unwrap();
         assert_eq!(updated_none.compression_codec, CompressionCodec::None);
         assert_eq!(updated_none.version, 0);
         assert_eq!(
@@ -399,7 +402,9 @@ mod test {
             "none".to_string(),
         );
         let metadata_explicit_none = create_test_metadata(props_explicit_none);
-        let updated_explicit = updated_gzip.with_new_metadata(&metadata_explicit_none);
+        let updated_explicit = updated_gzip
+            .try_with_new_metadata(&metadata_explicit_none)
+            .unwrap();
         assert_eq!(updated_explicit.compression_codec, CompressionCodec::None);
         assert_eq!(
             updated_explicit.to_string(),
@@ -408,10 +413,43 @@ mod test {
     }
 
     #[test]
+    fn test_with_new_metadata_re_derives_location() {
+        // Start from a parsed location under some existing metadata directory
+        let location = MetadataLocation::from_str(
+            "/old/table/metadata/00003-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
+        )
+        .unwrap();
+
+        // A new metadata (no `write.metadata.path`) re-derives to `<location>/metadata`,
+        // preserving the version and id of the existing location
+        let relocated = create_test_metadata(HashMap::new());
+        let updated = location.try_with_new_metadata(&relocated).unwrap();
+        assert!(
+            updated.to_string().starts_with("/test/table/metadata/"),
+            "unexpected location: {updated}"
+        );
+        assert_eq!(updated.version, location.version);
+        assert_eq!(updated.id, location.id);
+
+        // A configured `write.metadata.path` is honored on updates too
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
+            "s3://bucket/custom-meta".to_string(),
+        )]);
+        let with_meta_path = create_test_metadata(props);
+        let updated = location.try_with_new_metadata(&with_meta_path).unwrap();
+        assert!(
+            updated.to_string().starts_with("s3://bucket/custom-meta/"),
+            "unexpected location: {updated}"
+        );
+    }
+
+    #[test]
     fn test_new_with_metadata_honors_write_metadata_path() {
         // Test metadata lives under `<location>/metadata` by default
         let default_meta = create_test_metadata(HashMap::new());
-        let default_loc = MetadataLocation::new_with_metadata("/test/table", &default_meta);
+        let default_loc =
+            MetadataLocation::try_new_with_metadata("/test/table", &default_meta).unwrap();
         assert!(
             default_loc
                 .to_string()
@@ -421,11 +459,12 @@ mod test {
 
         // Test a configured `write.metadata.path` is honored
         let props = HashMap::from([(
-            "write.metadata.path".to_string(),
+            TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
             "s3://bucket/custom-meta".to_string(),
         )]);
         let custom_meta = create_test_metadata(props);
-        let custom_loc = MetadataLocation::new_with_metadata("/test/table", &custom_meta);
+        let custom_loc =
+            MetadataLocation::try_new_with_metadata("/test/table", &custom_meta).unwrap();
         assert!(
             custom_loc
                 .to_string()

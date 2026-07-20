@@ -356,7 +356,7 @@ mod tests {
 
         let metadata = create_metadata(schema)?;
         let metadata_location =
-            MetadataLocation::new_with_metadata(location, &metadata).to_string();
+            MetadataLocation::try_new_with_metadata(location, &metadata)?.to_string();
 
         let parameters = HashMap::from([
             (ICEBERG_FIELD_ID.to_string(), "1".to_string()),

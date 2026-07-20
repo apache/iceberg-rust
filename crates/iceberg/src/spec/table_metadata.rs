@@ -3615,7 +3615,8 @@ mod tests {
         let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
 
         // Define the metadata location
-        let metadata_location = MetadataLocation::new_with_metadata(temp_path, &original_metadata);
+        let metadata_location =
+            MetadataLocation::try_new_with_metadata(temp_path, &original_metadata).unwrap();
         let metadata_location_str = metadata_location.to_string();
 
         // Write the metadata
@@ -3699,7 +3700,7 @@ mod tests {
 
         // Create MetadataLocation with compression codec from metadata
         let metadata_location =
-            MetadataLocation::new_with_metadata(temp_path, &compressed_metadata);
+            MetadataLocation::try_new_with_metadata(temp_path, &compressed_metadata).unwrap();
         let metadata_location_str = metadata_location.to_string();
 
         // Verify the location has the .gz extension
