@@ -1096,7 +1096,7 @@ pub mod tests {
         /// Writes identical Parquet data files (1.parquet, 2.parquet, 3.parquet)
         /// and returns the file size in bytes.
         fn write_parquet_data_files(&self) -> u64 {
-            std::fs::create_dir_all(&self.table_location).unwrap();
+            fs::create_dir_all(&self.table_location).unwrap();
 
             let schema = {
                 let fields = vec![
@@ -1210,7 +1210,7 @@ pub mod tests {
                 writer.close().unwrap();
             }
 
-            std::fs::metadata(format!("{}/1.parquet", &self.table_location))
+            fs::metadata(format!("{}/1.parquet", &self.table_location))
                 .unwrap()
                 .len()
         }
@@ -2516,7 +2516,7 @@ pub mod tests {
             let file_col = batch.column_by_name(RESERVED_COL_NAME_FILE).unwrap();
             let run_array = file_col
                 .as_any()
-                .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
+                .downcast_ref::<RunArray<Int32Type>>()
                 .expect("_file column should be a RunArray");
 
             let values = run_array.values();

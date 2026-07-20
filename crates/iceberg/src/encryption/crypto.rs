@@ -138,6 +138,10 @@ impl FromStr for AesKeySize {
 }
 
 /// A secure encryption key that zeroes its memory on drop.
+///
+/// The `Debug` impl is safe to expose: the inner [`SensitiveBytes`] redacts
+/// the key material, printing only its length.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SecureKey {
     key: SensitiveBytes,
     key_size: AesKeySize,

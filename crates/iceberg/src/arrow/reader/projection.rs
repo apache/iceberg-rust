@@ -1360,7 +1360,7 @@ message schema {
                     NestedField::required(
                         2,
                         "person",
-                        Type::Struct(crate::spec::StructType::new(vec![
+                        Type::Struct(StructType::new(vec![
                             NestedField::required(
                                 3,
                                 "name",
@@ -1900,7 +1900,7 @@ message schema {
                     NestedField::required(
                         1,
                         "person",
-                        Type::Struct(crate::spec::StructType::new(vec![
+                        Type::Struct(StructType::new(vec![
                             NestedField::required(
                                 5,
                                 "name",
@@ -1919,7 +1919,7 @@ message schema {
                             element_field: NestedField::required(
                                 7,
                                 "element",
-                                Type::Struct(crate::spec::StructType::new(vec![
+                                Type::Struct(StructType::new(vec![
                                     NestedField::required(
                                         8,
                                         "name",

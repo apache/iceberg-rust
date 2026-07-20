@@ -953,7 +953,7 @@ pub(super) mod _serde {
 
     impl TryFrom<TableMetadataV3> for TableMetadata {
         type Error = Error;
-        fn try_from(value: TableMetadataV3) -> Result<Self, self::Error> {
+        fn try_from(value: TableMetadataV3) -> Result<Self, Error> {
             let TableMetadataV3 {
                 format_version: _,
                 shared: value,
@@ -1071,7 +1071,7 @@ pub(super) mod _serde {
 
     impl TryFrom<TableMetadataV2> for TableMetadata {
         type Error = Error;
-        fn try_from(value: TableMetadataV2) -> Result<Self, self::Error> {
+        fn try_from(value: TableMetadataV2) -> Result<Self, Error> {
             let snapshots = value.snapshots;
             let value = value.shared;
             let current_snapshot_id = if value.current_snapshot_id == Some(EMPTY_SNAPSHOT_ID) {
@@ -3644,7 +3644,7 @@ mod tests {
         let compressed = CompressionCodec::gzip_default()
             .compress(json.into_bytes())
             .expect("failed to compress metadata");
-        std::fs::write(&metadata_location, &compressed).expect("failed to write metadata");
+        fs::write(&metadata_location, &compressed).expect("failed to write metadata");
 
         // Read the metadata back
         let file_io = FileIO::new_with_fs();
@@ -3712,7 +3712,7 @@ mod tests {
         assert!(std::path::Path::new(&metadata_location_str).exists());
 
         // Read the raw file and check it's gzip compressed
-        let raw_content = std::fs::read(&metadata_location_str).unwrap();
+        let raw_content = fs::read(&metadata_location_str).unwrap();
         assert!(raw_content.len() > 2);
         assert_eq!(raw_content[0], 0x1F); // gzip magic number
         assert_eq!(raw_content[1], 0x8B); // gzip magic number
