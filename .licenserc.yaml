@@ -37,4 +37,7 @@ header:
     - "Cargo.lock"
     - "bindings/python/uv.lock"
     - ".github/PULL_REQUEST_TEMPLATE.md"
+    # Python environment
+    - "bindings/python/.venv/"
+    - "bindings/python/.pytest_cache/"
   comment: on-failure
