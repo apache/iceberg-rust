@@ -74,10 +74,19 @@ impl MetadataLocation {
 
     /// Creates a new metadata location for an updated metadata file.
     /// Increments the version number and generates a new UUID.
+    ///
+    /// A Java HadoopCatalog `v<n>.metadata.json` name (`id == None`) has no
+    /// `<version>-<uuid>` delimiter, so iceberg-java's `parseVersion` treats it
+    /// as unparseable (`-1`) and the next file resets to version 0. We match
+    /// that when transitioning such a location to the standard format.
     pub fn with_next_version(&self) -> Self {
+        let version = match self.id {
+            Some(_) => self.version + 1,
+            None => 0,
+        };
         Self {
             table_location: self.table_location.clone(),
-            version: self.version + 1,
+            version,
             id: Some(Uuid::new_v4()),
             compression_codec: self.compression_codec,
         }
@@ -381,16 +390,18 @@ mod test {
         assert_eq!(location.version, 3);
         assert_eq!(location.id, None);
 
+        // Matching iceberg-java: a HadoopCatalog `v<n>` name is unparseable in the
+        // `<version>-<uuid>` scheme, so the next metadata file resets to version 0.
         let next = location.with_next_version();
-        assert_eq!(next.version, 4);
+        assert_eq!(next.version, 0);
         assert!(next.id.is_some());
 
         let next_str = next.to_string();
-        assert!(next_str.starts_with("/warehouse/db/t/metadata/00004-"));
+        assert!(next_str.starts_with("/warehouse/db/t/metadata/00000-"));
         assert!(next_str.ends_with(".metadata.json"));
         // Round-trip the new location
         let reparsed = MetadataLocation::from_str(&next_str).unwrap();
-        assert_eq!(reparsed.version, 4);
+        assert_eq!(reparsed.version, 0);
         assert!(reparsed.id.is_some());
     }
 
