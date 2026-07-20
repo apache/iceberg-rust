@@ -19,6 +19,7 @@
 
 pub mod memory;
 mod metadata_location;
+mod session;
 pub(crate) mod utils;
 
 use std::collections::HashMap;
@@ -36,6 +37,7 @@ pub use metadata_location::*;
 #[cfg(test)]
 use mockall::automock;
 use serde_derive::{Deserialize, Serialize};
+pub use session::*;
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
