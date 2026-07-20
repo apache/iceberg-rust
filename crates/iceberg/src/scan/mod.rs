@@ -1531,7 +1531,7 @@ pub mod tests {
         /// id `1`) and `y` (field id `2`) both run 1000..1300, so row position `p`
         /// carries `x = y = 1000 + p`. Returns `(path, file_size_in_bytes)`.
         fn write_multi_row_group_data_file(&self) -> (String, u64) {
-            std::fs::create_dir_all(&self.table_location).unwrap();
+            fs::create_dir_all(&self.table_location).unwrap();
 
             let arrow_schema = Arc::new(arrow_schema::Schema::new(vec![
                 arrow_schema::Field::new("x", arrow_schema::DataType::Int64, false).with_metadata(
