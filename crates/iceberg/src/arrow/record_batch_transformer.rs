@@ -1488,8 +1488,7 @@ mod test {
     ///
     /// A historical spec may use `identity(col)` where `col` was later dropped from the
     /// schema. `constants_map()` must skip that field instead of failing, so the file can
-    /// still be read (the dropped column is not projected). Guards against a future refactor
-    /// that threads the spec through `with_partition` silently reintroducing the panic.
+    /// still be read (the dropped column is not projected).
     #[test]
     fn dropped_identity_partition_source_column_is_skipped() {
         use crate::spec::{Struct, Transform};
