@@ -49,23 +49,13 @@ impl MetadataLocation {
         parse_metadata_file_compression(properties).unwrap_or(CompressionCodec::None)
     }
 
-    /// Creates a completely new metadata location starting at version 0,
-    /// with compression settings from the table metadata.
-    /// Only used for creating a new table. For updates, see `next_version`.
-    ///
-    /// The metadata directory honors the `write.metadata.path` table property when set,
-    /// otherwise defaults to the `metadata` subdirectory of `table_location`.
-    pub fn try_new_with_metadata(
-        table_location: impl ToString,
-        metadata: &TableMetadata,
-    ) -> Result<Self> {
-        let table_location = table_location.to_string();
-        let location = metadata
-            .table_properties()?
-            .write_metadata_path
-            .unwrap_or_else(|| format!("{table_location}/{METADATA_FOLDER_NAME}"));
+    /// Creates a completely new metadata location starting at version 0, deriving the
+    /// metadata directory and compression settings from the table metadata.
+    /// Only used for creating a new table. For updates, see `with_next_version` and
+    /// `try_with_new_metadata`.
+    pub fn try_new_with_metadata(metadata: &TableMetadata) -> Result<Self> {
         Ok(Self {
-            location,
+            location: metadata.metadata_location()?,
             version: 0,
             id: Uuid::new_v4(),
             compression_codec: Self::compression_from_properties(metadata.properties()),
@@ -273,7 +263,7 @@ mod test {
                 "/metadata/noversion-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
                 Err("".to_string()),
             ),
-            // Metadata dir does not need to be named "metadata" (e.g. a `write.metadata.path`` location)
+            // Metadata dir does not need to be named "metadata" (e.g. a `write.metadata.path` location)
             (
                 "/wrongsubdir/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
                 Ok(MetadataLocation {
@@ -309,7 +299,7 @@ mod test {
     fn test_metadata_location_with_next_version() {
         let metadata = create_test_metadata(HashMap::new());
         let test_cases = vec![
-            MetadataLocation::try_new_with_metadata("/abc", &metadata).unwrap(),
+            MetadataLocation::try_new_with_metadata(&metadata).unwrap(),
             MetadataLocation::from_str(
                 "/abc/def/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
             )
@@ -448,8 +438,7 @@ mod test {
     fn test_new_with_metadata_honors_write_metadata_path() {
         // Test metadata lives under `<location>/metadata` by default
         let default_meta = create_test_metadata(HashMap::new());
-        let default_loc =
-            MetadataLocation::try_new_with_metadata("/test/table", &default_meta).unwrap();
+        let default_loc = MetadataLocation::try_new_with_metadata(&default_meta).unwrap();
         assert!(
             default_loc
                 .to_string()
@@ -463,8 +452,7 @@ mod test {
             "s3://bucket/custom-meta".to_string(),
         )]);
         let custom_meta = create_test_metadata(props);
-        let custom_loc =
-            MetadataLocation::try_new_with_metadata("/test/table", &custom_meta).unwrap();
+        let custom_loc = MetadataLocation::try_new_with_metadata(&custom_meta).unwrap();
         assert!(
             custom_loc
                 .to_string()

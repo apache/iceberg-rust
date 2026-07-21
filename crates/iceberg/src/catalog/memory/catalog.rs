@@ -286,30 +286,27 @@ impl Catalog for MemoryCatalog {
         let table_name = table_creation.name.clone();
         let table_ident = TableIdent::new(namespace_ident.clone(), table_name);
 
-        let (table_creation, location) = match table_creation.location.clone() {
-            Some(location) => (table_creation, location),
-            None => {
-                let namespace_properties = root_namespace_state.get_properties(namespace_ident)?;
-                let location_prefix = match namespace_properties.get(LOCATION) {
-                    Some(namespace_location) => namespace_location.clone(),
-                    None => format!("{}/{}", self.warehouse_location, namespace_ident.join("/")),
-                };
+        let table_creation = if table_creation.location.is_some() {
+            table_creation
+        } else {
+            let namespace_properties = root_namespace_state.get_properties(namespace_ident)?;
+            let location_prefix = match namespace_properties.get(LOCATION) {
+                Some(namespace_location) => namespace_location.clone(),
+                None => format!("{}/{}", self.warehouse_location, namespace_ident.join("/")),
+            };
 
-                let location = format!("{}/{}", location_prefix, table_ident.name());
+            let location = format!("{}/{}", location_prefix, table_ident.name());
 
-                let new_table_creation = TableCreation {
-                    location: Some(location.clone()),
-                    ..table_creation
-                };
-
-                (new_table_creation, location)
+            TableCreation {
+                location: Some(location),
+                ..table_creation
             }
         };
 
         let metadata = TableMetadataBuilder::from_table_creation(table_creation)?
             .build()?
             .metadata;
-        let metadata_location = MetadataLocation::try_new_with_metadata(location, &metadata)?;
+        let metadata_location = MetadataLocation::try_new_with_metadata(&metadata)?;
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 

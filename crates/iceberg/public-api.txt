@@ -3507,7 +3507,7 @@ pub fn iceberg::memory::MemoryCatalog::update_table<'life0, 'async_trait>(&'life
 pub struct iceberg::MetadataLocation
 impl iceberg::MetadataLocation
 pub fn iceberg::MetadataLocation::compression_codec(&self) -> iceberg::compression::CompressionCodec
-pub fn iceberg::MetadataLocation::try_new_with_metadata(table_location: impl alloc::string::ToString, metadata: &iceberg::spec::TableMetadata) -> iceberg::Result<Self>
+pub fn iceberg::MetadataLocation::try_new_with_metadata(metadata: &iceberg::spec::TableMetadata) -> iceberg::Result<Self>
 pub fn iceberg::MetadataLocation::try_with_new_metadata(&self, new_metadata: &iceberg::spec::TableMetadata) -> iceberg::Result<Self>
 pub fn iceberg::MetadataLocation::with_next_version(&self) -> Self
 impl core::clone::Clone for iceberg::MetadataLocation

@@ -1651,6 +1651,16 @@ mod tests {
         serde_json::from_str(&metadata).unwrap()
     }
 
+    /// Loads a test table metadata and relocates it to `location`, so that derived
+    /// metadata paths point at a writable (e.g. temp) directory.
+    fn get_test_table_metadata_at(file_name: &str, location: &str) -> TableMetadata {
+        TableMetadataBuilder::new_from_metadata(get_test_table_metadata(file_name), None)
+            .set_location(location.to_string())
+            .build()
+            .unwrap()
+            .metadata
+    }
+
     #[test]
     fn test_table_data_v2() {
         let data = r#"
@@ -3612,11 +3622,12 @@ mod tests {
         let file_io = FileIO::new_with_fs();
 
         // Use an existing test metadata from the test files
-        let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
+        let original_metadata: TableMetadata =
+            get_test_table_metadata_at("TableMetadataV2Valid.json", temp_path);
 
         // Define the metadata location
         let metadata_location =
-            MetadataLocation::try_new_with_metadata(temp_path, &original_metadata).unwrap();
+            MetadataLocation::try_new_with_metadata(&original_metadata).unwrap();
         let metadata_location_str = metadata_location.to_string();
 
         // Write the metadata
@@ -3680,7 +3691,8 @@ mod tests {
         let file_io = FileIO::new_with_fs();
 
         // Get a test metadata and add gzip compression property
-        let original_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
+        let original_metadata: TableMetadata =
+            get_test_table_metadata_at("TableMetadataV2Valid.json", temp_path);
 
         // Modify properties to enable gzip compression (using mixed case to test case-insensitive matching)
         let mut props = original_metadata.properties.clone();
@@ -3700,7 +3712,7 @@ mod tests {
 
         // Create MetadataLocation with compression codec from metadata
         let metadata_location =
-            MetadataLocation::try_new_with_metadata(temp_path, &compressed_metadata).unwrap();
+            MetadataLocation::try_new_with_metadata(&compressed_metadata).unwrap();
         let metadata_location_str = metadata_location.to_string();
 
         // Verify the location has the .gz extension
