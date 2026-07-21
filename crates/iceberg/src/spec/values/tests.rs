@@ -31,7 +31,6 @@ use crate::spec::Schema;
 use crate::spec::Type::Primitive;
 use crate::spec::datatypes::{ListType, MapType, NestedField, PrimitiveType, StructType, Type};
 use crate::spec::values::datum::{INT_MAX, INT_MIN, LONG_MAX, LONG_MIN};
-use crate::spec::values::serde::_serde;
 use crate::spec::values::{Datum, Literal, Map, PrimitiveLiteral, RawLiteral, Struct};
 
 fn check_json_serde(json: &str, expected_literal: Literal, expected_type: &Type) {
@@ -122,7 +121,7 @@ fn json_boolean() {
     check_json_serde(
         record,
         Literal::Primitive(PrimitiveLiteral::Boolean(true)),
-        &Type::Primitive(PrimitiveType::Boolean),
+        &Primitive(PrimitiveType::Boolean),
     );
 }
 
@@ -133,7 +132,7 @@ fn json_int() {
     check_json_serde(
         record,
         Literal::Primitive(PrimitiveLiteral::Int(32)),
-        &Type::Primitive(PrimitiveType::Int),
+        &Primitive(PrimitiveType::Int),
     );
 }
 
@@ -144,7 +143,7 @@ fn json_long() {
     check_json_serde(
         record,
         Literal::Primitive(PrimitiveLiteral::Long(32)),
-        &Type::Primitive(PrimitiveType::Long),
+        &Primitive(PrimitiveType::Long),
     );
 }
 
@@ -155,7 +154,7 @@ fn json_float() {
     check_json_serde(
         record,
         Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(1.0))),
-        &Type::Primitive(PrimitiveType::Float),
+        &Primitive(PrimitiveType::Float),
     );
 }
 
@@ -166,7 +165,7 @@ fn json_double() {
     check_json_serde(
         record,
         Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(1.0))),
-        &Type::Primitive(PrimitiveType::Double),
+        &Primitive(PrimitiveType::Double),
     );
 }
 
@@ -177,7 +176,7 @@ fn json_date() {
     check_json_serde(
         record,
         Literal::Primitive(PrimitiveLiteral::Int(17486)),
-        &Type::Primitive(PrimitiveType::Date),
+        &Primitive(PrimitiveType::Date),
     );
 }
 
@@ -188,7 +187,7 @@ fn json_time() {
     check_json_serde(
         record,
         Literal::Primitive(PrimitiveLiteral::Long(81068123456)),
-        &Type::Primitive(PrimitiveType::Time),
+        &Primitive(PrimitiveType::Time),
     );
 }
 
@@ -199,7 +198,7 @@ fn json_timestamp() {
     check_json_serde(
         record,
         Literal::Primitive(PrimitiveLiteral::Long(1510871468123456)),
-        &Type::Primitive(PrimitiveType::Timestamp),
+        &Primitive(PrimitiveType::Timestamp),
     );
 }
 
@@ -210,7 +209,54 @@ fn json_timestamptz() {
     check_json_serde(
         record,
         Literal::Primitive(PrimitiveLiteral::Long(1510871468123456)),
-        &Type::Primitive(PrimitiveType::Timestamptz),
+        &Primitive(PrimitiveType::Timestamptz),
+    );
+}
+
+#[test]
+fn json_timestamp_ns() {
+    let record = r#""2017-11-16T22:31:08.123456789""#;
+
+    check_json_serde(
+        record,
+        Literal::Primitive(PrimitiveLiteral::Long(1510871468123456789)),
+        &Primitive(PrimitiveType::TimestampNs),
+    );
+}
+
+#[test]
+fn json_timestamptz_ns() {
+    let record = r#""2017-11-16T22:31:08.123456789+00:00""#;
+
+    check_json_serde(
+        record,
+        Literal::Primitive(PrimitiveLiteral::Long(1510871468123456789)),
+        &Primitive(PrimitiveType::TimestamptzNs),
+    );
+}
+
+#[test]
+fn json_timestamptz_ns_rejects_non_utc_offset() {
+    // Per the spec, timestamptz_ns single-value serialization must use offset "+00:00"; Java's
+    // SingleValueParser enforces the same (DateTimeUtil.isUTCTimestamptz). A non-UTC offset is not a
+    // valid encoding and must be rejected, not silently re-based to UTC.
+    let record = serde_json::Value::String("2017-11-16T22:31:08.123456789+05:00".to_string());
+    let result = Literal::try_from_json(record, &Primitive(PrimitiveType::TimestamptzNs));
+    assert!(
+        result.is_err(),
+        "non-UTC offset must be rejected for timestamptz_ns, got {result:?}"
+    );
+}
+
+#[test]
+fn json_timestamptz_rejects_non_utc_offset() {
+    // Micros-precision counterpart, mirroring Java's TestSingleValueParser.testInvalidTimestamptz:
+    // the offset must be "+00:00", so a non-UTC offset is rejected.
+    let record = serde_json::Value::String("2017-11-16T22:31:08.123456+05:00".to_string());
+    let result = Literal::try_from_json(record, &Primitive(PrimitiveType::Timestamptz));
+    assert!(
+        result.is_err(),
+        "non-UTC offset must be rejected for timestamptz, got {result:?}"
     );
 }
 
@@ -221,7 +267,7 @@ fn json_string() {
     check_json_serde(
         record,
         Literal::Primitive(PrimitiveLiteral::String("iceberg".to_string())),
-        &Type::Primitive(PrimitiveType::String),
+        &Primitive(PrimitiveType::String),
     );
 }
 
@@ -236,7 +282,7 @@ fn json_uuid() {
                 .unwrap()
                 .as_u128(),
         )),
-        &Type::Primitive(PrimitiveType::Uuid),
+        &Primitive(PrimitiveType::Uuid),
     );
 }
 
@@ -258,7 +304,7 @@ fn json_binary() {
     check_json_serde(
         record,
         Literal::Primitive(PrimitiveLiteral::Binary(vec![0, 1, 15, 255])),
-        &Type::Primitive(PrimitiveType::Binary),
+        &Primitive(PrimitiveType::Binary),
     );
 }
 
@@ -269,7 +315,7 @@ fn json_fixed() {
     check_json_serde(
         record,
         Literal::Primitive(PrimitiveLiteral::Binary(vec![0, 1, 15, 255])),
-        &Type::Primitive(PrimitiveType::Fixed(4)),
+        &Primitive(PrimitiveType::Fixed(4)),
     );
 }
 
@@ -277,7 +323,7 @@ fn json_fixed() {
 fn test_should_parse_json_binary_if_hex_uses_uppercase_digits() {
     let result = Literal::try_from_json(
         serde_json::json!("00010FFF"),
-        &Type::Primitive(PrimitiveType::Binary),
+        &Primitive(PrimitiveType::Binary),
     )
     .unwrap();
 
@@ -292,33 +338,23 @@ fn test_should_parse_json_binary_if_hex_uses_uppercase_digits() {
 #[test]
 fn test_should_reject_json_binary_if_hex_is_invalid() {
     assert!(
-        Literal::try_from_json(
-            serde_json::json!("f"),
-            &Type::Primitive(PrimitiveType::Binary),
-        )
-        .is_err()
+        Literal::try_from_json(serde_json::json!("f"), &Primitive(PrimitiveType::Binary),).is_err()
     );
     assert!(
-        Literal::try_from_json(
-            serde_json::json!("fg"),
-            &Type::Primitive(PrimitiveType::Binary),
-        )
-        .is_err()
+        Literal::try_from_json(serde_json::json!("fg"), &Primitive(PrimitiveType::Binary),)
+            .is_err()
     );
 }
 
 #[test]
 fn test_should_reject_json_fixed_if_length_does_not_match() {
     assert!(
-        Literal::try_from_json(
-            serde_json::json!("ff"),
-            &Type::Primitive(PrimitiveType::Fixed(2)),
-        )
-        .is_err()
+        Literal::try_from_json(serde_json::json!("ff"), &Primitive(PrimitiveType::Fixed(2)),)
+            .is_err()
     );
     assert!(
         Literal::Primitive(PrimitiveLiteral::Binary(vec![255]))
-            .try_into_json(&Type::Primitive(PrimitiveType::Fixed(2)))
+            .try_into_json(&Primitive(PrimitiveType::Fixed(2)))
             .is_err()
     );
 }
@@ -337,9 +373,9 @@ fn json_struct() {
             None,
         ])),
         &Type::Struct(StructType::new(vec![
-            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-            NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-            NestedField::optional(3, "address", Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::required(1, "id", Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(2, "name", Primitive(PrimitiveType::String)).into(),
+            NestedField::optional(3, "address", Primitive(PrimitiveType::String)).into(),
         ])),
     );
 }
@@ -357,8 +393,7 @@ fn json_list() {
             None,
         ]),
         &Type::List(ListType {
-            element_field: NestedField::list_element(0, Type::Primitive(PrimitiveType::Int), true)
-                .into(),
+            element_field: NestedField::list_element(0, Primitive(PrimitiveType::Int), true).into(),
         }),
     );
 }
@@ -384,14 +419,9 @@ fn json_map() {
             ),
         ])),
         &Type::Map(MapType {
-            key_field: NestedField::map_key_element(0, Type::Primitive(PrimitiveType::String))
+            key_field: NestedField::map_key_element(0, Primitive(PrimitiveType::String)).into(),
+            value_field: NestedField::map_value_element(1, Primitive(PrimitiveType::Int), true)
                 .into(),
-            value_field: NestedField::map_value_element(
-                1,
-                Type::Primitive(PrimitiveType::Int),
-                true,
-            )
-            .into(),
         }),
     );
 }
@@ -460,8 +490,8 @@ fn avro_bytes_decimal() {
         (vec![251u8, 46u8], -1234, 2, 38),
         (vec![4u8, 210u8], 1234, 3, 38),
         (vec![251u8, 46u8], -1234, 3, 38),
-        (vec![42u8], 42, 2, 1),
-        (vec![214u8], -42, 2, 1),
+        (vec![42u8], 42, 2, 2),
+        (vec![214u8], -42, 2, 2),
     ];
 
     for (input_bytes, decimal_num, expect_scale, expect_precision) in cases {
@@ -503,7 +533,7 @@ fn check_raw_literal_bytes_serde_via_avro(
 
     // Create an Avro bytes value and deserialize it through the RawLiteral path
     let avro_value = Value::Bytes(input_bytes);
-    let raw_literal: _serde::RawLiteral = apache_avro::from_value(&avro_value).unwrap();
+    let raw_literal: RawLiteral = apache_avro::from_value(&avro_value).unwrap();
     let result = raw_literal.try_into(expected_type).unwrap();
     assert_eq!(result, Some(expected_literal));
 }
@@ -512,7 +542,7 @@ fn check_raw_literal_bytes_error_via_avro(input_bytes: Vec<u8>, expected_type: &
     use apache_avro::types::Value;
 
     let avro_value = Value::Bytes(input_bytes);
-    let raw_literal: _serde::RawLiteral = apache_avro::from_value(&avro_value).unwrap();
+    let raw_literal: RawLiteral = apache_avro::from_value(&avro_value).unwrap();
     let result = raw_literal.try_into(expected_type);
     assert!(result.is_err(), "Expected error but got: {result:?}");
 }
@@ -523,7 +553,7 @@ fn test_raw_literal_bytes_binary() {
     check_raw_literal_bytes_serde_via_avro(
         bytes.clone(),
         Literal::binary(bytes),
-        &Type::Primitive(PrimitiveType::Binary),
+        &Primitive(PrimitiveType::Binary),
     );
 }
 
@@ -533,7 +563,7 @@ fn test_raw_literal_bytes_binary_empty() {
     check_raw_literal_bytes_serde_via_avro(
         bytes.clone(),
         Literal::binary(bytes),
-        &Type::Primitive(PrimitiveType::Binary),
+        &Primitive(PrimitiveType::Binary),
     );
 }
 
@@ -543,14 +573,14 @@ fn test_raw_literal_bytes_fixed_correct_length() {
     check_raw_literal_bytes_serde_via_avro(
         bytes.clone(),
         Literal::fixed(bytes),
-        &Type::Primitive(PrimitiveType::Fixed(4)),
+        &Primitive(PrimitiveType::Fixed(4)),
     );
 }
 
 #[test]
 fn test_raw_literal_bytes_fixed_wrong_length() {
     let bytes = vec![1u8, 2u8, 3u8]; // 3 bytes, but expecting 4
-    check_raw_literal_bytes_error_via_avro(bytes, &Type::Primitive(PrimitiveType::Fixed(4)));
+    check_raw_literal_bytes_error_via_avro(bytes, &Primitive(PrimitiveType::Fixed(4)));
 }
 
 #[test]
@@ -559,7 +589,7 @@ fn test_raw_literal_bytes_fixed_empty_correct_length() {
     check_raw_literal_bytes_serde_via_avro(
         bytes.clone(),
         Literal::fixed(bytes),
-        &Type::Primitive(PrimitiveType::Fixed(0)),
+        &Primitive(PrimitiveType::Fixed(0)),
     );
 }
 
@@ -576,14 +606,14 @@ fn test_raw_literal_bytes_uuid_correct_length() {
     check_raw_literal_bytes_serde_via_avro(
         uuid_bytes,
         Literal::Primitive(PrimitiveLiteral::UInt128(expected_uuid)),
-        &Type::Primitive(PrimitiveType::Uuid),
+        &Primitive(PrimitiveType::Uuid),
     );
 }
 
 #[test]
 fn test_raw_literal_bytes_uuid_wrong_length() {
     let bytes = vec![1u8, 2u8, 3u8]; // 3 bytes, but UUID needs 16
-    check_raw_literal_bytes_error_via_avro(bytes, &Type::Primitive(PrimitiveType::Uuid));
+    check_raw_literal_bytes_error_via_avro(bytes, &Primitive(PrimitiveType::Uuid));
 }
 
 #[test]
@@ -594,7 +624,7 @@ fn test_raw_literal_bytes_decimal_precision_4_scale_2() {
     check_raw_literal_bytes_serde_via_avro(
         decimal_bytes,
         Literal::Primitive(PrimitiveLiteral::Int128(expected_decimal)),
-        &Type::Primitive(PrimitiveType::Decimal {
+        &Primitive(PrimitiveType::Decimal {
             precision: 4,
             scale: 2,
         }),
@@ -609,7 +639,7 @@ fn test_raw_literal_bytes_decimal_precision_4_negative() {
     check_raw_literal_bytes_serde_via_avro(
         decimal_bytes,
         Literal::Primitive(PrimitiveLiteral::Int128(expected_decimal)),
-        &Type::Primitive(PrimitiveType::Decimal {
+        &Primitive(PrimitiveType::Decimal {
             precision: 4,
             scale: 2,
         }),
@@ -624,7 +654,7 @@ fn test_raw_literal_bytes_decimal_precision_9_scale_2() {
     check_raw_literal_bytes_serde_via_avro(
         decimal_bytes,
         Literal::Primitive(PrimitiveLiteral::Int128(expected_decimal)),
-        &Type::Primitive(PrimitiveType::Decimal {
+        &Primitive(PrimitiveType::Decimal {
             precision: 9,
             scale: 2,
         }),
@@ -639,7 +669,7 @@ fn test_raw_literal_bytes_decimal_precision_18_scale_2() {
     check_raw_literal_bytes_serde_via_avro(
         decimal_bytes,
         Literal::Primitive(PrimitiveLiteral::Int128(expected_decimal)),
-        &Type::Primitive(PrimitiveType::Decimal {
+        &Primitive(PrimitiveType::Decimal {
             precision: 18,
             scale: 2,
         }),
@@ -657,7 +687,7 @@ fn test_raw_literal_bytes_decimal_precision_38_scale_2() {
     check_raw_literal_bytes_serde_via_avro(
         decimal_bytes,
         Literal::Primitive(PrimitiveLiteral::Int128(expected_decimal)),
-        &Type::Primitive(PrimitiveType::Decimal {
+        &Primitive(PrimitiveType::Decimal {
             precision: 38,
             scale: 2,
         }),
@@ -672,7 +702,7 @@ fn test_raw_literal_bytes_decimal_precision_1_scale_0() {
     check_raw_literal_bytes_serde_via_avro(
         decimal_bytes,
         Literal::Primitive(PrimitiveLiteral::Int128(expected_decimal)),
-        &Type::Primitive(PrimitiveType::Decimal {
+        &Primitive(PrimitiveType::Decimal {
             precision: 1,
             scale: 0,
         }),
@@ -687,7 +717,7 @@ fn test_raw_literal_bytes_decimal_precision_1_negative() {
     check_raw_literal_bytes_serde_via_avro(
         decimal_bytes,
         Literal::Primitive(PrimitiveLiteral::Int128(expected_decimal)),
-        &Type::Primitive(PrimitiveType::Decimal {
+        &Primitive(PrimitiveType::Decimal {
             precision: 1,
             scale: 0,
         }),
@@ -700,7 +730,7 @@ fn test_raw_literal_bytes_decimal_wrong_length() {
     let bytes = vec![1u8, 2u8, 3u8];
     check_raw_literal_bytes_error_via_avro(
         bytes,
-        &Type::Primitive(PrimitiveType::Decimal {
+        &Primitive(PrimitiveType::Decimal {
             precision: 4,
             scale: 2,
         }),
@@ -713,7 +743,7 @@ fn test_raw_literal_bytes_decimal_wrong_length_too_few() {
     let bytes = vec![0x42];
     check_raw_literal_bytes_error_via_avro(
         bytes,
-        &Type::Primitive(PrimitiveType::Decimal {
+        &Primitive(PrimitiveType::Decimal {
             precision: 9,
             scale: 2,
         }),
@@ -723,14 +753,14 @@ fn test_raw_literal_bytes_decimal_wrong_length_too_few() {
 #[test]
 fn test_raw_literal_bytes_unsupported_type() {
     let bytes = vec![1u8, 2u8, 3u8, 4u8];
-    check_raw_literal_bytes_error_via_avro(bytes, &Type::Primitive(PrimitiveType::Int));
+    check_raw_literal_bytes_error_via_avro(bytes, &Primitive(PrimitiveType::Int));
 }
 
 #[test]
 fn avro_convert_test_int() {
     check_convert_with_avro(
         Literal::Primitive(PrimitiveLiteral::Int(32)),
-        &Type::Primitive(PrimitiveType::Int),
+        &Primitive(PrimitiveType::Int),
     );
 }
 
@@ -738,7 +768,7 @@ fn avro_convert_test_int() {
 fn avro_convert_test_long() {
     check_convert_with_avro(
         Literal::Primitive(PrimitiveLiteral::Long(32)),
-        &Type::Primitive(PrimitiveType::Long),
+        &Primitive(PrimitiveType::Long),
     );
 }
 
@@ -746,7 +776,7 @@ fn avro_convert_test_long() {
 fn avro_convert_test_float() {
     check_convert_with_avro(
         Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(1.0))),
-        &Type::Primitive(PrimitiveType::Float),
+        &Primitive(PrimitiveType::Float),
     );
 }
 
@@ -754,7 +784,7 @@ fn avro_convert_test_float() {
 fn avro_convert_test_double() {
     check_convert_with_avro(
         Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(1.0))),
-        &Type::Primitive(PrimitiveType::Double),
+        &Primitive(PrimitiveType::Double),
     );
 }
 
@@ -762,7 +792,7 @@ fn avro_convert_test_double() {
 fn avro_convert_test_string() {
     check_convert_with_avro(
         Literal::Primitive(PrimitiveLiteral::String("iceberg".to_string())),
-        &Type::Primitive(PrimitiveType::String),
+        &Primitive(PrimitiveType::String),
     );
 }
 
@@ -770,7 +800,7 @@ fn avro_convert_test_string() {
 fn avro_convert_test_date() {
     check_convert_with_avro(
         Literal::Primitive(PrimitiveLiteral::Int(17486)),
-        &Type::Primitive(PrimitiveType::Date),
+        &Primitive(PrimitiveType::Date),
     );
 }
 
@@ -778,7 +808,7 @@ fn avro_convert_test_date() {
 fn avro_convert_test_time() {
     check_convert_with_avro(
         Literal::Primitive(PrimitiveLiteral::Long(81068123456)),
-        &Type::Primitive(PrimitiveType::Time),
+        &Primitive(PrimitiveType::Time),
     );
 }
 
@@ -786,7 +816,7 @@ fn avro_convert_test_time() {
 fn avro_convert_test_timestamp() {
     check_convert_with_avro(
         Literal::Primitive(PrimitiveLiteral::Long(1510871468123456)),
-        &Type::Primitive(PrimitiveType::Timestamp),
+        &Primitive(PrimitiveType::Timestamp),
     );
 }
 
@@ -794,7 +824,7 @@ fn avro_convert_test_timestamp() {
 fn avro_convert_test_timestamptz() {
     check_convert_with_avro(
         Literal::Primitive(PrimitiveLiteral::Long(1510871468123456)),
-        &Type::Primitive(PrimitiveType::Timestamptz),
+        &Primitive(PrimitiveType::Timestamptz),
     );
 }
 
@@ -808,7 +838,7 @@ fn avro_convert_test_list() {
             None,
         ]),
         &Type::List(ListType {
-            element_field: NestedField::list_element(0, Type::Primitive(PrimitiveType::Int), false)
+            element_field: NestedField::list_element(0, Primitive(PrimitiveType::Int), false)
                 .into(),
         }),
     );
@@ -820,8 +850,7 @@ fn avro_convert_test_list() {
             Some(Literal::Primitive(PrimitiveLiteral::Int(3))),
         ]),
         &Type::List(ListType {
-            element_field: NestedField::list_element(0, Type::Primitive(PrimitiveType::Int), true)
-                .into(),
+            element_field: NestedField::list_element(0, Primitive(PrimitiveType::Int), true).into(),
         }),
     );
 }
@@ -878,13 +907,9 @@ fn avro_convert_test_map() {
             (Literal::Primitive(PrimitiveLiteral::Int(3)), None),
         ])),
         &Type::Map(MapType {
-            key_field: NestedField::map_key_element(2, Type::Primitive(PrimitiveType::Int)).into(),
-            value_field: NestedField::map_value_element(
-                3,
-                Type::Primitive(PrimitiveType::Long),
-                false,
-            )
-            .into(),
+            key_field: NestedField::map_key_element(2, Primitive(PrimitiveType::Int)).into(),
+            value_field: NestedField::map_value_element(3, Primitive(PrimitiveType::Long), false)
+                .into(),
         }),
     );
 
@@ -904,13 +929,9 @@ fn avro_convert_test_map() {
             ),
         ])),
         &Type::Map(MapType {
-            key_field: NestedField::map_key_element(2, Type::Primitive(PrimitiveType::Int)).into(),
-            value_field: NestedField::map_value_element(
-                3,
-                Type::Primitive(PrimitiveType::Long),
-                true,
-            )
-            .into(),
+            key_field: NestedField::map_key_element(2, Primitive(PrimitiveType::Int)).into(),
+            value_field: NestedField::map_value_element(3, Primitive(PrimitiveType::Long), true)
+                .into(),
         }),
     );
 }
@@ -933,14 +954,9 @@ fn avro_convert_test_string_map() {
             ),
         ])),
         &Type::Map(MapType {
-            key_field: NestedField::map_key_element(2, Type::Primitive(PrimitiveType::String))
+            key_field: NestedField::map_key_element(2, Primitive(PrimitiveType::String)).into(),
+            value_field: NestedField::map_value_element(3, Primitive(PrimitiveType::Int), false)
                 .into(),
-            value_field: NestedField::map_value_element(
-                3,
-                Type::Primitive(PrimitiveType::Int),
-                false,
-            )
-            .into(),
         }),
     );
 
@@ -960,14 +976,9 @@ fn avro_convert_test_string_map() {
             ),
         ])),
         &Type::Map(MapType {
-            key_field: NestedField::map_key_element(2, Type::Primitive(PrimitiveType::String))
+            key_field: NestedField::map_key_element(2, Primitive(PrimitiveType::String)).into(),
+            value_field: NestedField::map_value_element(3, Primitive(PrimitiveType::Int), true)
                 .into(),
-            value_field: NestedField::map_value_element(
-                3,
-                Type::Primitive(PrimitiveType::Int),
-                true,
-            )
-            .into(),
         }),
     );
 }
@@ -983,9 +994,9 @@ fn avro_convert_test_record() {
             None,
         ])),
         &Type::Struct(StructType::new(vec![
-            NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
-            NestedField::optional(3, "name", Type::Primitive(PrimitiveType::String)).into(),
-            NestedField::optional(4, "address", Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::required(2, "id", Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(3, "name", Primitive(PrimitiveType::String)).into(),
+            NestedField::optional(4, "address", Primitive(PrimitiveType::String)).into(),
         ])),
     );
 }
@@ -997,7 +1008,7 @@ fn avro_convert_test_record() {
 #[test]
 fn avro_convert_test_binary_ser() {
     let literal = Literal::Primitive(PrimitiveLiteral::Binary(vec![1, 2, 3, 4, 5]));
-    let ty = Type::Primitive(PrimitiveType::Binary);
+    let ty = Primitive(PrimitiveType::Binary);
     let expect_value = Value::Bytes(vec![1, 2, 3, 4, 5]);
     check_serialize_avro(literal, &ty, expect_value);
 }
@@ -1005,7 +1016,7 @@ fn avro_convert_test_binary_ser() {
 #[test]
 fn avro_convert_test_decimal_ser() {
     let literal = Literal::decimal(12345);
-    let ty = Type::Primitive(PrimitiveType::Decimal {
+    let ty = Primitive(PrimitiveType::Decimal {
         precision: 9,
         scale: 8,
     });
@@ -1179,6 +1190,50 @@ fn test_datum_long_convert_to_int_below_min() {
     let result = datum.to(&Primitive(PrimitiveType::Int)).unwrap();
 
     let expected = Datum::new(PrimitiveType::Int, PrimitiveLiteral::BelowMin);
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_datum_double_convert_to_float() {
+    let datum = Datum::double(2.5);
+
+    let result = datum.to(&Primitive(PrimitiveType::Float)).unwrap();
+
+    let expected = Datum::float(2.5);
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_datum_double_convert_to_float_above_max() {
+    let datum = Datum::double(1e39);
+
+    let result = datum.to(&Primitive(PrimitiveType::Float)).unwrap();
+
+    let expected = Datum::new(PrimitiveType::Float, PrimitiveLiteral::AboveMax);
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_datum_double_convert_to_float_below_min() {
+    let datum = Datum::double(-1e39);
+
+    let result = datum.to(&Primitive(PrimitiveType::Float)).unwrap();
+
+    let expected = Datum::new(PrimitiveType::Float, PrimitiveLiteral::BelowMin);
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_datum_float_convert_to_double() {
+    let datum = Datum::float(2.5);
+
+    let result = datum.to(&Primitive(PrimitiveType::Double)).unwrap();
+
+    let expected = Datum::double(2.5);
 
     assert_eq!(result, expected);
 }
@@ -1406,8 +1461,7 @@ fn test_date_from_json_as_number() {
 
     // Test Date as number (days since epoch) - used in initial-default from add_files
     let date_number = json!(18628); // 2021-01-01 is 18628 days since 1970-01-01
-    let result =
-        Literal::try_from_json(date_number, &Type::Primitive(PrimitiveType::Date)).unwrap();
+    let result = Literal::try_from_json(date_number, &Primitive(PrimitiveType::Date)).unwrap();
     assert_eq!(
         result,
         Some(Literal::Primitive(PrimitiveLiteral::Int(18628)))
@@ -1415,12 +1469,162 @@ fn test_date_from_json_as_number() {
 
     // Test Date as string - traditional format
     let date_string = json!("2021-01-01");
-    let result =
-        Literal::try_from_json(date_string, &Type::Primitive(PrimitiveType::Date)).unwrap();
+    let result = Literal::try_from_json(date_string, &Primitive(PrimitiveType::Date)).unwrap();
     assert_eq!(
         result,
         Some(Literal::Primitive(PrimitiveLiteral::Int(18628)))
     );
 
     // Both formats should produce the same Literal value
+}
+
+#[test]
+fn test_datum_to_decimal_narrows_precision_when_scale_matches() {
+    let target_type = Primitive(PrimitiveType::Decimal {
+        precision: 9,
+        scale: 2,
+    });
+    let datum = Datum::decimal_from_str("123.45").unwrap();
+
+    let converted = datum.to(&target_type).unwrap();
+
+    assert_eq!(converted.data_type(), &PrimitiveType::Decimal {
+        precision: 9,
+        scale: 2,
+    });
+    assert_eq!(converted.literal(), &PrimitiveLiteral::Int128(12345));
+}
+
+#[test]
+fn test_datum_to_decimal_widens_precision_when_scale_matches() {
+    let target_type = Primitive(PrimitiveType::Decimal {
+        precision: 38,
+        scale: 2,
+    });
+    let datum = Datum::decimal_with_precision(decimal_from_i128_with_scale(12345, 2), 9).unwrap();
+
+    let converted = datum.to(&target_type).unwrap();
+
+    assert_eq!(converted.data_type(), &PrimitiveType::Decimal {
+        precision: 38,
+        scale: 2,
+    });
+    assert_eq!(converted.literal(), &PrimitiveLiteral::Int128(12345));
+}
+
+#[test]
+fn test_datum_to_decimal_accepts_zero_mantissa() {
+    let target_type = Primitive(PrimitiveType::Decimal {
+        precision: 1,
+        scale: 0,
+    });
+    let datum = Datum::decimal_with_precision(decimal_from_i128_with_scale(0, 0), 9).unwrap();
+
+    let converted = datum.to(&target_type).unwrap();
+
+    assert_eq!(converted.data_type(), &PrimitiveType::Decimal {
+        precision: 1,
+        scale: 0,
+    });
+    assert_eq!(converted.literal(), &PrimitiveLiteral::Int128(0));
+}
+
+#[test]
+fn test_datum_to_decimal_accepts_negative_mantissa() {
+    let target_type = Primitive(PrimitiveType::Decimal {
+        precision: 2,
+        scale: 1,
+    });
+    let datum = Datum::decimal_from_str("-1.5").unwrap();
+
+    let converted = datum.to(&target_type).unwrap();
+
+    assert_eq!(converted.data_type(), &PrimitiveType::Decimal {
+        precision: 2,
+        scale: 1,
+    });
+    assert_eq!(converted.literal(), &PrimitiveLiteral::Int128(-15));
+}
+
+#[test]
+fn test_datum_to_decimal_rejects_precision_too_narrow() {
+    let target_type = Primitive(PrimitiveType::Decimal {
+        precision: 1,
+        scale: 1,
+    });
+    let datum = Datum::decimal_from_str("1.5").unwrap();
+
+    let result = datum.to(&target_type);
+
+    assert!(result.is_err(), "expect error but got {result:?}");
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::DataInvalid);
+}
+
+#[test]
+fn test_datum_to_decimal_rejects_value_that_fits_storage_bytes_but_not_precision() {
+    let target_type = Primitive(PrimitiveType::Decimal {
+        precision: 1,
+        scale: 1,
+    });
+    let datum = Datum::decimal_from_str("4.2").unwrap();
+
+    let result = datum.to(&target_type);
+
+    assert!(result.is_err(), "expect error but got {result:?}");
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::DataInvalid);
+}
+
+#[test]
+fn test_datum_to_decimal_accepts_single_digit_mantissa_for_precision_one() {
+    let target_type = Primitive(PrimitiveType::Decimal {
+        precision: 1,
+        scale: 1,
+    });
+    let datum = Datum::decimal_from_str("0.5").unwrap();
+
+    let converted = datum.to(&target_type).unwrap();
+
+    assert_eq!(converted.data_type(), &PrimitiveType::Decimal {
+        precision: 1,
+        scale: 1,
+    });
+    assert_eq!(converted.literal(), &PrimitiveLiteral::Int128(5));
+}
+
+#[test]
+fn test_datum_decimal_with_precision_rejects_value_that_exceeds_digit_precision() {
+    let result = Datum::decimal_with_precision(decimal_from_i128_with_scale(42, 2), 1);
+
+    assert!(result.is_err(), "expect error but got {result:?}");
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::DataInvalid);
+}
+
+#[test]
+fn test_datum_decimal_with_precision_accepts_value_that_fits_digit_precision() {
+    let datum = Datum::decimal_with_precision(decimal_from_i128_with_scale(5, 1), 1).unwrap();
+
+    assert_eq!(datum.data_type(), &PrimitiveType::Decimal {
+        precision: 1,
+        scale: 1,
+    });
+    assert_eq!(datum.literal(), &PrimitiveLiteral::Int128(5));
+}
+
+#[test]
+fn test_datum_to_decimal_rejects_scale_change() {
+    let target_type = Primitive(PrimitiveType::Decimal {
+        precision: 9,
+        scale: 3,
+    });
+    let datum = Datum::decimal_from_str("123.45").unwrap();
+
+    let result = datum.to(&target_type);
+    assert!(result.is_err(), "expect error but got {result:?}");
+
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    assert!(
+        err.to_string()
+            .contains("Decimal scale conversion is not supported")
+    );
 }

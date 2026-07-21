@@ -38,7 +38,9 @@ use crate::{Error, ErrorKind};
 impl ArrowReader {
     pub(super) fn build_field_id_set_and_map(
         parquet_schema: &SchemaDescriptor,
+        arrow_schema: &ArrowSchemaRef,
         predicate: &BoundPredicate,
+        use_position_fallback: bool,
     ) -> Result<(HashSet<i32>, HashMap<i32, usize>)> {
         // Collects all Iceberg field IDs referenced in the filter predicate
         let mut collector = CollectFieldIdVisitor {
@@ -48,10 +50,13 @@ impl ArrowReader {
 
         let iceberg_field_ids = collector.field_ids();
 
-        // Without embedded field IDs, we fall back to position-based mapping for compatibility
         let field_id_map = match build_field_id_map(parquet_schema)? {
             Some(map) => map,
-            None => build_fallback_field_id_map(parquet_schema),
+            // No embedded field IDs and no name mapping: position-based fallback
+            None if use_position_fallback => build_fallback_field_id_map(parquet_schema),
+            // No embedded field IDs, but a name mapping assigned them to the Arrow
+            // schema: resolve columns through the mapped Arrow field-id metadata
+            None => build_field_id_map_from_arrow_schema(arrow_schema),
         };
 
         Ok((iceberg_field_ids, field_id_map))
@@ -76,6 +81,11 @@ impl ArrowReader {
                 Self::include_leaf_field_id(&map_type.key_field, field_ids);
                 Self::include_leaf_field_id(&map_type.value_field, field_ids);
             }
+            // Variant projection is rejected earlier (in `get_arrow_projection_mask`); this
+            // arm only keeps the match exhaustive. Treat it as a leaf, like a primitive.
+            Type::Variant(_) => {
+                field_ids.push(field.id);
+            }
         }
     }
 
@@ -84,7 +94,7 @@ impl ArrowReader {
         iceberg_schema_of_task: &Schema,
         parquet_schema: &SchemaDescriptor,
         arrow_schema: &ArrowSchemaRef,
-        use_fallback: bool, // Whether file lacks embedded field IDs (e.g., migrated from Hive/Spark)
+        use_fallback: bool, // Position-based fallback: file lacks embedded field IDs and no name mapping assigned any
     ) -> Result<ProjectionMask> {
         fn type_promotion_is_valid(
             file_type: Option<&PrimitiveType>,
@@ -112,6 +122,19 @@ impl ArrowReader {
 
         if field_ids.is_empty() {
             return Ok(ProjectionMask::all());
+        }
+
+        // Reading variant columns is not supported yet (see #2188 follow-ups): reject any
+        // projection that touches a variant, rather than returning a partial/incorrect batch.
+        for field_id in field_ids {
+            if let Some(field) = iceberg_schema_of_task.field_by_id(*field_id)
+                && type_contains_variant(&field.field_type)
+            {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Reading variant columns is not supported yet",
+                ));
+            }
         }
 
         if use_fallback {
@@ -150,6 +173,8 @@ impl ArrowReader {
     ) -> Result<ProjectionMask> {
         let mut column_map = HashMap::new();
         let fields = arrow_schema.fields();
+        // HashSet for O(1) membership checks instead of O(n) slice scans.
+        let leaf_field_id_set: HashSet<i32> = leaf_field_ids.iter().copied().collect();
 
         // Pre-project only the fields that have been selected, possibly avoiding converting
         // some Arrow types that are not yet supported.
@@ -161,7 +186,7 @@ impl ArrowReader {
                     .and_then(|field_id| i32::from_str(field_id).ok())
                     .is_some_and(|field_id| {
                         projected_fields.insert((*f).clone(), field_id);
-                        leaf_field_ids.contains(&field_id)
+                        leaf_field_id_set.contains(&field_id)
                     })
             }),
             arrow_schema.metadata().clone(),
@@ -240,6 +265,23 @@ impl ArrowReader {
     }
 }
 
+/// Whether `field_type` is, or transitively contains, a variant type.
+fn type_contains_variant(field_type: &Type) -> bool {
+    match field_type {
+        Type::Variant(_) => true,
+        Type::Struct(s) => s
+            .fields()
+            .iter()
+            .any(|f| type_contains_variant(&f.field_type)),
+        Type::List(l) => type_contains_variant(&l.element_field.field_type),
+        Type::Map(m) => {
+            type_contains_variant(&m.key_field.field_type)
+                || type_contains_variant(&m.value_field.field_type)
+        }
+        Type::Primitive(_) => false,
+    }
+}
+
 /// Build the map of parquet field id to Parquet column index in the schema.
 /// Returns None if the Parquet file doesn't have field IDs embedded (e.g., migrated tables).
 pub(super) fn build_field_id_map(
@@ -305,6 +347,30 @@ pub(super) fn build_fallback_field_id_map(
         leaf_idx += leaf_count(field);
     }
 
+    column_map
+}
+
+/// Builds a mapping from field IDs to leaf column indices using the field-id metadata
+/// carried by the Arrow schema.
+///
+/// Used for Parquet files without embedded field IDs when a name mapping has assigned
+/// IDs to the Arrow schema (see [`apply_name_mapping_to_arrow_schema`]): the Parquet
+/// schema descriptor itself still has no IDs, but the Arrow leaves are flattened in the
+/// same depth-first order as Parquet leaf columns, so the Arrow leaf index lines up with
+/// the Parquet column index. Columns the mapping did not match carry no field-id
+/// metadata and are simply absent from the map.
+fn build_field_id_map_from_arrow_schema(arrow_schema: &ArrowSchemaRef) -> HashMap<i32, usize> {
+    let mut column_map = HashMap::new();
+    arrow_schema.fields().filter_leaves(|idx, field| {
+        if let Some(field_id) = field
+            .metadata()
+            .get(PARQUET_FIELD_ID_META_KEY)
+            .and_then(|value| i32::from_str(value).ok())
+        {
+            column_map.insert(field_id, idx);
+        }
+        false
+    });
     column_map
 }
 
@@ -421,7 +487,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
-    use arrow_array::{ArrayRef, RecordBatch, StringArray};
+    use arrow_array::{Array, ArrayRef, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
     use futures::TryStreamExt;
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY, ProjectionMask};
@@ -435,7 +501,10 @@ mod tests {
     use crate::expr::{Bind, Reference};
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskStream};
-    use crate::spec::{DataFileFormat, Datum, NestedField, PrimitiveType, Schema, Type};
+    use crate::spec::{
+        DataFileFormat, Datum, MappedField, NameMapping, NestedField, PrimitiveType, Schema,
+        StructType, Type, VariantType,
+    };
     use crate::{ErrorKind, Runtime};
 
     #[test]
@@ -528,6 +597,61 @@ message schema {
         )
         .expect("Some ProjectionMask");
         assert_eq!(mask, ProjectionMask::leaves(&parquet_schema, vec![0]));
+    }
+
+    #[test]
+    fn test_arrow_projection_mask_variant_is_unsupported() {
+        // Reading variant columns is not supported yet: projecting one (top-level or
+        // nested) must fail loudly rather than return a partial/incorrect batch.
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
+                    NestedField::required(
+                        3,
+                        "s",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(4, "vv", Type::Variant(VariantType)).into(),
+                        ])),
+                    )
+                    .into(),
+                    NestedField::required(
+                        5,
+                        "m",
+                        Type::Map(crate::spec::MapType::required(
+                            6,
+                            Type::Primitive(PrimitiveType::String),
+                            7,
+                            Type::Variant(VariantType),
+                        )),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        // The parquet/arrow schemas are irrelevant: the variant is rejected before they
+        // are consulted, so an empty descriptor is enough to drive the code path.
+        let parquet_schema = SchemaDescriptor::new(Arc::new(
+            parse_message_type("message schema { optional int32 id = 1; }").unwrap(),
+        ));
+        let arrow_schema = Arc::new(ArrowSchema::empty());
+
+        // 2 = top-level variant, 3 = struct containing a variant, 4 = the nested variant,
+        // 5 = map<string, variant>, plus a mix with a non-variant sibling.
+        for projected in [vec![2], vec![3], vec![4], vec![5], vec![1, 2]] {
+            let err = ArrowReader::get_arrow_projection_mask(
+                &projected,
+                &schema,
+                &parquet_schema,
+                &arrow_schema,
+                false,
+            )
+            .expect_err("variant projection must be rejected");
+            assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+        }
     }
 
     /// Test schema evolution: reading old Parquet file (with only column 'a')
@@ -719,6 +843,212 @@ message schema {
         assert_eq!(age_array.value(0), 30);
         assert_eq!(age_array.value(1), 25);
         assert_eq!(age_array.value(2), 35);
+    }
+
+    /// Regression test for #2403: when a Parquet file lacks embedded field IDs but a
+    /// name mapping is present, projection must use the field IDs assigned by the name
+    /// mapping — not the position-based fallback (field_id N → column N-1).
+    ///
+    /// The scenario uses a file whose physical column order does not line up with the
+    /// Iceberg field IDs: physical columns are `[name, subdept]` while the mapping
+    /// assigns `name → 2` and `subdept → 4`. The position fallback would project
+    /// field 2 from physical column 1 (`subdept`) and drop field 4 (column 3 is out of
+    /// range), silently misreading data.
+    #[tokio::test]
+    async fn test_read_parquet_with_name_mapping_uses_mapped_field_ids() {
+        // Iceberg schema: physical file order does NOT match field-id order.
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(3, "dept", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(4, "subdept", Type::Primitive(PrimitiveType::String))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Migrated Parquet file: no field-id metadata, physical columns [name, subdept].
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("subdept", DataType::Utf8, true),
+        ]));
+
+        let name_mapping = Arc::new(NameMapping::new(vec![
+            MappedField::new(Some(2), vec!["name".to_string()], vec![]),
+            MappedField::new(Some(4), vec!["subdept".to_string()], vec![]),
+        ]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIO::new_with_fs();
+
+        let name_col = Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])) as ArrayRef;
+        let subdept_col = Arc::new(StringArray::from(vec!["comms", "tax", "audit"])) as ArrayRef;
+
+        let to_write =
+            RecordBatch::try_new(arrow_schema.clone(), vec![name_col, subdept_col]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
+        let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
+        writer.write(&to_write).expect("Writing batch");
+        writer.close().unwrap();
+
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
+
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(
+                    std::fs::metadata(format!("{table_location}/1.parquet"))
+                        .unwrap()
+                        .len(),
+                )
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(format!("{table_location}/1.parquet"))
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![2, 4])
+                .with_case_sensitive(false)
+                .with_name_mapping(Some(name_mapping))
+                .build())]
+            .into_iter(),
+        )) as FileScanTaskStream;
+
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        let batch = &result[0];
+        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(batch.num_columns(), 2);
+
+        // field 2 (`name`) must come from physical column 0, not be NULL-filled.
+        let name_array = batch.column(0).as_string::<i32>();
+        assert_eq!(
+            name_array.null_count(),
+            0,
+            "`name` was NULL-filled: name mapping was ignored and position fallback was used"
+        );
+        assert_eq!(name_array.value(0), "Alice");
+        assert_eq!(name_array.value(1), "Bob");
+        assert_eq!(name_array.value(2), "Charlie");
+
+        // field 4 (`subdept`) must come from physical column 1.
+        let subdept_array = batch.column(1).as_string::<i32>();
+        assert_eq!(subdept_array.null_count(), 0);
+        assert_eq!(subdept_array.value(0), "comms");
+        assert_eq!(subdept_array.value(1), "tax");
+        assert_eq!(subdept_array.value(2), "audit");
+    }
+
+    /// Regression test for #2403, predicate side: with a name mapping present, predicate
+    /// pushdown must resolve field IDs via the mapping rather than the position fallback,
+    /// which would evaluate the filter against the wrong physical column.
+    #[tokio::test]
+    async fn test_predicate_on_name_mapped_file_uses_mapped_field_ids() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(3, "dept", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(4, "subdept", Type::Primitive(PrimitiveType::String))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("subdept", DataType::Utf8, true),
+        ]));
+
+        let name_mapping = Arc::new(NameMapping::new(vec![
+            MappedField::new(Some(2), vec!["name".to_string()], vec![]),
+            MappedField::new(Some(4), vec!["subdept".to_string()], vec![]),
+        ]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIO::new_with_fs();
+
+        // Engineered so that filtering the wrong physical column yields different rows:
+        // `name` and `subdept` both contain the value "Alice", on different rows.
+        let name_col = Arc::new(StringArray::from(vec!["Alice", "Bob", "Sue"])) as ArrayRef;
+        let subdept_col = Arc::new(StringArray::from(vec!["Bob", "Alice", "Alice"])) as ArrayRef;
+
+        let to_write =
+            RecordBatch::try_new(arrow_schema.clone(), vec![name_col, subdept_col]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let file = File::create(format!("{table_location}/1.parquet")).unwrap();
+        let mut writer = ArrowWriter::try_new(file, to_write.schema(), Some(props)).unwrap();
+        writer.write(&to_write).expect("Writing batch");
+        writer.close().unwrap();
+
+        let predicate = Reference::new("name").equal_to(Datum::string("Alice"));
+
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
+            .with_row_group_filtering_enabled(true)
+            .with_row_selection_enabled(true)
+            .build();
+
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(
+                    std::fs::metadata(format!("{table_location}/1.parquet"))
+                        .unwrap()
+                        .len(),
+                )
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(format!("{table_location}/1.parquet"))
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![2, 4])
+                .with_case_sensitive(false)
+                .with_name_mapping(Some(name_mapping))
+                .with_predicate(Some(predicate.bind(schema, true).unwrap()))
+                .build())]
+            .into_iter(),
+        )) as FileScanTaskStream;
+
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(
+            total_rows, 1,
+            "filter `name = \"Alice\"` matched the wrong rows: predicate was evaluated \
+             against the wrong physical column"
+        );
+
+        let batch = &result[0];
+        let name_array = batch.column(0).as_string::<i32>();
+        assert_eq!(name_array.value(0), "Alice");
+        let subdept_array = batch.column(1).as_string::<i32>();
+        assert_eq!(subdept_array.value(0), "Bob");
     }
 
     /// Test reading Parquet files without field IDs with partial projection.
@@ -1030,7 +1360,7 @@ message schema {
                     NestedField::required(
                         2,
                         "person",
-                        Type::Struct(crate::spec::StructType::new(vec![
+                        Type::Struct(StructType::new(vec![
                             NestedField::required(
                                 3,
                                 "name",
@@ -1570,7 +1900,7 @@ message schema {
                     NestedField::required(
                         1,
                         "person",
-                        Type::Struct(crate::spec::StructType::new(vec![
+                        Type::Struct(StructType::new(vec![
                             NestedField::required(
                                 5,
                                 "name",
@@ -1589,7 +1919,7 @@ message schema {
                             element_field: NestedField::required(
                                 7,
                                 "element",
-                                Type::Struct(crate::spec::StructType::new(vec![
+                                Type::Struct(StructType::new(vec![
                                     NestedField::required(
                                         8,
                                         "name",

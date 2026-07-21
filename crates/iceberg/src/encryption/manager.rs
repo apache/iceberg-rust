@@ -41,7 +41,7 @@ use super::io::EncryptedOutputFile;
 use super::key_metadata::StandardKeyMetadata;
 use super::kms::KeyManagementClient;
 use crate::io::OutputFile;
-use crate::spec::EncryptedKey;
+use crate::spec::{EncryptedKey, FormatVersion, TableMetadataRef};
 use crate::{Error, ErrorKind, Result};
 
 /// Property key for the KEK creation timestamp (milliseconds since epoch).
@@ -105,6 +105,47 @@ impl fmt::Debug for EncryptionManager {
 }
 
 impl EncryptionManager {
+    /// Attempt to construct an [`EncryptionManager`] from table metadata.
+    ///
+    /// Returns `Ok(None)` if the format version is below v3 or the
+    /// `encryption.key-id` property is not set. Returns an error if the
+    /// property is set but no [`KeyManagementClient`] was provided.
+    pub(crate) fn from_table_metadata(
+        kms_client: Option<&Arc<dyn KeyManagementClient>>,
+        metadata: &TableMetadataRef,
+    ) -> Result<Option<Arc<Self>>> {
+        if metadata.format_version() < FormatVersion::V3 {
+            return Ok(None);
+        }
+
+        let table_properties = metadata.table_properties()?;
+        let Some(table_key_id) = table_properties.encryption_key_id else {
+            if kms_client.is_some() {
+                tracing::warn!(
+                    "KeyManagementClient provided but table does not have encryption.key-id set"
+                );
+            }
+            return Ok(None);
+        };
+
+        let kms_client = kms_client.ok_or_else(|| {
+            Error::new(
+                ErrorKind::PreconditionFailed,
+                "Table has encryption.key-id set but no KeyManagementClient was provided to TableBuilder",
+            )
+        })?;
+
+        let em = EncryptionManager::builder()
+            .kms_client(Arc::clone(kms_client))
+            .table_key_id(table_key_id)
+            .encryption_keys(metadata.encryption_keys.clone())
+            .key_size(AesKeySize::from_key_length(
+                table_properties.encryption_data_key_length,
+            )?)
+            .build();
+        Ok(Some(Arc::new(em)))
+    }
+
     /// Encrypt a file with AGS1 stream encryption.
     ///
     /// Returns an [`EncryptedOutputFile`] that transparently encrypts on
@@ -112,7 +153,7 @@ impl EncryptionManager {
     pub fn encrypt(&self, raw_output: OutputFile) -> EncryptedOutputFile {
         let dek = SecureKey::generate(self.key_size);
         let aad_prefix = Self::generate_aad_prefix();
-        let metadata = StandardKeyMetadata::new(dek.as_bytes()).with_aad_prefix(&aad_prefix);
+        let metadata = StandardKeyMetadata::from(dek).with_aad_prefix(&aad_prefix);
         EncryptedOutputFile::new(raw_output, metadata)
     }
 
@@ -419,7 +460,9 @@ mod tests {
     }
 
     fn sample_key_metadata() -> StandardKeyMetadata {
-        StandardKeyMetadata::new(b"0123456789abcdef").with_aad_prefix(b"test-aad-prefix!")
+        StandardKeyMetadata::try_new(b"0123456789abcdef")
+            .unwrap()
+            .with_aad_prefix(b"test-aad-prefix!")
     }
 
     #[tokio::test]

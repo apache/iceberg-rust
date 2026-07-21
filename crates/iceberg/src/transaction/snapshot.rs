@@ -113,7 +113,6 @@ pub(crate) struct SnapshotProducer<'a> {
     pub(crate) table: &'a Table,
     snapshot_id: i64,
     commit_uuid: Uuid,
-    key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
@@ -126,7 +125,6 @@ impl<'a> SnapshotProducer<'a> {
     pub(crate) fn new(
         table: &'a Table,
         commit_uuid: Uuid,
-        key_metadata: Option<Vec<u8>>,
         snapshot_properties: HashMap<String, String>,
         added_data_files: Vec<DataFile>,
     ) -> Self {
@@ -134,7 +132,6 @@ impl<'a> SnapshotProducer<'a> {
             table,
             snapshot_id: Self::generate_unique_snapshot_id(table),
             commit_uuid,
-            key_metadata,
             snapshot_properties,
             added_data_files,
             manifest_counter: (0..),
@@ -255,7 +252,6 @@ impl<'a> SnapshotProducer<'a> {
         let builder = ManifestWriterBuilder::new(
             output_file,
             Some(self.snapshot_id),
-            self.key_metadata.clone(),
             self.table.metadata().current_schema().clone(),
             self.table
                 .metadata()
@@ -338,7 +334,9 @@ impl<'a> SnapshotProducer<'a> {
         writer.write_manifest_file().await
     }
 
-    async fn manifest_file<OP: SnapshotProduceOperation, MP: ManifestProcess>(
+    /// Creates new manifests for data files added or removed,
+    /// and collects all of the manifests to be included in the new snapshot as [ManifestFile] entries.
+    async fn produce_manifests<OP: SnapshotProduceOperation, MP: ManifestProcess>(
         &mut self,
         snapshot_produce_operation: &OP,
         manifest_process: &MP,
@@ -404,8 +402,13 @@ impl<'a> SnapshotProducer<'a> {
 
         let previous_snapshot = table_metadata.current_snapshot();
 
-        let mut additional_properties = summary_collector.build();
-        additional_properties.extend(self.snapshot_properties.clone());
+        // User-supplied snapshot properties are applied first, then the computed
+        // metrics overwrite any colliding keys. This matches iceberg-java
+        // (`SnapshotProducer.summary`), where computed `added-*`/`total-*` values
+        // are written after user properties so a user cannot shadow them with a
+        // bad (or merely wrong) value that would corrupt the snapshot summary.
+        let mut additional_properties = self.snapshot_properties.clone();
+        additional_properties.extend(summary_collector.build());
 
         let summary = Summary {
             operation: snapshot_produce_operation.operation(),
@@ -440,42 +443,49 @@ impl<'a> SnapshotProducer<'a> {
         let manifest_list_path = self.generate_manifest_list_file_path(0);
         let next_seq_num = self.table.metadata().next_sequence_number();
         let first_row_id = self.table.metadata().next_row_id();
-        let writer = self
+
+        let raw_output = self
             .table
             .file_io()
-            .new_output(manifest_list_path.clone())?
-            .writer()
-            .await?;
+            .new_output(manifest_list_path.clone())?;
+
+        let (writer, encryption_key_id) = match self.table.encryption_manager() {
+            Some(em) => {
+                let encrypted_output = em.encrypt(raw_output);
+                let key_id = em
+                    .encrypt_manifest_list_key_metadata(encrypted_output.key_metadata())
+                    .await?;
+                (encrypted_output.writer().await?, Some(key_id))
+            }
+            None => (raw_output.writer().await?, None),
+        };
+
+        let parent_snapshot_id = self.table.metadata().current_snapshot_id();
         let mut manifest_list_writer = match self.table.metadata().format_version() {
-            FormatVersion::V1 => ManifestListWriter::v1(
-                writer,
-                self.snapshot_id,
-                self.table.metadata().current_snapshot_id(),
-            ),
-            FormatVersion::V2 => ManifestListWriter::v2(
-                writer,
-                self.snapshot_id,
-                self.table.metadata().current_snapshot_id(),
-                next_seq_num,
-            ),
+            FormatVersion::V1 => {
+                ManifestListWriter::v1(writer, self.snapshot_id, parent_snapshot_id)
+            }
+            FormatVersion::V2 => {
+                ManifestListWriter::v2(writer, self.snapshot_id, parent_snapshot_id, next_seq_num)
+            }
             FormatVersion::V3 => ManifestListWriter::v3(
                 writer,
                 self.snapshot_id,
-                self.table.metadata().current_snapshot_id(),
+                parent_snapshot_id,
                 next_seq_num,
                 Some(first_row_id),
             ),
         };
 
-        // Calling self.summary() before self.manifest_file() is important because self.added_data_files
-        // will be set to an empty vec after self.manifest_file() returns, resulting in an empty summary
+        // Calling self.summary() before self.produce_manifests() is important because self.added_data_files
+        // will be set to an empty vec after self.produce_manifests() returns, resulting in an empty summary
         // being generated.
         let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
             Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
         })?;
 
         let new_manifests = self
-            .manifest_file(&snapshot_produce_operation, &process)
+            .produce_manifests(&snapshot_produce_operation, &process)
             .await?;
 
         manifest_list_writer.add_manifests(new_manifests.into_iter())?;
@@ -490,6 +500,7 @@ impl<'a> SnapshotProducer<'a> {
             .with_sequence_number(next_seq_num)
             .with_summary(summary)
             .with_schema_id(self.table.metadata().current_schema_id())
+            .with_encryption_key_id(encryption_key_id)
             .with_timestamp_ms(commit_ts);
 
         let new_snapshot = if let Some(writer_next_row_id) = writer_next_row_id {
@@ -501,7 +512,22 @@ impl<'a> SnapshotProducer<'a> {
             new_snapshot.build()
         };
 
-        let updates = vec![
+        let encryption_key_updates: Vec<TableUpdate> = self
+            .table
+            .encryption_manager()
+            .map(|em| {
+                em.with_encryption_keys(|keys| {
+                    keys.values()
+                        .filter(|k| self.table.metadata().encryption_key(k.key_id()).is_none())
+                        .map(|k| TableUpdate::AddEncryptionKey {
+                            encryption_key: k.clone(),
+                        })
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
+
+        let updates = [encryption_key_updates, vec![
             TableUpdate::AddSnapshot {
                 snapshot: new_snapshot,
             },
@@ -512,7 +538,8 @@ impl<'a> SnapshotProducer<'a> {
                     SnapshotRetention::branch(None, None, None),
                 ),
             },
-        ];
+        ]]
+        .concat();
 
         let requirements = vec![
             TableRequirement::UuidMatch {

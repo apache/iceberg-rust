@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -113,10 +112,6 @@ impl IcebergCatalogList {
 }
 
 impl CatalogProviderList for IcebergCatalogList {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn register_catalog(
         &self,
         _name: String,

@@ -23,10 +23,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use aws_sdk_s3tables::operation::create_table::CreateTableOutput;
 use aws_sdk_s3tables::operation::get_namespace::GetNamespaceOutput;
-use aws_sdk_s3tables::operation::get_table::GetTableOutput;
+use aws_sdk_s3tables::operation::get_table::{GetTableError, GetTableOutput};
 use aws_sdk_s3tables::operation::list_tables::ListTablesOutput;
 use aws_sdk_s3tables::operation::update_table_metadata_location::UpdateTableMetadataLocationError;
 use aws_sdk_s3tables::types::OpenTableFormat;
+use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
@@ -71,6 +72,7 @@ struct S3TablesCatalogConfig {
 pub struct S3TablesCatalogBuilder {
     config: S3TablesCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
 }
 
@@ -86,6 +88,7 @@ impl Default for S3TablesCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
+            kms_client_factory: None,
             runtime: None,
         }
     }
@@ -131,6 +134,11 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
 
     fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
         self.storage_factory = Some(storage_factory);
+        self
+    }
+
+    fn with_kms_client_factory(mut self, kms_client_factory: Arc<dyn KmsClientFactory>) -> Self {
+        self.kms_client_factory = Some(kms_client_factory);
         self
     }
 
@@ -183,7 +191,11 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
                     Some(rt) => rt,
                     None => Runtime::try_current()?,
                 };
-                S3TablesCatalog::new(self.config, self.storage_factory, runtime).await
+                let kms_client = match self.kms_client_factory {
+                    Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
+                    None => None,
+                };
+                S3TablesCatalog::new(self.config, self.storage_factory, runtime, kms_client).await
             }
         }
     }
@@ -196,6 +208,7 @@ pub struct S3TablesCatalog {
     s3tables_client: aws_sdk_s3tables::Client,
     file_io: FileIO,
     runtime: Runtime,
+    kms_client: Option<Arc<dyn KeyManagementClient>>,
 }
 
 impl S3TablesCatalog {
@@ -204,6 +217,7 @@ impl S3TablesCatalog {
         config: S3TablesCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
+        kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
         let s3tables_client = if let Some(client) = config.client.clone() {
             client
@@ -227,6 +241,7 @@ impl S3TablesCatalog {
             s3tables_client,
             file_io,
             runtime,
+            kms_client,
         })
     }
 
@@ -240,7 +255,23 @@ impl S3TablesCatalog {
             .table_bucket_arn(self.config.table_bucket_arn.clone())
             .namespace(table_ident.namespace().to_url_string())
             .name(table_ident.name());
-        let resp: GetTableOutput = req.send().await.map_err(from_aws_sdk_error)?;
+
+        let resp = req.send().await.map_err(|err| {
+            if err
+                .as_service_error()
+                .is_some_and(GetTableError::is_not_found_exception)
+            {
+                // S3 Tables GetTable API only reports that the resource was not found, and does not distinguish between namespaces and tables.
+                // https://docs.aws.amazon.com/AmazonS3/latest/API/API_s3Buckets_GetTable.html#API_s3Buckets_GetTable_Errors
+                Error::new(
+                    ErrorKind::TableNotFound,
+                    format!("Table {table_ident} is not found, either because the namespace or table did not exist"),
+                )
+                .with_source(err)
+            } else {
+                from_aws_sdk_error(err)
+            }
+        })?;
 
         // when a table is created, it's possible that the metadata location is not set.
         let metadata_location = resp.metadata_location().ok_or_else(|| {
@@ -254,13 +285,16 @@ impl S3TablesCatalog {
         })?;
         let metadata = TableMetadata::read_from(&self.file_io, metadata_location).await?;
 
-        let table = Table::builder()
+        let mut builder = Table::builder()
             .identifier(table_ident.clone())
             .metadata(metadata)
             .metadata_location(metadata_location)
             .file_io(self.file_io.clone())
-            .runtime(self.runtime.clone())
-            .build()?;
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        let table = builder.build()?;
         Ok((table, resp.version_token))
     }
 }
@@ -553,13 +587,16 @@ impl Catalog for S3TablesCatalog {
             .await
             .map_err(from_aws_sdk_error)?;
 
-        let table = Table::builder()
+        let mut builder = Table::builder()
             .identifier(table_ident)
             .metadata_location(metadata_location_str)
             .metadata(metadata)
             .file_io(self.file_io.clone())
-            .runtime(self.runtime.clone())
-            .build()?;
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        let table = builder.build()?;
         Ok(table)
     }
 
@@ -743,7 +780,7 @@ mod tests {
         };
 
         Ok(Some(
-            S3TablesCatalog::new(config, None, Runtime::current()).await?,
+            S3TablesCatalog::new(config, None, Runtime::current(), None).await?,
         ))
     }
 
@@ -782,14 +819,26 @@ mod tests {
             Err(e) => panic!("Error loading catalog: {e}"),
         };
 
-        let table = catalog
+        let _table = catalog
             .load_table(&TableIdent::new(
                 NamespaceIdent::new("aws_s3_metadata".to_string()),
                 "query_storage_metadata".to_string(),
             ))
             .await
-            .unwrap();
-        println!("{table:?}");
+            .expect("table that exists should be loaded");
+
+        let load_table_err = catalog
+            .load_table(&TableIdent::new(
+                NamespaceIdent::new("not_a_namespace".to_string()),
+                "not_a_table_name".to_string(),
+            ))
+            .await
+            .expect_err("loading a table that does not exist should fail");
+        assert_eq!(
+            load_table_err.kind(),
+            ErrorKind::TableNotFound,
+            "must return table not found error for non-existent table"
+        );
     }
 
     #[tokio::test]
@@ -1244,7 +1293,7 @@ mod tests {
         .unwrap();
 
         // Locations will be generated based on the table metadata, which will be using `s3://` for Amazon S3 Tables.
-        let location_generator = DefaultLocationGenerator::new(table.metadata().clone()).unwrap();
+        let location_generator = DefaultLocationGenerator::new(table.metadata()).unwrap();
         let file_name_generator = DefaultFileNameGenerator::new(
             "test".to_string(),
             None,

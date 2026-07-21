@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
@@ -67,6 +68,7 @@ static TEST_BEFORE_ACQUIRE: bool = true; // Default the health-check of each con
 pub struct SqlCatalogBuilder {
     config: SqlCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
 }
 
@@ -81,6 +83,7 @@ impl Default for SqlCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
+            kms_client_factory: None,
             runtime: None,
         }
     }
@@ -145,6 +148,11 @@ impl CatalogBuilder for SqlCatalogBuilder {
         self
     }
 
+    fn with_kms_client_factory(mut self, kms_client_factory: Arc<dyn KmsClientFactory>) -> Self {
+        self.kms_client_factory = Some(kms_client_factory);
+        self
+    }
+
     fn with_runtime(mut self, runtime: Runtime) -> Self {
         self.runtime = Some(runtime);
         self
@@ -201,7 +209,11 @@ impl CatalogBuilder for SqlCatalogBuilder {
                     Some(rt) => rt,
                     None => Runtime::try_current()?,
                 };
-                SqlCatalog::new(self.config, self.storage_factory, runtime).await
+                let kms_client = match self.kms_client_factory {
+                    Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
+                    None => None,
+                };
+                SqlCatalog::new(self.config, self.storage_factory, runtime, kms_client).await
             }
         }
     }
@@ -233,6 +245,7 @@ pub struct SqlCatalog {
     fileio: FileIO,
     sql_bind_style: SqlBindStyle,
     runtime: Runtime,
+    kms_client: Option<Arc<dyn KeyManagementClient>>,
 }
 
 #[derive(Debug, PartialEq, strum::EnumString, strum::Display)]
@@ -250,6 +263,7 @@ impl SqlCatalog {
         config: SqlCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
+        kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
         let factory = storage_factory.ok_or_else(|| {
             Error::new(
@@ -321,6 +335,7 @@ impl SqlCatalog {
             fileio,
             sql_bind_style: config.sql_bind_style,
             runtime,
+            kms_client,
         })
     }
 
@@ -452,7 +467,7 @@ impl Catalog for SqlCatalog {
 
         if exists {
             return Err(Error::new(
-                iceberg::ErrorKind::NamespaceAlreadyExists,
+                ErrorKind::NamespaceAlreadyExists,
                 format!("Namespace {namespace:?} already exists"),
             ));
         }
@@ -655,7 +670,7 @@ impl Catalog for SqlCatalog {
             let tables = self.list_tables(namespace).await?;
             if !tables.is_empty() {
                 return Err(Error::new(
-                    iceberg::ErrorKind::Unexpected,
+                    ErrorKind::Unexpected,
                     format!(
                         "Namespace {:?} is not empty. {} tables exist.",
                         namespace,
@@ -818,13 +833,16 @@ impl Catalog for SqlCatalog {
 
         let metadata = TableMetadata::read_from(&self.fileio, &tbl_metadata_location).await?;
 
-        Ok(Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.fileio.clone())
             .identifier(identifier.clone())
             .metadata_location(tbl_metadata_location)
             .metadata(metadata)
-            .runtime(self.runtime.clone())
-            .build()?)
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        Ok(builder.build()?)
     }
 
     async fn create_table(
@@ -889,13 +907,16 @@ impl Catalog for SqlCatalog {
              VALUES (?, ?, ?, ?, ?)
             "), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name.clone()), Some(&tbl_metadata_location_str), Some(CATALOG_FIELD_TABLE_RECORD_TYPE)], None).await?;
 
-        Ok(Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.fileio.clone())
             .metadata_location(tbl_metadata_location_str)
             .identifier(tbl_ident)
             .metadata(tbl_metadata)
-            .runtime(self.runtime.clone())
-            .build()?)
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        Ok(builder.build()?)
     }
 
     async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
@@ -961,13 +982,16 @@ impl Catalog for SqlCatalog {
              VALUES (?, ?, ?, ?, ?)
             "), vec![Some(&self.name), Some(&namespace.join(".")), Some(&tbl_name), Some(&metadata_location), Some(CATALOG_FIELD_TABLE_RECORD_TYPE)], None).await?;
 
-        Ok(Table::builder()
+        let mut builder = Table::builder()
             .identifier(table_ident.clone())
             .metadata_location(metadata_location)
             .metadata(metadata)
             .file_io(self.fileio.clone())
-            .runtime(self.runtime.clone())
-            .build()?)
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        Ok(builder.build()?)
     }
 
     /// Updates an existing table within the SQL catalog.
@@ -1052,7 +1076,7 @@ mod tests {
         temp_dir.path().to_str().unwrap().to_string()
     }
 
-    fn to_set<T: std::cmp::Eq + Hash>(vec: Vec<T>) -> HashSet<T> {
+    fn to_set<T: Eq + Hash>(vec: Vec<T>) -> HashSet<T> {
         HashSet::from_iter(vec)
     }
 

@@ -252,12 +252,12 @@ pub trait FileRead: Send + Sync + Unpin + 'static {
     /// Read file content with given range.
     ///
     /// TODO: we can support reading non-contiguous bytes in the future.
-    async fn read(&self, range: Range<u64>) -> crate::Result<Bytes>;
+    async fn read(&self, range: Range<u64>) -> Result<Bytes>;
 }
 
 #[async_trait::async_trait]
 impl<T: AsRef<dyn FileRead> + Send + Sync + Unpin + 'static> FileRead for T {
-    async fn read(&self, range: Range<u64>) -> crate::Result<Bytes> {
+    async fn read(&self, range: Range<u64>) -> Result<Bytes> {
         self.as_ref().read(range).await
     }
 }
@@ -282,26 +282,26 @@ impl InputFile {
     }
 
     /// Check if file exists.
-    pub async fn exists(&self) -> crate::Result<bool> {
+    pub async fn exists(&self) -> Result<bool> {
         self.storage.exists(&self.path).await
     }
 
     /// Fetch and returns metadata of file.
-    pub async fn metadata(&self) -> crate::Result<FileMetadata> {
+    pub async fn metadata(&self) -> Result<FileMetadata> {
         self.storage.metadata(&self.path).await
     }
 
     /// Read and returns whole content of file.
     ///
     /// For continuous reading, use [`Self::reader`] instead.
-    pub async fn read(&self) -> crate::Result<Bytes> {
+    pub async fn read(&self) -> Result<Bytes> {
         self.storage.read(&self.path).await
     }
 
     /// Creates [`FileRead`] for continuous reading.
     ///
     /// For one-time reading, use [`Self::read`] instead.
-    pub async fn reader(&self) -> crate::Result<Box<dyn FileRead>> {
+    pub async fn reader(&self) -> Result<Box<dyn FileRead>> {
         self.storage.reader(&self.path).await
     }
 }
@@ -317,12 +317,12 @@ pub trait FileWrite: Send + Unpin + 'static {
     /// Write bytes to file.
     ///
     /// TODO: we can support writing non-contiguous bytes in the future.
-    async fn write(&mut self, bs: Bytes) -> crate::Result<()>;
+    async fn write(&mut self, bs: Bytes) -> Result<()>;
 
     /// Close file.
     ///
     /// Calling close on closed file will generate an error.
-    async fn close(&mut self) -> crate::Result<()>;
+    async fn close(&mut self) -> Result<()>;
 }
 
 /// Output file is used for writing to files..
@@ -370,7 +370,7 @@ impl OutputFile {
     ///
     /// Calling `write` will overwrite the file if it exists.
     /// For continuous writing, use [`Self::writer`].
-    pub async fn write(&self, bs: Bytes) -> crate::Result<()> {
+    pub async fn write(&self, bs: Bytes) -> Result<()> {
         self.storage.write(&self.path, bs).await
     }
 
@@ -379,7 +379,7 @@ impl OutputFile {
     /// # Notes
     ///
     /// For one-time writing, use [`Self::write`] instead.
-    pub async fn writer(&self) -> crate::Result<Box<dyn FileWrite>> {
+    pub async fn writer(&self) -> Result<Box<dyn FileWrite>> {
         self.storage.writer(&self.path).await
     }
 }

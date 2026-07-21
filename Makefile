@@ -26,8 +26,9 @@ check-fmt:
 check-clippy:
 	cargo clippy --all-targets --all-features --workspace -- -D warnings
 
+# Keep version in sync with the CI lint install step in .github/workflows/ci.yml.
 install-cargo-machete:
-	cargo install cargo-machete@0.7.0
+	cargo install --locked cargo-machete@0.7.0
 
 cargo-machete: install-cargo-machete
 	cargo machete
@@ -38,8 +39,9 @@ install-cargo-nextest:
 nextest: install-cargo-nextest
 	cargo nextest run --all-targets --all-features --workspace
 
+# Keep version in sync with the CI lint install step in .github/workflows/ci.yml.
 install-taplo-cli:
-	cargo install taplo-cli@0.9.3
+	cargo install --locked taplo-cli@0.9.3
 
 fix-toml: install-taplo-cli
 	taplo fmt
@@ -53,14 +55,16 @@ MSRV_VERSION    := $(shell awk -F'"' '/^rust-version/ {print $$2}' Cargo.toml)
 check-msrv:
 	cargo +$(MSRV_VERSION) check --workspace
 
-PUBLIC_API_CRATES := $(shell cargo metadata --no-deps --format-version 1 | \
-	jq -r '.packages[] | select(.publish == null) | "\(.name):\(.manifest_path)"')
+# Evaluated inside the recipes that need it rather than with $(shell) at parse
+# time, so plain `make <target>` invocations don't pay a cargo metadata call.
+PUBLIC_API_CRATES_CMD = cargo metadata --no-deps --format-version 1 | \
+	jq -r '.packages[] | select(.publish == null) | "\(.name):\(.manifest_path)"'
 
 install-cargo-public-api:
 	cargo install --locked cargo-public-api@0.51.0
 
 generate-public-api: install-cargo-public-api
-	@for entry in $(PUBLIC_API_CRATES); do \
+	@for entry in $$($(PUBLIC_API_CRATES_CMD)); do \
 		crate=$${entry%%:*}; \
 		manifest=$${entry##*:}; \
 		crate_dir=$$(dirname "$$manifest"); \
@@ -70,7 +74,7 @@ generate-public-api: install-cargo-public-api
 
 check-public-api: install-cargo-public-api
 	@fail=0; \
-	for entry in $(PUBLIC_API_CRATES); do \
+	for entry in $$($(PUBLIC_API_CRATES_CMD)); do \
 		crate=$${entry%%:*}; \
 		manifest=$${entry##*:}; \
 		crate_dir=$$(dirname "$$manifest"); \
@@ -98,7 +102,7 @@ clean:
 	cargo clean
 
 install-mdbook:
-	cargo install mdbook@0.4.36
+	cargo install --locked mdbook@0.4.36
 
 site: install-mdbook
 	cd website && mdbook serve
