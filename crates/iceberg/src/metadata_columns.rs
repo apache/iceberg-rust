@@ -425,6 +425,12 @@ pub fn get_metadata_field(field_id: i32) -> Result<&'static NestedFieldRef> {
 
 /// Returns the field ID for a metadata column name.
 ///
+/// This maps every reserved name to its field id, including the position-delete-file
+/// internal columns `pos` and `file_path`, which are not `_`-prefixed. It is therefore
+/// not a membership test for data-table metadata columns: `get_metadata_field_id("pos")`
+/// returns `Ok` even though `pos` is a valid user data column name. To decide whether a
+/// name is a projectable data-table metadata column, use [`is_metadata_column_name`].
+///
 /// # Arguments
 /// * `column_name` - The metadata column name
 ///
@@ -478,15 +484,26 @@ pub fn is_metadata_field(field_id: i32) -> bool {
     )
 }
 
-/// Checks if a column name is a metadata column.
+/// Checks if a column name is a metadata column of a data table.
+///
+/// Only the `_`-prefixed reserved names (`_file`, `_pos`, `_partition`, `_spec_id`,
+/// `_deleted`, and the changelog/row-lineage columns) are metadata columns that can be
+/// projected in a data-table scan. Per the Iceberg spec, reserved metadata column names
+/// are `_`-prefixed precisely so they cannot collide with user data columns.
+///
+/// The bare names `pos` and `file_path` are the internal columns of a position-delete
+/// file, not projectable metadata columns of a data table, so they are excluded here even
+/// though [`get_metadata_field_id`] still maps them to their reserved field ids. Without
+/// this exclusion a real data column named `pos` or `file_path` would be shadowed and fail
+/// to scan.
 ///
 /// # Arguments
 /// * `column_name` - The column name to check
 ///
 /// # Returns
-/// `true` if the column name is a metadata column, `false` otherwise
+/// `true` if the column name is a projectable data-table metadata column, `false` otherwise
 pub fn is_metadata_column_name(column_name: &str) -> bool {
-    get_metadata_field_id(column_name).is_ok()
+    column_name.starts_with('_') && get_metadata_field_id(column_name).is_ok()
 }
 
 #[cfg(test)]
@@ -568,5 +585,46 @@ mod tests {
         assert!(get_metadata_field(RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID).is_ok());
         assert!(get_metadata_field(RESERVED_FIELD_ID_ROW_ID).is_ok());
         assert!(get_metadata_field(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER).is_ok());
+    }
+
+    #[test]
+    fn test_underscore_prefixed_names_are_metadata_columns() {
+        assert!(is_metadata_column_name(RESERVED_COL_NAME_FILE));
+        assert!(is_metadata_column_name(RESERVED_COL_NAME_POS));
+        assert!(is_metadata_column_name(RESERVED_COL_NAME_DELETED));
+        assert!(is_metadata_column_name(RESERVED_COL_NAME_SPEC_ID));
+        assert!(is_metadata_column_name(RESERVED_COL_NAME_PARTITION));
+        assert!(is_metadata_column_name(RESERVED_COL_NAME_CHANGE_TYPE));
+        assert!(is_metadata_column_name(RESERVED_COL_NAME_ROW_ID));
+    }
+
+    #[test]
+    fn test_delete_file_column_names_are_not_data_table_metadata_columns() {
+        // `pos` and `file_path` are the internal columns of a position-delete file, not
+        // projectable metadata columns of a data table. They must not shadow real data
+        // columns of the same name during a scan (issue #2837).
+        assert!(!is_metadata_column_name(RESERVED_COL_NAME_DELETE_FILE_POS));
+        assert!(!is_metadata_column_name(RESERVED_COL_NAME_DELETE_FILE_PATH));
+        assert!(!is_metadata_column_name("pos"));
+        assert!(!is_metadata_column_name("file_path"));
+
+        // `get_metadata_field_id` intentionally still maps these bare names to their
+        // reserved field ids; only the data-table membership check excludes them.
+        assert_eq!(
+            get_metadata_field_id(RESERVED_COL_NAME_DELETE_FILE_POS).unwrap(),
+            RESERVED_FIELD_ID_DELETE_FILE_POS
+        );
+        assert_eq!(
+            get_metadata_field_id(RESERVED_COL_NAME_DELETE_FILE_PATH).unwrap(),
+            RESERVED_FIELD_ID_DELETE_FILE_PATH
+        );
+    }
+
+    #[test]
+    fn test_ordinary_data_column_names_are_not_metadata_columns() {
+        assert!(!is_metadata_column_name("id"));
+        assert!(!is_metadata_column_name("name"));
+        // A user column that merely starts with an underscore but is not reserved.
+        assert!(!is_metadata_column_name("_custom"));
     }
 }
