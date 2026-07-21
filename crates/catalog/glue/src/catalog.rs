@@ -204,6 +204,7 @@ impl GlueCatalog {
             &config.props,
             config.uri.as_deref(),
             DEFAULT_ASSUME_ROLE_SESSION_NAME,
+            sdk_config.region().map(AsRef::as_ref),
         );
 
         let client = aws_sdk_glue::Client::new(&sdk_config);

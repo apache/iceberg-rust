@@ -47,8 +47,16 @@ pub const S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN: &str = "table_bucket_arn";
 pub const S3TABLES_CATALOG_PROP_ENDPOINT_URL: &str = "endpoint_url";
 const DEFAULT_ASSUME_ROLE_SESSION_NAME: &str = "iceberg-s3tables-catalog";
 
-fn file_io_properties(properties: &HashMap<String, String>) -> HashMap<String, String> {
-    map_aws_to_s3_properties(properties, None, DEFAULT_ASSUME_ROLE_SESSION_NAME)
+fn file_io_properties(
+    properties: &HashMap<String, String>,
+    resolved_region: Option<&str>,
+) -> HashMap<String, String> {
+    map_aws_to_s3_properties(
+        properties,
+        None,
+        DEFAULT_ASSUME_ROLE_SESSION_NAME,
+        resolved_region,
+    )
 }
 
 /// S3Tables catalog configuration.
@@ -240,7 +248,8 @@ impl S3TablesCatalog {
 
         // The S3Tables endpoint is a control-plane endpoint, not an S3 object
         // storage endpoint. FileIO only honors an explicit `s3.endpoint`.
-        let mut file_io_props = file_io_properties(&config.props);
+        let mut file_io_props =
+            file_io_properties(&config.props, aws_config.region().map(AsRef::as_ref));
 
         // Use provided factory or default to OpenDalStorageFactory::S3
         let factory = storage_factory.unwrap_or_else(|| {
@@ -1063,18 +1072,47 @@ mod tests {
             ),
         ]);
 
-        let mapped = file_io_properties(&properties);
+        let mapped = file_io_properties(&properties, None);
 
         assert_eq!(
             mapped.get(iceberg::io::S3_ENDPOINT).map(String::as_str),
             Some(storage_endpoint)
         );
 
-        let mapped_without_s3_endpoint = file_io_properties(&HashMap::from([(
-            S3TABLES_CATALOG_PROP_ENDPOINT_URL.to_string(),
-            control_plane_endpoint.to_string(),
-        )]));
+        let mapped_without_s3_endpoint = file_io_properties(
+            &HashMap::from([(
+                S3TABLES_CATALOG_PROP_ENDPOINT_URL.to_string(),
+                control_plane_endpoint.to_string(),
+            )]),
+            None,
+        );
         assert!(!mapped_without_s3_endpoint.contains_key(iceberg::io::S3_ENDPOINT));
+    }
+
+    #[test]
+    fn test_file_io_region_falls_back_to_resolved_region() {
+        // No `region_name`/`s3.region` property is set: FileIO should still learn the
+        // region actually resolved onto the SDK config (e.g. via an AWS profile or IMDS).
+        let mapped = file_io_properties(&HashMap::new(), Some("eu-central-1"));
+        assert_eq!(
+            mapped.get(iceberg::io::S3_REGION).map(String::as_str),
+            Some("eu-central-1")
+        );
+
+        // An explicit `region_name` property still takes precedence.
+        let mapped_with_explicit_region = file_io_properties(
+            &HashMap::from([(
+                iceberg_aws::AWS_REGION_NAME.to_string(),
+                "ap-southeast-2".to_string(),
+            )]),
+            Some("eu-central-1"),
+        );
+        assert_eq!(
+            mapped_with_explicit_region
+                .get(iceberg::io::S3_REGION)
+                .map(String::as_str),
+            Some("ap-southeast-2")
+        );
     }
 
     #[tokio::test]

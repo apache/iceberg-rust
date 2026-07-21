@@ -231,10 +231,20 @@ pub fn remove_assume_role_properties(properties: &mut HashMap<String, String>) {
 ///
 /// Explicit S3 properties take precedence. When AssumeRole is enabled, the
 /// service-specific default session name is materialized for FileIO.
+///
+/// `resolved_region` should be the region actually resolved onto the SDK
+/// configuration used for the catalog client (e.g. via
+/// `sdk_config.region()`), typically obtained from [`create_sdk_config`].
+/// It is only used as a last-resort fallback: an explicit `s3.region`
+/// property always wins, followed by the generic `region_name` property,
+/// and only then `resolved_region`. This ensures FileIO still lands on the
+/// correct region when it was resolved implicitly (via an AWS profile,
+/// `AWS_REGION`/IMDS, etc.) rather than through an explicit property.
 pub fn map_aws_to_s3_properties(
     properties: &HashMap<String, String>,
     endpoint_uri: Option<&str>,
     default_session_name: &str,
+    resolved_region: Option<&str>,
 ) -> HashMap<String, String> {
     let mut s3_props = properties.clone();
 
@@ -251,10 +261,12 @@ pub fn map_aws_to_s3_properties(
             secret_access_key.to_string(),
         );
     }
-    if !s3_props.contains_key(S3_REGION)
-        && let Some(region) = s3_props.get(AWS_REGION_NAME)
-    {
-        s3_props.insert(S3_REGION.to_string(), region.to_string());
+    if !s3_props.contains_key(S3_REGION) {
+        if let Some(region) = s3_props.get(AWS_REGION_NAME) {
+            s3_props.insert(S3_REGION.to_string(), region.to_string());
+        } else if let Some(region) = resolved_region {
+            s3_props.insert(S3_REGION.to_string(), region.to_string());
+        }
     }
     if !s3_props.contains_key(S3_SESSION_TOKEN)
         && let Some(session_token) = s3_props.get(AWS_SESSION_TOKEN)
@@ -539,11 +551,13 @@ mod tests {
             &properties,
             Some("http://catalog.example"),
             DEFAULT_SESSION_NAME,
+            Some("eu-central-1"),
         );
 
         assert_eq!(mapped.get(S3_ACCESS_KEY_ID).unwrap(), "s3-access-key");
         assert_eq!(mapped.get(S3_SECRET_ACCESS_KEY).unwrap(), "s3-secret-key");
         assert_eq!(mapped.get(S3_SESSION_TOKEN).unwrap(), "s3-token");
+        // Explicit `s3.region` wins over both `region_name` and `resolved_region`.
         assert_eq!(mapped.get(S3_REGION).unwrap(), "us-west-2");
         assert_eq!(mapped.get(S3_ENDPOINT).unwrap(), "http://s3.example");
         assert_eq!(
@@ -554,9 +568,51 @@ mod tests {
     }
 
     #[test]
+    fn maps_region_name_over_resolved_region() {
+        // `assume_role_properties()` sets `region_name` to "ap-southeast-2" but no
+        // explicit `s3.region`.
+        let mapped = map_aws_to_s3_properties(
+            &assume_role_properties(),
+            None,
+            DEFAULT_SESSION_NAME,
+            Some("eu-central-1"),
+        );
+
+        assert_eq!(mapped.get(S3_REGION).unwrap(), "ap-southeast-2");
+    }
+
+    #[test]
+    fn falls_back_to_resolved_region_when_no_region_property_is_set() {
+        // No `region_name` or `s3.region` property at all: FileIO should still learn the
+        // region that was actually resolved onto the SDK config (e.g. via an AWS profile,
+        // `AWS_REGION` env var, or IMDS), rather than being left region-less.
+        let mut properties = assume_role_properties();
+        properties.remove(AWS_REGION_NAME);
+
+        let mapped = map_aws_to_s3_properties(
+            &properties,
+            None,
+            DEFAULT_SESSION_NAME,
+            Some("eu-central-1"),
+        );
+
+        assert_eq!(mapped.get(S3_REGION).unwrap(), "eu-central-1");
+    }
+
+    #[test]
+    fn omits_region_when_neither_property_nor_resolved_region_is_set() {
+        let mut properties = assume_role_properties();
+        properties.remove(AWS_REGION_NAME);
+
+        let mapped = map_aws_to_s3_properties(&properties, None, DEFAULT_SESSION_NAME, None);
+
+        assert!(!mapped.contains_key(S3_REGION));
+    }
+
+    #[test]
     fn removes_assume_role_properties_for_shared_provider() {
         let mut mapped =
-            map_aws_to_s3_properties(&assume_role_properties(), None, DEFAULT_SESSION_NAME);
+            map_aws_to_s3_properties(&assume_role_properties(), None, DEFAULT_SESSION_NAME, None);
         mapped.insert(
             S3_ASSUME_ROLE_EXTERNAL_ID.to_string(),
             "external-id".to_string(),
