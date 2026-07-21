@@ -122,6 +122,7 @@ pub fn iceberg::arrow::ArrowSchemaVisitor::map(&mut self, map: &arrow_schema::da
 pub fn iceberg::arrow::ArrowSchemaVisitor::primitive(&mut self, p: &arrow_schema::datatype::DataType) -> iceberg::Result<Self::T>
 pub fn iceberg::arrow::ArrowSchemaVisitor::schema(&mut self, schema: &arrow_schema::schema::Schema, values: alloc::vec::Vec<Self::T>) -> iceberg::Result<Self::U>
 pub fn iceberg::arrow::ArrowSchemaVisitor::struct(&mut self, fields: &arrow_schema::fields::Fields, results: alloc::vec::Vec<Self::T>) -> iceberg::Result<Self::T>
+pub fn iceberg::arrow::ArrowSchemaVisitor::variant(&mut self, field: &arrow_schema::field::FieldRef) -> iceberg::Result<Self::T> where Self: core::marker::Sized
 pub fn iceberg::arrow::arrow_primitive_to_literal(primitive_array: &arrow_array::array::ArrayRef, ty: &iceberg::spec::Type) -> iceberg::Result<alloc::vec::Vec<core::option::Option<iceberg::spec::Literal>>>
 pub fn iceberg::arrow::arrow_schema_to_schema(schema: &arrow_schema::schema::Schema) -> iceberg::Result<iceberg::spec::Schema>
 pub fn iceberg::arrow::arrow_schema_to_schema_auto_assign_ids(schema: &arrow_schema::schema::Schema) -> iceberg::Result<iceberg::spec::Schema>
@@ -2647,6 +2648,7 @@ pub fn iceberg::spec::TableMetadata::last_updated_ms(&self) -> i64
 pub fn iceberg::spec::TableMetadata::last_updated_timestamp(&self) -> iceberg::Result<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
 pub fn iceberg::spec::TableMetadata::location(&self) -> &str
 pub fn iceberg::spec::TableMetadata::metadata_compression_codec(&self) -> iceberg::Result<iceberg::compression::CompressionCodec>
+pub fn iceberg::spec::TableMetadata::metadata_location(&self) -> iceberg::Result<alloc::string::String>
 pub fn iceberg::spec::TableMetadata::metadata_log(&self) -> &[iceberg::spec::MetadataLog]
 pub fn iceberg::spec::TableMetadata::next_row_id(&self) -> u64
 pub fn iceberg::spec::TableMetadata::next_sequence_number(&self) -> i64
@@ -2750,6 +2752,7 @@ pub iceberg::spec::TableProperties::metadata_compression_codec: iceberg::compres
 pub iceberg::spec::TableProperties::min_snapshots_to_keep: usize
 pub iceberg::spec::TableProperties::write_datafusion_fanout_enabled: bool
 pub iceberg::spec::TableProperties::write_format_default: alloc::string::String
+pub iceberg::spec::TableProperties::write_metadata_path: core::option::Option<alloc::string::String>
 pub iceberg::spec::TableProperties::write_target_file_size_bytes: usize
 impl iceberg::spec::TableProperties
 pub const iceberg::spec::TableProperties::PROPERTY_COMMIT_MAX_RETRY_WAIT_MS: &str
@@ -2797,6 +2800,7 @@ pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL: &str
 pub const iceberg::spec::TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT: i32
 pub const iceberg::spec::TableProperties::PROPERTY_SNAPSHOT_COUNT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_UUID: &str
+pub const iceberg::spec::TableProperties::PROPERTY_WRITE_METADATA_PATH: &str
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: &str
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT: u64
 pub const iceberg::spec::TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES: &str
@@ -3565,9 +3569,8 @@ pub fn iceberg::memory::MemoryCatalog::update_table<'life0, 'async_trait>(&'life
 pub struct iceberg::MetadataLocation
 impl iceberg::MetadataLocation
 pub fn iceberg::MetadataLocation::compression_codec(&self) -> iceberg::compression::CompressionCodec
-pub fn iceberg::MetadataLocation::new_with_metadata(table_location: impl alloc::string::ToString, metadata: &iceberg::spec::TableMetadata) -> Self
-pub fn iceberg::MetadataLocation::new_with_table_location(table_location: impl alloc::string::ToString) -> Self
-pub fn iceberg::MetadataLocation::with_new_metadata(&self, new_metadata: &iceberg::spec::TableMetadata) -> Self
+pub fn iceberg::MetadataLocation::try_new_with_metadata(metadata: &iceberg::spec::TableMetadata) -> iceberg::Result<Self>
+pub fn iceberg::MetadataLocation::try_with_new_metadata(&self, new_metadata: &iceberg::spec::TableMetadata) -> iceberg::Result<Self>
 pub fn iceberg::MetadataLocation::with_next_version(&self) -> Self
 impl core::clone::Clone for iceberg::MetadataLocation
 pub fn iceberg::MetadataLocation::clone(&self) -> iceberg::MetadataLocation
