@@ -46,16 +46,20 @@ use crate::{
 /// When `client.assume-role.arn` is set, the configured base credentials,
 /// profile, region, and runtime settings are used for the STS request. The
 /// returned configuration uses the refreshable assumed-role provider.
+///
+/// `endpoint_uri`, when set, overrides the endpoint of the *catalog's own*
+/// service client (e.g. Glue or S3Tables) in the returned configuration. It
+/// is deliberately never applied to the STS `AssumeRole` request itself: STS
+/// always targets the real, region-derived STS endpoint (or an
+/// `AWS_ENDPOINT_URL_STS`/profile override), so pointing a catalog at a
+/// custom or LocalStack-style endpoint cannot accidentally redirect
+/// AssumeRole calls to that same host.
 pub async fn create_sdk_config(
     properties: &HashMap<String, String>,
     endpoint_uri: Option<&str>,
     default_session_name: &str,
 ) -> SdkConfig {
     let mut loader = aws_config::defaults(BehaviorVersion::latest());
-
-    if let Some(endpoint) = endpoint_uri {
-        loader = loader.endpoint_url(endpoint);
-    }
 
     if let (Some(access_key), Some(secret_key)) = (
         properties.get(AWS_ACCESS_KEY_ID),
@@ -75,9 +79,17 @@ pub async fn create_sdk_config(
         loader = loader.region(Region::new(region_name.clone()));
     }
 
+    // Deliberately built without `endpoint_uri`. `base_config` is used to
+    // authenticate and issue the STS `AssumeRole` request (when configured),
+    // which must always target the real STS endpoint, never the catalog's
+    // own service endpoint.
     let base_config = loader.load().await;
+
     let Some(role_arn) = properties.get(AWS_ASSUME_ROLE_ARN) else {
-        return base_config;
+        return match endpoint_uri {
+            Some(endpoint) => base_config.into_builder().endpoint_url(endpoint).build(),
+            None => base_config,
+        };
     };
 
     let session_name = properties
@@ -96,10 +108,18 @@ pub async fn create_sdk_config(
         inner: assume_role_builder.build().await,
         cached: tokio::sync::Mutex::new(None),
     });
-    base_config
+
+    // The catalog endpoint override (if any) is applied only to the
+    // configuration returned for the catalog's own service client, after the
+    // STS-backed provider above has already been built against the
+    // un-overridden `base_config`.
+    let mut builder = base_config
         .into_builder()
-        .credentials_provider(assume_role_provider)
-        .build()
+        .credentials_provider(assume_role_provider);
+    if let Some(endpoint) = endpoint_uri {
+        builder = builder.endpoint_url(endpoint);
+    }
+    builder.build()
 }
 
 #[derive(Debug)]
@@ -309,9 +329,60 @@ mod tests {
 </AssumeRoleResponse>"#
     }
 
+    /// A non-routable placeholder used as the *catalog's* service endpoint in tests that
+    /// assert STS traffic must never be sent there. The address is reserved for
+    /// documentation (RFC 5737) and is never dialed because these tests only assert on
+    /// `SdkConfig::endpoint_url()` / on what the STS mock server received.
+    const CATALOG_ENDPOINT: &str = "http://192.0.2.1:1234";
+
+    /// Serializes tests that mutate the process-wide `AWS_ENDPOINT_URL_STS` environment
+    /// variable. `cargo test` runs tests in parallel threads within one process, and env
+    /// vars are process-global, so concurrent mutation would be racy without this guard.
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// RAII guard that points the AWS SDK's STS client at `url` for the duration of a test
+    /// (via the SDK's own service-specific endpoint override mechanism) and restores the
+    /// previous value on drop.
+    struct StsEndpointEnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        previous: Option<String>,
+    }
+
+    impl StsEndpointEnvGuard {
+        fn set(url: &str) -> Self {
+            let lock = ENV_MUTEX
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            let previous = std::env::var("AWS_ENDPOINT_URL_STS").ok();
+            // SAFETY: `ENV_MUTEX` ensures no other test reads/writes process env concurrently.
+            unsafe {
+                std::env::set_var("AWS_ENDPOINT_URL_STS", url);
+            }
+            Self {
+                _lock: lock,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for StsEndpointEnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: see `set`; still holding `ENV_MUTEX` via `self._lock`.
+            unsafe {
+                match &self.previous {
+                    Some(value) => std::env::set_var("AWS_ENDPOINT_URL_STS", value),
+                    None => std::env::remove_var("AWS_ENDPOINT_URL_STS"),
+                }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn assume_role_uses_base_config_and_shared_provider() {
         let mut server = mockito::Server::new_async().await;
+        // Point the STS client at the mock via the SDK's own service-specific endpoint
+        // override, never via the catalog's `endpoint_uri` (see `create_sdk_config` docs).
+        let _sts_endpoint = StsEndpointEnvGuard::set(&server.url());
         let mock = server
             .mock("POST", "/")
             .match_header(
@@ -335,7 +406,7 @@ mod tests {
 
         let sdk_config = create_sdk_config(
             &assume_role_properties(),
-            Some(&server.url()),
+            Some(CATALOG_ENDPOINT),
             DEFAULT_SESSION_NAME,
         )
         .await;
@@ -361,12 +432,16 @@ mod tests {
             Some("assumed-session-token")
         );
         assert!(reqsign_credentials.expires_in.is_some());
+        // The catalog endpoint override must still land on the *returned* config, for use
+        // by the catalog's own (Glue/S3Tables) service client.
+        assert_eq!(sdk_config.endpoint_url(), Some(CATALOG_ENDPOINT));
         mock.assert_async().await;
     }
 
     #[tokio::test]
     async fn assume_role_sends_custom_session_name_and_external_id() {
         let mut server = mockito::Server::new_async().await;
+        let _sts_endpoint = StsEndpointEnvGuard::set(&server.url());
         let mock = server
             .mock("POST", "/")
             .match_body(Matcher::AllOf(vec![
@@ -390,7 +465,7 @@ mod tests {
         );
 
         let config =
-            create_sdk_config(&properties, Some(&server.url()), DEFAULT_SESSION_NAME).await;
+            create_sdk_config(&properties, Some(CATALOG_ENDPOINT), DEFAULT_SESSION_NAME).await;
         config
             .credentials_provider()
             .unwrap()
@@ -399,6 +474,53 @@ mod tests {
             .unwrap();
 
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn assume_role_never_targets_the_catalog_endpoint() {
+        // Regression test for apache/iceberg-rust#2396: a catalog-specific endpoint
+        // override (e.g. a custom Glue/S3Tables/LocalStack URL) must never be used for the
+        // STS `AssumeRole` request. We stand up a mock server as the "catalog endpoint" with
+        // *no* STS mocks configured, and a separate mock server as the real STS endpoint
+        // (via `AWS_ENDPOINT_URL_STS`). If STS traffic were misdirected to the catalog
+        // endpoint, `catalog_mock` below would receive it and fail the `expect(0)` check.
+        let mut catalog_server = mockito::Server::new_async().await;
+        let catalog_mock = catalog_server
+            .mock("POST", "/")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let mut sts_server = mockito::Server::new_async().await;
+        let _sts_endpoint = StsEndpointEnvGuard::set(&sts_server.url());
+        let sts_mock = sts_server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "text/xml")
+            .with_body(assume_role_response())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let sdk_config = create_sdk_config(
+            &assume_role_properties(),
+            Some(&catalog_server.url()),
+            DEFAULT_SESSION_NAME,
+        )
+        .await;
+        sdk_config
+            .credentials_provider()
+            .unwrap()
+            .provide_credentials()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            sdk_config.endpoint_url(),
+            Some(catalog_server.url().as_str())
+        );
+        sts_mock.assert_async().await;
+        catalog_mock.assert_async().await;
     }
 
     #[test]
