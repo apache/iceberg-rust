@@ -571,7 +571,7 @@
 <a href=#571 id=571 data-nosnippet>571</a>        <span class="kw">let </span>metadata = TableMetadataBuilder::from_table_creation(creation)<span class="question-mark">?
 <a href=#572 id=572 data-nosnippet>572</a>            </span>.build()<span class="question-mark">?
 <a href=#573 id=573 data-nosnippet>573</a>            </span>.metadata;
-<a href=#574 id=574 data-nosnippet>574</a>        <span class="kw">let </span>metadata_location = MetadataLocation::new_with_metadata(table_location, <span class="kw-2">&amp;</span>metadata);
+<a href=#574 id=574 data-nosnippet>574</a>        <span class="kw">let </span>metadata_location = MetadataLocation::try_new_with_metadata(<span class="kw-2">&amp;</span>metadata)<span class="question-mark">?</span>;
 <a href=#575 id=575 data-nosnippet>575</a>        metadata.write_to(<span class="kw-2">&amp;</span><span class="self">self</span>.file_io, <span class="kw-2">&amp;</span>metadata_location).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#576 id=576 data-nosnippet>576</a>
 <a href=#577 id=577 data-nosnippet>577</a>        <span class="comment">// update metadata location

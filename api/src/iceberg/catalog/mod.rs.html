@@ -426,8 +426,8 @@
 <a href=#426 id=426 data-nosnippet>426</a>
 <a href=#427 id=427 data-nosnippet>427</a>        <span class="kw">let </span>new_metadata_location = MetadataLocation::from_str(current_metadata_location)<span class="question-mark">?
 <a href=#428 id=428 data-nosnippet>428</a>            </span>.with_next_version()
-<a href=#429 id=429 data-nosnippet>429</a>            .with_new_metadata(<span class="kw-2">&amp;</span>new_metadata)
-<a href=#430 id=430 data-nosnippet>430</a>            .to_string();
+<a href=#429 id=429 data-nosnippet>429</a>            .try_with_new_metadata(<span class="kw-2">&amp;</span>new_metadata)<span class="question-mark">?
+<a href=#430 id=430 data-nosnippet>430</a>            </span>.to_string();
 <a href=#431 id=431 data-nosnippet>431</a>
 <a href=#432 id=432 data-nosnippet>432</a>        <span class="prelude-val">Ok</span>(table
 <a href=#433 id=433 data-nosnippet>433</a>            .with_metadata(Arc::new(new_metadata))
@@ -2465,18 +2465,19 @@
 <a href=#2465 id=2465 data-nosnippet>2465</a>            <span class="string">"v2"
 <a href=#2466 id=2466 data-nosnippet>2466</a>        </span>);
 <a href=#2467 id=2467 data-nosnippet>2467</a>
-<a href=#2468 id=2468 data-nosnippet>2468</a>        <span class="comment">// metadata version should be bumped
-<a href=#2469 id=2469 data-nosnippet>2469</a>        </span><span class="macro">assert!</span>(
-<a href=#2470 id=2470 data-nosnippet>2470</a>            updated_table
-<a href=#2471 id=2471 data-nosnippet>2471</a>                .metadata_location()
-<a href=#2472 id=2472 data-nosnippet>2472</a>                .unwrap()
-<a href=#2473 id=2473 data-nosnippet>2473</a>                .starts_with(<span class="string">"s3://bucket/test/location/metadata/00001-"</span>)
-<a href=#2474 id=2474 data-nosnippet>2474</a>        );
-<a href=#2475 id=2475 data-nosnippet>2475</a>
-<a href=#2476 id=2476 data-nosnippet>2476</a>        <span class="macro">assert_eq!</span>(
-<a href=#2477 id=2477 data-nosnippet>2477</a>            updated_table.metadata().location,
-<a href=#2478 id=2478 data-nosnippet>2478</a>            <span class="string">"s3://bucket/test/new_location/data"</span>,
-<a href=#2479 id=2479 data-nosnippet>2479</a>        );
-<a href=#2480 id=2480 data-nosnippet>2480</a>    }
-<a href=#2481 id=2481 data-nosnippet>2481</a>}
+<a href=#2468 id=2468 data-nosnippet>2468</a>        <span class="comment">// metadata version should be bumped, and the metadata directory should be
+<a href=#2469 id=2469 data-nosnippet>2469</a>        // re-derived from the updated table location
+<a href=#2470 id=2470 data-nosnippet>2470</a>        </span><span class="macro">assert!</span>(
+<a href=#2471 id=2471 data-nosnippet>2471</a>            updated_table
+<a href=#2472 id=2472 data-nosnippet>2472</a>                .metadata_location()
+<a href=#2473 id=2473 data-nosnippet>2473</a>                .unwrap()
+<a href=#2474 id=2474 data-nosnippet>2474</a>                .starts_with(<span class="string">"s3://bucket/test/new_location/data/metadata/00001-"</span>)
+<a href=#2475 id=2475 data-nosnippet>2475</a>        );
+<a href=#2476 id=2476 data-nosnippet>2476</a>
+<a href=#2477 id=2477 data-nosnippet>2477</a>        <span class="macro">assert_eq!</span>(
+<a href=#2478 id=2478 data-nosnippet>2478</a>            updated_table.metadata().location,
+<a href=#2479 id=2479 data-nosnippet>2479</a>            <span class="string">"s3://bucket/test/new_location/data"</span>,
+<a href=#2480 id=2480 data-nosnippet>2480</a>        );
+<a href=#2481 id=2481 data-nosnippet>2481</a>    }
+<a href=#2482 id=2482 data-nosnippet>2482</a>}
 </code></pre></div></section></main></body></html>
