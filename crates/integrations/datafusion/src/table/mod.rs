@@ -73,6 +73,10 @@ pub struct IcebergTableProvider {
     table_ident: TableIdent,
     /// A reference-counted arrow `Schema` (cached at construction)
     schema: ArrowSchemaRef,
+    /// Optional snapshot to read. `None` reads the current snapshot (refreshed
+    /// from the catalog on each scan); `Some` pins reads to that snapshot for
+    /// time-travel. Writes always target the current table state.
+    snapshot_id: Option<i64>,
 }
 
 impl IcebergTableProvider {
@@ -95,7 +99,21 @@ impl IcebergTableProvider {
             catalog,
             table_ident,
             schema,
+            snapshot_id: None,
         })
+    }
+
+    /// Pins reads to a specific snapshot for time-travel. `None` (the default)
+    /// reads the current snapshot. The snapshot id is threaded into the scan
+    /// node, so it is serialized and honored by a distributed engine as well.
+    pub fn with_snapshot_id(mut self, snapshot_id: Option<i64>) -> Self {
+        self.snapshot_id = snapshot_id;
+        self
+    }
+
+    /// Returns the snapshot this provider reads, if pinned for time-travel.
+    pub fn snapshot_id(&self) -> Option<i64> {
+        self.snapshot_id
     }
 
     pub(crate) async fn metadata_table(
@@ -136,10 +154,10 @@ impl TableProvider for IcebergTableProvider {
             .await
             .map_err(to_datafusion_error)?;
 
-        // Create scan with fresh metadata (always use current snapshot)
+        // Create scan with fresh metadata, honoring a pinned snapshot if set.
         Ok(Arc::new(IcebergTableScan::new(
             table,
-            None, // Always use current snapshot for catalog-backed provider
+            self.snapshot_id,
             self.schema.clone(),
             projection,
             filters,
@@ -864,5 +882,128 @@ mod tests {
             None,
             "Limit should be None when not specified"
         );
+    }
+
+    /// Counts the rows a provider returns for `SELECT * FROM t`.
+    async fn scan_row_count(provider: IcebergTableProvider) -> usize {
+        let ctx = SessionContext::new();
+        ctx.register_table("t", Arc::new(provider)).unwrap();
+        let batches = ctx
+            .sql("SELECT * FROM t")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        batches.iter().map(|b| b.num_rows()).sum()
+    }
+
+    #[tokio::test]
+    async fn test_pinned_snapshot_reads_historical_data() {
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+
+        // First append -> snapshot with a single row.
+        let writer =
+            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+                .await
+                .unwrap();
+        let ctx = SessionContext::new();
+        ctx.register_table("t", Arc::new(writer)).unwrap();
+        ctx.sql("INSERT INTO t VALUES (1, 'a')")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        // Capture the snapshot produced by the first append.
+        let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
+        let first_snapshot = catalog
+            .load_table(&table_ident)
+            .await
+            .unwrap()
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .snapshot_id();
+
+        // Second append -> current snapshot now has two rows.
+        ctx.sql("INSERT INTO t VALUES (2, 'b')")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        // Default (unpinned) provider sees the latest state: both rows.
+        let current =
+            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+                .await
+                .unwrap();
+        assert_eq!(
+            scan_row_count(current).await,
+            2,
+            "unpinned provider should read the current snapshot"
+        );
+
+        // Pinning the first snapshot time-travels: only the first row is visible,
+        // even though a newer snapshot exists.
+        let pinned =
+            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+                .await
+                .unwrap()
+                .with_snapshot_id(Some(first_snapshot));
+        assert_eq!(pinned.snapshot_id(), Some(first_snapshot));
+
+        // The pin is threaded onto the scan node itself — this is the value a
+        // distributed engine's codec serializes to reproduce the scan remotely.
+        let scan_plan = pinned
+            .scan(&SessionContext::new().state(), None, &[], None)
+            .await
+            .unwrap();
+        let iceberg_scan = scan_plan
+            .as_any()
+            .downcast_ref::<IcebergTableScan>()
+            .expect("Expected IcebergTableScan");
+        assert_eq!(
+            iceberg_scan.snapshot_id(),
+            Some(first_snapshot),
+            "pinned snapshot should propagate to the scan node"
+        );
+
+        // And it changes what is actually read: only the historical row.
+        assert_eq!(
+            scan_row_count(pinned).await,
+            1,
+            "provider pinned to the first snapshot should read only historical data"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_with_snapshot_id_none_reads_current() {
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+
+        let writer =
+            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+                .await
+                .unwrap();
+        let ctx = SessionContext::new();
+        ctx.register_table("t", Arc::new(writer)).unwrap();
+        ctx.sql("INSERT INTO t VALUES (1, 'a')")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        // Explicitly unpinning (None) is equivalent to the default: read current.
+        let provider =
+            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+                .await
+                .unwrap()
+                .with_snapshot_id(Some(1))
+                .with_snapshot_id(None);
+        assert_eq!(provider.snapshot_id(), None);
+        assert_eq!(scan_row_count(provider).await, 1);
     }
 }
