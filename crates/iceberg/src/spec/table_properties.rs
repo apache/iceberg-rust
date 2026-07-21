@@ -40,6 +40,37 @@ where
     })
 }
 
+/// Strips trailing slashes from a location, preserving a bare URI scheme root
+fn strip_trailing_slash(path: &str) -> &str {
+    let mut path = path;
+    while !path.ends_with("://") {
+        let Some(stripped) = path.strip_suffix('/') else {
+            break;
+        };
+        path = stripped;
+    }
+    path
+}
+
+fn parse_location_property(
+    properties: &HashMap<String, String>,
+    key: &str,
+) -> Result<Option<String>> {
+    properties
+        .get(key)
+        .map(|path| {
+            if path.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid value for {key}: path must not be empty"),
+                ));
+            }
+
+            Ok(strip_trailing_slash(path).to_string())
+        })
+        .transpose()
+}
+
 /// Parse compression codec for metadata files from table properties.
 /// Retrieves the compression codec property, applies defaults, and parses the value.
 /// Only "none" (or empty string) and "gzip" are supported for metadata compression.
@@ -332,9 +363,10 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             )?,
-            write_metadata_path: props
-                .get(TableProperties::PROPERTY_WRITE_METADATA_PATH)
-                .map(|path| path.trim_end_matches('/').to_string()),
+            write_metadata_path: parse_location_property(
+                props,
+                TableProperties::PROPERTY_WRITE_METADATA_PATH,
+            )?,
             metadata_compression_codec: parse_metadata_file_compression(props)?,
             write_datafusion_fanout_enabled: parse_property(
                 props,
@@ -473,7 +505,19 @@ mod tests {
         let table_properties = TableProperties::try_from(&HashMap::new()).unwrap();
         assert_eq!(table_properties.write_metadata_path, None);
 
-        // Test trimmed of any trailing slash
+        // Test empty path is invalid
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
+            String::new(),
+        )]);
+        let error = TableProperties::try_from(&props).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(
+            error
+                .message()
+                .contains(TableProperties::PROPERTY_WRITE_METADATA_PATH)
+        );
+
         let props = HashMap::from([(
             TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
             "s3://other-bucket/custom-meta/".to_string(),
@@ -483,6 +527,22 @@ mod tests {
             table_properties.write_metadata_path.as_deref(),
             Some("s3://other-bucket/custom-meta")
         );
+    }
+
+    #[test]
+    fn test_strip_trailing_slash() {
+        for (path, expected) in [
+            ("s3://bucket/db/tbl", "s3://bucket/db/tbl"),
+            ("s3://bucket/db/tbl/", "s3://bucket/db/tbl"),
+            ("s3://bucket/db/tbl////", "s3://bucket/db/tbl"),
+            ("blobstore://", "blobstore://"),
+            ("blobstore:///", "blobstore://"),
+            ("file:///", "file://"),
+            ("////", ""),
+            ("", ""),
+        ] {
+            assert_eq!(strip_trailing_slash(path), expected);
+        }
     }
 
     #[test]
