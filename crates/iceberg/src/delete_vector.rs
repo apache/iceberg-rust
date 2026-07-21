@@ -127,8 +127,7 @@ impl DeleteVector {
 
         // Verify the CRC before interpreting any bytes so a corrupt blob yields a single clear
         // error rather than an opaque roaring decode failure.
-        let stored_crc =
-            u32::from_be_bytes(blob[blob.len() - DV_CRC_BYTES..].try_into().unwrap());
+        let stored_crc = u32::from_be_bytes(blob[blob.len() - DV_CRC_BYTES..].try_into().unwrap());
         let computed_crc = crc32fast::hash(body);
         if computed_crc != stored_crc {
             return Err(Error::new(
@@ -143,7 +142,9 @@ impl DeleteVector {
         if magic != DV_MAGIC {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
-                format!("deletion-vector-v1 magic mismatch: {magic:02x?}, expected {DV_MAGIC:02x?}"),
+                format!(
+                    "deletion-vector-v1 magic mismatch: {magic:02x?}, expected {DV_MAGIC:02x?}"
+                ),
             ));
         }
 
