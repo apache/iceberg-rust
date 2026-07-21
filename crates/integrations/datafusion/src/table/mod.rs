@@ -977,33 +977,20 @@ mod tests {
             1,
             "provider pinned to the first snapshot should read only historical data"
         );
-    }
 
-    #[tokio::test]
-    async fn test_with_snapshot_id_none_reads_current() {
-        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
-
-        let writer =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
-        let ctx = SessionContext::new();
-        ctx.register_table("t", Arc::new(writer)).unwrap();
-        ctx.sql("INSERT INTO t VALUES (1, 'a')")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-
-        // Explicitly unpinning (None) is equivalent to the default: read current.
-        let provider =
+        // Clearing the pin (Some -> None) unpins back to the current snapshot,
+        // so the newer row becomes visible again.
+        let unpinned =
             IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
                 .await
                 .unwrap()
-                .with_snapshot_id(Some(1))
+                .with_snapshot_id(Some(first_snapshot))
                 .with_snapshot_id(None);
-        assert_eq!(provider.snapshot_id(), None);
-        assert_eq!(scan_row_count(provider).await, 1);
+        assert_eq!(unpinned.snapshot_id(), None);
+        assert_eq!(
+            scan_row_count(unpinned).await,
+            2,
+            "clearing the pin should read the current snapshot again"
+        );
     }
 }
