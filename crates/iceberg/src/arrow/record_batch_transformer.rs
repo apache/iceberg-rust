@@ -1484,6 +1484,84 @@ mod test {
         assert_eq!(get_string_value(result.column(2).as_ref(), 1), "Bob");
     }
 
+    /// Test that a dropped identity partition source column is skipped rather than erroring.
+    ///
+    /// A historical spec may use `identity(col)` where `col` was later dropped from the
+    /// schema. `constants_map()` must skip that field instead of failing, so the file can
+    /// still be read (the dropped column is not projected). Guards against a future refactor
+    /// that threads the spec through `with_partition` silently reintroducing the panic.
+    #[test]
+    fn dropped_identity_partition_source_column_is_skipped() {
+        use crate::spec::{Struct, Transform};
+
+        // Original schema used to build the spec: has id, dept, name.
+        let original_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "dept", Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::optional(3, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Spec: identity(dept). Built against the original schema where dept still exists.
+        let partition_spec = Arc::new(
+            crate::spec::PartitionSpec::builder(original_schema.clone())
+                .with_spec_id(0)
+                .add_partition_field("dept", "dept", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        // Evolved snapshot schema: dept (field id 2) has been dropped.
+        let evolved_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(3, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let partition_data = Struct::from_iter(vec![Some(Literal::string("engineering"))]);
+
+        let parquet_schema = Arc::new(ArrowSchema::new(vec![
+            simple_field("id", DataType::Int32, false, "1"),
+            simple_field("name", DataType::Utf8, true, "3"),
+        ]));
+
+        let projected_field_ids = [1, 3]; // id, name -- dept is gone
+
+        // The dropped source column must not cause an error here.
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(evolved_schema, &projected_field_ids)
+                .with_partition(partition_spec, partition_data)
+                .expect("dropped partition source column should be skipped, not error")
+                .build();
+
+        let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
+            Arc::new(Int32Array::from(vec![100, 200])),
+            Arc::new(StringArray::from(vec!["Alice", "Bob"])),
+        ])
+        .unwrap();
+
+        let result = transformer.process_record_batch(parquet_batch).unwrap();
+
+        // Only the live columns are projected; no constant is added for the dropped dept.
+        assert_eq!(result.num_columns(), 2);
+        assert_eq!(result.num_rows(), 2);
+        assert_eq!(get_int_value(result.column(0).as_ref(), 0), 100);
+        assert_eq!(get_int_value(result.column(0).as_ref(), 1), 200);
+        assert_eq!(get_string_value(result.column(1).as_ref(), 0), "Alice");
+        assert_eq!(get_string_value(result.column(1).as_ref(), 1), "Bob");
+    }
+
     /// Test bucket partitioning with renamed source column.
     ///
     /// This verifies correct behavior for TestRuntimeFiltering.testRenamedSourceColumnTable() in Iceberg Java.

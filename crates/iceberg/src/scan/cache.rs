@@ -69,21 +69,33 @@ impl PartitionFilterCache {
                 format!("Could not find partition spec for id {spec_id}"),
             ))?;
 
-        let partition_type = partition_spec.partition_type(schema)?;
-        let partition_fields = partition_type.fields().to_owned();
-        let partition_schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(partition_spec.spec_id())
-                .with_fields(partition_fields)
-                .build()?,
-        );
+        // The partition type may fail to resolve against the schema. The known case is a
+        // historical spec whose source column was dropped, which is a legitimate v2+ state.
+        // Any resolution failure falls back to an always-true filter: files under the spec
+        // are not partition-pruned but still receive the row filter. The fallback is cached
+        // by spec id like any other filter.
+        // TODO(https://github.com/apache/iceberg-rust/issues/2844): derive partition types from
+        // transforms where possible to restore pruning on a historical spec's still-live fields,
+        // and narrow this to the dropped-column case once a distinguishable error exists.
+        let partition_filter = match partition_spec.partition_type(schema) {
+            Ok(partition_type) => {
+                let partition_fields = partition_type.fields().to_owned();
+                let partition_schema = Arc::new(
+                    Schema::builder()
+                        .with_schema_id(partition_spec.spec_id())
+                        .with_fields(partition_fields)
+                        .build()?,
+                );
 
-        let mut inclusive_projection = InclusiveProjection::new(partition_spec.clone());
+                let mut inclusive_projection = InclusiveProjection::new(partition_spec.clone());
 
-        let partition_filter = inclusive_projection
-            .project(&filter)?
-            .rewrite_not()
-            .bind(partition_schema.clone(), case_sensitive)?;
+                inclusive_projection
+                    .project(&filter)?
+                    .rewrite_not()
+                    .bind(partition_schema.clone(), case_sensitive)?
+            }
+            Err(_) => BoundPredicate::AlwaysTrue,
+        };
 
         self.0
             .write()
