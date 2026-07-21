@@ -991,7 +991,6 @@ mod tests {
             .await
             .unwrap();
         let iceberg_scan = scan_plan
-            .as_any()
             .downcast_ref::<IcebergTableScan>()
             .expect("Expected IcebergTableScan");
         assert_eq!(
