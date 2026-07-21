@@ -115,6 +115,10 @@ pub(crate) struct SnapshotProducer<'a> {
     commit_uuid: Uuid,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
+    // Delete files (equality or position deletes) committed in the same
+    // snapshot. They receive the new snapshot's sequence number, so they
+    // apply to strictly older data files only (row-delta semantics).
+    added_delete_files: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
@@ -127,6 +131,7 @@ impl<'a> SnapshotProducer<'a> {
         commit_uuid: Uuid,
         snapshot_properties: HashMap<String, String>,
         added_data_files: Vec<DataFile>,
+        added_delete_files: Vec<DataFile>,
     ) -> Self {
         Self {
             table,
@@ -134,6 +139,7 @@ impl<'a> SnapshotProducer<'a> {
             commit_uuid,
             snapshot_properties,
             added_data_files,
+            added_delete_files,
             manifest_counter: (0..),
         }
     }
@@ -159,6 +165,71 @@ impl<'a> SnapshotProducer<'a> {
             )?;
         }
 
+        Ok(())
+    }
+
+    pub(crate) fn validate_added_delete_files(&self) -> Result<()> {
+        for delete_file in &self.added_delete_files {
+            if delete_file.content_type() == crate::spec::DataContentType::Data {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Only delete content types (position or equality) are allowed in the delete-file list",
+                ));
+            }
+            if self.table.metadata().default_partition_spec_id() != delete_file.partition_spec_id {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Delete file partition spec id does not match table default partition spec id",
+                ));
+            }
+            Self::validate_partition_value(
+                delete_file.partition(),
+                self.table.metadata().default_partition_type(),
+            )?;
+            if delete_file.content_type() == crate::spec::DataContentType::EqualityDeletes {
+                self.validate_equality_ids(delete_file)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Equality-delete key sanity, enforced at write time so bad files never
+    /// reach a manifest: the key set must be non-empty (an empty set would
+    /// match every row), every id must resolve in the current schema, and
+    /// float/double columns are rejected because equality is undefined for
+    /// them (NaN, +0.0/-0.0) — mirrors iceberg-java's identifier-field rules.
+    fn validate_equality_ids(&self, delete_file: &DataFile) -> Result<()> {
+        let ids = delete_file.equality_ids().unwrap_or_default();
+        if ids.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Equality delete file must declare a non-empty equality_ids set",
+            ));
+        }
+        let schema = self.table.metadata().current_schema();
+        for id in ids {
+            let field = schema.field_by_id(id).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Equality delete references unknown field id {id}"),
+                )
+            })?;
+            if matches!(
+                field.field_type.as_ref(),
+                crate::spec::Type::Primitive(crate::spec::PrimitiveType::Float)
+                    | crate::spec::Type::Primitive(crate::spec::PrimitiveType::Double)
+            ) {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Equality delete on float/double column {:?} (field id {id}) is not \
+                         allowed: floating-point equality is undefined (NaN, signed zero)",
+                        field.name
+                    ),
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -334,6 +405,37 @@ impl<'a> SnapshotProducer<'a> {
         writer.write_manifest_file().await
     }
 
+    // Write manifest file for added delete files and return the ManifestFile for ManifestList.
+    async fn write_added_delete_manifest(&mut self) -> Result<ManifestFile> {
+        let added_delete_files = std::mem::take(&mut self.added_delete_files);
+        if added_delete_files.is_empty() {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "No added delete files found when write an added delete manifest file",
+            ));
+        }
+
+        let snapshot_id = self.snapshot_id;
+        let format_version = self.table.metadata().format_version();
+        let manifest_entries = added_delete_files.into_iter().map(|delete_file| {
+            let builder = ManifestEntry::builder()
+                .status(crate::spec::ManifestStatus::Added)
+                .data_file(delete_file);
+            if format_version == FormatVersion::V1 {
+                builder.snapshot_id(snapshot_id).build()
+            } else {
+                // For format version > 1, we set the snapshot id at the inherited time to avoid rewrite the manifest file when
+                // commit failed.
+                builder.build()
+            }
+        });
+        let mut writer = self.new_manifest_writer(ManifestContentType::Deletes)?;
+        for entry in manifest_entries {
+            writer.add_entry(entry)?;
+        }
+        writer.write_manifest_file().await
+    }
+
     /// Creates new manifests for data files added or removed,
     /// and collects all of the manifests to be included in the new snapshot as [ManifestFile] entries.
     async fn produce_manifests<OP: SnapshotProduceOperation, MP: ManifestProcess>(
@@ -346,7 +448,10 @@ impl<'a> SnapshotProducer<'a> {
         // TODO: Allowing snapshot property setup with no added data files is a workaround.
         // We should clean it up after all necessary actions are supported.
         // For details, please refer to https://github.com/apache/iceberg-rust/issues/1548
-        if self.added_data_files.is_empty() && self.snapshot_properties.is_empty() {
+        if self.added_data_files.is_empty()
+            && self.added_delete_files.is_empty()
+            && self.snapshot_properties.is_empty()
+        {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
                 "No added data files or added snapshot properties found when write a manifest file",
@@ -360,6 +465,13 @@ impl<'a> SnapshotProducer<'a> {
         if !self.added_data_files.is_empty() {
             let added_manifest = self.write_added_manifest().await?;
             manifest_files.push(added_manifest);
+        }
+
+        // Process added delete files (position or equality deletes committed
+        // together with the new data files).
+        if !self.added_delete_files.is_empty() {
+            let added_delete_manifest = self.write_added_delete_manifest().await?;
+            manifest_files.push(added_delete_manifest);
         }
 
         // # TODO
@@ -395,6 +507,14 @@ impl<'a> SnapshotProducer<'a> {
         for data_file in &self.added_data_files {
             summary_collector.add_file(
                 data_file,
+                table_metadata.current_schema().clone(),
+                table_metadata.default_partition_spec().clone(),
+            );
+        }
+
+        for delete_file in &self.added_delete_files {
+            summary_collector.add_file(
+                delete_file,
                 table_metadata.current_schema().clone(),
                 table_metadata.default_partition_spec().clone(),
             );
