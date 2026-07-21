@@ -36,6 +36,28 @@ use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
 const META_ROOT_PATH: &str = "metadata";
 
+pub(crate) fn generate_unique_snapshot_id(table: &Table) -> i64 {
+    let generate_random_id = || -> i64 {
+        let (lhs, rhs) = Uuid::new_v4().as_u64_pair();
+        let snapshot_id = (lhs ^ rhs) as i64;
+        if snapshot_id < 0 {
+            -snapshot_id
+        } else {
+            snapshot_id
+        }
+    };
+    let mut snapshot_id = generate_random_id();
+
+    while table
+        .metadata()
+        .snapshots()
+        .any(|s| s.snapshot_id() == snapshot_id)
+    {
+        snapshot_id = generate_random_id();
+    }
+    snapshot_id
+}
+
 /// A trait that defines how different table operations produce new snapshots.
 ///
 /// `SnapshotProduceOperation` is used by [`SnapshotProducer`] to customize snapshot creation
@@ -130,7 +152,7 @@ impl<'a> SnapshotProducer<'a> {
     ) -> Self {
         Self {
             table,
-            snapshot_id: Self::generate_unique_snapshot_id(table),
+            snapshot_id: generate_unique_snapshot_id(table),
             commit_uuid,
             snapshot_properties,
             added_data_files,
@@ -215,28 +237,6 @@ impl<'a> SnapshotProducer<'a> {
         }
 
         Ok(())
-    }
-
-    fn generate_unique_snapshot_id(table: &Table) -> i64 {
-        let generate_random_id = || -> i64 {
-            let (lhs, rhs) = Uuid::new_v4().as_u64_pair();
-            let snapshot_id = (lhs ^ rhs) as i64;
-            if snapshot_id < 0 {
-                -snapshot_id
-            } else {
-                snapshot_id
-            }
-        };
-        let mut snapshot_id = generate_random_id();
-
-        while table
-            .metadata()
-            .snapshots()
-            .any(|s| s.snapshot_id() == snapshot_id)
-        {
-            snapshot_id = generate_random_id();
-        }
-        snapshot_id
     }
 
     fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
