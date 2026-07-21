@@ -417,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn deletion_vector_context_carries_coordinates() {
+    fn test_deletion_vector_context_carries_coordinates() {
         // A deletion vector is a PositionDeletes entry stored as a Puffin blob, located by
         // content_offset / content_size_in_bytes and scoped by referenced_data_file. Those
         // three fields must survive the conversion into a FileScanTaskDeleteFile so the loader
