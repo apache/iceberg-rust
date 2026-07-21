@@ -913,22 +913,24 @@ mod tests {
         );
     }
 
-    /// Counts the rows a provider returns for `SELECT * FROM t`.
-    async fn scan_row_count(provider: IcebergTableProvider) -> usize {
+    /// Runs `SELECT * FROM t` against `provider` and returns the result batches.
+    async fn scan_rows(
+        provider: IcebergTableProvider,
+    ) -> Vec<datafusion::arrow::array::RecordBatch> {
         let ctx = SessionContext::new();
         ctx.register_table("t", Arc::new(provider)).unwrap();
-        let batches = ctx
-            .sql("SELECT * FROM t")
+        ctx.sql("SELECT * FROM t")
             .await
             .unwrap()
             .collect()
             .await
-            .unwrap();
-        batches.iter().map(|b| b.num_rows()).sum()
+            .unwrap()
     }
 
     #[tokio::test]
     async fn test_pinned_snapshot_reads_historical_data() {
+        use datafusion::assert_batches_sorted_eq;
+
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
         // First append -> snapshot with a single row.
@@ -969,10 +971,16 @@ mod tests {
             IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
                 .await
                 .unwrap();
-        assert_eq!(
-            scan_row_count(current).await,
-            2,
-            "unpinned provider should read the current snapshot"
+        assert_batches_sorted_eq!(
+            [
+                "+----+------+",
+                "| id | name |",
+                "+----+------+",
+                "| 1  | a    |",
+                "| 2  | b    |",
+                "+----+------+",
+            ],
+            &scan_rows(current).await
         );
 
         // Pinning the first snapshot time-travels: only the first row is visible,
@@ -1000,10 +1008,15 @@ mod tests {
         );
 
         // And it changes what is actually read: only the historical row.
-        assert_eq!(
-            scan_row_count(pinned).await,
-            1,
-            "provider pinned to the first snapshot should read only historical data"
+        assert_batches_sorted_eq!(
+            [
+                "+----+------+",
+                "| id | name |",
+                "+----+------+",
+                "| 1  | a    |",
+                "+----+------+",
+            ],
+            &scan_rows(pinned).await
         );
 
         // Clearing the pin (Some -> None) unpins back to the current snapshot,
@@ -1015,10 +1028,16 @@ mod tests {
                 .with_snapshot_id(Some(first_snapshot))
                 .with_snapshot_id(None);
         assert_eq!(unpinned.snapshot_id(), None);
-        assert_eq!(
-            scan_row_count(unpinned).await,
-            2,
-            "clearing the pin should read the current snapshot again"
+        assert_batches_sorted_eq!(
+            [
+                "+----+------+",
+                "| id | name |",
+                "+----+------+",
+                "| 1  | a    |",
+                "| 2  | b    |",
+                "+----+------+",
+            ],
+            &scan_rows(unpinned).await
         );
     }
 }
