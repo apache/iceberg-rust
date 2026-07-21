@@ -163,17 +163,22 @@ impl DeleteFilter {
         &self,
         file_path: &str,
     ) -> Option<Predicate> {
-        let notifier = {
+        // Create the `Notified` while holding the read lock. The read lock ensures that
+        // when we go inside it, either the state is already at Loaded or it is still at
+        // Loading AND `notify_waiters()` has not been called yet. Any `Notified` created
+        // before the invocation of `notify_waiters()` will be notified by it even if
+        // `await` has not been called on it yet.
+        let notified = {
             match self.state.read().unwrap().equality_deletes.get(file_path) {
                 None => return None,
-                Some(EqDelState::Loading(notifier)) => notifier.clone(),
+                Some(EqDelState::Loading(notifier)) => notifier.clone().notified_owned(),
                 Some(EqDelState::Loaded(predicate)) => {
                     return Some(predicate.clone());
                 }
             }
         };
 
-        notifier.notified().await;
+        notified.await;
 
         match self.state.read().unwrap().equality_deletes.get(file_path) {
             Some(EqDelState::Loaded(predicate)) => Some(predicate.clone()),
