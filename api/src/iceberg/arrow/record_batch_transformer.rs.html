@@ -59,11 +59,11 @@
 <a href=#59 id=59 data-nosnippet>59</a>    <span class="kw">for </span>(pos, field) <span class="kw">in </span>partition_spec.fields().iter().enumerate() {
 <a href=#60 id=60 data-nosnippet>60</a>        <span class="comment">// Only identity transforms should use constant values from partition metadata
 <a href=#61 id=61 data-nosnippet>61</a>        </span><span class="kw">if </span><span class="macro">matches!</span>(field.transform, Transform::Identity) {
-<a href=#62 id=62 data-nosnippet>62</a>            <span class="comment">// Get the field from schema to extract its type
-<a href=#63 id=63 data-nosnippet>63</a>            </span><span class="kw">let </span>iceberg_field = schema.field_by_id(field.source_id).ok_or(Error::new(
-<a href=#64 id=64 data-nosnippet>64</a>                ErrorKind::Unexpected,
-<a href=#65 id=65 data-nosnippet>65</a>                <span class="macro">format!</span>(<span class="string">"Field {} not found in schema"</span>, field.source_id),
-<a href=#66 id=66 data-nosnippet>66</a>            ))<span class="question-mark">?</span>;
+<a href=#62 id=62 data-nosnippet>62</a>            <span class="comment">// The source column may have been dropped from the schema after the spec was
+<a href=#63 id=63 data-nosnippet>63</a>            // created. It cannot be projected in that case, so no constant is needed.
+<a href=#64 id=64 data-nosnippet>64</a>            </span><span class="kw">let </span><span class="prelude-val">Some</span>(iceberg_field) = schema.field_by_id(field.source_id) <span class="kw">else </span>{
+<a href=#65 id=65 data-nosnippet>65</a>                <span class="kw">continue</span>;
+<a href=#66 id=66 data-nosnippet>66</a>            };
 <a href=#67 id=67 data-nosnippet>67</a>
 <a href=#68 id=68 data-nosnippet>68</a>            <span class="comment">// Ensure the field type is primitive
 <a href=#69 id=69 data-nosnippet>69</a>            </span><span class="kw">let </span>prim_type = <span class="kw">match </span><span class="kw-2">&amp;*</span>iceberg_field.field_type {
