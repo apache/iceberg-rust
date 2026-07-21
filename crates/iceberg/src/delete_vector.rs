@@ -321,20 +321,20 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_roundtrip_empty() {
+    fn test_deserialize_roundtrip_empty() {
         let blob = encode_dv_blob(&DeleteVector::default());
         assert_eq!(DeleteVector::deserialize(&blob).unwrap().len(), 0);
     }
 
     #[test]
-    fn deserialize_roundtrip_small() {
+    fn test_deserialize_roundtrip_small() {
         let positions = [0u64, 5, 100, 1000];
         let dv = DeleteVector::deserialize(&encode_dv_blob(&dv_of(positions))).unwrap();
         assert_eq!(sorted(&dv), positions);
     }
 
     #[test]
-    fn deserialize_roundtrip_spanning_64bit_keys() {
+    fn test_deserialize_roundtrip_spanning_64bit_keys() {
         let positions = [1u64, 1 << 33, (1 << 33) + 5, 1 << 34];
         let dv = DeleteVector::deserialize(&encode_dv_blob(&dv_of(positions))).unwrap();
         assert_eq!(sorted(&dv), positions);
@@ -344,7 +344,7 @@ mod tests {
     // containers, which use the SERIAL_COOKIE roaring layout. Force that layout so decode
     // exercises the run-container path rather than only array and bitmap containers.
     #[test]
-    fn deserialize_roundtrip_run_optimized() {
+    fn test_deserialize_roundtrip_run_optimized() {
         let mut dv = dv_of(0..10_000);
         assert!(
             dv.inner.optimize(),
@@ -352,18 +352,19 @@ mod tests {
         );
         let decoded = DeleteVector::deserialize(&encode_dv_blob(&dv)).unwrap();
         assert_eq!(decoded.len(), 10_000);
-        assert_eq!(sorted(&decoded).first(), Some(&0));
-        assert_eq!(sorted(&decoded).last(), Some(&9_999));
+        let positions = sorted(&decoded);
+        assert_eq!(positions.first(), Some(&0));
+        assert_eq!(positions.last(), Some(&9_999));
     }
 
     #[test]
-    fn deserialize_rejects_short_blob() {
+    fn test_deserialize_rejects_short_blob() {
         let err = DeleteVector::deserialize(&[0u8; DV_MIN_BLOB_BYTES - 1]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
     #[test]
-    fn deserialize_rejects_bad_magic() {
+    fn test_deserialize_rejects_bad_magic() {
         let mut blob = encode_dv_blob(&dv_of([1]));
         blob[DV_LENGTH_PREFIX_BYTES] ^= 0xFF;
         // Recompute the CRC so the magic check, not the CRC check, is what fails.
@@ -375,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_rejects_bad_crc() {
+    fn test_deserialize_rejects_bad_crc() {
         let mut blob = encode_dv_blob(&dv_of([1, 2, 3]));
         let end = blob.len() - DV_CRC_BYTES;
         blob[end] ^= 0xFF;
@@ -384,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_rejects_length_prefix_mismatch() {
+    fn test_deserialize_rejects_length_prefix_mismatch() {
         let mut blob = encode_dv_blob(&dv_of([1]));
         let declared = u32::from_be_bytes(blob[..DV_LENGTH_PREFIX_BYTES].try_into().unwrap());
         blob[..DV_LENGTH_PREFIX_BYTES].copy_from_slice(&(declared + 1).to_be_bytes());
