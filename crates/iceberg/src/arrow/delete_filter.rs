@@ -498,7 +498,7 @@ pub(crate) mod tests {
             .with_start(0)
             .with_length(0)
             .with_data_file_path("data.parquet".to_string())
-            .with_data_file_format(crate::spec::DataFileFormat::Parquet)
+            .with_data_file_format(DataFileFormat::Parquet)
             .with_schema(schema.clone())
             .with_project_field_ids(vec![])
             .with_deletes(vec![

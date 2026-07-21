@@ -53,3 +53,6 @@ path = "tests/sqllogictests.rs"
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version
 ignored = ["enum-ordinalize"]
+
+[lints]
+workspace = true
