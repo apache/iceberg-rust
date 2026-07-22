@@ -737,9 +737,10 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_read_encrypted_parquet() {
-        let encryption_key = b"0123456789abcdef";
+    /// Writes a single-column Parquet file encrypted with `encryption_key`, then reads it
+    /// back through `ArrowReader` and asserts the round-tripped values. The key length
+    /// selects the AES-GCM variant in arrow-rs (16 -> AES-128, 32 -> AES-256).
+    async fn assert_encrypted_parquet_roundtrip(encryption_key: &[u8]) {
         let aad_prefix = b"aad_prefix";
 
         let schema = Arc::new(
@@ -805,6 +806,19 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .unwrap();
         assert_eq!(ids.values(), &[10, 20, 30]);
+    }
+
+    #[tokio::test]
+    async fn test_read_encrypted_parquet_aes_128() {
+        // 16-byte key -> AES-128-GCM.
+        assert_encrypted_parquet_roundtrip(b"0123456789abcdef").await;
+    }
+
+    #[tokio::test]
+    async fn test_read_encrypted_parquet_aes_256() {
+        // 32-byte key -> AES-256-GCM. Requires arrow-rs >= 58.4.0;
+        // 58.3.0 and earlier only supported AES-128 for Parquet modular encryption.
+        assert_encrypted_parquet_roundtrip(b"0123456789abcdef0123456789abcdef").await;
     }
 
     #[tokio::test]
