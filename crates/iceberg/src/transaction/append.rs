@@ -411,11 +411,13 @@ mod tests {
         let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
         let updates = action_commit.take_updates();
 
-        let new_snapshot: SnapshotRef = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
-            SnapshotRef::new(snapshot.clone())
-        } else {
-            unreachable!("first update of a fast append should be AddSnapshot")
-        };
+        let new_snapshot: SnapshotRef = updates
+            .iter()
+            .find_map(|u| match u {
+                TableUpdate::AddSnapshot { snapshot } => Some(SnapshotRef::new(snapshot.clone())),
+                _ => None,
+            })
+            .expect("a fast append should emit an AddSnapshot update");
 
         let manifest_list = table
             .manifest_list_reader(&new_snapshot)
