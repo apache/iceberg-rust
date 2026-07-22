@@ -111,3 +111,93 @@ impl CatalogProvider for IcebergCatalogProvider {
         self.schemas.get(name).cloned()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+    use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
+    use iceberg::{CatalogBuilder, TableCreation};
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::table::IcebergTableProvider;
+
+    async fn catalog_with_one_table() -> (Arc<dyn Catalog>, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let warehouse_path = temp_dir.path().to_str().unwrap().to_string();
+        let catalog = MemoryCatalogBuilder::default()
+            .load(
+                "memory",
+                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse_path.clone())]),
+            )
+            .await
+            .unwrap();
+
+        let namespace = NamespaceIdent::new("test_ns".to_string());
+        catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await
+            .unwrap();
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+        catalog
+            .create_table(
+                &namespace,
+                TableCreation::builder()
+                    .name("t".to_string())
+                    .location(format!("{warehouse_path}/t"))
+                    .schema(schema)
+                    .properties(HashMap::new())
+                    .build(),
+            )
+            .await
+            .unwrap();
+
+        (Arc::new(catalog), temp_dir)
+    }
+
+    /// Downcasts the `t` table provider in the `test_ns` schema and returns
+    /// whether it carries an [`IcebergCatalogConfig`].
+    async fn table_provider_has_config(provider: &IcebergCatalogProvider) -> bool {
+        let schema = provider.schema("test_ns").expect("test_ns schema");
+        let table = schema.table("t").await.unwrap().expect("table provider");
+        table
+            .downcast_ref::<IcebergTableProvider>()
+            .expect("IcebergTableProvider")
+            .catalog_config()
+            .is_some()
+    }
+
+    #[tokio::test]
+    async fn test_try_new_with_config_propagates_to_tables() {
+        let (catalog, _temp_dir) = catalog_with_one_table().await;
+        let config = IcebergCatalogConfig::new("memory", "memory", HashMap::new());
+
+        let provider = IcebergCatalogProvider::try_new_with_config(catalog, config)
+            .await
+            .unwrap();
+
+        assert!(
+            table_provider_has_config(&provider).await,
+            "try_new_with_config should thread the config down to table providers"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_try_new_leaves_tables_config_less() {
+        let (catalog, _temp_dir) = catalog_with_one_table().await;
+
+        let provider = IcebergCatalogProvider::try_new(catalog).await.unwrap();
+
+        assert!(
+            !table_provider_has_config(&provider).await,
+            "try_new should leave table providers without a config"
+        );
+    }
+}

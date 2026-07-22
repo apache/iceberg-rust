@@ -399,7 +399,7 @@ mod tests {
             .downcast_ref::<IcebergTableProvider>()
             .expect("IcebergTableProvider");
         assert!(
-            iceberg.config().is_some(),
+            iceberg.catalog_config().is_some(),
             "try_new_with_config should propagate the config to its tables"
         );
 
@@ -416,7 +416,7 @@ mod tests {
         let iceberg = provider
             .downcast_ref::<IcebergTableProvider>()
             .expect("IcebergTableProvider");
-        assert!(iceberg.config().is_none());
+        assert!(iceberg.catalog_config().is_none());
     }
 
     #[tokio::test]

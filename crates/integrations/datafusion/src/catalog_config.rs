@@ -34,6 +34,8 @@ use std::collections::HashMap;
 pub struct IcebergCatalogConfig {
     /// The catalog type, e.g. `"rest"`, `"sql"`, `"glue"`.
     pub r#type: String,
+    /// The catalog name it is registered under (used to look it up when
+    /// reconstructing the catalog on a remote node).
     pub name: String,
     /// Catalog connection and storage properties.
     pub props: HashMap<String, String>,

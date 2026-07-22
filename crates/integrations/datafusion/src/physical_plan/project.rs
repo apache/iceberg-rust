@@ -319,7 +319,14 @@ mod tests {
         let partition_spec = Arc::new(partition_spec);
         let calculator = PartitionValueCalculator::try_new(&partition_spec, &table_schema).unwrap();
         let partition_type = calculator.partition_arrow_type().clone();
-        let expr = PartitionExpr::try_new(partition_spec, Arc::new(table_schema.clone())).unwrap();
+        let table_schema_ref = Arc::new(table_schema.clone());
+        let expr =
+            PartitionExpr::try_new(partition_spec.clone(), table_schema_ref.clone()).unwrap();
+
+        // The getters expose the spec and schema the expression was built from,
+        // which a distributed engine serializes and rebuilds via `try_new`.
+        assert!(Arc::ptr_eq(expr.partition_spec(), &partition_spec));
+        assert!(Arc::ptr_eq(expr.table_schema(), &table_schema_ref));
 
         assert_eq!(expr.data_type(&arrow_schema).unwrap(), partition_type);
         assert!(!expr.nullable(&arrow_schema).unwrap());

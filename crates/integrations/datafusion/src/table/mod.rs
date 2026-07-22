@@ -76,11 +76,7 @@ pub struct IcebergTableProvider {
     /// threaded into the execution plan nodes produced by `scan`/`insert_into`
     /// so that a distributed engine can reconstruct them (and their catalog and
     /// storage) on remote nodes.
-    config: Option<crate::IcebergCatalogConfig>,
-    /// Optional snapshot to read. `None` reads the current snapshot (refreshed
-    /// from the catalog on each scan); `Some` pins reads to that snapshot for
-    /// time-travel. Writes always target the current table state.
-    snapshot_id: Option<i64>,
+    catalog_config: Option<crate::IcebergCatalogConfig>,
 }
 
 impl IcebergTableProvider {
@@ -104,8 +100,7 @@ impl IcebergTableProvider {
             catalog,
             table_ident,
             schema,
-            config,
-            snapshot_id: None,
+            catalog_config: config,
         })
     }
 
@@ -125,23 +120,10 @@ impl IcebergTableProvider {
         Self::try_new(catalog, Some(config), namespace, name).await
     }
 
-    /// Pins reads to a specific snapshot for time-travel. `None` (the default)
-    /// reads the current snapshot. The snapshot id is threaded into the scan
-    /// node, so it is serialized and honored by a distributed engine as well.
-    pub fn with_snapshot_id(mut self, snapshot_id: Option<i64>) -> Self {
-        self.snapshot_id = snapshot_id;
-        self
-    }
-
-    /// Returns the snapshot this provider reads, if pinned for time-travel.
-    pub fn snapshot_id(&self) -> Option<i64> {
-        self.snapshot_id
-    }
-
     /// Returns the serializable catalog/storage config, if this provider was
     /// created with one.
-    pub fn config(&self) -> Option<&crate::IcebergCatalogConfig> {
-        self.config.as_ref()
+    pub fn catalog_config(&self) -> Option<&crate::IcebergCatalogConfig> {
+        self.catalog_config.as_ref()
     }
 
     /// Returns the identifier of the table this provider serves.
@@ -156,7 +138,7 @@ impl IcebergTableProvider {
         // Load fresh table metadata for metadata table access
         let table = self.catalog.load_table(&self.table_ident).await?;
         Ok(IcebergMetadataTableProvider::new(table, r#type)
-            .with_catalog_config(self.config.clone()))
+            .with_catalog_config(self.catalog_config.clone()))
     }
 }
 
@@ -187,13 +169,13 @@ impl TableProvider for IcebergTableProvider {
         Ok(Arc::new(
             IcebergTableScan::new(
                 table,
-                self.snapshot_id,
+                None, // Always use current snapshot for catalog-backed provider
                 self.schema.clone(),
                 projection,
                 filters,
                 limit,
             )
-            .with_catalog_config(self.config.clone()),
+            .with_catalog_config(self.catalog_config.clone()),
         ))
     }
 
@@ -275,7 +257,7 @@ impl TableProvider for IcebergTableProvider {
 
         let write_plan = Arc::new(
             IcebergWriteExec::new(table.clone(), write_input, self.schema.clone())
-                .with_catalog_config(self.config.clone()),
+                .with_catalog_config(self.catalog_config.clone()),
         );
 
         // Merge the outputs of write_plan into one so we can commit all files together
@@ -288,7 +270,7 @@ impl TableProvider for IcebergTableProvider {
                 coalesce_partitions,
                 self.schema.clone(),
             )
-            .with_catalog_config(self.config.clone()),
+            .with_catalog_config(self.catalog_config.clone()),
         ))
     }
 }
@@ -482,6 +464,24 @@ mod tests {
         )
     }
 
+    /// Builds a config-less catalog-backed [`IcebergTableProvider`] over the
+    /// given table. Most catalog-backed tests don't care about the config, so
+    /// this keeps them free of the `try_new(.., None, ..)` boilerplate.
+    async fn catalog_backed_provider(
+        catalog: Arc<dyn Catalog>,
+        namespace: NamespaceIdent,
+        table_name: String,
+    ) -> IcebergTableProvider {
+        IcebergTableProvider::try_new(catalog, None, namespace, table_name)
+            .await
+            .unwrap()
+    }
+
+    /// A sample [`IcebergCatalogConfig`] for tests that exercise config threading.
+    fn sample_catalog_config() -> crate::IcebergCatalogConfig {
+        crate::IcebergCatalogConfig::new("memory", "memory", HashMap::new())
+    }
+
     // Tests for IcebergStaticTableProvider
 
     #[tokio::test]
@@ -580,14 +580,8 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
         // Test creating a catalog-backed provider
-        let provider = IcebergTableProvider::try_new(
-            catalog.clone(),
-            None,
-            namespace.clone(),
-            table_name.clone(),
-        )
-        .await
-        .unwrap();
+        let provider =
+            catalog_backed_provider(catalog.clone(), namespace.clone(), table_name.clone()).await;
 
         // Verify the schema is loaded correctly
         let schema = provider.schema();
@@ -600,14 +594,8 @@ mod tests {
     async fn test_catalog_backed_provider_scan() {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider = IcebergTableProvider::try_new(
-            catalog.clone(),
-            None,
-            namespace.clone(),
-            table_name.clone(),
-        )
-        .await
-        .unwrap();
+        let provider =
+            catalog_backed_provider(catalog.clone(), namespace.clone(), table_name.clone()).await;
 
         let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
@@ -630,14 +618,8 @@ mod tests {
     async fn test_catalog_backed_provider_insert() {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider = IcebergTableProvider::try_new(
-            catalog.clone(),
-            None,
-            namespace.clone(),
-            table_name.clone(),
-        )
-        .await
-        .unwrap();
+        let provider =
+            catalog_backed_provider(catalog.clone(), namespace.clone(), table_name.clone()).await;
 
         let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
@@ -661,14 +643,8 @@ mod tests {
     async fn test_physical_input_schema_consistent_with_logical_input_schema() {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider = IcebergTableProvider::try_new(
-            catalog.clone(),
-            None,
-            namespace.clone(),
-            table_name.clone(),
-        )
-        .await
-        .unwrap();
+        let provider =
+            catalog_backed_provider(catalog.clone(), namespace.clone(), table_name.clone()).await;
 
         let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
@@ -784,9 +760,7 @@ mod tests {
         use datafusion::physical_plan::empty::EmptyExec;
 
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
-        let provider = IcebergTableProvider::try_new(catalog, None, namespace, table_name)
-            .await
-            .unwrap();
+        let provider = catalog_backed_provider(catalog, namespace, table_name).await;
         let ctx = SessionContext::new();
 
         for (insert_op, expected_message) in [
@@ -825,14 +799,8 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) =
             get_partitioned_test_catalog_and_table(Some(true)).await;
 
-        let provider = IcebergTableProvider::try_new(
-            catalog.clone(),
-            None,
-            namespace.clone(),
-            table_name.clone(),
-        )
-        .await
-        .unwrap();
+        let provider =
+            catalog_backed_provider(catalog.clone(), namespace.clone(), table_name.clone()).await;
 
         let ctx = SessionContext::new();
         let input_schema = provider.schema();
@@ -861,14 +829,8 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) =
             get_partitioned_test_catalog_and_table(Some(false)).await;
 
-        let provider = IcebergTableProvider::try_new(
-            catalog.clone(),
-            None,
-            namespace.clone(),
-            table_name.clone(),
-        )
-        .await
-        .unwrap();
+        let provider =
+            catalog_backed_provider(catalog.clone(), namespace.clone(), table_name.clone()).await;
 
         let ctx = SessionContext::new();
         let input_schema = provider.schema();
@@ -924,14 +886,8 @@ mod tests {
 
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider = IcebergTableProvider::try_new(
-            catalog.clone(),
-            None,
-            namespace.clone(),
-            table_name.clone(),
-        )
-        .await
-        .unwrap();
+        let provider =
+            catalog_backed_provider(catalog.clone(), namespace.clone(), table_name.clone()).await;
 
         let ctx = SessionContext::new();
         let state = ctx.state();
@@ -978,5 +934,155 @@ mod tests {
             None,
             "Limit should be None when not specified"
         );
+    }
+
+    // Tests for catalog-config threading (the surface a distributed engine
+    // relies on to reconstruct these providers and plan nodes remotely).
+
+    #[tokio::test]
+    async fn test_try_new_with_config_carries_config() {
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+
+        let provider = IcebergTableProvider::try_new_with_config(
+            catalog,
+            sample_catalog_config(),
+            namespace,
+            table_name,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(provider.catalog_config(), Some(&sample_catalog_config()));
+    }
+
+    #[tokio::test]
+    async fn test_scan_threads_catalog_config_into_scan_node() {
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+
+        let provider = IcebergTableProvider::try_new_with_config(
+            catalog,
+            sample_catalog_config(),
+            namespace,
+            table_name,
+        )
+        .await
+        .unwrap();
+
+        let state = SessionContext::new().state();
+        let scan_plan = provider.scan(&state, None, &[], None).await.unwrap();
+        let scan = scan_plan
+            .downcast_ref::<IcebergTableScan>()
+            .expect("Expected IcebergTableScan");
+
+        assert_eq!(scan.catalog_config(), Some(&sample_catalog_config()));
+    }
+
+    #[tokio::test]
+    async fn test_scan_omits_catalog_config_when_provider_has_none() {
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+        let provider = catalog_backed_provider(catalog, namespace, table_name).await;
+
+        let state = SessionContext::new().state();
+        let scan_plan = provider.scan(&state, None, &[], None).await.unwrap();
+        let scan = scan_plan
+            .downcast_ref::<IcebergTableScan>()
+            .expect("Expected IcebergTableScan");
+
+        assert!(scan.catalog_config().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_insert_threads_catalog_config_into_write_and_commit_nodes() {
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+        let provider = IcebergTableProvider::try_new_with_config(
+            catalog,
+            sample_catalog_config(),
+            namespace,
+            table_name,
+        )
+        .await
+        .unwrap();
+
+        let input = Arc::new(EmptyExec::new(provider.schema())) as Arc<dyn ExecutionPlan>;
+        let state = SessionContext::new().state();
+        let insert_plan = provider
+            .insert_into(&state, input, InsertOp::Append)
+            .await
+            .unwrap();
+
+        // The top node is the commit; it must carry the config.
+        let commit = insert_plan
+            .downcast_ref::<IcebergCommitExec>()
+            .expect("Expected IcebergCommitExec at the root of the insert plan");
+        assert_eq!(commit.catalog_config(), Some(&sample_catalog_config()));
+
+        // The write node buried in the plan must carry it too.
+        assert!(
+            plan_has_write_exec_with_config(&insert_plan),
+            "IcebergWriteExec in the insert plan should carry the catalog config"
+        );
+    }
+
+    fn plan_has_write_exec_with_config(plan: &Arc<dyn ExecutionPlan>) -> bool {
+        if let Some(write) = plan.downcast_ref::<IcebergWriteExec>() {
+            return write.catalog_config() == Some(&sample_catalog_config());
+        }
+        plan.children()
+            .into_iter()
+            .any(plan_has_write_exec_with_config)
+    }
+
+    #[tokio::test]
+    async fn test_scan_with_predicates_overrides_predicate() {
+        use iceberg::expr::Reference;
+        use iceberg::spec::Datum;
+
+        let table = get_test_table_from_metadata_file().await;
+        let arrow_schema =
+            Arc::new(schema_to_arrow_schema(table.metadata().current_schema()).unwrap());
+
+        // Built with no filters, the scan carries no predicate.
+        let scan = IcebergTableScan::new(table, None, arrow_schema, None, &[], None);
+        assert!(scan.predicates().is_none());
+
+        // `with_predicates` installs one directly, as a distributed engine would
+        // after deserializing an already-built predicate.
+        let predicate = Reference::new("x").less_than(Datum::long(10));
+        let scan = scan.with_predicates(Some(predicate.clone()));
+        assert_eq!(scan.predicates(), Some(&predicate));
+
+        // ...and can clear it again.
+        let scan = scan.with_predicates(None);
+        assert!(scan.predicates().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_metadata_table_propagates_catalog_config() {
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+
+        // With config: the metadata-table provider carries it.
+        let with_config = IcebergTableProvider::try_new_with_config(
+            catalog.clone(),
+            sample_catalog_config(),
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
+        let meta = with_config
+            .metadata_table(MetadataTableType::Snapshots)
+            .await
+            .unwrap();
+        assert_eq!(meta.catalog_config(), Some(&sample_catalog_config()));
+
+        // Without config: the metadata-table provider stays config-less.
+        let without_config = catalog_backed_provider(catalog, namespace, table_name).await;
+        let meta = without_config
+            .metadata_table(MetadataTableType::Snapshots)
+            .await
+            .unwrap();
+        assert!(meta.catalog_config().is_none());
     }
 }

@@ -177,11 +177,9 @@ pub fn iceberg_datafusion::IcebergStaticTableProvider::supports_filters_pushdown
 pub fn iceberg_datafusion::IcebergStaticTableProvider::table_type(&self) -> datafusion_expr::table_source::TableType
 pub struct iceberg_datafusion::table::IcebergTableProvider
 impl iceberg_datafusion::IcebergTableProvider
-pub fn iceberg_datafusion::IcebergTableProvider::config(&self) -> core::option::Option<&iceberg_datafusion::IcebergCatalogConfig>
-pub fn iceberg_datafusion::IcebergTableProvider::snapshot_id(&self) -> core::option::Option<i64>
+pub fn iceberg_datafusion::IcebergTableProvider::catalog_config(&self) -> core::option::Option<&iceberg_datafusion::IcebergCatalogConfig>
 pub fn iceberg_datafusion::IcebergTableProvider::table_ident(&self) -> &iceberg::catalog::TableIdent
 pub async fn iceberg_datafusion::IcebergTableProvider::try_new_with_config(catalog: alloc::sync::Arc<dyn iceberg::catalog::Catalog>, config: iceberg_datafusion::IcebergCatalogConfig, namespace: iceberg::catalog::NamespaceIdent, name: impl core::convert::Into<alloc::string::String>) -> iceberg::error::Result<Self>
-pub fn iceberg_datafusion::IcebergTableProvider::with_snapshot_id(self, snapshot_id: core::option::Option<i64>) -> Self
 impl core::clone::Clone for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::clone(&self) -> iceberg_datafusion::IcebergTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergTableProvider
@@ -259,11 +257,9 @@ pub fn iceberg_datafusion::IcebergStaticTableProvider::supports_filters_pushdown
 pub fn iceberg_datafusion::IcebergStaticTableProvider::table_type(&self) -> datafusion_expr::table_source::TableType
 pub struct iceberg_datafusion::IcebergTableProvider
 impl iceberg_datafusion::IcebergTableProvider
-pub fn iceberg_datafusion::IcebergTableProvider::config(&self) -> core::option::Option<&iceberg_datafusion::IcebergCatalogConfig>
-pub fn iceberg_datafusion::IcebergTableProvider::snapshot_id(&self) -> core::option::Option<i64>
+pub fn iceberg_datafusion::IcebergTableProvider::catalog_config(&self) -> core::option::Option<&iceberg_datafusion::IcebergCatalogConfig>
 pub fn iceberg_datafusion::IcebergTableProvider::table_ident(&self) -> &iceberg::catalog::TableIdent
 pub async fn iceberg_datafusion::IcebergTableProvider::try_new_with_config(catalog: alloc::sync::Arc<dyn iceberg::catalog::Catalog>, config: iceberg_datafusion::IcebergCatalogConfig, namespace: iceberg::catalog::NamespaceIdent, name: impl core::convert::Into<alloc::string::String>) -> iceberg::error::Result<Self>
-pub fn iceberg_datafusion::IcebergTableProvider::with_snapshot_id(self, snapshot_id: core::option::Option<i64>) -> Self
 impl core::clone::Clone for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::clone(&self) -> iceberg_datafusion::IcebergTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergTableProvider
