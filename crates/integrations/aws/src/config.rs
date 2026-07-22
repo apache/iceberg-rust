@@ -106,7 +106,7 @@ pub async fn create_sdk_config(
 
     let assume_role_provider = SharedCredentialsProvider::new(RefreshingCredentialsProvider {
         inner: assume_role_builder.build().await,
-        cached: tokio::sync::Mutex::new(None),
+        cached: tokio::sync::Mutex::new(CachedCredentialsState::default()),
     });
 
     // The catalog endpoint override (if any) is applied only to the
@@ -125,22 +125,75 @@ pub async fn create_sdk_config(
 #[derive(Debug)]
 struct RefreshingCredentialsProvider {
     inner: AssumeRoleProvider,
-    cached: tokio::sync::Mutex<Option<AwsSdkCredentials>>,
+    cached: tokio::sync::Mutex<CachedCredentialsState>,
 }
+
+#[derive(Debug, Default)]
+struct CachedCredentialsState {
+    credentials: Option<AwsSdkCredentials>,
+    /// Set after a failed refresh; suppresses further STS attempts until this instant is
+    /// reached, so a sustained STS outage doesn't turn every credential consumer into a
+    /// concurrent retry storm against STS, nor serialize unrelated traffic behind repeated
+    /// slow/retried STS calls made while holding `cached`'s lock.
+    retry_not_before: Option<SystemTime>,
+}
+
+/// Minimum spacing between STS `AssumeRole` retry attempts once a refresh has failed.
+const REFRESH_RETRY_BACKOFF: Duration = Duration::from_secs(30);
 
 impl RefreshingCredentialsProvider {
     async fn credentials(&self) -> aws_credential_types::provider::Result {
-        let mut cached = self.cached.lock().await;
-        if let Some(credentials) = cached
+        let mut state = self.cached.lock().await;
+        let now = SystemTime::now();
+        if let Some(credentials) = state
+            .credentials
             .as_ref()
-            .filter(|credentials| credentials_are_fresh(credentials, SystemTime::now()))
+            .filter(|credentials| credentials_are_fresh(credentials, now))
         {
             return Ok(credentials.clone());
         }
 
-        let credentials = self.inner.provide_credentials().await?;
-        *cached = Some(credentials.clone());
-        Ok(credentials)
+        // We're stale (or have never fetched). If we're still inside a post-failure backoff
+        // window, don't hammer STS again on every call -- just keep serving the cached
+        // credential as long as it hasn't actually expired.
+        if state
+            .retry_not_before
+            .is_some_and(|retry_at| now < retry_at)
+            && let Some(credentials) = state
+                .credentials
+                .as_ref()
+                .filter(|credentials| credentials.expiry().is_none_or(|expiry| expiry > now))
+        {
+            return Ok(credentials.clone());
+        }
+
+        match self.inner.provide_credentials().await {
+            Ok(credentials) => {
+                state.credentials = Some(credentials.clone());
+                state.retry_not_before = None;
+                Ok(credentials)
+            }
+            Err(error) => {
+                state.retry_not_before = Some(now + REFRESH_RETRY_BACKOFF);
+                // `credentials_are_fresh` above triggers a refresh 5 minutes before actual
+                // expiry, so a refresh failure here does not necessarily mean the cached
+                // credentials are unusable yet. Prefer serving a still-valid (if aging)
+                // cached credential over turning a transient STS error (throttling, a
+                // network blip, temporary IAM/STS unavailability) into a hard failure.
+                if let Some(credentials) = state
+                    .credentials
+                    .as_ref()
+                    .filter(|credentials| credentials.expiry().is_none_or(|expiry| expiry > now))
+                {
+                    log::warn!(
+                        "failed to refresh AssumeRole credentials, falling back to cached \
+                         credentials that have not yet expired: {error}"
+                    );
+                    return Ok(credentials.clone());
+                }
+                Err(error)
+            }
+        }
     }
 }
 
@@ -533,6 +586,187 @@ mod tests {
         );
         sts_mock.assert_async().await;
         catalog_mock.assert_async().await;
+    }
+
+    /// A non-retryable STS error response (`AccessDenied`), so tests that expect exactly
+    /// one request don't have to also account for the AWS SDK's default retry behavior
+    /// (which *would* kick in for retryable errors like throttling or 5xxs).
+    fn assume_role_error_response() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<ErrorResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <Error>
+    <Type>Sender</Type>
+    <Code>AccessDenied</Code>
+    <Message>not authorized</Message>
+  </Error>
+  <RequestId>request-id</RequestId>
+</ErrorResponse>"#
+    }
+
+    /// Builds a real `AssumeRoleProvider` pointed at whatever `AWS_ENDPOINT_URL_STS`
+    /// currently resolves to, for direct, isolated testing of
+    /// `RefreshingCredentialsProvider` (i.e. without going through `create_sdk_config`).
+    async fn build_assume_role_provider() -> AssumeRoleProvider {
+        let base_config = aws_config::defaults(BehaviorVersion::latest())
+            .credentials_provider(Credentials::new(
+                "base-access-key",
+                "base-secret-key",
+                None,
+                None,
+                "test",
+            ))
+            .region(Region::new("ap-southeast-2"))
+            .load()
+            .await;
+
+        AssumeRoleProvider::builder("arn:aws:iam::123456789012:role/TestRole")
+            .session_name("test-session")
+            .configure(&base_config)
+            .build()
+            .await
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_cached_credentials_when_refresh_fails_but_not_yet_expired() {
+        let mut server = mockito::Server::new_async().await;
+        let _sts_endpoint = StsEndpointEnvGuard::set(&server.url());
+        let mock = server
+            .mock("POST", "/")
+            .with_status(403)
+            .with_header("content-type", "text/xml")
+            .with_body(assume_role_error_response())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let provider = RefreshingCredentialsProvider {
+            inner: build_assume_role_provider().await,
+            // Past the 5-minute early-refresh buffer (so a refresh is attempted), but not
+            // yet actually expired.
+            cached: tokio::sync::Mutex::new(CachedCredentialsState {
+                credentials: Some(AwsSdkCredentials::new(
+                    "cached-access-key",
+                    "cached-secret-key",
+                    None,
+                    Some(SystemTime::now() + Duration::from_secs(60)),
+                    "test",
+                )),
+                retry_not_before: None,
+            }),
+        };
+
+        let credentials = provider
+            .credentials()
+            .await
+            .expect("should fall back to the still-valid cached credentials");
+        assert_eq!(credentials.access_key_id(), "cached-access-key");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn propagates_error_when_cached_credentials_are_actually_expired() {
+        let mut server = mockito::Server::new_async().await;
+        let _sts_endpoint = StsEndpointEnvGuard::set(&server.url());
+        let mock = server
+            .mock("POST", "/")
+            .with_status(403)
+            .with_header("content-type", "text/xml")
+            .with_body(assume_role_error_response())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let provider = RefreshingCredentialsProvider {
+            inner: build_assume_role_provider().await,
+            cached: tokio::sync::Mutex::new(CachedCredentialsState {
+                credentials: Some(AwsSdkCredentials::new(
+                    "cached-access-key",
+                    "cached-secret-key",
+                    None,
+                    Some(SystemTime::now() - Duration::from_secs(10)),
+                    "test",
+                )),
+                retry_not_before: None,
+            }),
+        };
+
+        let result = provider.credentials().await;
+        assert!(
+            result.is_err(),
+            "actually-expired cached credentials must not mask a refresh failure"
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn propagates_error_when_no_cached_credentials_exist() {
+        let mut server = mockito::Server::new_async().await;
+        let _sts_endpoint = StsEndpointEnvGuard::set(&server.url());
+        let mock = server
+            .mock("POST", "/")
+            .with_status(403)
+            .with_header("content-type", "text/xml")
+            .with_body(assume_role_error_response())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let provider = RefreshingCredentialsProvider {
+            inner: build_assume_role_provider().await,
+            cached: tokio::sync::Mutex::new(CachedCredentialsState::default()),
+        };
+
+        let result = provider.credentials().await;
+        assert!(result.is_err());
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn does_not_retry_sts_again_within_the_backoff_window_after_a_failed_refresh() {
+        // Regression test: once a refresh fails, subsequent credential requests during the
+        // backoff window must be served from cache without re-hitting STS on every call --
+        // otherwise a sustained STS outage turns every credential consumer into a retry
+        // storm and serializes unrelated traffic behind repeated slow/retried STS calls
+        // made while holding the shared cache lock.
+        let mut server = mockito::Server::new_async().await;
+        let _sts_endpoint = StsEndpointEnvGuard::set(&server.url());
+        let mock = server
+            .mock("POST", "/")
+            .with_status(403)
+            .with_header("content-type", "text/xml")
+            .with_body(assume_role_error_response())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let provider = RefreshingCredentialsProvider {
+            inner: build_assume_role_provider().await,
+            cached: tokio::sync::Mutex::new(CachedCredentialsState {
+                credentials: Some(AwsSdkCredentials::new(
+                    "cached-access-key",
+                    "cached-secret-key",
+                    None,
+                    Some(SystemTime::now() + Duration::from_secs(60)),
+                    "test",
+                )),
+                retry_not_before: None,
+            }),
+        };
+
+        let first = provider
+            .credentials()
+            .await
+            .expect("first call falls back to cache after the failed refresh");
+        assert_eq!(first.access_key_id(), "cached-access-key");
+
+        let second = provider
+            .credentials()
+            .await
+            .expect("second call must not re-hit STS within the backoff window");
+        assert_eq!(second.access_key_id(), "cached-access-key");
+
+        // Exactly one STS call for two credential requests.
+        mock.assert_async().await;
     }
 
     #[test]

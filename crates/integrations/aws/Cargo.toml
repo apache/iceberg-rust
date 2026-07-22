@@ -33,6 +33,7 @@ aws-config = { workspace = true }
 aws-credential-types = { workspace = true }
 aws-sdk-sts = { workspace = true }
 iceberg = { workspace = true }
+log = { workspace = true }
 reqsign-aws-v4 = { workspace = true }
 reqsign-core = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }

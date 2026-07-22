@@ -3820,6 +3820,7 @@ dependencies = [
  "aws-credential-types",
  "aws-sdk-sts",
  "iceberg",
+ "log",
  "mockito",
  "reqsign-aws-v4",
  "reqsign-core",
