@@ -651,8 +651,10 @@ pub mod tests {
     use crate::scan::FileScanTask;
     use crate::spec::{
         DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, DataFileBuilder, DataFileFormat, Datum,
-        Literal, ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder,
-        NestedField, PartitionSpec, PrimitiveType, Schema, Struct, StructType, TableMetadata, Type,
+        Literal, MAIN_BRANCH, ManifestEntry, ManifestListWriter, ManifestStatus,
+        ManifestWriterBuilder, NestedField, Operation, PartitionSpec, PrimitiveType, Schema,
+        Snapshot, Struct, StructType, Summary, TableMetadata, TableMetadataBuilder, Type,
+        UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
@@ -1840,6 +1842,98 @@ pub mod tests {
             tasks[1].data_file_path,
             format!("{}/3.parquet", &fixture.table_location)
         );
+    }
+
+    #[tokio::test]
+    async fn test_filtered_scan_with_dropped_partition_source_column() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // baseline: the same filtered scan against the table before evolution
+        let baseline = scan_y_gte_5(&fixture.table).await;
+        assert!(!baseline.is_empty());
+        assert!(baseline.iter().all(|y| *y >= 5));
+
+        // Evolve the table so that the manifests reference a historical spec whose source
+        // column is no longer in the current schema: make an unpartitioned spec the
+        // default, then drop the original spec's source column from the schema.
+        let current_schema = fixture.table.metadata().current_schema();
+        let evolved_schema = Schema::builder()
+            .with_fields(
+                current_schema
+                    .as_struct()
+                    .fields()
+                    .iter()
+                    .filter(|field| field.id != 1)
+                    .cloned(),
+            )
+            .with_identifier_field_ids(vec![2])
+            .build()
+            .unwrap();
+        let evolved =
+            TableMetadataBuilder::new_from_metadata(fixture.table.metadata().clone(), None)
+                .add_default_partition_spec(UnboundPartitionSpec::builder().build())
+                .unwrap()
+                .add_current_schema(evolved_schema)
+                .unwrap()
+                .build()
+                .unwrap()
+                .metadata;
+
+        // a commit after the evolution carries the previous manifests forward: the new
+        // snapshot uses the evolved schema while its manifests still use historical spec 0
+        let parent = evolved.current_snapshot().unwrap().clone();
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(parent.snapshot_id() + 1)
+            .with_parent_snapshot_id(Some(parent.snapshot_id()))
+            .with_sequence_number(evolved.last_sequence_number() + 1)
+            .with_timestamp_ms(evolved.last_updated_ms + 1)
+            .with_schema_id(evolved.current_schema_id())
+            .with_manifest_list(parent.manifest_list())
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .build();
+        let metadata = TableMetadataBuilder::new_from_metadata(evolved, None)
+            .set_branch_snapshot(snapshot, MAIN_BRANCH)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        let table = fixture.table.clone().with_metadata(Arc::new(metadata));
+
+        // planning and reading must succeed, and the results must match the table before
+        // evolution: no rows wrongly pruned and none returned unfiltered
+        let evolved = scan_y_gte_5(&table).await;
+        assert_eq!(evolved, baseline);
+    }
+
+    async fn scan_y_gte_5(table: &Table) -> Vec<i64> {
+        let table_scan = table
+            .scan()
+            .select(["y"])
+            .with_filter(Reference::new("y").greater_than_or_equal_to(Datum::long(5)))
+            .build()
+            .unwrap();
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let mut values: Vec<i64> = batches
+            .iter()
+            .flat_map(|batch| {
+                let col = batch.column_by_name("y").unwrap();
+                let arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+                (0..arr.len()).map(|i| arr.value(i)).collect::<Vec<_>>()
+            })
+            .collect();
+        values.sort_unstable();
+        values
     }
 
     #[tokio::test]

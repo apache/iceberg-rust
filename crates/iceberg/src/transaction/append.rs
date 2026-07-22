@@ -362,6 +362,77 @@ mod tests {
         assert!(Arc::new(action).commit(&table).await.is_err());
     }
 
+    /// A `fast_append` must write the manifest list and the manifest
+    /// files under the `write.metadata.path` prefix when configured,
+    /// rather than the default `<location>/metadata` directory.
+    #[tokio::test]
+    async fn test_fast_append_honors_write_metadata_path() {
+        let base = make_v2_minimal_table();
+        let metadata_root = format!("{}/custom-meta", base.metadata().location());
+        let metadata = base
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .set_properties(HashMap::from([(
+                "write.metadata.path".to_string(),
+                metadata_root.clone(),
+            )]))
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        let table = base.with_metadata(Arc::new(metadata));
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(format!("{}/data/1.parquet", table.metadata().location()))
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![data_file]);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_snapshot: SnapshotRef = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            SnapshotRef::new(snapshot.clone())
+        } else {
+            unreachable!("first update of a fast append should be AddSnapshot")
+        };
+
+        let prefix = format!("{metadata_root}/");
+
+        // Manifest list
+        assert!(
+            new_snapshot.manifest_list().starts_with(prefix.as_str()),
+            "manifest list {} not under configured write.metadata.path {metadata_root}",
+            new_snapshot.manifest_list()
+        );
+
+        // Manifest files
+        let manifest_list = table
+            .manifest_list_reader(&new_snapshot)
+            .load()
+            .await
+            .unwrap();
+        assert!(
+            !manifest_list.entries().is_empty(),
+            "expected at least one manifest entry"
+        );
+        for entry in manifest_list.entries() {
+            assert!(
+                entry.manifest_path.starts_with(prefix.as_str()),
+                "manifest {} not under configured write.metadata.path {metadata_root}",
+                entry.manifest_path
+            );
+        }
+    }
+
     #[tokio::test]
     async fn test_set_snapshot_properties() {
         let table = make_v2_minimal_table();
