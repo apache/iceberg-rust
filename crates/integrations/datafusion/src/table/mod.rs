@@ -46,7 +46,7 @@ use iceberg::inspect::MetadataTableType;
 use iceberg::spec::TableProperties;
 use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
-use metadata_table::IcebergMetadataTableProvider;
+pub use metadata_table::IcebergMetadataTableProvider;
 
 use crate::error::to_datafusion_error;
 use crate::physical_plan::commit::IcebergCommitExec;
@@ -72,6 +72,15 @@ pub struct IcebergTableProvider {
     table_ident: TableIdent,
     /// A reference-counted arrow `Schema` (cached at construction)
     schema: ArrowSchemaRef,
+    /// Optional serializable catalog/storage config. When present, it is
+    /// threaded into the execution plan nodes produced by `scan`/`insert_into`
+    /// so that a distributed engine can reconstruct them (and their catalog and
+    /// storage) on remote nodes.
+    config: Option<crate::IcebergCatalogConfig>,
+    /// Optional snapshot to read. `None` reads the current snapshot (refreshed
+    /// from the catalog on each scan); `Some` pins reads to that snapshot for
+    /// time-travel. Writes always target the current table state.
+    snapshot_id: Option<i64>,
 }
 
 impl IcebergTableProvider {
@@ -81,6 +90,7 @@ impl IcebergTableProvider {
     /// reference for future metadata refreshes on each operation.
     pub(crate) async fn try_new(
         catalog: Arc<dyn Catalog>,
+        config: Option<crate::IcebergCatalogConfig>,
         namespace: NamespaceIdent,
         name: impl Into<String>,
     ) -> Result<Self> {
@@ -94,7 +104,49 @@ impl IcebergTableProvider {
             catalog,
             table_ident,
             schema,
+            config,
+            snapshot_id: None,
         })
+    }
+
+    /// Creates a catalog-backed table provider that carries a serializable
+    /// [`IcebergCatalogConfig`](crate::IcebergCatalogConfig).
+    ///
+    /// The `catalog` must already be built from the same `config`. The config is
+    /// threaded into the execution plan nodes this provider produces so that a
+    /// distributed engine (e.g. Ballista) can serialize those nodes and rebuild
+    /// the catalog/storage on remote executors.
+    pub async fn try_new_with_config(
+        catalog: Arc<dyn Catalog>,
+        config: crate::IcebergCatalogConfig,
+        namespace: NamespaceIdent,
+        name: impl Into<String>,
+    ) -> Result<Self> {
+        Self::try_new(catalog, Some(config), namespace, name).await
+    }
+
+    /// Pins reads to a specific snapshot for time-travel. `None` (the default)
+    /// reads the current snapshot. The snapshot id is threaded into the scan
+    /// node, so it is serialized and honored by a distributed engine as well.
+    pub fn with_snapshot_id(mut self, snapshot_id: Option<i64>) -> Self {
+        self.snapshot_id = snapshot_id;
+        self
+    }
+
+    /// Returns the snapshot this provider reads, if pinned for time-travel.
+    pub fn snapshot_id(&self) -> Option<i64> {
+        self.snapshot_id
+    }
+
+    /// Returns the serializable catalog/storage config, if this provider was
+    /// created with one.
+    pub fn config(&self) -> Option<&crate::IcebergCatalogConfig> {
+        self.config.as_ref()
+    }
+
+    /// Returns the identifier of the table this provider serves.
+    pub fn table_ident(&self) -> &TableIdent {
+        &self.table_ident
     }
 
     pub(crate) async fn metadata_table(
@@ -103,7 +155,8 @@ impl IcebergTableProvider {
     ) -> Result<IcebergMetadataTableProvider> {
         // Load fresh table metadata for metadata table access
         let table = self.catalog.load_table(&self.table_ident).await?;
-        Ok(IcebergMetadataTableProvider { table, r#type })
+        Ok(IcebergMetadataTableProvider::new(table, r#type)
+            .with_catalog_config(self.config.clone()))
     }
 }
 
@@ -131,15 +184,17 @@ impl TableProvider for IcebergTableProvider {
             .await
             .map_err(to_datafusion_error)?;
 
-        // Create scan with fresh metadata (always use current snapshot)
-        Ok(Arc::new(IcebergTableScan::new(
-            table,
-            None, // Always use current snapshot for catalog-backed provider
-            self.schema.clone(),
-            projection,
-            filters,
-            limit,
-        )))
+        Ok(Arc::new(
+            IcebergTableScan::new(
+                table,
+                self.snapshot_id,
+                self.schema.clone(),
+                projection,
+                filters,
+                limit,
+            )
+            .with_catalog_config(self.config.clone()),
+        ))
     }
 
     fn supports_filters_pushdown(
@@ -218,21 +273,23 @@ impl TableProvider for IcebergTableProvider {
             sort_by_partition(repartitioned_plan)?
         };
 
-        let write_plan = Arc::new(IcebergWriteExec::new(
-            table.clone(),
-            write_input,
-            self.schema.clone(),
-        ));
+        let write_plan = Arc::new(
+            IcebergWriteExec::new(table.clone(), write_input, self.schema.clone())
+                .with_catalog_config(self.config.clone()),
+        );
 
         // Merge the outputs of write_plan into one so we can commit all files together
         let coalesce_partitions = Arc::new(CoalescePartitionsExec::new(write_plan));
 
-        Ok(Arc::new(IcebergCommitExec::new(
-            table,
-            self.catalog.clone(),
-            coalesce_partitions,
-            self.schema.clone(),
-        )))
+        Ok(Arc::new(
+            IcebergCommitExec::new(
+                table,
+                self.catalog.clone(),
+                coalesce_partitions,
+                self.schema.clone(),
+            )
+            .with_catalog_config(self.config.clone()),
+        ))
     }
 }
 
@@ -523,10 +580,14 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
         // Test creating a catalog-backed provider
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         // Verify the schema is loaded correctly
         let schema = provider.schema();
@@ -539,10 +600,14 @@ mod tests {
     async fn test_catalog_backed_provider_scan() {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
@@ -565,10 +630,14 @@ mod tests {
     async fn test_catalog_backed_provider_insert() {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
@@ -592,10 +661,14 @@ mod tests {
     async fn test_physical_input_schema_consistent_with_logical_input_schema() {
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(provider))
@@ -711,7 +784,7 @@ mod tests {
         use datafusion::physical_plan::empty::EmptyExec;
 
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
-        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+        let provider = IcebergTableProvider::try_new(catalog, None, namespace, table_name)
             .await
             .unwrap();
         let ctx = SessionContext::new();
@@ -752,10 +825,14 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) =
             get_partitioned_test_catalog_and_table(Some(true)).await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         let input_schema = provider.schema();
@@ -784,10 +861,14 @@ mod tests {
         let (catalog, namespace, table_name, _temp_dir) =
             get_partitioned_test_catalog_and_table(Some(false)).await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         let input_schema = provider.schema();
@@ -843,10 +924,14 @@ mod tests {
 
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        let provider =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
 
         let ctx = SessionContext::new();
         let state = ctx.state();
@@ -892,6 +977,41 @@ mod tests {
             iceberg_scan.limit(),
             None,
             "Limit should be None when not specified"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_with_snapshot_id_pins_scan() {
+        use datafusion::datasource::TableProvider;
+
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+
+        // Default provider reads the current snapshot (None in the scan).
+        let provider = IcebergTableProvider::try_new(
+            catalog.clone(),
+            None,
+            namespace.clone(),
+            table_name.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(provider.snapshot_id(), None);
+
+        // Pinning a snapshot threads it into the scan node, where the codec reads
+        // it — so time-travel is honored locally and distributed.
+        let pinned = provider.with_snapshot_id(Some(123));
+        assert_eq!(pinned.snapshot_id(), Some(123));
+
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+        let scan_plan = pinned.scan(&state, None, &[], None).await.unwrap();
+        let iceberg_scan = scan_plan
+            .downcast_ref::<IcebergTableScan>()
+            .expect("Expected IcebergTableScan");
+        assert_eq!(
+            iceberg_scan.snapshot_id(),
+            Some(123),
+            "pinned snapshot should propagate to the scan node"
         );
     }
 }
