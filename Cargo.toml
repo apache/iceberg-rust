@@ -40,6 +40,9 @@ repository = "https://github.com/apache/iceberg-rust"
 # Check the MSRV policy in README.md before changing this
 rust-version = "1.94"
 
+[workspace.lints.rust]
+unused_qualifications = "deny"
+
 [workspace.dependencies]
 aes = { version = "0.8", features = ["zeroize"] }
 aes-gcm = "0.10"
@@ -79,10 +82,10 @@ cfg-if = "1"
 chrono = "0.4.41"
 clap = { version = "4.5.48", features = ["derive", "cargo"] }
 dashmap = "6"
-datafusion = "54.0.0"
-datafusion-cli = "54.0.0"
-datafusion-ffi = "54.0.0"
-datafusion-sqllogictest = "54.0.0"
+datafusion = "54.1.0"
+datafusion-cli = "54.1.0"
+datafusion-ffi = "54.1.0"
+datafusion-sqllogictest = "54.1.0"
 derive_builder = "0.20"
 dirs = "6"
 enum-ordinalize = "4.3.0"

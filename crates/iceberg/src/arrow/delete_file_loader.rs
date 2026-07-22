@@ -67,6 +67,7 @@ impl BasicDeleteFileLoader {
         &self,
         data_file_path: &str,
         file_size_in_bytes: u64,
+        key_metadata: Option<&[u8]>,
     ) -> Result<ArrowRecordBatchStream> {
         /*
            Essentially a super-cut-down ArrowReader. We can't use ArrowReader directly
@@ -80,6 +81,7 @@ impl BasicDeleteFileLoader {
             file_size_in_bytes,
             parquet_read_options,
             self.scan_metrics.bytes_read_counter(),
+            key_metadata,
         )
         .await?;
 
@@ -121,7 +123,11 @@ impl DeleteFileLoader for BasicDeleteFileLoader {
         schema: SchemaRef,
     ) -> Result<ArrowRecordBatchStream> {
         let raw_batch_stream = self
-            .parquet_to_batch_stream(&task.file_path, task.file_size_in_bytes)
+            .parquet_to_batch_stream(
+                &task.file_path,
+                task.file_size_in_bytes,
+                task.key_metadata.as_deref(),
+            )
             .await?;
 
         // For equality deletes, only evolve the equality_ids columns.
@@ -141,6 +147,7 @@ mod tests {
 
     use super::*;
     use crate::arrow::delete_filter::tests::setup;
+    use crate::arrow::test_utils::write_encrypted_parquet;
 
     #[tokio::test]
     async fn test_basic_delete_file_loader_read_delete_file() {
@@ -164,5 +171,158 @@ mod tests {
         let result = result.try_collect::<Vec<_>>().await.unwrap();
 
         assert_eq!(result.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_read_encrypted_positional_delete_file() {
+        use std::sync::Arc;
+
+        use arrow_array::{Int64Array, RecordBatch, StringArray};
+
+        use crate::arrow::delete_filter::tests::create_pos_del_schema;
+        use crate::encryption::StandardKeyMetadata;
+        use crate::scan::FileScanTaskDeleteFile;
+        use crate::spec::DataContentType;
+
+        let encryption_key = b"0123456789abcdef";
+        let aad_prefix = b"aad_prefix";
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap();
+        let file_io = FileIO::new_with_fs();
+
+        let positional_delete_schema = create_pos_del_schema();
+        let file_path_col = Arc::new(StringArray::from_iter_values(vec!["data.parquet"; 4]));
+        let pos_col = Arc::new(Int64Array::from(vec![0i64, 1, 5, 10]));
+        let batch = RecordBatch::try_new(positional_delete_schema.clone(), vec![
+            file_path_col,
+            pos_col,
+        ])
+        .unwrap();
+
+        let del_path = format!("{table_location}/encrypted-pos-del.parquet");
+        write_encrypted_parquet(&del_path, &batch, encryption_key, Some(aad_prefix));
+
+        let key_metadata = StandardKeyMetadata::try_new(encryption_key)
+            .unwrap()
+            .with_aad_prefix(aad_prefix)
+            .encode()
+            .unwrap();
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    crate::spec::NestedField::required(
+                        2147483546,
+                        "file_path",
+                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::String),
+                    )
+                    .into(),
+                    crate::spec::NestedField::required(
+                        2147483545,
+                        "pos",
+                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let task = FileScanTaskDeleteFile {
+            file_path: del_path.clone(),
+            file_size_in_bytes: std::fs::metadata(&del_path).unwrap().len(),
+            file_type: DataContentType::PositionDeletes,
+            partition_spec_id: 0,
+            equality_ids: None,
+            key_metadata: Some(Box::from(key_metadata.as_ref())),
+        };
+
+        let scan_metrics = ScanMetrics::new();
+        let delete_file_loader = BasicDeleteFileLoader::new(file_io, scan_metrics);
+
+        let result = delete_file_loader
+            .read_delete_file(&task, schema)
+            .await
+            .unwrap();
+
+        let batches: Vec<_> = result.try_collect().await.unwrap();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_read_encrypted_equality_delete_file() {
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        use arrow_array::{Int64Array, RecordBatch};
+        use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+
+        use crate::encryption::StandardKeyMetadata;
+        use crate::scan::FileScanTaskDeleteFile;
+        use crate::spec::DataContentType;
+
+        let encryption_key = b"0123456789abcdef";
+        let aad_prefix = b"my-table-uuid!!";
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap();
+        let file_io = FileIO::new_with_fs();
+
+        let arrow_schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("id", arrow_schema::DataType::Int64, false).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+            ),
+        ]));
+
+        let id_col = Arc::new(Int64Array::from(vec![100i64, 200, 300]));
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![id_col]).unwrap();
+
+        let del_path = format!("{table_location}/encrypted-eq-del.parquet");
+        write_encrypted_parquet(&del_path, &batch, encryption_key, Some(aad_prefix));
+
+        let key_metadata = StandardKeyMetadata::try_new(encryption_key)
+            .unwrap()
+            .with_aad_prefix(aad_prefix)
+            .encode()
+            .unwrap();
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    crate::spec::NestedField::required(
+                        1,
+                        "id",
+                        crate::spec::Type::Primitive(crate::spec::PrimitiveType::Long),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let task = FileScanTaskDeleteFile {
+            file_path: del_path.clone(),
+            file_size_in_bytes: std::fs::metadata(&del_path).unwrap().len(),
+            file_type: DataContentType::EqualityDeletes,
+            partition_spec_id: 0,
+            equality_ids: Some(vec![1]),
+            key_metadata: Some(Box::from(key_metadata.as_ref())),
+        };
+
+        let scan_metrics = ScanMetrics::new();
+        let delete_file_loader = BasicDeleteFileLoader::new(file_io, scan_metrics);
+
+        let result = delete_file_loader
+            .read_delete_file(&task, schema)
+            .await
+            .unwrap();
+
+        let batches: Vec<_> = result.try_collect().await.unwrap();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 3);
     }
 }

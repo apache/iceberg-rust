@@ -27,8 +27,10 @@
 //! Use [`RestCatalog::supports_endpoint`](crate::RestCatalog::supports_endpoint)
 //! to check whether the connected server advertised a given [`Endpoint`].
 
+use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use iceberg::{Error, ErrorKind};
 use reqwest::Method;
@@ -51,6 +53,18 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
+    /// Builds an endpoint from a known-valid method and path template.
+    ///
+    /// Intended for internal constants and tests; untrusted input (such as a
+    /// server's config response) is parsed through [`FromStr`], which validates
+    /// it.
+    pub(crate) fn new(method: Method, path: impl Into<String>) -> Self {
+        Self {
+            method,
+            path: path.into(),
+        }
+    }
+
     /// The HTTP method, e.g. `GET` or `POST`.
     pub fn method(&self) -> &str {
         self.method.as_str()
@@ -65,7 +79,7 @@ impl Endpoint {
 impl FromStr for Endpoint {
     type Err = Error;
 
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         // The wire form is exactly `"<method> <path>"` separated by a single
         // space; paths never contain spaces, so require exactly two non-empty
         // parts and a valid HTTP method.
@@ -100,14 +114,14 @@ impl Display for Endpoint {
 }
 
 impl Serialize for Endpoint {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where S: Serializer {
         serializer.collect_str(self)
     }
 }
 
 impl<'de> Deserialize<'de> for Endpoint {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where D: Deserializer<'de> {
         struct EndpointVisitor;
 
@@ -118,7 +132,7 @@ impl<'de> Deserialize<'de> for Endpoint {
                 f.write_str(r#"an endpoint string of the form "<method> <path>""#)
             }
 
-            fn visit_str<E>(self, v: &str) -> std::result::Result<Endpoint, E>
+            fn visit_str<E>(self, v: &str) -> Result<Endpoint, E>
             where E: DeError {
                 Endpoint::from_str(v).map_err(E::custom)
             }
@@ -127,6 +141,65 @@ impl<'de> Deserialize<'de> for Endpoint {
         deserializer.deserialize_str(EndpointVisitor)
     }
 }
+
+/// Declares named [`Endpoint`] constants for routes the client may negotiate.
+macro_rules! endpoints {
+    ($($name:ident => $method:ident $path:literal),+ $(,)?) => {
+        $(
+            pub(crate) static $name: LazyLock<Endpoint> =
+                LazyLock::new(|| Endpoint::new(Method::$method, $path));
+        )+
+    };
+}
+
+endpoints! {
+    V1_LIST_NAMESPACES => GET "/v1/{prefix}/namespaces",
+    V1_CREATE_NAMESPACE => POST "/v1/{prefix}/namespaces",
+    V1_LOAD_NAMESPACE => GET "/v1/{prefix}/namespaces/{namespace}",
+    V1_DELETE_NAMESPACE => DELETE "/v1/{prefix}/namespaces/{namespace}",
+    V1_UPDATE_NAMESPACE => POST "/v1/{prefix}/namespaces/{namespace}/properties",
+    V1_NAMESPACE_EXISTS => HEAD "/v1/{prefix}/namespaces/{namespace}",
+    V1_LIST_TABLES => GET "/v1/{prefix}/namespaces/{namespace}/tables",
+    V1_CREATE_TABLE => POST "/v1/{prefix}/namespaces/{namespace}/tables",
+    V1_LOAD_TABLE => GET "/v1/{prefix}/namespaces/{namespace}/tables/{table}",
+    V1_UPDATE_TABLE => POST "/v1/{prefix}/namespaces/{namespace}/tables/{table}",
+    V1_DELETE_TABLE => DELETE "/v1/{prefix}/namespaces/{namespace}/tables/{table}",
+    V1_TABLE_EXISTS => HEAD "/v1/{prefix}/namespaces/{namespace}/tables/{table}",
+    V1_RENAME_TABLE => POST "/v1/{prefix}/tables/rename",
+    V1_REGISTER_TABLE => POST "/v1/{prefix}/namespaces/{namespace}/register",
+    V1_REPORT_METRICS => POST "/v1/{prefix}/namespaces/{namespace}/tables/{table}/metrics",
+    V1_COMMIT_TRANSACTION => POST "/v1/{prefix}/transactions/commit",
+}
+
+/// The standard v1 endpoints assumed to be supported when a server's
+/// `GET /v1/config` response omits the `endpoints` field or sends an empty list
+/// (the two are treated alike). These are the minimum a server is expected to
+/// support; a server that advertises a non-empty list is taken at its word
+/// instead.
+///
+/// Note: existence-check `HEAD` routes are intentionally omitted — servers that
+/// do not advertise them are expected to fall back to `GET` load paths.
+pub(crate) static DEFAULT_ENDPOINTS: LazyLock<HashSet<Endpoint>> = LazyLock::new(|| {
+    [
+        &*V1_LIST_NAMESPACES,
+        &*V1_CREATE_NAMESPACE,
+        &*V1_LOAD_NAMESPACE,
+        &*V1_DELETE_NAMESPACE,
+        &*V1_UPDATE_NAMESPACE,
+        &*V1_LIST_TABLES,
+        &*V1_CREATE_TABLE,
+        &*V1_LOAD_TABLE,
+        &*V1_UPDATE_TABLE,
+        &*V1_DELETE_TABLE,
+        &*V1_RENAME_TABLE,
+        &*V1_REGISTER_TABLE,
+        &*V1_REPORT_METRICS,
+        &*V1_COMMIT_TRANSACTION,
+    ]
+    .into_iter()
+    .cloned()
+    .collect()
+});
 
 #[cfg(test)]
 mod tests {
