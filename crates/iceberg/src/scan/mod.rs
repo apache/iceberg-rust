@@ -305,14 +305,14 @@ impl<'a> TableScanBuilder<'a> {
 
         // Compute unified partition type if _partition is projected
         let unified_partition_type = if field_ids.contains(&RESERVED_FIELD_ID_PARTITION) {
-            let upt = compute_unified_partition_type(
+            let partition_type = compute_unified_partition_type(
                 self.table
                     .metadata()
                     .partition_specs_iter()
                     .map(|s| s.as_ref()),
                 &schema,
             )?;
-            Some(Arc::new(upt))
+            Some(Arc::new(partition_type))
         } else {
             None
         };
