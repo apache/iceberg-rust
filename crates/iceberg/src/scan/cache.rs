@@ -80,17 +80,12 @@ impl PartitionFilterCache {
         // TODO(https://github.com/apache/iceberg-rust/issues/2844): derive partition types from
         // transforms where possible to restore pruning on a historical spec's still-live fields,
         // which also makes the fallback per-term (dropped fields only) instead of per-spec.
-        let dropped_source_column = partition_spec
+        let has_dropped_source_column = partition_spec
             .fields()
             .iter()
             .any(|field| schema.field_by_id(field.source_id).is_none());
 
-        let partition_filter = if dropped_source_column {
-            tracing::warn!(
-                spec_id,
-                "Partition spec references a source column not in the scan schema; \
-                 skipping partition pruning for its manifests"
-            );
+        let partition_filter = if has_dropped_source_column {
             BoundPredicate::AlwaysTrue
         } else {
             let partition_type = partition_spec.partition_type(schema)?;
@@ -110,24 +105,29 @@ impl PartitionFilterCache {
                 .bind(partition_schema.clone(), case_sensitive)?
         };
 
-        self.0
-            .write()
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "PartitionFilterCache RwLock was poisoned",
-                )
-            })?
-            .insert(spec_id, Arc::new(partition_filter));
-
-        let read = self.0.read().map_err(|_| {
+        let mut write = self.0.write().map_err(|_| {
             Error::new(
                 ErrorKind::Unexpected,
                 "PartitionFilterCache RwLock was poisoned",
             )
         })?;
 
-        Ok(read.get(&spec_id).unwrap().clone())
+        // Another thread may have populated the entry while the filter was computed without a
+        // lock held. Only warn and insert when this call is the one that populates it, so the
+        // always-true fallback is logged once per spec rather than once per racing thread.
+        let partition_filter = write.entry(spec_id).or_insert_with(|| {
+            if has_dropped_source_column {
+                tracing::warn!(
+                    spec_id,
+                    "Partition spec references a source column not in the scan schema; \
+                     skipping partition pruning for its manifests"
+                );
+            }
+
+            Arc::new(partition_filter)
+        });
+
+        Ok(partition_filter.clone())
     }
 }
 
