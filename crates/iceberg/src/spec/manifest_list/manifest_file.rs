@@ -23,7 +23,7 @@ use super::ByteBuf;
 use crate::encryption::{EncryptedInputFile, StandardKeyMetadata};
 use crate::error::Result;
 use crate::io::FileIO;
-use crate::spec::Manifest;
+use crate::spec::{Manifest, ManifestEntry};
 use crate::{Error, ErrorKind};
 
 /// Entry in a manifest list.
@@ -195,7 +195,60 @@ impl ManifestFile {
             entry.inherit_data(self);
         }
 
+        self.assign_first_row_ids(&mut entries)?;
+
         Ok(Manifest::new(metadata, entries))
+    }
+
+    /// Assigns `first_row_id` to data-file entries that do not already have one,
+    /// starting from the manifest-level `first_row_id` and advancing by each
+    /// entry's record count. See the row-lineage inheritance rules in
+    /// <https://github.com/apache/iceberg/blob/main/format/spec.md#first-row-id-inheritance>.
+    fn assign_first_row_ids(&self, entries: &mut [ManifestEntry]) -> Result<()> {
+        let Some(manifest_first_row_id) = self.first_row_id else {
+            return Ok(());
+        };
+
+        // A `first_row_id` is only valid on data manifests; delete files always
+        // have a null `first_row_id`.
+        if self.content != ManifestContentType::Data {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "first_row_id is not valid for delete manifests (found {manifest_first_row_id} on {})",
+                    self.manifest_path
+                ),
+            ));
+        }
+
+        let mut next_row_id = i64::try_from(manifest_first_row_id).map_err(|_| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Invalid first_row_id: {manifest_first_row_id} (exceeds i64::MAX)"),
+            )
+        })?;
+
+        for entry in entries {
+            if !entry.is_alive() {
+                continue;
+            }
+
+            if entry.data_file.first_row_id.is_none() {
+                entry.data_file.first_row_id = Some(next_row_id);
+                let record_count = entry.data_file.record_count;
+                next_row_id = next_row_id.checked_add_unsigned(record_count).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Row ID overflow assigning first_row_id in {}. Next Row ID: {next_row_id}, Record Count: {record_count}",
+                            self.manifest_path
+                        ),
+                    )
+                })?;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -225,7 +278,6 @@ pub struct FieldSummary {
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use super::{ManifestContentType, ManifestFile};
@@ -233,8 +285,8 @@ mod test {
     use crate::encryption::{EncryptedOutputFile, StandardKeyMetadata};
     use crate::io::FileIO;
     use crate::spec::{
-        DataContentType, DataFile, DataFileFormat, ManifestEntry, ManifestStatus,
-        ManifestWriterBuilder, NestedField, PartitionSpec, PrimitiveType, Schema, Struct, Type,
+        DataContentType, DataFileBuilder, DataFileFormat, ManifestEntry, ManifestStatus,
+        ManifestWriterBuilder, NestedField, PartitionSpec, PrimitiveType, Schema, SchemaRef, Type,
     };
 
     #[test]
@@ -247,15 +299,9 @@ mod test {
         assert_eq!(ManifestContentType::default() as i32, 0);
     }
 
-    /// Writes a single-entry manifest, encrypting it with `key_metadata`, and
-    /// returns the resulting [`ManifestFile`]. The manifest is stored in `io`
-    /// at `path`.
-    async fn write_encrypted_manifest(
-        io: &FileIO,
-        path: &str,
-        key_metadata: StandardKeyMetadata,
-    ) -> ManifestFile {
-        let schema = Arc::new(
+    /// A single-field schema used by the manifest-writing test helpers.
+    fn test_schema() -> SchemaRef {
+        Arc::new(
             Schema::builder()
                 .with_fields(vec![Arc::new(NestedField::optional(
                     1,
@@ -264,8 +310,37 @@ mod test {
                 ))])
                 .build()
                 .unwrap(),
-        );
+        )
+    }
 
+    /// Writes a single-entry v3 data manifest to `io` at `path`, without
+    /// encryption, and returns the resulting [`ManifestFile`].
+    async fn write_manifest(io: &FileIO, path: &str) -> ManifestFile {
+        let schema = test_schema();
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+
+        let output_file = io.new_output(path).unwrap();
+        let mut writer = ManifestWriterBuilder::new(output_file, Some(1), schema, partition_spec)
+            .build_v3_data();
+
+        writer
+            .add_entry(data_entry(ManifestStatus::Added, 100, None))
+            .unwrap();
+
+        writer.write_manifest_file().await.unwrap()
+    }
+
+    /// Writes a single-entry v3 data manifest to `io` at `path`, encrypting it
+    /// with `key_metadata`, and returns the resulting [`ManifestFile`].
+    async fn write_encrypted_manifest(
+        io: &FileIO,
+        path: &str,
+        key_metadata: StandardKeyMetadata,
+    ) -> ManifestFile {
+        let schema = test_schema();
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
             .build()
@@ -277,42 +352,14 @@ mod test {
         let mut writer = ManifestWriterBuilder::new_from_encrypted(
             encrypted_output,
             Some(1),
-            schema.clone(),
-            partition_spec.clone(),
+            schema,
+            partition_spec,
         )
         .expect("Expected a valid writer")
         .build_v3_data();
 
         writer
-            .add_entry(ManifestEntry {
-                status: ManifestStatus::Added,
-                snapshot_id: None,
-                sequence_number: None,
-                file_sequence_number: None,
-                data_file: DataFile {
-                    content: DataContentType::Data,
-                    file_path: "s3://bucket/table/data/00000.parquet".to_string(),
-                    file_format: DataFileFormat::Parquet,
-                    partition: Struct::empty(),
-                    record_count: 100,
-                    file_size_in_bytes: 4096,
-                    column_sizes: HashMap::new(),
-                    value_counts: HashMap::new(),
-                    null_value_counts: HashMap::new(),
-                    nan_value_counts: HashMap::new(),
-                    lower_bounds: HashMap::new(),
-                    upper_bounds: HashMap::new(),
-                    key_metadata: None,
-                    split_offsets: None,
-                    equality_ids: None,
-                    sort_order_id: None,
-                    partition_spec_id: 0,
-                    first_row_id: None,
-                    referenced_data_file: None,
-                    content_offset: None,
-                    content_size_in_bytes: None,
-                },
-            })
+            .add_entry(data_entry(ManifestStatus::Added, 100, None))
             .unwrap();
 
         writer.write_manifest_file().await.unwrap()
@@ -388,5 +435,158 @@ mod test {
             .await
             .expect_err("load_manifest must fail when decrypting with the wrong AAD prefix");
         assert_eq!(err.kind(), ErrorKind::Unexpected);
+    }
+
+    /// Builds a data-file manifest entry with the given status, record count,
+    /// and pre-existing `first_row_id`.
+    fn data_entry(
+        status: ManifestStatus,
+        record_count: u64,
+        first_row_id: Option<i64>,
+    ) -> ManifestEntry {
+        let mut builder = DataFileBuilder::default();
+        builder
+            .content(DataContentType::Data)
+            .file_path("s3://bucket/table/data/00000.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(4096)
+            .record_count(record_count);
+        if let Some(id) = first_row_id {
+            builder.first_row_id(Some(id));
+        }
+
+        ManifestEntry::builder()
+            .status(status)
+            .data_file(builder.build().unwrap())
+            .build()
+    }
+
+    /// Builds a manifest file with the given content type and manifest-level
+    /// `first_row_id`. Other fields are irrelevant to row-id assignment.
+    fn manifest_file(content: ManifestContentType, first_row_id: Option<u64>) -> ManifestFile {
+        ManifestFile {
+            manifest_path: "memory:///m.avro".to_string(),
+            manifest_length: 0,
+            partition_spec_id: 0,
+            content,
+            sequence_number: 0,
+            min_sequence_number: 0,
+            added_snapshot_id: 0,
+            added_files_count: None,
+            existing_files_count: None,
+            deleted_files_count: None,
+            added_rows_count: None,
+            existing_rows_count: None,
+            deleted_rows_count: None,
+            partitions: None,
+            key_metadata: None,
+            first_row_id,
+        }
+    }
+
+    #[test]
+    fn test_assign_first_row_ids_interleaved() {
+        let manifest = manifest_file(ManifestContentType::Data, Some(10));
+        let mut entries = vec![
+            data_entry(ManifestStatus::Added, 3, None),
+            // A pre-assigned entry between two assigned ones: it keeps its id and
+            // must not advance the running counter.
+            data_entry(ManifestStatus::Added, 5, Some(100)),
+            // A deleted entry likewise neither receives nor consumes a row id.
+            data_entry(ManifestStatus::Deleted, 7, None),
+            data_entry(ManifestStatus::Existing, 2, None),
+        ];
+
+        manifest.assign_first_row_ids(&mut entries).unwrap();
+
+        assert_eq!(entries[0].data_file.first_row_id, Some(10));
+        assert_eq!(entries[1].data_file.first_row_id, Some(100));
+        assert_eq!(entries[2].data_file.first_row_id, None);
+        // 10 + 3 = 13; the preserved and deleted entries in between do not move it.
+        assert_eq!(entries[3].data_file.first_row_id, Some(13));
+    }
+
+    #[test]
+    fn test_assign_first_row_ids_noop_without_manifest_first_row_id() {
+        let manifest = manifest_file(ManifestContentType::Data, None);
+        let mut entries = vec![data_entry(ManifestStatus::Added, 3, None)];
+
+        manifest.assign_first_row_ids(&mut entries).unwrap();
+
+        assert_eq!(entries[0].data_file.first_row_id, None);
+    }
+
+    #[test]
+    fn test_assign_first_row_ids_rejects_delete_manifest() {
+        let manifest = manifest_file(ManifestContentType::Deletes, Some(10));
+        let mut entries = vec![data_entry(ManifestStatus::Added, 3, None)];
+
+        let err = manifest
+            .assign_first_row_ids(&mut entries)
+            .expect_err("a delete manifest with a first_row_id must be rejected");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("delete manifests"));
+    }
+
+    #[test]
+    fn test_assign_first_row_ids_rejects_oversized_manifest_first_row_id() {
+        // A manifest-level first_row_id above i64::MAX cannot be represented as the
+        // signed running counter and must be rejected.
+        let manifest = manifest_file(ManifestContentType::Data, Some(i64::MAX as u64 + 1));
+        let mut entries = vec![data_entry(ManifestStatus::Added, 3, None)];
+
+        let err = manifest
+            .assign_first_row_ids(&mut entries)
+            .expect_err("an oversized manifest first_row_id must be rejected");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("Invalid first_row_id"));
+    }
+
+    #[test]
+    fn test_assign_first_row_ids_rejects_counter_overflow() {
+        // Advancing the running counter past i64::MAX must be rejected rather than
+        // wrapping to a negative value that would corrupt subsequent assignments.
+        let manifest = manifest_file(ManifestContentType::Data, Some(i64::MAX as u64));
+        let mut entries = vec![data_entry(ManifestStatus::Added, 1, None)];
+
+        let err = manifest
+            .assign_first_row_ids(&mut entries)
+            .expect_err("counter overflow past i64::MAX must be rejected");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("Row ID overflow"));
+    }
+
+    #[tokio::test]
+    async fn test_load_manifest_reads_written_entries() {
+        let io = FileIO::new_with_memory();
+        let path = "memory:///test/plaintext_manifest.avro";
+        let manifest_file = write_manifest(&io, path).await;
+        assert_eq!(manifest_file.key_metadata, None);
+
+        let manifest = manifest_file.load_manifest(&io).await.unwrap();
+        assert_eq!(manifest.entries().len(), 1);
+        assert_eq!(
+            manifest.entries()[0].file_path(),
+            "s3://bucket/table/data/00000.parquet"
+        );
+        assert_eq!(manifest.entries()[0].data_file.record_count, 100);
+    }
+
+    /// End-to-end: writing a v3 data manifest, stamping a manifest-level
+    /// `first_row_id`, and loading it must assign inherited `first_row_id`s to
+    /// the entries. This exercises the wiring in `load_manifest` and the
+    /// write/read round-trip that leaves per-file `first_row_id` as `None`.
+    #[tokio::test]
+    async fn test_load_manifest_assigns_first_row_ids() {
+        let io = FileIO::new_with_memory();
+        let path = "memory:///test/first_row_id_manifest.avro";
+        let mut manifest_file = write_manifest(&io, path).await;
+
+        // Stamp a manifest-level first_row_id, as the manifest-list writer would.
+        manifest_file.first_row_id = Some(1000);
+
+        let manifest = manifest_file.load_manifest(&io).await.unwrap();
+        assert_eq!(manifest.entries().len(), 1);
+        assert_eq!(manifest.entries()[0].data_file().first_row_id(), Some(1000));
     }
 }
