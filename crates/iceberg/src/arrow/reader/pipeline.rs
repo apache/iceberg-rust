@@ -815,7 +815,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_encrypted_parquet_aes_256() {
-        // arrow-rs only added AES-256 for Parquet modular encryption in 58.4.0.
         assert_encrypted_parquet_roundtrip(b"0123456789abcdef0123456789abcdef").await;
     }
 
