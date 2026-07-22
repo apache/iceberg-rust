@@ -603,8 +603,6 @@ mod tests {
         // `pos` and `file_path` are the internal columns of a position-delete file, not
         // projectable metadata columns of a data table. They must not shadow real data
         // columns of the same name during a scan (issue #2837).
-        assert!(!is_metadata_column_name(RESERVED_COL_NAME_DELETE_FILE_POS));
-        assert!(!is_metadata_column_name(RESERVED_COL_NAME_DELETE_FILE_PATH));
         assert!(!is_metadata_column_name("pos"));
         assert!(!is_metadata_column_name("file_path"));
 

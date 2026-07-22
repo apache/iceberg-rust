@@ -2542,7 +2542,6 @@ pub mod tests {
             .metadata(metadata)
             .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
             .file_io(FileIO::new_with_fs())
-            .metadata_location("s3://bucket/table/metadata/v1.json")
             .runtime(test_runtime())
             .build()
             .unwrap()
