@@ -161,17 +161,17 @@ mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    use crate::encryption::SensitiveBytes;
     use crate::encryption::kms::MemoryKeyManagementClient;
+    use crate::encryption::{SensitiveBytes, StandardKeyMetadata};
     use crate::io::FileIO;
     use crate::spec::{
-        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, Manifest,
         ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, SnapshotRef,
         Struct, TableMetadata,
     };
     use crate::table::Table;
     use crate::test_utils::test_runtime;
-    use crate::transaction::tests::make_v2_minimal_table;
+    use crate::transaction::tests::{make_encrypted_table, make_v2_minimal_table};
     use crate::transaction::{Transaction, TransactionAction};
     use crate::{TableIdent, TableRequirement, TableUpdate};
 
@@ -389,10 +389,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_fast_append_writes_encrypted_manifest() {
-        use crate::encryption::StandardKeyMetadata;
-        use crate::spec::Manifest;
-        use crate::transaction::tests::make_encrypted_table;
-
         let table = make_encrypted_table().await;
         assert!(
             table.encryption_manager().is_some(),
