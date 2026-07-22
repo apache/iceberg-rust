@@ -40,6 +40,37 @@ where
     })
 }
 
+/// Strips trailing slashes from a location, preserving a bare URI scheme root
+fn strip_trailing_slash(path: &str) -> &str {
+    let mut path = path;
+    while !path.ends_with("://") {
+        let Some(stripped) = path.strip_suffix('/') else {
+            break;
+        };
+        path = stripped;
+    }
+    path
+}
+
+fn parse_location_property(
+    properties: &HashMap<String, String>,
+    key: &str,
+) -> Result<Option<String>> {
+    properties
+        .get(key)
+        .map(|path| {
+            if path.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid value for {key}: path must not be empty"),
+                ));
+            }
+
+            Ok(strip_trailing_slash(path).to_string())
+        })
+        .transpose()
+}
+
 /// Parse compression codec for metadata files from table properties.
 /// Retrieves the compression codec property, applies defaults, and parses the value.
 /// Only "none" (or empty string) and "gzip" are supported for metadata compression.
@@ -112,6 +143,9 @@ pub struct TableProperties {
     pub write_format_default: String,
     /// The target file size for files.
     pub write_target_file_size_bytes: usize,
+    /// Base directory for metadata files (manifests, manifest lists), with any
+    /// trailing slash trimmed. `None` if `write.metadata.path` is not set.
+    pub write_metadata_path: Option<String>,
     /// Compression codec for metadata files (JSON)
     pub metadata_compression_codec: CompressionCodec,
     /// Whether to use `FanoutWriter` for partitioned tables.
@@ -228,6 +262,11 @@ impl TableProperties {
     /// Default target file size
     pub const PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT: usize = 512 * 1024 * 1024; // 512 MB
 
+    /// Base location for metadata files (manifests, manifest lists, table metadata).
+    /// When unset, metadata files default to the `metadata` directory under the table
+    /// location.
+    pub const PROPERTY_WRITE_METADATA_PATH: &str = "write.metadata.path";
+
     /// Compression codec for metadata files (JSON)
     pub const PROPERTY_METADATA_COMPRESSION_CODEC: &str = "write.metadata.compression-codec";
     /// Default metadata compression codec - uncompressed
@@ -323,6 +362,10 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 props,
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES,
                 TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
+            )?,
+            write_metadata_path: parse_location_property(
+                props,
+                TableProperties::PROPERTY_WRITE_METADATA_PATH,
             )?,
             metadata_compression_codec: parse_metadata_file_compression(props)?,
             write_datafusion_fanout_enabled: parse_property(
@@ -454,6 +497,52 @@ mod tests {
         assert_eq!(table_properties.max_snapshot_age_ms, 1234);
         assert_eq!(table_properties.min_snapshots_to_keep, 7);
         assert_eq!(table_properties.max_ref_age_ms, 5678);
+    }
+
+    #[test]
+    fn test_table_properties_write_metadata_path() {
+        // Test unset
+        let table_properties = TableProperties::try_from(&HashMap::new()).unwrap();
+        assert_eq!(table_properties.write_metadata_path, None);
+
+        // Test empty path is invalid
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
+            String::new(),
+        )]);
+        let error = TableProperties::try_from(&props).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(
+            error
+                .message()
+                .contains(TableProperties::PROPERTY_WRITE_METADATA_PATH)
+        );
+
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_WRITE_METADATA_PATH.to_string(),
+            "s3://other-bucket/custom-meta/".to_string(),
+        )]);
+        let table_properties = TableProperties::try_from(&props).unwrap();
+        assert_eq!(
+            table_properties.write_metadata_path.as_deref(),
+            Some("s3://other-bucket/custom-meta")
+        );
+    }
+
+    #[test]
+    fn test_strip_trailing_slash() {
+        for (path, expected) in [
+            ("s3://bucket/db/tbl", "s3://bucket/db/tbl"),
+            ("s3://bucket/db/tbl/", "s3://bucket/db/tbl"),
+            ("s3://bucket/db/tbl////", "s3://bucket/db/tbl"),
+            ("blobstore://", "blobstore://"),
+            ("blobstore:///", "blobstore://"),
+            ("file:///", "file://"),
+            ("////", ""),
+            ("", ""),
+        ] {
+            assert_eq!(strip_trailing_slash(path), expected);
+        }
     }
 
     #[test]

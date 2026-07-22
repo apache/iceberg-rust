@@ -467,7 +467,7 @@ impl Catalog for SqlCatalog {
 
         if exists {
             return Err(Error::new(
-                iceberg::ErrorKind::NamespaceAlreadyExists,
+                ErrorKind::NamespaceAlreadyExists,
                 format!("Namespace {namespace:?} already exists"),
             ));
         }
@@ -670,7 +670,7 @@ impl Catalog for SqlCatalog {
             let tables = self.list_tables(namespace).await?;
             if !tables.is_empty() {
                 return Err(Error::new(
-                    iceberg::ErrorKind::Unexpected,
+                    ErrorKind::Unexpected,
                     format!(
                         "Namespace {:?} is not empty. {} tables exist.",
                         namespace,
@@ -861,40 +861,35 @@ impl Catalog for SqlCatalog {
             return table_already_exists_err(&tbl_ident);
         }
 
-        let (tbl_creation, location) = match creation.location.clone() {
-            Some(location) => (creation, location),
-            None => {
-                // fall back to namespace-specific location
-                // and then to warehouse location
-                let nsp_properties = self.get_namespace(namespace).await?.properties().clone();
-                let nsp_location = match nsp_properties.get(NAMESPACE_LOCATION_PROPERTY_KEY) {
-                    Some(location) => location.clone(),
-                    None => {
-                        format!(
-                            "{}/{}",
-                            self.warehouse_location.clone(),
-                            namespace.join("/")
-                        )
-                    }
-                };
+        let tbl_creation = if creation.location.is_some() {
+            creation
+        } else {
+            // fall back to namespace-specific location
+            // and then to warehouse location
+            let nsp_properties = self.get_namespace(namespace).await?.properties().clone();
+            let nsp_location = match nsp_properties.get(NAMESPACE_LOCATION_PROPERTY_KEY) {
+                Some(location) => location.clone(),
+                None => {
+                    format!(
+                        "{}/{}",
+                        self.warehouse_location.clone(),
+                        namespace.join("/")
+                    )
+                }
+            };
 
-                let tbl_location = format!("{}/{}", nsp_location, tbl_ident.name());
+            let tbl_location = format!("{}/{}", nsp_location, tbl_ident.name());
 
-                (
-                    TableCreation {
-                        location: Some(tbl_location.clone()),
-                        ..creation
-                    },
-                    tbl_location,
-                )
+            TableCreation {
+                location: Some(tbl_location),
+                ..creation
             }
         };
 
         let tbl_metadata = TableMetadataBuilder::from_table_creation(tbl_creation)?
             .build()?
             .metadata;
-        let tbl_metadata_location =
-            MetadataLocation::new_with_metadata(location.clone(), &tbl_metadata);
+        let tbl_metadata_location = MetadataLocation::try_new_with_metadata(&tbl_metadata)?;
 
         tbl_metadata
             .write_to(&self.fileio, &tbl_metadata_location)
@@ -1076,7 +1071,7 @@ mod tests {
         temp_dir.path().to_str().unwrap().to_string()
     }
 
-    fn to_set<T: std::cmp::Eq + Hash>(vec: Vec<T>) -> HashSet<T> {
+    fn to_set<T: Eq + Hash>(vec: Vec<T>) -> HashSet<T> {
         HashSet::from_iter(vec)
     }
 

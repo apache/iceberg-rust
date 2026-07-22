@@ -152,7 +152,7 @@ mod test {
         let bs = fs::read(full_path).expect("read_file must succeed");
 
         let parsed_manifest_list =
-            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V1).unwrap();
+            ManifestList::parse_with_version(&bs, FormatVersion::V1).unwrap();
 
         assert_eq!(manifest_list, parsed_manifest_list);
     }
@@ -230,7 +230,7 @@ mod test {
         let bs = fs::read(full_path).expect("read_file must succeed");
 
         let parsed_manifest_list =
-            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2).unwrap();
+            ManifestList::parse_with_version(&bs, FormatVersion::V2).unwrap();
 
         assert_eq!(manifest_list, parsed_manifest_list);
     }
@@ -270,7 +270,7 @@ mod test {
         let bs = writer.into_inner().unwrap();
 
         let parsed_manifest_list =
-            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2).unwrap();
+            ManifestList::parse_with_version(&bs, FormatVersion::V2).unwrap();
 
         assert_eq!(manifest_list, parsed_manifest_list);
     }
@@ -349,7 +349,7 @@ mod test {
         let bs = fs::read(full_path).expect("read_file must succeed");
 
         let parsed_manifest_list =
-            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V3).unwrap();
+            ManifestList::parse_with_version(&bs, FormatVersion::V3).unwrap();
 
         assert_eq!(manifest_list, parsed_manifest_list);
     }
