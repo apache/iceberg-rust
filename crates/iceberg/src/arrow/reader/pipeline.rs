@@ -810,14 +810,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_encrypted_parquet_aes_128() {
-        // 16-byte key -> AES-128-GCM.
         assert_encrypted_parquet_roundtrip(b"0123456789abcdef").await;
     }
 
     #[tokio::test]
     async fn test_read_encrypted_parquet_aes_256() {
-        // 32-byte key -> AES-256-GCM. Requires arrow-rs >= 58.4.0;
-        // 58.3.0 and earlier only supported AES-128 for Parquet modular encryption.
+        // arrow-rs only added AES-256 for Parquet modular encryption in 58.4.0.
         assert_encrypted_parquet_roundtrip(b"0123456789abcdef0123456789abcdef").await;
     }
 
