@@ -593,7 +593,7 @@ mod tests {
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
 
         let mut file_seq = 0u32;
-        let mut append_file = |table: &crate::table::Table, record_count: u64, file_size: u64| {
+        let mut append_file = |table: &Table, record_count: u64, file_size: u64| {
             file_seq += 1;
             let file = DataFileBuilder::default()
                 .content(DataContentType::Data)

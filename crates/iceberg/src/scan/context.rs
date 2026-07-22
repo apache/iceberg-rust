@@ -28,8 +28,8 @@ use crate::scan::{
     PartitionFilterCache,
 };
 use crate::spec::{
-    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping, SchemaRef,
-    SnapshotRef, TableMetadataRef,
+    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping,
+    PartitionSpecRef, SchemaRef, SnapshotRef, TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -48,6 +48,7 @@ pub(crate) struct ManifestFileContext {
     delete_file_index: DeleteFileIndex,
     name_mapping: Option<Arc<NameMapping>>,
     case_sensitive: bool,
+    partition_spec: Option<PartitionSpecRef>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -63,6 +64,7 @@ pub(crate) struct ManifestEntryContext {
     pub delete_file_index: DeleteFileIndex,
     pub name_mapping: Option<Arc<NameMapping>>,
     pub case_sensitive: bool,
+    pub partition_spec: Option<PartitionSpecRef>,
 }
 
 impl ManifestFileContext {
@@ -80,6 +82,7 @@ impl ManifestFileContext {
             delete_file_index,
             name_mapping,
             case_sensitive,
+            partition_spec,
         } = self;
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
@@ -96,6 +99,7 @@ impl ManifestFileContext {
                 delete_file_index: delete_file_index.clone(),
                 name_mapping: name_mapping.clone(),
                 case_sensitive,
+                partition_spec: partition_spec.clone(),
             };
 
             sender
@@ -135,10 +139,10 @@ impl ManifestEntryContext {
             )
             .with_deletes(deletes)
             .with_partition(Some(self.manifest_entry.data_file.partition.clone()))
-            // TODO: Pass actual PartitionSpec through context chain for native flow
-            .with_partition_spec(None)
+            .with_partition_spec(self.partition_spec.clone())
             .with_name_mapping(self.name_mapping)
             .with_case_sensitive(self.case_sensitive)
+            .with_key_metadata(self.manifest_entry.data_file.key_metadata().map(Box::from))
             .build())
     }
 }
@@ -171,8 +175,22 @@ impl PlanContext {
             .await
     }
 
+    /// Returns the partition filter for a manifest, or an always-true filter when the
+    /// manifest's spec cannot be resolved against the snapshot schema. Files of such
+    /// manifests are not partition-pruned but still receive the row filter.
     fn get_partition_filter(&self, manifest_file: &ManifestFile) -> Result<Arc<BoundPredicate>> {
         let partition_spec_id = manifest_file.partition_spec_id;
+
+        // Historical specs may reference source columns that were later dropped from the
+        // schema, in which case the partition type cannot be resolved. A missing spec is
+        // reported by the partition filter cache instead.
+        let resolvable = self
+            .table_metadata
+            .partition_spec_by_id(partition_spec_id)
+            .is_none_or(|spec| spec.partition_type(&self.snapshot_schema).is_ok());
+        if !resolvable {
+            return Ok(Arc::new(BoundPredicate::AlwaysTrue));
+        }
 
         let partition_filter = self.partition_filter_cache.get(
             partition_spec_id,
@@ -284,6 +302,10 @@ impl PlanContext {
             delete_file_index,
             name_mapping: self.name_mapping.clone(),
             case_sensitive: self.case_sensitive,
+            partition_spec: self
+                .table_metadata
+                .partition_spec_by_id(manifest_file.partition_spec_id)
+                .cloned(),
         }
     }
 }

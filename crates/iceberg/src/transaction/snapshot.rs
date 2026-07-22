@@ -34,8 +34,6 @@ use crate::table::Table;
 use crate::transaction::ActionCommit;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
-const META_ROOT_PATH: &str = "metadata";
-
 /// A trait that defines how different table operations produce new snapshots.
 ///
 /// `SnapshotProduceOperation` is used by [`SnapshotProducer`] to customize snapshot creation
@@ -241,9 +239,8 @@ impl<'a> SnapshotProducer<'a> {
 
     fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
         let new_manifest_path = format!(
-            "{}/{}/{}-m{}.{}",
-            self.table.metadata().location(),
-            META_ROOT_PATH,
+            "{}/{}-m{}.{}",
+            self.table.metadata().metadata_location()?,
             self.commit_uuid,
             self.manifest_counter.next().unwrap(),
             DataFileFormat::Avro
@@ -431,16 +428,15 @@ impl<'a> SnapshotProducer<'a> {
         )
     }
 
-    fn generate_manifest_list_file_path(&self, attempt: i64) -> String {
-        format!(
-            "{}/{}/snap-{}-{}-{}.{}",
-            self.table.metadata().location(),
-            META_ROOT_PATH,
+    fn generate_manifest_list_file_path(&self, attempt: i64) -> Result<String> {
+        Ok(format!(
+            "{}/snap-{}-{}-{}.{}",
+            self.table.metadata().metadata_location()?,
             self.snapshot_id,
             attempt,
             self.commit_uuid,
             DataFileFormat::Avro
-        )
+        ))
     }
 
     /// Finished building the action and return the [`ActionCommit`] to the transaction.
@@ -449,31 +445,38 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_produce_operation: OP,
         process: MP,
     ) -> Result<ActionCommit> {
-        let manifest_list_path = self.generate_manifest_list_file_path(0);
+        let manifest_list_path = self.generate_manifest_list_file_path(0)?;
         let next_seq_num = self.table.metadata().next_sequence_number();
         let first_row_id = self.table.metadata().next_row_id();
-        let writer = self
+
+        let raw_output = self
             .table
             .file_io()
-            .new_output(manifest_list_path.clone())?
-            .writer()
-            .await?;
+            .new_output(manifest_list_path.clone())?;
+
+        let (writer, encryption_key_id) = match self.table.encryption_manager() {
+            Some(em) => {
+                let encrypted_output = em.encrypt(raw_output);
+                let key_id = em
+                    .encrypt_manifest_list_key_metadata(encrypted_output.key_metadata())
+                    .await?;
+                (encrypted_output.writer().await?, Some(key_id))
+            }
+            None => (raw_output.writer().await?, None),
+        };
+
+        let parent_snapshot_id = self.table.metadata().current_snapshot_id();
         let mut manifest_list_writer = match self.table.metadata().format_version() {
-            FormatVersion::V1 => ManifestListWriter::v1(
-                writer,
-                self.snapshot_id,
-                self.table.metadata().current_snapshot_id(),
-            ),
-            FormatVersion::V2 => ManifestListWriter::v2(
-                writer,
-                self.snapshot_id,
-                self.table.metadata().current_snapshot_id(),
-                next_seq_num,
-            ),
+            FormatVersion::V1 => {
+                ManifestListWriter::v1(writer, self.snapshot_id, parent_snapshot_id)
+            }
+            FormatVersion::V2 => {
+                ManifestListWriter::v2(writer, self.snapshot_id, parent_snapshot_id, next_seq_num)
+            }
             FormatVersion::V3 => ManifestListWriter::v3(
                 writer,
                 self.snapshot_id,
-                self.table.metadata().current_snapshot_id(),
+                parent_snapshot_id,
                 next_seq_num,
                 Some(first_row_id),
             ),
@@ -502,6 +505,7 @@ impl<'a> SnapshotProducer<'a> {
             .with_sequence_number(next_seq_num)
             .with_summary(summary)
             .with_schema_id(self.table.metadata().current_schema_id())
+            .with_encryption_key_id(encryption_key_id)
             .with_timestamp_ms(commit_ts);
 
         let new_snapshot = if let Some(writer_next_row_id) = writer_next_row_id {
@@ -513,7 +517,22 @@ impl<'a> SnapshotProducer<'a> {
             new_snapshot.build()
         };
 
-        let updates = vec![
+        let encryption_key_updates: Vec<TableUpdate> = self
+            .table
+            .encryption_manager()
+            .map(|em| {
+                em.with_encryption_keys(|keys| {
+                    keys.values()
+                        .filter(|k| self.table.metadata().encryption_key(k.key_id()).is_none())
+                        .map(|k| TableUpdate::AddEncryptionKey {
+                            encryption_key: k.clone(),
+                        })
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
+
+        let updates = [encryption_key_updates, vec![
             TableUpdate::AddSnapshot {
                 snapshot: new_snapshot,
             },
@@ -524,7 +543,8 @@ impl<'a> SnapshotProducer<'a> {
                     SnapshotRetention::branch(None, None, None),
                 ),
             },
-        ];
+        ]]
+        .concat();
 
         let requirements = vec![
             TableRequirement::UuidMatch {
