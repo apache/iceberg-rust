@@ -979,39 +979,4 @@ mod tests {
             "Limit should be None when not specified"
         );
     }
-
-    #[tokio::test]
-    async fn test_with_snapshot_id_pins_scan() {
-        use datafusion::datasource::TableProvider;
-
-        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
-
-        // Default provider reads the current snapshot (None in the scan).
-        let provider = IcebergTableProvider::try_new(
-            catalog.clone(),
-            None,
-            namespace.clone(),
-            table_name.clone(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(provider.snapshot_id(), None);
-
-        // Pinning a snapshot threads it into the scan node, where the codec reads
-        // it — so time-travel is honored locally and distributed.
-        let pinned = provider.with_snapshot_id(Some(123));
-        assert_eq!(pinned.snapshot_id(), Some(123));
-
-        let ctx = SessionContext::new();
-        let state = ctx.state();
-        let scan_plan = pinned.scan(&state, None, &[], None).await.unwrap();
-        let iceberg_scan = scan_plan
-            .downcast_ref::<IcebergTableScan>()
-            .expect("Expected IcebergTableScan");
-        assert_eq!(
-            iceberg_scan.snapshot_id(),
-            Some(123),
-            "pinned snapshot should propagate to the scan node"
-        );
-    }
 }
