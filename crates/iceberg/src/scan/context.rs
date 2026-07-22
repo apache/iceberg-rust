@@ -175,6 +175,8 @@ impl PlanContext {
             .await
     }
 
+    /// Returns the partition filter for a manifest. See [`PartitionFilterCache::get`] for the
+    /// always-true fallback when the manifest's spec cannot be resolved against the scan schema.
     fn get_partition_filter(&self, manifest_file: &ManifestFile) -> Result<Arc<BoundPredicate>> {
         let partition_spec_id = manifest_file.partition_spec_id;
 

@@ -69,32 +69,45 @@ impl PartitionFilterCache {
                 format!("Could not find partition spec for id {spec_id}"),
             ))?;
 
-        // The partition type may fail to resolve against the schema. The known case is a
-        // historical spec whose source column was dropped, which is a legitimate v2+ state.
-        // Any resolution failure falls back to an always-true filter: files under the spec
-        // are not partition-pruned but still receive the row filter. The fallback is cached
-        // by spec id like any other filter.
+        // A historical spec may reference a source column that was later dropped from the
+        // schema, which is a legitimate v2+ state. Such a spec cannot be resolved to a
+        // partition type, so it falls back to an always-true filter: files under the spec
+        // are not partition-pruned but still receive the row filter. Any other resolution
+        // failure is unexpected and propagates. The fallback is cached by spec id like any
+        // other filter; this is safe only because the cache lives per-scan in `PlanContext`
+        // with a fixed schema and predicate. Hoisting it to table or catalog scope would
+        // pin a spec to always-true even for a later scan whose schema could resolve it.
         // TODO(https://github.com/apache/iceberg-rust/issues/2844): derive partition types from
         // transforms where possible to restore pruning on a historical spec's still-live fields,
-        // and narrow this to the dropped-column case once a distinguishable error exists.
-        let partition_filter = match partition_spec.partition_type(schema) {
-            Ok(partition_type) => {
-                let partition_fields = partition_type.fields().to_owned();
-                let partition_schema = Arc::new(
-                    Schema::builder()
-                        .with_schema_id(partition_spec.spec_id())
-                        .with_fields(partition_fields)
-                        .build()?,
-                );
+        // which also makes the fallback per-term (dropped fields only) instead of per-spec.
+        let dropped_source_column = partition_spec
+            .fields()
+            .iter()
+            .any(|field| schema.field_by_id(field.source_id).is_none());
 
-                let mut inclusive_projection = InclusiveProjection::new(partition_spec.clone());
+        let partition_filter = if dropped_source_column {
+            tracing::warn!(
+                spec_id,
+                "Partition spec references a source column not in the scan schema; \
+                 skipping partition pruning for its manifests"
+            );
+            BoundPredicate::AlwaysTrue
+        } else {
+            let partition_type = partition_spec.partition_type(schema)?;
+            let partition_fields = partition_type.fields().to_owned();
+            let partition_schema = Arc::new(
+                Schema::builder()
+                    .with_schema_id(partition_spec.spec_id())
+                    .with_fields(partition_fields)
+                    .build()?,
+            );
 
-                inclusive_projection
-                    .project(&filter)?
-                    .rewrite_not()
-                    .bind(partition_schema.clone(), case_sensitive)?
-            }
-            Err(_) => BoundPredicate::AlwaysTrue,
+            let mut inclusive_projection = InclusiveProjection::new(partition_spec.clone());
+
+            inclusive_projection
+                .project(&filter)?
+                .rewrite_not()
+                .bind(partition_schema.clone(), case_sensitive)?
         };
 
         self.0
@@ -245,5 +258,83 @@ impl ExpressionEvaluatorCache {
             .unwrap();
 
         Ok(read.get(&spec_id).unwrap().clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use super::PartitionFilterCache;
+    use crate::expr::{Bind, BoundPredicate, Reference};
+    use crate::spec::{
+        Datum, FormatVersion, NestedField, PrimitiveType, Schema, SortOrder, TableMetadataBuilder,
+        Transform, Type, UnboundPartitionSpec,
+    };
+
+    /// A historical spec whose source column was dropped from the current schema resolves to an
+    /// always-true filter, and the fallback is cached under the spec id.
+    #[test]
+    fn dropped_partition_source_column_falls_back_to_always_true() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "part", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        // Spec 0 partitions on `part` (id 2).
+        let spec = UnboundPartitionSpec::builder()
+            .with_spec_id(0)
+            .add_partition_field(2, "part", Transform::Identity)
+            .unwrap()
+            .build();
+
+        // Evolve the schema so that `part` is no longer present, leaving spec 0 unresolvable.
+        let evolved_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+        // Make an unpartitioned spec the default before dropping `part`, so spec 0 survives
+        // only as a historical spec that can no longer be resolved against the schema.
+        let table_metadata = Arc::new(
+            TableMetadataBuilder::new(
+                schema,
+                spec,
+                SortOrder::unsorted_order(),
+                "s3://bucket/test".to_string(),
+                FormatVersion::V2,
+                HashMap::new(),
+            )
+            .unwrap()
+            .add_default_partition_spec(UnboundPartitionSpec::builder().build())
+            .unwrap()
+            .add_current_schema(evolved_schema.clone())
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata,
+        );
+
+        let filter = Reference::new("id")
+            .greater_than_or_equal_to(Datum::long(5))
+            .bind(Arc::new(evolved_schema.clone()), true)
+            .unwrap();
+
+        let cache = PartitionFilterCache::new();
+        let partition_filter = cache
+            .get(0, &table_metadata, &evolved_schema, true, filter.clone())
+            .unwrap();
+        assert!(matches!(*partition_filter, BoundPredicate::AlwaysTrue));
+
+        // The fallback is cached, so a second lookup returns the same instance.
+        let cached = cache
+            .get(0, &table_metadata, &evolved_schema, true, filter)
+            .unwrap();
+        assert!(Arc::ptr_eq(&partition_filter, &cached));
     }
 }
