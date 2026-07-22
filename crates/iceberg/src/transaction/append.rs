@@ -353,6 +353,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_fast_append_writes_encrypted_manifest() {
+        use crate::encryption::StandardKeyMetadata;
+        use crate::spec::Manifest;
+        use crate::transaction::tests::make_encrypted_table;
+
+        let table = make_encrypted_table().await;
+        assert!(
+            table.encryption_manager().is_some(),
+            "fixture table should have an EncryptionManager"
+        );
+
+        let new_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("memory:///table/data/00000.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::empty())
+            .record_count(100)
+            .file_size_in_bytes(4096)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![new_file]);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let new_snapshot: SnapshotRef = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
+            SnapshotRef::new(snapshot.clone())
+        } else {
+            unreachable!("first update of a fast append should be AddSnapshot")
+        };
+
+        let manifest_list = table
+            .manifest_list_reader(&new_snapshot)
+            .load()
+            .await
+            .unwrap();
+        let manifest_file = manifest_list
+            .entries()
+            .iter()
+            .find(|m| m.added_files_count.unwrap_or(0) > 0)
+            .expect("new snapshot should carry the appended data manifest");
+
+        // The manifest list entry must carry decodable key metadata.
+        let key_metadata_bytes = manifest_file
+            .key_metadata
+            .as_ref()
+            .expect("encrypted manifest must record key metadata");
+        StandardKeyMetadata::decode(key_metadata_bytes)
+            .expect("recorded key metadata must decode as StandardKeyMetadata");
+
+        // The bytes on disk must actually be encrypted: a plaintext Avro parse
+        // must fail. (Guards against silently taking the unencrypted branch.)
+        let raw = table
+            .file_io()
+            .new_input(&manifest_file.manifest_path)
+            .unwrap()
+            .read()
+            .await
+            .unwrap();
+        assert!(
+            Manifest::parse_avro(&raw).is_err(),
+            "manifest bytes should not be readable as plaintext Avro"
+        );
+
+        // load_manifest self-decrypts using the recorded key metadata and must
+        // recover the entry we appended.
+        let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
+        assert_eq!(manifest.entries().len(), 1);
+        assert_eq!(
+            manifest.entries()[0].data_file().file_path(),
+            "memory:///table/data/00000.parquet"
+        );
+    }
+
+    #[tokio::test]
     async fn test_empty_data_append_action() {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);

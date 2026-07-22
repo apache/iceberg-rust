@@ -331,6 +331,62 @@ mod tests {
             .unwrap()
     }
 
+    /// Build a table backed by the V3 encryption fixture and an in-memory KMS,
+    /// so it has an [`EncryptionManager`](crate::encryption::EncryptionManager).
+    ///
+    /// The fixture's snapshot references an encrypted manifest list; its bytes
+    /// (the `manifest-list-v3-encrypted.avro` testdata, an encrypted empty list)
+    /// are seeded into the in-memory `FileIO` at that path so callers can read
+    /// the current snapshot's manifest list.
+    pub(crate) async fn make_encrypted_table() -> Table {
+        let file = File::open(format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            "TableMetadataV3ValidEncryption.json"
+        ))
+        .unwrap();
+        let reader = BufReader::new(file);
+        let metadata = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
+
+        let kms: Arc<dyn KeyManagementClient> = {
+            let k = MemoryKeyManagementClient::new();
+            k.add_master_key_bytes(
+                "master-1",
+                SensitiveBytes::new([
+                    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
+                    0x0d, 0x0e, 0x0f,
+                ]),
+            )
+            .unwrap();
+            Arc::new(k)
+        };
+
+        let file_io = FileIO::new_with_memory();
+
+        // Seed the encrypted (empty) manifest list at the path the snapshot references.
+        let manifest_list_bytes = std::fs::read(format!(
+            "{}/testdata/manifests_lists/manifest-list-v3-encrypted.avro",
+            env!("CARGO_MANIFEST_DIR"),
+        ))
+        .unwrap();
+        file_io
+            .new_output(metadata.current_snapshot().unwrap().manifest_list())
+            .unwrap()
+            .write(manifest_list_bytes.into())
+            .await
+            .unwrap();
+
+        Table::builder()
+            .metadata(metadata)
+            .metadata_location("memory:///table/metadata/v1.json")
+            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .file_io(file_io)
+            .kms_client(kms)
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+    }
+
     pub(crate) async fn make_v3_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
         let table_ident =
             TableIdent::from_strs([format!("ns1-{}", uuid::Uuid::new_v4()), "test1".to_string()])
@@ -579,37 +635,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_commit_rejects_encrypted_table() {
-        let file = File::open(format!(
-            "{}/testdata/table_metadata/{}",
-            env!("CARGO_MANIFEST_DIR"),
-            "TableMetadataV3ValidEncryption.json"
-        ))
-        .unwrap();
-        let reader = BufReader::new(file);
-        let resp = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
-
-        let kms: Arc<dyn KeyManagementClient> = {
-            let k = MemoryKeyManagementClient::new();
-            k.add_master_key_bytes(
-                "master-1",
-                SensitiveBytes::new([
-                    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
-                    0x0d, 0x0e, 0x0f,
-                ]),
-            )
-            .unwrap();
-            Arc::new(k)
-        };
-
-        let table = Table::builder()
-            .metadata(resp)
-            .metadata_location("s3://bucket/test/location/metadata/v1.json")
-            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
-            .file_io(FileIO::new_with_memory())
-            .kms_client(kms)
-            .runtime(crate::test_utils::test_runtime())
-            .build()
-            .unwrap();
+        let table = make_encrypted_table().await;
 
         let tx = Transaction::new(&table);
         let tx = tx
