@@ -516,6 +516,41 @@ mod tests {
         assert!(physical_plan.is_ok());
     }
 
+    #[tokio::test]
+    async fn test_catalog_backed_provider_scan_reports_metrics() {
+        use datafusion::datasource::TableProvider;
+
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+        let table_provider =
+            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+                .await
+                .unwrap();
+
+        let ctx = SessionContext::new();
+        let scan_plan = table_provider
+            .scan(&ctx.state(), None, &[], None)
+            .await
+            .unwrap();
+        let batches = datafusion::physical_plan::collect(Arc::clone(&scan_plan), ctx.task_ctx())
+            .await
+            .unwrap();
+        let output_rows = batches.iter().map(|batch| batch.num_rows()).sum();
+
+        let metrics = scan_plan.metrics().expect("scan should expose metrics");
+        assert_eq!(metrics.output_rows(), Some(output_rows));
+        assert!(
+            metrics.elapsed_compute().is_some_and(|elapsed| elapsed > 0),
+            "elapsed_compute should be recorded"
+        );
+
+        let reset_plan = scan_plan.reset_state().unwrap();
+        let metrics = reset_plan
+            .metrics()
+            .expect("reset scan should expose metrics");
+        assert_eq!(metrics.output_rows(), None);
+        assert_eq!(metrics.elapsed_compute(), None);
+    }
+
     // Tests for IcebergTableProvider
 
     #[tokio::test]
