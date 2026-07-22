@@ -38,3 +38,9 @@ iceberg-aws = { workspace = true }
 iceberg-storage-opendal = { workspace = true, features = ["opendal-s3"] }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
+
+[lints]
+workspace = true

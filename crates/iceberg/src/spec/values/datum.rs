@@ -98,27 +98,27 @@ impl<'de> Deserialize<'de> for Datum {
 
         struct DatumVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for DatumVisitor {
+        impl<'de> de::Visitor<'de> for DatumVisitor {
             type Value = Datum;
 
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
                 formatter.write_str("struct Datum")
             }
 
             fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
-            where A: serde::de::SeqAccess<'de> {
+            where A: de::SeqAccess<'de> {
                 let r#type = seq
                     .next_element::<PrimitiveType>()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
                 let value = seq
                     .next_element::<RawLiteral>()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
                 let Literal::Primitive(primitive) = value
                     .try_into(&Type::Primitive(r#type.clone()))
-                    .map_err(serde::de::Error::custom)?
-                    .ok_or_else(|| serde::de::Error::custom("None value"))?
+                    .map_err(de::Error::custom)?
+                    .ok_or_else(|| de::Error::custom("None value"))?
                 else {
-                    return Err(serde::de::Error::custom("Invalid value"));
+                    return Err(de::Error::custom("Invalid value"));
                 };
 
                 Ok(Datum::new(r#type, primitive))
@@ -145,17 +145,17 @@ impl<'de> Deserialize<'de> for Datum {
                     }
                 }
                 let Some(r#type) = r#type else {
-                    return Err(serde::de::Error::missing_field("type"));
+                    return Err(de::Error::missing_field("type"));
                 };
                 let Some(raw_primitive) = raw_primitive else {
-                    return Err(serde::de::Error::missing_field("literal"));
+                    return Err(de::Error::missing_field("literal"));
                 };
                 let Literal::Primitive(primitive) = raw_primitive
                     .try_into(&Type::Primitive(r#type.clone()))
-                    .map_err(serde::de::Error::custom)?
-                    .ok_or_else(|| serde::de::Error::custom("None value"))?
+                    .map_err(de::Error::custom)?
+                    .ok_or_else(|| de::Error::custom("None value"))?
                 else {
-                    return Err(serde::de::Error::custom("Invalid value"));
+                    return Err(de::Error::custom("Invalid value"));
                 };
                 Ok(Datum::new(r#type, primitive))
             }
@@ -456,7 +456,7 @@ impl Datum {
                         ErrorKind::DataInvalid,
                         format!(
                             "PrimitiveLiteral Int128 must be PrimitiveType Decimal but got {}",
-                            &self.r#type
+                            self.r#type
                         ),
                     ));
                 };
@@ -822,7 +822,7 @@ impl Datum {
         Self::timestamp_micros(dt.and_utc().timestamp_micros())
     }
 
-    /// Parse a timestamp in [`%Y-%m-%dT%H:%M:%S%.f`] format.
+    /// Parse a timestamp in `%Y-%m-%dT%H:%M:%S%.f` format.
     ///
     /// See [`NaiveDateTime::from_str`].
     ///
@@ -1240,7 +1240,7 @@ impl Datum {
     /// Returns a human-readable string representation of this literal.
     ///
     /// For string literals, this returns the raw string value without quotes.
-    /// For all other literals, it falls back to [`to_string()`].
+    /// For all other literals, it falls back to [`to_string()`](ToString::to_string).
     pub fn to_human_string(&self) -> String {
         match self.literal() {
             PrimitiveLiteral::String(s) => s.to_string(),

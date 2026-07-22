@@ -23,8 +23,10 @@ on:
       - main
   pull_request:
     paths:
-      - '**'                              # Include all files and directories in the repository by default.
-      - '!.github/ISSUE_TEMPLATE/**'      # Exclude files and directories that don't impact tests or code like templates, metadata, and documentation.
+      # Artifacts that must be included in releases, such as LICENSE and NOTICE, are deliberately not excluded so we can verify they will be bundled.
+      # Include all files and directories, then filter out files and directories that don't impact code, tests, or release artifacts.
+      - '**'
+      - '!.github/ISSUE_TEMPLATE/**'
       - '!dev/release/**'
       - '!website/**'
       - '!.asf.yml'
@@ -32,8 +34,6 @@ on:
       - '!.gitignore'
       - '!CONTRIBUTING.md'
       - '!CHANGELOG.md'
-      - '!LICENSE'
-      - '!NOTICE'
       - '!README.md'
 
 concurrency:
@@ -47,21 +47,21 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
 
       - name: Install lint tools
         # Keep versions in sync with the local install targets in Makefile.
-        uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2.82.9
+        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
         with:
           tool: taplo@0.9.3,cargo-machete@0.7.0
 
       - name: Check License Header
-        uses: apache/skywalking-eyes/header@61275cc80d0798a405cb070f7d3a8aaf7cf2c2c1 # v0.8.0
+        uses: apache/skywalking-eyes/header@a196742f472feaffafea537ce5a2a4c3c53a8de4 # v0.9.0
 
       - name: Check toml format
         run: taplo fmt --check
@@ -75,22 +75,25 @@ jobs:
       - name: Check Cargo.lock is up-to-date
         run: cargo update --workspace --locked
 
+      - name: Check crates package LICENSE and NOTICE
+        run: make check-license-notice
+
       - name: Cargo Machete
         run: cargo machete
 
       - name: Check typos
-        uses: crate-ci/typos@bee27e3a4fd1ea2111cf90ab89cd076c870fce14 # v1.48.0
+        uses: crate-ci/typos@4d9c206a77c041268485162b8e2579ad7a5cb9a3 # v1.50.0
 
   clippy:
     needs: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
 
       - name: Cargo clippy
         run: make check-clippy
@@ -109,15 +112,15 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
 
       - name: Cache Rust artifacts
-        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
@@ -130,15 +133,15 @@ jobs:
     needs: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
 
       - name: Cache Rust artifacts
-        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
@@ -165,15 +168,15 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
 
       - name: Cache Rust artifacts
-        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
@@ -194,22 +197,22 @@ jobs:
           - { name: "doc", args: "--doc --all-features --workspace" }
     name: Tests (${{ matrix.test-suite.name }})
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
 
       - name: Cache Rust artifacts
-        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.test-suite.name }}
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
         if: matrix.test-suite.name == 'default'
-        uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2.82.9
+        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
         with:
           tool: cargo-nextest
 
@@ -241,17 +244,17 @@ jobs:
     needs: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Get MSRV
         id: get-msrv
-        uses: ./.github/actions/get-msrv
+        uses: $/.github/actions/get-msrv
       - name: Setup MSRV Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
         with:
           rust-version: ${{ steps.get-msrv.outputs.msrv }}
       - name: Setup Nightly Rust toolchain
-        uses: ./.github/actions/setup-builder
+        uses: $/.github/actions/setup-builder
       - name: Check MSRV
         run: make check-msrv

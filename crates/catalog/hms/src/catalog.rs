@@ -533,7 +533,7 @@ impl Catalog for HmsCatalog {
             .build()?
             .metadata;
 
-        let metadata_location = MetadataLocation::new_with_metadata(location.clone(), &metadata);
+        let metadata_location = MetadataLocation::try_new_with_metadata(&metadata)?;
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 

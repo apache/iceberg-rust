@@ -22,9 +22,10 @@ use datafusion::arrow::array::{Array, ArrayRef, RecordBatch, StringArray, UInt64
 use datafusion::arrow::datatypes::{
     DataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{DataFusionError, Result as DFResult};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
@@ -134,6 +135,13 @@ impl ExecutionPlan for IcebergCommitExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> DFResult<TreeNodeRecursion>,
+    ) -> DFResult<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn required_input_distribution(&self) -> Vec<datafusion::physical_plan::Distribution> {
@@ -338,6 +346,13 @@ mod tests {
             vec![]
         }
 
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> DFResult<TreeNodeRecursion>,
+        ) -> DFResult<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
         fn with_new_children(
             self: Arc<Self>,
             _children: Vec<Arc<dyn ExecutionPlan>>,
@@ -503,8 +518,9 @@ mod tests {
         assert!(!manifest_list.entries().is_empty());
 
         // Load the first manifest and verify it contains our data files
-        let manifest = manifest_list.entries()[0]
-            .load_manifest(updated_table.file_io())
+        let manifest = updated_table
+            .manifest_reader()
+            .read(&manifest_list.entries()[0])
             .await?;
 
         // Verify that the manifest contains our data files

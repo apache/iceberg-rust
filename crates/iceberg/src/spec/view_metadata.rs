@@ -225,7 +225,7 @@ impl ViewVersionLog {
         self.timestamp_ms
     }
 
-    /// Returns the last updated timestamp as a DateTime<Utc> with millisecond precision.
+    /// Returns the last updated timestamp as a `DateTime<Utc>` with millisecond precision.
     pub fn timestamp(&self) -> Result<DateTime<Utc>> {
         timestamp_ms_to_utc(self.timestamp_ms)
     }
@@ -271,7 +271,7 @@ pub(super) mod _serde {
         pub(super) versions: Vec<ViewVersionV1>,
         pub(super) version_log: Vec<ViewVersionLog>,
         pub(super) schemas: Vec<SchemaV2>,
-        pub(super) properties: Option<std::collections::HashMap<String, String>>,
+        pub(super) properties: Option<HashMap<String, String>>,
     }
 
     impl Serialize for ViewMetadata {
@@ -305,7 +305,7 @@ pub(super) mod _serde {
 
     impl TryFrom<ViewMetadataV1> for ViewMetadata {
         type Error = Error;
-        fn try_from(value: ViewMetadataV1) -> Result<Self, self::Error> {
+        fn try_from(value: ViewMetadataV1) -> Result<Self, Error> {
             let schemas = HashMap::from_iter(
                 value
                     .schemas

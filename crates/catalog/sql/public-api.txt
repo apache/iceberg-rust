@@ -1,4 +1,23 @@
 pub mod iceberg_catalog_sql
+pub enum iceberg_catalog_sql::SchemaVersion
+pub iceberg_catalog_sql::SchemaVersion::V0
+pub iceberg_catalog_sql::SchemaVersion::V1
+impl core::clone::Clone for iceberg_catalog_sql::SchemaVersion
+pub fn iceberg_catalog_sql::SchemaVersion::clone(&self) -> iceberg_catalog_sql::SchemaVersion
+impl core::cmp::PartialEq for iceberg_catalog_sql::SchemaVersion
+pub fn iceberg_catalog_sql::SchemaVersion::eq(&self, other: &iceberg_catalog_sql::SchemaVersion) -> bool
+impl core::convert::TryFrom<&str> for iceberg_catalog_sql::SchemaVersion
+pub type iceberg_catalog_sql::SchemaVersion::Error = strum::ParseError
+pub fn iceberg_catalog_sql::SchemaVersion::try_from(s: &str) -> core::result::Result<iceberg_catalog_sql::SchemaVersion, <Self as core::convert::TryFrom<&str>>::Error>
+impl core::fmt::Debug for iceberg_catalog_sql::SchemaVersion
+pub fn iceberg_catalog_sql::SchemaVersion::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for iceberg_catalog_sql::SchemaVersion
+pub fn iceberg_catalog_sql::SchemaVersion::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::result::Result<(), core::fmt::Error>
+impl core::marker::Copy for iceberg_catalog_sql::SchemaVersion
+impl core::marker::StructuralPartialEq for iceberg_catalog_sql::SchemaVersion
+impl core::str::traits::FromStr for iceberg_catalog_sql::SchemaVersion
+pub type iceberg_catalog_sql::SchemaVersion::Err = strum::ParseError
+pub fn iceberg_catalog_sql::SchemaVersion::from_str(s: &str) -> core::result::Result<iceberg_catalog_sql::SchemaVersion, <Self as core::str::traits::FromStr>::Err>
 pub enum iceberg_catalog_sql::SqlBindStyle
 pub iceberg_catalog_sql::SqlBindStyle::DollarNumeric
 pub iceberg_catalog_sql::SqlBindStyle::QMark
@@ -52,5 +71,6 @@ pub fn iceberg_catalog_sql::SqlCatalogBuilder::with_kms_client_factory(self, kms
 pub fn iceberg_catalog_sql::SqlCatalogBuilder::with_runtime(self, runtime: iceberg::runtime::Runtime) -> Self
 pub fn iceberg_catalog_sql::SqlCatalogBuilder::with_storage_factory(self, storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> Self
 pub const iceberg_catalog_sql::SQL_CATALOG_PROP_BIND_STYLE: &str
+pub const iceberg_catalog_sql::SQL_CATALOG_PROP_SCHEMA_VERSION: &str
 pub const iceberg_catalog_sql::SQL_CATALOG_PROP_URI: &str
 pub const iceberg_catalog_sql::SQL_CATALOG_PROP_WAREHOUSE: &str

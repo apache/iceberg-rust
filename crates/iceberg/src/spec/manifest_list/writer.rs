@@ -315,10 +315,13 @@ fn require_row_counts_in_manifest(manifest: &ManifestFile) -> Result<(u64, u64)>
 mod test {
     use std::fs;
     use std::path::Path;
+    use std::sync::Arc;
 
     use tempfile::TempDir;
 
     use super::ManifestListWriter;
+    use crate::encryption::kms::{KeyManagementClient, MemoryKeyManagementClient};
+    use crate::encryption::{EncryptedInputFile, EncryptionManager};
     use crate::io::{FileIO, FileWrite};
     use crate::spec::{
         Datum, FieldSummary, ManifestContentType, ManifestFile, ManifestList,
@@ -605,6 +608,77 @@ mod test {
         assert_eq!(manifest_list, expected_manifest_list);
 
         temp_dir.close().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_manifest_list_writer_v3_encrypted_round_trip() {
+        let (mgr, file_io) = fresh_encryption_manager_and_io();
+        let path = "memory:///manifest_list_v3_encrypted.avro";
+
+        let encrypted_output = mgr.encrypt(file_io.new_output(path).unwrap());
+        let key_metadata = encrypted_output.key_metadata().clone();
+
+        let snapshot_id = 9_000_000_000_000_001i64;
+        let seq_num = 7i64;
+        let mut expected = ManifestList {
+            entries: vec![ManifestFile {
+                manifest_path: "memory:///encrypted/v3_m0.avro".to_string(),
+                manifest_length: 1234,
+                partition_spec_id: 0,
+                content: ManifestContentType::Data,
+                sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
+                min_sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
+                added_snapshot_id: snapshot_id,
+                added_files_count: Some(2),
+                existing_files_count: Some(0),
+                deleted_files_count: Some(0),
+                added_rows_count: Some(10),
+                existing_rows_count: Some(0),
+                deleted_rows_count: Some(0),
+                partitions: Some(vec![FieldSummary {
+                    contains_null: false,
+                    contains_nan: Some(false),
+                    lower_bound: Some(Datum::long(1).to_bytes().unwrap()),
+                    upper_bound: Some(Datum::long(1).to_bytes().unwrap()),
+                }]),
+                key_metadata: None,
+                first_row_id: None,
+            }],
+        };
+
+        let file_writer = encrypted_output.writer().await.unwrap();
+        let mut writer = ManifestListWriter::v3(file_writer, snapshot_id, Some(0), seq_num, None);
+        writer
+            .add_manifests(expected.entries.clone().into_iter())
+            .unwrap();
+        writer.close().await.unwrap();
+
+        let raw_bytes = file_io.new_input(path).unwrap().read().await.unwrap();
+        assert!(
+            ManifestList::parse_with_version(&raw_bytes, crate::spec::FormatVersion::V3).is_err(),
+            "raw bytes should be ciphertext, not parseable as Avro"
+        );
+
+        let plaintext = EncryptedInputFile::new(file_io.new_input(path).unwrap(), key_metadata)
+            .read()
+            .await
+            .unwrap();
+        let manifest_list =
+            ManifestList::parse_with_version(&plaintext, crate::spec::FormatVersion::V3).unwrap();
+
+        expected.entries[0].sequence_number = seq_num;
+        expected.entries[0].min_sequence_number = seq_num;
+        assert_eq!(manifest_list, expected);
+    }
+
+    fn fresh_encryption_manager_and_io() -> (EncryptionManager, FileIO) {
+        let kms = MemoryKeyManagementClient::new();
+        kms.add_master_key("master-1").unwrap();
+        let mgr = EncryptionManager::builder()
+            .kms_client(Arc::new(kms) as Arc<dyn KeyManagementClient>)
+            .table_key_id("master-1")
+            .build();
+        (mgr, FileIO::new_with_memory())
     }
 
     async fn file_writer(path: &Path, io: FileIO) -> Box<dyn FileWrite> {

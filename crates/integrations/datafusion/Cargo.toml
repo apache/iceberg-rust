@@ -44,3 +44,6 @@ uuid = { workspace = true }
 expect-test = { workspace = true }
 parquet = { workspace = true }
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

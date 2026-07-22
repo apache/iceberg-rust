@@ -17,12 +17,13 @@
 
 //! Utility functions for catalog operations.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use futures::{TryStreamExt, stream};
 
 use crate::Result;
 use crate::io::FileIO;
+use crate::spec::{ManifestFile, ManifestReader};
 use crate::table::Table;
 
 const DELETE_CONCURRENCY: usize = 10;
@@ -38,7 +39,7 @@ const DELETE_CONCURRENCY: usize = 10;
 /// may share the same data files.
 pub async fn drop_table_data(table_info: &Table) -> Result<()> {
     let mut manifest_lists_to_delete: HashSet<String> = HashSet::new();
-    let mut manifests_to_delete: HashSet<String> = HashSet::new();
+    let mut manifests_to_delete: HashMap<String, ManifestFile> = HashMap::new();
 
     let metadata = table_info.metadata_ref();
     let io = table_info.file_io();
@@ -55,17 +56,18 @@ pub async fn drop_table_data(table_info: &Table) -> Result<()> {
             manifest_lists_to_delete.insert(manifest_list_location);
         }
         for manifest_file in manifest_list.entries() {
-            manifests_to_delete.insert(manifest_file.manifest_path.clone());
+            manifests_to_delete.insert(manifest_file.manifest_path.clone(), manifest_file.clone());
         }
     }
 
     // Delete data files only if gc.enabled is true, to avoid corrupting shared tables
-    if metadata.table_properties()?.gc_enabled {
+    if metadata.table_properties().gc_enabled()? {
         delete_data_files(io, &manifests_to_delete).await?;
     }
 
     // Delete manifest files
-    io.delete_stream(stream::iter(manifests_to_delete)).await?;
+    let manifest_paths: Vec<String> = manifests_to_delete.into_keys().collect();
+    io.delete_stream(stream::iter(manifest_paths)).await?;
 
     // Delete manifest lists
     io.delete_stream(stream::iter(manifest_lists_to_delete))
@@ -103,13 +105,13 @@ pub async fn drop_table_data(table_info: &Table) -> Result<()> {
 }
 
 /// Reads manifests concurrently and deletes the data files referenced within.
-async fn delete_data_files(io: &FileIO, manifest_paths: &HashSet<String>) -> Result<()> {
-    stream::iter(manifest_paths.iter().map(Ok))
-        .try_for_each_concurrent(DELETE_CONCURRENCY, |manifest_path| async move {
-            let input = io.new_input(manifest_path)?;
-            let manifest_content = input.read().await?;
-            let manifest = crate::spec::Manifest::parse_avro(&manifest_content)?;
-
+async fn delete_data_files(
+    io: &FileIO,
+    manifest_files: &HashMap<String, ManifestFile>,
+) -> Result<()> {
+    stream::iter(manifest_files.values().map(Ok))
+        .try_for_each_concurrent(DELETE_CONCURRENCY, |manifest_file| async move {
+            let manifest = ManifestReader::new(io.clone()).read(manifest_file).await?;
             let data_file_paths = manifest
                 .entries()
                 .iter()

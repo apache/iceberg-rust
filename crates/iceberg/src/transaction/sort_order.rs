@@ -59,7 +59,7 @@ pub struct ReplaceSortOrderAction {
 }
 
 impl ReplaceSortOrderAction {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         ReplaceSortOrderAction {
             pending_sort_fields: vec![],
         }
@@ -88,12 +88,6 @@ impl ReplaceSortOrderAction {
         });
 
         self
-    }
-}
-
-impl Default for ReplaceSortOrderAction {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

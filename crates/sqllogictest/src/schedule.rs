@@ -110,7 +110,7 @@ impl Schedule {
             let step_sql_path = PathBuf::from(format!(
                 "{}/testdata/slts/{}",
                 env!("CARGO_MANIFEST_DIR"),
-                &step.slt
+                step.slt
             ));
 
             engine.run_slt_file(&step_sql_path).await?;

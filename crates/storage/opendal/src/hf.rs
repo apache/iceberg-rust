@@ -197,9 +197,7 @@ pub(crate) fn hf_config_build<'a>(
         .ok_or_else(|| Error::new(ErrorKind::DataInvalid, format!("Invalid hf url: {path}")))?;
     let relative_path = &path[path.len() - parsed.path.len()..];
 
-    let op = Operator::from_config(hf_cfg)
-        .map_err(from_opendal_error)?
-        .finish();
+    let op = Operator::from_config(hf_cfg).map_err(from_opendal_error)?;
     Ok((op, relative_path))
 }
 

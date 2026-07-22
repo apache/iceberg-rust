@@ -34,8 +34,8 @@ use iceberg::table::Table;
 use crate::physical_plan::metadata_scan::IcebergMetadataScan;
 use crate::to_datafusion_error;
 
-/// Represents a [`TableProvider`] for the Iceberg [`Catalog`],
-/// managing access to a [`MetadataTable`].
+/// Represents a [`TableProvider`] for the Iceberg [`iceberg::Catalog`],
+/// managing access to a [`iceberg::inspect::MetadataTable`].
 #[derive(Debug, Clone)]
 pub struct IcebergMetadataTableProvider {
     pub(crate) table: Table,
@@ -49,6 +49,7 @@ impl TableProvider for IcebergMetadataTableProvider {
         let schema = match self.r#type {
             MetadataTableType::Snapshots => metadata_table.snapshots().schema(),
             MetadataTableType::Manifests => metadata_table.manifests().schema(),
+            MetadataTableType::History => metadata_table.history().schema(),
         };
         schema_to_arrow_schema(&schema).unwrap().into()
     }
@@ -74,6 +75,7 @@ impl IcebergMetadataTableProvider {
         let stream = match self.r#type {
             MetadataTableType::Snapshots => metadata_table.snapshots().scan().await,
             MetadataTableType::Manifests => metadata_table.manifests().scan().await,
+            MetadataTableType::History => metadata_table.history().scan().await,
         }
         .map_err(to_datafusion_error)?;
         let stream = stream.map_err(to_datafusion_error);

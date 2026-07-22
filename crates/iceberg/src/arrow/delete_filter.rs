@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 use tokio::sync::Notify;
+use tokio::sync::futures::OwnedNotified;
 use tokio::sync::oneshot::Receiver;
 
 use crate::delete_vector::DeleteVector;
@@ -67,9 +68,11 @@ pub(crate) enum PosDelLoadAction {
     /// The file is already loaded, nothing to do.
     AlreadyLoaded,
     /// The file is currently being loaded by another task.
-    /// The caller *must* wait for this notifier to ensure data availability
-    /// before returning, as subsequent access (get_delete_vector) is synchronous.
-    WaitFor(Arc<Notify>),
+    /// The caller *must* await this future to ensure data availability before
+    /// returning, as subsequent access (get_delete_vector) is synchronous. The
+    /// future is created under the state lock so it cannot miss the loader's
+    /// `notify_waiters()` (which stores no permit).
+    WaitFor(OwnedNotified),
 }
 
 impl DeleteFilter {
@@ -127,7 +130,9 @@ impl DeleteFilter {
         if let Some(state) = state.positional_deletes.get(file_path) {
             match state {
                 PosDelState::Loaded => return PosDelLoadAction::AlreadyLoaded,
-                PosDelState::Loading(notify) => return PosDelLoadAction::WaitFor(notify.clone()),
+                PosDelState::Loading(notify) => {
+                    return PosDelLoadAction::WaitFor(notify.clone().notified_owned());
+                }
             }
         }
 
@@ -192,7 +197,7 @@ impl DeleteFilter {
         // * Bind the predicate to the task's schema to get a `BoundPredicate`
 
         let mut combined_predicate = AlwaysTrue;
-        for delete in &file_scan_task.deletes {
+        for delete in file_scan_task.deletes() {
             if !is_equality_delete(delete) {
                 continue;
             }
@@ -218,7 +223,7 @@ impl DeleteFilter {
         }
 
         let bound_predicate = combined_predicate
-            .bind(file_scan_task.schema.clone(), file_scan_task.case_sensitive)?;
+            .bind(file_scan_task.schema_ref(), file_scan_task.case_sensitive())?;
         Ok(Some(bound_predicate))
     }
 
@@ -296,6 +301,38 @@ pub(crate) mod tests {
     const FIELD_ID_POSITIONAL_DELETE_FILE_PATH: u64 = 2147483546;
     const FIELD_ID_POSITIONAL_DELETE_POS: u64 = 2147483545;
 
+    // Regression test for the positional-delete lost-wakeup hang.
+    //
+    // Drives the real API through the losing interleaving: the loader fires
+    // `notify_waiters()` (via `finish_pos_del_load`) *before* the waiter awaits the notifier
+    // handed back by `WaitFor`. `notify_waiters()` stores no permit, so this only completes if
+    // the waiter's `Notified` was created before the signal. Because `WaitFor` now carries an
+    // `OwnedNotified` created under the lock in `try_start_pos_del_load`, it is; on the old
+    // `WaitFor(Arc<Notify>)` contract the waiter created its `Notified` too late and hung.
+    #[tokio::test]
+    async fn test_wait_for_completes_when_load_finishes_before_await() {
+        let filter = DeleteFilter::new(Runtime::current());
+        let path = "s3://bucket/pos-delete.parquet";
+
+        assert!(matches!(
+            filter.try_start_pos_del_load(path),
+            PosDelLoadAction::Load
+        ));
+
+        let PosDelLoadAction::WaitFor(notified) = filter.try_start_pos_del_load(path) else {
+            panic!("expected WaitFor for an in-progress load");
+        };
+
+        // Loader completes and signals before the waiter awaits.
+        filter.finish_pos_del_load(path);
+
+        let waited = tokio::time::timeout(std::time::Duration::from_secs(5), notified).await;
+        assert!(
+            waited.is_ok(),
+            "WaitFor future must resolve after finish_pos_del_load"
+        );
+    }
+
     #[tokio::test]
     async fn test_delete_file_filter_load_deletes() {
         let tmp_dir = TempDir::new().unwrap();
@@ -308,7 +345,10 @@ pub(crate) mod tests {
         let file_scan_tasks = setup(table_location);
 
         let delete_filter = delete_file_loader
-            .load_deletes(&file_scan_tasks[0].deletes, file_scan_tasks[0].schema_ref())
+            .load_deletes(
+                file_scan_tasks[0].deletes(),
+                file_scan_tasks[0].schema_ref(),
+            )
             .await
             .unwrap()
             .unwrap();
@@ -319,7 +359,10 @@ pub(crate) mod tests {
         assert_eq!(result.lock().unwrap().len(), 12); // pos dels from pos del file 1 and 2
 
         let delete_filter = delete_file_loader
-            .load_deletes(&file_scan_tasks[1].deletes, file_scan_tasks[1].schema_ref())
+            .load_deletes(
+                file_scan_tasks[1].deletes(),
+                file_scan_tasks[1].schema_ref(),
+            )
             .await
             .unwrap()
             .unwrap();
@@ -398,6 +441,7 @@ pub(crate) mod tests {
                 .len(),
             )
             .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Parquet)
             .with_partition_spec_id(0)
             .build();
 
@@ -415,6 +459,7 @@ pub(crate) mod tests {
                 .len(),
             )
             .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Parquet)
             .with_partition_spec_id(0)
             .build();
 
@@ -432,6 +477,7 @@ pub(crate) mod tests {
                 .len(),
             )
             .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Parquet)
             .with_partition_spec_id(0)
             .build();
 
@@ -446,7 +492,8 @@ pub(crate) mod tests {
                 .with_project_field_ids(vec![])
                 .with_deletes(vec![pos_del_1, pos_del_2.clone()])
                 .with_case_sensitive(false)
-                .build(),
+                .build()
+                .unwrap(),
             FileScanTask::builder()
                 .with_file_size_in_bytes(0)
                 .with_start(0)
@@ -457,7 +504,8 @@ pub(crate) mod tests {
                 .with_project_field_ids(vec![])
                 .with_deletes(vec![pos_del_3])
                 .with_case_sensitive(false)
-                .build(),
+                .build()
+                .unwrap(),
         ];
 
         file_scan_tasks
@@ -498,7 +546,7 @@ pub(crate) mod tests {
             .with_start(0)
             .with_length(0)
             .with_data_file_path("data.parquet".to_string())
-            .with_data_file_format(crate::spec::DataFileFormat::Parquet)
+            .with_data_file_format(DataFileFormat::Parquet)
             .with_schema(schema.clone())
             .with_project_field_ids(vec![])
             .with_deletes(vec![
@@ -506,11 +554,13 @@ pub(crate) mod tests {
                     .with_file_path("eq-del.parquet".to_string())
                     .with_file_size_in_bytes(1) // never read; this test fails before opening the file
                     .with_file_type(DataContentType::EqualityDeletes)
+                    .with_file_format(DataFileFormat::Parquet)
                     .with_partition_spec_id(0)
                     .build(),
             ])
             .with_case_sensitive(true)
-            .build();
+            .build()
+            .unwrap();
 
         let filter = DeleteFilter::new(Runtime::current());
 

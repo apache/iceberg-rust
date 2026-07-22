@@ -81,6 +81,11 @@ impl ArrowReader {
                 Self::include_leaf_field_id(&map_type.key_field, field_ids);
                 Self::include_leaf_field_id(&map_type.value_field, field_ids);
             }
+            // Variant projection is rejected earlier (in `get_arrow_projection_mask`); this
+            // arm only keeps the match exhaustive. Treat it as a leaf, like a primitive.
+            Type::Variant(_) => {
+                field_ids.push(field.id);
+            }
         }
     }
 
@@ -119,6 +124,19 @@ impl ArrowReader {
             return Ok(ProjectionMask::all());
         }
 
+        // Reading variant columns is not supported yet (see #2188 follow-ups): reject any
+        // projection that touches a variant, rather than returning a partial/incorrect batch.
+        for field_id in field_ids {
+            if let Some(field) = iceberg_schema_of_task.field_by_id(*field_id)
+                && type_contains_variant(&field.field_type)
+            {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Reading variant columns is not supported yet",
+                ));
+            }
+        }
+
         if use_fallback {
             // Position-based projection necessary because file lacks embedded field IDs
             Self::get_arrow_projection_mask_fallback(field_ids, parquet_schema)
@@ -155,6 +173,8 @@ impl ArrowReader {
     ) -> Result<ProjectionMask> {
         let mut column_map = HashMap::new();
         let fields = arrow_schema.fields();
+        // HashSet for O(1) membership checks instead of O(n) slice scans.
+        let leaf_field_id_set: HashSet<i32> = leaf_field_ids.iter().copied().collect();
 
         // Pre-project only the fields that have been selected, possibly avoiding converting
         // some Arrow types that are not yet supported.
@@ -166,7 +186,7 @@ impl ArrowReader {
                     .and_then(|field_id| i32::from_str(field_id).ok())
                     .is_some_and(|field_id| {
                         projected_fields.insert((*f).clone(), field_id);
-                        leaf_field_ids.contains(&field_id)
+                        leaf_field_id_set.contains(&field_id)
                     })
             }),
             arrow_schema.metadata().clone(),
@@ -245,6 +265,23 @@ impl ArrowReader {
     }
 }
 
+/// Whether `field_type` is, or transitively contains, a variant type.
+fn type_contains_variant(field_type: &Type) -> bool {
+    match field_type {
+        Type::Variant(_) => true,
+        Type::Struct(s) => s
+            .fields()
+            .iter()
+            .any(|f| type_contains_variant(&f.field_type)),
+        Type::List(l) => type_contains_variant(&l.element_field.field_type),
+        Type::Map(m) => {
+            type_contains_variant(&m.key_field.field_type)
+                || type_contains_variant(&m.value_field.field_type)
+        }
+        Type::Primitive(_) => false,
+    }
+}
+
 /// Build the map of parquet field id to Parquet column index in the schema.
 /// Returns None if the Parquet file doesn't have field IDs embedded (e.g., migrated tables).
 pub(super) fn build_field_id_map(
@@ -273,6 +310,26 @@ pub(super) fn build_field_id_map(
     }
 
     Ok(Some(column_map))
+}
+
+/// Finds the Parquet leaf column index carrying `field_id` by its embedded id.
+///
+/// Unlike [`build_field_id_map`], a leaf without an embedded id does not abort the
+/// search -- it is simply skipped. This tolerates files that legitimately mix id-bearing
+/// and id-less leaves, e.g. a Variant column whose internal metadata/value leaves are
+/// required by the spec to have no field id, alongside a reserved metadata column that
+/// does carry its id.
+pub(super) fn find_leaf_by_field_id(
+    parquet_schema: &SchemaDescriptor,
+    field_id: i32,
+) -> Option<usize> {
+    parquet_schema.columns().iter().position(|col| {
+        matches!(
+            col.self_type(),
+            ParquetType::PrimitiveType { basic_info, .. }
+                if basic_info.has_id() && basic_info.id() == field_id
+        )
+    })
 }
 
 /// Build a fallback field ID map for Parquet files without embedded field IDs.
@@ -465,7 +522,8 @@ mod tests {
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskStream};
     use crate::spec::{
-        DataFileFormat, Datum, MappedField, NameMapping, NestedField, PrimitiveType, Schema, Type,
+        DataFileFormat, Datum, MappedField, NameMapping, NestedField, PrimitiveType, Schema,
+        StructType, Type, VariantType,
     };
     use crate::{ErrorKind, Runtime};
 
@@ -561,6 +619,61 @@ message schema {
         assert_eq!(mask, ProjectionMask::leaves(&parquet_schema, vec![0]));
     }
 
+    #[test]
+    fn test_arrow_projection_mask_variant_is_unsupported() {
+        // Reading variant columns is not supported yet: projecting one (top-level or
+        // nested) must fail loudly rather than return a partial/incorrect batch.
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
+                    NestedField::required(
+                        3,
+                        "s",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(4, "vv", Type::Variant(VariantType)).into(),
+                        ])),
+                    )
+                    .into(),
+                    NestedField::required(
+                        5,
+                        "m",
+                        Type::Map(crate::spec::MapType::required(
+                            6,
+                            Type::Primitive(PrimitiveType::String),
+                            7,
+                            Type::Variant(VariantType),
+                        )),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        // The parquet/arrow schemas are irrelevant: the variant is rejected before they
+        // are consulted, so an empty descriptor is enough to drive the code path.
+        let parquet_schema = SchemaDescriptor::new(Arc::new(
+            parse_message_type("message schema { optional int32 id = 1; }").unwrap(),
+        ));
+        let arrow_schema = Arc::new(ArrowSchema::empty());
+
+        // 2 = top-level variant, 3 = struct containing a variant, 4 = the nested variant,
+        // 5 = map<string, variant>, plus a mix with a non-variant sibling.
+        for projected in [vec![2], vec![3], vec![4], vec![5], vec![1, 2]] {
+            let err = ArrowReader::get_arrow_projection_mask(
+                &projected,
+                &schema,
+                &parquet_schema,
+                &arrow_schema,
+                false,
+            )
+            .expect_err("variant projection must be rejected");
+            assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+        }
+    }
+
     /// Test schema evolution: reading old Parquet file (with only column 'a')
     /// using a newer table schema (with columns 'a' and 'b').
     /// This tests that:
@@ -622,7 +735,8 @@ message schema {
                 .with_schema(new_schema.clone())
                 .with_project_field_ids(vec![1, 2]) // Request both columns 'a' and 'b'
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -721,7 +835,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -824,7 +939,8 @@ message schema {
                 .with_project_field_ids(vec![2, 4])
                 .with_case_sensitive(false)
                 .with_name_mapping(Some(name_mapping))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -932,7 +1048,8 @@ message schema {
                 .with_case_sensitive(false)
                 .with_name_mapping(Some(name_mapping))
                 .with_predicate(Some(predicate.bind(schema, true).unwrap()))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1025,7 +1142,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 3])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1112,7 +1230,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2, 3])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1213,7 +1332,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1267,7 +1387,7 @@ message schema {
                     NestedField::required(
                         2,
                         "person",
-                        Type::Struct(crate::spec::StructType::new(vec![
+                        Type::Struct(StructType::new(vec![
                             NestedField::required(
                                 3,
                                 "name",
@@ -1343,7 +1463,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1440,7 +1561,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 5, 2])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1551,7 +1673,8 @@ message schema {
                 .with_project_field_ids(vec![1, 2, 3])
                 .with_case_sensitive(false)
                 .with_predicate(Some(predicate.bind(schema, true).unwrap()))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1693,7 +1816,8 @@ message schema {
                 .with_case_sensitive(false)
                 .with_partition(Some(partition_data))
                 .with_partition_spec(Some(partition_spec))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1807,7 +1931,7 @@ message schema {
                     NestedField::required(
                         1,
                         "person",
-                        Type::Struct(crate::spec::StructType::new(vec![
+                        Type::Struct(StructType::new(vec![
                             NestedField::required(
                                 5,
                                 "name",
@@ -1826,7 +1950,7 @@ message schema {
                             element_field: NestedField::required(
                                 7,
                                 "element",
-                                Type::Struct(crate::spec::StructType::new(vec![
+                                Type::Struct(StructType::new(vec![
                                     NestedField::required(
                                         8,
                                         "name",
@@ -1900,7 +2024,8 @@ message schema {
                 .with_project_field_ids(vec![4])
                 .with_case_sensitive(false)
                 .with_predicate(Some(predicate.bind(iceberg_schema, true).unwrap()))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 

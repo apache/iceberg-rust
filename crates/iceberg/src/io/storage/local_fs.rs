@@ -50,7 +50,6 @@ use crate::{Error, ErrorKind, Result};
 /// - `file:///path/to/file` -> `/path/to/file`
 /// - `file:/path/to/file` -> `/path/to/file`
 /// - `/path/to/file` -> `/path/to/file`
-/// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LocalFsStorage;
 
