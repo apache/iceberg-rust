@@ -48,6 +48,16 @@
 //!         .unwrap();
 //! }
 //! ```
+//!
+//! # TLS
+//!
+//! `https://` catalog URIs work out of the box: the default `rustls-tls-native-roots`
+//! feature enables reqwest's rustls backend with the operating system's trust store, so
+//! CAs installed on the host are honored. The `rustls-tls` feature uses a compiled-in
+//! webpki root bundle instead. Disable default features to build without a TLS stack.
+//! For custom TLS settings (client certificates, additional roots, accepting invalid
+//! certs), pass a preconfigured `reqwest::Client` via
+//! [`RestCatalogBuilder::with_client`].
 
 #![deny(missing_docs)]
 
