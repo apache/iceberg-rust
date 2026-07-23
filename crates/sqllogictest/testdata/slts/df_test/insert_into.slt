@@ -39,6 +39,10 @@ query ??????
 SELECT * FROM default.default.test_unpartitioned_table$snapshots
 ----
 
+query ??????
+SELECT * FROM default.default.test_unpartitioned_table$refs
+----
+
 # Insert a single row and verify the count
 query I
 INSERT INTO default.default.test_unpartitioned_table VALUES (1, 'Alice')
