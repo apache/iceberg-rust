@@ -257,7 +257,7 @@ impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> CurrentFi
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
     use arrow_array::{ArrayRef, Int32Array, StringArray};
@@ -268,6 +268,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::arrow::test_utils::read_encrypted_parquet;
+    use crate::encryption::StandardKeyMetadata;
     use crate::io::FileIO;
     use crate::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, Type};
     use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
@@ -436,6 +438,113 @@ mod tests {
             total_records, expected_rows as u64,
             "Expected {expected_rows} total records across all files"
         );
+
+        Ok(())
+    }
+
+    /// Every rolled file is independently encrypted
+    #[tokio::test]
+    async fn test_rolling_writer_encrypted() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let file_io = FileIO::new_with_fs();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let schema = make_test_schema()?;
+
+        let table_properties = TableProperties::try_from(&HashMap::from([(
+            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+            "test-key".to_string(),
+        )]))?;
+        let parquet_writer_builder =
+            ParquetWriterBuilder::from_table_properties(&table_properties, Arc::new(schema))?;
+
+        // Set a very small target size to trigger rolling
+        let rolling_writer_builder = RollingFileWriterBuilder::new(
+            parquet_writer_builder,
+            1024,
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        );
+
+        let data_file_writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);
+
+        // Create writer
+        let mut writer = data_file_writer_builder.build(None).await?;
+
+        // Create test data
+        let arrow_schema = make_test_arrow_schema();
+        let arrow_schema_ref = Arc::new(arrow_schema.clone());
+
+        let names = vec![
+            "Alice", "Bob", "Charlie", "Dave", "Eve", "Frank", "Grace", "Heidi", "Ivan", "Judy",
+            "Kelly", "Larry", "Mallory", "Shawn",
+        ];
+
+        let mut rng = rand::rng();
+        let batch_num = 10;
+        let batch_rows = 100;
+        let expected_rows = batch_num * batch_rows;
+
+        for i in 0..batch_num {
+            let int_values: Vec<i32> = (0..batch_rows).map(|row| i * batch_rows + row).collect();
+            let str_values: Vec<&str> = (0..batch_rows)
+                .map(|_| *names.iter().choose(&mut rng).unwrap())
+                .collect();
+
+            let int_array = Arc::new(Int32Array::from(int_values)) as ArrayRef;
+            let str_array = Arc::new(StringArray::from(str_values)) as ArrayRef;
+
+            let batch =
+                RecordBatch::try_new(Arc::clone(&arrow_schema_ref), vec![int_array, str_array])
+                    .expect("Failed to create RecordBatch");
+
+            writer.write(batch).await?;
+        }
+
+        let data_files = writer.close().await?;
+
+        assert!(
+            data_files.len() > 4,
+            "Expected at least 4 data files to be created, but got {}",
+            data_files.len()
+        );
+
+        // Verify total record count across all files
+        let total_records: u64 = data_files.iter().map(|file| file.record_count).sum();
+        assert_eq!(
+            total_records, expected_rows as u64,
+            "Expected {expected_rows} total records across all files"
+        );
+
+        // Every rolled file carries key metadata, and each file's DEK is distinct.
+        let mut distinct_keys = HashSet::new();
+        for data_file in &data_files {
+            let key_metadata = StandardKeyMetadata::decode(
+                data_file
+                    .key_metadata()
+                    .expect("each rolled file must carry key metadata"),
+            )?;
+            assert!(
+                distinct_keys.insert(key_metadata.encryption_key().as_bytes().to_vec()),
+                "each rolled file must use a distinct DEK"
+            );
+        }
+
+        // One file decrypts and reads back with its own key metadata.
+        let data_file = &data_files[0];
+        let key_metadata = StandardKeyMetadata::decode(data_file.key_metadata().unwrap())?;
+        let batches = read_encrypted_parquet(
+            &data_file.file_path,
+            key_metadata.encryption_key().as_bytes(),
+            key_metadata.aad_prefix(),
+        );
+        let read_rows: u64 = batches.iter().map(|b| b.num_rows() as u64).sum();
+        assert_eq!(read_rows, data_file.record_count);
 
         Ok(())
     }

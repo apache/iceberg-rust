@@ -226,6 +226,7 @@ impl ExecutionPlan for IcebergWriteExec {
             &table_props,
             self.table.metadata().current_schema().clone(),
         )
+        .map_err(to_datafusion_error)?
         .with_match_mode(FieldMatchMode::Name);
         let target_file_size = table_props.write_target_file_size_bytes;
 
@@ -317,12 +318,16 @@ mod tests {
     use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
     use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
     use futures::{StreamExt, stream};
+    use iceberg::encryption::StandardKeyMetadata;
     use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
     use iceberg::spec::{
-        DataFileFormat, NestedField, PrimitiveType, Schema, Type, deserialize_data_file_from_json,
+        DataFileFormat, NestedField, PrimitiveType, Schema, TableProperties, Type,
+        deserialize_data_file_from_json,
     };
     use iceberg::{Catalog, CatalogBuilder, MemoryCatalog, NamespaceIdent, Result, TableCreation};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+    use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+    use parquet::encryption::decrypt::FileDecryptionProperties;
     use tempfile::TempDir;
 
     use super::*;
@@ -598,6 +603,102 @@ mod tests {
         // 7. Verify the file exists
         let file_io = table.file_io();
         assert!(file_io.exists(file_path).await?, "Data file should exist");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_iceberg_write_exec_encrypted() -> Result<()> {
+        let iceberg_catalog = get_iceberg_catalog().await;
+        let namespace = NamespaceIdent::new("test_namespace_enc".to_string());
+        iceberg_catalog
+            .create_namespace(&namespace, HashMap::new())
+            .await?;
+
+        // Create a table with encryption enabled via `encryption.key-id`.
+        let creation = TableCreation::builder()
+            .location(temp_path())
+            .name("test_table_enc".to_string())
+            .properties(HashMap::from([(
+                TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+                "test-key".to_string(),
+            )]))
+            .schema(get_test_schema()?)
+            .build();
+        let table = iceberg_catalog.create_table(&namespace, creation).await?;
+
+        // Input data fed to the planner.
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("name", DataType::Utf8, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+        let id_array = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let name_array = Arc::new(StringArray::from(vec!["Alice", "Bob", "Charlie"])) as ArrayRef;
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![id_array, name_array])
+            .map_err(|e| Error::new(ErrorKind::Unexpected, format!("record batch: {e}")))?;
+
+        let input_plan = Arc::new(MockExecutionPlan::new(arrow_schema.clone(), vec![batch]));
+        let write_exec = IcebergWriteExec::new(table.clone(), input_plan, arrow_schema);
+
+        // Execute the planner and collect the returned (serialized) data files.
+        let task_ctx = Arc::new(TaskContext::default());
+        let mut stream = write_exec
+            .execute(0, task_ctx)
+            .map_err(|e| Error::new(ErrorKind::Unexpected, format!("execute: {e}")))?;
+        let mut results = vec![];
+        while let Some(batch) = stream.next().await {
+            results
+                .push(batch.map_err(|e| Error::new(ErrorKind::Unexpected, format!("batch: {e}")))?);
+        }
+        assert_eq!(results.len(), 1, "expected one result batch");
+
+        let data_file_json = results[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("expected StringArray")
+            .value(0);
+        let data_file = deserialize_data_file_from_json(
+            data_file_json,
+            table.metadata().default_partition_spec_id(),
+            table.metadata().default_partition_type(),
+            table.metadata().current_schema(),
+        )?;
+
+        // The planner encrypted the file.
+        let key_metadata_bytes = data_file
+            .key_metadata()
+            .expect("planner must record key metadata on an encrypted data file");
+        let key_metadata = StandardKeyMetadata::decode(key_metadata_bytes)?;
+        let mut builder =
+            FileDecryptionProperties::builder(key_metadata.encryption_key().as_bytes().to_vec());
+        if let Some(aad) = key_metadata.aad_prefix() {
+            builder = builder.with_aad_prefix(aad.to_vec());
+        }
+        let options =
+            ArrowReaderOptions::new().with_file_decryption_properties(builder.build().unwrap());
+        let bytes = table
+            .file_io()
+            .new_input(data_file.file_path())
+            .unwrap()
+            .read()
+            .await
+            .unwrap();
+        let batches: Vec<RecordBatch> =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(bytes, options)
+                .unwrap()
+                .build()
+                .unwrap()
+                .map(|b| b.unwrap())
+                .collect();
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 3, "decrypted file must contain the 3 written rows");
 
         Ok(())
     }
