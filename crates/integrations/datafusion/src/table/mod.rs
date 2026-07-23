@@ -48,13 +48,44 @@ use iceberg::table::Table;
 use iceberg::{Catalog, Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 use metadata_table::IcebergMetadataTableProvider;
 
+use crate::IcebergDataFusionConfig;
 use crate::error::to_datafusion_error;
 use crate::physical_plan::commit::IcebergCommitExec;
 use crate::physical_plan::project::project_with_partition;
 use crate::physical_plan::repartition::repartition;
 use crate::physical_plan::scan::IcebergTableScan;
+use crate::physical_plan::scan_planning::{IcebergScanConfig, plan_file_task_groups};
 use crate::physical_plan::sort::sort_by_partition;
 use crate::physical_plan::write::IcebergWriteExec;
+
+fn enable_eager_scan_planning(state: &dyn Session) -> bool {
+    state
+        .config()
+        .options()
+        .extensions
+        .get::<IcebergDataFusionConfig>()
+        .is_some_and(|config| config.enable_eager_scan_planning)
+}
+
+async fn create_scan_plan(
+    state: &dyn Session,
+    table: Table,
+    scan_config: IcebergScanConfig,
+    limit: Option<usize>,
+) -> DFResult<Arc<dyn ExecutionPlan>> {
+    let file_task_groups = if enable_eager_scan_planning(state) {
+        Some(plan_file_task_groups(&table, &scan_config, state.config().target_partitions()).await?)
+    } else {
+        None
+    };
+
+    Ok(Arc::new(IcebergTableScan::new(
+        table,
+        scan_config,
+        limit,
+        file_task_groups,
+    )))
+}
 
 /// Catalog-backed table provider with automatic metadata refresh.
 ///
@@ -119,7 +150,7 @@ impl TableProvider for IcebergTableProvider {
 
     async fn scan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
@@ -131,15 +162,15 @@ impl TableProvider for IcebergTableProvider {
             .await
             .map_err(to_datafusion_error)?;
 
-        // Create scan with fresh metadata (always use current snapshot)
-        Ok(Arc::new(IcebergTableScan::new(
-            table,
-            None, // Always use current snapshot for catalog-backed provider
+        let scan_config = IcebergScanConfig::new(
             self.schema.clone(),
+            None, // Always use current snapshot for catalog-backed provider.
             projection,
             filters,
-            limit,
-        )))
+        );
+
+        // Create scan with fresh metadata (always use current snapshot)
+        create_scan_plan(state, table, scan_config, limit).await
     }
 
     fn supports_filters_pushdown(
@@ -306,20 +337,16 @@ impl TableProvider for IcebergStaticTableProvider {
 
     async fn scan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        let scan_config =
+            IcebergScanConfig::new(self.schema.clone(), self.snapshot_id, projection, filters);
+
         // Use cached table (no refresh)
-        Ok(Arc::new(IcebergTableScan::new(
-            self.table.clone(),
-            self.snapshot_id,
-            self.schema.clone(),
-            projection,
-            filters,
-            limit,
-        )))
+        create_scan_plan(state, self.table.clone(), scan_config, limit).await
     }
 
     fn supports_filters_pushdown(
@@ -361,6 +388,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::physical_plan::scan::IcebergTableScan;
 
     async fn get_test_table_from_metadata_file() -> Table {
         let metadata_file_name = "TableMetadataV2Valid.json";
