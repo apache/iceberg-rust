@@ -240,6 +240,10 @@ mod tests {
         async fn read(&self, range: Range<u64>) -> crate::Result<bytes::Bytes> {
             Ok(self.data.slice(range.start as usize..range.end as usize))
         }
+
+        async fn read_all(&self) -> crate::Result<bytes::Bytes> {
+            Ok(self.data.clone())
+        }
     }
 
     #[tokio::test]

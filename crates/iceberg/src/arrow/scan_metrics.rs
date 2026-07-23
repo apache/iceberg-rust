@@ -47,6 +47,13 @@ impl<F: FileRead> FileRead for CountingFileRead<F> {
             .fetch_add(range.end - range.start, Ordering::Relaxed);
         self.inner.read(range).await
     }
+
+    async fn read_all(&self) -> Result<Bytes> {
+        let bytes = self.inner.read_all().await?;
+        self.bytes_read
+            .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        Ok(bytes)
+    }
 }
 
 /// Metrics collected during an Iceberg scan.

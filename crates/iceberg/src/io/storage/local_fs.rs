@@ -261,6 +261,28 @@ impl FileRead for LocalFsFileRead {
 
         Ok(Bytes::from(buffer))
     }
+
+    async fn read_all(&self) -> Result<Bytes> {
+        let mut file = self.file.lock().map_err(|e| {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!("Failed to acquire file lock: {e}"),
+            )
+        })?;
+
+        file.seek(SeekFrom::Start(0)).map_err(|e| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Failed to seek to start of file: {e}"),
+            )
+        })?;
+
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)
+            .map_err(|e| Error::new(ErrorKind::DataInvalid, format!("Failed to read file: {e}")))?;
+
+        Ok(Bytes::from(buffer))
+    }
 }
 
 /// File writer for local filesystem storage.
@@ -472,6 +494,14 @@ mod tests {
         // Test partial read
         let partial = reader.read(0..5).await.unwrap();
         assert_eq!(partial, Bytes::from("Hello"));
+
+        // Test whole-file read
+        let all = reader.read_all().await.unwrap();
+        assert_eq!(all, content);
+
+        // read_all must be independent of any prior seek position
+        let all_again = reader.read_all().await.unwrap();
+        assert_eq!(all_again, content);
     }
 
     #[tokio::test]

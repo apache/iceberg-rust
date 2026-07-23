@@ -357,6 +357,10 @@ impl FileRead for AesGcmFileRead {
 
         Ok(result.freeze())
     }
+
+    async fn read_all(&self) -> Result<Bytes> {
+        self.read(0..self.plain_stream_size).await
+    }
 }
 
 /// Transparent encryption of AGS1 stream-encrypted files.
@@ -612,6 +616,10 @@ mod tests {
             }
             Ok(self.0.slice(start..end))
         }
+
+        async fn read_all(&self) -> Result<Bytes> {
+            Ok(self.0.clone())
+        }
     }
 
     #[tokio::test]
@@ -638,6 +646,10 @@ mod tests {
         // Reading empty range should return empty bytes
         let result = reader.read(0..0).await.unwrap();
         assert!(result.is_empty());
+
+        // read_all on an empty file should also return empty bytes
+        let all = reader.read_all().await.unwrap();
+        assert!(all.is_empty());
     }
 
     #[tokio::test]
@@ -720,6 +732,10 @@ mod tests {
         // Read entire file
         let result = reader.read(0..plaintext.len() as u64).await.unwrap();
         assert_eq!(&result[..], &plaintext[..]);
+
+        // read_all must recover the full plaintext across block boundaries
+        let all = reader.read_all().await.unwrap();
+        assert_eq!(&all[..], &plaintext[..]);
     }
 
     #[tokio::test]

@@ -286,6 +286,10 @@ impl FileRead for MemoryFileRead {
 
         Ok(self.data.slice(start..end))
     }
+
+    async fn read_all(&self) -> Result<Bytes> {
+        Ok(self.data.clone())
+    }
 }
 
 /// File writer for in-memory storage.
@@ -487,6 +491,10 @@ mod tests {
         // Test partial read
         let partial = reader.read(0..5).await.unwrap();
         assert_eq!(partial, Bytes::from("Hello"));
+
+        // Test whole-file read
+        let all = reader.read_all().await.unwrap();
+        assert_eq!(all, content);
     }
 
     #[tokio::test]

@@ -606,6 +606,13 @@ impl FileRead for OpenDalReader {
             .map_err(from_opendal_error)?
             .to_bytes())
     }
+
+    async fn read_all(&self) -> Result<Bytes> {
+        Ok(opendal::Reader::read(&self.0, ..)
+            .await
+            .map_err(from_opendal_error)?
+            .to_bytes())
+    }
 }
 
 /// Wrapper around `opendal::Writer` that implements `FileWrite`.

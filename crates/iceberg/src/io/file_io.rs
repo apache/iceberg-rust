@@ -253,12 +253,19 @@ pub trait FileRead: Send + Sync + Unpin + 'static {
     ///
     /// TODO: we can support reading non-contiguous bytes in the future.
     async fn read(&self, range: Range<u64>) -> Result<Bytes>;
+
+    /// Read the entire content of the file.
+    async fn read_all(&self) -> Result<Bytes>;
 }
 
 #[async_trait::async_trait]
 impl<T: AsRef<dyn FileRead> + Send + Sync + Unpin + 'static> FileRead for T {
     async fn read(&self, range: Range<u64>) -> Result<Bytes> {
         self.as_ref().read(range).await
+    }
+
+    async fn read_all(&self) -> Result<Bytes> {
+        self.as_ref().read_all().await
     }
 }
 

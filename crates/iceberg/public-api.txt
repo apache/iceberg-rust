@@ -264,6 +264,7 @@ pub fn iceberg::encryption::AesGcmFileRead::new(inner: alloc::boxed::Box<dyn ice
 pub fn iceberg::encryption::AesGcmFileRead::plaintext_length(&self) -> u64
 impl iceberg::io::FileRead for iceberg::encryption::AesGcmFileRead
 pub fn iceberg::encryption::AesGcmFileRead::read<'life0, 'async_trait>(&'life0 self, range: core::ops::range::Range<u64>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bytes::bytes::Bytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn iceberg::encryption::AesGcmFileRead::read_all<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bytes::bytes::Bytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub struct iceberg::encryption::AesGcmFileWrite
 impl iceberg::encryption::AesGcmFileWrite
 pub fn iceberg::encryption::AesGcmFileWrite::new(inner: alloc::boxed::Box<dyn iceberg::io::FileWrite>, cipher: alloc::sync::Arc<iceberg::encryption::AesGcmCipher>, aad_prefix: impl core::convert::Into<alloc::boxed::Box<[u8]>>) -> Self
@@ -1026,10 +1027,13 @@ pub const iceberg::io::S3_SSE_MD5: &str
 pub const iceberg::io::S3_SSE_TYPE: &str
 pub trait iceberg::io::FileRead: core::marker::Send + core::marker::Sync + core::marker::Unpin + 'static
 pub fn iceberg::io::FileRead::read<'life0, 'async_trait>(&'life0 self, range: core::ops::range::Range<u64>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bytes::bytes::Bytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn iceberg::io::FileRead::read_all<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bytes::bytes::Bytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 impl iceberg::io::FileRead for iceberg::encryption::AesGcmFileRead
 pub fn iceberg::encryption::AesGcmFileRead::read<'life0, 'async_trait>(&'life0 self, range: core::ops::range::Range<u64>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bytes::bytes::Bytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn iceberg::encryption::AesGcmFileRead::read_all<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bytes::bytes::Bytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 impl<T: core::convert::AsRef<dyn iceberg::io::FileRead> + core::marker::Send + core::marker::Sync + core::marker::Unpin + 'static> iceberg::io::FileRead for T
 pub fn T::read<'life0, 'async_trait>(&'life0 self, range: core::ops::range::Range<u64>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bytes::bytes::Bytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn T::read_all<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bytes::bytes::Bytes>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub trait iceberg::io::FileWrite: core::marker::Send + core::marker::Unpin + 'static
 pub fn iceberg::io::FileWrite::close<'life0, 'async_trait>(&'life0 mut self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn iceberg::io::FileWrite::write<'life0, 'async_trait>(&'life0 mut self, bs: bytes::bytes::Bytes) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
