@@ -50,6 +50,7 @@ use metadata_table::IcebergMetadataTableProvider;
 
 use crate::error::to_datafusion_error;
 use crate::physical_plan::commit::IcebergCommitExec;
+use crate::physical_plan::expr_to_predicate::classify_filter_pushdown;
 use crate::physical_plan::project::project_with_partition;
 use crate::physical_plan::repartition::repartition;
 use crate::physical_plan::scan::IcebergTableScan;
@@ -146,8 +147,10 @@ impl TableProvider for IcebergTableProvider {
         &self,
         filters: &[&Expr],
     ) -> DFResult<Vec<TableProviderFilterPushDown>> {
-        // Push down all filters, as a single source of truth, the scanner will drop the filters which couldn't be push down
-        Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
+        Ok(filters
+            .iter()
+            .map(|filter| classify_filter_pushdown(filter))
+            .collect())
     }
 
     async fn insert_into(
@@ -326,8 +329,10 @@ impl TableProvider for IcebergStaticTableProvider {
         &self,
         filters: &[&Expr],
     ) -> DFResult<Vec<TableProviderFilterPushDown>> {
-        // Push down all filters, as a single source of truth, the scanner will drop the filters which couldn't be push down
-        Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
+        Ok(filters
+            .iter()
+            .map(|filter| classify_filter_pushdown(filter))
+            .collect())
     }
 
     async fn insert_into(
