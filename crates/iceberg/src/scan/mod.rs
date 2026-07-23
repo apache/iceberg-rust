@@ -2775,6 +2775,123 @@ pub mod tests {
         );
     }
 
+    /// Builds a minimal single-snapshot table (no manifests on disk) whose schema
+    /// contains a column with the given name, so scan planning resolves column names
+    /// against a real schema. `TableScan::build()` only reads metadata, not manifest
+    /// files, so a snapshot pointing at a dummy manifest list is enough. Used to
+    /// reproduce issue #2837.
+    fn table_with_data_column(column_name: &str) -> Table {
+        use crate::spec::{
+            FormatVersion, MAIN_BRANCH, Operation, Snapshot, SnapshotReference, SnapshotRetention,
+            SortOrder, Summary, TableMetadataBuilder, UnboundPartitionSpec,
+        };
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, column_name, Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_timestamp_ms(1)
+            .with_sequence_number(0)
+            .with_schema_id(0)
+            .with_manifest_list("/snap-1.avro")
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .build();
+
+        let metadata = TableMetadataBuilder::new(
+            schema,
+            UnboundPartitionSpec::builder().with_spec_id(0).build(),
+            SortOrder::unsorted_order(),
+            "s3://bucket/table".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .add_snapshot(snapshot)
+        .unwrap()
+        .set_ref(MAIN_BRANCH, SnapshotReference {
+            snapshot_id: 1,
+            retention: SnapshotRetention::Branch {
+                min_snapshots_to_keep: None,
+                max_snapshot_age_ms: None,
+                max_ref_age_ms: None,
+            },
+        })
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        Table::builder()
+            .metadata(metadata)
+            .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
+            .file_io(FileIO::new_with_fs())
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+    }
+
+    /// A user data column named `pos` (a delete-file internal column name that is not a
+    /// data-table metadata column) must be projectable rather than shadowed. Regression
+    /// test for issue #2837.
+    #[test]
+    fn test_scan_projects_data_column_named_like_delete_file_column() {
+        for column_name in ["pos", "file_path"] {
+            let table = table_with_data_column(column_name);
+
+            // Projecting the data column must succeed and resolve to its real field id (2),
+            // not the reserved delete-file field id.
+            let table_scan = table
+                .scan()
+                .select([column_name])
+                .build()
+                .unwrap_or_else(|e| panic!("scan of data column `{column_name}` failed: {e}"));
+
+            assert_eq!(
+                table_scan.plan_context.as_ref().unwrap().field_ids.as_ref(),
+                &[2]
+            );
+
+            // The default projection (all columns) must resolve to the real field ids
+            // too, not shadow the data column with a reserved delete-file id.
+            let default_scan = table.scan().build().unwrap();
+            assert_eq!(
+                default_scan
+                    .plan_context
+                    .as_ref()
+                    .unwrap()
+                    .field_ids
+                    .as_ref(),
+                &[1, 2]
+            );
+        }
+    }
+
+    /// Projecting a genuinely absent column still fails with a clear "not found" error
+    /// rather than being silently accepted as a metadata column.
+    #[test]
+    fn test_scan_rejects_unknown_column_named_like_delete_file_column() {
+        // This table has no `pos` column (only `id` and `file_path`).
+        let table = table_with_data_column("file_path");
+
+        let err = table
+            .scan()
+            .select(["pos"])
+            .build()
+            .expect_err("projecting an absent column should fail");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.to_string().contains("not found"));
+    }
+
     #[tokio::test]
     async fn test_scan_deadlock() {
         let mut fixture = TableTestFixture::new();
