@@ -206,6 +206,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
 
     fn primitive(&mut self, p: &PrimitiveType, partner: &ArrayRef) -> Result<Vec<Option<Literal>>> {
         match p {
+            PrimitiveType::Unknown => Ok(vec![None; partner.len()]),
             PrimitiveType::Boolean => {
                 let array = partner
                     .as_any()
@@ -636,6 +637,7 @@ pub(crate) fn create_primitive_array_single_element(
     prim_lit: &Option<PrimitiveLiteral>,
 ) -> Result<ArrayRef> {
     match (data_type, prim_lit) {
+        (DataType::Null, None) => Ok(Arc::new(arrow_array::NullArray::new(1))),
         (DataType::Boolean, Some(PrimitiveLiteral::Boolean(v))) => {
             Ok(Arc::new(BooleanArray::from(vec![*v])))
         }
@@ -975,7 +977,7 @@ pub(crate) fn create_primitive_array_repeated(
                 Some(NullBuffer::new_null(num_rows)),
             ))
         }
-        (DataType::Null, _) => Arc::new(arrow_array::NullArray::new(num_rows)),
+        (DataType::Null, None) => Arc::new(arrow_array::NullArray::new(num_rows)),
         (dt, _) => {
             return Err(Error::new(
                 ErrorKind::Unexpected,
@@ -1892,6 +1894,26 @@ mod test {
             }
             other => panic!("Expected Decimal128, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_create_null_array_rejects_non_null_literal() {
+        let literal = Some(PrimitiveLiteral::Int(1));
+
+        assert!(create_primitive_array_single_element(&DataType::Null, &literal).is_err());
+        assert!(create_primitive_array_repeated(&DataType::Null, &literal, 2).is_err());
+        assert_eq!(
+            create_primitive_array_single_element(&DataType::Null, &None)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            create_primitive_array_repeated(&DataType::Null, &None, 2)
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]

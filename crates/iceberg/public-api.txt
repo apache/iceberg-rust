@@ -1598,6 +1598,7 @@ pub iceberg::spec::PrimitiveType::Timestamp
 pub iceberg::spec::PrimitiveType::TimestampNs
 pub iceberg::spec::PrimitiveType::Timestamptz
 pub iceberg::spec::PrimitiveType::TimestamptzNs
+pub iceberg::spec::PrimitiveType::Unknown
 pub iceberg::spec::PrimitiveType::Uuid
 impl iceberg::spec::PrimitiveType
 pub fn iceberg::spec::PrimitiveType::compatible(&self, literal: &iceberg::spec::PrimitiveLiteral) -> bool

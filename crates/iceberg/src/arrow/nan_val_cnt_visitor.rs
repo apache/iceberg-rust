@@ -21,15 +21,17 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, Float32Array, Float64Array, RecordBatch, StructArray};
+use arrow_array::{
+    ArrayRef, Float32Array, Float64Array, ListArray, MapArray, RecordBatch, StructArray,
+};
 use arrow_schema::DataType;
 
-use crate::Result;
-use crate::arrow::{ArrowArrayAccessor, FieldMatchMode};
+use crate::arrow::FieldMatchMode;
 use crate::spec::{
     ListType, MapType, NestedFieldRef, PrimitiveType, Schema, SchemaRef, SchemaWithPartnerVisitor,
-    StructType, VariantType, visit_struct_with_partner,
+    StructType, Type, VariantType,
 };
+use crate::{Error, ErrorKind, Result};
 
 macro_rules! cast_and_update_cnt_map {
     ($t:ty, $col:ident, $self:ident, $field_id:ident) => {
@@ -152,6 +154,84 @@ impl SchemaWithPartnerVisitor<ArrayRef> for NanValueCountVisitor {
 }
 
 impl NanValueCountVisitor {
+    fn visit_field(&mut self, field: &NestedFieldRef, array: &ArrayRef) -> Result<()> {
+        let field_id = field.id;
+        count_float_nans!(array, self, field_id);
+
+        match field.field_type.as_ref() {
+            Type::Primitive(_) | Type::Variant(_) => Ok(()),
+            Type::Struct(struct_type) => self.visit_struct(struct_type, array),
+            Type::List(list_type) => {
+                let list_array = array
+                    .as_any()
+                    .downcast_ref::<ListArray>()
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Expected list array for field {}, got {}",
+                                field.id,
+                                array.data_type()
+                            ),
+                        )
+                    })?;
+                self.visit_field(&list_type.element_field, list_array.values())
+            }
+            Type::Map(map_type) => {
+                let map_array = array
+                    .as_any()
+                    .downcast_ref::<MapArray>()
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Expected map array for field {}, got {}",
+                                field.id,
+                                array.data_type()
+                            ),
+                        )
+                    })?;
+                self.visit_field(&map_type.key_field, map_array.keys())?;
+                self.visit_field(&map_type.value_field, map_array.values())
+            }
+        }
+    }
+
+    fn visit_struct(&mut self, struct_type: &StructType, array: &ArrayRef) -> Result<()> {
+        let struct_array = array
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Expected struct array, got {}", array.data_type()),
+                )
+            })?;
+
+        for field in struct_type.fields() {
+            if matches!(
+                field.field_type.as_ref(),
+                Type::Primitive(PrimitiveType::Unknown)
+            ) {
+                continue;
+            }
+
+            let field_position = struct_array
+                .fields()
+                .iter()
+                .position(|arrow_field| self.match_mode.match_field(arrow_field, field))
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Field id {} not found in struct array", field.id),
+                    )
+                })?;
+            self.visit_field(field, struct_array.column(field_position))?;
+        }
+
+        Ok(())
+    }
+
     /// Creates new instance of NanValueCountVisitor
     pub fn new() -> Self {
         Self::new_with_match_mode(FieldMatchMode::Id)
@@ -167,17 +247,8 @@ impl NanValueCountVisitor {
 
     /// Compute nan value counts in given schema and record batch
     pub fn compute(&mut self, schema: SchemaRef, batch: RecordBatch) -> Result<()> {
-        let arrow_arr_partner_accessor = ArrowArrayAccessor::new_with_match_mode(self.match_mode);
-
         let struct_arr = Arc::new(StructArray::from(batch)) as ArrayRef;
-        visit_struct_with_partner(
-            schema.as_struct(),
-            &struct_arr,
-            self,
-            &arrow_arr_partner_accessor,
-        )?;
-
-        Ok(())
+        self.visit_struct(schema.as_struct(), &struct_arr)
     }
 }
 

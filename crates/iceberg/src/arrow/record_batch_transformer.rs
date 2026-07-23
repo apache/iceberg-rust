@@ -19,7 +19,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_array::{
-    Array as ArrowArray, ArrayRef, Int32Array, RecordBatch, RecordBatchOptions, RunArray,
+    Array as ArrowArray, ArrayRef, Int32Array, ListArray, MapArray, RecordBatch,
+    RecordBatchOptions, RunArray, StructArray, new_null_array,
 };
 use arrow_cast::cast;
 use arrow_schema::{
@@ -310,6 +311,160 @@ pub(crate) struct RecordBatchTransformer {
 }
 
 impl RecordBatchTransformer {
+    fn data_type_contains_null(data_type: &DataType) -> bool {
+        match data_type {
+            DataType::Null => true,
+            DataType::Struct(fields) => fields
+                .iter()
+                .any(|field| Self::data_type_contains_null(field.data_type())),
+            DataType::List(field)
+            | DataType::LargeList(field)
+            | DataType::FixedSizeList(field, _) => {
+                Self::data_type_contains_null(field.data_type())
+            }
+            DataType::Map(entries, _) => Self::data_type_contains_null(entries.data_type()),
+            _ => false,
+        }
+    }
+
+    fn transform_array(array: &ArrayRef, target_type: &DataType) -> Result<ArrayRef> {
+        if array.data_type().equals_datatype(target_type) {
+            return Ok(array.clone());
+        }
+
+        match target_type {
+            DataType::Struct(target_fields) => {
+                let source = array
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "Expected struct array while transforming {} to {target_type}",
+                                array.data_type()
+                            ),
+                        )
+                    })?;
+                let source_has_field_ids = source
+                    .fields()
+                    .iter()
+                    .any(|field| field.metadata().contains_key(PARQUET_FIELD_ID_META_KEY));
+                let columns = target_fields
+                    .iter()
+                    .enumerate()
+                    .map(|(target_index, target_field)| {
+                        let target_field_id =
+                            target_field.metadata().get(PARQUET_FIELD_ID_META_KEY);
+                        let source_index = target_field_id
+                            .and_then(|target_field_id| {
+                                source.fields().iter().position(|source_field| {
+                                    source_field.metadata().get(PARQUET_FIELD_ID_META_KEY)
+                                        == Some(target_field_id)
+                                })
+                            })
+                            .or_else(|| {
+                                source
+                                    .fields()
+                                    .iter()
+                                    .position(|source_field| {
+                                        source_field.name() == target_field.name()
+                                    })
+                            })
+                            .or_else(|| {
+                                (!source_has_field_ids
+                                    && !matches!(target_field.data_type(), DataType::Null))
+                                .then(|| {
+                                    target_fields
+                                        .iter()
+                                        .take(target_index)
+                                        .filter(|field| {
+                                            !matches!(field.data_type(), DataType::Null)
+                                        })
+                                        .count()
+                                })
+                            })
+                            .filter(|source_index| *source_index < source.num_columns());
+
+                        match source_index {
+                            Some(source_index) => Self::transform_array(
+                                source.column(source_index),
+                                target_field.data_type(),
+                            ),
+                            None if matches!(target_field.data_type(), DataType::Null) => {
+                                Ok(new_null_array(target_field.data_type(), source.len()))
+                            }
+                            None => Err(Error::new(
+                                ErrorKind::DataInvalid,
+                                format!(
+                                    "Field {} is missing while transforming nested struct",
+                                    target_field.name()
+                                ),
+                            )),
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                Ok(Arc::new(StructArray::try_new_with_length(
+                    target_fields.clone(),
+                    columns,
+                    source.nulls().cloned(),
+                    source.len(),
+                )?))
+            }
+            DataType::List(target_element) => {
+                let source = array.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Expected list array while transforming {} to {target_type}",
+                            array.data_type()
+                        ),
+                    )
+                })?;
+                let values = Self::transform_array(source.values(), target_element.data_type())?;
+                Ok(Arc::new(ListArray::try_new(
+                    target_element.clone(),
+                    source.offsets().clone(),
+                    values,
+                    source.nulls().cloned(),
+                )?))
+            }
+            DataType::Map(target_entries, ordered) => {
+                let source = array.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Expected map array while transforming {} to {target_type}",
+                            array.data_type()
+                        ),
+                    )
+                })?;
+                let source_entries: ArrayRef = Arc::new(source.entries().clone());
+                let entries =
+                    Self::transform_array(&source_entries, target_entries.data_type())?;
+                let entries = entries
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::Unexpected,
+                            "Transformed map entries are not a struct array",
+                        )
+                    })?
+                    .clone();
+                Ok(Arc::new(MapArray::try_new(
+                    target_entries.clone(),
+                    source.offsets().clone(),
+                    entries,
+                    source.nulls().cloned(),
+                    *ordered,
+                )?))
+            }
+            _ => Ok(cast(array.as_ref(), target_type)?),
+        }
+    }
+
     pub(crate) fn process_record_batch(
         &mut self,
         record_batch: RecordBatch,
@@ -677,6 +832,13 @@ impl RecordBatchTransformer {
                     ColumnSource::Promote {
                         target_type,
                         source_index,
+                    } if Self::data_type_contains_null(target_type) => {
+                        Self::transform_array(&columns[*source_index], target_type)?
+                    }
+
+                    ColumnSource::Promote {
+                        target_type,
+                        source_index,
                     } => cast(&*columns[*source_index], target_type)?,
 
                     ColumnSource::Add { target_type, value } => {
@@ -732,9 +894,9 @@ mod test {
 
     use arrow_array::{
         Array, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
-        StringArray,
+        StringArray, StructArray,
     };
-    use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+    use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
     use crate::arrow::record_batch_transformer::{
@@ -840,6 +1002,54 @@ mod test {
         let expected = expected_record_batch_migration_required();
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn processor_rebuilds_unknown_children_omitted_from_parquet_struct() {
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![NestedField::optional(
+                    1,
+                    "nested",
+                    Type::Struct(crate::spec::StructType::new(vec![
+                        NestedField::optional(2, "known", PrimitiveType::Int.into()).into(),
+                        NestedField::optional(3, "unknown", PrimitiveType::Unknown.into()).into(),
+                    ])),
+                )
+                .into()])
+                .build()
+                .unwrap(),
+        );
+        let source_fields = Fields::from(vec![simple_field(
+            "known",
+            DataType::Int32,
+            true,
+            "2",
+        )]);
+        let source_struct = Arc::new(StructArray::new(
+            source_fields.clone(),
+            vec![Arc::new(Int32Array::from(vec![Some(1), Some(2)]))],
+            None,
+        ));
+        let source_schema = Arc::new(ArrowSchema::new(vec![simple_field(
+            "nested",
+            DataType::Struct(source_fields),
+            true,
+            "1",
+        )]));
+        let source_batch = RecordBatch::try_new(source_schema, vec![source_struct]).unwrap();
+        let mut transformer = RecordBatchTransformerBuilder::new(snapshot_schema, &[1]).build();
+
+        let result = transformer.process_record_batch(source_batch).unwrap();
+
+        let nested = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_eq!(nested.num_columns(), 2);
+        assert_eq!(nested.fields()[1].data_type(), &DataType::Null);
+        assert_eq!(nested.column(1).null_count(), 2);
     }
 
     #[test]

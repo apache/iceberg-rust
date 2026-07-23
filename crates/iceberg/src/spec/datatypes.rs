@@ -19,7 +19,6 @@
  * Data Types
  */
 use std::collections::HashMap;
-use std::convert::identity;
 use std::fmt;
 use std::ops::Index;
 use std::sync::{Arc, OnceLock};
@@ -134,8 +133,8 @@ impl Type {
     /// Minimum [`FormatVersion`] required to support this type, **without** taking
     /// nested field types into account.
     ///
-    /// `TimestampNs` / `TimestamptzNs` / `Variant` require [`FormatVersion::V3`]; every
-    /// other type is valid from [`FormatVersion::V1`]. Mirrors Java's
+    /// `Unknown` / `TimestampNs` / `TimestamptzNs` / `Variant` require
+    /// [`FormatVersion::V3`]; every other type is valid from [`FormatVersion::V1`]. Mirrors Java's
     /// `Schema.MIN_FORMAT_VERSIONS` (a shallow lookup keyed by type id), so it
     /// intentionally does not recurse: callers needing the floor for a whole schema
     /// iterate its flattened fields (see [`Schema::calc_min_compatible_format`]).
@@ -143,7 +142,9 @@ impl Type {
     /// [`Schema::calc_min_compatible_format`]: crate::spec::Schema::calc_min_compatible_format
     pub(crate) fn min_format_version(&self) -> FormatVersion {
         match self {
-            Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs)
+            Type::Primitive(
+                PrimitiveType::Unknown | PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs,
+            )
             | Type::Variant(_) => FormatVersion::V3,
             _ => FormatVersion::V1,
         }
@@ -274,6 +275,8 @@ pub enum PrimitiveType {
     Fixed(u64),
     /// Arbitrary-length byte array.
     Binary,
+    /// Default / null column type used when a more specific type is not known.
+    Unknown,
 }
 
 impl PrimitiveType {
@@ -391,6 +394,7 @@ where S: Serializer {
 impl fmt::Display for PrimitiveType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            PrimitiveType::Unknown => write!(f, "unknown"),
             PrimitiveType::Boolean => write!(f, "boolean"),
             PrimitiveType::Int => write!(f, "int"),
             PrimitiveType::Long => write!(f, "long"),
@@ -554,7 +558,7 @@ impl fmt::Display for StructType {
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
-#[serde(from = "SerdeNestedField", into = "SerdeNestedField")]
+#[serde(try_from = "SerdeNestedField", into = "SerdeNestedField")]
 /// A struct is a tuple of typed values. Each field in the tuple is named and has an integer id that is unique in the table schema.
 /// Each field can be either optional or required, meaning that values can (or cannot) be null. Fields may be any type.
 /// Fields may have an optional comment or doc string. Fields can have default values.
@@ -591,25 +595,35 @@ struct SerdeNestedField {
     pub write_default: Option<JsonValue>,
 }
 
-impl From<SerdeNestedField> for NestedField {
-    fn from(value: SerdeNestedField) -> Self {
-        NestedField {
+impl TryFrom<SerdeNestedField> for NestedField {
+    type Error = crate::Error;
+
+    fn try_from(value: SerdeNestedField) -> Result<Self> {
+        fn parse_default(default: Option<JsonValue>, field_type: &Type) -> Result<Option<Literal>> {
+            let Some(default) = default else {
+                return Ok(None);
+            };
+            match Literal::try_from_json(default, field_type) {
+                Ok(default) => Ok(default),
+                Err(error) if matches!(field_type, Type::Primitive(PrimitiveType::Unknown)) => {
+                    Err(error)
+                }
+                Err(_) => Ok(None),
+            }
+        }
+
+        let initial_default = parse_default(value.initial_default, &value.field_type)?;
+        let write_default = parse_default(value.write_default, &value.field_type)?;
+
+        Ok(NestedField {
             id: value.id,
             name: value.name,
             required: value.required,
-            initial_default: value.initial_default.and_then(|x| {
-                Literal::try_from_json(x, &value.field_type)
-                    .ok()
-                    .and_then(identity)
-            }),
-            write_default: value.write_default.and_then(|x| {
-                Literal::try_from_json(x, &value.field_type)
-                    .ok()
-                    .and_then(identity)
-            }),
+            initial_default,
+            write_default,
             field_type: value.field_type,
             doc: value.doc,
-        }
+        })
     }
 }
 
@@ -936,6 +950,7 @@ mod tests {
     {
         "type": "struct",
         "fields": [
+            {"id": 17, "name": "unknown_field", "required": false, "type": "unknown"},
             {"id": 1, "name": "bool_field", "required": true, "type": "boolean"},
             {"id": 2, "name": "int_field", "required": true, "type": "int"},
             {"id": 3, "name": "long_field", "required": true, "type": "long"},
@@ -960,6 +975,12 @@ mod tests {
             record,
             Type::Struct(StructType {
                 fields: vec![
+                    NestedField::optional(
+                        17,
+                        "unknown_field",
+                        Type::Primitive(PrimitiveType::Unknown),
+                    )
+                    .into(),
                     NestedField::required(1, "bool_field", Type::Primitive(PrimitiveType::Boolean))
                         .into(),
                     NestedField::required(2, "int_field", Type::Primitive(PrimitiveType::Int))
@@ -1341,6 +1362,8 @@ mod tests {
         for (ty, literal) in pairs {
             assert!(ty.compatible(&literal));
         }
+
+        assert!(!PrimitiveType::Unknown.compatible(&PrimitiveLiteral::Int(1)));
     }
 
     #[test]
