@@ -20,10 +20,9 @@ use std::str::FromStr;
 use serde_derive::{Deserialize, Serialize};
 
 use super::ByteBuf;
-use crate::encryption::{EncryptedInputFile, StandardKeyMetadata};
 use crate::error::Result;
 use crate::io::FileIO;
-use crate::spec::{Manifest, ManifestEntry};
+use crate::spec::{Manifest, ManifestReader};
 use crate::{Error, ErrorKind};
 
 /// Entry in a manifest list.
@@ -179,91 +178,7 @@ impl ManifestFile {
     ///
     /// This method will also initialize inherited values of [`ManifestEntry`](crate::spec::ManifestEntry), such as `sequence_number`.
     pub async fn load_manifest(&self, file_io: &FileIO) -> Result<Manifest> {
-        let input = file_io.new_input(&self.manifest_path)?;
-        let avro = match &self.key_metadata {
-            Some(key_metadata_bytes) => {
-                let key_metadata = StandardKeyMetadata::decode(key_metadata_bytes)?;
-                EncryptedInputFile::new(input, key_metadata).read().await?
-            }
-            None => input.read().await?,
-        };
-
-        let (metadata, mut entries) = Manifest::try_from_avro_bytes(&avro)?;
-
-        // Let entries inherit values from the manifest list entry.
-        for entry in &mut entries {
-            entry.inherit_data(self);
-        }
-
-        self.assign_first_row_ids(&mut entries)?;
-
-        Ok(Manifest::new(metadata, entries))
-    }
-
-    /// Assigns `first_row_id` to the live data-file entries, following the
-    /// row-lineage inheritance rules in
-    /// <https://github.com/apache/iceberg/blob/main/format/spec.md#first-row-id-inheritance>.
-    ///
-    /// With a manifest-level `first_row_id`, each live entry lacking one is
-    /// assigned the running id, which then advances by that entry's record
-    /// count; entries that already carry a `first_row_id` keep it and do not
-    /// advance the counter. Without a manifest-level `first_row_id`, any
-    /// inherited per-entry value is cleared so callers never observe a stale id.
-    fn assign_first_row_ids(&self, entries: &mut [ManifestEntry]) -> Result<()> {
-        // A `first_row_id` is only valid on data manifests. Delete files always
-        // have a null `first_row_id`, so there is nothing to assign or clear; a
-        // stray value on a delete manifest is a spec violation by the writer,
-        // which we surface without failing the read.
-        if self.content != ManifestContentType::Data {
-            if let Some(manifest_first_row_id) = self.first_row_id {
-                tracing::warn!(
-                    "Ignoring first_row_id {manifest_first_row_id} on delete manifest {}",
-                    self.manifest_path
-                );
-            }
-
-            return Ok(());
-        }
-
-        let Some(manifest_first_row_id) = self.first_row_id else {
-            // A data manifest with no manifest-level `first_row_id` predates row
-            // lineage; clear any per-entry value inherited from an earlier read.
-            for entry in entries {
-                entry.data_file.first_row_id = None;
-            }
-
-            return Ok(());
-        };
-
-        let mut next_row_id = i64::try_from(manifest_first_row_id).map_err(|_| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid first_row_id: {manifest_first_row_id} (exceeds i64::MAX)"),
-            )
-        })?;
-
-        for entry in entries {
-            if !entry.is_alive() {
-                continue;
-            }
-
-            if entry.data_file.first_row_id.is_none() {
-                let file_first_row_id = next_row_id;
-                entry.data_file.first_row_id = Some(file_first_row_id);
-                let record_count = entry.data_file.record_count;
-                next_row_id = file_first_row_id.checked_add_unsigned(record_count).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Row ID overflow assigning first_row_id in {}. File first_row_id: {file_first_row_id}, record count: {record_count}",
-                            self.manifest_path
-                        ),
-                    )
-                })?;
-            }
-        }
-
-        Ok(())
+        ManifestReader::new(file_io.clone()).read(self).await
     }
 }
 
