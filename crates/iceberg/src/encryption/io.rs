@@ -67,9 +67,7 @@ impl EncryptedInputFile {
 
     /// Read and returns whole content of file (decrypted plaintext).
     pub async fn read(&self) -> Result<Bytes> {
-        let meta = self.metadata().await?;
-        let reader = self.reader().await?;
-        reader.read(0..meta.size).await
+        self.reader().await?.read_all().await
     }
 
     /// Creates a reader that transparently decrypts on each read.
