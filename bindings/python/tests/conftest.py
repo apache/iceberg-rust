@@ -16,25 +16,23 @@
 # under the License.
 
 
+from collections.abc import Generator
 from tempfile import TemporaryDirectory
 from typing import (
     Any,
-    Dict,
-    Generator,
 )
 
 import pytest
 from pydantic_core import to_json
-from pyiceberg.utils.config import Config
-
 from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
-from pyiceberg.transforms import IdentityTransform, DayTransform
+from pyiceberg.transforms import DayTransform, IdentityTransform
 from pyiceberg.types import (
     IntegerType,
     NestedField,
     TimestampType,
 )
+from pyiceberg.utils.config import Config
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -44,7 +42,7 @@ def isolate_pyiceberg_config() -> Generator[None, None, None]:
         monkeypatch.setenv("HOME", empty_home_dir)
         monkeypatch.setenv("PYICEBERG_HOME", empty_home_dir)
 
-        import pyiceberg.catalog as catalog
+        from pyiceberg import catalog
 
         monkeypatch.setattr(catalog, "_ENV_CONFIG", Config())
         yield
@@ -52,7 +50,7 @@ def isolate_pyiceberg_config() -> Generator[None, None, None]:
 
 
 @pytest.fixture(scope="session")
-def avro_schema_manifest_entry() -> Dict[str, Any]:
+def avro_schema_manifest_entry() -> dict[str, Any]:
     return {
         "type": "record",
         "name": "manifest_entry",
@@ -424,7 +422,7 @@ def test_partition_spec() -> Schema:
 
 @pytest.fixture(scope="session")
 def generated_manifest_entry_file(
-    avro_schema_manifest_entry: Dict[str, Any],
+    avro_schema_manifest_entry: dict[str, Any],
     test_schema: Schema,
     test_partition_spec: PartitionSpec,
 ) -> Generator[str, None, None]:

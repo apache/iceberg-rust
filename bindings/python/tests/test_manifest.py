@@ -15,10 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from typing import Any, List
+from typing import Any
+
 import pytest
-
-
 from pyiceberg.io import FileIO
 from pyiceberg.io.pyarrow import PyArrowFileIO
 from pyiceberg.manifest import (
@@ -59,7 +58,7 @@ def clear_global_manifests_cache() -> None:
 
 def fetch_manifest_entry(
     manifest_entry_file: str, io: FileIO, discard_deleted: bool = True
-) -> List[ManifestEntry]:
+) -> list[ManifestEntry]:
     from pyiceberg_core import manifest
 
     bs = io.new_input(manifest_entry_file).open().read()
