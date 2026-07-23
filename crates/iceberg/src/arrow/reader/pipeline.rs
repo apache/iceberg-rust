@@ -176,7 +176,7 @@ impl FileScanTaskReader {
             } else {
                 // Branch 3: No name mapping - use position-based fallback IDs
                 // Corresponds to Java's ParquetSchemaUtil.addFallbackIds()
-                add_fallback_field_ids_to_arrow_schema(arrow_metadata.schema())
+                add_fallback_field_ids_to_arrow_schema(arrow_metadata.schema(), &task.schema)
             };
 
             let options = ArrowReaderOptions::new().with_schema(arrow_schema);
