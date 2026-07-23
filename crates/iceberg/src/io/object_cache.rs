@@ -95,6 +95,17 @@ impl ObjectCache {
         }
     }
 
+    /// Returns a cache that uses `file_io` for future cache misses.
+    pub(crate) fn with_file_io(mut self, file_io: FileIO) -> Self {
+        self.file_io = file_io;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn file_io(&self) -> &FileIO {
+        &self.file_io
+    }
+
     /// Retrieves an Arc [`Manifest`] from the cache
     /// or retrieves one from FileIO and parses it if not present
     pub(crate) async fn get_manifest(&self, manifest_file: &ManifestFile) -> Result<Arc<Manifest>> {
