@@ -99,11 +99,11 @@ This issue is used to track tasks of the iceberg rust ${iceberg_version} release
 
 - [ ] Draft GitHub release
 - [ ] Bump version in project, update dependencies list, and update changelog
-- [ ] Create and push release candidate tag
+- [ ] Create release candidate tag and source artifacts
+- [ ] Push the release candidate tag and confirm the publish workflow publishes the RC wheels
 
 #### ASF Side
 
-- [ ] Create ASF source release artifacts
 - [ ] Upload artifacts to the SVN dist repo
 
 ### Voting
@@ -202,11 +202,9 @@ This script creates:
 
 The script checks license headers against the generated source archive, not the live Git worktree. If enabled, SVN upload runs after local artifact verification and before RC tag creation. The script creates the signed RC tag as the final release step, then prints a draft VOTE email for `dev@iceberg.apache.org`.
 
-To upload artifacts to ASF dev dist as part of RC creation, pass:
+By default the script does not upload to SVN (`--upload_svn 0`), so the source artifacts stay local at this stage. Push the RC tag to GitHub first, let the publish workflow build and publish the RC wheels, and only then upload the source artifacts to ASF dev dist.
 
-```shell
-dev/release/create_rc.sh ${iceberg_version} ${rc} --upload_svn 1
-```
+### Push the release candidate tag
 
 The script does not push the RC tag. Review the output, then push the tag manually:
 
@@ -214,7 +212,26 @@ The script does not push the RC tag. Review the output, then push the tag manual
 git push origin "v${iceberg_version}-rc.${rc}"
 ```
 
-If an RC has a problem, abandon that RC and increment the RC number.
+Pushing a `v${iceberg_version}-rc.${rc}` tag triggers the [publish workflow](https://github.com/apache/iceberg-rust/blob/main/.github/workflows/publish.yml).
+For a release candidate tag, crate publishing is skipped (it only runs for non-pre-release tags) and the workflow builds and publishes the pyiceberg-core RC wheels to PyPI as a PEP 440 pre-release (for example `0.9.1rc2`).
+
+Confirm the publish workflow succeeded before moving on to the ASF side.
+
+If the publish workflow fails, you can recover within the same RC because nothing has been uploaded to ASF dev dist and no vote has started yet:
+
+1. Delete the tag locally and on the remote:
+
+   ```shell
+   git tag -d "v${iceberg_version}-rc.${rc}"
+   git push origin ":refs/tags/v${iceberg_version}-rc.${rc}"
+   ```
+
+2. Fix the problem.
+3. Recreate and re-push the same RC tag.
+
+Because PyPI publishing uses `skip-existing`, wheels that were already published successfully are not re-uploaded on the retry.
+
+Once the source artifacts have been uploaded to SVN or the vote has started, an RC is no longer reusable: abandon that RC and increment the RC number instead.
 
 ## ASF Side
 
@@ -239,6 +256,8 @@ dev/release/verify_rc.sh ${iceberg_version} ${rc} --download 0 --build 0 --pytho
 
 SVN is required for this step.
 
+Only upload to ASF dev dist after the publish workflow for the RC tag has succeeded. Uploading here is the point at which the RC becomes committed: a later problem requires a new RC number rather than a re-push of the same tag.
+
 The SVN repository of the dev branch is: <https://dist.apache.org/repos/dist/dev/iceberg/>
 
 First, check out Iceberg to a local directory:
@@ -247,7 +266,7 @@ First, check out Iceberg to a local directory:
 svn co https://dist.apache.org/repos/dist/dev/iceberg/ /tmp/iceberg-dist-dev
 ```
 
-If the artifacts were not uploaded by `dev/release/create_rc.sh --upload_svn 1`, upload them manually:
+Upload the local artifacts produced by `dev/release/create_rc.sh`:
 
 ```shell
 rc_dist_dir="apache-iceberg-rust-${iceberg_version}-rc${rc}"
@@ -260,6 +279,8 @@ svn status
 svn add "${rc_dist_dir}"
 svn commit -m "Prepare Apache Iceberg Rust ${iceberg_version} RC${rc}"
 ```
+
+Alternatively, `dev/release/create_rc.sh` can upload the artifacts for you with `--upload_svn 1`. Use this only once you are confident the RC is good, since it uploads before the tag is pushed and the publish workflow runs.
 
 Visit <https://dist.apache.org/repos/dist/dev/iceberg/> to make sure the artifacts are uploaded correctly.
 
