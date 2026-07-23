@@ -1241,12 +1241,14 @@ pub struct iceberg::puffin::PuffinReader
 impl iceberg::puffin::PuffinReader
 pub async fn iceberg::puffin::PuffinReader::blob(&self, blob_metadata: &iceberg::puffin::BlobMetadata) -> iceberg::Result<iceberg::puffin::Blob>
 pub async fn iceberg::puffin::PuffinReader::file_metadata(&self) -> iceberg::Result<&iceberg::puffin::FileMetadata>
-pub fn iceberg::puffin::PuffinReader::new(input_file: iceberg::io::InputFile) -> Self
+pub async fn iceberg::puffin::PuffinReader::new(input_file: iceberg::io::InputFile) -> iceberg::Result<Self>
+pub async fn iceberg::puffin::PuffinReader::new_from_encrypted(encrypted_input: iceberg::encryption::EncryptedInputFile) -> iceberg::Result<Self>
 pub struct iceberg::puffin::PuffinWriter
 impl iceberg::puffin::PuffinWriter
 pub async fn iceberg::puffin::PuffinWriter::add(&mut self, blob: iceberg::puffin::Blob, compression_codec: iceberg::compression::CompressionCodec) -> iceberg::Result<()>
 pub async fn iceberg::puffin::PuffinWriter::close(self) -> iceberg::Result<()>
 pub async fn iceberg::puffin::PuffinWriter::new(output_file: &iceberg::io::OutputFile, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, compress_footer: bool) -> iceberg::Result<Self>
+pub async fn iceberg::puffin::PuffinWriter::new_from_encrypted(encrypted_output: &iceberg::encryption::EncryptedOutputFile, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, compress_footer: bool) -> iceberg::Result<Self>
 pub const iceberg::puffin::APACHE_DATASKETCHES_THETA_V1: &str
 pub const iceberg::puffin::CREATED_BY_PROPERTY: &str
 pub const iceberg::puffin::DELETION_VECTOR_V1: &str
