@@ -430,6 +430,8 @@ mod tests {
             .find(|m| m.added_files_count.unwrap_or(0) > 0)
             .expect("new snapshot should carry the appended data manifest");
 
+        // TODO(#2881): replace this manual read/decrypt/parse with a
+        // ManifestReader once it exists.
         // The manifest list entry must carry decodable key metadata.
         let key_metadata_bytes = manifest_file
             .key_metadata
