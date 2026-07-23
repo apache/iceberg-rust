@@ -51,11 +51,13 @@
 
 #![deny(missing_docs)]
 
+mod auth;
 mod catalog;
 mod client;
 mod endpoint;
 mod types;
 
+pub use auth::*;
 pub use catalog::*;
 pub use endpoint::Endpoint;
 pub use types::*;
