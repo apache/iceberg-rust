@@ -45,6 +45,10 @@ name = "oss-backend"
 path = "src/oss_backend.rs"
 required-features = ["storage-oss"]
 
+[[example]]
+name = "encryption-round-trip"
+path = "src/encryption_round_trip.rs"
+
 [features]
 default = []
 storage-oss = ["iceberg-storage-opendal/opendal-oss"]
