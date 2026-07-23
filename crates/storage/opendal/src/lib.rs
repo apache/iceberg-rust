@@ -34,7 +34,7 @@ use cfg_if::cfg_if;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use iceberg::io::{
-    FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
+    FileMetadata, FileRead, FileWrite, InputFile, ListEntry, OutputFile, Storage, StorageConfig,
     StorageFactory,
 };
 use iceberg::{Error, ErrorKind, Result};
@@ -547,6 +547,37 @@ impl Storage for OpenDalStorage {
             .recursive(true)
             .await
             .map_err(from_opendal_error)?)
+    }
+
+    async fn list_prefix(&self, path: &str) -> Result<Vec<ListEntry>> {
+        let (op, relative_path) = self.create_operator(&path)?;
+        // The absolute prefix is the input path minus its operator-relative
+        // suffix; entry paths (operator-root-relative) append onto it.
+        let absolute_prefix = &path[..path.len() - relative_path.len()];
+        let list_path = if relative_path.is_empty() || relative_path.ends_with('/') {
+            relative_path.to_string()
+        } else {
+            format!("{relative_path}/")
+        };
+        let entries = op
+            .list_with(&list_path)
+            .recursive(true)
+            .await
+            .map_err(from_opendal_error)?;
+        Ok(entries
+            .into_iter()
+            .filter(|e| !e.metadata().is_dir())
+            .map(|e| ListEntry {
+                path: format!("{absolute_prefix}{}", e.path()),
+                size: e.metadata().content_length(),
+                last_modified_ms: e.metadata().last_modified().and_then(|dt| {
+                    let t: std::time::SystemTime = dt.into();
+                    t.duration_since(std::time::UNIX_EPOCH)
+                        .ok()
+                        .map(|d| d.as_millis() as i64)
+                }),
+            })
+            .collect())
     }
 
     async fn delete_stream(&self, mut paths: BoxStream<'static, String>) -> Result<()> {

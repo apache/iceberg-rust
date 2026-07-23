@@ -162,6 +162,38 @@ impl FileIO {
         self.get_storage()?.exists(path.as_ref()).await
     }
 
+    /// Recursively list all FILES under a prefix (directories are not
+    /// returned). Entry paths are absolute, in the same form as the given
+    /// prefix, so they can be passed straight back to [`FileIO`] operations
+    /// and compared against paths recorded in table metadata.
+    ///
+    /// # Prefix semantics
+    ///
+    /// The prefix is treated as a *directory-style location*, not a raw
+    /// object-key prefix: implementations normalize a prefix without a
+    /// trailing `/` by appending one before listing. Consequently:
+    ///
+    /// * `list_prefix("s3://bucket/t")` and `list_prefix("s3://bucket/t/")`
+    ///   are equivalent;
+    /// * a path naming an existing FILE yields an empty list (it is not
+    ///   matched as a raw prefix) — use [`FileIO::exists`] to check for a
+    ///   specific file;
+    /// * a prefix with nothing under it yields an empty list, not an error.
+    ///
+    /// This directory-style contract matches the maintenance use case
+    /// (listing a table location, or its `data/`/`metadata/` directories,
+    /// for orphan-file cleanup). Java's `SupportsPrefixOperations.listPrefix`
+    /// leaves the exact-file/raw-prefix case implementation-defined; here it
+    /// is fixed to directory-style so callers do not have to defend against
+    /// both behaviors.
+    ///
+    /// # Arguments
+    ///
+    /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
+    pub async fn list_prefix(&self, path: impl AsRef<str>) -> Result<Vec<ListEntry>> {
+        self.get_storage()?.list_prefix(path.as_ref()).await
+    }
+
     /// Creates input file.
     ///
     /// # Arguments
@@ -240,6 +272,21 @@ impl FileIOBuilder {
 pub struct FileMetadata {
     /// The size of the file.
     pub size: u64,
+}
+
+/// A single file returned by [`FileIO::list_prefix`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListEntry {
+    /// Absolute path, in the same form as the listed prefix — directly usable
+    /// with [`FileIO`] operations and comparable to paths recorded in table
+    /// metadata.
+    pub path: String,
+    /// The size of the file in bytes.
+    pub size: u64,
+    /// Last-modified time in milliseconds since the Unix epoch, when the
+    /// backing storage tracks it. `None` means unknown — age-based logic
+    /// (e.g. orphan-file cleanup) must treat such files as NOT eligible.
+    pub last_modified_ms: Option<i64>,
 }
 
 /// Trait for reading file.
