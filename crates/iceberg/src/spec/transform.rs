@@ -1004,6 +1004,24 @@ impl FromStr for Transform {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self> {
+        /// Parses `name[N]` and returns the parameter when `s` is exactly that shape.
+        ///
+        /// Returns `None` when `s` is not a well-formed parameterized form of `name`,
+        /// in which case the transform is treated as unknown rather than rejected.
+        fn parse_bracketed_param(s: &str, name: &str) -> Option<Result<u32>> {
+            let inner = s.strip_prefix(name)?.strip_prefix('[')?.strip_suffix(']')?;
+            if inner.is_empty() || !inner.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            Some(inner.parse().map_err(|err| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("transform {s:?} is invalid"),
+                )
+                .with_source(err)
+            }))
+        }
+
         let t = match s {
             "identity" => Transform::Identity,
             "year" => Transform::Year,
@@ -1012,45 +1030,16 @@ impl FromStr for Transform {
             "hour" => Transform::Hour,
             "void" => Transform::Void,
             "unknown" => Transform::Unknown,
-            v if v.starts_with("bucket") => {
-                let length = v
-                    .strip_prefix("bucket")
-                    .expect("transform must starts with `bucket`")
-                    .trim_start_matches('[')
-                    .trim_end_matches(']')
-                    .parse()
-                    .map_err(|err| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("transform bucket type {v:?} is invalid"),
-                        )
-                        .with_source(err)
-                    })?;
-
-                Transform::Bucket(length)
-            }
-            v if v.starts_with("truncate") => {
-                let width = v
-                    .strip_prefix("truncate")
-                    .expect("transform must starts with `truncate`")
-                    .trim_start_matches('[')
-                    .trim_end_matches(']')
-                    .parse()
-                    .map_err(|err| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("transform truncate type {v:?} is invalid"),
-                        )
-                        .with_source(err)
-                    })?;
-
-                Transform::Truncate(width)
-            }
             v => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("transform {v:?} is invalid"),
-                ));
+                if let Some(length) = parse_bracketed_param(v, "bucket") {
+                    Transform::Bucket(length?)
+                } else if let Some(width) = parse_bracketed_param(v, "truncate") {
+                    Transform::Truncate(width?)
+                } else {
+                    // Per the spec, v3 readers are required to read tables with
+                    // unknown transforms, ignoring them
+                    Transform::Unknown
+                }
             }
         };
 
@@ -1118,5 +1107,54 @@ mod tests {
             );
             check_boundary(PredicateOperator::GreaterThanOrEq, datum.clone(), datum);
         }
+    }
+
+    #[test]
+    fn test_parse_known_transforms() {
+        assert_eq!(
+            "identity".parse::<Transform>().unwrap(),
+            Transform::Identity
+        );
+        assert_eq!(
+            "bucket[16]".parse::<Transform>().unwrap(),
+            Transform::Bucket(16)
+        );
+        assert_eq!(
+            "truncate[4]".parse::<Transform>().unwrap(),
+            Transform::Truncate(4)
+        );
+        assert_eq!("unknown".parse::<Transform>().unwrap(), Transform::Unknown);
+    }
+
+    #[test]
+    fn test_parse_unrecognized_transform_as_unknown() {
+        // Per the spec, v3 readers are required to read tables with unknown
+        // transforms, ignoring them. This matches Java's Transforms.fromString,
+        // which falls back to an unknown transform for anything that is not an
+        // exactly well-formed known transform.
+        for input in [
+            "zorder",
+            "bucketv2[4]",
+            "truncatev2[8]",
+            "bucket",
+            "truncate",
+            "bucket[abc]",
+            "bucket[]",
+            "bucket10",
+            "truncate[4x]",
+        ] {
+            assert_eq!(
+                input.parse::<Transform>().unwrap(),
+                Transform::Unknown,
+                "expected {input:?} to parse as Transform::Unknown"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_out_of_range_parameter_is_rejected() {
+        // well-formed shape but the parameter overflows u32; Java's Integer.parseInt
+        // throws for the equivalent input
+        assert!("bucket[99999999999999999999]".parse::<Transform>().is_err());
     }
 }
