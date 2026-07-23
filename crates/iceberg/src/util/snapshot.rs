@@ -47,6 +47,17 @@ pub fn ancestors_of(
     }
 }
 
+/// Returns whether `ancestor_id` is an ancestor of (or equal to) `descendant_id`, walking the
+/// `parent_snapshot_id` chain from `descendant_id`. Thin wrapper over [`ancestors_of`].
+pub fn is_ancestor_of(
+    table_metadata: &TableMetadataRef,
+    descendant_id: i64,
+    ancestor_id: i64,
+) -> bool {
+    ancestors_of(table_metadata, descendant_id)
+        .any(|snapshot| snapshot.snapshot_id() == ancestor_id)
+}
+
 /// Iterate starting from `latest_snapshot_id` (inclusive) to `oldest_snapshot_id` (exclusive).
 ///
 /// Note: if `oldest_snapshot_id` is `Some(id)` but `id` is not actually an

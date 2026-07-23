@@ -332,6 +332,20 @@ impl TableMetadata {
         })
     }
 
+    /// All snapshot references (branches and tags) keyed by name.
+    #[inline]
+    pub fn refs(&self) -> &HashMap<String, SnapshotReference> {
+        &self.refs
+    }
+
+    /// The snapshot reference (snapshot id and retention policy) for `name`, or `None` if there is
+    /// no such ref. Distinct from [`snapshot_for_ref`](Self::snapshot_for_ref), which resolves the
+    /// reference to its [`Snapshot`](crate::spec::Snapshot) and drops the retention metadata.
+    #[inline]
+    pub fn snapshot_reference(&self, name: &str) -> Option<&SnapshotReference> {
+        self.refs.get(name)
+    }
+
     /// Return all sort orders.
     #[inline]
     pub fn sort_orders_iter(&self) -> impl ExactSizeIterator<Item = &SortOrderRef> {
