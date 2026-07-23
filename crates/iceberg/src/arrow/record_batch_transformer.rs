@@ -1224,7 +1224,7 @@ mod test {
         let struct_column = result
             .column(2)
             .as_any()
-            .downcast_ref::<arrow_array::StructArray>()
+            .downcast_ref::<StructArray>()
             .unwrap();
         assert!(struct_column.is_null(0));
         assert!(struct_column.is_null(1));
