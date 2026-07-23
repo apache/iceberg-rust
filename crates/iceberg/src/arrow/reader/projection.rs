@@ -578,7 +578,7 @@ mod tests {
 
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].column(0).data_type(), &DataType::Null);
-        assert_eq!(batches[0].column(0).null_count(), 2);
+        assert_eq!(batches[0].column(0).logical_null_count(), 2);
         let known = batches[0]
             .column(1)
             .as_primitive::<arrow_array::types::Int32Type>();

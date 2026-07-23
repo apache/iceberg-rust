@@ -1041,7 +1041,7 @@ mod test {
             .unwrap();
         assert_eq!(nested.num_columns(), 2);
         assert_eq!(nested.fields()[1].data_type(), &DataType::Null);
-        assert_eq!(nested.column(1).null_count(), 2);
+        assert_eq!(nested.column(1).logical_null_count(), 2);
     }
 
     #[test]
