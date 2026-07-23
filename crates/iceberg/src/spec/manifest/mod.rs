@@ -169,6 +169,62 @@ mod tests {
     use crate::io::FileIO;
     use crate::spec::{Literal, NestedField, PrimitiveType, Struct, Transform, Type};
 
+    #[test]
+    fn test_manifest_metadata_with_manifest_entry_schema_for_unpartitioned_table() {
+        let mut meta = HashMap::new();
+        meta.insert("schema-id".to_string(), b"0".to_vec());
+        meta.insert("partition-spec".to_string(), b"[]".to_vec());
+        meta.insert("partition-spec-id".to_string(), b"0".to_vec());
+        meta.insert("format-version".to_string(), b"2".to_vec());
+        meta.insert("content".to_string(), b"data".to_vec());
+        meta.insert(
+            "schema".to_string(),
+            br#"{
+              "type": "struct",
+              "schema-id": 0,
+              "fields": [
+                {"id": 0, "name": "status", "required": true, "type": "int"},
+                {"id": 1, "name": "snapshot_id", "required": false, "type": "long"},
+                {
+                  "id": 2,
+                  "name": "data_file",
+                  "required": true,
+                  "type": {
+                    "type": "struct",
+                    "fields": [
+                      {"id": 100, "name": "file_path", "required": true, "type": "string"},
+                      {
+                        "id": 125,
+                        "name": "lower_bounds",
+                        "required": false,
+                        "type": {
+                          "type": "array",
+                          "items": {
+                            "type": "record",
+                            "name": "k126_k127",
+                            "fields": [
+                              {"name": "key", "type": "int", "id": 126},
+                              {"name": "value", "type": "binary", "id": 127}
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }"#
+            .to_vec(),
+        );
+
+        let metadata = ManifestMetadata::parse(&meta).unwrap();
+        assert_eq!(metadata.schema_id(), 0);
+        assert!(metadata.schema().as_struct().fields().is_empty());
+        assert!(metadata.partition_spec().fields().is_empty());
+        assert_eq!(metadata.format_version(), &FormatVersion::V2);
+        assert_eq!(metadata.content(), &ManifestContentType::Data);
+    }
+
     #[tokio::test]
     async fn test_parse_manifest_v2_unpartition() {
         let schema = Arc::new(
