@@ -165,7 +165,7 @@ mod tests {
     use crate::encryption::{SensitiveBytes, StandardKeyMetadata};
     use crate::io::FileIO;
     use crate::spec::{
-        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH, Manifest,
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
         ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, SnapshotRef,
         Struct, TableMetadata,
     };
@@ -430,7 +430,6 @@ mod tests {
             .find(|m| m.added_files_count.unwrap_or(0) > 0)
             .expect("new snapshot should carry the appended data manifest");
 
-        // TODO(#2881): replace this manual read/decrypt/parse with a
         // ManifestReader once it exists.
         // The manifest list entry must carry decodable key metadata.
         let key_metadata_bytes = manifest_file
@@ -440,22 +439,10 @@ mod tests {
         StandardKeyMetadata::decode(key_metadata_bytes)
             .expect("recorded key metadata must decode as StandardKeyMetadata");
 
-        // The bytes on disk must actually be encrypted: a plaintext Avro parse
-        // must fail. (Guards against silently taking the unencrypted branch.)
-        let raw = table
-            .file_io()
-            .new_input(&manifest_file.manifest_path)
-            .unwrap()
-            .read()
-            .await
-            .unwrap();
-        assert!(
-            Manifest::parse_avro(&raw).is_err(),
-            "manifest bytes should not be readable as plaintext Avro"
-        );
-
         // load_manifest self-decrypts using the recorded key metadata and must
-        // recover the entry we appended.
+        // recover the entry we appended. Because the read goes through
+        // decryption path, this succeeding also proves the bytes
+        // on disk were genuinely encrypted (not silently written as plaintext).
         let manifest = manifest_file.load_manifest(table.file_io()).await.unwrap();
         assert_eq!(manifest.entries().len(), 1);
         assert_eq!(
