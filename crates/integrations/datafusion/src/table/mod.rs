@@ -74,7 +74,7 @@ pub struct IcebergTableProvider {
     schema: ArrowSchemaRef,
     /// Optional snapshot to read. `None` reads the current snapshot (refreshed
     /// from the catalog on each scan); `Some` pins reads to that snapshot for
-    /// time-travel. Writes always target the current table state.
+    /// time-travel and rejects writes.
     snapshot_id: Option<i64>,
 }
 
@@ -105,6 +105,9 @@ impl IcebergTableProvider {
     /// Pins reads to a specific snapshot for time-travel. `None` (the default)
     /// reads the current snapshot. The snapshot id is threaded into the scan
     /// node, so it is serialized and honored by a distributed engine as well.
+    /// A pinned provider is read-only: `insert_into` returns an error, since a
+    /// write would commit to the current table state and be invisible to this
+    /// provider's pinned reads.
     pub fn with_snapshot_id(mut self, snapshot_id: Option<i64>) -> Self {
         self.snapshot_id = snapshot_id;
         self
@@ -177,6 +180,16 @@ impl TableProvider for IcebergTableProvider {
         if _insert_op != InsertOp::Append {
             return Err(DataFusionError::NotImplemented(format!(
                 "IcebergTableProvider supports only append inserts, got {_insert_op}"
+            )));
+        }
+
+        // A pinned provider reads a fixed snapshot, but writes would commit to
+        // the table's current state — the inserted rows would be invisible to
+        // this provider's own reads. Reject the write instead.
+        if let Some(snapshot_id) = self.snapshot_id {
+            return Err(DataFusionError::NotImplemented(format!(
+                "IcebergTableProvider is pinned to snapshot {snapshot_id} and cannot be \
+                 written to; use an unpinned IcebergTableProvider for writes"
             )));
         }
 
@@ -758,6 +771,33 @@ mod tests {
                 "unexpected error: {error}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_pinned_provider_rejects_writes() {
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+        let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
+            .await
+            .unwrap()
+            .with_snapshot_id(Some(42));
+        let ctx = SessionContext::new();
+
+        let input = Arc::new(EmptyExec::new(provider.schema())) as Arc<dyn ExecutionPlan>;
+        let error = provider
+            .insert_into(&ctx.state(), input, InsertOp::Append)
+            .await
+            .expect_err("writes to a pinned provider should be rejected");
+
+        assert!(
+            matches!(
+                error,
+                DataFusionError::NotImplemented(ref message)
+                    if message.contains("pinned to snapshot 42")
+            ),
+            "unexpected error: {error}"
+        );
     }
 
     #[tokio::test]
