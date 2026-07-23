@@ -3232,6 +3232,15 @@ impl core::fmt::Debug for iceberg::writer::file_writer::location_generator::Defa
 pub fn iceberg::writer::file_writer::location_generator::DefaultLocationGenerator::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::writer::file_writer::location_generator::LocationGenerator for iceberg::writer::file_writer::location_generator::DefaultLocationGenerator
 pub fn iceberg::writer::file_writer::location_generator::DefaultLocationGenerator::generate_location(&self, partition_key: core::option::Option<&iceberg::spec::PartitionKey>, file_name: &str) -> alloc::string::String
+pub struct iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator
+impl iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator
+pub fn iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator::new(table_metadata: &iceberg::spec::TableMetadata) -> iceberg::Result<Self>
+impl core::clone::Clone for iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator
+pub fn iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator::clone(&self) -> iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator
+impl core::fmt::Debug for iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator
+pub fn iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::writer::file_writer::location_generator::LocationGenerator for iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator
+pub fn iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator::generate_location(&self, partition_key: core::option::Option<&iceberg::spec::PartitionKey>, file_name: &str) -> alloc::string::String
 pub trait iceberg::writer::file_writer::location_generator::FileNameGenerator: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
 pub fn iceberg::writer::file_writer::location_generator::FileNameGenerator::generate_file_name(&self) -> alloc::string::String
 impl iceberg::writer::file_writer::location_generator::FileNameGenerator for iceberg::writer::file_writer::location_generator::DefaultFileNameGenerator
@@ -3240,6 +3249,8 @@ pub trait iceberg::writer::file_writer::location_generator::LocationGenerator: c
 pub fn iceberg::writer::file_writer::location_generator::LocationGenerator::generate_location(&self, partition_key: core::option::Option<&iceberg::spec::PartitionKey>, file_name: &str) -> alloc::string::String
 impl iceberg::writer::file_writer::location_generator::LocationGenerator for iceberg::writer::file_writer::location_generator::DefaultLocationGenerator
 pub fn iceberg::writer::file_writer::location_generator::DefaultLocationGenerator::generate_location(&self, partition_key: core::option::Option<&iceberg::spec::PartitionKey>, file_name: &str) -> alloc::string::String
+impl iceberg::writer::file_writer::location_generator::LocationGenerator for iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator
+pub fn iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator::generate_location(&self, partition_key: core::option::Option<&iceberg::spec::PartitionKey>, file_name: &str) -> alloc::string::String
 pub mod iceberg::writer::file_writer::rolling_writer
 pub struct iceberg::writer::file_writer::rolling_writer::RollingFileWriter<B: iceberg::writer::file_writer::FileWriterBuilder, L: iceberg::writer::file_writer::location_generator::LocationGenerator, F: iceberg::writer::file_writer::location_generator::FileNameGenerator>
 impl<B, L, F> iceberg::writer::file_writer::rolling_writer::RollingFileWriter<B, L, F> where B: iceberg::writer::file_writer::FileWriterBuilder, L: iceberg::writer::file_writer::location_generator::LocationGenerator, F: iceberg::writer::file_writer::location_generator::FileNameGenerator

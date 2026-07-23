@@ -79,6 +79,7 @@ tracing = { workspace = true }
 typed-builder = { workspace = true }
 typetag = { workspace = true }
 url = { workspace = true }
+urlencoding = "2.1.3"
 uuid = { workspace = true }
 zeroize = { workspace = true }
 zstd = { workspace = true }

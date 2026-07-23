@@ -168,10 +168,14 @@ impl PartitionSpec {
                 let value = data[i].as_ref();
                 format!(
                     "{}={}",
-                    field.name,
-                    field
-                        .transform
-                        .to_human_string(&field_types[i].field_type, value)
+                    urlencoding::encode(field.name.as_str()).into_owned(),
+                    urlencoding::encode(
+                        field
+                            .transform
+                            .to_human_string(&field_types[i].field_type, value)
+                            .as_str()
+                    )
+                    .into_owned()
                 )
             })
             .join("/")
