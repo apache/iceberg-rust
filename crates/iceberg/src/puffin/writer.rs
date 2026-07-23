@@ -26,6 +26,16 @@ use crate::io::{FileWrite, OutputFile};
 use crate::puffin::blob::Blob;
 use crate::puffin::metadata::{BlobMetadata, FileMetadata, Flag};
 
+/// Result of finalizing a Puffin file: total bytes written + per-blob metadata
+/// (offsets/lengths), needed to build delete-file `DataFile`s for MoR commits.
+#[derive(Debug, Clone)]
+pub struct PuffinWriteResult {
+    /// Total size of the written Puffin file in bytes.
+    pub file_size_in_bytes: u64,
+    /// Metadata (incl. offset + length) for each blob written into the file.
+    pub blobs_metadata: Vec<BlobMetadata>,
+}
+
 /// Puffin writer
 pub struct PuffinWriter {
     writer: Box<dyn FileWrite>,
@@ -87,12 +97,21 @@ impl PuffinWriter {
         Ok(())
     }
 
-    /// Finalizes the Puffin file
-    pub async fn close(mut self) -> Result<()> {
+    /// Finalizes the Puffin file.
+    pub async fn close(self) -> Result<()> {
+        self.close_with_metadata().await.map(|_| ())
+    }
+
+    /// Finalizes the Puffin file and returns the written size + per-blob metadata
+    /// (offsets/lengths) — needed to build a `DataFile` for an added MoR delete file.
+    pub async fn close_with_metadata(mut self) -> Result<PuffinWriteResult> {
         self.write_header_once().await?;
         self.write_footer().await?;
         self.writer.close().await?;
-        Ok(())
+        Ok(PuffinWriteResult {
+            file_size_in_bytes: self.num_bytes_written,
+            blobs_metadata: self.written_blobs_metadata,
+        })
     }
 
     async fn write(&mut self, bytes: Bytes) -> Result<()> {
