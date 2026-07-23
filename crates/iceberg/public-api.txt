@@ -2045,6 +2045,7 @@ pub fn iceberg::spec::ManifestFile::has_deleted_files(&self) -> bool
 pub fn iceberg::spec::ManifestFile::has_existing_files(&self) -> bool
 impl iceberg::spec::ManifestFile
 pub async fn iceberg::spec::ManifestFile::load_manifest(&self, file_io: &iceberg::io::FileIO) -> iceberg::Result<iceberg::spec::Manifest>
+pub async fn iceberg::spec::ManifestFile::load_manifest_with(&self, file_io: &iceberg::io::FileIO, table_metadata: core::option::Option<&iceberg::spec::TableMetadataRef>) -> iceberg::Result<iceberg::spec::Manifest>
 impl core::clone::Clone for iceberg::spec::ManifestFile
 pub fn iceberg::spec::ManifestFile::clone(&self) -> iceberg::spec::ManifestFile
 impl core::cmp::Eq for iceberg::spec::ManifestFile
@@ -2090,6 +2091,7 @@ impl iceberg::spec::ManifestMetadata
 pub fn iceberg::spec::ManifestMetadata::content(&self) -> &iceberg::spec::ManifestContentType
 pub fn iceberg::spec::ManifestMetadata::format_version(&self) -> &iceberg::spec::FormatVersion
 pub fn iceberg::spec::ManifestMetadata::parse(meta: &std::collections::hash::map::HashMap<alloc::string::String, alloc::vec::Vec<u8>>) -> iceberg::Result<Self>
+pub fn iceberg::spec::ManifestMetadata::parse_with(meta: &std::collections::hash::map::HashMap<alloc::string::String, alloc::vec::Vec<u8>>, table_metadata: core::option::Option<&iceberg::spec::TableMetadataRef>) -> iceberg::Result<Self>
 pub fn iceberg::spec::ManifestMetadata::partition_spec(&self) -> &iceberg::spec::PartitionSpec
 pub fn iceberg::spec::ManifestMetadata::schema(&self) -> &iceberg::spec::SchemaRef
 pub fn iceberg::spec::ManifestMetadata::schema_id(&self) -> iceberg::spec::SchemaId

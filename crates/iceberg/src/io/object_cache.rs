@@ -97,10 +97,14 @@ impl ObjectCache {
 
     /// Retrieves an Arc [`Manifest`] from the cache
     /// or retrieves one from FileIO and parses it if not present
-    pub(crate) async fn get_manifest(&self, manifest_file: &ManifestFile) -> Result<Arc<Manifest>> {
+    pub(crate) async fn get_manifest(
+        &self,
+        manifest_file: &ManifestFile,
+        table_metadata: &TableMetadataRef,
+    ) -> Result<Arc<Manifest>> {
         if self.cache_disabled {
             return manifest_file
-                .load_manifest(&self.file_io)
+                .load_manifest_with(&self.file_io, Some(table_metadata))
                 .await
                 .map(Arc::new);
         }
@@ -110,7 +114,7 @@ impl ObjectCache {
         let cache_entry = self
             .cache
             .entry_by_ref(&key)
-            .or_try_insert_with(self.fetch_and_parse_manifest(manifest_file))
+            .or_try_insert_with(self.fetch_and_parse_manifest(manifest_file, table_metadata))
             .await
             .map_err(|err| {
                 Error::new(
@@ -179,8 +183,14 @@ impl ObjectCache {
         }
     }
 
-    async fn fetch_and_parse_manifest(&self, manifest_file: &ManifestFile) -> Result<CachedItem> {
-        let manifest = manifest_file.load_manifest(&self.file_io).await?;
+    async fn fetch_and_parse_manifest(
+        &self,
+        manifest_file: &ManifestFile,
+        table_metadata: &TableMetadataRef,
+    ) -> Result<CachedItem> {
+        let manifest = manifest_file
+            .load_manifest_with(&self.file_io, Some(table_metadata))
+            .await?;
 
         Ok(CachedItem::Manifest(Arc::new(manifest)))
     }
@@ -358,7 +368,10 @@ mod tests {
         assert_eq!(result_manifest_list.entries().len(), 1);
 
         let manifest_file = result_manifest_list.entries().first().unwrap();
-        let result_manifest = object_cache.get_manifest(manifest_file).await.unwrap();
+        let result_manifest = object_cache
+            .get_manifest(manifest_file, &fixture.table.metadata_ref())
+            .await
+            .unwrap();
 
         assert_eq!(
             result_manifest
@@ -405,7 +418,10 @@ mod tests {
         let manifest_file = result_manifest_list.entries().first().unwrap();
 
         // not in cache
-        let result_manifest = object_cache.get_manifest(manifest_file).await.unwrap();
+        let result_manifest = object_cache
+            .get_manifest(manifest_file, &fixture.table.metadata_ref())
+            .await
+            .unwrap();
 
         assert_eq!(
             result_manifest
@@ -420,7 +436,10 @@ mod tests {
         );
 
         // retrieve cached version
-        let result_manifest = object_cache.get_manifest(manifest_file).await.unwrap();
+        let result_manifest = object_cache
+            .get_manifest(manifest_file, &fixture.table.metadata_ref())
+            .await
+            .unwrap();
 
         assert_eq!(
             result_manifest
@@ -432,6 +451,83 @@ mod tests {
                 .last()
                 .unwrap(),
             "1.parquet"
+        );
+    }
+
+    #[test]
+    fn test_manifest_metadata_parse_prefers_table_metadata_over_bad_schema() {
+        use std::collections::HashMap;
+
+        use crate::spec::ManifestMetadata;
+
+        let fixture = TableTestFixture::new();
+        let table_metadata = fixture.table.metadata_ref();
+        let schema_id = table_metadata.current_schema().schema_id();
+        let spec_id = table_metadata.default_partition_spec().spec_id();
+
+        // Manifest key-value metadata whose `schema` value is non-conformant
+        // (as written by some engines, e.g. duckdb-iceberg, which serialize the
+        // manifest_entry Avro schema there using Avro type names like `array`),
+        // but whose `schema-id` / `partition-spec-id` are valid.
+        let mut meta: HashMap<String, Vec<u8>> = HashMap::new();
+        meta.insert("schema-id".to_string(), schema_id.to_string().into_bytes());
+        meta.insert(
+            "partition-spec-id".to_string(),
+            spec_id.to_string().into_bytes(),
+        );
+        meta.insert("format-version".to_string(), b"2".to_vec());
+        meta.insert("content".to_string(), b"data".to_vec());
+        meta.insert(
+            "schema".to_string(),
+            br#"{"type":"struct","schema-id":0,"fields":[{"id":1,"name":"x","required":true,"type":{"type":"array","items":"int"}}]}"#
+                .to_vec(),
+        );
+
+        // Parsing from the manifest's own metadata rejects the non-conformant schema.
+        assert!(ManifestMetadata::parse(&meta).is_err());
+
+        // With table metadata available, the authoritative schema/spec are used
+        // (looked up by id) and the manifest's `schema` key is not parsed.
+        let parsed = ManifestMetadata::parse_with(&meta, Some(&table_metadata)).unwrap();
+        assert_eq!(parsed.schema.schema_id(), schema_id);
+        assert_eq!(parsed.partition_spec.spec_id(), spec_id);
+    }
+
+    #[test]
+    fn test_manifest_metadata_parse_self_describes_when_ids_not_recorded() {
+        use std::collections::HashMap;
+
+        use crate::spec::{ManifestMetadata, Type};
+
+        let fixture = TableTestFixture::new();
+        let table_metadata = fixture.table.metadata_ref();
+
+        // A manifest written WITHOUT `schema-id` / `partition-spec-id` keys
+        // (some writers omit them). Its self-described schema — a single long
+        // column that does NOT match the table's schemas — must win: assuming
+        // the default id 0 and looking that up in the table metadata would
+        // mistype this manifest's column bounds.
+        let mut meta: HashMap<String, Vec<u8>> = HashMap::new();
+        meta.insert("format-version".to_string(), b"2".to_vec());
+        meta.insert("content".to_string(), b"data".to_vec());
+        meta.insert(
+            "schema".to_string(),
+            br#"{"type":"struct","schema-id":0,"fields":[{"id":1,"name":"foo","required":false,"type":"long"}]}"#
+                .to_vec(),
+        );
+        meta.insert("partition-spec".to_string(), b"[]".to_vec());
+
+        let parsed = ManifestMetadata::parse_with(&meta, Some(&table_metadata)).unwrap();
+        let field = parsed.schema.field_by_id(1).unwrap();
+        assert_eq!(field.name, "foo");
+        assert_eq!(
+            *field.field_type,
+            Type::Primitive(crate::spec::PrimitiveType::Long)
+        );
+        assert_ne!(
+            parsed.schema.as_ref().as_struct(),
+            table_metadata.current_schema().as_struct(),
+            "must not silently adopt a table schema the manifest never referenced"
         );
     }
 }

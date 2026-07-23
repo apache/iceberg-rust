@@ -23,7 +23,7 @@ use super::ByteBuf;
 use crate::encryption::{EncryptedInputFile, StandardKeyMetadata};
 use crate::error::Result;
 use crate::io::FileIO;
-use crate::spec::Manifest;
+use crate::spec::{Manifest, TableMetadataRef};
 use crate::{Error, ErrorKind};
 
 /// Entry in a manifest list.
@@ -179,6 +179,18 @@ impl ManifestFile {
     ///
     /// This method will also initialize inherited values of [`ManifestEntry`](crate::spec::ManifestEntry), such as `sequence_number`.
     pub async fn load_manifest(&self, file_io: &FileIO) -> Result<Manifest> {
+        self.load_manifest_with(file_io, None).await
+    }
+
+    /// Like [`Self::load_manifest`], but prefers the provided table metadata's
+    /// schema and partition spec over the manifest's own self-described
+    /// `schema` / `partition-spec` metadata (see
+    /// [`ManifestMetadata::parse_with`](crate::spec::ManifestMetadata::parse_with)).
+    pub async fn load_manifest_with(
+        &self,
+        file_io: &FileIO,
+        table_metadata: Option<&TableMetadataRef>,
+    ) -> Result<Manifest> {
         let input = file_io.new_input(&self.manifest_path)?;
         let avro = match &self.key_metadata {
             Some(key_metadata_bytes) => {
@@ -188,7 +200,7 @@ impl ManifestFile {
             None => input.read().await?,
         };
 
-        let (metadata, mut entries) = Manifest::try_from_avro_bytes(&avro)?;
+        let (metadata, mut entries) = Manifest::try_from_avro_bytes_with(&avro, table_metadata)?;
 
         // Let entries inherit values from the manifest list entry.
         for entry in &mut entries {
