@@ -162,35 +162,29 @@ impl NanValueCountVisitor {
             Type::Primitive(_) | Type::Variant(_) => Ok(()),
             Type::Struct(struct_type) => self.visit_struct(struct_type, array),
             Type::List(list_type) => {
-                let list_array = array
-                    .as_any()
-                    .downcast_ref::<ListArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Expected list array for field {}, got {}",
-                                field.id,
-                                array.data_type()
-                            ),
-                        )
-                    })?;
+                let list_array = array.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Expected list array for field {}, got {}",
+                            field.id,
+                            array.data_type()
+                        ),
+                    )
+                })?;
                 self.visit_field(&list_type.element_field, list_array.values())
             }
             Type::Map(map_type) => {
-                let map_array = array
-                    .as_any()
-                    .downcast_ref::<MapArray>()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!(
-                                "Expected map array for field {}, got {}",
-                                field.id,
-                                array.data_type()
-                            ),
-                        )
-                    })?;
+                let map_array = array.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Expected map array for field {}, got {}",
+                            field.id,
+                            array.data_type()
+                        ),
+                    )
+                })?;
                 self.visit_field(&map_type.key_field, map_array.keys())?;
                 self.visit_field(&map_type.value_field, map_array.values())
             }

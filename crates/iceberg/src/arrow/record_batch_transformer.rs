@@ -319,9 +319,7 @@ impl RecordBatchTransformer {
                 .any(|field| Self::data_type_contains_null(field.data_type())),
             DataType::List(field)
             | DataType::LargeList(field)
-            | DataType::FixedSizeList(field, _) => {
-                Self::data_type_contains_null(field.data_type())
-            }
+            | DataType::FixedSizeList(field, _) => Self::data_type_contains_null(field.data_type()),
             DataType::Map(entries, _) => Self::data_type_contains_null(entries.data_type()),
             _ => false,
         }
@@ -364,12 +362,9 @@ impl RecordBatchTransformer {
                                 })
                             })
                             .or_else(|| {
-                                source
-                                    .fields()
-                                    .iter()
-                                    .position(|source_field| {
-                                        source_field.name() == target_field.name()
-                                    })
+                                source.fields().iter().position(|source_field| {
+                                    source_field.name() == target_field.name()
+                                })
                             })
                             .or_else(|| {
                                 (!source_has_field_ids
@@ -441,8 +436,7 @@ impl RecordBatchTransformer {
                     )
                 })?;
                 let source_entries: ArrayRef = Arc::new(source.entries().clone());
-                let entries =
-                    Self::transform_array(&source_entries, target_entries.data_type())?;
+                let entries = Self::transform_array(&source_entries, target_entries.data_type())?;
                 let entries = entries
                     .as_any()
                     .downcast_ref::<StructArray>()
@@ -1008,24 +1002,22 @@ mod test {
     fn processor_rebuilds_unknown_children_omitted_from_parquet_struct() {
         let snapshot_schema = Arc::new(
             Schema::builder()
-                .with_fields(vec![NestedField::optional(
-                    1,
-                    "nested",
-                    Type::Struct(crate::spec::StructType::new(vec![
-                        NestedField::optional(2, "known", PrimitiveType::Int.into()).into(),
-                        NestedField::optional(3, "unknown", PrimitiveType::Unknown.into()).into(),
-                    ])),
-                )
-                .into()])
+                .with_fields(vec![
+                    NestedField::optional(
+                        1,
+                        "nested",
+                        Type::Struct(crate::spec::StructType::new(vec![
+                            NestedField::optional(2, "known", PrimitiveType::Int.into()).into(),
+                            NestedField::optional(3, "unknown", PrimitiveType::Unknown.into())
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
                 .build()
                 .unwrap(),
         );
-        let source_fields = Fields::from(vec![simple_field(
-            "known",
-            DataType::Int32,
-            true,
-            "2",
-        )]);
+        let source_fields = Fields::from(vec![simple_field("known", DataType::Int32, true, "2")]);
         let source_struct = Arc::new(StructArray::new(
             source_fields.clone(),
             vec![Arc::new(Int32Array::from(vec![Some(1), Some(2)]))],

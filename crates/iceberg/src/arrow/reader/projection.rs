@@ -436,8 +436,7 @@ pub(super) fn add_fallback_field_ids_to_arrow_schema(
         .filter(|field| !type_has_parquet_physical_field(&field.field_type))
         .map(|field| field.id)
         .collect();
-    let mut fallback_field_ids =
-        (1_i32..).filter(|field_id| !omitted_field_ids.contains(field_id));
+    let mut fallback_field_ids = (1_i32..).filter(|field_id| !omitted_field_ids.contains(field_id));
     let fields_with_fallback_ids: Vec<_> = arrow_schema
         .fields()
         .iter()
@@ -546,10 +545,9 @@ mod tests {
             DataType::Int32,
             true,
         )]));
-        let file_batch = RecordBatch::try_new(
-            file_schema.clone(),
-            vec![Arc::new(arrow_array::Int32Array::from(vec![10, 20]))],
-        )
+        let file_batch = RecordBatch::try_new(file_schema.clone(), vec![Arc::new(
+            arrow_array::Int32Array::from(vec![10, 20]),
+        )])
         .unwrap();
         let tmp_dir = TempDir::new().unwrap();
         let file_path = tmp_dir.path().join("unknown-fallback.parquet");
@@ -559,18 +557,16 @@ mod tests {
         writer.close().unwrap();
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
-        let tasks = Box::pin(futures::stream::iter(vec![Ok(
-            FileScanTask::builder()
-                .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
-                .with_start(0)
-                .with_length(0)
-                .with_data_file_path(file_path.to_string_lossy().into_owned())
-                .with_data_file_format(DataFileFormat::Parquet)
-                .with_schema(schema)
-                .with_project_field_ids(vec![1, 2])
-                .with_case_sensitive(false)
-                .build(),
-        )])) as FileScanTaskStream;
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path.to_string_lossy().into_owned())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema)
+            .with_project_field_ids(vec![1, 2])
+            .with_case_sensitive(false)
+            .build())])) as FileScanTaskStream;
 
         let batches = reader
             .read(tasks)

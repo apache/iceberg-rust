@@ -1608,5 +1608,4 @@ table {
                 .contains("unknown type requires null defaults")
         );
     }
-
 }
