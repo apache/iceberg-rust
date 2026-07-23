@@ -203,6 +203,50 @@ impl Transaction {
         .1
     }
 
+    /// Run this transaction's actions against its base table and return the
+    /// resulting [`TableCommit`] without sending it to a catalog.
+    ///
+    /// This is the per-table building block for atomic multi-table commits:
+    /// prepare one `TableCommit` per table, then submit the whole group in a
+    /// single catalog operation (for example the REST catalog's
+    /// `/v1/{prefix}/transactions/commit` endpoint), which applies all of the
+    /// changes or none of them.
+    ///
+    /// Unlike [`Transaction::commit`], this method does not refresh the base
+    /// table and does not retry: requirements in the returned commit are
+    /// computed against the table state this transaction was created from,
+    /// and conflict handling across the transaction group belongs to the
+    /// caller.
+    pub async fn prepare_commit(self) -> Result<TableCommit> {
+        if self.actions.is_empty() {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "No actions to prepare for commit",
+            ));
+        }
+
+        let mut current_table = self.table.clone();
+        let mut existing_updates: Vec<TableUpdate> = vec![];
+        let mut existing_requirements: Vec<TableRequirement> = vec![];
+
+        for action in &self.actions {
+            let action_commit = Arc::clone(action).commit(&current_table).await?;
+            // apply action commit to current_table
+            current_table = Self::apply(
+                current_table,
+                action_commit,
+                &mut existing_updates,
+                &mut existing_requirements,
+            )?;
+        }
+
+        Ok(TableCommit::builder()
+            .ident(self.table.identifier().to_owned())
+            .updates(existing_updates)
+            .requirements(existing_requirements)
+            .build())
+    }
+
     fn build_backoff(props: TableProperties) -> Result<ExponentialBackoff> {
         Ok(ExponentialBuilder::new()
             .with_min_delay(Duration::from_millis(props.commit_min_retry_wait_ms))
@@ -630,6 +674,30 @@ mod tests {
             "unexpected error message: {}",
             err.message()
         );
+    }
+
+    #[tokio::test]
+    async fn test_prepare_commit_returns_table_commit_without_catalog() {
+        let table = make_v2_minimal_table();
+        let tx = create_test_transaction(&table);
+
+        let mut table_commit = tx.prepare_commit().await.unwrap();
+
+        assert_eq!(table_commit.identifier(), table.identifier());
+        let updates = table_commit.take_updates();
+        assert!(
+            updates
+                .iter()
+                .any(|u| matches!(u, crate::TableUpdate::SetProperties { updates } if updates.contains_key("test.key"))),
+            "prepared commit should carry the SetProperties update"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_prepare_commit_empty_transaction_errors() {
+        let table = make_v2_minimal_table();
+        let tx = Transaction::new(&table);
+        assert!(tx.prepare_commit().await.is_err());
     }
 }
 

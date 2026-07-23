@@ -43,9 +43,9 @@ use crate::client::{
 };
 use crate::endpoint::{Endpoint, V1_NAMESPACE_EXISTS, V1_TABLE_EXISTS};
 use crate::types::{
-    CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
-    CreateTableRequest, ListNamespaceResponse, ListTablesResponse, LoadTableResult,
-    NamespaceResponse, RegisterTableRequest, RenameTableRequest,
+    CatalogConfig, CommitTableRequest, CommitTableResponse, CommitTransactionRequest,
+    CreateNamespaceRequest, CreateTableRequest, ListNamespaceResponse, ListTablesResponse,
+    LoadTableResult, NamespaceResponse, RegisterTableRequest, RenameTableRequest,
 };
 
 /// REST catalog URI
@@ -216,6 +216,10 @@ impl RestCatalogConfig {
 
     fn rename_table_endpoint(&self) -> String {
         self.url_prefixed(&["tables", "rename"])
+    }
+
+    fn transactions_commit_endpoint(&self) -> String {
+        self.url_prefixed(&["transactions", "commit"])
     }
 
     fn register_table_endpoint(&self, ns: &NamespaceIdent) -> String {
@@ -560,6 +564,89 @@ impl RestCatalog {
     /// the current token unchanged.
     pub async fn regenerate_token(&self) -> Result<()> {
         self.context().await?.client.regenerate_token().await
+    }
+
+    /// Commit updates to multiple tables in one atomic operation, via the
+    /// REST spec's `POST /v1/{prefix}/transactions/commit`.
+    ///
+    /// Build each table's changes with
+    /// [`Transaction::prepare_commit`](iceberg::transaction::Transaction::prepare_commit)
+    /// and submit them together; the catalog applies all of the changes or
+    /// none of them.
+    ///
+    /// Unlike [`Catalog::update_table`], this method does not retry: on a
+    /// conflict the base metadata of every prepared table may be stale, so
+    /// re-preparing the whole transaction is the caller's decision.
+    ///
+    /// Two contract points callers must handle:
+    ///
+    /// * **A success returns no refreshed metadata** (the endpoint responds
+    ///   200/204 with an empty body), so post-commit state is not applied to
+    ///   any in-memory `Table`. Reload each affected table from the catalog
+    ///   before building further transactions on top of it.
+    /// * **Error semantics are the atomicity surface.** HTTP 409 means the
+    ///   commit did not apply and is safe to retry after re-preparing (the
+    ///   error is marked retryable). HTTP 500/502/503/504 mean the commit
+    ///   state is *unknown* — it may or may not have applied — so these are
+    ///   NOT marked retryable: blindly resubmitting can double-apply. Reload
+    ///   the tables and inspect before retrying.
+    pub async fn commit_transaction(&self, commits: Vec<TableCommit>) -> Result<()> {
+        if commits.is_empty() {
+            return Ok(());
+        }
+
+        let context = self.context().await?;
+
+        let table_changes: Vec<CommitTableRequest> = commits
+            .into_iter()
+            .map(|mut commit| CommitTableRequest {
+                identifier: Some(commit.identifier().clone()),
+                requirements: commit.take_requirements(),
+                updates: commit.take_updates(),
+            })
+            .collect();
+
+        let request = context
+            .client
+            .request(Method::POST, context.config.transactions_commit_endpoint())
+            .json(&CommitTransactionRequest { table_changes })
+            .build()?;
+
+        let http_response = context.client.query_catalog(request).await?;
+
+        match http_response.status() {
+            StatusCode::OK | StatusCode::NO_CONTENT => Ok(()),
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::TableNotFound,
+                "Tried to commit a transaction against a table that does not exist",
+            )),
+            StatusCode::CONFLICT => Err(Error::new(
+                ErrorKind::CatalogCommitConflicts,
+                "CatalogCommitConflicts, one or more requirements failed. The client may retry.",
+            )
+            .with_retryable(true)),
+            StatusCode::INTERNAL_SERVER_ERROR => Err(Error::new(
+                ErrorKind::Unexpected,
+                "An unknown server-side problem occurred; the commit state is unknown.",
+            )),
+            StatusCode::BAD_GATEWAY => Err(Error::new(
+                ErrorKind::Unexpected,
+                "A gateway or proxy received an invalid response from the upstream server; the commit state is unknown.",
+            )),
+            StatusCode::GATEWAY_TIMEOUT => Err(Error::new(
+                ErrorKind::Unexpected,
+                "A server-side gateway timeout occurred; the commit state is unknown.",
+            )),
+            StatusCode::SERVICE_UNAVAILABLE => Err(Error::new(
+                ErrorKind::Unexpected,
+                "The service is unavailable; the commit state is unknown.",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                context.client.disable_header_redaction(),
+            )
+            .await),
+        }
     }
 }
 
@@ -3247,5 +3334,106 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
             assert_eq!(err.message(), "Catalog uri is required");
         }
+    }
+
+    fn table_for_transaction(ident: &str) -> Table {
+        let file = File::open(format!(
+            "{}/testdata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            "create_table_response.json"
+        ))
+        .unwrap();
+        let reader = BufReader::new(file);
+        let resp = serde_json::from_reader::<_, LoadTableResult>(reader).unwrap();
+
+        Table::builder()
+            .metadata(resp.metadata)
+            .metadata_location(resp.metadata_location.unwrap())
+            .identifier(TableIdent::from_strs(["ns1", ident]).unwrap())
+            .file_io(FileIO::new_with_fs())
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+    }
+
+    async fn prepared_commits_for_two_tables() -> Vec<iceberg::TableCommit> {
+        let mut commits = Vec::new();
+        for ident in ["test1", "test2"] {
+            let table = table_for_transaction(ident);
+            let tx = Transaction::new(&table);
+            let tx = tx
+                .update_table_properties()
+                .set("owner".to_string(), ident.to_string())
+                .apply(tx)
+                .unwrap();
+            commits.push(tx.prepare_commit().await.unwrap());
+        }
+        commits
+    }
+
+    #[tokio::test]
+    async fn test_commit_transaction() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        let commit_transaction_mock = server
+            .mock("POST", "/v1/transactions/commit")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("table-changes".to_string()),
+                mockito::Matcher::Regex("test1".to_string()),
+                mockito::Matcher::Regex("test2".to_string()),
+            ]))
+            .with_status(204)
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+        );
+
+        let commits = prepared_commits_for_two_tables().await;
+        catalog.commit_transaction(commits).await.unwrap();
+
+        config_mock.assert_async().await;
+        commit_transaction_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_commit_transaction_conflict_is_retryable() {
+        let mut server = Server::new_async().await;
+        let _config_mock = create_config_mock(&mut server).await;
+
+        let _commit_transaction_mock = server
+            .mock("POST", "/v1/transactions/commit")
+            .with_status(409)
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+        );
+
+        let commits = prepared_commits_for_two_tables().await;
+        let err = catalog.commit_transaction(commits).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::CatalogCommitConflicts);
+        assert!(err.retryable());
+    }
+
+    #[tokio::test]
+    async fn test_commit_transaction_empty_is_noop() {
+        let server = Server::new_async().await;
+
+        let catalog = RestCatalog::new(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+        );
+
+        // No HTTP mocks: an empty commit list must not contact the server.
+        catalog.commit_transaction(vec![]).await.unwrap();
     }
 }
