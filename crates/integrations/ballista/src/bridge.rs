@@ -38,7 +38,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use datafusion::common::DataFusionError;
 use iceberg::table::Table;
-use iceberg::{Catalog, TableIdent};
+use iceberg::{Catalog, Error, ErrorKind, TableIdent};
 use iceberg_datafusion::IcebergCatalogConfig;
 use iceberg_storage_opendal::OpenDalResolvingStorageFactory;
 use serde::{Deserialize, Serialize};
@@ -138,13 +138,46 @@ pub(crate) fn get_catalog(
     Ok(catalog)
 }
 
+/// Drops any cached catalog for `config`, so the next [`get_catalog`] rebuilds
+/// it — reopening connections and re-resolving credentials.
+fn evict_catalog(config: &IcebergCatalogConfig) {
+    CATALOGS
+        .lock()
+        .unwrap()
+        .remove(&CatalogConfigWire::from(config));
+}
+
+/// Whether a catalog error is worth one rebuild-and-retry.
+///
+/// Iceberg has no dedicated auth/transport [`ErrorKind`] — the REST client maps
+/// every HTTP failure, including the 401/403 of an expired token, to
+/// [`ErrorKind::Unexpected`]. So only that catch-all can hide a stale-client
+/// failure a rebuild would fix; the semantic kinds are deterministic and would
+/// fail identically.
+fn is_retryable(err: &Error) -> bool {
+    matches!(err.kind(), ErrorKind::Unexpected)
+}
+
 /// Loads a fresh [`Table`] from the catalog described by `config`.
+///
+/// A retryable failure (see [`is_retryable`]) evicts the cached catalog and
+/// retries once against a rebuilt one, so an executor whose credentials went
+/// stale recovers instead of failing every decode until restart. A second
+/// failure propagates.
 pub(crate) fn load_table(
     config: &IcebergCatalogConfig,
     ident: &TableIdent,
 ) -> Result<Table, DataFusionError> {
     let catalog = get_catalog(config)?;
-    block_on(catalog.load_table(ident)).map_err(to_df_err)
+    match block_on(catalog.load_table(ident)) {
+        Ok(table) => Ok(table),
+        Err(e) if is_retryable(&e) => {
+            evict_catalog(config);
+            let fresh = get_catalog(config)?;
+            block_on(fresh.load_table(ident)).map_err(to_df_err)
+        }
+        Err(e) => Err(to_df_err(e)),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -224,6 +257,40 @@ mod tests {
             ("warehouse".to_string(), "s3://bucket/wh".to_string()),
             ("s3.region".to_string(), "us-east-1".to_string()),
         ]
+    }
+
+    #[test]
+    fn only_the_catch_all_error_kind_is_retryable() {
+        assert!(is_retryable(&Error::new(
+            ErrorKind::Unexpected,
+            "http 401 unauthorized"
+        )));
+
+        for kind in [
+            ErrorKind::PreconditionFailed,
+            ErrorKind::DataInvalid,
+            ErrorKind::NamespaceAlreadyExists,
+            ErrorKind::TableAlreadyExists,
+            ErrorKind::NamespaceNotFound,
+            ErrorKind::TableNotFound,
+            ErrorKind::FeatureUnsupported,
+            ErrorKind::CatalogCommitConflicts,
+        ] {
+            assert!(
+                !is_retryable(&Error::new(kind, "deterministic")),
+                "{kind:?} must not trigger a rebuild"
+            );
+        }
+    }
+
+    #[test]
+    fn evicting_an_uncached_config_is_a_noop() {
+        // The retry path evicts unconditionally, so an uncached config must not
+        // panic and poison the cache for every later decode.
+        let config =
+            IcebergCatalogConfig::new("rest", "never-cached", sample_props().into_iter().collect());
+        evict_catalog(&config);
+        evict_catalog(&config);
     }
 
     #[test]
