@@ -164,6 +164,21 @@ pub trait ArrowSchemaVisitor {
 
     /// Called when see a primitive type.
     fn primitive(&mut self, p: &DataType) -> Result<Self::T>;
+
+    /// Called when a field carries the `arrow.parquet.variant` extension type.
+    ///
+    /// The default treats the variant as its underlying Arrow struct storage: it
+    /// re-enters normal traversal, preserving the behavior of visitors that don't
+    /// special-case variants. A visitor that produces Iceberg types (or otherwise
+    /// needs variant identity) should override this to fold the struct into a
+    /// single logical variant.
+    ///
+    /// Takes the `&FieldRef` rather than a `&DataType` because the variant signal
+    /// lives on the field's metadata, not on its data type.
+    fn variant(&mut self, field: &FieldRef) -> Result<Self::T>
+    where Self: Sized {
+        visit_type(field.data_type(), self)
+    }
 }
 
 /// Visiting a type in post order.
@@ -201,14 +216,14 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
 
                 let key_result = {
                     visitor.before_map_key(key_field)?;
-                    let ret = visit_type(key_field.data_type(), visitor)?;
+                    let ret = visit_field(key_field, visitor)?;
                     visitor.after_map_key(key_field)?;
                     ret
                 };
 
                 let value_result = {
                     visitor.before_map_value(value_field)?;
-                    let ret = visit_type(value_field.data_type(), visitor)?;
+                    let ret = visit_field(value_field, visitor)?;
                     visitor.after_map_value(value_field)?;
                     ret
                 };
@@ -229,6 +244,16 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
     }
 }
 
+/// Dispatch a field: fold it into a variant when it carries the
+/// `arrow.parquet.variant` extension type, otherwise visit its data type.
+fn visit_field<V: ArrowSchemaVisitor>(field: &FieldRef, visitor: &mut V) -> Result<V::T> {
+    if field.extension_type_name() == Some(VariantExtensionType::NAME) {
+        visitor.variant(field)
+    } else {
+        visit_type(field.data_type(), visitor)
+    }
+}
+
 /// Visit list types in post order.
 fn visit_list<V: ArrowSchemaVisitor>(
     data_type: &DataType,
@@ -236,7 +261,7 @@ fn visit_list<V: ArrowSchemaVisitor>(
     visitor: &mut V,
 ) -> Result<V::T> {
     visitor.before_list_element(element_field)?;
-    let value = visit_type(element_field.data_type(), visitor)?;
+    let value = visit_field(element_field, visitor)?;
     visitor.after_list_element(element_field)?;
     visitor.list(data_type, value)
 }
@@ -246,7 +271,7 @@ fn visit_struct<V: ArrowSchemaVisitor>(fields: &Fields, visitor: &mut V) -> Resu
     let mut results = Vec::with_capacity(fields.len());
     for field in fields {
         visitor.before_field(field)?;
-        let result = visit_type(field.data_type(), visitor)?;
+        let result = visit_field(field, visitor)?;
         visitor.after_field(field)?;
         results.push(result);
     }
@@ -262,7 +287,7 @@ pub(crate) fn visit_schema<V: ArrowSchemaVisitor>(
     let mut results = Vec::with_capacity(schema.fields().len());
     for field in schema.fields() {
         visitor.before_field(field)?;
-        let result = visit_type(field.data_type(), visitor)?;
+        let result = visit_field(field, visitor)?;
         visitor.after_field(field)?;
         results.push(result);
     }
@@ -544,6 +569,21 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             )),
         }
     }
+
+    fn variant(&mut self, field: &FieldRef) -> Result<Self::T> {
+        // The extension may only sit on struct storage (mirrors
+        // `VariantExtensionType::supports_data_type`).
+        if !matches!(field.data_type(), DataType::Struct(_)) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "arrow.parquet.variant extension requires Struct storage",
+            ));
+        }
+        // Fold the whole struct into a single logical variant without descending:
+        // the storage sub-fields carry no Iceberg field id, so visiting them would
+        // fail. The enclosing field's own id is read by the caller.
+        Ok(Type::Variant(VariantType))
+    }
 }
 
 struct ToArrowSchemaConverter;
@@ -559,9 +599,9 @@ impl SchemaVisitor for ToArrowSchemaConverter {
 
     fn schema(
         &mut self,
-        _schema: &crate::spec::Schema,
+        _schema: &Schema,
         value: ArrowSchemaOrFieldOrType,
-    ) -> crate::Result<ArrowSchemaOrFieldOrType> {
+    ) -> Result<ArrowSchemaOrFieldOrType> {
         let struct_type = match value {
             ArrowSchemaOrFieldOrType::Type(DataType::Struct(fields)) => fields,
             _ => unreachable!(),
@@ -573,9 +613,9 @@ impl SchemaVisitor for ToArrowSchemaConverter {
 
     fn field(
         &mut self,
-        field: &crate::spec::NestedFieldRef,
+        field: &NestedFieldRef,
         value: ArrowSchemaOrFieldOrType,
-    ) -> crate::Result<ArrowSchemaOrFieldOrType> {
+    ) -> Result<ArrowSchemaOrFieldOrType> {
         let ty = match value {
             ArrowSchemaOrFieldOrType::Type(ty) => ty,
             _ => unreachable!(),
@@ -602,9 +642,9 @@ impl SchemaVisitor for ToArrowSchemaConverter {
 
     fn r#struct(
         &mut self,
-        _: &crate::spec::StructType,
+        _: &StructType,
         results: Vec<ArrowSchemaOrFieldOrType>,
-    ) -> crate::Result<ArrowSchemaOrFieldOrType> {
+    ) -> Result<ArrowSchemaOrFieldOrType> {
         let fields = results
             .into_iter()
             .map(|result| match result {
@@ -615,11 +655,7 @@ impl SchemaVisitor for ToArrowSchemaConverter {
         Ok(ArrowSchemaOrFieldOrType::Type(DataType::Struct(fields)))
     }
 
-    fn list(
-        &mut self,
-        list: &crate::spec::ListType,
-        value: ArrowSchemaOrFieldOrType,
-    ) -> crate::Result<Self::T> {
+    fn list(&mut self, list: &ListType, value: ArrowSchemaOrFieldOrType) -> Result<Self::T> {
         // `field` already carries the element's field id, doc, and — for a variant element —
         // the arrow.parquet.variant extension type. Don't overwrite its metadata here (doing so
         // would drop the extension type for `list<variant>`).
@@ -634,10 +670,10 @@ impl SchemaVisitor for ToArrowSchemaConverter {
 
     fn map(
         &mut self,
-        map: &crate::spec::MapType,
+        map: &MapType,
         key_value: ArrowSchemaOrFieldOrType,
         value: ArrowSchemaOrFieldOrType,
-    ) -> crate::Result<ArrowSchemaOrFieldOrType> {
+    ) -> Result<ArrowSchemaOrFieldOrType> {
         let key_field = match self.field(&map.key_field, key_value)? {
             ArrowSchemaOrFieldOrType::Field(field) => field,
             _ => unreachable!(),
@@ -659,34 +695,25 @@ impl SchemaVisitor for ToArrowSchemaConverter {
         )))
     }
 
-    fn primitive(
-        &mut self,
-        p: &crate::spec::PrimitiveType,
-    ) -> crate::Result<ArrowSchemaOrFieldOrType> {
+    fn primitive(&mut self, p: &PrimitiveType) -> Result<ArrowSchemaOrFieldOrType> {
         match p {
-            crate::spec::PrimitiveType::Boolean => {
-                Ok(ArrowSchemaOrFieldOrType::Type(DataType::Boolean))
-            }
-            crate::spec::PrimitiveType::Int => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Int32)),
-            crate::spec::PrimitiveType::Long => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Int64)),
-            crate::spec::PrimitiveType::Float => {
-                Ok(ArrowSchemaOrFieldOrType::Type(DataType::Float32))
-            }
-            crate::spec::PrimitiveType::Double => {
-                Ok(ArrowSchemaOrFieldOrType::Type(DataType::Float64))
-            }
-            crate::spec::PrimitiveType::Decimal { precision, scale } => {
+            PrimitiveType::Boolean => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Boolean)),
+            PrimitiveType::Int => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Int32)),
+            PrimitiveType::Long => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Int64)),
+            PrimitiveType::Float => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Float32)),
+            PrimitiveType::Double => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Float64)),
+            PrimitiveType::Decimal { precision, scale } => {
                 let (precision, scale) = {
                     let precision: u8 = precision.to_owned().try_into().map_err(|err| {
                         Error::new(
-                            crate::ErrorKind::DataInvalid,
+                            ErrorKind::DataInvalid,
                             "incompatible precision for decimal type convert",
                         )
                         .with_source(err)
                     })?;
                     let scale = scale.to_owned().try_into().map_err(|err| {
                         Error::new(
-                            crate::ErrorKind::DataInvalid,
+                            ErrorKind::DataInvalid,
                             "incompatible scale for decimal type convert",
                         )
                         .with_source(err)
@@ -696,7 +723,7 @@ impl SchemaVisitor for ToArrowSchemaConverter {
                 validate_decimal_precision_and_scale::<Decimal128Type>(precision, scale).map_err(
                     |err| {
                         Error::new(
-                            crate::ErrorKind::DataInvalid,
+                            ErrorKind::DataInvalid,
                             "incompatible precision and scale for decimal type convert",
                         )
                         .with_source(err)
@@ -706,45 +733,41 @@ impl SchemaVisitor for ToArrowSchemaConverter {
                     precision, scale,
                 )))
             }
-            crate::spec::PrimitiveType::Date => {
-                Ok(ArrowSchemaOrFieldOrType::Type(DataType::Date32))
-            }
-            crate::spec::PrimitiveType::Time => Ok(ArrowSchemaOrFieldOrType::Type(
-                DataType::Time64(TimeUnit::Microsecond),
-            )),
-            crate::spec::PrimitiveType::Timestamp => Ok(ArrowSchemaOrFieldOrType::Type(
-                DataType::Timestamp(TimeUnit::Microsecond, None),
-            )),
-            crate::spec::PrimitiveType::Timestamptz => Ok(ArrowSchemaOrFieldOrType::Type(
+            PrimitiveType::Date => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Date32)),
+            PrimitiveType::Time => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Time64(
+                TimeUnit::Microsecond,
+            ))),
+            PrimitiveType::Timestamp => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Timestamp(
+                TimeUnit::Microsecond,
+                None,
+            ))),
+            PrimitiveType::Timestamptz => Ok(ArrowSchemaOrFieldOrType::Type(
                 // Timestampz always stored as UTC
                 DataType::Timestamp(TimeUnit::Microsecond, Some(UTC_TIME_ZONE.into())),
             )),
-            crate::spec::PrimitiveType::TimestampNs => Ok(ArrowSchemaOrFieldOrType::Type(
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
-            )),
-            crate::spec::PrimitiveType::TimestamptzNs => Ok(ArrowSchemaOrFieldOrType::Type(
+            PrimitiveType::TimestampNs => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                None,
+            ))),
+            PrimitiveType::TimestamptzNs => Ok(ArrowSchemaOrFieldOrType::Type(
                 // Store timestamptz_ns as UTC
                 DataType::Timestamp(TimeUnit::Nanosecond, Some(UTC_TIME_ZONE.into())),
             )),
-            crate::spec::PrimitiveType::String => {
-                Ok(ArrowSchemaOrFieldOrType::Type(DataType::Utf8))
-            }
-            crate::spec::PrimitiveType::Uuid => Ok(ArrowSchemaOrFieldOrType::Type(
-                DataType::FixedSizeBinary(16),
-            )),
-            crate::spec::PrimitiveType::Fixed(len) => Ok(ArrowSchemaOrFieldOrType::Type(
+            PrimitiveType::String => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Utf8)),
+            PrimitiveType::Uuid => Ok(ArrowSchemaOrFieldOrType::Type(DataType::FixedSizeBinary(
+                16,
+            ))),
+            PrimitiveType::Fixed(len) => Ok(ArrowSchemaOrFieldOrType::Type(
                 i32::try_from(*len)
                     .ok()
                     .map(DataType::FixedSizeBinary)
                     .unwrap_or(DataType::LargeBinary),
             )),
-            crate::spec::PrimitiveType::Binary => {
-                Ok(ArrowSchemaOrFieldOrType::Type(DataType::LargeBinary))
-            }
+            PrimitiveType::Binary => Ok(ArrowSchemaOrFieldOrType::Type(DataType::LargeBinary)),
         }
     }
 
-    fn variant(&mut self, _v: &VariantType) -> crate::Result<ArrowSchemaOrFieldOrType> {
+    fn variant(&mut self, _v: &VariantType) -> Result<ArrowSchemaOrFieldOrType> {
         // Variant is stored as a struct of two binary sub-fields (no field IDs on sub-fields).
         // Uses Binary (not LargeBinary) matching the Parquet BINARY primitive directly.
         // `metadata` is always present; `value` is nullable, since in a shredded variant the
@@ -759,7 +782,7 @@ impl SchemaVisitor for ToArrowSchemaConverter {
 }
 
 /// Convert iceberg schema to an arrow schema.
-pub fn schema_to_arrow_schema(schema: &crate::spec::Schema) -> crate::Result<ArrowSchema> {
+pub fn schema_to_arrow_schema(schema: &Schema) -> Result<ArrowSchema> {
     let mut converter = ToArrowSchemaConverter;
     match crate::spec::visit_schema(schema, &mut converter)? {
         ArrowSchemaOrFieldOrType::Schema(schema) => Ok(schema),
@@ -768,7 +791,7 @@ pub fn schema_to_arrow_schema(schema: &crate::spec::Schema) -> crate::Result<Arr
 }
 
 /// Convert iceberg type to an arrow type.
-pub fn type_to_arrow_type(ty: &crate::spec::Type) -> crate::Result<DataType> {
+pub fn type_to_arrow_type(ty: &Type) -> Result<DataType> {
     let mut converter = ToArrowSchemaConverter;
     match crate::spec::visit_type(ty, &mut converter)? {
         ArrowSchemaOrFieldOrType::Type(ty) => Ok(ty),
@@ -1131,18 +1154,18 @@ pub(crate) fn get_parquet_stat_max_as_datum(
     })
 }
 
-impl TryFrom<&ArrowSchema> for crate::spec::Schema {
+impl TryFrom<&ArrowSchema> for Schema {
     type Error = Error;
 
-    fn try_from(schema: &ArrowSchema) -> crate::Result<Self> {
+    fn try_from(schema: &ArrowSchema) -> Result<Self> {
         arrow_schema_to_schema(schema)
     }
 }
 
-impl TryFrom<&crate::spec::Schema> for ArrowSchema {
+impl TryFrom<&Schema> for ArrowSchema {
     type Error = Error;
 
-    fn try_from(schema: &crate::spec::Schema) -> crate::Result<Self> {
+    fn try_from(schema: &Schema) -> Result<Self> {
         schema_to_arrow_schema(schema)
     }
 }
@@ -2078,6 +2101,114 @@ mod tests {
         };
         let value = kv.iter().find(|f| f.name() == "value").unwrap();
         assert_eq!(value.extension_type_name(), Some("arrow.parquet.variant"));
+    }
+
+    /// The unshredded Arrow storage of a variant: `metadata` (required) + `value`
+    /// (nullable) binary, with no field ids on the sub-fields.
+    fn variant_storage() -> DataType {
+        DataType::Struct(Fields::from(vec![
+            Field::new("metadata", DataType::Binary, false),
+            Field::new("value", DataType::Binary, true),
+        ]))
+    }
+
+    #[test]
+    fn test_variant_arrow_field_folds_to_iceberg_variant() {
+        // A field tagged with the arrow.parquet.variant extension is folded into an
+        // atomic Type::Variant; its storage sub-fields (which carry no field id) are
+        // never descended into.
+        let field = simple_field("v", variant_storage(), true, "1")
+            .with_extension_type(VariantExtensionType);
+        let arrow_schema = ArrowSchema::new(vec![field]);
+
+        let converted = arrow_schema_to_schema(&arrow_schema).unwrap();
+        let expected = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+            ])
+            .build()
+            .unwrap();
+        pretty_assertions::assert_eq!(converted, expected);
+    }
+
+    #[test]
+    fn test_variant_schema_round_trips() {
+        // Iceberg -> Arrow -> Iceberg is the identity for variants at every position:
+        // top-level, nested in a struct, as a list element, and as a map value.
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+                NestedField::optional(
+                    2,
+                    "s",
+                    Type::Struct(StructType::new(vec![
+                        NestedField::optional(3, "sv", Type::Variant(VariantType)).into(),
+                    ])),
+                )
+                .into(),
+                NestedField::optional(
+                    4,
+                    "l",
+                    Type::List(ListType::new(
+                        NestedField::optional(5, "element", Type::Variant(VariantType)).into(),
+                    )),
+                )
+                .into(),
+                NestedField::optional(
+                    6,
+                    "m",
+                    Type::Map(MapType::new(
+                        NestedField::map_key_element(7, Type::Primitive(PrimitiveType::String))
+                            .into(),
+                        NestedField::map_value_element(8, Type::Variant(VariantType), false).into(),
+                    )),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let arrow_schema = schema_to_arrow_schema(&schema).unwrap();
+        let round_tripped = arrow_schema_to_schema(&arrow_schema).unwrap();
+        pretty_assertions::assert_eq!(round_tripped, schema);
+    }
+
+    #[test]
+    fn test_variant_recognized_with_auto_assigned_ids() {
+        // Recognition also works when the Arrow schema has no field ids: the variant
+        // field gets an auto-assigned id and its storage is still not descended into.
+        let field =
+            Field::new("v", variant_storage(), true).with_extension_type(VariantExtensionType);
+        let arrow_schema = ArrowSchema::new(vec![field]);
+
+        let converted = arrow_schema_to_schema_auto_assign_ids(&arrow_schema).unwrap();
+        let expected = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+            ])
+            .build()
+            .unwrap();
+        pretty_assertions::assert_eq!(converted, expected);
+    }
+
+    #[test]
+    fn test_variant_extension_on_non_struct_storage_is_rejected() {
+        // The extension may only sit on struct storage. A hand-injected tag on a
+        // non-struct field is rejected rather than silently reinterpreted as a variant.
+        let field = Field::new("v", DataType::Int32, true).with_metadata(HashMap::from([
+            (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
+            (
+                arrow_schema::extension::EXTENSION_TYPE_NAME_KEY.to_string(),
+                VariantExtensionType::NAME.to_string(),
+            ),
+        ]));
+        let arrow_schema = ArrowSchema::new(vec![field]);
+
+        let err = arrow_schema_to_schema(&arrow_schema).unwrap_err();
+        assert!(
+            err.to_string().contains("requires Struct storage"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

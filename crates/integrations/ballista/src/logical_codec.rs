@@ -131,7 +131,8 @@ impl LogicalExtensionCodec for IcebergLogicalCodec {
                             cat, config, namespace, name,
                         ))
                         .map_err(to_df_err)?
-                        .with_snapshot_id(snapshot_id);
+                        .with_snapshot_id(snapshot_id)
+                        .map_err(to_df_err)?;
                         Ok(Arc::new(provider))
                     }
                     IcebergProviderWire::Metadata {

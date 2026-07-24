@@ -16,16 +16,17 @@
 # under the License.
 
 
-from datetime import date, datetime
 import uuid
-import pytest
-from pyiceberg_core.datafusion import IcebergDataFusionTable
-from datafusion import SessionContext
-from pyiceberg.catalog import Catalog, load_catalog
-import pyarrow as pa
+from datetime import date, datetime
 from pathlib import Path
+
 import datafusion
+import pyarrow as pa
+import pytest
+from datafusion import SessionContext
 from packaging.version import Version
+from pyiceberg.catalog import Catalog, load_catalog
+from pyiceberg_core.datafusion import IcebergDataFusionTable
 
 if Version(datafusion.__version__) < Version("53.0.0"):
     pytest.skip(
@@ -43,10 +44,8 @@ def warehouse(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def catalog(warehouse: Path):
     catalog = load_catalog(
         "default",
-        **{
-            "uri": f"sqlite:///{warehouse}/pyiceberg_catalog.db",
-            "warehouse": f"file://{warehouse}",
-        },
+        uri=f"sqlite:///{warehouse}/pyiceberg_catalog.db",
+        warehouse=f"file://{warehouse}",
     )
     yield catalog
     catalog.close()
@@ -69,9 +68,9 @@ def arrow_table_with_null() -> "pa.Table":
             "double": [0.0, None, 0.9],
             # 'time': [1_000_000, None, 3_000_000],  # Example times: 1s, none, and 3s past midnight #Spark does not support time fields
             "timestamp": [
-                datetime(2023, 1, 1, 19, 25, 00),
+                datetime(2023, 1, 1, 19, 25, 00),  # noqa: DTZ001
                 None,
-                datetime(2023, 3, 1, 19, 25, 00),
+                datetime(2023, 3, 1, 19, 25, 00),  # noqa: DTZ001
             ],
             # "timestamptz": [
             #     datetime(2023, 1, 1, 19, 25, 00, tzinfo=timezone.utc),

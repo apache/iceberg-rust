@@ -186,7 +186,7 @@ pub fn iceberg_datafusion::IcebergTableProvider::config(&self) -> core::option::
 pub fn iceberg_datafusion::IcebergTableProvider::snapshot_id(&self) -> core::option::Option<i64>
 pub fn iceberg_datafusion::IcebergTableProvider::table_ident(&self) -> &iceberg::catalog::TableIdent
 pub async fn iceberg_datafusion::IcebergTableProvider::try_new_with_config(catalog: alloc::sync::Arc<dyn iceberg::catalog::Catalog>, config: iceberg_datafusion::IcebergCatalogConfig, namespace: iceberg::catalog::NamespaceIdent, name: impl core::convert::Into<alloc::string::String>) -> iceberg::error::Result<Self>
-pub fn iceberg_datafusion::IcebergTableProvider::with_snapshot_id(self, snapshot_id: core::option::Option<i64>) -> Self
+pub fn iceberg_datafusion::IcebergTableProvider::with_snapshot_id(self, snapshot_id: core::option::Option<i64>) -> iceberg::error::Result<Self>
 impl core::clone::Clone for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::clone(&self) -> iceberg_datafusion::IcebergTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergTableProvider
@@ -269,7 +269,7 @@ pub fn iceberg_datafusion::IcebergTableProvider::config(&self) -> core::option::
 pub fn iceberg_datafusion::IcebergTableProvider::snapshot_id(&self) -> core::option::Option<i64>
 pub fn iceberg_datafusion::IcebergTableProvider::table_ident(&self) -> &iceberg::catalog::TableIdent
 pub async fn iceberg_datafusion::IcebergTableProvider::try_new_with_config(catalog: alloc::sync::Arc<dyn iceberg::catalog::Catalog>, config: iceberg_datafusion::IcebergCatalogConfig, namespace: iceberg::catalog::NamespaceIdent, name: impl core::convert::Into<alloc::string::String>) -> iceberg::error::Result<Self>
-pub fn iceberg_datafusion::IcebergTableProvider::with_snapshot_id(self, snapshot_id: core::option::Option<i64>) -> Self
+pub fn iceberg_datafusion::IcebergTableProvider::with_snapshot_id(self, snapshot_id: core::option::Option<i64>) -> iceberg::error::Result<Self>
 impl core::clone::Clone for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::clone(&self) -> iceberg_datafusion::IcebergTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergTableProvider
