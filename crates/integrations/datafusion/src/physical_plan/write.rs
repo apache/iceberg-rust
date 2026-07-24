@@ -226,6 +226,7 @@ impl ExecutionPlan for IcebergWriteExec {
             &table_props,
             self.table.metadata().current_schema().clone(),
         )
+        .map_err(to_datafusion_error)?
         .with_match_mode(FieldMatchMode::Name);
         let target_file_size = table_props.write_target_file_size_bytes;
 

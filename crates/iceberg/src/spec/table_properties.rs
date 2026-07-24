@@ -40,6 +40,28 @@ where
     })
 }
 
+/// Parse an optional property, returning `None` when the key is absent and an
+/// error when the value is present but fails to parse.
+fn parse_optional_property<T: FromStr>(
+    properties: &HashMap<String, String>,
+    key: &str,
+) -> Result<Option<T>>
+where
+    <T as FromStr>::Err: Display,
+{
+    properties
+        .get(key)
+        .map(|value| {
+            value.parse::<T>().map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid value for {key}: {e}"),
+                )
+            })
+        })
+        .transpose()
+}
+
 /// Strips trailing slashes from a location, preserving a bare URI scheme root
 fn strip_trailing_slash(path: &str) -> &str {
     let mut path = path;
@@ -168,6 +190,20 @@ pub struct TableProperties {
     pub cdc_max_chunk_size: usize,
     /// Content-defined chunking normalization level (gearhash bit adjustment).
     pub cdc_norm_level: i32,
+    /// Parquet compression codec name (e.g. `zstd`, `gzip`). Validated when the
+    /// writer is built, not when properties are parsed.
+    pub parquet_compression_codec: String,
+    /// Parquet compression level for codecs that accept one. `None` uses the
+    /// codec's default level.
+    pub parquet_compression_level: Option<i32>,
+    /// Approximate maximum Parquet row group size in bytes.
+    pub parquet_row_group_size_bytes: usize,
+    /// Approximate maximum Parquet data page size in bytes.
+    pub parquet_page_size_bytes: usize,
+    /// Maximum number of rows per Parquet data page.
+    pub parquet_page_row_limit: usize,
+    /// Approximate maximum Parquet dictionary page size in bytes.
+    pub parquet_dict_size_bytes: usize,
     /// The master key id used to encrypt this table's manifest list and data
     /// files. `None` if `encryption.key-id` is not set.
     pub encryption_key_id: Option<String>,
@@ -317,6 +353,36 @@ impl TableProperties {
     /// Default matches `parquet::file::properties::DEFAULT_CDC_NORM_LEVEL`.
     pub const PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT: i32 = 0;
 
+    /// Compression codec for Parquet data files (e.g. `zstd`, `gzip`, `snappy`,
+    /// `lz4`, `brotli`, `uncompressed`). The codec name is validated when the
+    /// writer is built, not when properties are parsed.
+    pub const PROPERTY_PARQUET_COMPRESSION_CODEC: &str = "write.parquet.compression-codec";
+    /// Default Parquet compression codec.
+    pub const PROPERTY_PARQUET_COMPRESSION_CODEC_DEFAULT: &str = "zstd";
+    /// Compression level for Parquet data files, for codecs that take one
+    /// (`gzip`, `zstd`, `brotli`). When unset, the codec's default level is used.
+    pub const PROPERTY_PARQUET_COMPRESSION_LEVEL: &str = "write.parquet.compression-level";
+
+    /// Approximate maximum size of a Parquet row group in bytes.
+    pub const PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES: &str = "write.parquet.row-group-size-bytes";
+    /// Default Parquet row group size in bytes.
+    pub const PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT: usize = 128 * 1024 * 1024;
+
+    /// Approximate maximum size of a Parquet data page in bytes.
+    pub const PROPERTY_PARQUET_PAGE_SIZE_BYTES: &str = "write.parquet.page-size-bytes";
+    /// Default Parquet page size in bytes.
+    pub const PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT: usize = 1024 * 1024;
+
+    /// Maximum number of rows per Parquet data page.
+    pub const PROPERTY_PARQUET_PAGE_ROW_LIMIT: &str = "write.parquet.page-row-limit";
+    /// Default Parquet page row limit.
+    pub const PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT: usize = 20000;
+
+    /// Approximate maximum size of the Parquet dictionary page in bytes.
+    pub const PROPERTY_PARQUET_DICT_SIZE_BYTES: &str = "write.parquet.dict-size-bytes";
+    /// Default Parquet dictionary page size in bytes.
+    pub const PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT: usize = 2 * 1024 * 1024;
+
     /// Property key for the master key id used to encrypt the table's manifest
     /// list and data files as defined in https://iceberg.apache.org/docs/nightly/encryption/.
     pub const PROPERTY_ENCRYPTION_KEY_ID: &str = "encryption.key-id";
@@ -412,6 +478,35 @@ impl TryFrom<&HashMap<String, String>> for TableProperties {
                 props,
                 TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL,
                 TableProperties::PROPERTY_PARQUET_CDC_NORM_LEVEL_DEFAULT,
+            )?,
+            parquet_compression_codec: parse_property(
+                props,
+                TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC,
+                TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC_DEFAULT.to_string(),
+            )?,
+            parquet_compression_level: parse_optional_property(
+                props,
+                TableProperties::PROPERTY_PARQUET_COMPRESSION_LEVEL,
+            )?,
+            parquet_row_group_size_bytes: parse_property(
+                props,
+                TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES,
+                TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT,
+            )?,
+            parquet_page_size_bytes: parse_property(
+                props,
+                TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES,
+                TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT,
+            )?,
+            parquet_page_row_limit: parse_property(
+                props,
+                TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT,
+                TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT,
+            )?,
+            parquet_dict_size_bytes: parse_property(
+                props,
+                TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES,
+                TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT,
             )?,
             encryption_key_id: props
                 .get(TableProperties::PROPERTY_ENCRYPTION_KEY_ID)
@@ -946,5 +1041,82 @@ mod tests {
         let props = HashMap::from([("some.other.property".to_string(), "value".to_string())]);
         let tp = TableProperties::try_from(&props).unwrap();
         assert!(!tp.cdc_enabled);
+    }
+
+    #[test]
+    fn test_parquet_sizing_defaults() {
+        let tp = TableProperties::try_from(&HashMap::new()).unwrap();
+        assert_eq!(
+            tp.parquet_compression_codec,
+            TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC_DEFAULT
+        );
+        assert_eq!(tp.parquet_compression_level, None);
+        assert_eq!(
+            tp.parquet_row_group_size_bytes,
+            TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT
+        );
+        assert_eq!(
+            tp.parquet_page_size_bytes,
+            TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES_DEFAULT
+        );
+        assert_eq!(
+            tp.parquet_page_row_limit,
+            TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT_DEFAULT
+        );
+        assert_eq!(
+            tp.parquet_dict_size_bytes,
+            TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES_DEFAULT
+        );
+    }
+
+    #[test]
+    fn test_parquet_sizing_overrides() {
+        let props = HashMap::from([
+            (
+                TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC.to_string(),
+                "gzip".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_COMPRESSION_LEVEL.to_string(),
+                "4".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES.to_string(),
+                "1048576".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_PAGE_SIZE_BYTES.to_string(),
+                "65536".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_PAGE_ROW_LIMIT.to_string(),
+                "5000".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_PARQUET_DICT_SIZE_BYTES.to_string(),
+                "131072".to_string(),
+            ),
+        ]);
+        let tp = TableProperties::try_from(&props).unwrap();
+        assert_eq!(tp.parquet_compression_codec, "gzip");
+        assert_eq!(tp.parquet_compression_level, Some(4));
+        assert_eq!(tp.parquet_row_group_size_bytes, 1048576);
+        assert_eq!(tp.parquet_page_size_bytes, 65536);
+        assert_eq!(tp.parquet_page_row_limit, 5000);
+        assert_eq!(tp.parquet_dict_size_bytes, 131072);
+    }
+
+    #[test]
+    fn test_parquet_invalid_sizing_rejected() {
+        let props = HashMap::from([(
+            TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES.to_string(),
+            "not_a_number".to_string(),
+        )]);
+        let err = TableProperties::try_from(&props).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string()
+                .contains(TableProperties::PROPERTY_PARQUET_ROW_GROUP_SIZE_BYTES)
+        );
     }
 }
