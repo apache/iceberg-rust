@@ -18,6 +18,9 @@
 mod catalog;
 pub use catalog::*;
 
+mod catalog_config;
+pub use catalog_config::*;
+
 mod error;
 pub use error::*;
 

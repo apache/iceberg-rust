@@ -52,11 +52,15 @@ pub struct IcebergTableScan {
     predicates: Option<Predicate>,
     /// Optional limit on the number of rows to return
     limit: Option<usize>,
+    /// Optional serializable catalog/storage config, populated when this scan is
+    /// built through a config-backed provider so it can be reconstructed on a
+    /// remote node by a distributed engine.
+    catalog_config: Option<crate::IcebergCatalogConfig>,
 }
 
 impl IcebergTableScan {
     /// Creates a new [`IcebergTableScan`] object.
-    pub(crate) fn new(
+    pub fn new(
         table: Table,
         snapshot_id: Option<i64>,
         schema: ArrowSchemaRef,
@@ -79,7 +83,34 @@ impl IcebergTableScan {
             projection,
             predicates,
             limit,
+            catalog_config: None,
         }
+    }
+
+    /// Attaches a serializable catalog/storage config to this scan so that a
+    /// distributed engine can reconstruct it on a remote node.
+    pub fn with_catalog_config(
+        mut self,
+        catalog_config: Option<crate::IcebergCatalogConfig>,
+    ) -> Self {
+        self.catalog_config = catalog_config;
+        self
+    }
+
+    /// Returns the serializable catalog/storage config, if any.
+    pub fn catalog_config(&self) -> Option<&crate::IcebergCatalogConfig> {
+        self.catalog_config.as_ref()
+    }
+
+    /// Replaces the scan's pushed-down filter predicate.
+    ///
+    /// `IcebergTableScan::new` derives the predicate from DataFusion `Expr`
+    /// filters; this setter lets a distributed engine restore an already-built
+    /// [`Predicate`] directly (e.g. after deserializing it), so file pruning is
+    /// preserved on remote nodes.
+    pub fn with_predicates(mut self, predicates: Option<Predicate>) -> Self {
+        self.predicates = predicates;
+        self
     }
 
     pub fn table(&self) -> &Table {
