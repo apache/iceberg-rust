@@ -20,20 +20,38 @@ use std::sync::Arc;
 
 use arrow_array::{
     Array as ArrowArray, ArrayRef, Int32Array, RecordBatch, RecordBatchOptions, RunArray,
+    StructArray,
 };
 use arrow_cast::cast;
 use arrow_schema::{
-    DataType, Field, FieldRef, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef, SchemaRef,
+    DataType, Field, FieldRef, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+    SchemaRef,
 };
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::value::{create_primitive_array_repeated, create_primitive_array_single_element};
 use crate::arrow::{datum_to_arrow_type_with_ree, schema_to_arrow_schema, type_to_arrow_type};
-use crate::metadata_columns::get_metadata_field;
+use crate::metadata_columns::{
+    RESERVED_COL_NAME_PARTITION, RESERVED_FIELD_ID_PARTITION, get_metadata_field,
+};
 use crate::spec::{
-    Datum, Literal, PartitionSpec, PrimitiveLiteral, Schema as IcebergSchema, Struct, Transform,
+    Datum, Literal, PartitionSpec, PrimitiveLiteral, Schema as IcebergSchema, Struct, StructType,
+    Transform,
 };
 use crate::{Error, ErrorKind, Result};
+
+/// Create an Arrow Field with PARQUET_FIELD_ID_META_KEY metadata attached.
+fn field_with_id(
+    name: impl Into<String>,
+    data_type: DataType,
+    nullable: bool,
+    field_id: i32,
+) -> Field {
+    Field::new(name, data_type, nullable).with_metadata(HashMap::from([(
+        PARQUET_FIELD_ID_META_KEY.to_string(),
+        field_id.to_string(),
+    )]))
+}
 
 /// Build a map of field ID to constant value (as Datum) for identity-partitioned fields.
 ///
@@ -140,6 +158,13 @@ pub(crate) enum ColumnSource {
         target_type: DataType,
         value: Option<PrimitiveLiteral>,
     },
+
+    // A struct column where each child is a constant primitive value.
+    // Used for the _partition metadata column.
+    AddStructConstant {
+        fields: Fields,
+        child_values: Vec<Option<PrimitiveLiteral>>,
+    },
     // The iceberg spec refers to other permissible schema evolution actions
     // (see https://iceberg.apache.org/spec/#schema-evolution):
     // renaming fields, deleting fields and reordering fields.
@@ -186,14 +211,66 @@ enum SchemaComparison {
 
 /// Builder for RecordBatchTransformer to improve ergonomics when constructing with optional parameters.
 ///
-/// Constant fields are pre-computed for both virtual/metadata fields (like _file) and
-/// identity-partitioned fields to avoid duplicate work during batch processing.
+/// All per-file constants (scalar metadata like `_file`, identity partition values,
+/// and the `_partition` struct) are stored in a single `constant_fields` map keyed by
+/// field_id. This unified representation (via [`ColumnConstant`]) means the
+/// transformer handles all constant columns through one code path.
 #[derive(Debug)]
 pub(crate) struct RecordBatchTransformerBuilder {
     snapshot_schema: Arc<IcebergSchema>,
     projected_iceberg_field_ids: Vec<i32>,
-    constant_fields: HashMap<i32, Datum>,
+    constant_fields: HashMap<i32, ColumnConstant>,
     virtual_fields: HashSet<i32>,
+}
+
+/// A per-file constant value for a column.
+///
+/// Covers both scalar constants (metadata columns like `_file` and `_spec_id`,
+/// as well as identity partition source fields) and the struct `_partition` column.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ColumnConstant {
+    /// A scalar constant (e.g., `_file` path, `_spec_id`, identity partition values).
+    /// The Datum carries both the Iceberg type and the value.
+    Scalar(Datum),
+    /// A struct constant (the `_partition` column). Each child is a primitive constant
+    /// or null (for partition evolution gaps).
+    Struct(StructConstant),
+}
+
+/// Pre-computed data for a struct constant column.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructConstant {
+    fields: Fields,
+    child_values: Vec<Option<PrimitiveLiteral>>,
+}
+
+impl StructConstant {
+    /// Create a new StructConstant, validating that fields and child_values have
+    /// the same length.
+    pub fn new(fields: Fields, child_values: Vec<Option<PrimitiveLiteral>>) -> Result<Self> {
+        if fields.len() != child_values.len() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "StructConstant: fields length ({}) != child_values length ({})",
+                    fields.len(),
+                    child_values.len()
+                ),
+            ));
+        }
+        Ok(Self {
+            fields,
+            child_values,
+        })
+    }
+
+    pub(crate) fn fields(&self) -> &Fields {
+        &self.fields
+    }
+
+    pub(crate) fn child_values(&self) -> &[Option<PrimitiveLiteral>] {
+        &self.child_values
+    }
 }
 
 impl RecordBatchTransformerBuilder {
@@ -209,14 +286,11 @@ impl RecordBatchTransformerBuilder {
         }
     }
 
-    /// Add a constant value for a specific field ID.
+    /// Add a scalar constant value for a specific field ID.
     /// This is used for virtual/metadata fields like _file that have constant values per batch.
-    ///
-    /// # Arguments
-    /// * `field_id` - The field ID to associate with the constant
-    /// * `datum` - The constant value (with type) for this field
     pub(crate) fn with_constant(mut self, field_id: i32, datum: Datum) -> Self {
-        self.constant_fields.insert(field_id, datum);
+        self.constant_fields
+            .insert(field_id, ColumnConstant::Scalar(datum));
         self
     }
 
@@ -230,13 +304,12 @@ impl RecordBatchTransformerBuilder {
         partition_spec: Arc<PartitionSpec>,
         partition_data: Struct,
     ) -> Result<Self> {
-        // Compute partition constants for identity-transformed fields (already returns Datum)
         let partition_constants =
             constants_map(&partition_spec, &partition_data, &self.snapshot_schema)?;
 
-        // Add partition constants to constant_fields
         for (field_id, datum) in partition_constants {
-            self.constant_fields.insert(field_id, datum);
+            self.constant_fields
+                .insert(field_id, ColumnConstant::Scalar(datum));
         }
 
         Ok(self)
@@ -246,6 +319,18 @@ impl RecordBatchTransformerBuilder {
     /// ArrowReaderOptions::with_virtual_columns call on the reader
     pub(crate) fn with_virtual_field(mut self, field_id: i32) -> Self {
         self.virtual_fields.insert(field_id);
+        self
+    }
+
+    /// Set a pre-computed _partition column constant directly.
+    pub(crate) fn with_partition_column_precomputed(
+        mut self,
+        partition_column: StructConstant,
+    ) -> Self {
+        self.constant_fields.insert(
+            RESERVED_FIELD_ID_PARTITION,
+            ColumnConstant::Struct(partition_column),
+        );
         self
     }
 
@@ -294,10 +379,8 @@ impl RecordBatchTransformerBuilder {
 pub(crate) struct RecordBatchTransformer {
     snapshot_schema: Arc<IcebergSchema>,
     projected_iceberg_field_ids: Vec<i32>,
-    // Pre-computed constant field information: field_id -> Datum
-    // Includes both virtual/metadata fields (like _file) and identity-partitioned fields
-    // Datum holds both the Iceberg type and the value
-    constant_fields: HashMap<i32, Datum>,
+    // Unified map of all per-file constant columns (metadata, identity partition, _partition struct).
+    constant_fields: HashMap<i32, ColumnConstant>,
 
     // Field IDs whose data is delivered by the source batch as an arrow-rs virtual column
     // (e.g. _pos via RowNumber). These fields bypass the snapshot-schema lookup and the
@@ -364,7 +447,7 @@ impl RecordBatchTransformer {
         source_schema: &ArrowSchemaRef,
         snapshot_schema: &IcebergSchema,
         projected_iceberg_field_ids: &[i32],
-        constant_fields: &HashMap<i32, Datum>,
+        constant_fields: &HashMap<i32, ColumnConstant>,
         virtual_fields: &HashSet<i32>,
     ) -> Result<BatchTransform> {
         let mapped_unprojected_arrow_schema = Arc::new(schema_to_arrow_schema(snapshot_schema)?);
@@ -376,39 +459,62 @@ impl RecordBatchTransformer {
         let fields: Result<Vec<_>> = projected_iceberg_field_ids
             .iter()
             .map(|field_id| {
-                // Metadata/virtual fields (like _file, _spec_id) don't exist in the table
-                // schema, so build their Arrow field from the metadata column definition and
-                // the pre-computed constant's type.
-                if let Some(datum) = constant_fields.get(field_id)
-                    && let Ok(iceberg_field) = get_metadata_field(*field_id)
-                {
-                    let arrow_type = datum_to_arrow_type_with_ree(datum);
-                    let arrow_field =
-                        Field::new(&iceberg_field.name, arrow_type, !iceberg_field.required)
-                            .with_metadata(HashMap::from([(
-                                PARQUET_FIELD_ID_META_KEY.to_string(),
-                                iceberg_field.id.to_string(),
-                            )]));
-                    Ok(Arc::new(arrow_field))
-                } else if virtual_fields.contains(field_id) {
+                match constant_fields.get(field_id) {
+                    Some(ColumnConstant::Struct(pc))
+                        if *field_id == RESERVED_FIELD_ID_PARTITION =>
+                    {
+                        let struct_type = DataType::Struct(pc.fields().clone());
+                        let nullable = pc.fields().is_empty();
+                        let arrow_field = field_with_id(
+                            RESERVED_COL_NAME_PARTITION,
+                            struct_type,
+                            nullable,
+                            *field_id,
+                        );
+                        return Ok(Arc::new(arrow_field));
+                    }
+                    Some(ColumnConstant::Struct(_)) => {
+                        return Err(Error::new(
+                            ErrorKind::Unexpected,
+                            format!("Unexpected struct constant for field id {field_id}"),
+                        ));
+                    }
+                    Some(ColumnConstant::Scalar(datum)) => {
+                        if let Ok(iceberg_field) = get_metadata_field(*field_id) {
+                            let arrow_type = datum_to_arrow_type_with_ree(datum);
+                            let arrow_field = field_with_id(
+                                &iceberg_field.name,
+                                arrow_type,
+                                !iceberg_field.required,
+                                iceberg_field.id,
+                            );
+                            return Ok(Arc::new(arrow_field));
+                        }
+                        // Identity partition constant -- fall through to use the
+                        // mapped schema field (read from file if present).
+                    }
+                    None => {}
+                }
+
+                if virtual_fields.contains(field_id) {
                     let virtual_field = get_metadata_field(*field_id)?;
                     let arrow_type = type_to_arrow_type(&virtual_field.field_type)?;
-                    let arrow_field =
-                        Field::new(&virtual_field.name, arrow_type, !virtual_field.required)
-                            .with_metadata(HashMap::from([(
-                                PARQUET_FIELD_ID_META_KEY.to_string(),
-                                virtual_field.id.to_string(),
-                            )]));
-                    Ok(Arc::new(arrow_field))
-                } else {
-                    // Regular fields and identity-partitioned constant fields both exist in the
-                    // table schema, so use the mapped Arrow field as-is.
-                    Ok(field_id_to_mapped_schema_map
-                        .get(field_id)
-                        .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
-                        .0
-                        .clone())
+                    let arrow_field = field_with_id(
+                        &virtual_field.name,
+                        arrow_type,
+                        !virtual_field.required,
+                        virtual_field.id,
+                    );
+                    return Ok(Arc::new(arrow_field));
                 }
+
+                // Regular fields and identity-partitioned constant fields both exist in the
+                // table schema, so use the mapped Arrow field as-is.
+                Ok(field_id_to_mapped_schema_map
+                    .get(field_id)
+                    .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
+                    .0
+                    .clone())
             })
             .collect();
 
@@ -492,7 +598,7 @@ impl RecordBatchTransformer {
         snapshot_schema: &IcebergSchema,
         projected_iceberg_field_ids: &[i32],
         field_id_to_mapped_schema_map: HashMap<i32, (FieldRef, usize)>,
-        constant_fields: &HashMap<i32, Datum>,
+        constant_fields: &HashMap<i32, ColumnConstant>,
         virtual_fields: &HashSet<i32>,
     ) -> Result<Vec<ColumnSource>> {
         let field_id_to_source_schema_map =
@@ -501,39 +607,50 @@ impl RecordBatchTransformer {
         projected_iceberg_field_ids
             .iter()
             .map(|field_id| {
-                // Check if this is a constant field (metadata/virtual or identity-partitioned).
-                //
-                // Metadata/virtual fields (like _file, _spec_id) never exist in the data file,
-                // so they always use their pre-computed constant value.
-                //
-                // For identity-partitioned fields, the Iceberg spec's "Column Projection" rules
-                // only apply to "field ids which are not present in a data file". When the column
-                // IS present in the Parquet file, it must be read from the file; the partition
-                // metadata constant is only a fallback for when the column is absent (e.g. add_files).
-                if let Some(datum) = constant_fields.get(field_id) {
-                    let is_metadata_field = get_metadata_field(*field_id).is_ok();
-                    let present_in_file = field_id_to_source_schema_map.contains_key(field_id);
-
-                    if is_metadata_field || !present_in_file {
-                        let arrow_type = if is_metadata_field {
-                            datum_to_arrow_type_with_ree(datum)
-                        } else {
-                            field_id_to_mapped_schema_map
-                                .get(field_id)
-                                .ok_or(Error::new(
-                                    ErrorKind::Unexpected,
-                                    "could not find field in schema",
-                                ))?
-                                .0
-                                .data_type()
-                                .clone()
-                        };
-
-                        return Ok(ColumnSource::Add {
-                            value: Some(datum.literal().clone()),
-                            target_type: arrow_type,
+                match constant_fields.get(field_id) {
+                    Some(ColumnConstant::Struct(pc))
+                        if *field_id == RESERVED_FIELD_ID_PARTITION =>
+                    {
+                        return Ok(ColumnSource::AddStructConstant {
+                            fields: pc.fields().clone(),
+                            child_values: pc.child_values().to_vec(),
                         });
                     }
+                    Some(ColumnConstant::Struct(_)) => {
+                        return Err(Error::new(
+                            ErrorKind::Unexpected,
+                            format!("Unexpected struct constant for field id {field_id}"),
+                        ));
+                    }
+                    Some(ColumnConstant::Scalar(datum)) => {
+                        let is_metadata = get_metadata_field(*field_id).is_ok();
+                        let present_in_file =
+                            field_id_to_source_schema_map.contains_key(field_id);
+
+                        if is_metadata || !present_in_file {
+                            let arrow_type = if is_metadata {
+                                datum_to_arrow_type_with_ree(datum)
+                            } else {
+                                field_id_to_mapped_schema_map
+                                    .get(field_id)
+                                    .ok_or(Error::new(
+                                        ErrorKind::Unexpected,
+                                        "could not find field in schema",
+                                    ))?
+                                    .0
+                                    .data_type()
+                                    .clone()
+                            };
+
+                            return Ok(ColumnSource::Add {
+                                value: Some(datum.literal().clone()),
+                                target_type: arrow_type,
+                            });
+                        }
+                        // Identity partition field present in the file -- fall through
+                        // to read from the file instead of using the constant.
+                    }
+                    None => {}
                 }
 
                 if virtual_fields.contains(field_id) {
@@ -682,6 +799,11 @@ impl RecordBatchTransformer {
                     ColumnSource::Add { target_type, value } => {
                         Self::create_column(target_type, value, num_rows)?
                     }
+
+                    ColumnSource::AddStructConstant {
+                        fields,
+                        child_values,
+                    } => Self::create_struct_column(fields, child_values, num_rows)?,
                 })
             })
             .collect()
@@ -723,6 +845,89 @@ impl RecordBatchTransformer {
             create_primitive_array_repeated(target_type, prim_lit, num_rows)
         }
     }
+
+    fn create_struct_column(
+        fields: &Fields,
+        child_values: &[Option<PrimitiveLiteral>],
+        num_rows: usize,
+    ) -> Result<ArrayRef> {
+        if fields.is_empty() {
+            let nulls = arrow_buffer::NullBuffer::new_null(num_rows);
+            return Ok(Arc::new(StructArray::new_empty_fields(
+                num_rows,
+                Some(nulls),
+            )));
+        }
+
+        let child_arrays: Vec<ArrayRef> = fields
+            .iter()
+            .zip(child_values.iter())
+            .map(|(field, value)| {
+                create_primitive_array_repeated(field.data_type(), value, num_rows)
+            })
+            .collect::<Result<_>>()?;
+
+        Ok(Arc::new(StructArray::try_new(
+            fields.clone(),
+            child_arrays,
+            None,
+        )?))
+    }
+}
+
+/// Builds a [`StructConstant`] from the unified partition type and a file's
+/// partition spec/data.
+///
+/// If `unified_partition_type` has no fields (unpartitioned table), returns an empty constant
+/// that renders as a null struct column.
+///
+/// For each field in the unified partition type:
+/// - If it corresponds to a field in this file's partition spec, use the value from partition_data
+/// - Otherwise (partition evolution), use null
+pub fn build_partition_column_constant(
+    unified_partition_type: &StructType,
+    partition_spec: &PartitionSpec,
+    partition_data: &Struct,
+) -> Result<StructConstant> {
+    // Unpartitioned table: empty struct rendered as null
+    if unified_partition_type.fields().is_empty() {
+        return StructConstant::new(Fields::empty(), vec![]);
+    }
+
+    use crate::arrow::type_to_arrow_type;
+
+    let spec_fields = partition_spec.fields();
+
+    let mut arrow_fields = Vec::with_capacity(unified_partition_type.fields().len());
+    let mut child_values = Vec::with_capacity(unified_partition_type.fields().len());
+
+    for unified_field in unified_partition_type.fields() {
+        let arrow_type = type_to_arrow_type(&unified_field.field_type)?;
+        // Don't attach PARQUET_FIELD_ID_META_KEY metadata to child fields --
+        // Spark's output schema for _partition doesn't include it, and Arrow's
+        // Field::eq checks metadata, causing the schema adapter to insert an
+        // unnecessary cast operation per batch.
+        // Always nullable: partition evolution means any field may be absent
+        // for files written under a different spec.
+        let arrow_field = Field::new(&unified_field.name, arrow_type, true);
+        arrow_fields.push(Arc::new(arrow_field));
+
+        // Find matching field in this file's partition spec by field_id
+        let value = spec_fields
+            .iter()
+            .position(|f| f.field_id == unified_field.id)
+            .and_then(|pos| {
+                // Get the value from partition_data at this position
+                match &partition_data[pos] {
+                    Some(Literal::Primitive(prim)) => Some(prim.clone()),
+                    _ => None,
+                }
+            });
+
+        child_values.push(value);
+    }
+
+    StructConstant::new(Fields::from(arrow_fields), child_values)
 }
 
 #[cfg(test)]
@@ -737,6 +942,7 @@ mod test {
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
+    use crate::arrow::build_partition_column_constant;
     use crate::arrow::record_batch_transformer::{
         RecordBatchTransformer, RecordBatchTransformerBuilder,
     };
@@ -1930,5 +2136,207 @@ mod test {
 
         assert_eq!(id_col.len(), 3);
         assert_eq!(id_col.values(), &[100, 200, 300]);
+    }
+
+    #[test]
+    fn partition_column_struct_constant() {
+        use arrow_array::StructArray;
+
+        use crate::metadata_columns::RESERVED_FIELD_ID_PARTITION;
+        use crate::spec::Transform;
+
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Partition spec: identity(id)
+        let partition_spec = Arc::new(
+            crate::spec::PartitionSpec::builder(snapshot_schema.clone())
+                .with_spec_id(0)
+                .add_partition_field("id", "id", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        // Unified partition type: just one field (same as the spec's type)
+        let unified_partition_type = partition_spec.partition_type(&snapshot_schema).unwrap();
+
+        // Partition data: id=42
+        let partition_data = Struct::from_iter(vec![Some(Literal::int(42))]);
+
+        // Parquet file has both columns
+        let parquet_schema = Arc::new(ArrowSchema::new(vec![
+            simple_field("id", DataType::Int32, false, "1"),
+            simple_field("name", DataType::Utf8, true, "2"),
+        ]));
+
+        // Project id, name, and _partition
+        let projected_field_ids = [1, 2, RESERVED_FIELD_ID_PARTITION];
+
+        let partition_column = build_partition_column_constant(
+            &unified_partition_type,
+            &partition_spec,
+            &partition_data,
+        )
+        .unwrap();
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
+                .with_partition_column_precomputed(partition_column)
+                .build();
+
+        let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
+            Arc::new(Int32Array::from(vec![100, 200, 300])),
+            Arc::new(StringArray::from(vec!["a", "b", "c"])),
+        ])
+        .unwrap();
+
+        let result = transformer.process_record_batch(parquet_batch).unwrap();
+
+        assert_eq!(result.num_columns(), 3);
+        assert_eq!(result.num_rows(), 3);
+
+        // id column from file
+        let id_col = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_col.values(), &[100, 200, 300]);
+
+        // name column from file
+        let name_col = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(name_col.value(0), "a");
+
+        // _partition struct column
+        let partition_col = result
+            .column(2)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_eq!(partition_col.num_columns(), 1);
+        assert_eq!(partition_col.len(), 3);
+
+        let inner = partition_col
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(inner.value(0), 42);
+        assert_eq!(inner.value(1), 42);
+        assert_eq!(inner.value(2), 42);
+    }
+
+    #[test]
+    fn partition_column_with_evolution() {
+        use arrow_array::StructArray;
+
+        use crate::metadata_columns::RESERVED_FIELD_ID_PARTITION;
+        use crate::partitioning::compute_unified_partition_type;
+        use crate::spec::Transform;
+
+        // Schema with two fields that could be partition sources
+        let snapshot_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(vec![
+                    NestedField::required(1, "year", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "month", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(3, "data", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Old spec: partition by year only
+        let spec_v0 = crate::spec::PartitionSpec::builder(snapshot_schema.clone())
+            .with_spec_id(0)
+            .add_partition_field("year", "year", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // New spec: partition by year and month
+        let spec_v1 = crate::spec::PartitionSpec::builder(snapshot_schema.clone())
+            .with_spec_id(1)
+            .add_partition_field("year", "year", Transform::Identity)
+            .unwrap()
+            .add_partition_field("month", "month", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Unified type includes both year and month
+        let unified_partition_type =
+            compute_unified_partition_type([&spec_v0, &spec_v1].into_iter(), &snapshot_schema)
+                .unwrap();
+
+        assert_eq!(unified_partition_type.fields().len(), 2);
+
+        // File written with spec_v0 (only has year=2023)
+        let partition_data = Struct::from_iter(vec![Some(Literal::int(2023))]);
+
+        let parquet_schema = Arc::new(ArrowSchema::new(vec![simple_field(
+            "data",
+            DataType::Utf8,
+            true,
+            "3",
+        )]));
+
+        let projected_field_ids = [3, RESERVED_FIELD_ID_PARTITION];
+
+        let partition_column =
+            build_partition_column_constant(&unified_partition_type, &spec_v0, &partition_data)
+                .unwrap();
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
+                .with_partition_column_precomputed(partition_column)
+                .build();
+
+        let parquet_batch =
+            RecordBatch::try_new(parquet_schema, vec![Arc::new(StringArray::from(vec![
+                "hello", "world",
+            ]))])
+            .unwrap();
+
+        let result = transformer.process_record_batch(parquet_batch).unwrap();
+
+        assert_eq!(result.num_columns(), 2);
+        assert_eq!(result.num_rows(), 2);
+
+        // _partition struct has 2 fields: year (present) and month (null for this old spec file)
+        let partition_col = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_eq!(partition_col.num_columns(), 2);
+
+        let year_col = partition_col
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(year_col.value(0), 2023);
+        assert_eq!(year_col.value(1), 2023);
+
+        let month_col = partition_col
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert!(month_col.is_null(0));
+        assert!(month_col.is_null(1));
     }
 }
