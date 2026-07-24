@@ -553,26 +553,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_lz4_compressed_footer_returns_error() {
+    async fn test_lz4_compressed_footer_is_decoded() {
+        // Hand-built file with FooterPayloadCompressed=1 and a real LZ4 frame in place
+        // of the raw JSON. This confirms the reader honors the flag rather than
+        // assuming the payload is always uncompressed.
         let temp_dir = TempDir::new().unwrap();
+
+        let compressed_payload = CompressionCodec::Lz4
+            .compress(empty_footer_payload_bytes())
+            .unwrap();
 
         let mut bytes = vec![];
         bytes.extend(FileMetadata::MAGIC.to_vec());
         bytes.extend(FileMetadata::MAGIC.to_vec());
-        bytes.extend(empty_footer_payload_bytes());
-        bytes.extend(empty_footer_payload_bytes_length_bytes());
+        bytes.extend(&compressed_payload);
+        bytes.extend(u32::to_le_bytes(compressed_payload.len() as u32));
+        // FooterPayloadCompressed bit set in the first flag byte.
         bytes.extend(vec![0b00000001, 0, 0, 0]);
         bytes.extend(FileMetadata::MAGIC.to_vec());
 
         let input_file = input_file_with_bytes(&temp_dir, &bytes).await;
 
         assert_eq!(
-            FileMetadata::read(&input_file)
-                .await
-                .unwrap_err()
-                .to_string(),
-            "FeatureUnsupported => LZ4 decompression is not supported currently",
-        )
+            FileMetadata::read(&input_file).await.unwrap(),
+            empty_footer_payload()
+        );
     }
 
     #[tokio::test]

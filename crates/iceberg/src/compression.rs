@@ -23,6 +23,7 @@ use std::io::{Read, Write};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
+use lz4_flex::frame::{FrameDecoder, FrameEncoder, FrameInfo};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{Error, ErrorKind, Result};
@@ -118,10 +119,12 @@ impl CompressionCodec {
     pub(crate) fn decompress(&self, bytes: Vec<u8>) -> Result<Vec<u8>> {
         match self {
             CompressionCodec::None => Ok(bytes),
-            CompressionCodec::Lz4 => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "LZ4 decompression is not supported currently",
-            )),
+            CompressionCodec::Lz4 => {
+                let mut decoder = FrameDecoder::new(&bytes[..]);
+                let mut decompressed = Vec::new();
+                decoder.read_to_end(&mut decompressed)?;
+                Ok(decompressed)
+            }
             CompressionCodec::Zstd(_) => Ok(zstd::stream::decode_all(&bytes[..])?),
             CompressionCodec::Gzip(_) => {
                 let mut decoder = GzDecoder::new(&bytes[..]);
@@ -139,10 +142,17 @@ impl CompressionCodec {
     pub(crate) fn compress(&self, bytes: Vec<u8>) -> Result<Vec<u8>> {
         match self {
             CompressionCodec::None => Ok(bytes),
-            CompressionCodec::Lz4 => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                "LZ4 compression is not supported currently",
-            )),
+            CompressionCodec::Lz4 => {
+                // The Puffin spec requires "LZ4 single compression frame with content size
+                // present" for footer payloads, so we set content_size on the frame header.
+                // See https://iceberg.apache.org/puffin-spec/#footer-payload
+                let frame_info = FrameInfo::new().content_size(Some(bytes.len() as u64));
+                let mut encoder = FrameEncoder::with_frame_info(frame_info, Vec::new());
+                encoder.write_all(&bytes)?;
+                encoder.finish().map_err(|e| {
+                    Error::new(ErrorKind::Unexpected, "Failed to finish LZ4 frame").with_source(e)
+                })
+            }
             CompressionCodec::Zstd(level) => {
                 let writer = Vec::<u8>::new();
                 let mut encoder = zstd::stream::Encoder::new(writer, *level as i32)?;
@@ -173,7 +183,10 @@ impl CompressionCodec {
     ///
     /// # Errors
     ///
-    /// Returns an error for Lz4 and Zstd as they are not fully supported.
+    /// Returns an error for codecs without a canonical file-extension convention
+    /// (Lz4, Zstd, Snappy). LZ4 is fully supported for compression and decompression,
+    /// but is used in framed form (e.g., inside Puffin footers) where no separate
+    /// file suffix is required.
     pub fn suffix(&self) -> Result<&'static str> {
         match self {
             CompressionCodec::None => Ok(""),
@@ -205,40 +218,59 @@ mod tests {
 
     #[tokio::test]
     async fn test_compression_codec_compress() {
-        let bytes_vec = [0_u8; 100].to_vec();
-
         let compression_codecs = [
+            CompressionCodec::Lz4,
             CompressionCodec::zstd_default(),
             CompressionCodec::gzip_default(),
         ];
 
         for codec in compression_codecs {
-            let compressed = codec.compress(bytes_vec.clone()).unwrap();
-            assert!(compressed.len() < bytes_vec.len());
-            let decompressed = codec.decompress(compressed).unwrap();
-            assert_eq!(decompressed, bytes_vec);
+            // Empty input round-trips (the frame still carries header/footer bytes).
+            let empty: Vec<u8> = vec![];
+            let compressed = codec.compress(empty.clone()).unwrap();
+            assert_eq!(codec.decompress(compressed).unwrap(), empty);
+
+            // Highly compressible input (all zeros) shrinks and round-trips.
+            let zeros = vec![0_u8; 100];
+            let compressed = codec.compress(zeros.clone()).unwrap();
+            assert!(compressed.len() < zeros.len());
+            assert_eq!(codec.decompress(compressed).unwrap(), zeros);
+
+            // Less-compressible input (mixed bytes) round-trips.
+            let mixed: Vec<u8> = (0..10_000).map(|i| (i % 251) as u8).collect();
+            let compressed = codec.compress(mixed.clone()).unwrap();
+            assert_eq!(codec.decompress(compressed).unwrap(), mixed);
         }
     }
 
     #[tokio::test]
-    async fn test_compression_codec_unsupported() {
-        let unsupported_codecs = [
-            (CompressionCodec::Lz4, "LZ4"),
-            (CompressionCodec::Snappy, "Snappy"),
-        ];
+    async fn test_lz4_frame_magic_number() {
+        // LZ4 footers use the framed format; the frame must begin with the LZ4 frame
+        // magic number 0x184D2204 (little-endian) per
+        // https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md.
+        let compressed = CompressionCodec::Lz4.compress(vec![0u8; 10_000]).unwrap();
+        assert_eq!(&compressed[..4], &[0x04, 0x22, 0x4D, 0x18]);
+    }
+
+    #[tokio::test]
+    async fn test_snappy_compression_is_unsupported() {
         let bytes_vec = [0_u8; 100].to_vec();
 
-        for (codec, name) in unsupported_codecs {
-            assert_eq!(
-                codec.compress(bytes_vec.clone()).unwrap_err().to_string(),
-                format!("FeatureUnsupported => {name} compression is not supported currently"),
-            );
+        assert_eq!(
+            CompressionCodec::Snappy
+                .compress(bytes_vec.clone())
+                .unwrap_err()
+                .to_string(),
+            "FeatureUnsupported => Snappy compression is not supported currently",
+        );
 
-            assert_eq!(
-                codec.decompress(bytes_vec.clone()).unwrap_err().to_string(),
-                format!("FeatureUnsupported => {name} decompression is not supported currently"),
-            );
-        }
+        assert_eq!(
+            CompressionCodec::Snappy
+                .decompress(bytes_vec)
+                .unwrap_err()
+                .to_string(),
+            "FeatureUnsupported => Snappy decompression is not supported currently",
+        );
     }
 
     #[test]
