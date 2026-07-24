@@ -1468,6 +1468,8 @@ impl core::cmp::PartialEq for iceberg::spec::Literal
 pub fn iceberg::spec::Literal::eq(&self, other: &iceberg::spec::Literal) -> bool
 impl core::convert::From<iceberg::spec::Datum> for iceberg::spec::Literal
 pub fn iceberg::spec::Literal::from(value: iceberg::spec::Datum) -> Self
+impl core::convert::From<iceberg::spec::PrimitiveLiteral> for iceberg::spec::Literal
+pub fn iceberg::spec::Literal::from(value: iceberg::spec::PrimitiveLiteral) -> Self
 impl core::fmt::Debug for iceberg::spec::Literal
 pub fn iceberg::spec::Literal::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for iceberg::spec::Literal
@@ -1575,6 +1577,8 @@ impl core::cmp::PartialOrd for iceberg::spec::PrimitiveLiteral
 pub fn iceberg::spec::PrimitiveLiteral::partial_cmp(&self, other: &iceberg::spec::PrimitiveLiteral) -> core::option::Option<core::cmp::Ordering>
 impl core::convert::From<iceberg::spec::Datum> for iceberg::spec::PrimitiveLiteral
 pub fn iceberg::spec::PrimitiveLiteral::from(value: iceberg::spec::Datum) -> Self
+impl core::convert::From<iceberg::spec::PrimitiveLiteral> for iceberg::spec::Literal
+pub fn iceberg::spec::Literal::from(value: iceberg::spec::PrimitiveLiteral) -> Self
 impl core::fmt::Debug for iceberg::spec::PrimitiveLiteral
 pub fn iceberg::spec::PrimitiveLiteral::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for iceberg::spec::PrimitiveLiteral
@@ -1724,6 +1728,8 @@ pub fn iceberg::spec::Type::decimal(precision: u32, scale: u32) -> iceberg::Resu
 pub fn iceberg::spec::Type::decimal_max_precision(num_bytes: u32) -> iceberg::Result<u32>
 pub fn iceberg::spec::Type::decimal_required_bytes(precision: u32) -> iceberg::Result<u32>
 pub fn iceberg::spec::Type::is_floating_type(&self) -> bool
+pub fn iceberg::spec::Type::is_list(&self) -> bool
+pub fn iceberg::spec::Type::is_map(&self) -> bool
 pub fn iceberg::spec::Type::is_nested(&self) -> bool
 pub fn iceberg::spec::Type::is_primitive(&self) -> bool
 pub fn iceberg::spec::Type::is_struct(&self) -> bool
@@ -1966,10 +1972,34 @@ impl serde_core::ser::Serialize for iceberg::spec::FieldSummary
 pub fn iceberg::spec::FieldSummary::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::spec::FieldSummary
 pub fn iceberg::spec::FieldSummary::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::spec::IndexByName
+impl iceberg::spec::IndexByName
+pub fn iceberg::spec::IndexByName::indexes(self) -> (std::collections::hash::map::HashMap<alloc::string::String, i32>, std::collections::hash::map::HashMap<i32, alloc::string::String>)
+impl core::default::Default for iceberg::spec::IndexByName
+pub fn iceberg::spec::IndexByName::default() -> iceberg::spec::IndexByName
+impl iceberg::spec::SchemaVisitor for iceberg::spec::IndexByName
+pub type iceberg::spec::IndexByName::T = ()
+pub fn iceberg::spec::IndexByName::after_list_element(&mut self, field: &iceberg::spec::NestedFieldRef) -> iceberg::Result<()>
+pub fn iceberg::spec::IndexByName::after_map_key(&mut self, field: &iceberg::spec::NestedFieldRef) -> iceberg::Result<()>
+pub fn iceberg::spec::IndexByName::after_map_value(&mut self, field: &iceberg::spec::NestedFieldRef) -> iceberg::Result<()>
+pub fn iceberg::spec::IndexByName::after_struct_field(&mut self, _field: &iceberg::spec::NestedFieldRef) -> iceberg::Result<()>
+pub fn iceberg::spec::IndexByName::before_list_element(&mut self, field: &iceberg::spec::NestedFieldRef) -> iceberg::Result<()>
+pub fn iceberg::spec::IndexByName::before_map_key(&mut self, field: &iceberg::spec::NestedFieldRef) -> iceberg::Result<()>
+pub fn iceberg::spec::IndexByName::before_map_value(&mut self, field: &iceberg::spec::NestedFieldRef) -> iceberg::Result<()>
+pub fn iceberg::spec::IndexByName::before_struct_field(&mut self, field: &iceberg::spec::NestedFieldRef) -> iceberg::Result<()>
+pub fn iceberg::spec::IndexByName::field(&mut self, field: &iceberg::spec::NestedFieldRef, _value: Self::T) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::IndexByName::list(&mut self, list: &iceberg::spec::ListType, _value: Self::T) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::IndexByName::map(&mut self, map: &iceberg::spec::MapType, _key_value: Self::T, _value: Self::T) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::IndexByName::primitive(&mut self, _p: &iceberg::spec::PrimitiveType) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::IndexByName::schema(&mut self, _schema: &iceberg::spec::Schema, _value: Self::T) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::IndexByName::struct(&mut self, _struct: &iceberg::spec::StructType, _results: alloc::vec::Vec<Self::T>) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::IndexByName::variant(&mut self, _v: &iceberg::spec::VariantType) -> iceberg::Result<Self::T>
 pub struct iceberg::spec::ListType
 pub iceberg::spec::ListType::element_field: iceberg::spec::NestedFieldRef
 impl iceberg::spec::ListType
 pub fn iceberg::spec::ListType::new(element_field: iceberg::spec::NestedFieldRef) -> Self
+pub fn iceberg::spec::ListType::optional(element_id: i32, element_type: iceberg::spec::Type) -> Self
+pub fn iceberg::spec::ListType::required(element_id: i32, element_type: iceberg::spec::Type) -> Self
 impl core::clone::Clone for iceberg::spec::ListType
 pub fn iceberg::spec::ListType::clone(&self) -> iceberg::spec::ListType
 impl core::cmp::Eq for iceberg::spec::ListType
@@ -3041,6 +3071,23 @@ pub fn iceberg::spec::SchemaVisitor::primitive(&mut self, p: &iceberg::spec::Pri
 pub fn iceberg::spec::SchemaVisitor::schema(&mut self, schema: &iceberg::spec::Schema, value: Self::T) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::SchemaVisitor::struct(&mut self, struct: &iceberg::spec::StructType, results: alloc::vec::Vec<Self::T>) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::SchemaVisitor::variant(&mut self, v: &iceberg::spec::VariantType) -> iceberg::Result<Self::T>
+impl iceberg::spec::SchemaVisitor for iceberg::spec::IndexByName
+pub type iceberg::spec::IndexByName::T = ()
+pub fn iceberg::spec::IndexByName::after_list_element(&mut self, field: &iceberg::spec::NestedFieldRef) -> iceberg::Result<()>
+pub fn iceberg::spec::IndexByName::after_map_key(&mut self, field: &iceberg::spec::NestedFieldRef) -> iceberg::Result<()>
+pub fn iceberg::spec::IndexByName::after_map_value(&mut self, field: &iceberg::spec::NestedFieldRef) -> iceberg::Result<()>
+pub fn iceberg::spec::IndexByName::after_struct_field(&mut self, _field: &iceberg::spec::NestedFieldRef) -> iceberg::Result<()>
+pub fn iceberg::spec::IndexByName::before_list_element(&mut self, field: &iceberg::spec::NestedFieldRef) -> iceberg::Result<()>
+pub fn iceberg::spec::IndexByName::before_map_key(&mut self, field: &iceberg::spec::NestedFieldRef) -> iceberg::Result<()>
+pub fn iceberg::spec::IndexByName::before_map_value(&mut self, field: &iceberg::spec::NestedFieldRef) -> iceberg::Result<()>
+pub fn iceberg::spec::IndexByName::before_struct_field(&mut self, field: &iceberg::spec::NestedFieldRef) -> iceberg::Result<()>
+pub fn iceberg::spec::IndexByName::field(&mut self, field: &iceberg::spec::NestedFieldRef, _value: Self::T) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::IndexByName::list(&mut self, list: &iceberg::spec::ListType, _value: Self::T) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::IndexByName::map(&mut self, map: &iceberg::spec::MapType, _key_value: Self::T, _value: Self::T) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::IndexByName::primitive(&mut self, _p: &iceberg::spec::PrimitiveType) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::IndexByName::schema(&mut self, _schema: &iceberg::spec::Schema, _value: Self::T) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::IndexByName::struct(&mut self, _struct: &iceberg::spec::StructType, _results: alloc::vec::Vec<Self::T>) -> iceberg::Result<Self::T>
+pub fn iceberg::spec::IndexByName::variant(&mut self, _v: &iceberg::spec::VariantType) -> iceberg::Result<Self::T>
 pub trait iceberg::spec::SchemaWithPartnerVisitor<P>
 pub type iceberg::spec::SchemaWithPartnerVisitor::T
 pub fn iceberg::spec::SchemaWithPartnerVisitor::after_list_element(&mut self, _field: &iceberg::spec::NestedFieldRef, _partner: &P) -> iceberg::Result<()>
@@ -3059,6 +3106,8 @@ pub fn iceberg::spec::SchemaWithPartnerVisitor::schema(&mut self, schema: &icebe
 pub fn iceberg::spec::SchemaWithPartnerVisitor::struct(&mut self, struct: &iceberg::spec::StructType, partner: &P, results: alloc::vec::Vec<Self::T>) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::SchemaWithPartnerVisitor::variant(&mut self, v: &iceberg::spec::VariantType, partner: &P) -> iceberg::Result<Self::T>
 pub fn iceberg::spec::deserialize_data_file_from_json(json: &str, partition_spec_id: i32, partition_type: &iceberg::spec::StructType, schema: &iceberg::spec::Schema) -> iceberg::Result<iceberg::spec::DataFile>
+pub fn iceberg::spec::index_by_id(struct: &iceberg::spec::StructType) -> iceberg::Result<std::collections::hash::map::HashMap<i32, iceberg::spec::NestedFieldRef>>
+pub fn iceberg::spec::index_parents(struct: &iceberg::spec::StructType) -> iceberg::Result<std::collections::hash::map::HashMap<i32, i32>>
 pub fn iceberg::spec::prune_columns(schema: &iceberg::spec::Schema, selected: impl core::iter::traits::collect::IntoIterator<Item = i32>, select_full_types: bool) -> iceberg::Result<iceberg::spec::Type>
 pub fn iceberg::spec::read_data_files_from_avro<R: std::io::Read>(reader: &mut R, schema: &iceberg::spec::Schema, partition_spec_id: i32, partition_type: &iceberg::spec::StructType, version: iceberg::spec::FormatVersion) -> iceberg::Result<alloc::vec::Vec<iceberg::spec::DataFile>>
 pub fn iceberg::spec::serialize_data_file_to_json(data_file: iceberg::spec::DataFile, partition_type: &iceberg::spec::StructType, format_version: iceberg::spec::FormatVersion) -> iceberg::Result<alloc::string::String>
@@ -3127,6 +3176,8 @@ pub fn iceberg::table::TableBuilder::readonly(self, readonly: bool) -> Self
 pub fn iceberg::table::TableBuilder::runtime(self, runtime: iceberg::Runtime) -> Self
 pub mod iceberg::test_utils
 pub fn iceberg::test_utils::check_record_batches(record_batches: alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, expected_schema: expect_test::Expect, expected_data: expect_test::Expect, ignore_check_columns: &[&str], sort_column: core::option::Option<&str>)
+pub fn iceberg::test_utils::get_projected_ids_of_schema(schema: &iceberg::spec::Schema) -> std::collections::hash::set::HashSet<i32>
+pub fn iceberg::test_utils::get_projected_ids_of_type(type: &iceberg::spec::Type) -> std::collections::hash::set::HashSet<i32>
 pub fn iceberg::test_utils::test_runtime() -> iceberg::Runtime
 pub mod iceberg::transaction
 pub struct iceberg::transaction::ActionCommit
@@ -3136,10 +3187,24 @@ pub fn iceberg::transaction::ActionCommit::take_requirements(&mut self) -> alloc
 pub fn iceberg::transaction::ActionCommit::take_updates(&mut self) -> alloc::vec::Vec<iceberg::TableUpdate>
 pub struct iceberg::transaction::AddColumn
 impl iceberg::transaction::AddColumn
-pub fn iceberg::transaction::AddColumn::optional(name: impl alloc::string::ToString, field_type: iceberg::spec::Type) -> Self
-pub fn iceberg::transaction::AddColumn::required(name: impl alloc::string::ToString, field_type: iceberg::spec::Type, initial_default: iceberg::spec::Literal) -> Self
+pub fn iceberg::transaction::AddColumn::optional(name: impl core::convert::Into<alloc::string::String>, type: iceberg::spec::Type) -> Self
+pub fn iceberg::transaction::AddColumn::parent(self, parent: impl core::convert::Into<core::option::Option<alloc::string::String>>) -> Self
+pub fn iceberg::transaction::AddColumn::required(name: impl core::convert::Into<alloc::string::String>, type: iceberg::spec::Type) -> Self
 impl iceberg::transaction::AddColumn
-pub fn iceberg::transaction::AddColumn::builder() -> AddColumnBuilder<((), (), (), (), (), (), ())>
+pub fn iceberg::transaction::AddColumn::builder() -> AddColumnBuilder<((), (), (), (), (), ())>
+pub struct iceberg::transaction::DeleteColumn
+impl iceberg::transaction::DeleteColumn
+pub fn iceberg::transaction::DeleteColumn::new(name: impl core::convert::Into<alloc::string::String>) -> Self
+pub struct iceberg::transaction::MoveColumn
+impl iceberg::transaction::MoveColumn
+pub fn iceberg::transaction::MoveColumn::after(name: impl core::convert::Into<alloc::string::String>, reference: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn iceberg::transaction::MoveColumn::before(name: impl core::convert::Into<alloc::string::String>, reference: impl core::convert::Into<alloc::string::String>) -> Self
+pub fn iceberg::transaction::MoveColumn::first(name: impl core::convert::Into<alloc::string::String>) -> Self
+pub struct iceberg::transaction::RenameColumn
+impl iceberg::transaction::RenameColumn
+pub fn iceberg::transaction::RenameColumn::new(name: impl core::convert::Into<alloc::string::String>, new_name: impl core::convert::Into<alloc::string::String>) -> Self
+impl iceberg::transaction::RenameColumn
+pub fn iceberg::transaction::RenameColumn::builder() -> RenameColumnBuilder<((), ())>
 pub struct iceberg::transaction::Transaction
 impl iceberg::transaction::Transaction
 pub async fn iceberg::transaction::Transaction::commit(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>
@@ -3148,12 +3213,15 @@ pub fn iceberg::transaction::Transaction::fast_append(&self) -> iceberg::transac
 pub fn iceberg::transaction::Transaction::new(table: &iceberg::table::Table) -> Self
 pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::sort_order::ReplaceSortOrderAction
 pub fn iceberg::transaction::Transaction::update_location(&self) -> iceberg::transaction::update_location::UpdateLocationAction
-pub fn iceberg::transaction::Transaction::update_schema(&self) -> iceberg::transaction::update_schema::UpdateSchemaAction
+pub fn iceberg::transaction::Transaction::update_schema(&self) -> iceberg::Result<iceberg::transaction::update_schema::UpdateSchemaAction>
 pub fn iceberg::transaction::Transaction::update_statistics(&self) -> iceberg::transaction::update_statistics::UpdateStatisticsAction
 pub fn iceberg::transaction::Transaction::update_table_properties(&self) -> iceberg::transaction::update_properties::UpdatePropertiesAction
 pub fn iceberg::transaction::Transaction::upgrade_table_version(&self) -> iceberg::transaction::upgrade_format_version::UpgradeFormatVersionAction
 impl core::clone::Clone for iceberg::transaction::Transaction
 pub fn iceberg::transaction::Transaction::clone(&self) -> iceberg::transaction::Transaction
+pub struct iceberg::transaction::UpdateColumn
+impl iceberg::transaction::UpdateColumn
+pub fn iceberg::transaction::UpdateColumn::builder(name: impl core::convert::Into<alloc::string::String>) -> iceberg::transaction::update_schema::UpdateColumnBuilder
 pub trait iceberg::transaction::ApplyTransactionAction
 pub fn iceberg::transaction::ApplyTransactionAction::apply(self, tx: iceberg::transaction::Transaction) -> iceberg::Result<iceberg::transaction::Transaction>
 impl<T: TransactionAction + 'static> iceberg::transaction::ApplyTransactionAction for T
@@ -3358,6 +3426,7 @@ impl<B, L, F> iceberg::writer::IcebergWriterBuilder for iceberg::writer::base_wr
 pub type iceberg::writer::base_writer::equality_delete_writer::EqualityDeleteFileWriterBuilder<B, L, F>::R = iceberg::writer::base_writer::equality_delete_writer::EqualityDeleteFileWriter<B, L, F>
 pub fn iceberg::writer::base_writer::equality_delete_writer::EqualityDeleteFileWriterBuilder<B, L, F>::build<'life0, 'async_trait>(&'life0 self, partition_key: core::option::Option<iceberg::spec::PartitionKey>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<Self::R>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub macro iceberg::ensure_data_valid!
+pub macro iceberg::ensure_precondition!
 #[non_exhaustive] pub enum iceberg::ErrorKind
 pub iceberg::ErrorKind::CatalogCommitConflicts
 pub iceberg::ErrorKind::DataInvalid
