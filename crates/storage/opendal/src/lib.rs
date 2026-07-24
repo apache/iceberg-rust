@@ -34,7 +34,7 @@ use cfg_if::cfg_if;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use iceberg::io::{
-    FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
+    FileMetadata, FileRead, FileWrite, InputFile, ListEntry, OutputFile, Storage, StorageConfig,
     StorageFactory,
 };
 use iceberg::{Error, ErrorKind, Result};
@@ -549,6 +549,37 @@ impl Storage for OpenDalStorage {
             .map_err(from_opendal_error)?)
     }
 
+    async fn list_prefix(&self, path: &str) -> Result<Vec<ListEntry>> {
+        let (op, relative_path) = self.create_operator(&path)?;
+        // The absolute prefix is the input path minus its operator-relative
+        // suffix; entry paths (operator-root-relative) append onto it.
+        let absolute_prefix = &path[..path.len() - relative_path.len()];
+        let list_path = if relative_path.is_empty() || relative_path.ends_with('/') {
+            relative_path.to_string()
+        } else {
+            format!("{relative_path}/")
+        };
+        let entries = op
+            .list_with(&list_path)
+            .recursive(true)
+            .await
+            .map_err(from_opendal_error)?;
+        Ok(entries
+            .into_iter()
+            .filter(|e| !e.metadata().is_dir())
+            .map(|e| ListEntry {
+                path: format!("{absolute_prefix}{}", e.path()),
+                size: e.metadata().content_length(),
+                last_modified_ms: e.metadata().last_modified().and_then(|dt| {
+                    let t: std::time::SystemTime = dt.into();
+                    t.duration_since(std::time::UNIX_EPOCH)
+                        .ok()
+                        .map(|d| d.as_millis() as i64)
+                }),
+            })
+            .collect())
+    }
+
     async fn delete_stream(&self, mut paths: BoxStream<'static, String>) -> Result<()> {
         let mut deleters: HashMap<String, opendal::Deleter> = HashMap::new();
 
@@ -652,6 +683,36 @@ mod tests {
             storage.relativize_path("/path/to/file").unwrap(),
             "path/to/file"
         );
+    }
+
+    #[cfg(feature = "opendal-memory")]
+    #[tokio::test]
+    async fn test_list_prefix_is_directory_style_for_opendal_memory() {
+        let storage = OpenDalStorage::Memory(default_memory_operator());
+        let file = "memory:/warehouse/t/data/a.parquet";
+        storage
+            .write(file, Bytes::from_static(b"aa"))
+            .await
+            .unwrap();
+
+        let (op, relative_path) = storage.create_operator(&file).unwrap();
+        let raw_entries = op.list_with(relative_path).recursive(true).await.unwrap();
+        assert!(raw_entries.iter().any(
+            |entry| entry.path() == "warehouse/t/data/a.parquet" && !entry.metadata().is_dir()
+        ));
+
+        let mut entries = storage.list_prefix("memory:/warehouse/t").await.unwrap();
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, file);
+        assert_eq!(entries[0].size, 2);
+
+        let slash_entries = storage.list_prefix("memory:/warehouse/t/").await.unwrap();
+        assert_eq!(slash_entries.len(), 1);
+        assert_eq!(slash_entries[0].path, file);
+
+        assert!(storage.list_prefix(file).await.unwrap().is_empty());
+        assert!(storage.exists(file).await.unwrap());
     }
 
     #[cfg(feature = "opendal-fs")]
