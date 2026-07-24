@@ -23,12 +23,6 @@ use crate::spec::ManifestFile;
 
 /// Reads a manifest file referenced by a manifest list entry, transparently
 /// decrypting it when the entry records key metadata.
-///
-/// This is the read-side counterpart to [`ManifestWriter`], encapsulating the
-/// read -> (decrypt) -> parse -> inherit sequence in one place so callers don't
-/// have to repeat it.
-///
-/// [`ManifestWriter`]: super::ManifestWriter
 pub(crate) struct ManifestReader {
     file_io: FileIO,
 }
