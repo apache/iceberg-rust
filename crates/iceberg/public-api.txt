@@ -3147,6 +3147,7 @@ pub fn iceberg::transaction::Transaction::expire_snapshots(&self) -> iceberg::tr
 pub fn iceberg::transaction::Transaction::fast_append(&self) -> iceberg::transaction::append::FastAppendAction
 pub fn iceberg::transaction::Transaction::new(table: &iceberg::table::Table) -> Self
 pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::sort_order::ReplaceSortOrderAction
+pub fn iceberg::transaction::Transaction::row_delta(&self) -> iceberg::transaction::row_delta::RowDeltaAction
 pub fn iceberg::transaction::Transaction::update_location(&self) -> iceberg::transaction::update_location::UpdateLocationAction
 pub fn iceberg::transaction::Transaction::update_schema(&self) -> iceberg::transaction::update_schema::UpdateSchemaAction
 pub fn iceberg::transaction::Transaction::update_statistics(&self) -> iceberg::transaction::update_statistics::UpdateStatisticsAction
