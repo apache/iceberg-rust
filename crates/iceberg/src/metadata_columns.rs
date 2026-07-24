@@ -425,6 +425,12 @@ pub fn get_metadata_field(field_id: i32) -> Result<&'static NestedFieldRef> {
 
 /// Returns the field ID for a metadata column name.
 ///
+/// This maps every reserved name to its field id, including the position-delete-file
+/// internal columns `pos` and `file_path`, which are not `_`-prefixed. It is therefore
+/// not a membership test for data-table metadata columns: `get_metadata_field_id("pos")`
+/// returns `Ok` even though `pos` is a valid user data column name. To decide whether a
+/// name is a projectable data-table metadata column, use [`is_metadata_column_name`].
+///
 /// # Arguments
 /// * `column_name` - The metadata column name
 ///
@@ -453,13 +459,20 @@ pub fn get_metadata_field_id(column_name: &str) -> Result<i32> {
     }
 }
 
-/// Checks if a field ID is a metadata field.
+/// Checks if a field ID is a data-table metadata column.
+///
+/// Mirrors Java `MetadataColumns.isMetadataColumn(int)` (backed by `META_IDS`): only the
+/// field ids of columns projectable in a data-table scan return `true`. The
+/// position-delete-file internal columns (`file_path`/`pos`, ids `i32::MAX - 101/-102`)
+/// and the changelog columns (`_change_type`/`_change_ordinal`/`_commit_snapshot_id`) are
+/// deliberately excluded, so their ids return `false` here even though
+/// [`get_metadata_field`] can still resolve them.
 ///
 /// # Arguments
 /// * `field_id` - The field ID to check
 ///
 /// # Returns
-/// `true` if the field ID is a (currently supported) metadata field, `false` otherwise
+/// `true` if the field ID is a data-table metadata column, `false` otherwise
 pub fn is_metadata_field(field_id: i32) -> bool {
     matches!(
         field_id,
@@ -468,25 +481,43 @@ pub fn is_metadata_field(field_id: i32) -> bool {
             | RESERVED_FIELD_ID_DELETED
             | RESERVED_FIELD_ID_SPEC_ID
             | RESERVED_FIELD_ID_PARTITION
-            | RESERVED_FIELD_ID_DELETE_FILE_PATH
-            | RESERVED_FIELD_ID_DELETE_FILE_POS
-            | RESERVED_FIELD_ID_CHANGE_TYPE
-            | RESERVED_FIELD_ID_CHANGE_ORDINAL
-            | RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID
             | RESERVED_FIELD_ID_ROW_ID
             | RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER
     )
 }
 
-/// Checks if a column name is a metadata column.
+/// Checks if a column name is a data-table metadata column.
+///
+/// Mirrors Java `MetadataColumns.isMetadataColumn(String)` (backed by its `META_COLUMNS`
+/// allowlist plus the `_partition` special case): a column name is a data-table metadata
+/// column only if it is one of the reserved names that a scan can project.
+///
+/// This deliberately excludes two groups of reserved names that Java also keeps out of
+/// `META_COLUMNS`:
+/// - the position-delete-file internal columns `pos`, `file_path`, and `row`, so a user
+///   data column of the same name is not shadowed during a scan (issue #2837);
+/// - the changelog columns `_change_type`, `_change_ordinal`, and `_commit_snapshot_id`.
+///
+/// [`get_metadata_field_id`] still maps the reserved names it knows (including `pos` and
+/// `file_path`) to their field ids; only this membership check excludes them. (`row` has
+/// no reserved id in this crate, so `get_metadata_field_id("row")` is an error.)
 ///
 /// # Arguments
 /// * `column_name` - The column name to check
 ///
 /// # Returns
-/// `true` if the column name is a metadata column, `false` otherwise
+/// `true` if the column name is a data-table metadata column, `false` otherwise
 pub fn is_metadata_column_name(column_name: &str) -> bool {
-    get_metadata_field_id(column_name).is_ok()
+    matches!(
+        column_name,
+        RESERVED_COL_NAME_FILE
+            | RESERVED_COL_NAME_POS
+            | RESERVED_COL_NAME_DELETED
+            | RESERVED_COL_NAME_SPEC_ID
+            | RESERVED_COL_NAME_PARTITION
+            | RESERVED_COL_NAME_ROW_ID
+            | RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER
+    )
 }
 
 #[cfg(test)]
@@ -568,5 +599,81 @@ mod tests {
         assert!(get_metadata_field(RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID).is_ok());
         assert!(get_metadata_field(RESERVED_FIELD_ID_ROW_ID).is_ok());
         assert!(get_metadata_field(RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER).is_ok());
+    }
+
+    #[test]
+    fn test_data_table_metadata_columns() {
+        // Both sides of the data-table metadata check (name and field id) must accept
+        // these seven columns. On the name side Java keeps six in `META_COLUMNS` and
+        // recognizes `_partition` via the `isMetadataColumn(String)` special case; on the
+        // id side all seven are in `META_IDS`.
+        assert!(is_metadata_column_name(RESERVED_COL_NAME_FILE));
+        assert!(is_metadata_column_name(RESERVED_COL_NAME_POS));
+        assert!(is_metadata_column_name(RESERVED_COL_NAME_DELETED));
+        assert!(is_metadata_column_name(RESERVED_COL_NAME_SPEC_ID));
+        assert!(is_metadata_column_name(RESERVED_COL_NAME_PARTITION));
+        assert!(is_metadata_column_name(RESERVED_COL_NAME_ROW_ID));
+        assert!(is_metadata_column_name(
+            RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER
+        ));
+
+        assert!(is_metadata_field(RESERVED_FIELD_ID_FILE));
+        assert!(is_metadata_field(RESERVED_FIELD_ID_POS));
+        assert!(is_metadata_field(RESERVED_FIELD_ID_DELETED));
+        assert!(is_metadata_field(RESERVED_FIELD_ID_SPEC_ID));
+        assert!(is_metadata_field(RESERVED_FIELD_ID_PARTITION));
+        assert!(is_metadata_field(RESERVED_FIELD_ID_ROW_ID));
+        assert!(is_metadata_field(
+            RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER
+        ));
+    }
+
+    #[test]
+    fn test_changelog_columns_are_not_data_table_metadata_columns() {
+        // Changelog columns are not in Java's `META_COLUMNS`, so they are not projectable
+        // data-table metadata columns (`isMetadataColumn` is false for them).
+        assert!(!is_metadata_column_name(RESERVED_COL_NAME_CHANGE_TYPE));
+        assert!(!is_metadata_column_name(RESERVED_COL_NAME_CHANGE_ORDINAL));
+        assert!(!is_metadata_column_name(
+            RESERVED_COL_NAME_COMMIT_SNAPSHOT_ID
+        ));
+        assert!(!is_metadata_field(RESERVED_FIELD_ID_CHANGE_TYPE));
+        assert!(!is_metadata_field(RESERVED_FIELD_ID_CHANGE_ORDINAL));
+        assert!(!is_metadata_field(RESERVED_FIELD_ID_COMMIT_SNAPSHOT_ID));
+    }
+
+    #[test]
+    fn test_delete_file_columns_are_not_data_table_metadata_columns() {
+        // `pos`, `file_path`, and `row` are the internal columns of a position-delete file,
+        // not projectable metadata columns of a data table. They must not shadow real data
+        // columns of the same name during a scan (issue #2837). Java returns false for both
+        // their names and their field ids; mirror that on both sides here.
+        assert!(!is_metadata_column_name("pos"));
+        assert!(!is_metadata_column_name("file_path"));
+        assert!(!is_metadata_column_name("row"));
+        assert!(!is_metadata_field(RESERVED_FIELD_ID_DELETE_FILE_POS));
+        assert!(!is_metadata_field(RESERVED_FIELD_ID_DELETE_FILE_PATH));
+        // `row` (Java's DELETE_FILE_ROW_FIELD_ID, i32::MAX - 103) has no reserved id in
+        // this crate, so it is not a metadata field either.
+        assert!(!is_metadata_field(i32::MAX - 103));
+
+        // `get_metadata_field_id` intentionally still maps the two bare names it knows to
+        // their reserved field ids; only the data-table membership check excludes them.
+        assert_eq!(
+            get_metadata_field_id(RESERVED_COL_NAME_DELETE_FILE_POS).unwrap(),
+            RESERVED_FIELD_ID_DELETE_FILE_POS
+        );
+        assert_eq!(
+            get_metadata_field_id(RESERVED_COL_NAME_DELETE_FILE_PATH).unwrap(),
+            RESERVED_FIELD_ID_DELETE_FILE_PATH
+        );
+    }
+
+    #[test]
+    fn test_ordinary_data_column_names_are_not_metadata_columns() {
+        assert!(!is_metadata_column_name("id"));
+        assert!(!is_metadata_column_name("name"));
+        // A user column that merely starts with an underscore but is not reserved.
+        assert!(!is_metadata_column_name("_custom"));
     }
 }
