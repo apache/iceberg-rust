@@ -175,22 +175,10 @@ impl PlanContext {
             .await
     }
 
-    /// Returns the partition filter for a manifest, or an always-true filter when the
-    /// manifest's spec cannot be resolved against the snapshot schema. Files of such
-    /// manifests are not partition-pruned but still receive the row filter.
+    /// Returns the partition filter for a manifest. See [`PartitionFilterCache::get`] for the
+    /// always-true fallback when the manifest's spec cannot be resolved against the scan schema.
     fn get_partition_filter(&self, manifest_file: &ManifestFile) -> Result<Arc<BoundPredicate>> {
         let partition_spec_id = manifest_file.partition_spec_id;
-
-        // Historical specs may reference source columns that were later dropped from the
-        // schema, in which case the partition type cannot be resolved. A missing spec is
-        // reported by the partition filter cache instead.
-        let resolvable = self
-            .table_metadata
-            .partition_spec_by_id(partition_spec_id)
-            .is_none_or(|spec| spec.partition_type(&self.snapshot_schema).is_ok());
-        if !resolvable {
-            return Ok(Arc::new(BoundPredicate::AlwaysTrue));
-        }
 
         let partition_filter = self.partition_filter_cache.get(
             partition_spec_id,
