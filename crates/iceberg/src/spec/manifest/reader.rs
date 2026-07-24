@@ -93,10 +93,7 @@ mod tests {
         // Writing the manifest yields the manifest list entry describing it.
         let manifest_file = writer.write_manifest_file().await.unwrap();
 
-        let manifest = ManifestReader::new(io)
-            .read(&manifest_file)
-            .await
-            .unwrap();
+        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
         assert_eq!(manifest.entries().len(), 1);
         assert_eq!(
             manifest.entries()[0].data_file().file_path(),
@@ -162,7 +159,6 @@ mod tests {
         );
     }
 
-
     fn test_schema() -> Arc<Schema> {
         Arc::new(
             Schema::builder()
@@ -211,5 +207,4 @@ mod tests {
     fn key_metadata() -> StandardKeyMetadata {
         StandardKeyMetadata::try_new(b"0123456789abcdef").unwrap()
     }
-
 }
