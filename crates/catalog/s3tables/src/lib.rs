@@ -49,6 +49,5 @@
 #![deny(missing_docs)]
 
 mod catalog;
-mod utils;
 
 pub use catalog::*;
