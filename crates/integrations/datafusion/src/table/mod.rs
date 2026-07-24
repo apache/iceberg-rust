@@ -1245,11 +1245,12 @@ mod tests {
         );
 
         // A nonexistent snapshot id is rejected up front by with_snapshot_id.
-        let err = IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), "t".to_string())
-            .await
-            .unwrap()
-            .with_snapshot_id(Some(9_999_999))
-            .unwrap_err();
+        let err =
+            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), "t".to_string())
+                .await
+                .unwrap()
+                .with_snapshot_id(Some(9_999_999))
+                .unwrap_err();
         assert!(
             err.to_string().contains("snapshot id"),
             "unexpected error: {err}"

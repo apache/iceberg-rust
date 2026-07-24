@@ -72,7 +72,7 @@ pub fn iceberg_datafusion::IcebergStaticTableProvider::table_type(&self) -> data
 pub struct iceberg_datafusion::table::IcebergTableProvider
 impl iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::snapshot_id(&self) -> core::option::Option<i64>
-pub fn iceberg_datafusion::IcebergTableProvider::with_snapshot_id(self, snapshot_id: core::option::Option<i64>) -> Self
+pub fn iceberg_datafusion::IcebergTableProvider::with_snapshot_id(self, snapshot_id: core::option::Option<i64>) -> iceberg::error::Result<Self>
 impl core::clone::Clone for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::clone(&self) -> iceberg_datafusion::IcebergTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergTableProvider
@@ -119,7 +119,7 @@ pub fn iceberg_datafusion::IcebergStaticTableProvider::table_type(&self) -> data
 pub struct iceberg_datafusion::IcebergTableProvider
 impl iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::snapshot_id(&self) -> core::option::Option<i64>
-pub fn iceberg_datafusion::IcebergTableProvider::with_snapshot_id(self, snapshot_id: core::option::Option<i64>) -> Self
+pub fn iceberg_datafusion::IcebergTableProvider::with_snapshot_id(self, snapshot_id: core::option::Option<i64>) -> iceberg::error::Result<Self>
 impl core::clone::Clone for iceberg_datafusion::IcebergTableProvider
 pub fn iceberg_datafusion::IcebergTableProvider::clone(&self) -> iceberg_datafusion::IcebergTableProvider
 impl core::fmt::Debug for iceberg_datafusion::IcebergTableProvider
