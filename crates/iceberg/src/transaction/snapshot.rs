@@ -34,8 +34,6 @@ use crate::table::Table;
 use crate::transaction::ActionCommit;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
 
-const META_ROOT_PATH: &str = "metadata";
-
 /// A trait that defines how different table operations produce new snapshots.
 ///
 /// `SnapshotProduceOperation` is used by [`SnapshotProducer`] to customize snapshot creation
@@ -241,24 +239,32 @@ impl<'a> SnapshotProducer<'a> {
 
     fn new_manifest_writer(&mut self, content: ManifestContentType) -> Result<ManifestWriter> {
         let new_manifest_path = format!(
-            "{}/{}/{}-m{}.{}",
-            self.table.metadata().location(),
-            META_ROOT_PATH,
+            "{}/{}-m{}.{}",
+            self.table.metadata().metadata_location()?,
             self.commit_uuid,
             self.manifest_counter.next().unwrap(),
             DataFileFormat::Avro
         );
         let output_file = self.table.file_io().new_output(new_manifest_path)?;
-        let builder = ManifestWriterBuilder::new(
-            output_file,
-            Some(self.snapshot_id),
-            self.table.metadata().current_schema().clone(),
-            self.table
-                .metadata()
-                .default_partition_spec()
-                .as_ref()
-                .clone(),
-        );
+        let partition_spec = self
+            .table
+            .metadata()
+            .default_partition_spec()
+            .as_ref()
+            .clone();
+        let schema = self.table.metadata().current_schema().clone();
+
+        let builder = if let Some(em) = self.table.encryption_manager() {
+            ManifestWriterBuilder::new_from_encrypted(
+                em.encrypt(output_file),
+                Some(self.snapshot_id),
+                schema,
+                partition_spec,
+            )?
+        } else {
+            ManifestWriterBuilder::new(output_file, Some(self.snapshot_id), schema, partition_spec)
+        };
+
         match self.table.metadata().format_version() {
             FormatVersion::V1 => Ok(builder.build_v1()),
             FormatVersion::V2 => match content {
@@ -422,16 +428,15 @@ impl<'a> SnapshotProducer<'a> {
         )
     }
 
-    fn generate_manifest_list_file_path(&self, attempt: i64) -> String {
-        format!(
-            "{}/{}/snap-{}-{}-{}.{}",
-            self.table.metadata().location(),
-            META_ROOT_PATH,
+    fn generate_manifest_list_file_path(&self, attempt: i64) -> Result<String> {
+        Ok(format!(
+            "{}/snap-{}-{}-{}.{}",
+            self.table.metadata().metadata_location()?,
             self.snapshot_id,
             attempt,
             self.commit_uuid,
             DataFileFormat::Avro
-        )
+        ))
     }
 
     /// Finished building the action and return the [`ActionCommit`] to the transaction.
@@ -440,7 +445,7 @@ impl<'a> SnapshotProducer<'a> {
         snapshot_produce_operation: OP,
         process: MP,
     ) -> Result<ActionCommit> {
-        let manifest_list_path = self.generate_manifest_list_file_path(0);
+        let manifest_list_path = self.generate_manifest_list_file_path(0)?;
         let next_seq_num = self.table.metadata().next_sequence_number();
         let first_row_id = self.table.metadata().next_row_id();
 
