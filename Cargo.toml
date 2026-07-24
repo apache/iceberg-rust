@@ -76,6 +76,7 @@ bytes = "1.11"
 cfg-if = "1"
 chrono = "0.4.41"
 clap = { version = "4.5.48", features = ["derive", "cargo"] }
+crc32fast = "1"
 dashmap = "6"
 datafusion = "54.1.0"
 datafusion-cli = "54.1.0"
