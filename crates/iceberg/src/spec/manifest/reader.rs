@@ -21,19 +21,27 @@ use crate::error::Result;
 use crate::io::FileIO;
 use crate::spec::ManifestFile;
 
-/// Reads a manifest file referenced by a manifest list entry.
-pub struct ManifestReader {
+/// Reads a manifest file referenced by a manifest list entry, transparently
+/// decrypting it when the entry records key metadata.
+///
+/// This is the read-side counterpart to [`ManifestWriter`], encapsulating the
+/// read -> (decrypt) -> parse -> inherit sequence in one place so callers don't
+/// have to repeat it.
+///
+/// [`ManifestWriter`]: super::ManifestWriter
+pub(crate) struct ManifestReader {
     file_io: FileIO,
 }
 
 impl ManifestReader {
-    /// Create a reader for the manifest.
-    pub fn new(file_io: FileIO) -> Self {
+    /// Create a manifest reader.
+    pub(crate) fn new(file_io: FileIO) -> Self {
         Self { file_io }
     }
 
-    /// Read and parse manifest.
-    pub async fn read(self, manifest_file: &ManifestFile) -> Result<Manifest> {
+    /// Read, decrypt, parse and return the manifest described by
+    /// `manifest_file`.
+    pub(crate) async fn read(self, manifest_file: &ManifestFile) -> Result<Manifest> {
         let input_file = self.file_io.new_input(&manifest_file.manifest_path)?;
         let key_metadata = manifest_file
             .key_metadata

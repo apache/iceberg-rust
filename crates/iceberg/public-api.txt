@@ -2103,10 +2103,6 @@ pub fn iceberg::spec::ManifestMetadata::fmt(&self, f: &mut core::fmt::Formatter<
 impl core::marker::StructuralPartialEq for iceberg::spec::ManifestMetadata
 impl iceberg::spec::ManifestMetadata
 pub fn iceberg::spec::ManifestMetadata::builder() -> ManifestMetadataBuilder<((), (), (), (), ())>
-pub struct iceberg::spec::ManifestReader
-impl iceberg::spec::ManifestReader
-pub fn iceberg::spec::ManifestReader::new(file_io: iceberg::io::FileIO) -> Self
-pub async fn iceberg::spec::ManifestReader::read(self, manifest_file: &iceberg::spec::ManifestFile) -> iceberg::Result<iceberg::spec::Manifest>
 pub struct iceberg::spec::ManifestWriter
 impl iceberg::spec::ManifestWriter
 pub fn iceberg::spec::ManifestWriter::add_delete_file(&mut self, data_file: iceberg::spec::DataFile, sequence_number: i64, file_sequence_number: core::option::Option<i64>) -> iceberg::Result<()>
