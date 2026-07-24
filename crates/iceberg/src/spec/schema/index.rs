@@ -164,6 +164,7 @@ pub fn index_parents(r#struct: &StructType) -> Result<HashMap<i32, i32>> {
     Ok(index.result)
 }
 
+/// An index of field names to field ids, and short field names to field ids.
 #[derive(Default)]
 pub struct IndexByName {
     // Maybe radix tree is better here?
