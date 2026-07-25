@@ -224,18 +224,18 @@ impl CompressionCodec {
     }
 
     /// Returns the file extension suffix for this compression codec.
-    /// Returns empty string for None, ".gz" for Gzip.
+    /// Returns empty string for None, ".zstd" for Zstd, and ".gz" for Gzip.
     ///
     /// # Errors
     ///
-    /// Returns an error for Lz4 and Zstd as they are not fully supported.
+    /// Returns an error for Lz4 and Snappy as they are not fully supported.
     pub fn suffix(&self) -> Result<&'static str> {
         match self {
             CompressionCodec::None => Ok(""),
+            CompressionCodec::Zstd(_) => Ok(".zstd"),
             CompressionCodec::Gzip(_) => Ok(".gz"),
             codec @ (CompressionCodec::Lz4
             | CompressionCodec::Lz4Raw
-            | CompressionCodec::Zstd(_)
             | CompressionCodec::Brotli(_)
             | CompressionCodec::Lzo
             | CompressionCodec::Snappy) => Err(Error::new(
@@ -302,17 +302,14 @@ mod tests {
     #[test]
     fn test_suffix() {
         assert_eq!(CompressionCodec::None.suffix().unwrap(), "");
+        assert_eq!(CompressionCodec::zstd_default().suffix().unwrap(), ".zstd");
         assert_eq!(CompressionCodec::gzip_default().suffix().unwrap(), ".gz");
 
         assert!(CompressionCodec::Lz4.suffix().is_err());
-        assert!(CompressionCodec::zstd_default().suffix().is_err());
         assert!(CompressionCodec::Snappy.suffix().is_err());
 
         let lz4_err = CompressionCodec::Lz4.suffix().unwrap_err();
         assert!(lz4_err.to_string().contains("suffix not defined for Lz4"));
-
-        let zstd_err = CompressionCodec::zstd_default().suffix().unwrap_err();
-        assert!(zstd_err.to_string().contains("suffix not defined for Zstd"));
     }
 
     #[test]
