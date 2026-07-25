@@ -122,10 +122,29 @@ fn missing_config_err(node: &str) -> DataFusionError {
     ))
 }
 
-/// Arrow schema of the table's current Iceberg schema.
-fn arrow_schema_of(table: &Table) -> Result<SchemaRef, DataFusionError> {
+/// Arrow schema of the table at `snapshot_id`, or its current schema for `None`.
+///
+/// A pinned scan must use the schema that snapshot was written under. The
+/// table's schema may have changed since, and the executor resolves this on its
+/// own — so using the current schema here would describe historical rows with a
+/// column list that no longer matches them.
+fn arrow_schema_of(table: &Table, snapshot_id: Option<i64>) -> Result<SchemaRef, DataFusionError> {
+    let iceberg_schema = match snapshot_id {
+        None => table.metadata().current_schema().clone(),
+        Some(snapshot_id) => table
+            .metadata()
+            .snapshot_by_id(snapshot_id)
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "snapshot id {snapshot_id} not found in table {}",
+                    table.identifier()
+                ))
+            })?
+            .schema(table.metadata())
+            .map_err(to_df_err)?,
+    };
     Ok(Arc::new(
-        schema_to_arrow_schema(table.metadata().current_schema()).map_err(to_df_err)?,
+        schema_to_arrow_schema(&iceberg_schema).map_err(to_df_err)?,
     ))
 }
 
@@ -159,30 +178,9 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
             } => {
                 let config = catalog.into();
                 let table_obj = load_table(&config, &table)?;
-                let arrow_schema = arrow_schema_of(&table_obj)?;
-                // Map the projected column names back to indices in the table
-                // schema. A name that doesn't resolve is a hard error: the
-                // executor reloads table metadata independently of the scheduler,
-                // so silently dropping it would rebuild the scan with fewer
-                // columns than the plan expects and surface later as a confusing
-                // column-count mismatch instead of a clear failure here.
-                let proj_indices: Option<Vec<usize>> = projection
-                    .as_ref()
-                    .map(|names| {
-                        names
-                            .iter()
-                            .map(|n| {
-                                arrow_schema.index_of(n).map_err(|_| {
-                                    DataFusionError::Internal(format!(
-                                        "projected column {n:?} not found in table {} schema; \
-                                         scheduler and executor table metadata may be out of sync",
-                                        table
-                                    ))
-                                })
-                            })
-                            .collect::<Result<Vec<usize>, _>>()
-                    })
-                    .transpose()?;
+                let arrow_schema = arrow_schema_of(&table_obj, snapshot_id)?;
+                let proj_indices =
+                    project_indices(&arrow_schema, projection.as_ref(), &table, snapshot_id)?;
                 let scan = IcebergTableScan::new(
                     table_obj,
                     snapshot_id,
@@ -198,7 +196,9 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
             IcebergPhysicalNode::Write { catalog, table } => {
                 let config = catalog.into();
                 let table_obj = load_table(&config, &table)?;
-                let arrow_schema = arrow_schema_of(&table_obj)?;
+                // Writes always target the current schema — a snapshot-pinned
+                // provider is read-only.
+                let arrow_schema = arrow_schema_of(&table_obj, None)?;
                 let input = single_input(inputs, "IcebergWriteExec")?;
                 let write = IcebergWriteExec::new(table_obj, input, arrow_schema)
                     .with_catalog_config(Some(config));
@@ -208,7 +208,7 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
                 let config = catalog.into();
                 let cat = get_catalog(&config)?;
                 let table_obj = load_table(&config, &table)?;
-                let arrow_schema = arrow_schema_of(&table_obj)?;
+                let arrow_schema = arrow_schema_of(&table_obj, None)?;
                 let input = single_input(inputs, "IcebergCommitExec")?;
                 let commit = IcebergCommitExec::new(table_obj, cat, input, arrow_schema)
                     .with_catalog_config(Some(config));
@@ -335,6 +335,49 @@ impl PhysicalExtensionCodec for IcebergPhysicalCodec {
             ))),
         }
     }
+}
+
+/// Maps projected column names back to their indices in `arrow_schema`, the
+/// schema of the table at `snapshot_id`.
+///
+/// A name that doesn't resolve is a hard error: the executor reloads table
+/// metadata independently of the scheduler, so silently dropping it would
+/// rebuild the scan with fewer columns than the plan expects and surface later
+/// as a confusing column-count mismatch instead of a clear failure here.
+///
+/// The usual cause is a schema change with no write behind it. Evolving a schema
+/// creates no snapshot, so a scan planned right after an `ADD COLUMN` projects a
+/// column that the latest snapshot's schema does not have yet — hence the
+/// message points at the snapshot rather than at cluster state.
+fn project_indices(
+    arrow_schema: &SchemaRef,
+    projection: Option<&Vec<String>>,
+    table: &TableIdent,
+    snapshot_id: Option<i64>,
+) -> Result<Option<Vec<usize>>, DataFusionError> {
+    projection
+        .map(|names| {
+            names
+                .iter()
+                .map(|n| {
+                    arrow_schema.index_of(n).map_err(|_| {
+                        let cause = match snapshot_id {
+                            Some(id) => format!(
+                                "not found in the schema of table {table} at snapshot {id}; \
+                                 the table's schema may have changed since that snapshot \
+                                 was written"
+                            ),
+                            None => format!(
+                                "not found in the current schema of table {table}; \
+                                 scheduler and executor table metadata may be out of sync"
+                            ),
+                        };
+                        DataFusionError::Internal(format!("projected column {n:?} {cause}"))
+                    })
+                })
+                .collect::<Result<Vec<usize>, _>>()
+        })
+        .transpose()
 }
 
 fn single_input(
@@ -552,5 +595,195 @@ mod tests {
             .expect("decoded plan should be a ShuffleWriterExec");
         assert_eq!(decoded.job_id().as_str(), "job-1");
         assert_eq!(decoded.stage_id(), 7);
+    }
+
+    fn arrow_schema() -> SchemaRef {
+        use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]))
+    }
+
+    fn tbl() -> TableIdent {
+        TableIdent::from_strs(["ns", "tbl"]).unwrap()
+    }
+
+    #[test]
+    fn project_indices_resolves_names_in_projection_order() {
+        let names = vec!["c".to_string(), "a".to_string()];
+        let idx = project_indices(&arrow_schema(), Some(&names), &tbl(), None).unwrap();
+        assert_eq!(idx, Some(vec![2, 0]), "resolved in projection order");
+
+        // No projection means "all columns", not "no columns".
+        assert_eq!(
+            project_indices(&arrow_schema(), None, &tbl(), None).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn project_indices_unknown_column_errors() {
+        // A projected name absent from the reloaded schema must fail loudly,
+        // naming the column and a cause that fits how the schema was resolved.
+        let names = vec!["missing".to_string()];
+
+        let err = project_indices(&arrow_schema(), Some(&names), &tbl(), Some(42)).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("missing"), "names the column: {msg}");
+        assert!(msg.contains("snapshot 42"), "names the snapshot: {msg}");
+        assert!(msg.contains("schema may have changed"), "the likely cause: {msg}");
+
+        // Unpinned scans resolve against the current schema, where a missing
+        // column really does mean the two nodes disagree about the table.
+        let err = project_indices(&arrow_schema(), Some(&names), &tbl(), None).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("out of sync"), "explains the cause: {msg}");
+    }
+
+    const PINNED_SNAPSHOT: i64 = 3_051_729_675_574_597_004;
+
+    /// A table with two schemas: `PINNED_SNAPSHOT` was written under
+    /// `{id, name}`, and `email` was added after it.
+    fn evolved_table() -> Table {
+        use std::collections::HashMap;
+
+        use iceberg::io::FileIO;
+        use iceberg::spec::{
+            FormatVersion, NestedField, Operation, PartitionSpec, PrimitiveType, Snapshot,
+            SortOrder, Summary, TableMetadataBuilder, Type,
+        };
+        use iceberg::test_utils::test_runtime;
+
+        let v1 = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+        let v2 = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(3, "email", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        // Two stages, so the snapshot can use the schema id the builder actually
+        // assigned to `v1` instead of a guessed one.
+        let base = TableMetadataBuilder::new(
+            v1,
+            PartitionSpec::unpartition_spec(),
+            SortOrder::unsorted_order(),
+            "/test/table".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+        let v1_schema_id = base.current_schema().schema_id();
+
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(PINNED_SNAPSHOT)
+            .with_sequence_number(1)
+            .with_timestamp_ms(base.last_updated_ms())
+            .with_manifest_list("/test/snap-1.avro")
+            .with_schema_id(v1_schema_id)
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .build();
+
+        let metadata = TableMetadataBuilder::new_from_metadata(base, None)
+            .add_snapshot(snapshot)
+            .unwrap()
+            .add_schema(v2)
+            .unwrap()
+            .set_current_schema(-1)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        Table::builder()
+            .metadata(metadata)
+            .identifier(tbl())
+            .file_io(FileIO::new_with_fs())
+            .metadata_location("/test/metadata.json")
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+    }
+
+    fn field_names(schema: &SchemaRef) -> Vec<&str> {
+        schema.fields().iter().map(|f| f.name().as_str()).collect()
+    }
+
+    #[test]
+    fn arrow_schema_of_pinned_snapshot_uses_that_snapshot_schema() {
+        // `email` came later, so a scan pinned to this snapshot must not
+        // advertise it.
+        let table = evolved_table();
+        let schema = arrow_schema_of(&table, Some(PINNED_SNAPSHOT)).unwrap();
+        assert_eq!(field_names(&schema), vec!["id", "name"]);
+    }
+
+    #[test]
+    fn arrow_schema_of_unpinned_uses_current_schema() {
+        let table = evolved_table();
+        let schema = arrow_schema_of(&table, None).unwrap();
+        assert_eq!(field_names(&schema), vec!["id", "name", "email"]);
+    }
+
+    #[test]
+    fn arrow_schema_of_unknown_snapshot_errors() {
+        // Falling back to the current schema would turn a stale pin into wrong
+        // output instead of a failure.
+        let table = evolved_table();
+        let err = arrow_schema_of(&table, Some(-1)).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("snapshot id -1"), "names the snapshot: {msg}");
+    }
+
+    #[test]
+    fn try_decode_rejects_unframed_buffers() {
+        use datafusion::prelude::SessionContext;
+
+        // Missing or unrecognized framing must be a hard error, never a misparse
+        // of whatever bytes follow.
+        let ctx = SessionContext::new();
+        let codec = IcebergPhysicalCodec::default();
+
+        let err = codec.try_decode(&[], &[], &ctx.task_ctx()).unwrap_err();
+        assert!(err.to_string().contains("empty"), "{err}");
+
+        let err = codec.try_decode(&[99], &[], &ctx.task_ctx()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unknown iceberg physical codec tag 99"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn try_decode_expr_rejects_unframed_buffers() {
+        // The expr path has its own tag dispatch, so it needs its own check.
+        let codec = IcebergPhysicalCodec::default();
+
+        let err = codec.try_decode_expr(&[], &[]).unwrap_err();
+        assert!(err.to_string().contains("empty"), "{err}");
+
+        let err = codec.try_decode_expr(&[99], &[]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unknown iceberg physical expr tag 99"),
+            "{err}"
+        );
     }
 }

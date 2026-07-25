@@ -45,11 +45,13 @@ use iceberg::spec::{
     NestedField, PrimitiveType, Schema, Transform, Type, UnboundPartitionField,
     UnboundPartitionSpec,
 };
+use iceberg::transaction::{AddColumn, ApplyTransactionAction, Transaction};
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableCreation, TableIdent};
 use iceberg_ballista::{
     IcebergCatalogConfig, register_iceberg_catalog, register_iceberg_codecs, register_iceberg_table,
 };
 use iceberg_catalog_rest::RestCatalogBuilder;
+use iceberg_datafusion::IcebergTableProvider;
 use iceberg_storage_opendal::OpenDalStorageFactory;
 use tokio::sync::Mutex;
 
@@ -106,6 +108,21 @@ fn i32_values(batches: &[RecordBatch]) -> Vec<i32> {
     batches
         .iter()
         .flat_map(|b| b.column(0).as_primitive::<Int32Type>().values().to_vec())
+        .collect()
+}
+
+/// Flattens a named string column across all batches, preserving nulls.
+fn string_values(batches: &[RecordBatch], column: &str) -> Vec<Option<String>> {
+    batches
+        .iter()
+        .flat_map(|b| {
+            let idx = b.schema().index_of(column).expect("column present");
+            b.column(idx)
+                .as_string::<i32>()
+                .iter()
+                .map(|v| v.map(str::to_string))
+                .collect::<Vec<_>>()
+        })
         .collect()
 }
 
@@ -170,6 +187,34 @@ async fn create_table(props: &HashMap<String, String>, table_name: &str) -> Name
         .expect("create table");
 
     namespace
+}
+
+/// Column names of a result set, in order.
+fn column_names(batches: &[RecordBatch]) -> Vec<String> {
+    batches
+        .first()
+        .expect("at least one batch")
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect()
+}
+
+/// Loads the table from the catalog and returns its current snapshot id.
+async fn current_snapshot_id(
+    props: &HashMap<String, String>,
+    namespace: &NamespaceIdent,
+    table_name: &str,
+) -> i64 {
+    build_rest_catalog(props)
+        .await
+        .load_table(&TableIdent::new(namespace.clone(), table_name.to_string()))
+        .await
+        .expect("load table")
+        .metadata()
+        .current_snapshot_id()
+        .expect("table has a snapshot")
 }
 
 /// Creates a table partitioned by `region` (identity). A distributed INSERT then
@@ -247,6 +292,13 @@ async fn distributed_insert_and_read() {
     .await
     .expect("register iceberg table");
 
+    // Read *before* any insert. This first read is what makes the re-reads below
+    // meaningful: it forces the registered provider through a full plan/scan
+    // cycle while the table is still empty, so a provider that froze its table
+    // metadata here would keep returning this empty snapshot forever.
+    let count = single_i64(&run_sql(&ctx, "SELECT count(*) AS n FROM events").await);
+    assert_eq!(count, 0, "table is empty before the first insert");
+
     run_sql(
         &ctx,
         "INSERT INTO events VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')",
@@ -258,6 +310,23 @@ async fn distributed_insert_and_read() {
 
     let rows = run_sql(&ctx, "SELECT id, name FROM events ORDER BY id").await;
     assert_eq!(i32_values(&rows), vec![1, 2, 3]);
+
+    // Insert again through the same registration and re-read. `scan` reloads
+    // table metadata from the catalog every time, so each query plans against
+    // the snapshot current at *that* moment — the codec then pins it for the
+    // executors. A provider (or a cached catalog/table) that went stale after
+    // the first read would still report 3 rows here.
+    run_sql(&ctx, "INSERT INTO events VALUES (4, 'dave'), (5, 'erin')").await;
+
+    let count = single_i64(&run_sql(&ctx, "SELECT count(*) AS n FROM events").await);
+    assert_eq!(count, 5, "re-read must observe the interposed insert");
+
+    let rows = run_sql(&ctx, "SELECT id, name FROM events ORDER BY id").await;
+    assert_eq!(
+        i32_values(&rows),
+        vec![1, 2, 3, 4, 5],
+        "re-read returns both the original and the newly inserted rows"
+    );
 
     // Catalog-level registration: mount the whole Iceberg catalog and read the
     // same table as `<catalog>.<namespace>.<table>`. The providers built through
@@ -277,7 +346,7 @@ async fn distributed_insert_and_read() {
         )
         .await,
     );
-    assert_eq!(count, 3, "catalog-qualified distributed read");
+    assert_eq!(count, 5, "catalog-qualified distributed read");
 }
 
 /// Distributed correctness on a real multi-executor cluster, writing a
@@ -430,5 +499,229 @@ async fn parallel_multi_executor_insert_commits_all_rows() {
         filtered_ids,
         (1..=half).collect::<Vec<_>>(),
         "predicate-filtered distributed read"
+    );
+}
+
+/// A distributed read pinned to an old snapshot must return that snapshot's rows
+/// *and* that snapshot's schema — even after the table's schema has changed.
+///
+/// The executor never sees the scheduler's table object; it reloads metadata from
+/// the catalog itself. So the pin has to survive both codecs to get there, and an
+/// executor that used the table's *current* schema would describe the historical
+/// rows wrongly.
+///
+/// One table, five phases, so both directions of schema drift are covered by a
+/// single cluster:
+///
+/// 1. write `{id, name}` -> snapshot 1
+/// 2. add `email`, write again -> snapshot 2; a current read sees all six rows
+/// 3. read pinned to snapshot 1 — current schema has a column it lacks
+/// 4. drop `name`, leaving `{id, email}`
+/// 5. read pinned to snapshot 2 — that snapshot has a column current lacks
+///
+/// Phase 3 must come before the drop, while the schemas still differ. Phase 5 is
+/// the one an executor can't get right by accident: the current schema has no
+/// `name` to project, though the pinned snapshot's rows have the values.
+///
+/// Phase 4 drops `name` rather than `email` to work around an unrelated
+/// iceberg-rust bug; see the comment there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn distributed_time_travel_pins_snapshot_schema() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let _catalog_guard = CATALOG_GUARD.lock().await;
+
+    let props = catalog_props();
+    let table_name = unique_table_name("timetravel");
+    let namespace = create_table(&props, &table_name).await;
+
+    let state = iceberg_session_state(
+        SessionConfig::new_with_ballista()
+            .with_target_partitions(2)
+            .with_ballista_standalone_parallelism(2),
+    );
+    let ctx = SessionContext::standalone_with_state(state)
+        .await
+        .expect("start standalone ballista");
+
+    let catalog_config = IcebergCatalogConfig::new("rest", "rest", props.clone());
+    register_iceberg_table(
+        &ctx,
+        "events",
+        catalog_config.clone(),
+        namespace.clone(),
+        table_name.clone(),
+    )
+    .await
+    .expect("register iceberg table");
+
+    // Snapshot 1: three rows under the original {id, name} schema.
+    run_sql(
+        &ctx,
+        "INSERT INTO events VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')",
+    )
+    .await;
+    let snapshot_1 = current_snapshot_id(&props, &namespace, &table_name).await;
+
+    // Evolve the schema: add an `email` column. Snapshot 1 keeps referencing the
+    // two-column schema, so current and historical schemas now differ.
+    let catalog: Arc<dyn Catalog> = Arc::new(build_rest_catalog(&props).await);
+    let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
+    let table = catalog.load_table(&table_ident).await.expect("load table");
+    let tx = Transaction::new(&table);
+    let tx = tx
+        .update_schema()
+        .add_column(AddColumn::optional(
+            "email",
+            Type::Primitive(PrimitiveType::String),
+        ))
+        .apply(tx)
+        .expect("apply schema update");
+    tx.commit(catalog.as_ref()).await.expect("commit schema");
+
+    // A provider registered before the change still exposes the schema it was
+    // built with, so writing the new column needs a freshly built provider.
+    let evolved = IcebergTableProvider::try_new_with_config(
+        catalog.clone(),
+        catalog_config.clone(),
+        namespace.clone(),
+        table_name.clone(),
+    )
+    .await
+    .expect("build evolved provider");
+    ctx.register_table("events_v2", Arc::new(evolved))
+        .expect("register evolved provider");
+
+    // Snapshot 2: three more rows, now carrying `email`.
+    run_sql(
+        &ctx,
+        "INSERT INTO events_v2 VALUES (4, 'dave', 'dave@x.test'), \
+         (5, 'erin', 'erin@x.test'), (6, 'frank', 'frank@x.test')",
+    )
+    .await;
+    let snapshot_2 = current_snapshot_id(&props, &namespace, &table_name).await;
+
+    // The current distributed read sees all six rows under the evolved schema.
+    let current = run_sql(&ctx, "SELECT * FROM events_v2 ORDER BY id").await;
+    assert_eq!(
+        column_names(&current),
+        vec!["id", "name", "email"],
+        "phase 2: current read exposes the evolved schema"
+    );
+    assert_eq!(i32_values(&current), vec![1, 2, 3, 4, 5, 6]);
+
+    // Phase 3 — pin to snapshot 1, which has no `email` while the table does.
+    // Must run before the drop below, or the two schemas match again and the
+    // assertion would pass even for a scan that ignored the pin.
+    let pinned_v1 = IcebergTableProvider::try_new_with_config(
+        catalog.clone(),
+        catalog_config.clone(),
+        namespace.clone(),
+        table_name.clone(),
+    )
+    .await
+    .expect("build provider pinned to snapshot 1")
+    .with_snapshot_id(Some(snapshot_1))
+    .expect("pin snapshot 1");
+    ctx.register_table("events_v1", Arc::new(pinned_v1))
+        .expect("register provider pinned to snapshot 1");
+
+    // The pinned read returns that snapshot's rows under that snapshot's schema.
+    let pinned = run_sql(&ctx, "SELECT * FROM events_v1 ORDER BY id").await;
+    assert_eq!(
+        column_names(&pinned),
+        vec!["id", "name"],
+        "phase 3: pinned read exposes the schema in effect at that snapshot"
+    );
+    assert_eq!(
+        i32_values(&pinned),
+        vec![1, 2, 3],
+        "phase 3: exact historical row set from the pinned snapshot"
+    );
+
+    // Phase 4 — drop `name`, leaving {id, email}. Snapshot 2 keeps referencing
+    // the three-column schema.
+    //
+    // Dropping `email` instead would read more naturally here, but it hits an
+    // iceberg-rust bug: `UpdateSchema` always emits `AddSchema` followed by
+    // `SetCurrentSchema { schema_id: -1 }`, i.e. "make the last added schema
+    // current". Removing `email` reproduces the table's original {id, name}
+    // schema exactly, and the Java REST catalog treats `AddSchema` for a schema
+    // it already knows as a no-op — so nothing is "last added" and the commit
+    // fails with `Cannot set last added schema: no schema has been added`. Any
+    // drop that returns a table to an earlier schema hits this; the fix is to
+    // send the resolved schema id rather than -1 when the schema already exists.
+    // Dropping `name` sidesteps it, since {id, email} is new.
+    let table = catalog.load_table(&table_ident).await.expect("reload table");
+    let tx = Transaction::new(&table);
+    let tx = tx
+        .update_schema()
+        .delete_column("name")
+        .apply(tx)
+        .expect("apply column delete");
+    tx.commit(catalog.as_ref())
+        .await
+        .expect("commit delete column");
+
+    let dropped = IcebergTableProvider::try_new_with_config(
+        catalog.clone(),
+        catalog_config.clone(),
+        namespace.clone(),
+        table_name.clone(),
+    )
+    .await
+    .expect("build provider after drop");
+    ctx.register_table("events_v3", Arc::new(dropped))
+        .expect("register provider after drop");
+
+    let current = run_sql(&ctx, "SELECT * FROM events_v3 ORDER BY id").await;
+    assert_eq!(
+        column_names(&current),
+        vec!["id", "email"],
+        "phase 4: current read reflects the dropped column"
+    );
+    assert_eq!(i32_values(&current), vec![1, 2, 3, 4, 5, 6]);
+
+    // Phase 5 — pin to snapshot 2, which still has the `name` the table just
+    // lost. An executor using the current schema has no `name` to project, so
+    // the query fails outright even though those rows carry the values.
+    let pinned_v2 = IcebergTableProvider::try_new_with_config(
+        catalog,
+        catalog_config,
+        namespace,
+        table_name,
+    )
+    .await
+    .expect("build provider pinned to snapshot 2")
+    .with_snapshot_id(Some(snapshot_2))
+    .expect("pin snapshot 2");
+    ctx.register_table("events_v2_pinned", Arc::new(pinned_v2))
+        .expect("register provider pinned to snapshot 2");
+
+    let pinned = run_sql(&ctx, "SELECT * FROM events_v2_pinned ORDER BY id").await;
+    assert_eq!(
+        column_names(&pinned),
+        vec!["id", "name", "email"],
+        "phase 5: pinned read exposes the column that existed at that snapshot"
+    );
+    assert_eq!(i32_values(&pinned), vec![1, 2, 3, 4, 5, 6]);
+    assert_eq!(
+        string_values(&pinned, "name"),
+        ["alice", "bob", "carol", "dave", "erin", "frank"]
+            .map(|s| Some(s.to_string()))
+            .to_vec(),
+        "phase 5: the dropped column's values still read back from the pinned \
+         snapshot"
+    );
+    assert_eq!(
+        string_values(&pinned, "email"),
+        vec![
+            None,
+            None,
+            None,
+            Some("dave@x.test".to_string()),
+            Some("erin@x.test".to_string()),
+            Some("frank@x.test".to_string()),
+        ],
+        "phase 5: rows written before `email` existed read back null"
     );
 }

@@ -358,4 +358,38 @@ mod tests {
             .expect("decode");
         assert!(decoded.downcast_ref::<EmptyTable>().is_some());
     }
+
+    fn one_col_schema() -> SchemaRef {
+        Arc::new(ArrowSchema::new(vec![Field::new(
+            "a",
+            DataType::Int32,
+            false,
+        )]))
+    }
+
+    #[test]
+    fn try_decode_table_provider_rejects_unframed_buffers() {
+        // Missing or unrecognized framing must be a hard error, never a misparse
+        // of whatever bytes follow.
+        let codec = IcebergLogicalCodec::default();
+        let ctx = SessionContext::new();
+        let decode = |buf: &[u8]| {
+            codec.try_decode_table_provider(
+                buf,
+                &TableReference::bare("t"),
+                one_col_schema(),
+                &ctx.task_ctx(),
+            )
+        };
+
+        let err = decode(&[]).unwrap_err();
+        assert!(err.to_string().contains("empty"), "{err}");
+
+        let err = decode(&[99]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unknown iceberg logical table-provider tag 99"),
+            "{err}"
+        );
+    }
 }
