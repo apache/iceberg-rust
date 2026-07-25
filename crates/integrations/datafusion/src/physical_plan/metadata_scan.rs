@@ -45,6 +45,13 @@ impl IcebergMetadataScan {
             properties,
         }
     }
+
+    /// Returns the metadata-table provider this node scans, so a distributed
+    /// engine can serialize the catalog config + table identifier + metadata type
+    /// it carries and rebuild it on a remote node.
+    pub fn provider(&self) -> &IcebergMetadataTableProvider {
+        &self.provider
+    }
 }
 
 impl DisplayAs for IcebergMetadataScan {
