@@ -34,15 +34,14 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use iceberg::TableIdent;
-use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::expr::Predicate;
 use iceberg::inspect::MetadataTableType;
 use iceberg::spec::{PartitionSpec, Schema};
 use iceberg::table::Table;
-use iceberg_datafusion::IcebergMetadataTableProvider;
 use iceberg_datafusion::physical_plan::{
     IcebergCommitExec, IcebergMetadataScan, IcebergTableScan, IcebergWriteExec, PartitionExpr,
 };
+use iceberg_datafusion::{IcebergMetadataTableProvider, snapshot_arrow_schema, to_datafusion_error};
 use serde::{Deserialize, Serialize};
 
 use crate::bridge::{
@@ -128,24 +127,14 @@ fn missing_config_err(node: &str) -> DataFusionError {
 /// table's schema may have changed since, and the executor resolves this on its
 /// own — so using the current schema here would describe historical rows with a
 /// column list that no longer matches them.
+///
+/// Delegates to [`snapshot_arrow_schema`], the same function
+/// [`IcebergTableProvider`](iceberg_datafusion::IcebergTableProvider) resolves
+/// its schema with at planning time. Reimplementing it here would let the two
+/// drift, and a scheduler and executor that disagree about a pinned snapshot's
+/// schema is exactly the failure this node exists to prevent.
 fn arrow_schema_of(table: &Table, snapshot_id: Option<i64>) -> Result<SchemaRef, DataFusionError> {
-    let iceberg_schema = match snapshot_id {
-        None => table.metadata().current_schema().clone(),
-        Some(snapshot_id) => table
-            .metadata()
-            .snapshot_by_id(snapshot_id)
-            .ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "snapshot id {snapshot_id} not found in table {}",
-                    table.identifier()
-                ))
-            })?
-            .schema(table.metadata())
-            .map_err(to_df_err)?,
-    };
-    Ok(Arc::new(
-        schema_to_arrow_schema(&iceberg_schema).map_err(to_df_err)?,
-    ))
+    snapshot_arrow_schema(table, snapshot_id).map_err(to_datafusion_error)
 }
 
 impl PhysicalExtensionCodec for IcebergPhysicalCodec {
@@ -640,115 +629,6 @@ mod tests {
         let err = project_indices(&arrow_schema(), Some(&names), &tbl(), None).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("out of sync"), "explains the cause: {msg}");
-    }
-
-    const PINNED_SNAPSHOT: i64 = 3_051_729_675_574_597_004;
-
-    /// A table with two schemas: `PINNED_SNAPSHOT` was written under
-    /// `{id, name}`, and `email` was added after it.
-    fn evolved_table() -> Table {
-        use std::collections::HashMap;
-
-        use iceberg::io::FileIO;
-        use iceberg::spec::{
-            FormatVersion, NestedField, Operation, PartitionSpec, PrimitiveType, Snapshot,
-            SortOrder, Summary, TableMetadataBuilder, Type,
-        };
-        use iceberg::test_utils::test_runtime;
-
-        let v1 = Schema::builder()
-            .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-            ])
-            .build()
-            .unwrap();
-        let v2 = Schema::builder()
-            .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::optional(3, "email", Type::Primitive(PrimitiveType::String)).into(),
-            ])
-            .build()
-            .unwrap();
-
-        // Two stages, so the snapshot can use the schema id the builder actually
-        // assigned to `v1` instead of a guessed one.
-        let base = TableMetadataBuilder::new(
-            v1,
-            PartitionSpec::unpartition_spec(),
-            SortOrder::unsorted_order(),
-            "/test/table".to_string(),
-            FormatVersion::V2,
-            HashMap::new(),
-        )
-        .unwrap()
-        .build()
-        .unwrap()
-        .metadata;
-        let v1_schema_id = base.current_schema().schema_id();
-
-        let snapshot = Snapshot::builder()
-            .with_snapshot_id(PINNED_SNAPSHOT)
-            .with_sequence_number(1)
-            .with_timestamp_ms(base.last_updated_ms())
-            .with_manifest_list("/test/snap-1.avro")
-            .with_schema_id(v1_schema_id)
-            .with_summary(Summary {
-                operation: Operation::Append,
-                additional_properties: HashMap::new(),
-            })
-            .build();
-
-        let metadata = TableMetadataBuilder::new_from_metadata(base, None)
-            .add_snapshot(snapshot)
-            .unwrap()
-            .add_schema(v2)
-            .unwrap()
-            .set_current_schema(-1)
-            .unwrap()
-            .build()
-            .unwrap()
-            .metadata;
-
-        Table::builder()
-            .metadata(metadata)
-            .identifier(tbl())
-            .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/metadata.json")
-            .runtime(test_runtime())
-            .build()
-            .unwrap()
-    }
-
-    fn field_names(schema: &SchemaRef) -> Vec<&str> {
-        schema.fields().iter().map(|f| f.name().as_str()).collect()
-    }
-
-    #[test]
-    fn arrow_schema_of_pinned_snapshot_uses_that_snapshot_schema() {
-        // `email` came later, so a scan pinned to this snapshot must not
-        // advertise it.
-        let table = evolved_table();
-        let schema = arrow_schema_of(&table, Some(PINNED_SNAPSHOT)).unwrap();
-        assert_eq!(field_names(&schema), vec!["id", "name"]);
-    }
-
-    #[test]
-    fn arrow_schema_of_unpinned_uses_current_schema() {
-        let table = evolved_table();
-        let schema = arrow_schema_of(&table, None).unwrap();
-        assert_eq!(field_names(&schema), vec!["id", "name", "email"]);
-    }
-
-    #[test]
-    fn arrow_schema_of_unknown_snapshot_errors() {
-        // Falling back to the current schema would turn a stale pin into wrong
-        // output instead of a failure.
-        let table = evolved_table();
-        let err = arrow_schema_of(&table, Some(-1)).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("snapshot id -1"), "names the snapshot: {msg}");
     }
 
     #[test]

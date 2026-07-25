@@ -62,7 +62,13 @@ use crate::physical_plan::write::IcebergWriteExec;
 /// `None` uses the table's current schema. `Some` validates the snapshot exists
 /// and uses that snapshot's schema, so time-travel reads stay consistent with the
 /// schema in effect at that snapshot even after the table's schema has evolved.
-fn snapshot_arrow_schema(table: &Table, snapshot_id: Option<i64>) -> Result<ArrowSchemaRef> {
+///
+/// This is the single definition of that mapping. Distributed engines need it
+/// too — an executor rebuilding a snapshot-pinned plan node has to resolve the
+/// same schema the provider resolved at planning time — so it is public rather
+/// than reimplemented per engine, where the two copies could drift apart
+/// silently.
+pub fn snapshot_arrow_schema(table: &Table, snapshot_id: Option<i64>) -> Result<ArrowSchemaRef> {
     let iceberg_schema = match snapshot_id {
         None => table.metadata().current_schema().clone(),
         Some(snapshot_id) => {
@@ -74,7 +80,7 @@ fn snapshot_arrow_schema(table: &Table, snapshot_id: Option<i64>) -> Result<Arro
                         ErrorKind::DataInvalid,
                         format!(
                             "snapshot id {snapshot_id} not found in table {}",
-                            table.identifier().name()
+                            table.identifier()
                         ),
                     )
                 })?;
@@ -1322,5 +1328,109 @@ mod tests {
             err.to_string().contains("snapshot id"),
             "unexpected error: {err}"
         );
+    }
+
+    const PINNED_SNAPSHOT: i64 = 3_051_729_675_574_597_004;
+
+    /// A table with two schemas: `PINNED_SNAPSHOT` was written under
+    /// `{id, name}`, and `email` was added after it.
+    fn evolved_table() -> Table {
+        use iceberg::spec::{
+            FormatVersion, Operation, PartitionSpec, Snapshot, SortOrder, Summary,
+            TableMetadataBuilder,
+        };
+        use iceberg::test_utils::test_runtime;
+
+        let v1 = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+        let v2 = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(3, "email", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        // Two stages, so the snapshot can use the schema id the builder actually
+        // assigned to `v1` instead of a guessed one.
+        let base = TableMetadataBuilder::new(
+            v1,
+            PartitionSpec::unpartition_spec(),
+            SortOrder::unsorted_order(),
+            "/test/table".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+        let v1_schema_id = base.current_schema().schema_id();
+
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(PINNED_SNAPSHOT)
+            .with_sequence_number(1)
+            .with_timestamp_ms(base.last_updated_ms())
+            .with_manifest_list("/test/snap-1.avro")
+            .with_schema_id(v1_schema_id)
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .build();
+
+        let metadata = TableMetadataBuilder::new_from_metadata(base, None)
+            .add_snapshot(snapshot)
+            .unwrap()
+            .add_schema(v2)
+            .unwrap()
+            .set_current_schema(-1)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        Table::builder()
+            .metadata(metadata)
+            .identifier(TableIdent::from_strs(["ns", "tbl"]).unwrap())
+            .file_io(FileIO::new_with_fs())
+            .metadata_location("/test/metadata.json")
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+    }
+
+    fn field_names(schema: &ArrowSchemaRef) -> Vec<&str> {
+        schema.fields().iter().map(|f| f.name().as_str()).collect()
+    }
+
+    #[test]
+    fn snapshot_arrow_schema_pinned_uses_that_snapshot_schema() {
+        // `email` came later, so a read pinned to this snapshot must not
+        // advertise it.
+        let schema = snapshot_arrow_schema(&evolved_table(), Some(PINNED_SNAPSHOT)).unwrap();
+        assert_eq!(field_names(&schema), vec!["id", "name"]);
+    }
+
+    #[test]
+    fn snapshot_arrow_schema_unpinned_uses_current_schema() {
+        let schema = snapshot_arrow_schema(&evolved_table(), None).unwrap();
+        assert_eq!(field_names(&schema), vec!["id", "name", "email"]);
+    }
+
+    #[test]
+    fn snapshot_arrow_schema_unknown_snapshot_errors() {
+        // Falling back to the current schema would turn a stale pin into wrong
+        // output instead of a failure.
+        let err = snapshot_arrow_schema(&evolved_table(), Some(-1)).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("snapshot id -1"), "names the snapshot: {msg}");
+        assert!(msg.contains("ns.tbl"), "names the table: {msg}");
     }
 }
