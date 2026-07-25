@@ -186,13 +186,26 @@ impl NamespaceState {
         let (parent_namespace_state, child_namespace_name) =
             self.get_mut_parent_namespace_of(namespace_ident)?;
 
-        match parent_namespace_state
-            .namespaces
-            .remove(&child_namespace_name)
-        {
-            None => no_such_namespace_err(namespace_ident),
-            Some(_) => Ok(()),
+        let Some(namespace_state) = parent_namespace_state.namespaces.get(&child_namespace_name)
+        else {
+            return no_such_namespace_err(namespace_ident);
+        };
+
+        let child_namespace_count = namespace_state.namespaces.len();
+        let table_count = namespace_state.table_metadata_locations.len();
+        if child_namespace_count > 0 || table_count > 0 {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                format!(
+                    "Namespace {namespace_ident:?} is not empty: contains {child_namespace_count} child namespace(s) and {table_count} table(s)."
+                ),
+            ));
         }
+
+        let _ = parent_namespace_state
+            .namespaces
+            .remove(&child_namespace_name);
+        Ok(())
     }
 
     // Returns the properties of the given namespace or an error if doesn't exist
