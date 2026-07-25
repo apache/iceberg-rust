@@ -22,8 +22,7 @@ use arrow_schema::DataType;
 
 use super::TransformFunction;
 use crate::Error;
-use crate::spec::decimal_utils::decimal_from_i128_with_scale;
-use crate::spec::{Datum, PrimitiveLiteral};
+use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType};
 
 #[derive(Debug)]
 pub struct Truncate {
@@ -163,11 +162,21 @@ impl TransformFunction for Truncate {
                 Datum::long(Self::truncate_i64(*v, width))
             })),
             PrimitiveLiteral::Int128(v) => Ok(Some({
+                let PrimitiveType::Decimal { precision, scale } = input.data_type() else {
+                    return Err(Error::new(
+                        crate::ErrorKind::DataInvalid,
+                        format!(
+                            "Expected decimal type for decimal literal, got: {:?}",
+                            input.data_type()
+                        ),
+                    ));
+                };
                 let width = self.width as i128;
-                Datum::decimal(decimal_from_i128_with_scale(
+                Datum::decimal_from_mantissa(
                     Self::truncate_decimal_i128(*v, width),
-                    0,
-                ))?
+                    *precision,
+                    *scale,
+                )?
             })),
             PrimitiveLiteral::String(v) => Ok(Some({
                 let len = self.width as usize;
@@ -344,6 +353,17 @@ mod test {
     }
 
     #[test]
+    fn test_truncate_decimal_literal_preserves_type() -> Result<()> {
+        let input = Datum::decimal_with_precision(decimal_new(9_999, 2), 9)?;
+        let transformed = super::Truncate::new(10).transform_literal(&input)?.unwrap();
+
+        assert_eq!(transformed.data_type(), input.data_type());
+        assert_eq!(transformed.to_string(), "99.90");
+
+        Ok(())
+    }
+
+    #[test]
     fn test_projection_truncate_upper_bound_decimal() -> Result<()> {
         let prev = "98.99";
         let curr = "99.99";
@@ -364,7 +384,7 @@ mod test {
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::LessThan, Datum::decimal_from_str(curr)?),
-            Some("name <= 9990"),
+            Some("name <= 99.90"),
         )?;
 
         fixture.assert_projection(
@@ -372,7 +392,7 @@ mod test {
                 PredicateOperator::LessThanOrEq,
                 Datum::decimal_from_str(curr)?,
             ),
-            Some("name <= 9990"),
+            Some("name <= 99.90"),
         )?;
 
         fixture.assert_projection(
@@ -380,12 +400,12 @@ mod test {
                 PredicateOperator::GreaterThanOrEq,
                 Datum::decimal_from_str(curr)?,
             ),
-            Some("name >= 9990"),
+            Some("name >= 99.90"),
         )?;
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::Eq, Datum::decimal_from_str(curr)?),
-            Some("name = 9990"),
+            Some("name = 99.90"),
         )?;
 
         fixture.assert_projection(
@@ -399,7 +419,7 @@ mod test {
                 Datum::decimal_from_str(curr)?,
                 Datum::decimal_from_str(next)?,
             ]),
-            Some("name IN (9890, 9990, 10090)"),
+            Some("name IN (99.90, 100.90, 98.90)"),
         )?;
 
         fixture.assert_projection(
@@ -434,7 +454,7 @@ mod test {
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::LessThan, Datum::decimal_from_str(curr)?),
-            Some("name <= 9990"),
+            Some("name <= 99.90"),
         )?;
 
         fixture.assert_projection(
@@ -442,7 +462,7 @@ mod test {
                 PredicateOperator::LessThanOrEq,
                 Datum::decimal_from_str(curr)?,
             ),
-            Some("name <= 10000"),
+            Some("name <= 100.00"),
         )?;
 
         fixture.assert_projection(
@@ -450,12 +470,12 @@ mod test {
                 PredicateOperator::GreaterThanOrEq,
                 Datum::decimal_from_str(curr)?,
             ),
-            Some("name >= 10000"),
+            Some("name >= 100.00"),
         )?;
 
         fixture.assert_projection(
             &fixture.binary_predicate(PredicateOperator::Eq, Datum::decimal_from_str(curr)?),
-            Some("name = 10000"),
+            Some("name = 100.00"),
         )?;
 
         fixture.assert_projection(
@@ -469,7 +489,7 @@ mod test {
                 Datum::decimal_from_str(curr)?,
                 Datum::decimal_from_str(next)?,
             ]),
-            Some("name IN (10000, 10100, 9900)"),
+            Some("name IN (99.00, 100.00, 101.00)"),
         )?;
 
         fixture.assert_projection(

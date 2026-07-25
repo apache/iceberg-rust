@@ -1102,7 +1102,11 @@ impl Datum {
         })
     }
 
-    fn decimal_from_mantissa(mantissa: i128, precision: u32, scale: u32) -> Result<Self> {
+    pub(crate) fn decimal_from_mantissa(
+        mantissa: i128,
+        precision: u32,
+        scale: u32,
+    ) -> Result<Self> {
         let r#type = Type::decimal(precision, scale)?;
         if decimal_precision(mantissa) > precision {
             let value = decimal_from_i128_with_scale(mantissa, scale);
