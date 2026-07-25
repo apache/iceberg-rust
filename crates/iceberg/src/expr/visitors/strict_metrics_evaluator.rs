@@ -361,12 +361,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
             ));
         };
 
-        let prefix_len = prefix.chars().count();
-        if lower_bound.chars().count() >= prefix_len
-            && lower_bound.chars().take(prefix_len).eq(prefix.chars())
-            && upper_bound.chars().count() >= prefix_len
-            && upper_bound.chars().take(prefix_len).eq(prefix.chars())
-        {
+        if lower_bound.starts_with(prefix) && upper_bound.starts_with(prefix) {
             return ROWS_MUST_MATCH;
         }
 
@@ -391,6 +386,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
                 "Cannot use NotStartsWith operator on non-string values",
             ));
         };
+        let prefix_len = prefix.chars().count();
 
         if let Some(lower_bound) = self.lower_bound(field_id) {
             let PrimitiveLiteral::String(lower_bound) = lower_bound.literal() else {
@@ -400,9 +396,12 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
                 ));
             };
 
-            let prefix_len = prefix.chars().count();
-            let truncated_lower = lower_bound.chars().take(prefix_len).collect::<String>();
-            if truncated_lower > *prefix {
+            if lower_bound
+                .chars()
+                .take(prefix_len)
+                .cmp(prefix.chars())
+                .is_gt()
+            {
                 return ROWS_MUST_MATCH;
             }
         }
@@ -415,9 +414,12 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
                 ));
             };
 
-            let prefix_len = prefix.chars().count();
-            let truncated_upper = upper_bound.chars().take(prefix_len).collect::<String>();
-            if truncated_upper < *prefix {
+            if upper_bound
+                .chars()
+                .take(prefix_len)
+                .cmp(prefix.chars())
+                .is_lt()
+            {
                 return ROWS_MUST_MATCH;
             }
         }
