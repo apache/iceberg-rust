@@ -19,7 +19,7 @@ use fnv::FnvHashSet;
 
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference};
-use crate::spec::{DataFile, Datum};
+use crate::spec::{DataFile, Datum, PrimitiveLiteral};
 use crate::{Error, ErrorKind, Result};
 
 #[allow(dead_code)]
@@ -325,19 +325,103 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
 
     fn starts_with(
         &mut self,
-        _reference: &BoundReference,
-        _datum: &Datum,
+        reference: &BoundReference,
+        datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
+        let field_id = reference.field().id;
+
+        if self.may_contain_null(field_id) {
+            return ROWS_MIGHT_NOT_MATCH;
+        }
+
+        let PrimitiveLiteral::String(prefix) = datum.literal() else {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "Cannot use StartsWith operator on non-string values",
+            ));
+        };
+
+        let (Some(lower_bound), Some(upper_bound)) =
+            (self.lower_bound(field_id), self.upper_bound(field_id))
+        else {
+            return ROWS_MIGHT_NOT_MATCH;
+        };
+
+        let PrimitiveLiteral::String(lower_bound) = lower_bound.literal() else {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "Cannot use StartsWith operator on non-string lower_bound value",
+            ));
+        };
+        let PrimitiveLiteral::String(upper_bound) = upper_bound.literal() else {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "Cannot use StartsWith operator on non-string upper_bound value",
+            ));
+        };
+
+        let prefix_len = prefix.chars().count();
+        if lower_bound.chars().count() >= prefix_len
+            && lower_bound.chars().take(prefix_len).eq(prefix.chars())
+            && upper_bound.chars().count() >= prefix_len
+            && upper_bound.chars().take(prefix_len).eq(prefix.chars())
+        {
+            return ROWS_MUST_MATCH;
+        }
+
         ROWS_MIGHT_NOT_MATCH
     }
 
     fn not_starts_with(
         &mut self,
-        _reference: &BoundReference,
-        _datum: &Datum,
+        reference: &BoundReference,
+        datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
+        let field_id = reference.field().id;
+
+        if self.contains_nulls_only(field_id) {
+            return ROWS_MUST_MATCH;
+        }
+
+        let PrimitiveLiteral::String(prefix) = datum.literal() else {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "Cannot use NotStartsWith operator on non-string values",
+            ));
+        };
+
+        if let Some(lower_bound) = self.lower_bound(field_id) {
+            let PrimitiveLiteral::String(lower_bound) = lower_bound.literal() else {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Cannot use NotStartsWith operator on non-string lower_bound value",
+                ));
+            };
+
+            let prefix_len = prefix.chars().count();
+            let truncated_lower = lower_bound.chars().take(prefix_len).collect::<String>();
+            if truncated_lower > *prefix {
+                return ROWS_MUST_MATCH;
+            }
+        }
+
+        if let Some(upper_bound) = self.upper_bound(field_id) {
+            let PrimitiveLiteral::String(upper_bound) = upper_bound.literal() else {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "Cannot use NotStartsWith operator on non-string upper_bound value",
+                ));
+            };
+
+            let prefix_len = prefix.chars().count();
+            let truncated_upper = upper_bound.chars().take(prefix_len).collect::<String>();
+            if truncated_upper < *prefix {
+                return ROWS_MUST_MATCH;
+            }
+        }
+
         ROWS_MIGHT_NOT_MATCH
     }
 
@@ -907,7 +991,7 @@ mod test {
 
         let result =
             StrictMetricsEvaluator::eval(&not_starts_with("all_nulls", "a"), &file).unwrap();
-        assert!(!result, "Strict eval: notStartsWith always returns false");
+        assert!(result, "All-null columns satisfy notStartsWith");
 
         // "some_nulls" (field 5) has some nulls.
         let result = StrictMetricsEvaluator::eval(&not_null("some_nulls"), &file).unwrap();
@@ -1387,29 +1471,59 @@ mod test {
 
     #[test]
     fn test_string_starts_with() {
-        let file1 = get_test_file_1();
-        let file2 = get_test_file_2();
+        let file_without_bounds = get_test_file_1();
+        let file_with_nulls = get_test_file_2();
+        let mut file = get_test_file_2();
+        file.null_value_counts.insert(3, 0);
+        file.lower_bounds.insert(3, Datum::string("apple"));
+        file.upper_bounds.insert(3, Datum::string("azure"));
 
-        let result = StrictMetricsEvaluator::eval(&starts_with("required", "a"), &file1).unwrap();
         assert!(
-            !result,
-            "strict eval: startsWith always false (no metrics support)"
+            StrictMetricsEvaluator::eval(&starts_with("required", "a"), &file).unwrap(),
+            "both bounds start with the prefix"
         );
-        let result = StrictMetricsEvaluator::eval(&starts_with("required", "a"), &file2).unwrap();
-        assert!(!result, "strict eval: startsWith always false");
+        assert!(
+            !StrictMetricsEvaluator::eval(&starts_with("required", "ap"), &file).unwrap(),
+            "the upper bound does not start with the prefix"
+        );
+        assert!(
+            !StrictMetricsEvaluator::eval(&starts_with("required", "applepie"), &file).unwrap(),
+            "the lower bound is shorter than the prefix"
+        );
+        assert!(
+            !StrictMetricsEvaluator::eval(&starts_with("required", "a"), &file_without_bounds,)
+                .unwrap(),
+            "both bounds are required"
+        );
+        assert!(
+            !StrictMetricsEvaluator::eval(&starts_with("required", "a"), &file_with_nulls).unwrap(),
+            "nulls may not match the prefix"
+        );
     }
 
     #[test]
     fn test_string_not_starts_with() {
-        let file1 = get_test_file_1();
-        let file2 = get_test_file_2();
+        let mut file = get_test_file_2();
+        file.lower_bounds.insert(3, Datum::string("bravo"));
+        file.upper_bounds.insert(3, Datum::string("charlie"));
 
-        let result =
-            StrictMetricsEvaluator::eval(&not_starts_with("required", "a"), &file1).unwrap();
-        assert!(!result, "Strict eval: notStartsWith always false");
-        let result =
-            StrictMetricsEvaluator::eval(&not_starts_with("required", "a"), &file2).unwrap();
-        assert!(!result, "Strict eval: notStartsWith always false");
+        assert!(
+            StrictMetricsEvaluator::eval(&not_starts_with("required", "a"), &file).unwrap(),
+            "the lower bound is above the prefix"
+        );
+        assert!(
+            StrictMetricsEvaluator::eval(&not_starts_with("required", "d"), &file).unwrap(),
+            "the upper bound is below the prefix"
+        );
+        assert!(
+            !StrictMetricsEvaluator::eval(&not_starts_with("required", "b"), &file).unwrap(),
+            "the bounds do not prove that all values miss the prefix"
+        );
+        assert!(
+            StrictMetricsEvaluator::eval(&not_starts_with("all_nulls", "a"), &get_test_file_1(),)
+                .unwrap(),
+            "all-null columns satisfy notStartsWith"
+        );
     }
 
     #[test]
