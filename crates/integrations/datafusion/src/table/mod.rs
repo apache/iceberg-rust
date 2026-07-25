@@ -62,7 +62,7 @@ use crate::physical_plan::write::IcebergWriteExec;
 /// `None` uses the table's current schema. `Some` validates the snapshot exists
 /// and uses that snapshot's schema, so time-travel reads stay consistent with the
 /// schema in effect at that snapshot even after the table's schema has evolved.
-fn snapshot_arrow_schema(table: &Table, snapshot_id: Option<i64>) -> Result<ArrowSchemaRef> {
+pub fn snapshot_arrow_schema(table: &Table, snapshot_id: Option<i64>) -> Result<ArrowSchemaRef> {
     let iceberg_schema = match snapshot_id {
         None => table.metadata().current_schema().clone(),
         Some(snapshot_id) => {
@@ -74,7 +74,7 @@ fn snapshot_arrow_schema(table: &Table, snapshot_id: Option<i64>) -> Result<Arro
                         ErrorKind::DataInvalid,
                         format!(
                             "snapshot id {snapshot_id} not found in table {}",
-                            table.identifier().name()
+                            table.identifier()
                         ),
                     )
                 })?;
