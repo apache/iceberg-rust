@@ -30,7 +30,7 @@ use crate::{Error, ErrorKind, Result};
 pub(crate) const METADATA_FOLDER_NAME: &str = "metadata";
 
 /// Helper for parsing a location of the format: `<metadata-dir>/<version>-<uuid>.metadata.json`
-/// or with compression: `<metadata-dir>/<version>-<uuid>.gz.metadata.json`
+/// or with compression: `<metadata-dir>/<version>-<uuid>.<codec>.metadata.json`
 ///
 /// `<metadata-dir>` is set to the `write.metadata.path` table property and
 /// it defaults to the `<location>/metadata` when the property is not set.
@@ -90,20 +90,34 @@ impl MetadataLocation {
     }
 
     /// Parses a file name of the format `<version>-<uuid>.metadata.json`
-    /// or with compression: `<version>-<uuid>.gz.metadata.json`.
+    /// or with compression before or after `.metadata.json`.
     /// Parse errors for compression codec result in CompressionCodec::None.
     fn parse_file_name(file_name: &str) -> Result<(i32, Uuid, CompressionCodec)> {
-        let stripped = file_name.strip_suffix(".metadata.json").ok_or(Error::new(
-            ErrorKind::Unexpected,
-            format!("Invalid metadata file ending: {file_name}"),
-        ))?;
-
-        // Check for compression suffix (e.g., .gz)
         let gzip_suffix = CompressionCodec::gzip_default().suffix()?;
-        let (stripped, compression_codec) = if let Some(s) = stripped.strip_suffix(gzip_suffix) {
-            (s, CompressionCodec::gzip_default())
+        let zstd_suffix = CompressionCodec::zstd_default().suffix()?;
+        let metadata_suffix = ".metadata.json";
+
+        let (stripped, compression_codec) = if let Some(stripped) =
+            file_name.strip_suffix(&format!("{metadata_suffix}{zstd_suffix}"))
+        {
+            (stripped, CompressionCodec::zstd_default())
+        } else if let Some(stripped) =
+            file_name.strip_suffix(&format!("{metadata_suffix}{gzip_suffix}"))
+        {
+            (stripped, CompressionCodec::gzip_default())
+        } else if let Some(stripped) = file_name.strip_suffix(metadata_suffix) {
+            if let Some(stripped) = stripped.strip_suffix(zstd_suffix) {
+                (stripped, CompressionCodec::zstd_default())
+            } else if let Some(stripped) = stripped.strip_suffix(gzip_suffix) {
+                (stripped, CompressionCodec::gzip_default())
+            } else {
+                (stripped, CompressionCodec::None)
+            }
         } else {
-            (stripped, CompressionCodec::None)
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                format!("Invalid metadata file ending: {file_name}"),
+            ));
         };
 
         let (version, id) = stripped.split_once('-').ok_or(Error::new(
@@ -248,6 +262,36 @@ mod test {
                     compression_codec: CompressionCodec::gzip_default(),
                 }),
             ),
+            // With trailing gzip compression suffix
+            (
+                "/abc/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json.gz",
+                Ok(MetadataLocation {
+                    location: "/abc/metadata".to_string(),
+                    version: 1234567,
+                    id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
+                    compression_codec: CompressionCodec::gzip_default(),
+                }),
+            ),
+            // With zstd compression
+            (
+                "/abc/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.zstd.metadata.json",
+                Ok(MetadataLocation {
+                    location: "/abc/metadata".to_string(),
+                    version: 1234567,
+                    id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
+                    compression_codec: CompressionCodec::zstd_default(),
+                }),
+            ),
+            // With trailing zstd compression suffix
+            (
+                "/abc/metadata/1234567-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json.zstd",
+                Ok(MetadataLocation {
+                    location: "/abc/metadata".to_string(),
+                    version: 1234567,
+                    id: Uuid::from_str("2cd22b57-5127-4198-92ba-e4e67c79821b").unwrap(),
+                    compression_codec: CompressionCodec::zstd_default(),
+                }),
+            ),
             // Negative version
             (
                 "/metadata/-123-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
@@ -296,6 +340,25 @@ mod test {
     }
 
     #[test]
+    fn test_metadata_location_canonicalizes_compression_suffixes() {
+        for (input, expected) in [
+            (
+                "/abc/metadata/00001-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json.gz",
+                "/abc/metadata/00001-2cd22b57-5127-4198-92ba-e4e67c79821b.gz.metadata.json",
+            ),
+            (
+                "/abc/metadata/00001-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json.zstd",
+                "/abc/metadata/00001-2cd22b57-5127-4198-92ba-e4e67c79821b.zstd.metadata.json",
+            ),
+        ] {
+            assert_eq!(
+                MetadataLocation::from_str(input).unwrap().to_string(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn test_metadata_location_with_next_version() {
         let metadata = create_test_metadata(HashMap::new());
         let test_cases = vec![
@@ -318,33 +381,34 @@ mod test {
 
     #[test]
     fn test_with_next_version_preserves_compression() {
-        // Start from a parsed location with no compression
-        let location_none = MetadataLocation::from_str(
-            "/test/table/metadata/00000-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
-        )
-        .unwrap();
-        assert_eq!(location_none.compression_codec, CompressionCodec::None);
+        for (input, expected_codec, expected_version, expected_suffix) in [
+            (
+                "/test/table/metadata/00000-2cd22b57-5127-4198-92ba-e4e67c79821b.metadata.json",
+                CompressionCodec::None,
+                1,
+                ".metadata.json",
+            ),
+            (
+                "/test/table/metadata/00005-81056704-ce5b-41c4-bb83-eb6408081af6.metadata.json.gz",
+                CompressionCodec::gzip_default(),
+                6,
+                ".gz.metadata.json",
+            ),
+            (
+                "/test/table/metadata/00009-81056704-ce5b-41c4-bb83-eb6408081af6.metadata.json.zstd",
+                CompressionCodec::zstd_default(),
+                10,
+                ".zstd.metadata.json",
+            ),
+        ] {
+            let location = MetadataLocation::from_str(input).unwrap();
+            assert_eq!(location.compression_codec, expected_codec);
 
-        let next_none = location_none.with_next_version();
-        assert_eq!(next_none.compression_codec, CompressionCodec::None);
-        assert_eq!(next_none.version, 1);
-
-        // Start from a parsed location with gzip compression
-        let location_gzip = MetadataLocation::from_str(
-            "/test/table/metadata/00005-81056704-ce5b-41c4-bb83-eb6408081af6.gz.metadata.json",
-        )
-        .unwrap();
-        assert_eq!(
-            location_gzip.compression_codec,
-            CompressionCodec::gzip_default()
-        );
-
-        let next_gzip = location_gzip.with_next_version();
-        assert_eq!(
-            next_gzip.compression_codec,
-            CompressionCodec::gzip_default()
-        );
-        assert_eq!(next_gzip.version, 6);
+            let next = location.with_next_version();
+            assert_eq!(next.compression_codec, expected_codec);
+            assert_eq!(next.version, expected_version);
+            assert!(next.to_string().ends_with(expected_suffix));
+        }
     }
 
     #[test]
@@ -374,10 +438,26 @@ mod test {
             "/test/table/metadata/00000-2cd22b57-5127-4198-92ba-e4e67c79821b.gz.metadata.json"
         );
 
+        // Transition from gzip to zstd compression
+        let props_zstd = HashMap::from([(
+            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+            "zstd".to_string(),
+        )]);
+        let metadata_zstd = create_test_metadata(props_zstd);
+        let updated_zstd = updated_gzip.try_with_new_metadata(&metadata_zstd).unwrap();
+        assert_eq!(
+            updated_zstd.compression_codec,
+            CompressionCodec::zstd_default()
+        );
+        assert_eq!(
+            updated_zstd.to_string(),
+            "/test/table/metadata/00000-2cd22b57-5127-4198-92ba-e4e67c79821b.zstd.metadata.json"
+        );
+
         // Update back to no compression
         let props_none = HashMap::new();
         let metadata_none = create_test_metadata(props_none);
-        let updated_none = updated_gzip.try_with_new_metadata(&metadata_none).unwrap();
+        let updated_none = updated_zstd.try_with_new_metadata(&metadata_none).unwrap();
         assert_eq!(updated_none.compression_codec, CompressionCodec::None);
         assert_eq!(updated_none.version, 0);
         assert_eq!(
@@ -436,15 +516,30 @@ mod test {
 
     #[test]
     fn test_new_with_metadata_honors_write_metadata_path() {
-        // Test metadata lives under `<location>/metadata` by default
-        let default_meta = create_test_metadata(HashMap::new());
-        let default_loc = MetadataLocation::try_new_with_metadata(&default_meta).unwrap();
-        assert!(
-            default_loc
-                .to_string()
-                .starts_with("/test/table/metadata/00000-"),
-            "unexpected location: {default_loc}"
-        );
+        // Test metadata lives under `<location>/metadata` with canonical compression suffixes.
+        for (compression, expected_suffix) in [
+            (None, ".metadata.json"),
+            (Some("gzip"), ".gz.metadata.json"),
+            (Some("zstd"), ".zstd.metadata.json"),
+        ] {
+            let properties = compression
+                .map(|compression| {
+                    HashMap::from([(
+                        TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+                        compression.to_string(),
+                    )])
+                })
+                .unwrap_or_default();
+            let metadata = create_test_metadata(properties);
+            let location = MetadataLocation::try_new_with_metadata(&metadata).unwrap();
+            assert!(
+                location
+                    .to_string()
+                    .starts_with("/test/table/metadata/00000-"),
+                "unexpected location: {location}"
+            );
+            assert!(location.to_string().ends_with(expected_suffix));
+        }
 
         // Test a configured `write.metadata.path` is honored
         let props = HashMap::from([(

@@ -73,7 +73,7 @@ fn parse_location_property(
 
 /// Parse compression codec for metadata files from table properties.
 /// Retrieves the compression codec property, applies defaults, and parses the value.
-/// Only "none" (or empty string) and "gzip" are supported for metadata compression.
+/// Only "none" (or empty string), "gzip", and "zstd" are supported for metadata compression.
 ///
 /// # Arguments
 ///
@@ -81,8 +81,8 @@ fn parse_location_property(
 ///
 /// # Errors
 ///
-/// Returns an error if the codec is not "none", "", or "gzip" (case-insensitive).
-/// Lz4 and Zstd are not supported for metadata file compression.
+/// Returns an error if the codec is not "none", "", "gzip", or "zstd" (case-insensitive).
+/// Lz4 and Snappy are not supported for metadata file compression.
 pub(crate) fn parse_metadata_file_compression(
     properties: &HashMap<String, String>,
 ) -> Result<CompressionCodec> {
@@ -107,22 +107,24 @@ pub(crate) fn parse_metadata_file_compression(
         Error::new(
             ErrorKind::DataInvalid,
             format!(
-                "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported.",
+                "Invalid metadata compression codec: {value}. Only '{}', '{}', and '{}' are supported.",
                 CompressionCodec::None.name(),
-                CompressionCodec::gzip_default().name()
+                CompressionCodec::gzip_default().name(),
+                CompressionCodec::zstd_default().name()
             ),
         )
     })?;
 
-    // Validate that only None and Gzip are used for metadata
+    // Validate that only None, Gzip, and Zstd are used for metadata
     match codec {
-        CompressionCodec::None | CompressionCodec::Gzip(_) => Ok(codec),
+        CompressionCodec::None | CompressionCodec::Gzip(_) | CompressionCodec::Zstd(_) => Ok(codec),
         _ => Err(Error::new(
             ErrorKind::DataInvalid,
             format!(
-                "Invalid metadata compression codec: {value}. Only '{}' and '{}' are supported for metadata files.",
+                "Invalid metadata compression codec: {value}. Only '{}', '{}', and '{}' are supported for metadata files.",
                 CompressionCodec::None.name(),
-                CompressionCodec::gzip_default().name()
+                CompressionCodec::gzip_default().name(),
+                CompressionCodec::zstd_default().name()
             ),
         )),
     }
@@ -547,15 +549,17 @@ mod tests {
 
     #[test]
     fn test_table_properties_compression() {
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "gzip".to_string(),
-        )]);
-        let table_properties = TableProperties::try_from(&props).unwrap();
-        assert_eq!(
-            table_properties.metadata_compression_codec,
-            CompressionCodec::gzip_default()
-        );
+        for (value, expected) in [
+            ("gzip", CompressionCodec::gzip_default()),
+            ("zstd", CompressionCodec::zstd_default()),
+        ] {
+            let props = HashMap::from([(
+                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+                value.to_string(),
+            )]);
+            let table_properties = TableProperties::try_from(&props).unwrap();
+            assert_eq!(table_properties.metadata_compression_codec, expected);
+        }
     }
 
     #[test]
@@ -573,38 +577,20 @@ mod tests {
 
     #[test]
     fn test_table_properties_compression_case_insensitive() {
-        // Test uppercase
-        let props_upper = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "GZIP".to_string(),
-        )]);
-        let table_properties = TableProperties::try_from(&props_upper).unwrap();
-        assert_eq!(
-            table_properties.metadata_compression_codec,
-            CompressionCodec::gzip_default()
-        );
-
-        // Test mixed case
-        let props_mixed = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "GzIp".to_string(),
-        )]);
-        let table_properties = TableProperties::try_from(&props_mixed).unwrap();
-        assert_eq!(
-            table_properties.metadata_compression_codec,
-            CompressionCodec::gzip_default()
-        );
-
-        // Test "NONE" should also be case-insensitive
-        let props_none_upper = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "NONE".to_string(),
-        )]);
-        let table_properties = TableProperties::try_from(&props_none_upper).unwrap();
-        assert_eq!(
-            table_properties.metadata_compression_codec,
-            CompressionCodec::None
-        );
+        for (value, expected) in [
+            ("GZIP", CompressionCodec::gzip_default()),
+            ("GzIp", CompressionCodec::gzip_default()),
+            ("ZSTD", CompressionCodec::zstd_default()),
+            ("ZsTd", CompressionCodec::zstd_default()),
+            ("NONE", CompressionCodec::None),
+        ] {
+            let props = HashMap::from([(
+                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+                value.to_string(),
+            )]);
+            let table_properties = TableProperties::try_from(&props).unwrap();
+            assert_eq!(table_properties.metadata_compression_codec, expected);
+        }
     }
 
     #[test]
@@ -698,7 +684,7 @@ mod tests {
 
     #[test]
     fn test_table_properties_compression_invalid_rejected() {
-        let invalid_codecs = ["lz4", "zstd", "snappy"];
+        let invalid_codecs = ["lz4", "snappy"];
 
         for codec in invalid_codecs {
             let props = HashMap::from([(
@@ -712,7 +698,7 @@ mod tests {
                 "Expected error message to contain codec '{codec}', got: {err_msg}"
             );
             assert!(
-                err_msg.contains("Only 'none' and 'gzip' are supported"),
+                err_msg.contains("Only 'none', 'gzip', and 'zstd' are supported"),
                 "Expected error message to contain supported codecs, got: {err_msg}"
             );
         }
@@ -720,65 +706,23 @@ mod tests {
 
     #[test]
     fn test_parse_metadata_file_compression_valid() {
-        // Test with "none"
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "none".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::None
-        );
-
-        // Test with empty string
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::None
-        );
-
-        // Test with "gzip"
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "gzip".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::gzip_default()
-        );
-
-        // Test case insensitivity - "NONE"
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "NONE".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::None
-        );
-
-        // Test case insensitivity - "GZIP"
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "GZIP".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::gzip_default()
-        );
-
-        // Test case insensitivity - "GzIp"
-        let props = HashMap::from([(
-            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
-            "GzIp".to_string(),
-        )]);
-        assert_eq!(
-            parse_metadata_file_compression(&props).unwrap(),
-            CompressionCodec::gzip_default()
-        );
+        for (value, expected) in [
+            ("none", CompressionCodec::None),
+            ("", CompressionCodec::None),
+            ("gzip", CompressionCodec::gzip_default()),
+            ("zstd", CompressionCodec::zstd_default()),
+            ("NONE", CompressionCodec::None),
+            ("GZIP", CompressionCodec::gzip_default()),
+            ("GzIp", CompressionCodec::gzip_default()),
+            ("ZSTD", CompressionCodec::zstd_default()),
+            ("ZsTd", CompressionCodec::zstd_default()),
+        ] {
+            let props = HashMap::from([(
+                TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+                value.to_string(),
+            )]);
+            assert_eq!(parse_metadata_file_compression(&props).unwrap(), expected);
+        }
 
         // Test default when property is missing
         let props = HashMap::new();
@@ -790,7 +734,7 @@ mod tests {
 
     #[test]
     fn test_parse_metadata_file_compression_invalid() {
-        let invalid_codecs = ["lz4", "zstd", "snappy"];
+        let invalid_codecs = ["lz4", "snappy"];
 
         for codec in invalid_codecs {
             let props = HashMap::from([(
@@ -804,7 +748,7 @@ mod tests {
                 "Expected error message to contain 'Invalid metadata compression codec', got: {err_msg}"
             );
             assert!(
-                err_msg.contains("Only 'none' and 'gzip' are supported"),
+                err_msg.contains("Only 'none', 'gzip', and 'zstd' are supported"),
                 "Expected error message to contain supported codecs, got: {err_msg}"
             );
         }

@@ -46,6 +46,8 @@ use crate::{Error, ErrorKind};
 
 static MAIN_BRANCH: &str = "main";
 pub(crate) static ONE_MINUTE_MS: i64 = 60_000;
+const GZIP_MAGIC: &[u8] = &[0x1F, 0x8B];
+const ZSTD_MAGIC: &[u8] = &[0x28, 0xB5, 0x2F, 0xFD];
 
 /// Sentinel value used by the Java implementation and older metadata files
 /// to represent a missing/empty current snapshot ID. During deserialization,
@@ -378,7 +380,7 @@ impl TableMetadata {
     /// Returns the metadata compression codec from table properties.
     ///
     /// Returns `CompressionCodec::None` if compression is disabled or not configured.
-    /// Returns `CompressionCodec::Gzip` if gzip compression is enabled.
+    /// Returns the configured gzip or zstd codec when compression is enabled.
     ///
     /// # Errors
     ///
@@ -466,21 +468,23 @@ impl TableMetadata {
         let input_file = file_io.new_input(metadata_location)?;
         let metadata_content = input_file.read().await?;
 
-        // Check if the file is compressed by looking for the gzip "magic number".
-        let metadata = if metadata_content.len() > 2
-            && metadata_content[0] == 0x1F
-            && metadata_content[1] == 0x8B
-        {
-            let decompressed_data = CompressionCodec::gzip_default()
-                .decompress(metadata_content.to_vec())
-                .map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Trying to read compressed metadata file",
-                    )
-                    .with_context("file_path", metadata_location)
-                    .with_source(e)
-                })?;
+        let compression_codec = if metadata_content.starts_with(GZIP_MAGIC) {
+            Some(CompressionCodec::gzip_default())
+        } else if metadata_content.starts_with(ZSTD_MAGIC) {
+            Some(CompressionCodec::zstd_default())
+        } else {
+            None
+        };
+
+        let metadata = if let Some(codec) = compression_codec {
+            let decompressed_data = codec.decompress(metadata_content.to_vec()).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    "Trying to read compressed metadata file",
+                )
+                .with_context("file_path", metadata_location)
+                .with_source(e)
+            })?;
             serde_json::from_slice(&decompressed_data)?
         } else {
             serde_json::from_slice(&metadata_content)?
@@ -513,7 +517,7 @@ impl TableMetadata {
 
         // Apply compression based on codec
         let data_to_write = match codec {
-            CompressionCodec::Gzip(_) => codec.compress(json_data)?,
+            CompressionCodec::Gzip(_) | CompressionCodec::Zstd(_) => codec.compress(json_data)?,
             CompressionCodec::None => json_data,
             _ => {
                 return Err(Error::new(
@@ -1629,7 +1633,7 @@ mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
+    use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder, ZSTD_MAGIC};
     use crate::catalog::MetadataLocation;
     use crate::compression::CompressionCodec;
     use crate::io::FileIO;
@@ -3681,6 +3685,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_table_metadata_read_iceberg_go_zstd_fixture() {
+        let fixture =
+            fs::read("testdata/table_metadata/TableMetadataV2Valid.zstd.metadata.json").unwrap();
+        assert!(fixture.starts_with(ZSTD_MAGIC));
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let mut expected_metadata = None;
+
+        for file_name in [
+            "v1.zstd.metadata.json",
+            "v1.metadata.json.zstd",
+            "v1.metadata.json",
+        ] {
+            let metadata_location = temp_dir.path().join(file_name);
+            fs::write(&metadata_location, &fixture).unwrap();
+
+            let read_metadata =
+                TableMetadata::read_from(&file_io, metadata_location.to_str().unwrap())
+                    .await
+                    .unwrap();
+            if let Some(expected_metadata) = &expected_metadata {
+                assert_eq!(&read_metadata, expected_metadata);
+            } else {
+                assert_eq!(read_metadata.format_version(), FormatVersion::V2);
+                assert_eq!(
+                    read_metadata.uuid(),
+                    Uuid::parse_str("9c12d441-03fe-4693-9a96-a0705ddf69c1").unwrap()
+                );
+                assert_eq!(read_metadata.location(), "s3://bucket/test/location");
+                expected_metadata = Some(read_metadata);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_table_metadata_read_plain_json_with_zstd_file_name() {
+        let temp_dir = TempDir::new().unwrap();
+        let metadata_location = temp_dir.path().join("v1.zstd.metadata.json");
+        let expected_metadata: TableMetadata = get_test_table_metadata("TableMetadataV2Valid.json");
+        fs::write(
+            &metadata_location,
+            serde_json::to_vec(&expected_metadata).unwrap(),
+        )
+        .unwrap();
+
+        let file_io = FileIO::new_with_fs();
+        let read_metadata = TableMetadata::read_from(&file_io, metadata_location.to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(read_metadata, expected_metadata);
+    }
+
+    #[tokio::test]
+    async fn test_table_metadata_read_truncated_zstd() {
+        let mut fixture =
+            fs::read("testdata/table_metadata/TableMetadataV2Valid.zstd.metadata.json").unwrap();
+        fixture.truncate(fixture.len() / 2);
+        assert!(fixture.starts_with(ZSTD_MAGIC));
+
+        let temp_dir = TempDir::new().unwrap();
+        let metadata_location = temp_dir.path().join("truncated.metadata.json");
+        fs::write(&metadata_location, fixture).unwrap();
+
+        let file_io = FileIO::new_with_fs();
+        let metadata_location = metadata_location.to_str().unwrap();
+        let err = TableMetadata::read_from(&file_io, metadata_location)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.to_string().contains(metadata_location));
+    }
+
+    #[tokio::test]
     async fn test_table_metadata_read_nonexistent_file() {
         // Create a FileIO instance
         let file_io = FileIO::new_with_fs();
@@ -3747,6 +3825,47 @@ mod tests {
             .unwrap();
 
         // Verify the complete round-trip: read metadata should match what we wrote
+        assert_eq!(read_metadata, compressed_metadata);
+    }
+
+    #[tokio::test]
+    async fn test_table_metadata_write_with_zstd_compression() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path().to_str().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let original_metadata: TableMetadata =
+            get_test_table_metadata_at("TableMetadataV2Valid.json", temp_path);
+
+        let mut props = original_metadata.properties.clone();
+        props.insert(
+            TableProperties::PROPERTY_METADATA_COMPRESSION_CODEC.to_string(),
+            "ZsTd".to_string(),
+        );
+        let compressed_metadata =
+            TableMetadataBuilder::new_from_metadata(original_metadata.clone(), None)
+                .assign_uuid(original_metadata.table_uuid)
+                .set_properties(props)
+                .unwrap()
+                .build()
+                .unwrap()
+                .metadata;
+
+        let expected_location =
+            format!("{temp_path}/00000-2cd22b57-5127-4198-92ba-e4e67c79821b.zstd.metadata.json");
+        let metadata_location = expected_location.parse::<MetadataLocation>().unwrap();
+
+        compressed_metadata
+            .write_to(&file_io, &metadata_location)
+            .await
+            .unwrap();
+
+        assert_eq!(metadata_location.to_string(), expected_location);
+        let raw_content = fs::read(&expected_location).unwrap();
+        assert!(raw_content.starts_with(ZSTD_MAGIC));
+
+        let read_metadata = TableMetadata::read_from(&file_io, &expected_location)
+            .await
+            .unwrap();
         assert_eq!(read_metadata, compressed_metadata);
     }
 
