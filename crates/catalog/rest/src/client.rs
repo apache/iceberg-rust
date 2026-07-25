@@ -72,17 +72,15 @@ impl HttpClient {
     /// properties (carrying over state such as a cached token).
     pub async fn update_with(self, cfg: &RestCatalogConfig) -> Result<Self> {
         let HttpClient {
-            // The same client comes back from `cfg.client()` below: the config
-            // clone shares the lazily-created default (or the user's client).
+            // `cfg.client()` below returns this same shared client.
             client: _,
             extra_headers: current_headers,
             disable_header_redaction: _,
             auth_manager,
             session: init_session,
         } = self;
-        // Release the init-phase session before deriving the catalog session,
-        // so a manager whose init session guards a one-shot resource (released
-        // on drop) can build its catalog session without deadlocking.
+        // Release the init session first, so a manager whose init session
+        // guards a one-shot resource can build its catalog session.
         drop(init_session);
 
         let extra_headers = (!cfg.extra_headers()?.is_empty())
@@ -106,9 +104,9 @@ impl HttpClient {
 
     /// Testing only: the bearer token the current session would attach.
     ///
-    /// Authenticates a throwaway request (never sent — `authenticate` only
-    /// mutates it) and reads the header back, so this works for any
-    /// [`AuthSession`] without the trait carrying a test-only method.
+    /// Authenticates a throwaway request (never sent) and reads the header
+    /// back, so it works for any [`AuthSession`] without a test-only trait
+    /// method.
     #[cfg(test)]
     pub(crate) async fn token(&self) -> Option<String> {
         let mut request = self

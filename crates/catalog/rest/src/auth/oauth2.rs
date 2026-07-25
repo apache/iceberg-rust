@@ -74,8 +74,7 @@ impl OAuth2Manager {
                 extra_headers: HeaderMap::new(),
                 token_endpoint: token_endpoint.into(),
                 credential: None,
-                // Same default as the configuration path (and the
-                // pre-AuthManager client): the Iceberg catalog scope.
+                // Same default as the configuration path: the catalog scope.
                 extra_oauth_params: HashMap::from([("scope".to_string(), "catalog".to_string())]),
             },
             endpoint_is_default: false,
@@ -156,9 +155,8 @@ impl AuthManager for OAuth2Manager {
             *self.token.lock().await = Some(token.clone());
         }
 
-        // Explicit property overrides are merged ONTO the manager's configured
-        // options: an injected manager keeps its token endpoint, extra headers
-        // and OAuth params unless a property explicitly overrides them.
+        // Explicit property overrides merge ONTO the manager's options, so an
+        // injected manager keeps whatever a property doesn't override.
         let mut extra_headers = self.init_params.extra_headers.clone();
         extra_headers.extend(explicit_headers_from_props(props)?);
 
@@ -171,9 +169,8 @@ impl AuthManager for OAuth2Manager {
 
         let token_endpoint = match props.get("oauth2-server-uri") {
             Some(uri) if !uri.is_empty() => uri.clone(),
-            // The built-in manager's default endpoint follows the merged
-            // catalog URI (a `/v1/config` override may have changed it);
-            // injected managers keep their explicitly configured endpoint.
+            // A default endpoint follows the merged catalog URI (which
+            // `/v1/config` may have overridden); explicit ones are kept.
             _ if self.endpoint_is_default => props
                 .get(REST_CATALOG_PROP_URI)
                 .map(|uri| default_token_endpoint(uri))

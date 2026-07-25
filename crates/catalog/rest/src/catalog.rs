@@ -289,11 +289,8 @@ impl RestCatalogConfig {
     /// resolved token endpoint made explicit.
     pub(crate) fn auth_props(&self) -> HashMap<String, String> {
         // `oauth2-server-uri` stays absent unless explicitly configured, so an
-        // injected manager keeps its own token endpoint instead of having a
-        // synthesized `<catalog>/v1/oauth/tokens` forced onto it (posting a
-        // client secret to the wrong host). The resolved catalog `uri` (which
-        // a `/v1/config` override may have changed) IS passed, so the built-in
-        // manager can recompute its default endpoint from it.
+        // injected manager keeps its own endpoint. The resolved `uri` IS passed
+        // so the built-in manager can recompute its default from it.
         let mut props = self.props.clone();
         props.insert(REST_CATALOG_PROP_URI.to_string(), self.uri.clone());
         props
@@ -344,10 +341,8 @@ impl RestCatalogConfig {
 
         let mut props = config.defaults;
         props.extend(self.props);
-        // The client-side warehouse was moved off the props by the builder;
-        // restore it between defaults and overrides so managers receive the
-        // resolved value via `auth_props` with the standard precedence
-        // (server default < client < server override).
+        // The builder moved the client warehouse off the props; restore it
+        // between defaults and overrides (default < client < override).
         if let Some(warehouse) = &self.warehouse {
             props.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), warehouse.clone());
         }

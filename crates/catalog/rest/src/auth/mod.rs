@@ -105,11 +105,8 @@ pub trait AuthSession: Debug + Send + Sync {
 
     /// Drops any cached credentials so the next request re-authenticates.
     ///
-    /// Exists to back the pre-existing [`RestCatalog::invalidate_token`] API
-    /// and has no counterpart in Java's `AuthSession`. Implementations are
-    /// expected to manage credential lifetime inside [`Self::authenticate`];
-    /// this is not part of the intended extension surface, and the default
-    /// no-op is fine for most managers.
+    /// Backs the existing [`RestCatalog::invalidate_token`] API; not part of
+    /// the intended extension surface, and the default no-op is usually fine.
     ///
     /// [`RestCatalog::invalidate_token`]: crate::RestCatalog::invalidate_token
     async fn invalidate(&self) -> Result<()> {
@@ -119,9 +116,7 @@ pub trait AuthSession: Debug + Send + Sync {
     /// Proactively refreshes cached credentials (e.g. re-exchanges an OAuth2
     /// client credential for a new token), leaving them intact on failure.
     ///
-    /// Like [`Self::invalidate`], this backs the pre-existing
-    /// [`RestCatalog::regenerate_token`] API rather than being part of the
-    /// intended extension surface.
+    /// Like [`Self::invalidate`], backs [`RestCatalog::regenerate_token`].
     ///
     /// [`RestCatalog::regenerate_token`]: crate::RestCatalog::regenerate_token
     async fn refresh(&self) -> Result<()> {
