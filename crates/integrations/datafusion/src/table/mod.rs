@@ -809,16 +809,7 @@ mod tests {
             .await
             .unwrap();
 
-        let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
-        let snapshot = catalog
-            .load_table(&table_ident)
-            .await
-            .unwrap()
-            .metadata()
-            .current_snapshot()
-            .unwrap()
-            .snapshot_id();
-
+        let snapshot = current_snapshot_id(&catalog, &namespace, &table_name).await;
         let provider = IcebergTableProvider::try_new(catalog, namespace, table_name)
             .await
             .unwrap()
@@ -1009,38 +1000,43 @@ mod tests {
             .unwrap()
     }
 
+    async fn current_snapshot_id(
+        catalog: &Arc<dyn Catalog>,
+        namespace: &NamespaceIdent,
+        table_name: &str,
+    ) -> i64 {
+        catalog
+            .load_table(&TableIdent::new(namespace.clone(), table_name.to_string()))
+            .await
+            .unwrap()
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .snapshot_id()
+    }
+
     #[tokio::test]
     async fn test_pinned_snapshot_reads_historical_data() {
         use datafusion::assert_batches_sorted_eq;
 
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
 
-        // First append -> snapshot with a single row.
-        let writer =
+        // Built while the table still has no snapshot at all, then left alone —
+        // the shape of the providers the catalog builds once and caches.
+        let provider =
             IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
                 .await
                 .unwrap();
+
         let ctx = SessionContext::new();
-        ctx.register_table("t", Arc::new(writer)).unwrap();
+        ctx.register_table("t", Arc::new(provider.clone())).unwrap();
         ctx.sql("INSERT INTO t VALUES (1, 'a')")
             .await
             .unwrap()
             .collect()
             .await
             .unwrap();
-
-        // Capture the snapshot produced by the first append.
-        let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
-        let first_snapshot = catalog
-            .load_table(&table_ident)
-            .await
-            .unwrap()
-            .metadata()
-            .current_snapshot()
-            .unwrap()
-            .snapshot_id();
-
-        // Second append -> current snapshot now has two rows.
+        let first_snapshot = current_snapshot_id(&catalog, &namespace, &table_name).await;
         ctx.sql("INSERT INTO t VALUES (2, 'b')")
             .await
             .unwrap()
@@ -1048,11 +1044,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Default (unpinned) provider sees the latest state: both rows.
-        let current =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
+        // Unpinned, it reloads on every scan and sees the latest state.
+        assert_eq!(provider.snapshot_id(), None);
         assert_batches_sorted_eq!(
             [
                 "+----+------+",
@@ -1062,35 +1055,17 @@ mod tests {
                 "| 2  | b    |",
                 "+----+------+",
             ],
-            &scan_rows(current).await
+            &scan_rows(provider.clone()).await
         );
 
-        // Pinning the first snapshot hides the newer row.
-        let pinned =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap()
-                .with_snapshot_id(Some(first_snapshot))
-                .await
-                .unwrap();
-        assert_eq!(pinned.snapshot_id(), Some(first_snapshot));
-
-        // The pin is carried on the scan node itself, so a distributed engine's
-        // codec can serialize it.
-        let scan_plan = pinned
-            .scan(&SessionContext::new().state(), None, &[], None)
+        // Pinning resolves `first_snapshot` even though the provider predates it,
+        // and hides the newer row.
+        let pinned = provider
+            .clone()
+            .with_snapshot_id(Some(first_snapshot))
             .await
             .unwrap();
-        let iceberg_scan = scan_plan
-            .downcast_ref::<IcebergTableScan>()
-            .expect("Expected IcebergTableScan");
-        assert_eq!(
-            iceberg_scan.snapshot_id(),
-            Some(first_snapshot),
-            "pinned snapshot should propagate to the scan node"
-        );
-
-        // And it changes what is read.
+        assert_eq!(pinned.snapshot_id(), Some(first_snapshot));
         assert_batches_sorted_eq!(
             [
                 "+----+------+",
@@ -1099,20 +1074,26 @@ mod tests {
                 "| 1  | a    |",
                 "+----+------+",
             ],
-            &scan_rows(pinned).await
+            &scan_rows(pinned.clone()).await
+        );
+
+        // The pin is carried on the scan node itself, so a distributed engine's
+        // codec can serialize it.
+        let scan_plan = pinned
+            .scan(&SessionContext::new().state(), None, &[], None)
+            .await
+            .unwrap();
+        assert_eq!(
+            scan_plan
+                .downcast_ref::<IcebergTableScan>()
+                .expect("Expected IcebergTableScan")
+                .snapshot_id(),
+            Some(first_snapshot),
+            "pinned snapshot should propagate to the scan node"
         );
 
         // Clearing the pin brings the newer row back.
-        let unpinned =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap()
-                .with_snapshot_id(Some(first_snapshot))
-                .await
-                .unwrap()
-                .with_snapshot_id(None)
-                .await
-                .unwrap();
+        let unpinned = pinned.with_snapshot_id(None).await.unwrap();
         assert_eq!(unpinned.snapshot_id(), None);
         assert_batches_sorted_eq!(
             [
@@ -1128,19 +1109,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_with_snapshot_id_sees_snapshot_created_after_construction() {
+    async fn test_with_snapshot_id_recomputes_schema_on_evolution() {
         use datafusion::assert_batches_sorted_eq;
+        use iceberg::transaction::{AddColumn, ApplyTransactionAction, Transaction};
 
         let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+        let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
 
-        // Built before the table has any snapshot, then left alone — the shape of
-        // the providers the catalog builds once and caches.
-        let stale =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
-                .await
-                .unwrap();
-
-        // Someone else writes, producing a snapshot `stale` has never seen.
+        // Append under the original {id, name} schema.
         let writer =
             IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
                 .await
@@ -1153,20 +1129,44 @@ mod tests {
             .collect()
             .await
             .unwrap();
+        let snapshot = current_snapshot_id(&catalog, &namespace, &table_name).await;
 
-        let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
-        let new_snapshot = catalog
-            .load_table(&table_ident)
+        // Evolve the schema. The snapshot above still references {id, name}.
+        let table = catalog.load_table(&table_ident).await.unwrap();
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_schema()
+            .add_column(AddColumn::optional(
+                "email",
+                Type::Primitive(PrimitiveType::String),
+            ))
+            .apply(tx)
+            .unwrap();
+        tx.commit(catalog.as_ref()).await.unwrap();
+
+        let provider =
+            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+                .await
+                .unwrap();
+        assert_eq!(provider.schema().fields().len(), 3);
+
+        // Pinning re-derives the historical schema. Before the fix, `schema()`
+        // kept advertising `email` and the scan below failed with "Column email
+        // not found in table".
+        let pinned = provider
+            .clone()
+            .with_snapshot_id(Some(snapshot))
             .await
-            .unwrap()
-            .metadata()
-            .current_snapshot()
-            .unwrap()
-            .snapshot_id();
-
-        // Pinning reloads, so the newer snapshot resolves.
-        let pinned = stale.with_snapshot_id(Some(new_snapshot)).await.unwrap();
-        assert_eq!(pinned.snapshot_id(), Some(new_snapshot));
+            .unwrap();
+        assert_eq!(
+            pinned
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.name().as_str())
+                .collect::<Vec<_>>(),
+            ["id", "name"]
+        );
         assert_batches_sorted_eq!(
             [
                 "+----+------+",
@@ -1177,230 +1177,17 @@ mod tests {
             ],
             &scan_rows(pinned).await
         );
-    }
 
-    #[tokio::test]
-    async fn test_with_snapshot_id_recomputes_schema_on_evolution() {
-        use datafusion::assert_batches_sorted_eq;
-        use iceberg::transaction::{AddColumn, ApplyTransactionAction, Transaction};
-
-        // A table with a single `id` column.
-        let temp_dir = TempDir::new().unwrap();
-        let warehouse_path = temp_dir.path().to_str().unwrap().to_string();
-        let catalog: Arc<dyn Catalog> = Arc::new(
-            MemoryCatalogBuilder::default()
-                .load(
-                    "memory",
-                    HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse_path.clone())]),
-                )
-                .await
-                .unwrap(),
-        );
-        let namespace = NamespaceIdent::new("test_ns".to_string());
-        catalog
-            .create_namespace(&namespace, HashMap::new())
+        // A snapshot the table doesn't have is rejected up front. Falling back to
+        // the current schema would turn a stale pin into wrong output instead of
+        // an error.
+        let error = provider
+            .with_snapshot_id(Some(9_999_999))
             .await
-            .unwrap();
-        let schema = Schema::builder()
-            .with_schema_id(0)
-            .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-            ])
-            .build()
-            .unwrap();
-        catalog
-            .create_table(
-                &namespace,
-                TableCreation::builder()
-                    .name("t".to_string())
-                    .location(format!("{warehouse_path}/t"))
-                    .schema(schema)
-                    .properties(HashMap::new())
-                    .build(),
-            )
-            .await
-            .unwrap();
-
-        // Append a row while the schema is still {id} -> snapshot S1 (schema id 0).
-        let writer =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), "t".to_string())
-                .await
-                .unwrap();
-        let ctx = SessionContext::new();
-        ctx.register_table("t", Arc::new(writer)).unwrap();
-        ctx.sql("INSERT INTO t VALUES (1)")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-
-        let table_ident = TableIdent::new(namespace.clone(), "t".to_string());
-        let s1 = catalog
-            .load_table(&table_ident)
-            .await
-            .unwrap()
-            .metadata()
-            .current_snapshot()
-            .unwrap()
-            .snapshot_id();
-
-        // Evolve the schema: add a `name` column. Current schema becomes
-        // {id, name}, but S1 still references the {id}-only schema.
-        let table = catalog.load_table(&table_ident).await.unwrap();
-        let tx = Transaction::new(&table);
-        let tx = tx
-            .update_schema()
-            .add_column(AddColumn::optional(
-                "name",
-                Type::Primitive(PrimitiveType::String),
-            ))
-            .apply(tx)
-            .unwrap();
-        tx.commit(catalog.as_ref()).await.unwrap();
-
-        // Unpinned provider exposes the evolved schema {id, name}.
-        let current =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), "t".to_string())
-                .await
-                .unwrap();
-        assert_eq!(current.schema().fields().len(), 2);
-
-        // Pinning S1 re-derives the historical schema {id}. Before the fix,
-        // schema() returned the current {id, name}, and the scan below failed with
-        // "Column name not found in table".
-        let pinned =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), "t".to_string())
-                .await
-                .unwrap()
-                .with_snapshot_id(Some(s1))
-                .await
-                .unwrap();
-        assert_eq!(pinned.schema().fields().len(), 1);
-        assert_eq!(pinned.schema().field(0).name(), "id");
-
-        // A SELECT * against the pinned snapshot reads the historical row cleanly.
-        assert_batches_sorted_eq!(
-            ["+----+", "| id |", "+----+", "| 1  |", "+----+",],
-            &scan_rows(pinned).await
-        );
-
-        // A nonexistent snapshot id is rejected up front by with_snapshot_id.
-        let err =
-            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), "t".to_string())
-                .await
-                .unwrap()
-                .with_snapshot_id(Some(9_999_999))
-                .await
-                .unwrap_err();
-        assert!(
-            err.to_string().contains("snapshot id"),
-            "unexpected error: {err}"
-        );
-    }
-
-    const PINNED_SNAPSHOT: i64 = 3_051_729_675_574_597_004;
-
-    /// A table whose `PINNED_SNAPSHOT` was written under `{id, name}`, with
-    /// `email` added after it. Built from metadata rather than a catalog, so the
-    /// tests below stay synchronous and do no I/O.
-    fn evolved_table() -> Table {
-        use iceberg::spec::{
-            FormatVersion, Operation, PartitionSpec, Snapshot, SortOrder, Summary,
-            TableMetadataBuilder,
-        };
-        use iceberg::test_utils::test_runtime;
-
-        let v1 = Schema::builder()
-            .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-            ])
-            .build()
-            .unwrap();
-        let v2 = Schema::builder()
-            .with_fields(vec![
-                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::optional(3, "email", Type::Primitive(PrimitiveType::String)).into(),
-            ])
-            .build()
-            .unwrap();
-
-        // Two stages, so the snapshot gets the schema id the builder assigned to
-        // `v1` rather than a guessed one.
-        let base = TableMetadataBuilder::new(
-            v1,
-            PartitionSpec::unpartition_spec(),
-            SortOrder::unsorted_order(),
-            "/test/table".to_string(),
-            FormatVersion::V2,
-            HashMap::new(),
-        )
-        .unwrap()
-        .build()
-        .unwrap()
-        .metadata;
-        let v1_schema_id = base.current_schema().schema_id();
-
-        let snapshot = Snapshot::builder()
-            .with_snapshot_id(PINNED_SNAPSHOT)
-            .with_sequence_number(1)
-            .with_timestamp_ms(base.last_updated_ms())
-            .with_manifest_list("/test/snap-1.avro")
-            .with_schema_id(v1_schema_id)
-            .with_summary(Summary {
-                operation: Operation::Append,
-                additional_properties: HashMap::new(),
-            })
-            .build();
-
-        let metadata = TableMetadataBuilder::new_from_metadata(base, None)
-            .add_snapshot(snapshot)
-            .unwrap()
-            .add_schema(v2)
-            .unwrap()
-            .set_current_schema(-1)
-            .unwrap()
-            .build()
-            .unwrap()
-            .metadata;
-
-        Table::builder()
-            .metadata(metadata)
-            .identifier(TableIdent::from_strs(["ns", "tbl"]).unwrap())
-            .file_io(FileIO::new_with_fs())
-            .metadata_location("/test/metadata.json")
-            .runtime(test_runtime())
-            .build()
-            .unwrap()
-    }
-
-    fn field_names(schema: &ArrowSchemaRef) -> Vec<&str> {
-        schema.fields().iter().map(|f| f.name().as_str()).collect()
-    }
-
-    #[test]
-    fn test_snapshot_arrow_schema_pinned_uses_that_snapshot_schema() {
-        // `email` came later, so a pinned read must not advertise it.
-        let schema = snapshot_arrow_schema(&evolved_table(), Some(PINNED_SNAPSHOT)).unwrap();
-        assert_eq!(field_names(&schema), vec!["id", "name"]);
-    }
-
-    #[test]
-    fn test_snapshot_arrow_schema_unpinned_uses_current_schema() {
-        let schema = snapshot_arrow_schema(&evolved_table(), None).unwrap();
-        assert_eq!(field_names(&schema), vec!["id", "name", "email"]);
-    }
-
-    #[test]
-    fn test_snapshot_arrow_schema_unknown_snapshot_errors() {
-        // Falling back to the current schema would turn a stale pin into wrong
-        // output instead of an error.
-        let err = snapshot_arrow_schema(&evolved_table(), Some(-1)).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("snapshot id -1"), "names the snapshot: {msg}");
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("snapshot id 9999999"), "{message}");
         // Namespace-qualified: a bare table name is ambiguous across namespaces.
-        assert!(msg.contains("ns.tbl"), "names the table: {msg}");
+        assert!(message.contains("test_ns.test_table"), "{message}");
     }
 }
