@@ -61,3 +61,6 @@ iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 [package.metadata.cargo-machete]
 # These dependencies are added to ensure minimal dependency version
 ignored = ["faststr", "linkedbytes", "metainfo", "volo", "motore-macros"]
+
+[lints]
+workspace = true

@@ -16,7 +16,7 @@
 // under the License.
 
 use hive_metastore::FieldSchema;
-use iceberg::spec::{PrimitiveType, Schema, SchemaVisitor, visit_schema};
+use iceberg::spec::{PrimitiveType, Schema, SchemaVisitor, VariantType, visit_schema};
 use iceberg::{Error, ErrorKind, Result};
 
 type HiveSchema = Vec<FieldSchema>;
@@ -49,18 +49,11 @@ impl HiveSchemaBuilder {
 impl SchemaVisitor for HiveSchemaBuilder {
     type T = String;
 
-    fn schema(
-        &mut self,
-        _schema: &iceberg::spec::Schema,
-        value: String,
-    ) -> iceberg::Result<String> {
+    fn schema(&mut self, _schema: &Schema, value: String) -> Result<String> {
         Ok(value)
     }
 
-    fn before_struct_field(
-        &mut self,
-        _field: &iceberg::spec::NestedFieldRef,
-    ) -> iceberg::Result<()> {
+    fn before_struct_field(&mut self, _field: &iceberg::spec::NestedFieldRef) -> Result<()> {
         self.depth += 1;
         Ok(())
     }
@@ -69,23 +62,16 @@ impl SchemaVisitor for HiveSchemaBuilder {
         &mut self,
         r#_struct: &iceberg::spec::StructType,
         results: Vec<String>,
-    ) -> iceberg::Result<String> {
+    ) -> Result<String> {
         Ok(format!("struct<{}>", results.join(", ")))
     }
 
-    fn after_struct_field(
-        &mut self,
-        _field: &iceberg::spec::NestedFieldRef,
-    ) -> iceberg::Result<()> {
+    fn after_struct_field(&mut self, _field: &iceberg::spec::NestedFieldRef) -> Result<()> {
         self.depth -= 1;
         Ok(())
     }
 
-    fn field(
-        &mut self,
-        field: &iceberg::spec::NestedFieldRef,
-        value: String,
-    ) -> iceberg::Result<String> {
+    fn field(&mut self, field: &iceberg::spec::NestedFieldRef, value: String) -> Result<String> {
         if self.is_inside_struct() {
             return Ok(format!("{}:{}", field.name, value));
         }
@@ -99,7 +85,7 @@ impl SchemaVisitor for HiveSchemaBuilder {
         Ok(value)
     }
 
-    fn list(&mut self, _list: &iceberg::spec::ListType, value: String) -> iceberg::Result<String> {
+    fn list(&mut self, _list: &iceberg::spec::ListType, value: String) -> Result<String> {
         Ok(format!("array<{value}>"))
     }
 
@@ -108,11 +94,11 @@ impl SchemaVisitor for HiveSchemaBuilder {
         _map: &iceberg::spec::MapType,
         key_value: String,
         value: String,
-    ) -> iceberg::Result<String> {
+    ) -> Result<String> {
         Ok(format!("map<{key_value},{value}>"))
     }
 
-    fn primitive(&mut self, p: &iceberg::spec::PrimitiveType) -> iceberg::Result<String> {
+    fn primitive(&mut self, p: &PrimitiveType) -> Result<String> {
         let hive_type = match p {
             PrimitiveType::Boolean => "boolean".to_string(),
             PrimitiveType::Int => "int".to_string(),
@@ -138,6 +124,12 @@ impl SchemaVisitor for HiveSchemaBuilder {
         };
 
         Ok(hive_type)
+    }
+
+    fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
+        // Match iceberg-java's HiveSchemaUtil, which maps VARIANT to "unknown"
+        // (apache/iceberg#15964).
+        Ok("unknown".to_string())
     }
 }
 
@@ -451,6 +443,38 @@ mod tests {
                 comment: None,
             },
         ];
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_schema_with_variant() -> Result<()> {
+        // VARIANT maps to Hive "unknown", matching iceberg-java's HiveSchemaUtil
+        // (apache/iceberg#15964).
+        let record = r#"{
+            "type": "struct",
+            "schema-id": 1,
+            "fields": [
+                {
+                    "id": 1,
+                    "name": "v",
+                    "required": true,
+                    "type": "variant"
+                }
+            ]
+        }"#;
+
+        let schema = serde_json::from_str::<Schema>(record)?;
+
+        let result = HiveSchemaBuilder::from_iceberg(&schema)?.build();
+
+        let expected = vec![FieldSchema {
+            name: Some("v".into()),
+            r#type: Some("unknown".into()),
+            comment: None,
+        }];
 
         assert_eq!(result, expected);
 
