@@ -218,11 +218,6 @@ impl<'a> TableScanBuilder<'a> {
             }
         };
 
-        // Time travel projects the pinned snapshot's schema; a scan of the
-        // current state projects the table's current schema, which is ahead of
-        // the current snapshot's after a schema update with no write since.
-        // Columns missing from older data files read as their initial-default,
-        // else null. Matches the Java and Python implementations.
         let schema = match self.snapshot_id {
             Some(_) => snapshot.schema(self.table.metadata())?,
             None => self.table.metadata().current_schema().clone(),
