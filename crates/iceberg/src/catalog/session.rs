@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 #[cfg(test)]
@@ -28,7 +29,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::table::Table;
-use crate::{Namespace, NamespaceIdent, Result, TableCommit, TableCreation, TableIdent};
+use crate::{Catalog, Namespace, NamespaceIdent, Result, TableCommit, TableCreation, TableIdent};
 
 /// Context for a session.
 ///
@@ -231,6 +232,120 @@ pub trait SessionCatalog: Debug + Send + Sync {
 
     /// Update a table to the catalog.
     async fn update_table(&self, context: &SessionContext, commit: TableCommit) -> Result<Table>;
+}
+
+impl dyn SessionCatalog {
+    /// Bind this catalog to a session, exposing the ordinary Catalog API.
+    ///
+    /// # Example
+    /// ```
+    /// # fn into_catalog(session_catalog: Arc<dyn SessionCatalog>, id: String) {
+    /// let session = SessionContext::builder().session_id(id).build();
+    ///
+    /// // Use the plain catalog API for the duration of this session.
+    /// let catalog = session_catalog.into_catalog(session);
+    /// # let _ = catalog;
+    /// # }
+    /// ```
+    pub fn into_catalog(self: Arc<Self>, session: SessionContext) -> Arc<dyn Catalog> {
+        Arc::new(SessionBoundCatalog {
+            inner: self,
+            session,
+        })
+    }
+}
+
+/// Allows any [`SessionCatalog`] to implement the [`Catalog`] trait.
+#[derive(Debug)]
+struct SessionBoundCatalog {
+    inner: Arc<dyn SessionCatalog>,
+    session: SessionContext,
+}
+
+#[async_trait]
+impl Catalog for SessionBoundCatalog {
+    async fn list_namespaces(
+        &self,
+        parent: Option<&NamespaceIdent>,
+    ) -> Result<Vec<NamespaceIdent>> {
+        self.inner.list_namespaces(&self.session, parent).await
+    }
+
+    async fn create_namespace(
+        &self,
+        namespace: &NamespaceIdent,
+        properties: HashMap<String, String>,
+    ) -> Result<Namespace> {
+        self.inner
+            .create_namespace(&self.session, namespace, properties)
+            .await
+    }
+
+    async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
+        self.inner.get_namespace(&self.session, namespace).await
+    }
+
+    async fn namespace_exists(&self, namespace: &NamespaceIdent) -> Result<bool> {
+        self.inner.namespace_exists(&self.session, namespace).await
+    }
+
+    async fn update_namespace(
+        &self,
+        namespace: &NamespaceIdent,
+        properties: HashMap<String, String>,
+    ) -> Result<()> {
+        self.inner
+            .update_namespace(&self.session, namespace, properties)
+            .await
+    }
+
+    async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
+        self.inner.drop_namespace(&self.session, namespace).await
+    }
+
+    async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
+        self.inner.list_tables(&self.session, namespace).await
+    }
+
+    async fn create_table(
+        &self,
+        namespace: &NamespaceIdent,
+        creation: TableCreation,
+    ) -> Result<Table> {
+        self.inner
+            .create_table(&self.session, namespace, creation)
+            .await
+    }
+
+    async fn load_table(&self, table: &TableIdent) -> Result<Table> {
+        self.inner.load_table(&self.session, table).await
+    }
+
+    async fn drop_table(&self, table: &TableIdent) -> Result<()> {
+        self.inner.drop_table(&self.session, table).await
+    }
+
+    async fn purge_table(&self, table: &TableIdent) -> Result<()> {
+        self.inner.purge_table(&self.session, table).await
+    }
+
+    async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
+        self.inner.table_exists(&self.session, table).await
+    }
+
+    async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
+        self.inner.rename_table(&self.session, src, dest).await
+    }
+
+    async fn register_table(&self, table: &TableIdent, metadata_location: String) -> Result<Table> {
+        self.inner
+            .register_table(&self.session, table, metadata_location)
+            .await
+    }
+
+    async fn update_table(&self, commit: TableCommit) -> Result<Table> {
+        self.inner.update_table(&self.session, commit).await
+    }
 }
 
 #[cfg(test)]
