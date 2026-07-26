@@ -56,12 +56,9 @@ use crate::physical_plan::scan::IcebergTableScan;
 use crate::physical_plan::sort::sort_by_partition;
 use crate::physical_plan::write::IcebergWriteExec;
 
-/// Computes the arrow schema DataFusion should expose for reading `table` at the
-/// given snapshot.
-///
-/// `None` uses the table's current schema. `Some` validates the snapshot exists
-/// and uses that snapshot's schema, so time-travel reads stay consistent with the
-/// schema in effect at that snapshot even after the table's schema has evolved.
+/// Computes the arrow schema to expose for reading `table` at the given snapshot:
+/// the table's current schema for `None`, that snapshot's schema for `Some`, so
+/// a time-travel read plans against the schema in effect at that snapshot.
 pub fn snapshot_arrow_schema(table: &Table, snapshot_id: Option<i64>) -> Result<ArrowSchemaRef> {
     let iceberg_schema = match snapshot_id {
         None => table.metadata().current_schema().clone(),
@@ -98,16 +95,11 @@ pub struct IcebergTableProvider {
     catalog: Arc<dyn Catalog>,
     /// The table identifier (namespace + name)
     table_ident: TableIdent,
-    /// The table as loaded at construction. Used only to resolve schemas at
-    /// construction time and when pinning a snapshot; scans and writes always
-    /// reload fresh metadata from the catalog.
-    table: Table,
     /// A reference-counted arrow `Schema` (cached at construction, recomputed
-    /// when a snapshot is pinned so it always matches the schema being read)
+    /// when a snapshot is pinned)
     schema: ArrowSchemaRef,
-    /// Optional snapshot to read. `None` reads the current snapshot (refreshed
-    /// from the catalog on each scan); `Some` pins reads to that snapshot for
-    /// time-travel and rejects writes.
+    /// Snapshot to read. `None` reads the current snapshot; `Some` pins reads to
+    /// that snapshot and rejects writes.
     snapshot_id: Option<i64>,
 }
 
@@ -130,28 +122,23 @@ impl IcebergTableProvider {
         Ok(IcebergTableProvider {
             catalog,
             table_ident,
-            table,
             schema,
             snapshot_id: None,
         })
     }
 
-    /// Pins reads to a specific snapshot for time-travel. `None` (the default)
-    /// reads the current snapshot. The snapshot id is threaded into the scan
-    /// node, so it is serialized and honored by a distributed engine as well.
-    /// A pinned provider is read-only: `insert_into` returns an error, since a
-    /// write would commit to the current table state and be invisible to this
-    /// provider's pinned reads.
+    /// Pins reads to a snapshot for time travel; `None` (the default) reads the
+    /// current snapshot. A pinned provider is read-only: `insert_into` would
+    /// commit to the current table state, invisible to its own reads, so it
+    /// errors instead.
     ///
-    /// Validates that the snapshot exists and re-derives the exposed schema from
-    /// it, so `schema()` and the columns pushed down to the scan match the schema
-    /// actually being read even when the table's schema has since evolved.
-    ///
-    /// The snapshot is resolved against the metadata loaded when this provider
-    /// was constructed, so a snapshot committed afterwards is not visible here;
-    /// rebuild the provider to pin one.
-    pub fn with_snapshot_id(mut self, snapshot_id: Option<i64>) -> Result<Self> {
-        self.schema = snapshot_arrow_schema(&self.table, snapshot_id)?;
+    /// Reloads metadata from the catalog to validate the snapshot and re-derive
+    /// `schema()` from it. The reload matters because providers handed out by
+    /// the catalog are cached, so a snapshot committed after construction would
+    /// otherwise look nonexistent.
+    pub async fn with_snapshot_id(mut self, snapshot_id: Option<i64>) -> Result<Self> {
+        let table = self.catalog.load_table(&self.table_ident).await?;
+        self.schema = snapshot_arrow_schema(&table, snapshot_id)?;
         self.snapshot_id = snapshot_id;
         Ok(self)
     }
@@ -226,9 +213,8 @@ impl TableProvider for IcebergTableProvider {
             )));
         }
 
-        // A pinned provider reads a fixed snapshot, but writes would commit to
-        // the table's current state — the inserted rows would be invisible to
-        // this provider's own reads. Reject the write instead.
+        // A write would commit to the table's current state, invisible to this
+        // provider's pinned reads.
         if let Some(snapshot_id) = self.snapshot_id {
             return Err(DataFusionError::NotImplemented(format!(
                 "IcebergTableProvider is pinned to snapshot {snapshot_id} and cannot be \
@@ -837,6 +823,7 @@ mod tests {
             .await
             .unwrap()
             .with_snapshot_id(Some(snapshot))
+            .await
             .unwrap();
 
         let input = Arc::new(EmptyExec::new(provider.schema())) as Arc<dyn ExecutionPlan>;
@@ -1078,18 +1065,18 @@ mod tests {
             &scan_rows(current).await
         );
 
-        // Pinning the first snapshot time-travels: only the first row is visible,
-        // even though a newer snapshot exists.
+        // Pinning the first snapshot hides the newer row.
         let pinned =
             IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
                 .await
                 .unwrap()
                 .with_snapshot_id(Some(first_snapshot))
+                .await
                 .unwrap();
         assert_eq!(pinned.snapshot_id(), Some(first_snapshot));
 
-        // The pin is threaded onto the scan node itself — this is the value a
-        // distributed engine's codec serializes to reproduce the scan remotely.
+        // The pin is carried on the scan node itself, so a distributed engine's
+        // codec can serialize it.
         let scan_plan = pinned
             .scan(&SessionContext::new().state(), None, &[], None)
             .await
@@ -1103,7 +1090,7 @@ mod tests {
             "pinned snapshot should propagate to the scan node"
         );
 
-        // And it changes what is actually read: only the historical row.
+        // And it changes what is read.
         assert_batches_sorted_eq!(
             [
                 "+----+------+",
@@ -1115,15 +1102,16 @@ mod tests {
             &scan_rows(pinned).await
         );
 
-        // Clearing the pin (Some -> None) unpins back to the current snapshot,
-        // so the newer row becomes visible again.
+        // Clearing the pin brings the newer row back.
         let unpinned =
             IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
                 .await
                 .unwrap()
                 .with_snapshot_id(Some(first_snapshot))
+                .await
                 .unwrap()
                 .with_snapshot_id(None)
+                .await
                 .unwrap();
         assert_eq!(unpinned.snapshot_id(), None);
         assert_batches_sorted_eq!(
@@ -1136,6 +1124,58 @@ mod tests {
                 "+----+------+",
             ],
             &scan_rows(unpinned).await
+        );
+    }
+
+    #[tokio::test]
+    async fn test_with_snapshot_id_sees_snapshot_created_after_construction() {
+        use datafusion::assert_batches_sorted_eq;
+
+        let (catalog, namespace, table_name, _temp_dir) = get_test_catalog_and_table().await;
+
+        // Built before the table has any snapshot, then left alone — the shape of
+        // the providers the catalog builds once and caches.
+        let stale =
+            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+                .await
+                .unwrap();
+
+        // Someone else writes, producing a snapshot `stale` has never seen.
+        let writer =
+            IcebergTableProvider::try_new(catalog.clone(), namespace.clone(), table_name.clone())
+                .await
+                .unwrap();
+        let ctx = SessionContext::new();
+        ctx.register_table("t", Arc::new(writer)).unwrap();
+        ctx.sql("INSERT INTO t VALUES (1, 'a')")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
+        let new_snapshot = catalog
+            .load_table(&table_ident)
+            .await
+            .unwrap()
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .snapshot_id();
+
+        // Pinning reloads, so the newer snapshot resolves.
+        let pinned = stale.with_snapshot_id(Some(new_snapshot)).await.unwrap();
+        assert_eq!(pinned.snapshot_id(), Some(new_snapshot));
+        assert_batches_sorted_eq!(
+            [
+                "+----+------+",
+                "| id | name |",
+                "+----+------+",
+                "| 1  | a    |",
+                "+----+------+",
+            ],
+            &scan_rows(pinned).await
         );
     }
 
@@ -1234,6 +1274,7 @@ mod tests {
                 .await
                 .unwrap()
                 .with_snapshot_id(Some(s1))
+                .await
                 .unwrap();
         assert_eq!(pinned.schema().fields().len(), 1);
         assert_eq!(pinned.schema().field(0).name(), "id");
@@ -1250,10 +1291,116 @@ mod tests {
                 .await
                 .unwrap()
                 .with_snapshot_id(Some(9_999_999))
+                .await
                 .unwrap_err();
         assert!(
             err.to_string().contains("snapshot id"),
             "unexpected error: {err}"
         );
+    }
+
+    const PINNED_SNAPSHOT: i64 = 3_051_729_675_574_597_004;
+
+    /// A table whose `PINNED_SNAPSHOT` was written under `{id, name}`, with
+    /// `email` added after it. Built from metadata rather than a catalog, so the
+    /// tests below stay synchronous and do no I/O.
+    fn evolved_table() -> Table {
+        use iceberg::spec::{
+            FormatVersion, Operation, PartitionSpec, Snapshot, SortOrder, Summary,
+            TableMetadataBuilder,
+        };
+        use iceberg::test_utils::test_runtime;
+
+        let v1 = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+        let v2 = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(3, "email", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        // Two stages, so the snapshot gets the schema id the builder assigned to
+        // `v1` rather than a guessed one.
+        let base = TableMetadataBuilder::new(
+            v1,
+            PartitionSpec::unpartition_spec(),
+            SortOrder::unsorted_order(),
+            "/test/table".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+        let v1_schema_id = base.current_schema().schema_id();
+
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(PINNED_SNAPSHOT)
+            .with_sequence_number(1)
+            .with_timestamp_ms(base.last_updated_ms())
+            .with_manifest_list("/test/snap-1.avro")
+            .with_schema_id(v1_schema_id)
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .build();
+
+        let metadata = TableMetadataBuilder::new_from_metadata(base, None)
+            .add_snapshot(snapshot)
+            .unwrap()
+            .add_schema(v2)
+            .unwrap()
+            .set_current_schema(-1)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        Table::builder()
+            .metadata(metadata)
+            .identifier(TableIdent::from_strs(["ns", "tbl"]).unwrap())
+            .file_io(FileIO::new_with_fs())
+            .metadata_location("/test/metadata.json")
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+    }
+
+    fn field_names(schema: &ArrowSchemaRef) -> Vec<&str> {
+        schema.fields().iter().map(|f| f.name().as_str()).collect()
+    }
+
+    #[test]
+    fn test_snapshot_arrow_schema_pinned_uses_that_snapshot_schema() {
+        // `email` came later, so a pinned read must not advertise it.
+        let schema = snapshot_arrow_schema(&evolved_table(), Some(PINNED_SNAPSHOT)).unwrap();
+        assert_eq!(field_names(&schema), vec!["id", "name"]);
+    }
+
+    #[test]
+    fn test_snapshot_arrow_schema_unpinned_uses_current_schema() {
+        let schema = snapshot_arrow_schema(&evolved_table(), None).unwrap();
+        assert_eq!(field_names(&schema), vec!["id", "name", "email"]);
+    }
+
+    #[test]
+    fn test_snapshot_arrow_schema_unknown_snapshot_errors() {
+        // Falling back to the current schema would turn a stale pin into wrong
+        // output instead of an error.
+        let err = snapshot_arrow_schema(&evolved_table(), Some(-1)).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("snapshot id -1"), "names the snapshot: {msg}");
+        // Namespace-qualified: a bare table name is ambiguous across namespaces.
+        assert!(msg.contains("ns.tbl"), "names the table: {msg}");
     }
 }
