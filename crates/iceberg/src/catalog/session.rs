@@ -25,6 +25,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use crate::io::StorageFactory;
 use crate::runtime::Runtime;
@@ -49,7 +50,7 @@ pub struct SessionContext {
     properties: HashMap<String, String>,
 
     #[builder(default)]
-    credentials: HashMap<String, String>,
+    credentials: HashMap<String, Credential>,
 }
 
 impl SessionContext {
@@ -81,8 +82,38 @@ impl SessionContext {
     }
 
     /// Returns the session's credential map.
-    pub fn credentials(&self) -> &HashMap<String, String> {
+    pub fn credentials(&self) -> &HashMap<String, Credential> {
         &self.credentials
+    }
+}
+
+/// A string-like type containing sensitive information such as passwords or tokens.
+///
+/// It is redacted from logs and automatically zeroized.
+#[derive(Clone)]
+pub struct Credential(Zeroizing<String>);
+
+impl Credential {
+    /// Creates a new [`Credential`] from a string.
+    pub fn new(value: String) -> Self {
+        Self(Zeroizing::new(value))
+    }
+
+    /// Returns the raw value of the credential.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Debug for Credential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Credential([REDACTED])")
+    }
+}
+
+impl From<String> for Credential {
+    fn from(value: String) -> Self {
+        Self::new(value)
     }
 }
 
@@ -217,4 +248,17 @@ pub trait SessionCatalogBuilder: Default + Debug + Send + Sync {
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send;
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Credential;
+
+    #[test]
+    fn test_credential_redacts_value() {
+        let sensitive_value = "my-pw-12346";
+
+        let logged = format!("{:?}", Credential::new(sensitive_value.to_string()));
+        assert!(!logged.contains(sensitive_value));
+    }
 }

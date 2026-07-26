@@ -3516,6 +3516,16 @@ impl serde_core::ser::Serialize for iceberg::ViewUpdate
 pub fn iceberg::ViewUpdate::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::ViewUpdate
 pub fn iceberg::ViewUpdate::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::Credential(_)
+impl iceberg::Credential
+pub fn iceberg::Credential::expose(&self) -> &str
+pub fn iceberg::Credential::new(value: alloc::string::String) -> Self
+impl core::clone::Clone for iceberg::Credential
+pub fn iceberg::Credential::clone(&self) -> iceberg::Credential
+impl core::convert::From<alloc::string::String> for iceberg::Credential
+pub fn iceberg::Credential::from(value: alloc::string::String) -> Self
+impl core::fmt::Debug for iceberg::Credential
+pub fn iceberg::Credential::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::Error
 impl iceberg::Error
 pub fn iceberg::Error::backtrace(&self) -> &std::backtrace::Backtrace
@@ -3666,7 +3676,7 @@ impl core::fmt::Debug for iceberg::RuntimeHandle
 pub fn iceberg::RuntimeHandle::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::SessionContext
 impl iceberg::SessionContext
-pub fn iceberg::SessionContext::credentials(&self) -> &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub fn iceberg::SessionContext::credentials(&self) -> &std::collections::hash::map::HashMap<alloc::string::String, iceberg::Credential>
 pub fn iceberg::SessionContext::empty() -> Self
 pub fn iceberg::SessionContext::identity(&self) -> core::option::Option<&str>
 pub fn iceberg::SessionContext::properties(&self) -> &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
