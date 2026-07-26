@@ -37,3 +37,6 @@ ordered-float = "2.10.1"
 parquet = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
+
+[lints]
+workspace = true

@@ -98,27 +98,27 @@ impl<'de> Deserialize<'de> for Datum {
 
         struct DatumVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for DatumVisitor {
+        impl<'de> de::Visitor<'de> for DatumVisitor {
             type Value = Datum;
 
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
                 formatter.write_str("struct Datum")
             }
 
             fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
-            where A: serde::de::SeqAccess<'de> {
+            where A: de::SeqAccess<'de> {
                 let r#type = seq
                     .next_element::<PrimitiveType>()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
                 let value = seq
                     .next_element::<RawLiteral>()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
                 let Literal::Primitive(primitive) = value
                     .try_into(&Type::Primitive(r#type.clone()))
-                    .map_err(serde::de::Error::custom)?
-                    .ok_or_else(|| serde::de::Error::custom("None value"))?
+                    .map_err(de::Error::custom)?
+                    .ok_or_else(|| de::Error::custom("None value"))?
                 else {
-                    return Err(serde::de::Error::custom("Invalid value"));
+                    return Err(de::Error::custom("Invalid value"));
                 };
 
                 Ok(Datum::new(r#type, primitive))
@@ -145,17 +145,17 @@ impl<'de> Deserialize<'de> for Datum {
                     }
                 }
                 let Some(r#type) = r#type else {
-                    return Err(serde::de::Error::missing_field("type"));
+                    return Err(de::Error::missing_field("type"));
                 };
                 let Some(raw_primitive) = raw_primitive else {
-                    return Err(serde::de::Error::missing_field("literal"));
+                    return Err(de::Error::missing_field("literal"));
                 };
                 let Literal::Primitive(primitive) = raw_primitive
                     .try_into(&Type::Primitive(r#type.clone()))
-                    .map_err(serde::de::Error::custom)?
-                    .ok_or_else(|| serde::de::Error::custom("None value"))?
+                    .map_err(de::Error::custom)?
+                    .ok_or_else(|| de::Error::custom("None value"))?
                 else {
-                    return Err(serde::de::Error::custom("Invalid value"));
+                    return Err(de::Error::custom("Invalid value"));
                 };
                 Ok(Datum::new(r#type, primitive))
             }
@@ -1086,6 +1086,16 @@ impl Datum {
         }
     }
 
+    fn f64_to_f32(val: f64) -> Datum {
+        if val > f32::MAX as f64 {
+            Datum::new(PrimitiveType::Float, PrimitiveLiteral::AboveMax)
+        } else if val < (f32::MIN as f64) {
+            Datum::new(PrimitiveType::Float, PrimitiveLiteral::BelowMin)
+        } else {
+            Datum::float(val as f32)
+        }
+    }
+
     fn string_to_i128<S: AsRef<str>>(s: S) -> Result<i128> {
         s.as_ref().parse::<i128>().map_err(|e| {
             Error::new(ErrorKind::DataInvalid, "Can't parse string to i128.").with_source(e)
@@ -1122,6 +1132,12 @@ impl Datum {
                     (PrimitiveLiteral::Int(val), _, PrimitiveType::Long) => Ok(Datum::long(*val)),
                     (PrimitiveLiteral::Long(val), _, PrimitiveType::Int) => {
                         Ok(Datum::i64_to_i32(*val))
+                    }
+                    (PrimitiveLiteral::Double(val), _, PrimitiveType::Float) => {
+                        Ok(Datum::f64_to_f32(val.0))
+                    }
+                    (PrimitiveLiteral::Float(val), _, PrimitiveType::Double) => {
+                        Ok(Datum::double(val.0 as f64))
                     }
                     (PrimitiveLiteral::Long(val), _, PrimitiveType::Timestamp) => {
                         Ok(Datum::timestamp_micros(*val))

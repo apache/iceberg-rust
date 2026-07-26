@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -45,15 +44,12 @@ pub struct IcebergMetadataTableProvider {
 
 #[async_trait]
 impl TableProvider for IcebergMetadataTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> ArrowSchemaRef {
         let metadata_table = self.table.inspect();
         let schema = match self.r#type {
             MetadataTableType::Snapshots => metadata_table.snapshots().schema(),
             MetadataTableType::Manifests => metadata_table.manifests().schema(),
+            MetadataTableType::History => metadata_table.history().schema(),
         };
         schema_to_arrow_schema(&schema).unwrap().into()
     }
@@ -79,6 +75,7 @@ impl IcebergMetadataTableProvider {
         let stream = match self.r#type {
             MetadataTableType::Snapshots => metadata_table.snapshots().scan().await,
             MetadataTableType::Manifests => metadata_table.manifests().scan().await,
+            MetadataTableType::History => metadata_table.history().scan().await,
         }
         .map_err(to_datafusion_error)?;
         let stream = stream.map_err(to_datafusion_error);
