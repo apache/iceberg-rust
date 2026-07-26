@@ -218,7 +218,15 @@ impl<'a> TableScanBuilder<'a> {
             }
         };
 
-        let schema = snapshot.schema(self.table.metadata())?;
+        // Time travel projects the pinned snapshot's schema; a scan of the
+        // current state projects the table's current schema, which is ahead of
+        // the current snapshot's after a schema update with no write since.
+        // Columns missing from older data files read as their initial-default,
+        // else null. Matches the Java and Python implementations.
+        let schema = match self.snapshot_id {
+            Some(_) => snapshot.schema(self.table.metadata())?,
+            None => self.table.metadata().current_schema().clone(),
+        };
 
         // Check that all column names exist in the schema (skip reserved columns).
         if let Some(column_names) = self.column_names.as_ref() {
@@ -1687,6 +1695,139 @@ pub mod tests {
             table_scan.snapshot().unwrap().snapshot_id(),
             3051729675574597004
         );
+    }
+
+    /// `table` with a column added after its last write, so its current schema is
+    /// ahead of the schema its current snapshot was written with.
+    fn with_column_added_after_last_write(table: &Table) -> Table {
+        let metadata = table.metadata();
+
+        let mut fields = metadata.current_schema().as_struct().fields().to_vec();
+        fields.push(
+            NestedField::optional(
+                100,
+                "added_after_write",
+                Type::Primitive(PrimitiveType::Long),
+            )
+            .into(),
+        );
+        let evolved_schema = Schema::builder().with_fields(fields).build().unwrap();
+
+        let metadata = TableMetadataBuilder::new_from_metadata(metadata.clone(), None)
+            .add_schema(evolved_schema)
+            .unwrap()
+            .set_current_schema(-1)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        Table::builder()
+            .metadata(metadata)
+            .identifier(table.identifier().clone())
+            .file_io(table.file_io().clone())
+            .metadata_location(table.metadata_location().unwrap().to_string())
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_table_scan_of_current_state_projects_current_schema() {
+        let table = with_column_added_after_last_write(&TableTestFixture::new().table);
+        let current_schema_id = table.metadata().current_schema().schema_id();
+        assert_ne!(
+            current_schema_id,
+            table
+                .metadata()
+                .current_snapshot()
+                .unwrap()
+                .schema(table.metadata())
+                .unwrap()
+                .schema_id(),
+            "fixture should have a schema update after its last write"
+        );
+
+        let table_scan = table.scan().build().unwrap();
+        assert_eq!(
+            table_scan
+                .plan_context
+                .as_ref()
+                .unwrap()
+                .snapshot_schema
+                .schema_id(),
+            current_schema_id
+        );
+
+        // A column added after the last write is part of the table, so it can be
+        // selected; older data files simply have no values for it.
+        table
+            .scan()
+            .select(["added_after_write"])
+            .build()
+            .expect("column added after the last write should be selectable");
+    }
+
+    #[test]
+    fn test_table_scan_with_snapshot_id_projects_snapshot_schema() {
+        let table = with_column_added_after_last_write(&TableTestFixture::new().table);
+        let snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
+        let snapshot_schema_id = table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .schema(table.metadata())
+            .unwrap()
+            .schema_id();
+
+        let table_scan = table.scan().snapshot_id(snapshot_id).build().unwrap();
+        assert_eq!(
+            table_scan
+                .plan_context
+                .as_ref()
+                .unwrap()
+                .snapshot_schema
+                .schema_id(),
+            snapshot_schema_id
+        );
+
+        // Time travel sees the table as it was, so a column added afterwards is
+        // not part of that scan.
+        let error = table
+            .scan()
+            .snapshot_id(snapshot_id)
+            .select(["added_after_write"])
+            .build()
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[tokio::test]
+    async fn test_scan_of_current_state_reads_column_added_after_last_write() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let table = with_column_added_after_last_write(&fixture.table);
+
+        let batches: Vec<_> = table
+            .scan()
+            .build()
+            .unwrap()
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        // The data files were written before the column existed, so it reads as
+        // null instead of failing the scan.
+        assert!(!batches.is_empty());
+        for batch in &batches {
+            let column = batch
+                .column_by_name("added_after_write")
+                .expect("column added after the last write should be projected");
+            assert_eq!(column.null_count(), column.len());
+        }
     }
 
     fn table_with_property(key: &str, value: &str) -> Table {
