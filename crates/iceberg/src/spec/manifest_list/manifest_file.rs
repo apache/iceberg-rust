@@ -167,7 +167,7 @@ impl TryFrom<i32> for ManifestContentType {
             0 => Ok(ManifestContentType::Data),
             1 => Ok(ManifestContentType::Deletes),
             _ => Err(Error::new(
-                crate::ErrorKind::DataInvalid,
+                ErrorKind::DataInvalid,
                 format!("Invalid manifest content type. Expected 0 or 1, got {value}"),
             )),
         }
@@ -332,8 +332,9 @@ mod test {
 
     #[tokio::test]
     async fn test_load_manifest_decrypts_when_key_metadata_present() {
-        let key_metadata =
-            StandardKeyMetadata::new(b"0123456789abcdef").with_aad_prefix(b"test-aad-prefix!");
+        let key_metadata = StandardKeyMetadata::try_new(b"0123456789abcdef")
+            .unwrap()
+            .with_aad_prefix(b"test-aad-prefix!");
         let encoded_key_metadata = key_metadata.encode().unwrap().to_vec();
 
         let io = FileIO::new_with_memory();
@@ -352,8 +353,9 @@ mod test {
 
     #[tokio::test]
     async fn test_load_manifest_fails_with_wrong_key() {
-        let key_metadata =
-            StandardKeyMetadata::new(b"0123456789abcdef").with_aad_prefix(b"test-aad-prefix!");
+        let key_metadata = StandardKeyMetadata::try_new(b"0123456789abcdef")
+            .unwrap()
+            .with_aad_prefix(b"test-aad-prefix!");
 
         let io = FileIO::new_with_memory();
         let path = "memory:///test/wrong_key_manifest.avro";
@@ -363,8 +365,9 @@ mod test {
         // the same AAD prefix). The bytes on disk were encrypted with the
         // original key, so GCM authentication must fail rather than silently
         // returning garbage.
-        let wrong_key_metadata =
-            StandardKeyMetadata::new(b"fedcba9876543210").with_aad_prefix(b"test-aad-prefix!");
+        let wrong_key_metadata = StandardKeyMetadata::try_new(b"fedcba9876543210")
+            .unwrap()
+            .with_aad_prefix(b"test-aad-prefix!");
         manifest_file.key_metadata = Some(wrong_key_metadata.encode().unwrap().to_vec());
 
         let err = manifest_file
@@ -376,8 +379,9 @@ mod test {
 
     #[tokio::test]
     async fn test_load_manifest_fails_with_wrong_aad() {
-        let key_metadata =
-            StandardKeyMetadata::new(b"0123456789abcdef").with_aad_prefix(b"test-aad-prefix!");
+        let key_metadata = StandardKeyMetadata::try_new(b"0123456789abcdef")
+            .unwrap()
+            .with_aad_prefix(b"test-aad-prefix!");
 
         let io = FileIO::new_with_memory();
         let path = "memory:///test/wrong_aad_manifest.avro";
@@ -386,8 +390,9 @@ mod test {
         // Point the manifest file at key metadata carrying the correct DEK but a
         // different AAD prefix. The per-block AAD is `aad_prefix || block_index`,
         // so GCM authentication must fail even though the key is right.
-        let wrong_aad_metadata =
-            StandardKeyMetadata::new(b"0123456789abcdef").with_aad_prefix(b"wrong-aad-prefix");
+        let wrong_aad_metadata = StandardKeyMetadata::try_new(b"0123456789abcdef")
+            .unwrap()
+            .with_aad_prefix(b"wrong-aad-prefix");
         manifest_file.key_metadata = Some(wrong_aad_metadata.encode().unwrap().to_vec());
 
         let err = manifest_file

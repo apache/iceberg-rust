@@ -41,3 +41,6 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
+
+[lints]
+workspace = true

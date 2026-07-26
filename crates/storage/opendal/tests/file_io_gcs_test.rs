@@ -74,7 +74,7 @@ mod tests {
         let file_io = get_file_io_gcs().await;
         let output = file_io.new_output(&gs_file).unwrap();
         output
-            .write(bytes::Bytes::from_static(b"iceberg-gcs!"))
+            .write(Bytes::from_static(b"iceberg-gcs!"))
             .await
             .expect("Write to test output file");
         assert!(file_io.exists(gs_file).await.unwrap())
@@ -86,7 +86,7 @@ mod tests {
         let file_io = get_file_io_gcs().await;
         let output = file_io.new_output(&gs_file).unwrap();
         output
-            .write(bytes::Bytes::from_static(b"iceberg!"))
+            .write(Bytes::from_static(b"iceberg!"))
             .await
             .expect("Write to test output file");
         assert!(file_io.exists(&gs_file).await.unwrap());
