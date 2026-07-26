@@ -39,6 +39,7 @@ use serde_derive::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
+use crate::encryption::kms::KmsClientFactory;
 use crate::io::StorageFactory;
 use crate::runtime::Runtime;
 use crate::spec::{
@@ -151,6 +152,28 @@ pub trait CatalogBuilder: Default + Debug + Send + Sync {
     ///     .await?;
     /// ```
     fn with_storage_factory(self, storage_factory: Arc<dyn StorageFactory>) -> Self;
+
+    /// Set a [`KmsClientFactory`] to enable table encryption.
+    ///
+    /// When provided, the catalog calls the factory once during
+    /// [`load`](Self::load) with the catalog properties to create a shared
+    /// [`KeyManagementClient`](crate::encryption::KeyManagementClient).
+    /// That client is then passed to each table's `TableBuilder` so tables
+    /// with `encryption.key-id` set can construct an `EncryptionManager`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use iceberg::CatalogBuilder;
+    /// use iceberg::encryption::kms::KmsClientFactory;
+    /// use std::sync::Arc;
+    ///
+    /// let catalog = MyCatalogBuilder::default()
+    ///     .with_kms_client_factory(Arc::new(MyKmsClientFactory))
+    ///     .load("my_catalog", props)
+    ///     .await?;
+    /// ```
+    fn with_kms_client_factory(self, kms_client_factory: Arc<dyn KmsClientFactory>) -> Self;
 
     /// Set a custom tokio Runtime to use for spawning async tasks.
     ///
@@ -403,7 +426,7 @@ impl TableCommit {
 
         let new_metadata_location = MetadataLocation::from_str(current_metadata_location)?
             .with_next_version()
-            .with_new_metadata(&new_metadata)
+            .try_with_new_metadata(&new_metadata)?
             .to_string();
 
         Ok(table
@@ -2442,12 +2465,13 @@ mod tests {
             "v2"
         );
 
-        // metadata version should be bumped
+        // metadata version should be bumped, and the metadata directory should be
+        // re-derived from the updated table location
         assert!(
             updated_table
                 .metadata_location()
                 .unwrap()
-                .starts_with("s3://bucket/test/location/metadata/00001-")
+                .starts_with("s3://bucket/test/new_location/data/metadata/00001-")
         );
 
         assert_eq!(
