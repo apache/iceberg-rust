@@ -34,7 +34,22 @@ use crate::{Namespace, NamespaceIdent, Result, TableCommit, TableCreation, Table
 /// Context for a session.
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct SessionContext {
+    /// The unique identifier for this session.
+    ///
+    /// Note that the session_id may be used for caching session-scoped state
+    /// and re-use of a session_id with different session context may result in
+    /// unexpected behavior.
     session_id: String,
+
+    /// An optional user or principal associated with the session.
+    #[builder(default, setter(strip_option))]
+    identity: Option<String>,
+
+    #[builder(default)]
+    properties: HashMap<String, String>,
+
+    #[builder(default)]
+    credentials: HashMap<String, String>,
 }
 
 impl SessionContext {
@@ -42,14 +57,32 @@ impl SessionContext {
     pub fn empty() -> Self {
         Self {
             session_id: Uuid::new_v4().to_string(),
+            identity: None,
+            properties: HashMap::new(),
+            credentials: HashMap::new(),
         }
     }
 
-    /// Returns a string that identifies this session.
+    /// Returns the identifier for this session.
     ///
-    /// This can be used for caching state within a session.
+    /// The identifier may be used for caching state within a session.
     pub fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    /// Returns a string that identifies the current user or principal.
+    pub fn identity(&self) -> Option<&str> {
+        self.identity.as_deref()
+    }
+
+    /// Returns a map of properties currently set for the session.
+    pub fn properties(&self) -> &HashMap<String, String> {
+        &self.properties
+    }
+
+    /// Returns the session's credential map.
+    pub fn credentials(&self) -> &HashMap<String, String> {
+        &self.credentials
     }
 }
 

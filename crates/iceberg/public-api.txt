@@ -3666,14 +3666,17 @@ impl core::fmt::Debug for iceberg::RuntimeHandle
 pub fn iceberg::RuntimeHandle::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::SessionContext
 impl iceberg::SessionContext
+pub fn iceberg::SessionContext::credentials(&self) -> &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
 pub fn iceberg::SessionContext::empty() -> Self
+pub fn iceberg::SessionContext::identity(&self) -> core::option::Option<&str>
+pub fn iceberg::SessionContext::properties(&self) -> &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
 pub fn iceberg::SessionContext::session_id(&self) -> &str
 impl core::clone::Clone for iceberg::SessionContext
 pub fn iceberg::SessionContext::clone(&self) -> iceberg::SessionContext
 impl core::fmt::Debug for iceberg::SessionContext
 pub fn iceberg::SessionContext::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::SessionContext
-pub fn iceberg::SessionContext::builder() -> SessionContextBuilder<(())>
+pub fn iceberg::SessionContext::builder() -> SessionContextBuilder<((), (), (), ())>
 pub struct iceberg::TableCommit
 impl iceberg::TableCommit
 pub fn iceberg::TableCommit::apply(self, table: iceberg::table::Table) -> iceberg::Result<iceberg::table::Table>
