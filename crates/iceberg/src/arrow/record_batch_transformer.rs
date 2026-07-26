@@ -228,7 +228,7 @@ pub(crate) struct RecordBatchTransformerBuilder {
 /// Covers both scalar constants (metadata columns like `_file` and `_spec_id`,
 /// as well as identity partition source fields) and the struct `_partition` column.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ColumnConstant {
+pub(crate) enum ColumnConstant {
     /// A scalar constant (e.g., `_file` path, `_spec_id`, identity partition values).
     /// The Datum carries both the Iceberg type and the value.
     Scalar(Datum),
@@ -239,7 +239,7 @@ pub enum ColumnConstant {
 
 /// Pre-computed data for a struct constant column.
 #[derive(Debug, Clone, PartialEq)]
-pub struct StructConstant {
+pub(crate) struct StructConstant {
     fields: Fields,
     child_values: Vec<Option<PrimitiveLiteral>>,
 }
@@ -247,7 +247,7 @@ pub struct StructConstant {
 impl StructConstant {
     /// Create a new StructConstant, validating that fields and child_values have
     /// the same length.
-    pub fn new(fields: Fields, child_values: Vec<Option<PrimitiveLiteral>>) -> Result<Self> {
+    pub(crate) fn new(fields: Fields, child_values: Vec<Option<PrimitiveLiteral>>) -> Result<Self> {
         if fields.len() != child_values.len() {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
@@ -323,10 +323,7 @@ impl RecordBatchTransformerBuilder {
     }
 
     /// Set a pre-computed _partition column constant directly.
-    pub(crate) fn with_partition_column_precomputed(
-        mut self,
-        partition_column: StructConstant,
-    ) -> Self {
+    pub(crate) fn with_partition_constant(mut self, partition_column: StructConstant) -> Self {
         self.constant_fields.insert(
             RESERVED_FIELD_ID_PARTITION,
             ColumnConstant::Struct(partition_column),
@@ -476,7 +473,11 @@ impl RecordBatchTransformer {
                     Some(ColumnConstant::Struct(_)) => {
                         return Err(Error::new(
                             ErrorKind::Unexpected,
-                            format!("Unexpected struct constant for field id {field_id}"),
+                            format!(
+                                "Struct column constants are only supported for the `_partition` \
+                                 metadata column (field id {RESERVED_FIELD_ID_PARTITION}), but \
+                                 one was set for field id {field_id}"
+                            ),
                         ));
                     }
                     Some(ColumnConstant::Scalar(datum)) => {
@@ -619,7 +620,11 @@ impl RecordBatchTransformer {
                     Some(ColumnConstant::Struct(_)) => {
                         return Err(Error::new(
                             ErrorKind::Unexpected,
-                            format!("Unexpected struct constant for field id {field_id}"),
+                            format!(
+                                "Struct column constants are only supported for the `_partition` \
+                                 metadata column (field id {RESERVED_FIELD_ID_PARTITION}), but \
+                                 one was set for field id {field_id}"
+                            ),
                         ));
                     }
                     Some(ColumnConstant::Scalar(datum)) => {
@@ -884,7 +889,7 @@ impl RecordBatchTransformer {
 /// For each field in the unified partition type:
 /// - If it corresponds to a field in this file's partition spec, use the value from partition_data
 /// - Otherwise (partition evolution), use null
-pub fn build_partition_column_constant(
+pub(crate) fn build_partition_constant(
     unified_partition_type: &StructType,
     partition_spec: &PartitionSpec,
     partition_data: &Struct,
@@ -940,9 +945,9 @@ mod test {
         StringArray,
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
-    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
-    use crate::arrow::build_partition_column_constant;
+    use super::field_with_id;
+    use crate::arrow::build_partition_constant;
     use crate::arrow::record_batch_transformer::{
         RecordBatchTransformer, RecordBatchTransformerBuilder,
     };
@@ -1072,8 +1077,8 @@ mod test {
                 .build();
 
         let file_schema = Arc::new(ArrowSchema::new(vec![
-            simple_field("id", DataType::Int32, false, "1"),
-            simple_field("name", DataType::Utf8, true, "2"),
+            field_with_id("id", DataType::Int32, false, 1),
+            field_with_id("name", DataType::Utf8, true, 2),
         ]));
 
         let file_batch = RecordBatch::try_new(file_schema, vec![
@@ -1140,11 +1145,11 @@ mod test {
             RecordBatchTransformerBuilder::new(snapshot_schema, &projected_iceberg_field_ids)
                 .build();
 
-        let file_schema = Arc::new(ArrowSchema::new(vec![simple_field(
+        let file_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
             "id",
             DataType::Int32,
             false,
-            "1",
+            1,
         )]));
         let file_batch =
             RecordBatch::try_new(file_schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
@@ -1194,8 +1199,8 @@ mod test {
                 .build();
 
         let file_schema = Arc::new(ArrowSchema::new(vec![
-            simple_field("id", DataType::Int32, false, "1"),
-            simple_field("data", DataType::Utf8, false, "2"),
+            field_with_id("id", DataType::Int32, false, 1),
+            field_with_id("data", DataType::Utf8, false, 2),
         ]));
 
         let file_batch = RecordBatch::try_new(file_schema, vec![
@@ -1315,36 +1320,28 @@ mod test {
 
     fn arrow_schema_already_same_as_target() -> Arc<ArrowSchema> {
         Arc::new(ArrowSchema::new(vec![
-            simple_field("a", DataType::Utf8, true, "10"),
-            simple_field("b", DataType::Int64, false, "11"),
-            simple_field("c", DataType::Float64, false, "12"),
-            simple_field("e", DataType::Utf8, true, "14"),
-            simple_field("f", DataType::Utf8, false, "15"),
+            field_with_id("a", DataType::Utf8, true, 10),
+            field_with_id("b", DataType::Int64, false, 11),
+            field_with_id("c", DataType::Float64, false, 12),
+            field_with_id("e", DataType::Utf8, true, 14),
+            field_with_id("f", DataType::Utf8, false, 15),
         ]))
     }
 
     fn arrow_schema_promotion_addition_and_renaming_required() -> Arc<ArrowSchema> {
         Arc::new(ArrowSchema::new(vec![
-            simple_field("b", DataType::Int32, false, "11"),
-            simple_field("c", DataType::Float32, false, "12"),
-            simple_field("d", DataType::Int32, false, "13"),
-            simple_field("e_old", DataType::Utf8, true, "14"),
+            field_with_id("b", DataType::Int32, false, 11),
+            field_with_id("c", DataType::Float32, false, 12),
+            field_with_id("d", DataType::Int32, false, 13),
+            field_with_id("e_old", DataType::Utf8, true, 14),
         ]))
     }
 
     fn arrow_schema_no_promotion_addition_or_renaming_required() -> Arc<ArrowSchema> {
         Arc::new(ArrowSchema::new(vec![
-            simple_field("d", DataType::Int32, false, "13"),
-            simple_field("e", DataType::Utf8, true, "14"),
+            field_with_id("d", DataType::Int32, false, 13),
+            field_with_id("e", DataType::Utf8, true, 14),
         ]))
-    }
-
-    /// Create a simple arrow field with metadata.
-    fn simple_field(name: &str, ty: DataType, nullable: bool, value: &str) -> Field {
-        Field::new(name, ty, nullable).with_metadata(HashMap::from([(
-            PARQUET_FIELD_ID_META_KEY.to_string(),
-            value.to_string(),
-        )]))
     }
 
     /// Test for add_files with Parquet files that have NO field IDs (Hive tables).
@@ -1526,8 +1523,8 @@ mod test {
 
         // Parquet file contains both id and name columns
         let parquet_schema = Arc::new(ArrowSchema::new(vec![
-            simple_field("id", DataType::Int32, false, "1"),
-            simple_field("name", DataType::Utf8, true, "2"),
+            field_with_id("id", DataType::Int32, false, 1),
+            field_with_id("name", DataType::Utf8, true, 2),
         ]));
 
         let projected_field_ids = [1, 2]; // id, name
@@ -1647,8 +1644,8 @@ mod test {
 
         // Parquet file contains only id and name (dept is in partition path)
         let parquet_schema = Arc::new(ArrowSchema::new(vec![
-            simple_field("id", DataType::Int32, false, "1"),
-            simple_field("name", DataType::Utf8, true, "3"),
+            field_with_id("id", DataType::Int32, false, 1),
+            field_with_id("name", DataType::Utf8, true, 3),
         ]));
 
         let projected_field_ids = [1, 2, 3]; // id, dept, name
@@ -1737,8 +1734,8 @@ mod test {
         let partition_data = Struct::from_iter(vec![Some(Literal::string("engineering"))]);
 
         let parquet_schema = Arc::new(ArrowSchema::new(vec![
-            simple_field("id", DataType::Int32, false, "1"),
-            simple_field("name", DataType::Utf8, true, "3"),
+            field_with_id("id", DataType::Int32, false, 1),
+            field_with_id("name", DataType::Utf8, true, 3),
         ]));
 
         let projected_field_ids = [1, 3]; // id, name -- dept is gone
@@ -1833,8 +1830,8 @@ mod test {
         // Parquet file has OLD column name "id" but SAME field_id=1
         // Field-ID-based mapping should find this despite name mismatch
         let parquet_schema = Arc::new(ArrowSchema::new(vec![
-            simple_field("id", DataType::Int32, false, "1"),
-            simple_field("name", DataType::Utf8, true, "2"),
+            field_with_id("id", DataType::Int32, false, 1),
+            field_with_id("name", DataType::Utf8, true, 2),
         ]));
 
         let projected_field_ids = [1, 2]; // row_id (field_id=1), name (field_id=2)
@@ -1938,8 +1935,8 @@ mod test {
         // Has id (field_id=1) and data (field_id=3, assigned by ArrowReader via name mapping)
         // Missing: dept (in partition), category (has default), notes (no default)
         let parquet_schema = Arc::new(ArrowSchema::new(vec![
-            simple_field("id", DataType::Int32, false, "1"),
-            simple_field("data", DataType::Utf8, false, "3"),
+            field_with_id("id", DataType::Int32, false, 1),
+            field_with_id("data", DataType::Utf8, false, 3),
         ]));
 
         let projected_field_ids = [1, 2, 3, 4, 5]; // id, dept, data, category, notes
@@ -2030,11 +2027,11 @@ mod test {
         // Partition has null value for the data column
         let partition_data = Struct::from_iter(vec![None]);
 
-        let file_schema = Arc::new(ArrowSchema::new(vec![simple_field(
+        let file_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
             "id",
             DataType::Int32,
             true,
-            "1",
+            1,
         )]));
 
         let projected_field_ids = [1, 2];
@@ -2085,14 +2082,9 @@ mod test {
         // Simulate what arrow-rs's virtual-column reader produces: file columns
         // followed by the _pos Int64 column carrying absolute file row indices.
         let parquet_schema = Arc::new(ArrowSchema::new(vec![
-            simple_field("id", DataType::Int32, false, "1"),
-            simple_field("name", DataType::Utf8, true, "2"),
-            simple_field(
-                "_pos",
-                DataType::Int64,
-                false,
-                &RESERVED_FIELD_ID_POS.to_string(),
-            ),
+            field_with_id("id", DataType::Int32, false, 1),
+            field_with_id("name", DataType::Utf8, true, 2),
+            field_with_id("_pos", DataType::Int64, false, RESERVED_FIELD_ID_POS),
         ]));
 
         let projected_field_ids = [1, 2, RESERVED_FIELD_ID_POS];
@@ -2160,14 +2152,9 @@ mod test {
         );
 
         let parquet_schema = Arc::new(ArrowSchema::new(vec![
-            simple_field("id_long", DataType::Int64, false, "1"),
-            simple_field("name", DataType::Utf8, true, "2"),
-            simple_field(
-                "_pos",
-                DataType::Int64,
-                false,
-                &RESERVED_FIELD_ID_POS.to_string(),
-            ),
+            field_with_id("id_long", DataType::Int64, false, 1),
+            field_with_id("name", DataType::Utf8, true, 2),
+            field_with_id("_pos", DataType::Int64, false, RESERVED_FIELD_ID_POS),
         ]));
 
         let projected_field_ids = [RESERVED_FIELD_ID_POS, 2, 1];
@@ -2251,22 +2238,19 @@ mod test {
 
         // Parquet file has both columns
         let parquet_schema = Arc::new(ArrowSchema::new(vec![
-            simple_field("id", DataType::Int32, false, "1"),
-            simple_field("name", DataType::Utf8, true, "2"),
+            field_with_id("id", DataType::Int32, false, 1),
+            field_with_id("name", DataType::Utf8, true, 2),
         ]));
 
         // Project id, name, and _partition
         let projected_field_ids = [1, 2, RESERVED_FIELD_ID_PARTITION];
 
-        let partition_column = build_partition_column_constant(
-            &unified_partition_type,
-            &partition_spec,
-            &partition_data,
-        )
-        .unwrap();
+        let partition_column =
+            build_partition_constant(&unified_partition_type, &partition_spec, &partition_data)
+                .unwrap();
         let mut transformer =
             RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
-                .with_partition_column_precomputed(partition_column)
+                .with_partition_constant(partition_column)
                 .build();
 
         let parquet_batch = RecordBatch::try_new(parquet_schema, vec![
@@ -2364,21 +2348,20 @@ mod test {
         // File written with spec_v0 (only has year=2023)
         let partition_data = Struct::from_iter(vec![Some(Literal::int(2023))]);
 
-        let parquet_schema = Arc::new(ArrowSchema::new(vec![simple_field(
+        let parquet_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
             "data",
             DataType::Utf8,
             true,
-            "3",
+            3,
         )]));
 
         let projected_field_ids = [3, RESERVED_FIELD_ID_PARTITION];
 
         let partition_column =
-            build_partition_column_constant(&unified_partition_type, &spec_v0, &partition_data)
-                .unwrap();
+            build_partition_constant(&unified_partition_type, &spec_v0, &partition_data).unwrap();
         let mut transformer =
             RecordBatchTransformerBuilder::new(snapshot_schema, &projected_field_ids)
-                .with_partition_column_precomputed(partition_column)
+                .with_partition_constant(partition_column)
                 .build();
 
         let parquet_batch =

@@ -34,7 +34,7 @@ use super::{
     ArrowFileReader, ArrowReader, ParquetReadOptions, add_fallback_field_ids_to_arrow_schema,
     apply_name_mapping_to_arrow_schema,
 };
-use crate::arrow::build_partition_column_constant;
+use crate::arrow::build_partition_constant;
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
 use crate::arrow::int96::coerce_int96_timestamps;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
@@ -321,13 +321,13 @@ impl FileScanTaskReader {
         {
             let (spec, partition_data) = match (&task.partition_spec, &task.partition) {
                 (Some(spec), Some(data)) => (spec.clone(), data.clone()),
-                // Unpartitioned table or missing spec: build_partition_column_constant
+                // Unpartitioned table or missing spec: build_partition_constant
                 // handles the empty unified_type case with an early return.
                 _ => (Arc::new(PartitionSpec::unpartition_spec()), Struct::empty()),
             };
-            let constant = build_partition_column_constant(unified_type, &spec, &partition_data)?;
+            let constant = build_partition_constant(unified_type, &spec, &partition_data)?;
             record_batch_transformer_builder =
-                record_batch_transformer_builder.with_partition_column_precomputed(constant);
+                record_batch_transformer_builder.with_partition_constant(constant);
         }
 
         let mut record_batch_transformer = record_batch_transformer_builder.build();

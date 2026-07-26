@@ -18,9 +18,11 @@
 //! Partition type utilities for Iceberg tables.
 
 use std::cmp::Reverse;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use crate::spec::{NestedField, NestedFieldRef, PartitionSpec, Schema, StructType, Transform};
+use crate::spec::{
+    NestedField, NestedFieldRef, PartitionSpec, Schema, StructType, Transform, Type,
+};
 use crate::{Error, ErrorKind, Result};
 
 /// Computes the unified partition type across all partition specs in the table.
@@ -29,11 +31,15 @@ use crate::{Error, ErrorKind, Result};
 /// StructType containing all partition fields ever used across all specs, enabling correct
 /// representation of the `_partition` metadata column when partition evolution has occurred.
 ///
-/// Matches Java's behavior:
+/// Matches Java's `buildPartitionProjectionType` behavior:
 /// - Specs are sorted by spec_id in descending order (newer specs first), so newer field
 ///   names take precedence when deduplicating by field_id.
-/// - Void and unknown transform fields are skipped.
-/// - Fields are deduplicated by field_id — each unique field_id appears exactly once.
+/// - Unknown transforms cause an error.
+/// - Fields whose source column was dropped from the schema are skipped.
+/// - When a newer spec marks a field as Void (dropped) but an older spec has it with a
+///   real transform, the older spec's type is preserved while the newer spec's name is kept.
+/// - Fields are deduplicated by field_id; each unique field_id appears exactly once.
+/// - Output fields are sorted by field_id ascending.
 ///
 /// # Arguments
 /// * `partition_specs` - Iterator over all partition specs in the table
@@ -42,33 +48,23 @@ pub fn compute_unified_partition_type<'a>(
     partition_specs: impl Iterator<Item = &'a PartitionSpec>,
     schema: &Schema,
 ) -> Result<StructType> {
-    let mut seen_field_ids = HashSet::new();
-    let mut struct_fields: Vec<NestedFieldRef> = Vec::new();
-
-    // Sort specs by spec_id descending (newer first) to match Java's behavior:
-    // newer field names take precedence when deduplicating by field_id.
     let mut specs: Vec<&PartitionSpec> = partition_specs.collect();
     specs.sort_by_key(|s| Reverse(s.spec_id()));
 
-    for spec in specs {
+    let active_field_ids = all_active_field_ids(specs.iter().copied(), schema);
+
+    let mut field_map: HashMap<i32, &crate::spec::PartitionField> = HashMap::new();
+    let mut type_map: HashMap<i32, Type> = HashMap::new();
+    let mut name_map: HashMap<i32, String> = HashMap::new();
+
+    for spec in &specs {
         for field in spec.fields() {
-            if seen_field_ids.contains(&field.field_id) {
+            let field_id = field.field_id;
+
+            if !active_field_ids.contains(&field_id) {
                 continue;
             }
 
-            // Claim this field_id for the current (newest) spec, even if it's void.
-            // This ensures that if a newer spec marks a field Void, an older spec
-            // won't re-add it with a stale name.
-            seen_field_ids.insert(field.field_id);
-
-            // Skip void transforms (dropped partition columns)
-            if matches!(field.transform, Transform::Void) {
-                continue;
-            }
-
-            // Reject unknown transforms — the table uses a spec feature that
-            // this version of iceberg-rust doesn't support. Matching Java's
-            // behavior where getResultType() throws for unknown transforms.
             if matches!(field.transform, Transform::Unknown) {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
@@ -80,22 +76,272 @@ pub fn compute_unified_partition_type<'a>(
                 ));
             }
 
-            // Skip fields whose source column was dropped (partition evolution
-            // allows dropping columns; Java's Partitioning.partitionType skips these).
             let source_field = match schema.field_by_id(field.source_id) {
                 Some(f) => f,
                 None => continue,
             };
 
-            let res_type = field.transform.result_type(&source_field.field_type)?;
-            let nested = NestedField::optional(field.field_id, &field.name, res_type).into();
-            struct_fields.push(nested);
+            match field_map.get(&field_id) {
+                None => {
+                    let res_type = field.transform.result_type(&source_field.field_type)?;
+                    field_map.insert(field_id, field);
+                    type_map.insert(field_id, res_type);
+                    name_map.insert(field_id, field.name.clone());
+                }
+                Some(existing) => {
+                    if is_void_transform(existing) && !is_void_transform(field) {
+                        let res_type = field.transform.result_type(&source_field.field_type)?;
+                        field_map.insert(field_id, field);
+                        type_map.insert(field_id, res_type);
+                    }
+                }
+            }
         }
     }
 
-    // Sort by field ID ascending to match Java's buildPartitionProjectionType
-    // which sorts by fieldMap.keySet().stream().sorted(Comparator.naturalOrder()).
-    struct_fields.sort_by_key(|f| f.id);
+    let mut field_ids: Vec<i32> = field_map.keys().copied().collect();
+    field_ids.sort();
+
+    let struct_fields: Vec<NestedFieldRef> = field_ids
+        .into_iter()
+        .map(|fid| {
+            let name = &name_map[&fid];
+            let ty = type_map.remove(&fid).unwrap();
+            NestedField::optional(fid, name, ty).into()
+        })
+        .collect();
 
     Ok(StructType::new(struct_fields))
+}
+
+fn is_void_transform(field: &crate::spec::PartitionField) -> bool {
+    matches!(field.transform, Transform::Void)
+}
+
+fn all_active_field_ids<'a>(
+    partition_specs: impl Iterator<Item = &'a PartitionSpec>,
+    schema: &Schema,
+) -> HashSet<i32> {
+    partition_specs
+        .flat_map(|spec| spec.fields().iter())
+        .filter(|field| schema.field_by_id(field.source_id).is_some())
+        .map(|field| field.field_id)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::spec::{NestedField, PrimitiveType, Transform, Type, UnboundPartitionSpec};
+
+    fn test_schema() -> Schema {
+        Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(3, "ts", Type::Primitive(PrimitiveType::Timestamp)).into(),
+                NestedField::required(4, "category", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    fn build_spec(
+        schema: &Schema,
+        spec_id: i32,
+        fields: Vec<(i32, &str, Transform)>,
+    ) -> PartitionSpec {
+        let mut builder = UnboundPartitionSpec::builder().with_spec_id(spec_id);
+        for (source_id, name, transform) in fields {
+            builder = builder
+                .add_partition_field(source_id, name, transform)
+                .unwrap();
+        }
+        builder.build().bind(schema.clone()).unwrap()
+    }
+
+    #[test]
+    fn test_single_spec_identity() {
+        let schema = test_schema();
+        let spec = build_spec(&schema, 0, vec![(4, "category", Transform::Identity)]);
+
+        let result = compute_unified_partition_type([&spec].into_iter(), &schema).unwrap();
+        assert_eq!(result.fields().len(), 1);
+        assert_eq!(result.fields()[0].name, "category");
+        assert_eq!(
+            *result.fields()[0].field_type,
+            Type::Primitive(PrimitiveType::String)
+        );
+    }
+
+    #[test]
+    fn test_single_spec_with_year_transform() {
+        let schema = test_schema();
+        let spec = build_spec(&schema, 0, vec![(3, "ts_year", Transform::Year)]);
+
+        let result = compute_unified_partition_type([&spec].into_iter(), &schema).unwrap();
+        assert_eq!(result.fields().len(), 1);
+        assert_eq!(result.fields()[0].name, "ts_year");
+        assert_eq!(
+            *result.fields()[0].field_type,
+            Type::Primitive(PrimitiveType::Int)
+        );
+    }
+
+    #[test]
+    fn test_unpartitioned() {
+        let schema = test_schema();
+        let spec = PartitionSpec::unpartition_spec();
+        let result = compute_unified_partition_type([&spec].into_iter(), &schema).unwrap();
+        assert!(result.fields().is_empty());
+    }
+
+    #[test]
+    fn test_multiple_fields_sorted_by_id() {
+        let schema = test_schema();
+        let spec = build_spec(&schema, 0, vec![
+            (3, "ts_year", Transform::Year),
+            (4, "category", Transform::Identity),
+        ]);
+
+        let result = compute_unified_partition_type([&spec].into_iter(), &schema).unwrap();
+        assert_eq!(result.fields().len(), 2);
+        assert!(result.fields()[0].id < result.fields()[1].id);
+    }
+
+    #[test]
+    fn test_newer_name_takes_precedence() {
+        let schema = test_schema();
+
+        // Spec 0: old name
+        let spec_v0 = PartitionSpec::builder(Arc::new(schema.clone()))
+            .with_spec_id(0)
+            .add_unbound_field(crate::spec::UnboundPartitionField {
+                source_id: 4,
+                field_id: Some(1000),
+                name: "cat_old".to_string(),
+                transform: Transform::Identity,
+            })
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Spec 1: newer name, same field_id
+        let spec_v1 = PartitionSpec::builder(Arc::new(schema.clone()))
+            .with_spec_id(1)
+            .add_unbound_field(crate::spec::UnboundPartitionField {
+                source_id: 4,
+                field_id: Some(1000),
+                name: "cat_new".to_string(),
+                transform: Transform::Identity,
+            })
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let result =
+            compute_unified_partition_type([&spec_v0, &spec_v1].into_iter(), &schema).unwrap();
+        assert_eq!(result.fields().len(), 1);
+        assert_eq!(result.fields()[0].name, "cat_new");
+    }
+
+    #[test]
+    fn test_void_replaced_by_older_non_void() {
+        let schema = test_schema();
+
+        // Spec 0 (older): category partitioned by identity
+        let spec_v0 = PartitionSpec::builder(Arc::new(schema.clone()))
+            .with_spec_id(0)
+            .add_unbound_field(crate::spec::UnboundPartitionField {
+                source_id: 4,
+                field_id: Some(1000),
+                name: "category".to_string(),
+                transform: Transform::Identity,
+            })
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Spec 1 (newer): same field_id voided (partition dropped)
+        let spec_v1 = PartitionSpec::builder(Arc::new(schema.clone()))
+            .with_spec_id(1)
+            .add_unbound_field(crate::spec::UnboundPartitionField {
+                source_id: 4,
+                field_id: Some(1000),
+                name: "category_v2".to_string(),
+                transform: Transform::Void,
+            })
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let result =
+            compute_unified_partition_type([&spec_v0, &spec_v1].into_iter(), &schema).unwrap();
+
+        assert_eq!(result.fields().len(), 1);
+        // Name from newer spec
+        assert_eq!(result.fields()[0].name, "category_v2");
+        // Type from older non-void spec
+        assert_eq!(
+            *result.fields()[0].field_type,
+            Type::Primitive(PrimitiveType::String)
+        );
+    }
+
+    #[test]
+    fn test_dropped_source_column_skipped() {
+        // Schema without field 4 (category was dropped)
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, "data", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        // Spec references source_id=4 which no longer exists in the schema.
+        // Deserialize directly since the builder rejects unknown source columns.
+        let spec = serde_json::from_value::<PartitionSpec>(serde_json::json!({
+            "spec-id": 0,
+            "fields": [{
+                "source-id": 4,
+                "field-id": 1000,
+                "name": "category",
+                "transform": "identity"
+            }]
+        }))
+        .unwrap();
+
+        let result = compute_unified_partition_type([&spec].into_iter(), &schema).unwrap();
+        assert!(result.fields().is_empty());
+    }
+
+    #[test]
+    fn test_evolution_adds_new_field() {
+        let schema = test_schema();
+
+        // Spec 0: partition by category
+        let spec_v0 = build_spec(&schema, 0, vec![(4, "category", Transform::Identity)]);
+
+        // Spec 1: partition by category + ts_year
+        let spec_v1 = PartitionSpec::builder(Arc::new(schema.clone()))
+            .with_spec_id(1)
+            .add_unbound_field(crate::spec::UnboundPartitionField {
+                source_id: 4,
+                field_id: Some(spec_v0.fields()[0].field_id),
+                name: "category".to_string(),
+                transform: Transform::Identity,
+            })
+            .unwrap()
+            .add_partition_field("ts", "ts_year", Transform::Year)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let result =
+            compute_unified_partition_type([&spec_v0, &spec_v1].into_iter(), &schema).unwrap();
+        assert_eq!(result.fields().len(), 2);
+    }
 }
