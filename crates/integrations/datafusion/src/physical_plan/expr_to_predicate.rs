@@ -140,7 +140,8 @@ fn to_iceberg_predicate(expr: &Expr) -> TransformedResult {
             }
         }
         Expr::Cast(c) => {
-            if c.data_type == DataType::Date32 || c.data_type == DataType::Date64 {
+            if *c.field.data_type() == DataType::Date32 || *c.field.data_type() == DataType::Date64
+            {
                 // Casts to date truncate the expression, we cannot simply extract it as it
                 // can create erroneous predicates.
                 return TransformedResult::NotTransformed;
@@ -262,7 +263,9 @@ fn resolve_nan_preserving_reference(expr: &Expr) -> Option<Reference> {
         Expr::Cast(cast) => {
             // Casts to date truncate the value and are not numeric, so they
             // cannot be treated as NaN-preserving.
-            if cast.data_type == DataType::Date32 || cast.data_type == DataType::Date64 {
+            if *cast.field.data_type() == DataType::Date32
+                || *cast.field.data_type() == DataType::Date64
+            {
                 return None;
             }
             resolve_nan_preserving_reference(&cast.expr)

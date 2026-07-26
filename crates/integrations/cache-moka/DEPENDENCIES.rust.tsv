@@ -8,7 +8,7 @@ aho-corasick@1.1.4										X		X
 alloc-no-stdlib@2.0.4					X								
 alloc-stdlib@0.2.2					X								
 android_system_properties@0.1.5		X								X			
-anyhow@1.0.102		X								X			
+anyhow@1.0.103		X								X			
 apache-avro@0.21.0		X											
 array-init@2.1.0		X								X			
 arrow-arith@58.3.0		X											
@@ -301,7 +301,7 @@ zerocopy@0.8.47		X		X						X
 zerocopy-derive@0.8.47		X		X						X			
 zerofrom@0.1.6											X		
 zerofrom-derive@0.1.6											X		
-zeroize@1.8.2		X								X			
+zeroize@1.9.0		X								X			
 zerotrie@0.2.3											X		
 zerovec@0.11.5											X		
 zerovec-derive@0.11.2											X		

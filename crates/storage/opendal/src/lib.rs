@@ -18,8 +18,8 @@
 //! OpenDAL-based storage implementation for Apache Iceberg.
 //!
 //! This crate provides [`OpenDalStorage`] and [`OpenDalStorageFactory`],
-//! which implement the [`Storage`](iceberg::io::Storage) and
-//! [`StorageFactory`](iceberg::io::StorageFactory) traits from the `iceberg` crate
+//! which implement the [`Storage`](Storage) and
+//! [`StorageFactory`](StorageFactory) traits from the `iceberg` crate
 //! using [OpenDAL](https://opendal.apache.org/) as the backend.
 
 mod utils;
@@ -117,7 +117,7 @@ pub enum OpenDalStorageFactory {
     S3 {
         /// Custom AWS credential loader.
         #[serde(skip)]
-        customized_credential_load: Option<s3::CustomAwsCredentialLoader>,
+        customized_credential_load: Option<CustomAwsCredentialLoader>,
     },
     /// GCS storage factory.
     #[cfg(feature = "opendal-gcs")]
@@ -209,7 +209,7 @@ pub enum OpenDalStorage {
         config: Arc<S3Config>,
         /// Custom AWS credential loader.
         #[serde(skip)]
-        customized_credential_load: Option<s3::CustomAwsCredentialLoader>,
+        customized_credential_load: Option<CustomAwsCredentialLoader>,
     },
     /// GCS storage variant.
     #[cfg(feature = "opendal-gcs")]
@@ -462,7 +462,7 @@ impl OpenDalStorage {
             }
             #[cfg(feature = "opendal-hf")]
             OpenDalStorage::Hf { .. } => {
-                let parsed = hf::HfUri::parse(path).ok_or_else(|| {
+                let parsed = HfUri::parse(path).ok_or_else(|| {
                     Error::new(ErrorKind::DataInvalid, format!("Invalid hf url: {path}"))
                 })?;
                 Ok(&path[path.len() - parsed.path.len()..])
