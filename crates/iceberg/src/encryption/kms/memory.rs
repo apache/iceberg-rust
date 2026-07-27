@@ -27,6 +27,7 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 
 use super::KeyManagementClient;
+use super::factory::KmsClientFactory;
 use crate::encryption::{AesGcmCipher, AesKeySize, SecureKey, SensitiveBytes};
 use crate::error::lock_error;
 use crate::{Error, ErrorKind, Result};
@@ -139,6 +140,71 @@ impl MemoryKeyManagementClient {
             .read()
             .map(|keys| keys.contains_key(key_id))
             .unwrap_or(false)
+    }
+}
+
+/// Factory for creating [`MemoryKeyManagementClient`] instances.
+///
+/// The factory owns the master-key table and its key size; seed it with
+/// [`add_master_key`](Self::add_master_key) /
+/// [`add_master_key_bytes`](Self::add_master_key_bytes), then every client it
+/// produces via [`create_kms_client`](KmsClientFactory::create_kms_client)
+/// shares that same table. Useful for testing encryption flows without a real
+/// KMS backend.
+#[derive(Debug, Clone, Default)]
+pub struct MemoryKmsClientFactory {
+    master_keys: Arc<RwLock<HashMap<String, SensitiveBytes>>>,
+    master_key_size: AesKeySize,
+}
+
+impl MemoryKmsClientFactory {
+    /// Creates a new factory with 128-bit AES master keys.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates a new factory whose clients use the given master key size.
+    pub fn with_master_key_size(master_key_size: AesKeySize) -> Self {
+        Self {
+            master_keys: Arc::new(RwLock::new(HashMap::new())),
+            master_key_size,
+        }
+    }
+
+    /// A client view over this factory's shared master-key table.
+    fn client(&self) -> MemoryKeyManagementClient {
+        MemoryKeyManagementClient {
+            master_keys: Arc::clone(&self.master_keys),
+            master_key_size: self.master_key_size,
+        }
+    }
+
+    /// Adds a randomly generated master key with the given ID.
+    pub fn add_master_key(&self, key_id: impl Into<String>) -> Result<()> {
+        self.client().add_master_key(key_id)
+    }
+
+    /// Adds a master key with explicit key bytes.
+    ///
+    /// Use this to seed the factory with known key material, e.g. for
+    /// cross-language integration tests where both Java and Rust must
+    /// share the same master key bytes.
+    pub fn add_master_key_bytes(
+        &self,
+        key_id: impl Into<String>,
+        key_bytes: SensitiveBytes,
+    ) -> Result<()> {
+        self.client().add_master_key_bytes(key_id, key_bytes)
+    }
+}
+
+#[async_trait]
+impl KmsClientFactory for MemoryKmsClientFactory {
+    async fn create_kms_client(
+        &self,
+        _properties: &HashMap<String, String>,
+    ) -> Result<Arc<dyn KeyManagementClient>> {
+        Ok(Arc::new(self.client()))
     }
 }
 
@@ -292,5 +358,47 @@ mod tests {
 
         kms1.add_master_key("shared-key").unwrap();
         assert!(kms2.has_key("shared-key"));
+    }
+
+    #[tokio::test]
+    async fn test_factory_seeds_produced_clients() {
+        // Seed the factory, then every client it produces sees those keys and
+        // can wrap/unwrap with them.
+        let factory = MemoryKmsClientFactory::new();
+        factory
+            .add_master_key_bytes("master-1", SensitiveBytes::new([9u8; 16]))
+            .unwrap();
+
+        let client = factory.create_kms_client(&HashMap::new()).await.unwrap();
+
+        let dek = vec![3u8; 16];
+        let wrapped = client.wrap_key(&dek, "master-1").await.unwrap();
+        let unwrapped = client.unwrap_key(&wrapped, "master-1").await.unwrap();
+        assert_eq!(unwrapped.as_bytes(), dek.as_slice());
+    }
+
+    #[tokio::test]
+    async fn test_factory_seeding_after_client_creation_is_visible() {
+        // The factory owns the shared table, so keys added after a client is
+        // produced are still visible to that client.
+        let factory = MemoryKmsClientFactory::new();
+        let client = factory.create_kms_client(&HashMap::new()).await.unwrap();
+
+        factory.add_master_key("late-key").unwrap();
+
+        let dek = vec![1u8; 16];
+        assert!(client.wrap_key(&dek, "late-key").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_factory_with_master_key_size() {
+        let factory = MemoryKmsClientFactory::with_master_key_size(AesKeySize::Bits256);
+        factory.add_master_key("master-256").unwrap();
+
+        let client = factory.create_kms_client(&HashMap::new()).await.unwrap();
+        let dek = vec![0u8; 16];
+        let wrapped = client.wrap_key(&dek, "master-256").await.unwrap();
+        let unwrapped = client.unwrap_key(&wrapped, "master-256").await.unwrap();
+        assert_eq!(unwrapped.as_bytes(), dek.as_slice());
     }
 }

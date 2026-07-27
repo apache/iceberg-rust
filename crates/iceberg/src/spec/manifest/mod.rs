@@ -270,7 +270,6 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(1),
-            None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
         )
@@ -572,7 +571,6 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(2),
-            None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
         )
@@ -669,7 +667,6 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(3),
-            None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
         )
@@ -778,7 +775,6 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(2),
-            None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
         )
@@ -886,7 +882,6 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(2),
-            None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
         )
@@ -1165,7 +1160,6 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(1),
-            None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
         )

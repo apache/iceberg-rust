@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -45,7 +44,6 @@ use iceberg::writer::file_writer::location_generator::{
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::{Error, ErrorKind};
-use parquet::file::properties::{CdcOptions, WriterPropertiesBuilder};
 use uuid::Uuid;
 
 use crate::physical_plan::DATA_FILES_COL_NAME;
@@ -139,10 +137,6 @@ impl ExecutionPlan for IcebergWriteExec {
         "IcebergWriteExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     /// Prevents the introduction of additional `RepartitionExec` and processing input in parallel.
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
@@ -225,21 +219,14 @@ impl ExecutionPlan for IcebergWriteExec {
             )));
         }
 
-        // Create data file writer builder
-        let cdc_options = table_props.cdc_enabled.then_some(CdcOptions {
-            min_chunk_size: table_props.cdc_min_chunk_size,
-            max_chunk_size: table_props.cdc_max_chunk_size,
-            norm_level: table_props.cdc_norm_level,
-        });
-        let writer_properties = WriterPropertiesBuilder::default()
-            .set_content_defined_chunking(cdc_options)
-            .build();
-
-        let parquet_file_writer_builder = ParquetWriterBuilder::new_with_match_mode(
-            writer_properties,
+        // Build the writer from the already-parsed table properties so it honors
+        // `write.parquet.*` settings (e.g. CDC). Arrow batches flowing through
+        // DataFusion carry no field-id metadata, so match fields by name.
+        let parquet_file_writer_builder = ParquetWriterBuilder::from_table_properties(
+            &table_props,
             self.table.metadata().current_schema().clone(),
-            FieldMatchMode::Name,
-        );
+        )
+        .with_match_mode(FieldMatchMode::Name);
         let target_file_size = table_props.write_target_file_size_bytes;
 
         let file_io = self.table.file_io().clone();
@@ -315,7 +302,6 @@ impl ExecutionPlan for IcebergWriteExec {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
     use std::collections::HashMap;
     use std::fmt::{Debug, Formatter};
     use std::sync::Arc;
@@ -386,10 +372,6 @@ mod tests {
     impl ExecutionPlan for MockExecutionPlan {
         fn name(&self) -> &str {
             "MockExecutionPlan"
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
 
         fn properties(&self) -> &Arc<PlanProperties> {

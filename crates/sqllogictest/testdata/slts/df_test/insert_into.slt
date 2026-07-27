@@ -24,6 +24,21 @@ query IT rowsort
 SELECT * FROM default.default.test_unpartitioned_table
 ----
 
+# Insert zero rows and verify it returns count 0 without creating a snapshot
+query I
+INSERT INTO default.default.test_unpartitioned_table SELECT * FROM (VALUES (1, 'Nobody')) AS t(id, name) WHERE false
+----
+0
+
+query I
+SELECT COUNT(*) FROM default.default.test_unpartitioned_table
+----
+0
+
+query ??????
+SELECT * FROM default.default.test_unpartitioned_table$snapshots
+----
+
 # Insert a single row and verify the count
 query I
 INSERT INTO default.default.test_unpartitioned_table VALUES (1, 'Alice')
@@ -68,6 +83,21 @@ SELECT * FROM default.default.test_unpartitioned_table
 # Test partitioned table - verify initially empty
 query ITT rowsort
 SELECT * FROM default.default.test_partitioned_table
+----
+
+# Insert zero rows into a partitioned table and verify it returns count 0 without creating a snapshot
+query I
+INSERT INTO default.default.test_partitioned_table SELECT * FROM (VALUES (1, 'electronics', 'laptop')) AS t(id, category, value) WHERE false
+----
+0
+
+query I
+SELECT COUNT(*) FROM default.default.test_partitioned_table
+----
+0
+
+query ??????
+SELECT * FROM default.default.test_partitioned_table$snapshots
 ----
 
 # Insert single row into partitioned table

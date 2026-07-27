@@ -56,11 +56,10 @@ pub struct ManifestWriterBuilder {
 }
 
 impl ManifestWriterBuilder {
-    /// Create a new builder.
+    /// Create a new builder for unencrypted manifests.
     pub fn new(
         output: OutputFile,
         snapshot_id: Option<i64>,
-        key_metadata: Option<Vec<u8>>,
         schema: SchemaRef,
         partition_spec: PartitionSpec,
     ) -> Self {
@@ -69,7 +68,7 @@ impl ManifestWriterBuilder {
             writer_future: Box::pin(async move { output.writer().await }),
             location,
             snapshot_id,
-            key_metadata,
+            key_metadata: None,
             schema,
             partition_spec,
         }
@@ -81,19 +80,19 @@ impl ManifestWriterBuilder {
     pub fn new_from_encrypted(
         encrypted_output: EncryptedOutputFile,
         snapshot_id: Option<i64>,
-        key_metadata: Option<Vec<u8>>,
         schema: SchemaRef,
         partition_spec: PartitionSpec,
-    ) -> Self {
+    ) -> Result<Self> {
         let location = encrypted_output.location().to_owned();
-        Self {
+        let key_metadata = Some(encrypted_output.key_metadata().encode()?.to_vec());
+        Ok(Self {
             writer_future: Box::pin(async move { encrypted_output.writer().await }),
             location,
             snapshot_id,
             key_metadata,
             schema,
             partition_spec,
-        }
+        })
     }
 
     /// Build a [`ManifestWriter`] for format version 1.
@@ -124,6 +123,7 @@ impl ManifestWriterBuilder {
             .format_version(FormatVersion::V2)
             .content(ManifestContentType::Data)
             .build();
+
         ManifestWriter::new(
             self.writer_future,
             self.location,
@@ -732,7 +732,6 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(3),
-            None,
             metadata.schema.clone(),
             metadata.partition_spec.clone(),
         )
@@ -820,7 +819,6 @@ mod tests {
         let mut writer = ManifestWriterBuilder::new(
             output_file,
             Some(1),
-            None,
             schema.clone(),
             partition_spec.clone(),
         )
