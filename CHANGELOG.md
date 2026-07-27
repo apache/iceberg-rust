@@ -24,6 +24,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.10.1] - 2026-07-28
+
+* chore: Update crossbeam-epoch to 0.9.20, pin CI ruff version to 0.15.22 by @dannycjones in https://github.com/apache/iceberg-rust/pull/2911
+
 ## [v0.10.0] - 2026-07-07
 
 ### Breaking Changes

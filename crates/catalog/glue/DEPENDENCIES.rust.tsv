@@ -84,7 +84,7 @@ cpufeatures@0.2.17		X									X
 crc32c@0.6.8		X									X				
 crc32fast@1.5.0		X									X				
 crossbeam-channel@0.5.15		X									X				
-crossbeam-epoch@0.9.18		X									X				
+crossbeam-epoch@0.9.20		X									X				
 crossbeam-utils@0.8.21		X									X				
 crunchy@0.2.4											X				
 crypto-common@0.1.7		X									X				
@@ -157,10 +157,10 @@ hyper-rustls@0.27.7		X							X		X
 hyper-util@0.1.20											X				
 iana-time-zone@0.1.65		X									X				
 iana-time-zone-haiku@0.1.2		X									X				
-iceberg@0.10.0		X													
-iceberg-catalog-glue@0.10.0		X													
-iceberg-storage-opendal@0.10.0		X													
-iceberg_test_utils@0.10.0		X													
+iceberg@0.10.1		X													
+iceberg-catalog-glue@0.10.1		X													
+iceberg-storage-opendal@0.10.1		X													
+iceberg_test_utils@0.10.1		X													
 icu_collections@2.1.1													X		
 icu_locale_core@2.1.1													X		
 icu_normalizer@2.1.1													X		
