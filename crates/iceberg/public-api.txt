@@ -1326,6 +1326,7 @@ pub fn iceberg::scan::ScanResult::metrics(&self) -> &iceberg::scan::ScanMetrics
 pub fn iceberg::scan::ScanResult::stream(self) -> iceberg::scan::ArrowRecordBatchStream
 pub struct iceberg::scan::TableScan
 impl iceberg::scan::TableScan
+pub fn iceberg::scan::TableScan::arrow_reader_builder(&self) -> iceberg::arrow::ArrowReaderBuilder
 pub fn iceberg::scan::TableScan::column_names(&self) -> core::option::Option<&[alloc::string::String]>
 pub async fn iceberg::scan::TableScan::plan_files(&self) -> iceberg::Result<iceberg::scan::FileScanTaskStream>
 pub fn iceberg::scan::TableScan::snapshot(&self) -> core::option::Option<&iceberg::spec::SnapshotRef>

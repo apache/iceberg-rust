@@ -480,8 +480,8 @@ impl TableScan {
         Ok(file_scan_task_rx.boxed())
     }
 
-    /// Returns an [`ArrowRecordBatchStream`].
-    pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
+    /// Returns an [`ArrowReaderBuilder`] configured for this table scan.
+    pub fn arrow_reader_builder(&self) -> ArrowReaderBuilder {
         let mut arrow_reader_builder =
             ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
                 .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
@@ -493,6 +493,11 @@ impl TableScan {
         }
 
         arrow_reader_builder
+    }
+
+    /// Returns an [`ArrowRecordBatchStream`].
+    pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
+        self.arrow_reader_builder()
             .build()
             .read(self.plan_files().await?)
             .map(|result| result.stream())

@@ -120,8 +120,14 @@ impl ExecutionPlan for IcebergTableScan {
 
     fn with_new_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        if !children.is_empty() {
+            return Err(datafusion::common::DataFusionError::Internal(
+                "IcebergTableScan is a leaf node and cannot have children".to_string(),
+            ));
+        }
+
         Ok(self)
     }
 
@@ -148,9 +154,8 @@ impl ExecutionPlan for IcebergTableScan {
                 let tasks: FileScanTaskStream = Box::pin(futures::stream::iter(
                     (0..file_task_group.len()).map(move |idx| Ok(file_task_group[idx].clone())),
                 ));
-                let stream = self
-                    .table
-                    .reader_builder()
+                let stream = build_table_scan(&self.table, &self.scan_config)?
+                    .arrow_reader_builder()
                     // Eager planning lets DataFusion drive scan concurrency via output
                     // partitions. Match DataFusion's FileStream model, where each
                     // output partition owns one ScanState; keep one data file in
@@ -183,7 +188,9 @@ impl ExecutionPlan for IcebergTableScan {
             }
         };
 
-        // Apply limit if specified
+        // Apply a scan-partition bound if specified. In eager planning this is only
+        // a per-partition bound; DataFusion's GlobalLimitExec remains responsible
+        // for enforcing the final global limit.
         let limited_stream: Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>> =
             if let Some(limit) = self.limit {
                 let mut remaining = limit;
