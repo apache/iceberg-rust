@@ -1279,4 +1279,321 @@ mod tests {
             "positional deletes must be applied correctly even when page indexes are absent"
         );
     }
+
+    /// End-to-end regression for issue #2432: a predicate on a primitive leaf nested in a
+    /// struct (`person.age > 25`) must build a row filter and prune rows, rather than
+    /// failing because the leaf's Parquet column root is a group. Reads a real Parquet
+    /// file so the projected `RecordBatch` shape (a `StructArray` holding the leaf) comes
+    /// from arrow-rs, not a hand-built batch.
+    #[tokio::test]
+    async fn test_predicate_on_nested_struct_leaf_reads_real_parquet() {
+        use arrow_array::StructArray;
+        use arrow_schema::Fields;
+
+        use crate::spec::StructType;
+
+        // Schema: id: int (1), person: struct<age: int (3)> (2)
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(
+                        2,
+                        "person",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(3, "age", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Arrow schema carrying field ids so the reader resolves by id, not position.
+        let age_field = Field::new("age", DataType::Int32, false).with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "3".to_string(),
+        )]));
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new(
+                "person",
+                DataType::Struct(Fields::from(vec![age_field.clone()])),
+                false,
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_path = format!("{table_location}/1.parquet");
+
+        let id = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let person = Arc::new(StructArray::from(vec![(
+            Arc::new(age_field),
+            Arc::new(Int32Array::from(vec![30, 20, 40])) as ArrayRef,
+        )])) as ArrayRef;
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![id, person]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let file = File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // Predicate targets the nested leaf; project only the top-level `id` so the
+        // predicate's own projection (not the output projection) drives the struct read.
+        let predicate = Reference::new("person.age")
+            .greater_than(Datum::int(25))
+            .bind(iceberg_schema.clone(), false)
+            .unwrap();
+
+        let file_io = FileIO::new_with_fs();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
+
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(iceberg_schema.clone())
+            .with_project_field_ids(vec![1])
+            .with_predicate(Some(predicate))
+            .with_case_sensitive(false)
+            .build();
+
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        // Rows with person.age > 25 are id=1 (30) and id=3 (40); id=2 (20) is pruned.
+        let ids: Vec<i32> = batches
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_primitive::<arrow_array::types::Int32Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(ids, vec![1, 3]);
+    }
+
+    /// A predicate on a field nested two structs deep (`person.address.zip`) must resolve
+    /// through both struct levels. This exercises `project_column`'s descent loop more than
+    /// once, which the single-level `person.age` case does not. Regression for issue #2432.
+    #[tokio::test]
+    async fn test_predicate_on_doubly_nested_struct_leaf() {
+        use arrow_array::StructArray;
+        use arrow_schema::Fields;
+
+        use crate::spec::StructType;
+
+        // Schema: id: int (1), person: struct<address: struct<zip: int (4)> (3)> (2)
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(
+                        2,
+                        "person",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(
+                                3,
+                                "address",
+                                Type::Struct(StructType::new(vec![
+                                    NestedField::required(
+                                        4,
+                                        "zip",
+                                        Type::Primitive(PrimitiveType::Int),
+                                    )
+                                    .into(),
+                                ])),
+                            )
+                            .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let zip_field = Field::new("zip", DataType::Int32, false).with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "4".to_string(),
+        )]));
+        let address_field = Field::new(
+            "address",
+            DataType::Struct(Fields::from(vec![zip_field.clone()])),
+            false,
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "3".to_string(),
+        )]));
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new(
+                "person",
+                DataType::Struct(Fields::from(vec![address_field.clone()])),
+                false,
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_path = format!("{table_location}/1.parquet");
+
+        let id = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let address = Arc::new(StructArray::from(vec![(
+            Arc::new(zip_field),
+            Arc::new(Int32Array::from(vec![10001, 20002, 30003])) as ArrayRef,
+        )])) as ArrayRef;
+        let person =
+            Arc::new(StructArray::from(vec![(Arc::new(address_field), address)])) as ArrayRef;
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![id, person]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        let file = File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // person.address.zip >= 20002 keeps id=2 (20002) and id=3 (30003).
+        let predicate = Reference::new("person.address.zip")
+            .greater_than_or_equal_to(Datum::int(20002))
+            .bind(iceberg_schema.clone(), false)
+            .unwrap();
+
+        let file_io = FileIO::new_with_fs();
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
+
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(iceberg_schema.clone())
+            .with_project_field_ids(vec![1])
+            .with_predicate(Some(predicate))
+            .with_case_sensitive(false)
+            .build();
+
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        let ids: Vec<i32> = batches
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_primitive::<arrow_array::types::Int32Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(ids, vec![2, 3]);
+    }
+
+    /// Fields inside a list or map have no accessor (see `Schema::build_accessors`), so a
+    /// predicate referencing one fails at bind time and never reaches the row-filter
+    /// conversion. This pins the assumption `project_column` relies on: every predicate
+    /// path segment before the leaf is a struct, never a list/map interior.
+    #[test]
+    fn test_predicate_on_list_and_map_interior_fails_to_bind() {
+        use crate::spec::{ListType, MapType, StructType};
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    // tags: list<struct<name: string (4)>> (2, element 3)
+                    NestedField::required(
+                        2,
+                        "tags",
+                        Type::List(ListType::new(
+                            NestedField::required(
+                                3,
+                                "element",
+                                Type::Struct(StructType::new(vec![
+                                    NestedField::required(
+                                        4,
+                                        "name",
+                                        Type::Primitive(PrimitiveType::String),
+                                    )
+                                    .into(),
+                                ])),
+                            )
+                            .into(),
+                        )),
+                    )
+                    .into(),
+                    // props: map<string (6), int (7)> (5)
+                    NestedField::required(
+                        5,
+                        "props",
+                        Type::Map(MapType::new(
+                            NestedField::required(6, "key", Type::Primitive(PrimitiveType::String))
+                                .into(),
+                            NestedField::required(7, "value", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        )),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // A field inside the list element and a map value: both must fail to bind.
+        assert!(
+            Reference::new("tags.element.name")
+                .is_null()
+                .bind(schema.clone(), false)
+                .is_err(),
+            "a predicate on a field inside a list must not bind"
+        );
+        assert!(
+            Reference::new("props.value")
+                .greater_than(Datum::int(0))
+                .bind(schema.clone(), false)
+                .is_err(),
+            "a predicate on a map value must not bind"
+        );
+    }
 }
