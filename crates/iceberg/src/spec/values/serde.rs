@@ -23,6 +23,7 @@ pub(crate) mod _serde {
     use serde::{Deserialize, Serialize};
     use serde_bytes::ByteBuf;
     use serde_derive::{Deserialize as DeserializeDerive, Serialize as SerializeDerive};
+    use uuid::Uuid;
 
     use crate::spec::values::{Literal, Map, PrimitiveLiteral, Struct};
     use crate::spec::{MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, PrimitiveType, Type};
@@ -238,7 +239,11 @@ pub(crate) mod _serde {
                     PrimitiveLiteral::Double(v) => RawLiteralEnum::Double(v.0),
                     PrimitiveLiteral::String(v) => RawLiteralEnum::String(v),
                     PrimitiveLiteral::UInt128(v) => {
-                        RawLiteralEnum::Bytes(ByteBuf::from(v.to_be_bytes()))
+                        if *ty == Type::Primitive(PrimitiveType::Uuid) {
+                            RawLiteralEnum::String(Uuid::from_u128(v).hyphenated().to_string())
+                        } else {
+                            RawLiteralEnum::Bytes(ByteBuf::from(v.to_be_bytes()))
+                        }
                     }
                     PrimitiveLiteral::Binary(v) => RawLiteralEnum::Bytes(ByteBuf::from(v)),
                     PrimitiveLiteral::Int128(v) => {
@@ -444,6 +449,12 @@ pub(crate) mod _serde {
                 },
                 RawLiteralEnum::String(v) => match ty {
                     Type::Primitive(PrimitiveType::String) => Ok(Some(Literal::string(v))),
+                    Type::Primitive(PrimitiveType::Uuid) => {
+                        let uuid = Uuid::parse_str(&v).map_err(|_| {
+                            invalid_err_with_reason("string", "UUID must be a valid UUID string")
+                        })?;
+                        Ok(Some(Literal::uuid(uuid)))
+                    }
                     _ => Err(invalid_err("string")),
                 },
                 RawLiteralEnum::Bytes(v) => match ty {
@@ -467,7 +478,7 @@ pub(crate) mod _serde {
                             let bytes: [u8; 16] = v.as_slice().try_into().map_err(|_| {
                                 invalid_err_with_reason("bytes", "UUID must be exactly 16 bytes")
                             })?;
-                            Ok(Some(Literal::uuid(uuid::Uuid::from_bytes(bytes))))
+                            Ok(Some(Literal::uuid(Uuid::from_bytes(bytes))))
                         } else {
                             Err(invalid_err_with_reason(
                                 "bytes",
@@ -601,7 +612,7 @@ pub(crate) mod _serde {
                                 ));
                             }
                         }
-                        Ok(Some(Literal::uuid(uuid::Uuid::from_bytes(bytes))))
+                        Ok(Some(Literal::uuid(Uuid::from_bytes(bytes))))
                     }
                     Type::Primitive(PrimitiveType::Decimal {
                         precision: _,
