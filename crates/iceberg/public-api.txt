@@ -1000,6 +1000,10 @@ pub const iceberg::io::ADLS_CLIENT_SECRET: &str
 pub const iceberg::io::ADLS_CONNECTION_STRING: &str
 pub const iceberg::io::ADLS_SAS_TOKEN: &str
 pub const iceberg::io::ADLS_TENANT_ID: &str
+pub const iceberg::io::AZBLOB_ACCOUNT_KEY: &str
+pub const iceberg::io::AZBLOB_ACCOUNT_NAME: &str
+pub const iceberg::io::AZBLOB_ENDPOINT: &str
+pub const iceberg::io::AZBLOB_SAS_TOKEN: &str
 pub const iceberg::io::CLIENT_REGION: &str
 pub const iceberg::io::GCS_ALLOW_ANONYMOUS: &str
 pub const iceberg::io::GCS_CREDENTIALS_JSON: &str
