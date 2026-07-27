@@ -53,7 +53,7 @@ impl ArrowReader {
         let field_id_map = match build_field_id_map(parquet_schema)? {
             Some(map) => map,
             // No embedded field IDs and no name mapping: position-based fallback
-            None if use_position_fallback => build_fallback_field_id_map(parquet_schema),
+            None if use_position_fallback => build_field_id_map_from_arrow_schema(arrow_schema),
             // No embedded field IDs, but a name mapping assigned them to the Arrow
             // schema: resolve columns through the mapped Arrow field-id metadata
             None => build_field_id_map_from_arrow_schema(arrow_schema),
@@ -66,6 +66,7 @@ impl ArrowReader {
     /// Nested types (struct/list/map) are flattened in Parquet's columnar format.
     fn include_leaf_field_id(field: &NestedField, field_ids: &mut Vec<i32>) {
         match field.field_type.as_ref() {
+            Type::Primitive(PrimitiveType::Unknown) => {}
             Type::Primitive(_) => {
                 field_ids.push(field.id);
             }
@@ -104,6 +105,7 @@ impl ArrowReader {
                 (Some(lhs), Some(rhs)) if lhs == rhs => true,
                 (Some(PrimitiveType::Int), Some(PrimitiveType::Long)) => true,
                 (Some(PrimitiveType::Float), Some(PrimitiveType::Double)) => true,
+                (Some(PrimitiveType::Unknown), Some(_)) => true,
                 (
                     Some(PrimitiveType::Decimal {
                         precision: file_precision,
@@ -139,7 +141,7 @@ impl ArrowReader {
 
         if use_fallback {
             // Position-based projection necessary because file lacks embedded field IDs
-            Self::get_arrow_projection_mask_fallback(field_ids, parquet_schema)
+            Self::get_arrow_projection_mask_fallback(field_ids, parquet_schema, arrow_schema)
         } else {
             // Field-ID-based projection using embedded field IDs from Parquet metadata
 
@@ -238,23 +240,25 @@ impl ArrowReader {
     }
 
     /// Fallback projection for Parquet files without field IDs.
-    /// Uses position-based matching: field ID N → column position N-1.
+    /// Uses the fallback IDs assigned to physical top-level Arrow fields.
     /// Projects entire top-level columns (including nested content) for iceberg-java compatibility.
     fn get_arrow_projection_mask_fallback(
         field_ids: &[i32],
         parquet_schema: &SchemaDescriptor,
+        arrow_schema: &ArrowSchemaRef,
     ) -> Result<ProjectionMask> {
-        // Position-based: field_id N → column N-1 (field IDs are 1-indexed)
-        let parquet_root_fields = parquet_schema.root_schema().get_fields();
+        let field_id_set: HashSet<i32> = field_ids.iter().copied().collect();
         let mut root_indices = vec![];
 
-        for field_id in field_ids.iter() {
-            let parquet_pos = (*field_id - 1) as usize;
-
-            if parquet_pos < parquet_root_fields.len() {
-                root_indices.push(parquet_pos);
+        for (root_index, field) in arrow_schema.fields().iter().enumerate() {
+            if field
+                .metadata()
+                .get(PARQUET_FIELD_ID_META_KEY)
+                .and_then(|field_id| i32::from_str(field_id).ok())
+                .is_some_and(|field_id| field_id_set.contains(&field_id))
+            {
+                root_indices.push(root_index);
             }
-            // RecordBatchTransformer adds missing columns with NULL values
         }
 
         if root_indices.is_empty() {
@@ -310,44 +314,6 @@ pub(super) fn build_field_id_map(
     }
 
     Ok(Some(column_map))
-}
-
-/// Build a fallback field ID map for Parquet files without embedded field IDs.
-///
-/// Returns the number of primitive (leaf) columns in a Parquet type, recursing into groups.
-fn leaf_count(ty: &parquet::schema::types::Type) -> usize {
-    if ty.is_primitive() {
-        1
-    } else {
-        ty.get_fields().iter().map(|f| leaf_count(f)).sum()
-    }
-}
-
-/// Builds a mapping from fallback field IDs to leaf column indices for Parquet files
-/// without embedded field IDs. Returns entries only for primitive top-level fields.
-///
-/// Must use top-level field positions (not leaf column positions) to stay consistent
-/// with `add_fallback_field_ids_to_arrow_schema`, which assigns ordinal IDs to
-/// top-level Arrow fields. Using leaf positions instead would produce wrong indices
-/// when nested types (struct/list/map) expand into multiple leaf columns.
-///
-/// Mirrors iceberg-java's ParquetSchemaUtil.addFallbackIds() which iterates
-/// fileSchema.getFields() assigning ordinal IDs to top-level fields.
-pub(super) fn build_fallback_field_id_map(
-    parquet_schema: &SchemaDescriptor,
-) -> HashMap<i32, usize> {
-    let mut column_map = HashMap::new();
-    let mut leaf_idx = 0;
-
-    for (top_pos, field) in parquet_schema.root_schema().get_fields().iter().enumerate() {
-        let field_id = (top_pos + 1) as i32;
-        if field.is_primitive() {
-            column_map.insert(field_id, leaf_idx);
-        }
-        leaf_idx += leaf_count(field);
-    }
-
-    column_map
 }
 
 /// Builds a mapping from field IDs to leaf column indices using the field-id metadata
@@ -448,8 +414,11 @@ pub(super) fn apply_name_mapping_to_arrow_schema(
 /// Why at schema level (not per-batch): Efficiency - avoids repeated schema modification.
 /// Why only top-level: Nested projection uses leaf column indices, not parent struct IDs.
 /// Why 1-indexed: Compatibility with iceberg-java's ParquetSchemaUtil.addFallbackIds().
+/// Unknown fields have no Parquet column, so their field IDs remain gaps in the fallback IDs
+/// assigned to later physical fields.
 pub(super) fn add_fallback_field_ids_to_arrow_schema(
     arrow_schema: &ArrowSchemaRef,
+    iceberg_schema: &Schema,
 ) -> Arc<ArrowSchema> {
     debug_assert!(
         arrow_schema
@@ -460,13 +429,20 @@ pub(super) fn add_fallback_field_ids_to_arrow_schema(
         "Schema already has field IDs"
     );
 
+    let omitted_field_ids: HashSet<i32> = iceberg_schema
+        .as_struct()
+        .fields()
+        .iter()
+        .filter(|field| !type_has_parquet_physical_field(&field.field_type))
+        .map(|field| field.id)
+        .collect();
+    let mut fallback_field_ids = (1_i32..).filter(|field_id| !omitted_field_ids.contains(field_id));
     let fields_with_fallback_ids: Vec<_> = arrow_schema
         .fields()
         .iter()
-        .enumerate()
-        .map(|(pos, field)| {
+        .map(|field| {
             let mut metadata = field.metadata().clone();
-            let field_id = (pos + 1) as i32; // 1-indexed for Java compatibility
+            let field_id = fallback_field_ids.next().unwrap();
             metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string());
 
             Field::new(field.name(), field.data_type().clone(), field.is_nullable())
@@ -478,6 +454,24 @@ pub(super) fn add_fallback_field_ids_to_arrow_schema(
         fields_with_fallback_ids,
         arrow_schema.metadata().clone(),
     ))
+}
+
+fn type_has_parquet_physical_field(field_type: &Type) -> bool {
+    match field_type {
+        Type::Primitive(PrimitiveType::Unknown) => false,
+        Type::Primitive(_) | Type::Variant(_) => true,
+        Type::Struct(struct_type) => struct_type
+            .fields()
+            .iter()
+            .any(|field| type_has_parquet_physical_field(&field.field_type)),
+        Type::List(list_type) => {
+            type_has_parquet_physical_field(&list_type.element_field.field_type)
+        }
+        Type::Map(map_type) => {
+            type_has_parquet_physical_field(&map_type.key_field.field_type)
+                && type_has_parquet_physical_field(&map_type.value_field.field_type)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -497,6 +491,7 @@ mod tests {
     use parquet::schema::types::SchemaDescriptor;
     use tempfile::TempDir;
 
+    use super::add_fallback_field_ids_to_arrow_schema;
     use crate::arrow::{ArrowReader, ArrowReaderBuilder};
     use crate::expr::{Bind, Reference};
     use crate::io::FileIO;
@@ -506,6 +501,89 @@ mod tests {
         StructType, Type, VariantType,
     };
     use crate::{ErrorKind, Runtime};
+
+    #[test]
+    fn test_fallback_field_ids_account_for_omitted_unknown_fields() {
+        let iceberg_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "unknown", PrimitiveType::Unknown.into()).into(),
+                NestedField::optional(2, "known", PrimitiveType::Int.into()).into(),
+            ])
+            .build()
+            .unwrap();
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "known",
+            DataType::Int32,
+            true,
+        )]));
+
+        let schema_with_ids =
+            add_fallback_field_ids_to_arrow_schema(&arrow_schema, &iceberg_schema);
+
+        assert_eq!(
+            schema_with_ids.fields()[0]
+                .metadata()
+                .get(PARQUET_FIELD_ID_META_KEY)
+                .map(String::as_str),
+            Some("2")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fallback_projection_after_omitted_unknown_field() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "unknown", PrimitiveType::Unknown.into()).into(),
+                    NestedField::optional(2, "known", PrimitiveType::Int.into()).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let file_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "known",
+            DataType::Int32,
+            true,
+        )]));
+        let file_batch = RecordBatch::try_new(file_schema.clone(), vec![Arc::new(
+            arrow_array::Int32Array::from(vec![10, 20]),
+        )])
+        .unwrap();
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = tmp_dir.path().join("unknown-fallback.parquet");
+        let file = File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, file_schema, None).unwrap();
+        writer.write(&file_batch).unwrap();
+        writer.close().unwrap();
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path.to_string_lossy().into_owned())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema)
+            .with_project_field_ids(vec![1, 2])
+            .with_case_sensitive(false)
+            .build())])) as FileScanTaskStream;
+
+        let batches = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].column(0).data_type(), &DataType::Null);
+        assert_eq!(batches[0].column(0).logical_null_count(), 2);
+        let known = batches[0]
+            .column(1)
+            .as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!(known.values(), &[10, 20]);
+    }
 
     #[test]
     fn test_arrow_projection_mask() {

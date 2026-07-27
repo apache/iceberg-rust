@@ -191,6 +191,7 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
                     | DataType::Utf8
                     | DataType::LargeUtf8
                     | DataType::Utf8View
+                    | DataType::Null
                     | DataType::Binary
                     | DataType::LargeBinary
                     | DataType::BinaryView
@@ -509,6 +510,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
 
     fn primitive(&mut self, p: &DataType) -> Result<Self::T> {
         match p {
+            DataType::Null => Ok(Type::Primitive(PrimitiveType::Unknown)),
             DataType::Boolean => Ok(Type::Primitive(PrimitiveType::Boolean)),
             DataType::Int8 | DataType::Int16 | DataType::Int32 => {
                 Ok(Type::Primitive(PrimitiveType::Int))
@@ -697,6 +699,7 @@ impl SchemaVisitor for ToArrowSchemaConverter {
 
     fn primitive(&mut self, p: &PrimitiveType) -> Result<ArrowSchemaOrFieldOrType> {
         match p {
+            PrimitiveType::Unknown => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Null)),
             PrimitiveType::Boolean => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Boolean)),
             PrimitiveType::Int => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Int32)),
             PrimitiveType::Long => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Int64)),
@@ -788,6 +791,164 @@ pub fn schema_to_arrow_schema(schema: &Schema) -> Result<ArrowSchema> {
         ArrowSchemaOrFieldOrType::Schema(schema) => Ok(schema),
         _ => unreachable!(),
     }
+}
+
+fn parquet_arrow_field(field: &NestedFieldRef, arrow_field: &FieldRef) -> Result<Option<FieldRef>> {
+    let data_type = match field.field_type.as_ref() {
+        Type::Primitive(PrimitiveType::Unknown) => return Ok(None),
+        Type::Struct(struct_type) => {
+            let DataType::Struct(arrow_fields) = arrow_field.data_type() else {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!(
+                        "Expected Arrow struct for Iceberg field {}, got {}",
+                        field.id,
+                        arrow_field.data_type()
+                    ),
+                ));
+            };
+            if struct_type.fields().len() != arrow_fields.len() {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!(
+                        "Arrow and Iceberg struct field counts differ for field {}",
+                        field.id
+                    ),
+                ));
+            }
+
+            let fields = struct_type
+                .fields()
+                .iter()
+                .zip(arrow_fields.iter())
+                .filter_map(|(field, arrow_field)| {
+                    parquet_arrow_field(field, arrow_field).transpose()
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if fields.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!(
+                        "Cannot write struct field {} with no Parquet physical fields",
+                        field.id
+                    ),
+                ));
+            }
+            DataType::Struct(fields.into())
+        }
+        Type::List(list_type) => {
+            let DataType::List(element_field) = arrow_field.data_type() else {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!(
+                        "Expected Arrow list for Iceberg field {}, got {}",
+                        field.id,
+                        arrow_field.data_type()
+                    ),
+                ));
+            };
+            let element_field = parquet_arrow_field(&list_type.element_field, element_field)?
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::FeatureUnsupported,
+                        format!(
+                            "Cannot write list element {} with no Parquet physical fields",
+                            list_type.element_field.id
+                        ),
+                    )
+                })?;
+            DataType::List(element_field)
+        }
+        Type::Map(map_type) => {
+            let DataType::Map(entries_field, ordered) = arrow_field.data_type() else {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!(
+                        "Expected Arrow map for Iceberg field {}, got {}",
+                        field.id,
+                        arrow_field.data_type()
+                    ),
+                ));
+            };
+            let DataType::Struct(entry_fields) = entries_field.data_type() else {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!(
+                        "Expected Arrow map entries struct for Iceberg field {}",
+                        field.id
+                    ),
+                ));
+            };
+            if entry_fields.len() != 2 {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!(
+                        "Expected two Arrow map entry fields for Iceberg field {}",
+                        field.id
+                    ),
+                ));
+            }
+
+            let key_field = parquet_arrow_field(&map_type.key_field, &entry_fields[0])?
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::FeatureUnsupported,
+                        format!(
+                            "Cannot write map key {} with no Parquet physical fields",
+                            map_type.key_field.id
+                        ),
+                    )
+                })?;
+            let value_field = parquet_arrow_field(&map_type.value_field, &entry_fields[1])?
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::FeatureUnsupported,
+                        format!(
+                            "Cannot write map value {} with no Parquet physical fields",
+                            map_type.value_field.id
+                        ),
+                    )
+                })?;
+            let entries_field = Arc::new(
+                entries_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(DataType::Struct(vec![key_field, value_field].into())),
+            );
+            DataType::Map(entries_field, *ordered)
+        }
+        Type::Primitive(_) | Type::Variant(_) => arrow_field.data_type().clone(),
+    };
+
+    Ok(Some(Arc::new(
+        arrow_field.as_ref().clone().with_data_type(data_type),
+    )))
+}
+
+/// Convert an Iceberg schema to the Arrow schema used for Parquet writes.
+///
+/// Unknown fields are omitted because Iceberg has no Parquet physical mapping for them. Structs,
+/// list elements, and map keys/values left with no physical fields cannot be omitted without
+/// losing container semantics, so those schemas are rejected.
+pub(crate) fn schema_to_arrow_schema_for_parquet(schema: &Schema) -> Result<ArrowSchema> {
+    let arrow_schema = schema_to_arrow_schema(schema)?;
+    let fields = schema
+        .as_struct()
+        .fields()
+        .iter()
+        .zip(arrow_schema.fields().iter())
+        .filter_map(|(field, arrow_field)| parquet_arrow_field(field, arrow_field).transpose())
+        .collect::<Result<Vec<_>>>()?;
+    if fields.is_empty() {
+        return Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Cannot write a schema with no Parquet physical fields",
+        ));
+    }
+    Ok(ArrowSchema::new_with_metadata(
+        fields,
+        arrow_schema.metadata().clone(),
+    ))
 }
 
 /// Convert iceberg type to an arrow type.
@@ -1203,6 +1364,7 @@ pub fn datum_to_arrow_type_with_ree(datum: &Datum) -> DataType {
 
     // Match on the PrimitiveType from the Datum to determine the Arrow type
     match datum.data_type() {
+        PrimitiveType::Unknown => make_ree(DataType::Null),
         PrimitiveType::Boolean => make_ree(DataType::Boolean),
         PrimitiveType::Int => make_ree(DataType::Int32),
         PrimitiveType::Long => make_ree(DataType::Int64),
@@ -2212,11 +2374,161 @@ mod tests {
     }
 
     #[test]
+    fn test_parquet_arrow_schema_omits_unknown_struct_fields() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "unknown", PrimitiveType::Unknown.into()).into(),
+                NestedField::optional(
+                    2,
+                    "struct",
+                    Type::Struct(StructType::new(vec![
+                        NestedField::optional(3, "unknown", PrimitiveType::Unknown.into()).into(),
+                        NestedField::optional(4, "known", PrimitiveType::Int.into()).into(),
+                    ])),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let arrow_schema = schema_to_arrow_schema_for_parquet(&schema).unwrap();
+        assert_eq!(arrow_schema.fields().len(), 1);
+        assert_eq!(arrow_schema.field(0).name(), "struct");
+        let DataType::Struct(fields) = arrow_schema.field(0).data_type() else {
+            panic!("expected struct field");
+        };
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name(), "known");
+    }
+
+    #[test]
+    fn test_parquet_arrow_schema_rejects_empty_struct() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "known", PrimitiveType::Int.into()).into(),
+                NestedField::optional(
+                    2,
+                    "empty_struct",
+                    Type::Struct(StructType::new(vec![
+                        NestedField::optional(3, "unknown", PrimitiveType::Unknown.into()).into(),
+                    ])),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        assert!(
+            schema_to_arrow_schema_for_parquet(&schema)
+                .unwrap_err()
+                .message()
+                .contains("struct field 2")
+        );
+    }
+
+    #[test]
+    fn test_parquet_arrow_schema_rejects_all_unknown_fields() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "unknown", PrimitiveType::Unknown.into()).into(),
+            ])
+            .build()
+            .unwrap();
+
+        assert!(
+            schema_to_arrow_schema_for_parquet(&schema)
+                .unwrap_err()
+                .message()
+                .contains("no Parquet physical fields")
+        );
+    }
+
+    #[test]
+    fn test_parquet_arrow_schema_rejects_unknown_container_values() {
+        let list_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(
+                    1,
+                    "list",
+                    Type::List(ListType::new(
+                        NestedField::optional(2, "element", PrimitiveType::Unknown.into()).into(),
+                    )),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        assert!(
+            schema_to_arrow_schema_for_parquet(&list_schema)
+                .unwrap_err()
+                .message()
+                .contains("list element")
+        );
+
+        let list_of_empty_struct_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(
+                    1,
+                    "list",
+                    Type::List(ListType::new(
+                        NestedField::optional(
+                            2,
+                            "element",
+                            Type::Struct(StructType::new(vec![
+                                NestedField::optional(3, "unknown", PrimitiveType::Unknown.into())
+                                    .into(),
+                            ])),
+                        )
+                        .into(),
+                    )),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        assert!(
+            schema_to_arrow_schema_for_parquet(&list_of_empty_struct_schema)
+                .unwrap_err()
+                .message()
+                .contains("struct field 2")
+        );
+
+        let map_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(
+                    1,
+                    "map",
+                    Type::Map(MapType::new(
+                        NestedField::map_key_element(2, PrimitiveType::String.into()).into(),
+                        NestedField::map_value_element(3, PrimitiveType::Unknown.into(), false)
+                            .into(),
+                    )),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        assert!(
+            schema_to_arrow_schema_for_parquet(&map_schema)
+                .unwrap_err()
+                .message()
+                .contains("map value")
+        );
+    }
+
+    #[test]
     fn test_type_conversion() {
         // test primitive type
         {
             let arrow_type = DataType::Int32;
             let iceberg_type = Type::Primitive(PrimitiveType::Int);
+            assert_eq!(arrow_type, type_to_arrow_type(&iceberg_type).unwrap());
+            assert_eq!(iceberg_type, arrow_type_to_type(&arrow_type).unwrap());
+        }
+
+        {
+            let arrow_type = DataType::Null;
+            let iceberg_type = Type::Primitive(PrimitiveType::Unknown);
             assert_eq!(arrow_type, type_to_arrow_type(&iceberg_type).unwrap());
             assert_eq!(iceberg_type, arrow_type_to_type(&arrow_type).unwrap());
         }
