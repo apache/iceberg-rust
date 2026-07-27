@@ -3127,6 +3127,7 @@ pub fn iceberg::table::TableBuilder::readonly(self, readonly: bool) -> Self
 pub fn iceberg::table::TableBuilder::runtime(self, runtime: iceberg::Runtime) -> Self
 pub mod iceberg::test_utils
 pub fn iceberg::test_utils::check_record_batches(record_batches: alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, expected_schema: expect_test::Expect, expected_data: expect_test::Expect, ignore_check_columns: &[&str], sort_column: core::option::Option<&str>)
+pub async fn iceberg::test_utils::make_encrypted_table() -> iceberg::table::Table
 pub fn iceberg::test_utils::test_runtime() -> iceberg::Runtime
 pub mod iceberg::transaction
 pub struct iceberg::transaction::ActionCommit

@@ -23,6 +23,7 @@ use futures::{TryStreamExt, stream};
 
 use crate::Result;
 use crate::io::FileIO;
+use crate::spec::ManifestFile;
 use crate::table::Table;
 
 const DELETE_CONCURRENCY: usize = 10;
@@ -38,7 +39,7 @@ const DELETE_CONCURRENCY: usize = 10;
 /// may share the same data files.
 pub async fn drop_table_data(table_info: &Table) -> Result<()> {
     let mut manifest_lists_to_delete: HashSet<String> = HashSet::new();
-    let mut manifests_to_delete: HashSet<String> = HashSet::new();
+    let mut manifests_to_delete: HashSet<ManifestFile> = HashSet::new();
 
     let metadata = table_info.metadata_ref();
     let io = table_info.file_io();
@@ -55,7 +56,7 @@ pub async fn drop_table_data(table_info: &Table) -> Result<()> {
             manifest_lists_to_delete.insert(manifest_list_location);
         }
         for manifest_file in manifest_list.entries() {
-            manifests_to_delete.insert(manifest_file.manifest_path.clone());
+            manifests_to_delete.insert(manifest_file.clone());
         }
     }
 
@@ -65,7 +66,11 @@ pub async fn drop_table_data(table_info: &Table) -> Result<()> {
     }
 
     // Delete manifest files
-    io.delete_stream(stream::iter(manifests_to_delete)).await?;
+    let manifest_paths: Vec<String> = manifests_to_delete
+        .into_iter()
+        .map(|manifest_file| manifest_file.manifest_path)
+        .collect();
+    io.delete_stream(stream::iter(manifest_paths)).await?;
 
     // Delete manifest lists
     io.delete_stream(stream::iter(manifest_lists_to_delete))
@@ -103,13 +108,10 @@ pub async fn drop_table_data(table_info: &Table) -> Result<()> {
 }
 
 /// Reads manifests concurrently and deletes the data files referenced within.
-async fn delete_data_files(io: &FileIO, manifest_paths: &HashSet<String>) -> Result<()> {
-    stream::iter(manifest_paths.iter().map(Ok))
-        .try_for_each_concurrent(DELETE_CONCURRENCY, |manifest_path| async move {
-            let input = io.new_input(manifest_path)?;
-            let manifest_content = input.read().await?;
-            let manifest = crate::spec::Manifest::parse_avro(&manifest_content)?;
-
+async fn delete_data_files(io: &FileIO, manifest_files: &HashSet<ManifestFile>) -> Result<()> {
+    stream::iter(manifest_files.iter().map(Ok))
+        .try_for_each_concurrent(DELETE_CONCURRENCY, |manifest_file| async move {
+            let manifest = manifest_file.load_manifest(io).await?;
             let data_file_paths = manifest
                 .entries()
                 .iter()
@@ -119,4 +121,94 @@ async fn delete_data_files(io: &FileIO, manifest_paths: &HashSet<String>) -> Res
             io.delete_stream(stream::iter(data_file_paths)).await
         })
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_array::{Int32Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use parquet::arrow::ArrowWriter;
+    use parquet::encryption::encrypt::FileEncryptionProperties;
+    use parquet::file::properties::WriterProperties;
+
+    use super::*;
+    use crate::encryption::StandardKeyMetadata;
+    use crate::spec::{DataContentType, DataFileBuilder, DataFileFormat, Struct, TableMetadataRef};
+    use crate::test_utils::make_encrypted_table;
+    use crate::transaction::{Transaction, TransactionAction};
+
+    #[tokio::test]
+    async fn drop_table_data_deletes_data_files_from_encrypted_manifest() {
+        let table = make_encrypted_table().await;
+        let data_key = b"0123456789abcdef";
+        let aad_prefix = b"aad_prefix";
+
+        let arrow_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(Int32Array::from(
+            vec![1, 2, 3],
+        ))])
+        .unwrap();
+
+        let encryption_properties = FileEncryptionProperties::builder(data_key.to_vec())
+            .with_aad_prefix(aad_prefix.to_vec())
+            .build()
+            .unwrap();
+        let writer_properties = WriterProperties::builder()
+            .with_file_encryption_properties(encryption_properties)
+            .build();
+
+        let mut parquet_bytes = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut parquet_bytes, arrow_schema, Some(writer_properties))
+                .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let data_file_path = "memory:///table/data/00000.parquet".to_string();
+        let io = table.file_io().clone();
+        io.new_output(&data_file_path)
+            .unwrap()
+            .write(parquet_bytes.clone().into())
+            .await
+            .unwrap();
+        assert!(io.exists(&data_file_path).await.unwrap());
+
+        let key_metadata = StandardKeyMetadata::try_new(data_key)
+            .unwrap()
+            .with_aad_prefix(aad_prefix)
+            .encode()
+            .unwrap();
+
+        let new_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(data_file_path.clone())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::empty())
+            .record_count(3)
+            .file_size_in_bytes(parquet_bytes.len() as u64)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .key_metadata(Some(key_metadata.to_vec()))
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![new_file]);
+        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let updates = action_commit.take_updates();
+
+        let mut builder = table.metadata().clone().into_builder(None);
+        for update in updates {
+            builder = update.apply(builder).unwrap();
+        }
+        let table = table.with_metadata(TableMetadataRef::new(builder.build().unwrap().metadata));
+
+        drop_table_data(&table).await.unwrap();
+
+        assert!(
+            !io.exists(&data_file_path).await.unwrap(),
+            "purge should have deleted the data file referenced by the encrypted manifest"
+        );
+    }
 }
