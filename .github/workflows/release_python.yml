@@ -61,11 +61,18 @@ jobs:
             exit 1
           fi
           echo "✅ Release tag format is valid: $RELEASE_TAG"
-          
+
+          # Verify that the workflow is being run on the same version as the release tag
+          DESIRED_REF="refs/tags/${RELEASE_TAG}"
+          if [[ "${GITHUB_REF}" != "${DESIRED_REF}" ]]; then
+            echo "Error: expected workflow execution on ref ${DESIRED_REF}, got ref: ${GITHUB_REF}"
+            exit 1
+          fi
+
           # Strip 'v' prefix for cargo version
           CARGO_VERSION="${RELEASE_TAG#v}"
           echo "Cargo version (without v prefix): $CARGO_VERSION"
-          
+
           # For manual triggers, validate that the tag matches the version in Cargo.toml
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             # Extract base version (without -rc.X suffix) for comparison with Cargo.toml
