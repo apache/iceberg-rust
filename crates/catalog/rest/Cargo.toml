@@ -44,6 +44,7 @@ typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+iceberg-storage-opendal = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
 mockito = { workspace = true }
 tokio = { workspace = true }
