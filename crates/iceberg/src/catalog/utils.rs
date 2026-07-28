@@ -17,7 +17,7 @@
 
 //! Utility functions for catalog operations.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use futures::{TryStreamExt, stream};
 
@@ -39,7 +39,7 @@ const DELETE_CONCURRENCY: usize = 10;
 /// may share the same data files.
 pub async fn drop_table_data(table_info: &Table) -> Result<()> {
     let mut manifest_lists_to_delete: HashSet<String> = HashSet::new();
-    let mut manifests_to_delete: HashSet<ManifestFile> = HashSet::new();
+    let mut manifests_to_delete: HashMap<String, ManifestFile> = HashMap::new();
 
     let metadata = table_info.metadata_ref();
     let io = table_info.file_io();
@@ -56,7 +56,7 @@ pub async fn drop_table_data(table_info: &Table) -> Result<()> {
             manifest_lists_to_delete.insert(manifest_list_location);
         }
         for manifest_file in manifest_list.entries() {
-            manifests_to_delete.insert(manifest_file.clone());
+            manifests_to_delete.insert(manifest_file.manifest_path.clone(), manifest_file.clone());
         }
     }
 
@@ -66,10 +66,7 @@ pub async fn drop_table_data(table_info: &Table) -> Result<()> {
     }
 
     // Delete manifest files
-    let manifest_paths: Vec<String> = manifests_to_delete
-        .into_iter()
-        .map(|manifest_file| manifest_file.manifest_path)
-        .collect();
+    let manifest_paths: Vec<String> = manifests_to_delete.into_keys().collect();
     io.delete_stream(stream::iter(manifest_paths)).await?;
 
     // Delete manifest lists
@@ -108,8 +105,11 @@ pub async fn drop_table_data(table_info: &Table) -> Result<()> {
 }
 
 /// Reads manifests concurrently and deletes the data files referenced within.
-async fn delete_data_files(io: &FileIO, manifest_files: &HashSet<ManifestFile>) -> Result<()> {
-    stream::iter(manifest_files.iter().map(Ok))
+async fn delete_data_files(
+    io: &FileIO,
+    manifest_files: &HashMap<String, ManifestFile>,
+) -> Result<()> {
+    stream::iter(manifest_files.values().map(Ok))
         .try_for_each_concurrent(DELETE_CONCURRENCY, |manifest_file| async move {
             let manifest = manifest_file.load_manifest(io).await?;
             let data_file_paths = manifest
