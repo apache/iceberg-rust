@@ -240,7 +240,7 @@ fn json_timestamptz_ns_rejects_non_utc_offset() {
     // Per the spec, timestamptz_ns single-value serialization must use offset "+00:00"; Java's
     // SingleValueParser enforces the same (DateTimeUtil.isUTCTimestamptz). A non-UTC offset is not a
     // valid encoding and must be rejected, not silently re-based to UTC.
-    let record = serde_json::Value::String("2017-11-16T22:31:08.123456789+05:00".to_string());
+    let record = JsonValue::String("2017-11-16T22:31:08.123456789+05:00".to_string());
     let result = Literal::try_from_json(record, &Primitive(PrimitiveType::TimestamptzNs));
     assert!(
         result.is_err(),
@@ -252,7 +252,7 @@ fn json_timestamptz_ns_rejects_non_utc_offset() {
 fn json_timestamptz_rejects_non_utc_offset() {
     // Micros-precision counterpart, mirroring Java's TestSingleValueParser.testInvalidTimestamptz:
     // the offset must be "+00:00", so a non-UTC offset is rejected.
-    let record = serde_json::Value::String("2017-11-16T22:31:08.123456+05:00".to_string());
+    let record = JsonValue::String("2017-11-16T22:31:08.123456+05:00".to_string());
     let result = Literal::try_from_json(record, &Primitive(PrimitiveType::Timestamptz));
     assert!(
         result.is_err(),
@@ -529,20 +529,38 @@ fn check_raw_literal_bytes_serde_via_avro(
     expected_literal: Literal,
     expected_type: &Type,
 ) {
-    use apache_avro::types::Value;
-
     // Create an Avro bytes value and deserialize it through the RawLiteral path
     let avro_value = Value::Bytes(input_bytes);
-    let raw_literal: RawLiteral = apache_avro::from_value(&avro_value).unwrap();
+    check_raw_literal_serde_via_avro(avro_value, expected_literal, expected_type);
+}
+
+fn check_raw_literal_bytes_error_via_avro(input_bytes: Vec<u8>, expected_type: &Type) {
+    let avro_value = Value::Bytes(input_bytes);
+    check_raw_literal_error_via_avro(avro_value, expected_type);
+}
+
+fn check_raw_literal_string_serde_via_avro(
+    input: &str,
+    expected_literal: Literal,
+    expected_type: &Type,
+) {
+    let avro_value = Value::String(input.to_string());
+    check_raw_literal_serde_via_avro(avro_value, expected_literal, expected_type);
+}
+
+fn check_raw_literal_string_error_via_avro(input: &str, expected_type: &Type) {
+    let avro_value = Value::String(input.to_string());
+    check_raw_literal_error_via_avro(avro_value, expected_type);
+}
+
+fn check_raw_literal_serde_via_avro(input: Value, expected_literal: Literal, expected_type: &Type) {
+    let raw_literal: RawLiteral = apache_avro::from_value(&input).unwrap();
     let result = raw_literal.try_into(expected_type).unwrap();
     assert_eq!(result, Some(expected_literal));
 }
 
-fn check_raw_literal_bytes_error_via_avro(input_bytes: Vec<u8>, expected_type: &Type) {
-    use apache_avro::types::Value;
-
-    let avro_value = Value::Bytes(input_bytes);
-    let raw_literal: RawLiteral = apache_avro::from_value(&avro_value).unwrap();
+fn check_raw_literal_error_via_avro(input: Value, expected_type: &Type) {
+    let raw_literal: RawLiteral = apache_avro::from_value(&input).unwrap();
     let result = raw_literal.try_into(expected_type);
     assert!(result.is_err(), "Expected error but got: {result:?}");
 }
@@ -614,6 +632,21 @@ fn test_raw_literal_bytes_uuid_correct_length() {
 fn test_raw_literal_bytes_uuid_wrong_length() {
     let bytes = vec![1u8, 2u8, 3u8]; // 3 bytes, but UUID needs 16
     check_raw_literal_bytes_error_via_avro(bytes, &Primitive(PrimitiveType::Uuid));
+}
+
+#[test]
+fn test_raw_literal_string_uuid_valid() {
+    let s = "f79c3e09-677c-4bbd-a479-3f349cb785e7";
+    check_raw_literal_string_serde_via_avro(
+        s,
+        Literal::uuid(Uuid::parse_str(s).unwrap()),
+        &Primitive(PrimitiveType::Uuid),
+    );
+}
+
+#[test]
+fn test_raw_literal_string_uuid_invalid() {
+    check_raw_literal_string_error_via_avro("not-a-uuid", &Primitive(PrimitiveType::Uuid));
 }
 
 #[test]
