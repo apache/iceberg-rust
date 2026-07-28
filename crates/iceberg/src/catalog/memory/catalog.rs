@@ -1134,7 +1134,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_drop_namespace_throws_error_if_namespace_has_children() {
+    async fn test_drop_namespace_returns_error_if_namespace_has_children() {
         let catalog = new_memory_catalog().await;
         let namespace_ident_a = NamespaceIdent::new("a".into());
         let namespace_ident_a_b = NamespaceIdent::from_strs(vec!["a", "b"]).unwrap();
@@ -1145,11 +1145,11 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(error.kind(), ErrorKind::Unexpected);
+        assert_eq!(error.kind(), ErrorKind::NamespaceNotEmpty);
         assert_eq!(
             error.to_string(),
             format!(
-                "Unexpected => Namespace {namespace_ident_a:?} is not empty: contains 1 child namespace(s) and 0 table(s)."
+                "NamespaceNotEmpty => Namespace {namespace_ident_a:?} is not empty: contains 1 child namespace(s) and 0 table(s)."
             )
         );
         assert!(catalog.namespace_exists(&namespace_ident_a).await.unwrap());
@@ -1162,7 +1162,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_drop_namespace_throws_error_if_namespace_has_tables() {
+    async fn test_drop_namespace_returns_error_if_namespace_has_tables() {
         let catalog = new_memory_catalog().await;
         let namespace_ident = NamespaceIdent::new("a".into());
         create_namespace(&catalog, &namespace_ident).await;
@@ -1171,11 +1171,11 @@ pub(crate) mod tests {
 
         let error = catalog.drop_namespace(&namespace_ident).await.unwrap_err();
 
-        assert_eq!(error.kind(), ErrorKind::Unexpected);
+        assert_eq!(error.kind(), ErrorKind::NamespaceNotEmpty);
         assert_eq!(
             error.to_string(),
             format!(
-                "Unexpected => Namespace {namespace_ident:?} is not empty: contains 0 child namespace(s) and 1 table(s)."
+                "NamespaceNotEmpty => Namespace {namespace_ident:?} is not empty: contains 0 child namespace(s) and 1 table(s)."
             )
         );
         assert!(catalog.namespace_exists(&namespace_ident).await.unwrap());

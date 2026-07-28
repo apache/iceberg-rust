@@ -195,7 +195,7 @@ impl NamespaceState {
         let table_count = namespace_state.table_metadata_locations.len();
         if child_namespace_count > 0 || table_count > 0 {
             return Err(Error::new(
-                ErrorKind::Unexpected,
+                ErrorKind::NamespaceNotEmpty,
                 format!(
                     "Namespace {namespace_ident:?} is not empty: contains {child_namespace_count} child namespace(s) and {table_count} table(s)."
                 ),
