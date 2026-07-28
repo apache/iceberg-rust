@@ -174,6 +174,11 @@ impl FileMetadata {
     pub(crate) const FOOTER_STRUCT_LENGTH: u8 =
         FileMetadata::FOOTER_STRUCT_MAGIC_OFFSET + FileMetadata::MAGIC_LENGTH;
 
+    /// Smallest possible Puffin file: the file header magic, followed by a footer
+    /// holding an empty payload (footer magic + FOOTER_STRUCT).
+    const MIN_FILE_LENGTH: u64 =
+        (FileMetadata::MAGIC_LENGTH as u64) * 2 + (FileMetadata::FOOTER_STRUCT_LENGTH as u64);
+
     /// Constructs new puffin `FileMetadata`
     pub fn new(blobs: Vec<BlobMetadata>, properties: HashMap<String, String>) -> Self {
         Self { blobs, properties }
@@ -215,7 +220,16 @@ impl FileMetadata {
         let footer_length = footer_payload_length as u64
             + FileMetadata::FOOTER_STRUCT_LENGTH as u64
             + FileMetadata::MAGIC_LENGTH as u64;
-        let start = input_file_length - footer_length;
+        let start = input_file_length
+            .checked_sub(footer_length)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Footer length {footer_length} exceeds file length {input_file_length}"
+                    ),
+                )
+            })?;
         let end = input_file_length;
         file_read.read(start..end).await
     }
@@ -280,10 +294,21 @@ impl FileMetadata {
     pub(crate) async fn read(input_file: &InputFile) -> Result<FileMetadata> {
         let file_read = input_file.reader().await?;
 
+        let input_file_length = input_file.metadata().await?.size;
+        if input_file_length < FileMetadata::MIN_FILE_LENGTH {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "File length {} is too short to be a Puffin file, expected at least {} bytes",
+                    input_file_length,
+                    FileMetadata::MIN_FILE_LENGTH
+                ),
+            ));
+        }
+
         let first_four_bytes = file_read.read(0..FileMetadata::MAGIC_LENGTH.into()).await?;
         FileMetadata::check_magic(&first_four_bytes)?;
 
-        let input_file_length = input_file.metadata().await?.size;
         let footer_payload_length =
             FileMetadata::read_footer_payload_length(file_read.as_ref(), input_file_length).await?;
         let footer_bytes = FileMetadata::read_footer_bytes(
@@ -622,6 +647,44 @@ mod tests {
                 .to_string(),
             "DataInvalid => Footer is not a valid UTF-8 string, source: invalid utf-8 sequence of 1 bytes from index 1",
         )
+    }
+
+    #[tokio::test]
+    async fn test_file_shorter_than_minimum_length_returns_error() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Only the file header magic, nothing else.
+        let input_file = input_file_with_bytes(&temp_dir, &FileMetadata::MAGIC).await;
+
+        let err = FileMetadata::read(&input_file).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string().contains("too short to be a Puffin file"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_footer_payload_length_larger_than_file_returns_error() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let mut bytes = vec![];
+        bytes.extend(FileMetadata::MAGIC.to_vec());
+        bytes.extend(FileMetadata::MAGIC.to_vec());
+        bytes.extend(empty_footer_payload_bytes());
+        // Declared footer payload length is far larger than the file itself.
+        bytes.extend(u32::to_le_bytes(u32::MAX));
+        bytes.extend(vec![0, 0, 0, 0]);
+        bytes.extend(FileMetadata::MAGIC);
+
+        let input_file = input_file_with_bytes(&temp_dir, &bytes).await;
+
+        let err = FileMetadata::read(&input_file).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.to_string().contains("exceeds file length"),
+            "unexpected error: {err}"
+        );
     }
 
     #[tokio::test]
