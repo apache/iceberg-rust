@@ -400,6 +400,25 @@ fn avro_bytes_string() {
 }
 
 #[test]
+fn try_from_bytes_string_truncated_utf8_is_lenient() {
+    // A string metric bound truncated to 16 bytes (default `truncate(16)`) can
+    // split a multi-byte UTF-8 character, leaving an incomplete trailing byte.
+    // `try_from_bytes` must decode this leniently instead of erroring, otherwise
+    // the whole manifest becomes unreadable (e.g. breaking compaction).
+    // 15 valid ASCII bytes + 0xC3 (a 2-byte-sequence lead byte with no
+    // continuation) reproduces "incomplete utf-8 byte sequence from index 15".
+    let mut bytes = b"abcdefghijklmno".to_vec();
+    bytes.push(0xC3);
+    assert_eq!(bytes.len(), 16);
+    // Sanity check: these bytes really are invalid UTF-8, so a strict decode would error.
+    assert!(std::str::from_utf8(&bytes).is_err());
+
+    let datum = Datum::try_from_bytes(&bytes, PrimitiveType::String)
+        .expect("truncated utf-8 string bound should decode leniently");
+    assert_eq!(datum, Datum::string("abcdefghijklmno\u{FFFD}"));
+}
+
+#[test]
 fn avro_bytes_decimal() {
     // (input_bytes, decimal_num, expect_scale, expect_precision)
     let cases = vec![

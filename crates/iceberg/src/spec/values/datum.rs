@@ -412,7 +412,16 @@ impl Datum {
                 PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
             }
             PrimitiveType::String => {
-                PrimitiveLiteral::String(std::str::from_utf8(bytes)?.to_string())
+                // Decode leniently: string metric bounds (lower/upper bounds in
+                // manifest entries) are truncated to a fixed byte length per the
+                // metrics truncation config (default `truncate(16)`). A non-UTF-8-aware
+                // writer can truncate in the middle of a multi-byte character, leaving
+                // an incomplete UTF-8 sequence in the stored bytes. A strict
+                // `str::from_utf8` would error and make the whole manifest unreadable
+                // (e.g. failing compaction). The value here is only ever used as a
+                // scan-pruning bound, so a lossy decode (invalid tail -> U+FFFD) is
+                // acceptable and keeps the manifest loadable.
+                PrimitiveLiteral::String(String::from_utf8_lossy(bytes).into_owned())
             }
             PrimitiveType::Uuid => {
                 PrimitiveLiteral::UInt128(u128::from_be_bytes(bytes.try_into()?))
