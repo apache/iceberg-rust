@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 use tokio::sync::Notify;
+use tokio::sync::futures::OwnedNotified;
 use tokio::sync::oneshot::Receiver;
 
 use crate::delete_vector::DeleteVector;
@@ -67,9 +68,11 @@ pub(crate) enum PosDelLoadAction {
     /// The file is already loaded, nothing to do.
     AlreadyLoaded,
     /// The file is currently being loaded by another task.
-    /// The caller *must* wait for this notifier to ensure data availability
-    /// before returning, as subsequent access (get_delete_vector) is synchronous.
-    WaitFor(Arc<Notify>),
+    /// The caller *must* await this future to ensure data availability before
+    /// returning, as subsequent access (get_delete_vector) is synchronous. The
+    /// future is created under the state lock so it cannot miss the loader's
+    /// `notify_waiters()` (which stores no permit).
+    WaitFor(OwnedNotified),
 }
 
 impl DeleteFilter {
@@ -127,7 +130,9 @@ impl DeleteFilter {
         if let Some(state) = state.positional_deletes.get(file_path) {
             match state {
                 PosDelState::Loaded => return PosDelLoadAction::AlreadyLoaded,
-                PosDelState::Loading(notify) => return PosDelLoadAction::WaitFor(notify.clone()),
+                PosDelState::Loading(notify) => {
+                    return PosDelLoadAction::WaitFor(notify.clone().notified_owned());
+                }
             }
         }
 
@@ -295,6 +300,38 @@ pub(crate) mod tests {
 
     const FIELD_ID_POSITIONAL_DELETE_FILE_PATH: u64 = 2147483546;
     const FIELD_ID_POSITIONAL_DELETE_POS: u64 = 2147483545;
+
+    // Regression test for the positional-delete lost-wakeup hang.
+    //
+    // Drives the real API through the losing interleaving: the loader fires
+    // `notify_waiters()` (via `finish_pos_del_load`) *before* the waiter awaits the notifier
+    // handed back by `WaitFor`. `notify_waiters()` stores no permit, so this only completes if
+    // the waiter's `Notified` was created before the signal. Because `WaitFor` now carries an
+    // `OwnedNotified` created under the lock in `try_start_pos_del_load`, it is; on the old
+    // `WaitFor(Arc<Notify>)` contract the waiter created its `Notified` too late and hung.
+    #[tokio::test]
+    async fn test_wait_for_completes_when_load_finishes_before_await() {
+        let filter = DeleteFilter::new(Runtime::current());
+        let path = "s3://bucket/pos-delete.parquet";
+
+        assert!(matches!(
+            filter.try_start_pos_del_load(path),
+            PosDelLoadAction::Load
+        ));
+
+        let PosDelLoadAction::WaitFor(notified) = filter.try_start_pos_del_load(path) else {
+            panic!("expected WaitFor for an in-progress load");
+        };
+
+        // Loader completes and signals before the waiter awaits.
+        filter.finish_pos_del_load(path);
+
+        let waited = tokio::time::timeout(std::time::Duration::from_secs(5), notified).await;
+        assert!(
+            waited.is_ok(),
+            "WaitFor future must resolve after finish_pos_del_load"
+        );
+    }
 
     #[tokio::test]
     async fn test_delete_file_filter_load_deletes() {
