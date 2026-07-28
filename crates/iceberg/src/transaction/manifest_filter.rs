@@ -24,8 +24,8 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::io::FileIO;
 use crate::spec::{
-    DataFile, FormatVersion, ManifestContentType, ManifestFile, ManifestStatus, ManifestWriter,
-    ManifestWriterBuilder, PartitionSpec, Schema,
+    DataContentType, DataFile, FormatVersion, ManifestContentType, ManifestFile, ManifestStatus,
+    ManifestWriter, ManifestWriterBuilder, PartitionSpec, Schema,
 };
 use crate::transaction::snapshot::new_manifest_path;
 use crate::{Error, ErrorKind};
@@ -283,14 +283,25 @@ impl ManifestFilterManager {
             let entry = entry.as_ref();
             let file = entry.data_file();
 
-            // Check if file is marked for deletion based on various criteria
-            let marked_for_delete =
-                // Check if file is in delete files collection
-                self.files_to_delete.contains_key(file.file_path()) ||
-                // For delete manifests, check sequence number for old delete files
-                (is_delete && matches!(entry.sequence_number(), Some(seq_num) if seq_num != crate::spec::UNASSIGNED_SEQUENCE_NUMBER
+            // Why an entry is removed matters, so keep the reasons separate.
+            //
+            // An explicit delete, or the sequence-number rule, condemns the *whole file*
+            // and may therefore be promoted to the path-level `files_to_delete` set.
+            // Danglingness is different: it is a property of a single deletion-vector
+            // *blob*. Several DVs can share one Puffin file, distinguished by
+            // (`file_path`, `content_offset`, `content_size_in_bytes`), so a dangling blob
+            // says nothing about its neighbours in the same file.
+            let explicitly_deleted = self.files_to_delete.contains_key(file.file_path());
+            // For delete manifests, check sequence number for old delete files
+            let superseded_by_sequence_number = is_delete
+                && matches!(entry.sequence_number(), Some(seq_num) if seq_num != crate::spec::UNASSIGNED_SEQUENCE_NUMBER
                              && seq_num > 0
-                             && seq_num < self.min_sequence_number));
+                             && seq_num < self.min_sequence_number);
+            // For delete manifests, drop deletes whose referenced data file is gone
+            let dangling_delete = is_delete && self.is_dangling_delete(file);
+
+            let marked_for_delete =
+                explicitly_deleted || superseded_by_sequence_number || dangling_delete;
 
             // TODO: Add expression evaluation logic
             if marked_for_delete {
@@ -313,22 +324,30 @@ impl ManifestFilterManager {
                     // Mark this entry as deleted
                     writer.add_delete_entry(entry.clone())?;
 
-                    // Create a copy of the file without stats
-                    let file_copy = file.clone();
+                    // A blob-level decision must NOT be promoted to the path-level sets:
+                    // `files_to_delete` is keyed by path and is consulted for every entry
+                    // in this and every later manifest, so recording a shared Puffin here
+                    // would drop the *live* deletion vectors of data files that were never
+                    // rewritten -- silently resurrecting their deleted rows. Dropping this
+                    // one entry is the whole effect we want.
+                    if explicitly_deleted || superseded_by_sequence_number {
+                        // Create a copy of the file without stats
+                        let file_copy = file.clone();
 
-                    // For file that it was deleted using an expression
-                    self.files_to_delete
-                        .insert(file.file_path().to_string(), file_copy.clone());
+                        // For file that it was deleted using an expression
+                        self.files_to_delete
+                            .insert(file.file_path().to_string(), file_copy.clone());
 
-                    // TODO: add file to removed_data_file_path once we implement drop_partition
+                        // TODO: add file to removed_data_file_path once we implement drop_partition
 
-                    // Track deleted files for duplicate detection and validation
-                    if deleted_files.contains_key(file_copy.file_path()) {
-                        // TODO: Log warning about duplicate
-                    } else {
-                        // Only add the file to deletes if it is a new delete
-                        // This keeps the snapshot summary accurate for non-duplicate data
-                        deleted_files.insert(file_copy.file_path.to_owned(), file_copy.clone());
+                        // Track deleted files for duplicate detection and validation
+                        if deleted_files.contains_key(file_copy.file_path()) {
+                            // TODO: Log warning about duplicate
+                        } else {
+                            // Only add the file to deletes if it is a new delete
+                            // This keeps the snapshot summary accurate for non-duplicate data
+                            deleted_files.insert(file_copy.file_path.to_owned(), file_copy.clone());
+                        }
                     }
                 } else {
                     // Keep the entry as existing
@@ -406,7 +425,9 @@ impl ManifestFilterManager {
 
             let file = entry.data_file();
 
-            // Check if file is marked for deletion based on various criteria
+            // Check if file is marked for deletion based on various criteria.
+            // Mirrors the decision in `filter_manifest_with_deleted_files`; see the comment
+            // there for why the dangling-delete case is deliberately per-blob.
             let marked_for_delete =
                 // Check if file path is in files to delete
                 self.files_to_delete.contains_key(file.file_path()) ||
@@ -415,9 +436,9 @@ impl ManifestFilterManager {
                  entry.status() != ManifestStatus::Deleted &&
                   matches!(entry.sequence_number(), Some(seq_num) if seq_num != crate::spec::UNASSIGNED_SEQUENCE_NUMBER
                              && seq_num > 0
-                             && seq_num < self.min_sequence_number));
-
-            // TODO: Add dangling delete vector check: (is_delete && self.is_dangling_dv(file))
+                             && seq_num < self.min_sequence_number)) ||
+                // For delete manifests, drop deletes whose referenced data file is gone
+                (is_delete && self.is_dangling_delete(file));
 
             // TODO: Add expression evaluation logic
             if marked_for_delete {
@@ -457,6 +478,38 @@ impl ManifestFilterManager {
     pub(crate) fn remove_dangling_deletes_for(&mut self, file_paths: &HashSet<String>) {
         self.removed_data_file_path
             .extend(file_paths.iter().cloned());
+    }
+
+    /// Returns `true` if `file` is a delete file that can no longer apply to anything,
+    /// because the single data file it references is being removed in this commit.
+    ///
+    /// This covers deletes that target exactly one data file and therefore can be
+    /// *proven* dangling:
+    ///
+    /// * **Deletion vectors** (v3): a Puffin blob carrying the deleted row positions for
+    ///   one data file, identified by `referenced-data-file`.
+    /// * **Position delete files** (v2) that set `referenced-data-file`.
+    ///
+    /// Deletes without `referenced-data-file` (equality deletes, or position deletes that
+    /// span several data files) may still apply to surviving data files, so they are never
+    /// reported as dangling here. The sequence-number rule in
+    /// [`Self::drop_delete_files_older_than`] is what eventually retires those.
+    ///
+    /// Without this check a rewrite (e.g. compaction) that replaces a data file leaves its
+    /// deletion vector live in the delete manifests forever: it applies to nothing, but it
+    /// keeps the Puffin file reachable, so snapshot expiration cannot reclaim it either and
+    /// the delete manifests grow monotonically with every rewrite.
+    fn is_dangling_delete(&self, file: &DataFile) -> bool {
+        if self.removed_data_file_path.is_empty() {
+            return false;
+        }
+
+        if file.content_type() == DataContentType::Data {
+            return false;
+        }
+
+        file.referenced_data_file()
+            .is_some_and(|referenced| self.removed_data_file_path.contains(&referenced))
     }
 }
 
@@ -520,6 +573,47 @@ mod tests {
             referenced_data_file: None,
             content_offset: None,
             content_size_in_bytes: None,
+        }
+    }
+
+    // Helper function to create a deletion vector sharing a Puffin file with others.
+    // Real DVs are addressed by (file_path, content_offset, content_size_in_bytes), so a
+    // single Puffin can hold the vectors of many data files.
+    fn create_test_deletion_vector_at(
+        file_path: &str,
+        referenced_data_file: &str,
+        content_offset: i64,
+    ) -> DataFile {
+        let mut dv = create_test_deletion_vector(file_path, referenced_data_file);
+        dv.content_offset = Some(content_offset);
+        dv
+    }
+
+    // Helper function to create a deletion vector (Puffin position-delete) DataFile that
+    // carries the deleted row positions for exactly one referenced data file.
+    fn create_test_deletion_vector(file_path: &str, referenced_data_file: &str) -> DataFile {
+        DataFile {
+            content: DataContentType::PositionDeletes,
+            file_path: file_path.to_string(),
+            file_format: DataFileFormat::Puffin,
+            partition: Struct::empty(),
+            partition_spec_id: 0,
+            record_count: 3,
+            file_size_in_bytes: 128,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: HashMap::new(),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::new(),
+            upper_bounds: HashMap::new(),
+            key_metadata: None,
+            split_offsets: None,
+            equality_ids: None,
+            sort_order_id: None,
+            first_row_id: None,
+            referenced_data_file: Some(referenced_data_file.to_string()),
+            content_offset: Some(4),
+            content_size_in_bytes: Some(64),
         }
     }
 
@@ -617,6 +711,33 @@ mod tests {
             partition_spec,
         )
         .build_v2_data();
+
+        for entry in entries {
+            writer.add_entry(entry)?;
+        }
+        writer.write_manifest_file().await?;
+        Ok(())
+    }
+
+    // Helper function to write delete-manifest entries to file. Deletion vectors live in
+    // delete manifests, so the dangling-delete tests need the `deletes` writer variant.
+    async fn write_delete_manifest_with_entries(
+        manager: &ManifestFilterManager,
+        manifest_path: &str,
+        schema: &Schema,
+        entries: Vec<ManifestEntry>,
+        snapshot_id: i64,
+    ) -> Result<()> {
+        let partition_spec = PartitionSpec::unpartition_spec();
+        let output_file = manager.file_io.new_output(manifest_path)?;
+        let mut writer = ManifestWriterBuilder::new(
+            output_file,
+            Some(snapshot_id),
+            None,
+            schema.clone().into(),
+            partition_spec,
+        )
+        .build_v2_deletes();
 
         for entry in entries {
             writer.add_entry(entry)?;
@@ -1154,5 +1275,272 @@ mod tests {
         manager.delete_file(file_with_different_spec).unwrap();
         assert!(manager.contains_deletes());
         assert_eq!(manager.files_to_be_deleted().len(), 1);
+    }
+
+    #[test]
+    fn test_is_dangling_delete() {
+        let (mut manager, _temp_dir) = setup_test_manager();
+
+        let dv = create_test_deletion_vector("/test/deletes.puffin", "/test/data1.parquet");
+
+        // Nothing removed yet -> nothing can be dangling.
+        assert!(!manager.is_dangling_delete(&dv));
+
+        manager.remove_dangling_deletes_for(&HashSet::from(["/test/data1.parquet".to_string()]));
+
+        // The DV references a data file that is being removed -> dangling.
+        assert!(manager.is_dangling_delete(&dv));
+
+        // A DV for a data file that survives is NOT dangling.
+        let other_dv = create_test_deletion_vector("/test/deletes2.puffin", "/test/data2.parquet");
+        assert!(!manager.is_dangling_delete(&other_dv));
+
+        // A data file is never a dangling delete, even if it is itself being removed.
+        let data_file = create_test_data_file("/test/data1.parquet", 0);
+        assert!(!manager.is_dangling_delete(&data_file));
+
+        // A delete file without `referenced_data_file` (e.g. an equality delete, or a
+        // position delete spanning several data files) can still apply to surviving data
+        // files, so it must never be reported as dangling.
+        let mut unreferenced_delete = dv.clone();
+        unreferenced_delete.referenced_data_file = None;
+        assert!(!manager.is_dangling_delete(&unreferenced_delete));
+    }
+
+    #[tokio::test]
+    async fn test_filter_manifests_drops_dangling_deletion_vector() {
+        let (mut manager, temp_dir) = setup_test_manager();
+        let schema = create_test_schema();
+
+        // Two deletion vectors: one for a data file that this commit rewrites away, one for
+        // a data file that survives.
+        let dangling_dv =
+            create_test_deletion_vector("/test/dangling.puffin", "/test/rewritten.parquet");
+        let live_dv = create_test_deletion_vector("/test/live.puffin", "/test/surviving.parquet");
+
+        let manifest_path = temp_dir
+            .path()
+            .join("delete-manifest.avro")
+            .to_string_lossy()
+            .to_string();
+
+        write_delete_manifest_with_entries(
+            &manager,
+            &manifest_path,
+            &schema,
+            create_entries_from_files(vec![dangling_dv.clone(), live_dv.clone()]),
+            12345,
+        )
+        .await
+        .unwrap();
+
+        let input_manifest = create_manifest_metadata(
+            &manifest_path,
+            ManifestContentType::Deletes,
+            10,
+            12345,
+            (2, 0, 0),
+        );
+
+        // The rewrite removed `/test/rewritten.parquet`.
+        manager
+            .remove_dangling_deletes_for(&HashSet::from(["/test/rewritten.parquet".to_string()]));
+
+        let filtered = manager
+            .filter_manifests(&schema, vec![input_manifest.clone()])
+            .await
+            .unwrap();
+
+        assert_eq!(filtered.len(), 1);
+        assert_ne!(
+            filtered[0].manifest_path, input_manifest.manifest_path,
+            "manifest must be rewritten when it contains a dangling delete"
+        );
+
+        let filtered_manifest = filtered[0].load_manifest(&manager.file_io).await.unwrap();
+        let statuses: HashMap<&str, ManifestStatus> = filtered_manifest
+            .entries()
+            .iter()
+            .map(|entry| (entry.data_file().file_path(), entry.status()))
+            .collect();
+
+        assert_eq!(
+            statuses.get("/test/dangling.puffin"),
+            Some(&ManifestStatus::Deleted),
+            "the deletion vector of a rewritten data file must be dropped"
+        );
+        assert_eq!(
+            statuses.get("/test/live.puffin"),
+            Some(&ManifestStatus::Existing),
+            "the deletion vector of a surviving data file must be kept"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_filter_manifests_keeps_deletion_vectors_when_nothing_removed() {
+        let (mut manager, temp_dir) = setup_test_manager();
+        let schema = create_test_schema();
+
+        let dv = create_test_deletion_vector("/test/live.puffin", "/test/surviving.parquet");
+
+        let manifest_path = temp_dir
+            .path()
+            .join("delete-manifest-untouched.avro")
+            .to_string_lossy()
+            .to_string();
+
+        write_delete_manifest_with_entries(
+            &manager,
+            &manifest_path,
+            &schema,
+            create_entries_from_files(vec![dv]),
+            12345,
+        )
+        .await
+        .unwrap();
+
+        let input_manifest = create_manifest_metadata(
+            &manifest_path,
+            ManifestContentType::Deletes,
+            10,
+            12345,
+            (1, 0, 0),
+        );
+
+        // No data files removed in this commit -> the delete manifest must be returned
+        // untouched (no rewrite, no new manifest file).
+        let filtered = manager
+            .filter_manifests(&schema, vec![input_manifest.clone()])
+            .await
+            .unwrap();
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(
+            filtered[0].manifest_path, input_manifest.manifest_path,
+            "delete manifest must not be rewritten when no data files were removed"
+        );
+    }
+
+    /// Regression test for the shared-Puffin hazard raised in review of #188.
+    ///
+    /// Several deletion vectors may live in ONE Puffin file, distinguished by
+    /// (`file_path`, `content_offset`, `content_size_in_bytes`). Danglingness is therefore a
+    /// per-blob property. An earlier version of this code promoted a dangling blob into the
+    /// path-keyed `files_to_delete` set, which then matched every other entry with the same
+    /// Puffin path -- dropping the *live* deletion vectors of data files that were never
+    /// rewritten and silently resurrecting their deleted rows.
+    #[tokio::test]
+    async fn test_shared_puffin_keeps_live_deletion_vectors() {
+        let (mut manager, temp_dir) = setup_test_manager();
+        let schema = create_test_schema();
+
+        // One Puffin, two blobs: one for a data file this commit rewrites away, one for a
+        // data file that survives.
+        const PUFFIN: &str = "/test/shared.puffin";
+        let dangling_blob = create_test_deletion_vector_at(PUFFIN, "/test/rewritten.parquet", 4);
+        let live_blob = create_test_deletion_vector_at(PUFFIN, "/test/surviving.parquet", 128);
+
+        // A second manifest holds another live blob in the SAME Puffin, to prove the
+        // path-level set cannot leak across manifests either (the manager is reused for
+        // every manifest in `filter_manifests`).
+        let other_live_blob =
+            create_test_deletion_vector_at(PUFFIN, "/test/surviving-2.parquet", 256);
+
+        let manifest_a = temp_dir
+            .path()
+            .join("delete-manifest-a.avro")
+            .to_string_lossy()
+            .to_string();
+        let manifest_b = temp_dir
+            .path()
+            .join("delete-manifest-b.avro")
+            .to_string_lossy()
+            .to_string();
+
+        write_delete_manifest_with_entries(
+            &manager,
+            &manifest_a,
+            &schema,
+            create_entries_from_files(vec![dangling_blob, live_blob]),
+            12345,
+        )
+        .await
+        .unwrap();
+        write_delete_manifest_with_entries(
+            &manager,
+            &manifest_b,
+            &schema,
+            create_entries_from_files(vec![other_live_blob]),
+            12346,
+        )
+        .await
+        .unwrap();
+
+        let inputs = vec![
+            create_manifest_metadata(
+                &manifest_a,
+                ManifestContentType::Deletes,
+                10,
+                12345,
+                (2, 0, 0),
+            ),
+            create_manifest_metadata(
+                &manifest_b,
+                ManifestContentType::Deletes,
+                10,
+                12346,
+                (1, 0, 0),
+            ),
+        ];
+
+        manager
+            .remove_dangling_deletes_for(&HashSet::from(["/test/rewritten.parquet".to_string()]));
+
+        let filtered = manager.filter_manifests(&schema, inputs).await.unwrap();
+        assert_eq!(filtered.len(), 2);
+
+        // Manifest A: only the blob whose data file is gone may be dropped. Both entries
+        // share a path, so identify them by their blob offset.
+        let manifest_a_out = filtered[0].load_manifest(&manager.file_io).await.unwrap();
+        let statuses: HashMap<(Option<i64>, Option<String>), ManifestStatus> = manifest_a_out
+            .entries()
+            .iter()
+            .map(|entry| {
+                (
+                    (
+                        entry.data_file().content_offset(),
+                        entry.data_file().referenced_data_file(),
+                    ),
+                    entry.status(),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            statuses.get(&(Some(4), Some("/test/rewritten.parquet".to_string()))),
+            Some(&ManifestStatus::Deleted),
+            "the blob for the rewritten data file must be dropped"
+        );
+        assert_eq!(
+            statuses.get(&(Some(128), Some("/test/surviving.parquet".to_string()))),
+            Some(&ManifestStatus::Existing),
+            "a live blob sharing the Puffin must survive -- dropping it would resurrect \
+             deleted rows for a data file that was never rewritten"
+        );
+
+        // Manifest B must be untouched: the path-level set must not have been contaminated.
+        assert_eq!(
+            filtered[1].manifest_path, manifest_b,
+            "a manifest holding only live blobs of the shared Puffin must not be rewritten"
+        );
+
+        // And the Puffin itself must never be queued for deletion while blobs still live.
+        assert!(
+            !manager
+                .files_to_be_deleted()
+                .iter()
+                .any(|f| f.file_path() == PUFFIN),
+            "a partially-dangling Puffin must not be promoted to a path-level delete"
+        );
     }
 }

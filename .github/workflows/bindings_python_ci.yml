@@ -65,7 +65,13 @@ jobs:
           enable-cache: true
       - name: Install tools
         run: |
-          uv tool install ruff
+          # Pinned deliberately: `uv tool install ruff` resolves the latest release, so a
+          # new ruff version changes the lint set under CI without any repo change. ruff
+          # 0.16.0 expanded the default rule selection and started reporting 16 findings
+          # in this directory (DTZ001, UP006, UP035, I001, PLR0402, PIE804), turning
+          # `check-python` red on every PR. 0.15.22 is the last version this repo was
+          # green on. Bump intentionally, together with the fixes a new version wants.
+          uv tool install ruff==0.15.22
       - name: Check format
         working-directory: "bindings/python"
         run: |
