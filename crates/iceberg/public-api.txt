@@ -634,6 +634,7 @@ pub type iceberg::expr::BoundTerm = iceberg::expr::BoundReference
 pub type iceberg::expr::Term = iceberg::expr::Reference
 pub mod iceberg::inspect
 pub enum iceberg::inspect::MetadataTableType
+pub iceberg::inspect::MetadataTableType::History
 pub iceberg::inspect::MetadataTableType::Manifests
 pub iceberg::inspect::MetadataTableType::Snapshots
 impl iceberg::inspect::MetadataTableType
@@ -649,6 +650,11 @@ pub fn iceberg::inspect::MetadataTableType::fmt(&self, f: &mut core::fmt::Format
 impl strum::IntoEnumIterator for iceberg::inspect::MetadataTableType
 pub type iceberg::inspect::MetadataTableType::Iterator = iceberg::inspect::MetadataTableTypeIter
 pub fn iceberg::inspect::MetadataTableType::iter() -> iceberg::inspect::MetadataTableTypeIter
+pub struct iceberg::inspect::HistoryTable<'a>
+impl<'a> iceberg::inspect::HistoryTable<'a>
+pub fn iceberg::inspect::HistoryTable<'a>::new(table: &'a iceberg::table::Table) -> Self
+pub async fn iceberg::inspect::HistoryTable<'a>::scan(&self) -> iceberg::Result<iceberg::scan::ArrowRecordBatchStream>
+pub fn iceberg::inspect::HistoryTable<'a>::schema(&self) -> iceberg::spec::Schema
 pub struct iceberg::inspect::ManifestsTable<'a>
 impl<'a> iceberg::inspect::ManifestsTable<'a>
 pub fn iceberg::inspect::ManifestsTable<'a>::new(table: &'a iceberg::table::Table) -> Self
@@ -656,6 +662,7 @@ pub async fn iceberg::inspect::ManifestsTable<'a>::scan(&self) -> iceberg::Resul
 pub fn iceberg::inspect::ManifestsTable<'a>::schema(&self) -> iceberg::spec::Schema
 pub struct iceberg::inspect::MetadataTable<'a>(_)
 impl<'a> iceberg::inspect::MetadataTable<'a>
+pub fn iceberg::inspect::MetadataTable<'a>::history(&self) -> iceberg::inspect::HistoryTable<'_>
 pub fn iceberg::inspect::MetadataTable<'a>::manifests(&self) -> iceberg::inspect::ManifestsTable<'_>
 pub fn iceberg::inspect::MetadataTable<'a>::new(table: &'a iceberg::table::Table) -> Self
 pub fn iceberg::inspect::MetadataTable<'a>::snapshots(&self) -> iceberg::inspect::SnapshotsTable<'_>
