@@ -35,6 +35,10 @@ const GZIP_DEFAULT_LEVEL: u8 = 6;
 const GZIP_MAX_LEVEL: u8 = 9;
 /// Default compression level for Brotli.
 const BROTLI_DEFAULT_LEVEL: u8 = 1;
+const GZIP_SUFFIX: &str = ".gz";
+const ZSTD_SUFFIX: &str = ".zstd";
+const GZIP_MAGIC: &[u8] = &[0x1F, 0x8B];
+const ZSTD_MAGIC: &[u8] = &[0x28, 0xB5, 0x2F, 0xFD];
 
 /// Data compression formats
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
@@ -61,6 +65,22 @@ pub enum CompressionCodec {
     /// Snappy compression
     Snappy,
 }
+
+pub(crate) const TABLE_METADATA_SUPPORTED_COMPRESSION: &[CompressionCodec] = &[
+    CompressionCodec::None,
+    CompressionCodec::Gzip(GZIP_DEFAULT_LEVEL),
+    CompressionCodec::Zstd(ZSTD_DEFAULT_LEVEL),
+];
+
+pub(crate) const TABLE_METADATA_SUFFIX_TO_COMPRESSION: &[(&str, CompressionCodec)] = &[
+    (ZSTD_SUFFIX, CompressionCodec::Zstd(ZSTD_DEFAULT_LEVEL)),
+    (GZIP_SUFFIX, CompressionCodec::Gzip(GZIP_DEFAULT_LEVEL)),
+];
+
+pub(crate) const TABLE_METADATA_MAGIC_TO_COMPRESSION: &[(&[u8], CompressionCodec)] = &[
+    (GZIP_MAGIC, CompressionCodec::Gzip(GZIP_DEFAULT_LEVEL)),
+    (ZSTD_MAGIC, CompressionCodec::Zstd(ZSTD_DEFAULT_LEVEL)),
+];
 
 impl CompressionCodec {
     /// Returns a Zstd codec with the default compression level.
@@ -228,12 +248,12 @@ impl CompressionCodec {
     ///
     /// # Errors
     ///
-    /// Returns an error for Lz4 and Snappy as they are not fully supported.
+    /// Returns an error for codecs without a metadata file suffix.
     pub fn suffix(&self) -> Result<&'static str> {
         match self {
             CompressionCodec::None => Ok(""),
-            CompressionCodec::Zstd(_) => Ok(".zstd"),
-            CompressionCodec::Gzip(_) => Ok(".gz"),
+            CompressionCodec::Zstd(_) => Ok(ZSTD_SUFFIX),
+            CompressionCodec::Gzip(_) => Ok(GZIP_SUFFIX),
             codec @ (CompressionCodec::Lz4
             | CompressionCodec::Lz4Raw
             | CompressionCodec::Brotli(_)
