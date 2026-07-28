@@ -413,29 +413,13 @@ mod tests {
     use crate::puffin::test_utils::{
         empty_footer_payload, empty_footer_payload_bytes, empty_footer_payload_bytes_length_bytes,
         java_empty_uncompressed_input_file, java_uncompressed_metric_input_file,
-        java_zstd_compressed_metric_input_file, uncompressed_metric_file_metadata,
+        java_zstd_compressed_metric_input_file, read_file_metadata,
+        read_file_metadata_with_prefetch, uncompressed_metric_file_metadata,
         zstd_compressed_metric_file_metadata,
     };
-    use crate::{ErrorKind, Result};
+    use crate::ErrorKind;
 
     const INVALID_MAGIC_VALUE: [u8; 4] = [80, 70, 65, 0];
-
-    /// Reads file metadata from an [`InputFile`], resolving its reader and length.
-    async fn read_file_metadata(input_file: &InputFile) -> Result<FileMetadata> {
-        let file_read = input_file.reader().await?;
-        let file_length = input_file.metadata().await?.size;
-        FileMetadata::read(file_read.as_ref(), file_length).await
-    }
-
-    /// Reads file metadata with a prefetch hint from an [`InputFile`].
-    async fn read_file_metadata_with_prefetch(
-        input_file: &InputFile,
-        prefetch_hint: u8,
-    ) -> Result<FileMetadata> {
-        let file_read = input_file.reader().await?;
-        let file_length = input_file.metadata().await?.size;
-        FileMetadata::read_with_prefetch(file_read.as_ref(), file_length, prefetch_hint).await
-    }
 
     async fn input_file_with_bytes(temp_dir: &TempDir, slice: &[u8]) -> InputFile {
         let file_io = FileIO::new_with_fs();

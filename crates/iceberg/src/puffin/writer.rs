@@ -188,8 +188,8 @@ mod tests {
     use crate::puffin::test_utils::{
         blob_0, blob_1, empty_footer_payload, empty_footer_payload_bytes, file_properties,
         java_empty_uncompressed_input_file, java_uncompressed_metric_input_file,
-        java_zstd_compressed_metric_input_file, uncompressed_metric_file_metadata,
-        zstd_compressed_metric_file_metadata,
+        java_zstd_compressed_metric_input_file, read_file_metadata,
+        uncompressed_metric_file_metadata, zstd_compressed_metric_file_metadata,
     };
     use crate::puffin::writer::PuffinWriter;
     use crate::{ErrorKind, Result};
@@ -214,14 +214,6 @@ mod tests {
         Ok(output_file)
     }
 
-    async fn read_file_metadata(input_file: &InputFile) -> FileMetadata {
-        let file_read = input_file.reader().await.unwrap();
-        let file_length = input_file.metadata().await.unwrap().size;
-        FileMetadata::read(file_read.as_ref(), file_length)
-            .await
-            .unwrap()
-    }
-
     async fn read_all_blobs_from_puffin_file(input_file: InputFile) -> Vec<Blob> {
         let puffin_reader = PuffinReader::new(input_file).await.unwrap();
         let mut blobs = Vec::new();
@@ -242,7 +234,7 @@ mod tests {
             .to_input_file();
 
         assert_eq!(
-            read_file_metadata(&input_file).await,
+            read_file_metadata(&input_file).await.unwrap(),
             empty_footer_payload()
         );
 
@@ -278,7 +270,7 @@ mod tests {
             .to_input_file();
 
         assert_eq!(
-            read_file_metadata(&input_file).await,
+            read_file_metadata(&input_file).await.unwrap(),
             uncompressed_metric_file_metadata()
         );
 
@@ -298,7 +290,7 @@ mod tests {
             .to_input_file();
 
         assert_eq!(
-            read_file_metadata(&input_file).await,
+            read_file_metadata(&input_file).await.unwrap(),
             zstd_compressed_metric_file_metadata()
         );
 
