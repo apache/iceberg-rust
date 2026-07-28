@@ -408,6 +408,7 @@ mod tests {
     use bytes::Bytes;
     use tempfile::TempDir;
 
+    use crate::ErrorKind;
     use crate::io::{FileIO, InputFile};
     use crate::puffin::metadata::{BlobMetadata, CompressionCodec, FileMetadata};
     use crate::puffin::test_utils::{
@@ -417,7 +418,6 @@ mod tests {
         read_file_metadata_with_prefetch, uncompressed_metric_file_metadata,
         zstd_compressed_metric_file_metadata,
     };
-    use crate::ErrorKind;
 
     const INVALID_MAGIC_VALUE: [u8; 4] = [80, 70, 65, 0];
 
