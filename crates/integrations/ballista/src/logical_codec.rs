@@ -127,11 +127,14 @@ impl LogicalExtensionCodec for IcebergLogicalCodec {
                         let config = catalog.into();
                         let cat = get_catalog(&config)?;
                         let TableIdent { namespace, name } = table;
-                        let provider = block_on(IcebergTableProvider::try_new_with_config(
-                            cat, config, namespace, name,
-                        ))
-                        .map_err(to_df_err)?
-                        .with_snapshot_id(snapshot_id)
+                        // Both steps run on the catalog runtime: `with_snapshot_id`
+                        // reloads metadata to validate the pin, so it is async too.
+                        let provider = block_on(async {
+                            IcebergTableProvider::try_new_with_config(cat, config, namespace, name)
+                                .await?
+                                .with_snapshot_id(snapshot_id)
+                                .await
+                        })
                         .map_err(to_df_err)?;
                         Ok(Arc::new(provider))
                     }

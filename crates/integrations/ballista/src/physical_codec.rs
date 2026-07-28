@@ -41,7 +41,9 @@ use iceberg::table::Table;
 use iceberg_datafusion::physical_plan::{
     IcebergCommitExec, IcebergMetadataScan, IcebergTableScan, IcebergWriteExec, PartitionExpr,
 };
-use iceberg_datafusion::{IcebergMetadataTableProvider, snapshot_arrow_schema, to_datafusion_error};
+use iceberg_datafusion::{
+    IcebergMetadataTableProvider, snapshot_arrow_schema, to_datafusion_error,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::bridge::{
@@ -622,7 +624,10 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("missing"), "names the column: {msg}");
         assert!(msg.contains("snapshot 42"), "names the snapshot: {msg}");
-        assert!(msg.contains("schema may have changed"), "the likely cause: {msg}");
+        assert!(
+            msg.contains("schema may have changed"),
+            "the likely cause: {msg}"
+        );
 
         // Unpinned scans resolve against the current schema, where a missing
         // column really does mean the two nodes disagree about the table.

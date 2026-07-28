@@ -621,6 +621,7 @@ async fn distributed_time_travel_pins_snapshot_schema() {
     .await
     .expect("build provider pinned to snapshot 1")
     .with_snapshot_id(Some(snapshot_1))
+    .await
     .expect("pin snapshot 1");
     ctx.register_table("events_v1", Arc::new(pinned_v1))
         .expect("register provider pinned to snapshot 1");
@@ -651,7 +652,10 @@ async fn distributed_time_travel_pins_snapshot_schema() {
     // drop that returns a table to an earlier schema hits this; the fix is to
     // send the resolved schema id rather than -1 when the schema already exists.
     // Dropping `name` sidesteps it, since {id, email} is new.
-    let table = catalog.load_table(&table_ident).await.expect("reload table");
+    let table = catalog
+        .load_table(&table_ident)
+        .await
+        .expect("reload table");
     let tx = Transaction::new(&table);
     let tx = tx
         .update_schema()
@@ -684,16 +688,13 @@ async fn distributed_time_travel_pins_snapshot_schema() {
     // Phase 5 — pin to snapshot 2, which still has the `name` the table just
     // lost. An executor using the current schema has no `name` to project, so
     // the query fails outright even though those rows carry the values.
-    let pinned_v2 = IcebergTableProvider::try_new_with_config(
-        catalog,
-        catalog_config,
-        namespace,
-        table_name,
-    )
-    .await
-    .expect("build provider pinned to snapshot 2")
-    .with_snapshot_id(Some(snapshot_2))
-    .expect("pin snapshot 2");
+    let pinned_v2 =
+        IcebergTableProvider::try_new_with_config(catalog, catalog_config, namespace, table_name)
+            .await
+            .expect("build provider pinned to snapshot 2")
+            .with_snapshot_id(Some(snapshot_2))
+            .await
+            .expect("pin snapshot 2");
     ctx.register_table("events_v2_pinned", Arc::new(pinned_v2))
         .expect("register provider pinned to snapshot 2");
 
