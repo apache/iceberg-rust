@@ -71,6 +71,7 @@ impl PyDataFile {
             DataFileFormat::Orc => "orc",
             DataFileFormat::Parquet => "parquet",
             DataFileFormat::Puffin => "puffin",
+            DataFileFormat::Vortex => "vortex",
         }
     }
 

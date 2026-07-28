@@ -52,6 +52,10 @@ impl StructAccessor {
         self.position
     }
 
+    pub(crate) fn inner(&self) -> Option<&StructAccessor> {
+        self.inner.as_deref()
+    }
+
     pub(crate) fn r#type(&self) -> &PrimitiveType {
         &self.r#type
     }

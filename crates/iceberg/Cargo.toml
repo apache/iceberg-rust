@@ -80,6 +80,7 @@ typed-builder = { workspace = true }
 typetag = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+vortex = { workspace = true }
 zeroize = { workspace = true }
 zstd = { workspace = true }
 
