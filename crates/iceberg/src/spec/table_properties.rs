@@ -19,8 +19,34 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 
-use crate::compression::CompressionCodec;
+use crate::compression::{CompressionCodec, TABLE_METADATA_SUPPORTED_COMPRESSION};
 use crate::error::{Error, ErrorKind, Result};
+
+fn supported_metadata_compression_names() -> String {
+    let names = TABLE_METADATA_SUPPORTED_COMPRESSION
+        .iter()
+        .map(|codec| format!("'{}'", codec.name()))
+        .collect::<Vec<_>>();
+    let (last, rest) = names
+        .split_last()
+        .expect("metadata compression codec list must not be empty");
+
+    if rest.is_empty() {
+        last.clone()
+    } else {
+        format!("{}, and {last}", rest.join(", "))
+    }
+}
+
+fn invalid_metadata_compression_codec(value: &str) -> Error {
+    Error::new(
+        ErrorKind::DataInvalid,
+        format!(
+            "Invalid metadata compression codec: {value}. Only {} are supported for metadata files.",
+            supported_metadata_compression_names()
+        ),
+    )
+}
 
 fn parse_property<T: FromStr>(
     properties: &HashMap<String, String>,
@@ -100,33 +126,14 @@ pub(crate) fn parse_metadata_file_compression(
     let lowercase_value = value.to_lowercase();
 
     // Use serde to parse the codec (which has rename_all = "lowercase")
-    let codec: CompressionCodec = serde_json::from_value(serde_json::Value::String(
-        lowercase_value,
-    ))
-    .map_err(|_| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Invalid metadata compression codec: {value}. Only '{}', '{}', and '{}' are supported.",
-                CompressionCodec::None.name(),
-                CompressionCodec::gzip_default().name(),
-                CompressionCodec::zstd_default().name()
-            ),
-        )
-    })?;
+    let codec: CompressionCodec =
+        serde_json::from_value(serde_json::Value::String(lowercase_value))
+            .map_err(|_| invalid_metadata_compression_codec(value))?;
 
-    // Validate that only None, Gzip, and Zstd are used for metadata
-    match codec {
-        CompressionCodec::None | CompressionCodec::Gzip(_) | CompressionCodec::Zstd(_) => Ok(codec),
-        _ => Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Invalid metadata compression codec: {value}. Only '{}', '{}', and '{}' are supported for metadata files.",
-                CompressionCodec::None.name(),
-                CompressionCodec::gzip_default().name(),
-                CompressionCodec::zstd_default().name()
-            ),
-        )),
+    if TABLE_METADATA_SUPPORTED_COMPRESSION.contains(&codec) {
+        Ok(codec)
+    } else {
+        Err(invalid_metadata_compression_codec(value))
     }
 }
 

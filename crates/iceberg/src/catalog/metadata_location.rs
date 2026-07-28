@@ -21,13 +21,25 @@ use std::str::FromStr;
 
 use uuid::Uuid;
 
-use crate::compression::CompressionCodec;
+use crate::compression::{CompressionCodec, TABLE_METADATA_SUFFIX_TO_COMPRESSION};
 use crate::spec::{TableMetadata, parse_metadata_file_compression};
 use crate::{Error, ErrorKind, Result};
 
 /// Default folder name for metadata files under the table location, used when the
 /// `write.metadata.path` table property is not set.
 pub(crate) const METADATA_FOLDER_NAME: &str = "metadata";
+const METADATA_SUFFIX: &str = ".metadata.json";
+
+fn strip_metadata_suffix<'a>(file_name: &'a str, codec_suffix: &str) -> Option<&'a str> {
+    file_name
+        .strip_suffix(METADATA_SUFFIX)
+        .and_then(|stripped| stripped.strip_suffix(codec_suffix))
+        .or_else(|| {
+            file_name
+                .strip_suffix(codec_suffix)
+                .and_then(|stripped| stripped.strip_suffix(METADATA_SUFFIX))
+        })
+}
 
 /// Helper for parsing a location of the format: `<metadata-dir>/<version>-<uuid>.metadata.json`
 /// or with compression: `<metadata-dir>/<version>-<uuid>.<codec>.metadata.json`
@@ -91,34 +103,23 @@ impl MetadataLocation {
 
     /// Parses a file name of the format `<version>-<uuid>.metadata.json`
     /// or with compression before or after `.metadata.json`.
-    /// Parse errors for compression codec result in CompressionCodec::None.
     fn parse_file_name(file_name: &str) -> Result<(i32, Uuid, CompressionCodec)> {
-        let gzip_suffix = CompressionCodec::gzip_default().suffix()?;
-        let zstd_suffix = CompressionCodec::zstd_default().suffix()?;
-        let metadata_suffix = ".metadata.json";
-
-        let (stripped, compression_codec) = if let Some(stripped) =
-            file_name.strip_suffix(&format!("{metadata_suffix}{zstd_suffix}"))
-        {
-            (stripped, CompressionCodec::zstd_default())
-        } else if let Some(stripped) =
-            file_name.strip_suffix(&format!("{metadata_suffix}{gzip_suffix}"))
-        {
-            (stripped, CompressionCodec::gzip_default())
-        } else if let Some(stripped) = file_name.strip_suffix(metadata_suffix) {
-            if let Some(stripped) = stripped.strip_suffix(zstd_suffix) {
-                (stripped, CompressionCodec::zstd_default())
-            } else if let Some(stripped) = stripped.strip_suffix(gzip_suffix) {
-                (stripped, CompressionCodec::gzip_default())
-            } else {
-                (stripped, CompressionCodec::None)
-            }
-        } else {
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                format!("Invalid metadata file ending: {file_name}"),
-            ));
-        };
+        let (stripped, compression_codec) = TABLE_METADATA_SUFFIX_TO_COMPRESSION
+            .iter()
+            .find_map(|(suffix, codec)| {
+                strip_metadata_suffix(file_name, suffix).map(|stripped| (stripped, *codec))
+            })
+            .or_else(|| {
+                file_name
+                    .strip_suffix(METADATA_SUFFIX)
+                    .map(|stripped| (stripped, CompressionCodec::None))
+            })
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Invalid metadata file ending: {file_name}"),
+                )
+            })?;
 
         let (version, id) = stripped.split_once('-').ok_or(Error::new(
             ErrorKind::Unexpected,

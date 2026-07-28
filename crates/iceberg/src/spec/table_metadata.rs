@@ -38,7 +38,7 @@ use super::{
     TableProperties, parse_metadata_file_compression,
 };
 use crate::catalog::{METADATA_FOLDER_NAME, MetadataLocation};
-use crate::compression::CompressionCodec;
+use crate::compression::{CompressionCodec, TABLE_METADATA_MAGIC_TO_COMPRESSION};
 use crate::error::{Result, timestamp_ms_to_utc};
 use crate::io::FileIO;
 use crate::spec::EncryptedKey;
@@ -46,8 +46,6 @@ use crate::{Error, ErrorKind};
 
 static MAIN_BRANCH: &str = "main";
 pub(crate) static ONE_MINUTE_MS: i64 = 60_000;
-const GZIP_MAGIC: &[u8] = &[0x1F, 0x8B];
-const ZSTD_MAGIC: &[u8] = &[0x28, 0xB5, 0x2F, 0xFD];
 
 /// Sentinel value used by the Java implementation and older metadata files
 /// to represent a missing/empty current snapshot ID. During deserialization,
@@ -468,13 +466,9 @@ impl TableMetadata {
         let input_file = file_io.new_input(metadata_location)?;
         let metadata_content = input_file.read().await?;
 
-        let compression_codec = if metadata_content.starts_with(GZIP_MAGIC) {
-            Some(CompressionCodec::gzip_default())
-        } else if metadata_content.starts_with(ZSTD_MAGIC) {
-            Some(CompressionCodec::zstd_default())
-        } else {
-            None
-        };
+        let compression_codec = TABLE_METADATA_MAGIC_TO_COMPRESSION
+            .iter()
+            .find_map(|(magic, codec)| metadata_content.starts_with(magic).then_some(*codec));
 
         let metadata = if let Some(codec) = compression_codec {
             let decompressed_data = codec.decompress(metadata_content.to_vec()).map_err(|e| {
@@ -515,17 +509,7 @@ impl TableMetadata {
             ));
         }
 
-        // Apply compression based on codec
-        let data_to_write = match codec {
-            CompressionCodec::Gzip(_) | CompressionCodec::Zstd(_) => codec.compress(json_data)?,
-            CompressionCodec::None => json_data,
-            _ => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Unsupported metadata compression codec: {codec:?}"),
-                ));
-            }
-        };
+        let data_to_write = codec.compress(json_data)?;
 
         file_io
             .new_output(metadata_location.to_string())?
@@ -1633,9 +1617,9 @@ mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder, ZSTD_MAGIC};
+    use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
     use crate::catalog::MetadataLocation;
-    use crate::compression::CompressionCodec;
+    use crate::compression::{CompressionCodec, TABLE_METADATA_MAGIC_TO_COMPRESSION};
     use crate::io::FileIO;
     use crate::spec::table_metadata::TableMetadata;
     use crate::spec::{
@@ -1661,6 +1645,13 @@ mod tests {
         let metadata: String = fs::read_to_string(path).unwrap();
 
         serde_json::from_str(&metadata).unwrap()
+    }
+
+    fn table_metadata_magic(codec: CompressionCodec) -> &'static [u8] {
+        TABLE_METADATA_MAGIC_TO_COMPRESSION
+            .iter()
+            .find_map(|(magic, mapped_codec)| (*mapped_codec == codec).then_some(*magic))
+            .unwrap()
     }
 
     /// Loads a test table metadata and relocates it to `location`, so that derived
@@ -3688,7 +3679,7 @@ mod tests {
     async fn test_table_metadata_read_iceberg_go_zstd_fixture() {
         let fixture =
             fs::read("testdata/table_metadata/TableMetadataV2Valid.zstd.metadata.json").unwrap();
-        assert!(fixture.starts_with(ZSTD_MAGIC));
+        assert!(fixture.starts_with(table_metadata_magic(CompressionCodec::zstd_default())));
 
         let temp_dir = TempDir::new().unwrap();
         let file_io = FileIO::new_with_fs();
@@ -3743,7 +3734,7 @@ mod tests {
         let mut fixture =
             fs::read("testdata/table_metadata/TableMetadataV2Valid.zstd.metadata.json").unwrap();
         fixture.truncate(fixture.len() / 2);
-        assert!(fixture.starts_with(ZSTD_MAGIC));
+        assert!(fixture.starts_with(table_metadata_magic(CompressionCodec::zstd_default())));
 
         let temp_dir = TempDir::new().unwrap();
         let metadata_location = temp_dir.path().join("truncated.metadata.json");
@@ -3815,9 +3806,7 @@ mod tests {
 
         // Read the raw file and check it's gzip compressed
         let raw_content = fs::read(&metadata_location_str).unwrap();
-        assert!(raw_content.len() > 2);
-        assert_eq!(raw_content[0], 0x1F); // gzip magic number
-        assert_eq!(raw_content[1], 0x8B); // gzip magic number
+        assert!(raw_content.starts_with(table_metadata_magic(CompressionCodec::gzip_default())));
 
         // Read the metadata back using the compressed location
         let read_metadata = TableMetadata::read_from(&file_io, &metadata_location_str)
@@ -3861,7 +3850,7 @@ mod tests {
 
         assert_eq!(metadata_location.to_string(), expected_location);
         let raw_content = fs::read(&expected_location).unwrap();
-        assert!(raw_content.starts_with(ZSTD_MAGIC));
+        assert!(raw_content.starts_with(table_metadata_magic(CompressionCodec::zstd_default())));
 
         let read_metadata = TableMetadata::read_from(&file_io, &expected_location)
             .await
