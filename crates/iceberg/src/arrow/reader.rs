@@ -506,6 +506,34 @@ impl ArrowReader {
         // Get the metadata for the Parquet file we need to read and build
         // a reader for the data within
         let parquet_file = file_io.new_input(data_file_path)?;
+
+        // Guard against truncated / partially-written data files.
+        //
+        // `ParquetMetaDataReader` trusts `file_size_in_bytes` (sourced from the
+        // manifest entry) to locate the footer at the end of the file. If the
+        // object actually present in storage is smaller than the manifest claims
+        // — e.g. an interrupted or aborted write left a truncated object behind —
+        // the footer read is issued for a byte range past the real end of the
+        // object. That out-of-bounds range read panics deep inside the
+        // object-store layer (`opendal::Buffer::slice`: "range end out of bounds")
+        // rather than returning an error we can propagate, which unwinds and takes
+        // down the whole reading process instead of failing just this file.
+        //
+        // Verify the real object size up front and fail with a clear, catchable
+        // error so callers (e.g. compaction) can classify it as bad input.
+        let actual_size = parquet_file.metadata().await?.size;
+        if actual_size < file_size_in_bytes {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Parquet data file is truncated: manifest recorded \
+                     file_size_in_bytes={file_size_in_bytes} but object store \
+                     reports {actual_size} bytes"
+                ),
+            )
+            .with_context("path", data_file_path.to_string()));
+        }
+
         let parquet_reader = parquet_file.reader().await?;
         let mut parquet_file_reader = ArrowFileReader::new(
             FileMetadata {
@@ -2774,6 +2802,44 @@ message schema {
             .iter()
             .map(|v| v.map(ToOwned::to_owned))
             .collect::<Vec<_>>()
+    }
+
+    #[tokio::test]
+    async fn test_truncated_data_file_errors_instead_of_panicking() {
+        // Regression test: a data file whose actual on-disk size is smaller than
+        // the `file_size_in_bytes` recorded in the manifest (i.e. a truncated /
+        // partially-written file) must surface a clean `DataInvalid` error rather
+        // than panicking with an out-of-bounds range read while locating the
+        // Parquet footer.
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap().to_string();
+        let file_io = FileIO::from_path(&table_location).unwrap().build().unwrap();
+
+        // Write a small object whose real size does not match the (much larger)
+        // size the manifest claims for it.
+        let data_file_path = format!("{table_location}/truncated.parquet");
+        std::fs::write(&data_file_path, vec![0u8; 41_470]).unwrap();
+        let manifest_recorded_size = 4_686_247u64;
+
+        let result = ArrowReader::create_parquet_record_batch_stream_builder(
+            &data_file_path,
+            file_io,
+            false,
+            None,
+            None,
+            manifest_recorded_size,
+        )
+        .await;
+
+        let err = match result {
+            Ok(_) => panic!("expected truncated data file to error, not succeed"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message().contains("truncated"),
+            "unexpected error message: {err}"
+        );
     }
 
     fn setup_kleene_logic(

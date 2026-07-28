@@ -223,9 +223,11 @@ fn datum_serialized_len(datum: &Datum) -> u64 {
 
             let min_len = (16 - start) as u64;
             let max_len = match datum.data_type() {
-                PrimitiveType::Decimal { precision, .. } => crate::spec::Type::decimal_required_bytes(*precision)
-                    .map(|n| n as u64)
-                    .unwrap_or(16),
+                PrimitiveType::Decimal { precision, .. } => {
+                    crate::spec::Type::decimal_required_bytes(*precision)
+                        .map(|n| n as u64)
+                        .unwrap_or(16)
+                }
                 _ => 16,
             };
             min_len.min(max_len)
